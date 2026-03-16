@@ -56,11 +56,6 @@ agent = create_agent(
 MCP is supported via [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
 
 ## Bog Agents CLI
-
-<p align="center">
-  <img src="libs/cli/images/cli.png" alt="Bog Agents CLI" width="600"/>
-</p>
-
 ```bash
 curl -LsSf https://raw.githubusercontent.com/langchain-ai/bog-agents/main/libs/cli/scripts/install.sh | bash
 ```
