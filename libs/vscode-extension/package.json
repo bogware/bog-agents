@@ -1,0 +1,126 @@
+{
+  "name": "bog-agents-vscode",
+  "displayName": "Bog Agents",
+  "description": "Bog Agents AI coding assistant for VS Code",
+  "version": "0.1.0",
+  "publisher": "bog-agents",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "coding",
+    "agent",
+    "bog-agents",
+    "assistant"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "bog-agents.openChat",
+        "title": "Bog Agents: Open Chat"
+      },
+      {
+        "command": "bog-agents.reviewSelection",
+        "title": "Bog Agents: Review Selected Code"
+      },
+      {
+        "command": "bog-agents.explainSelection",
+        "title": "Bog Agents: Explain Selected Code"
+      },
+      {
+        "command": "bog-agents.fixSelection",
+        "title": "Bog Agents: Fix Selected Code"
+      },
+      {
+        "command": "bog-agents.runDoctor",
+        "title": "Bog Agents: Run Diagnostics"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "bog-agents.reviewSelection",
+          "when": "editorHasSelection",
+          "group": "bog-agents"
+        },
+        {
+          "command": "bog-agents.explainSelection",
+          "when": "editorHasSelection",
+          "group": "bog-agents"
+        },
+        {
+          "command": "bog-agents.fixSelection",
+          "when": "editorHasSelection",
+          "group": "bog-agents"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "bog-agents",
+          "title": "Bog Agents",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "bog-agents": [
+        {
+          "type": "webview",
+          "id": "bog-agents.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Bog Agents",
+      "properties": {
+        "bog-agents.model": {
+          "type": "string",
+          "default": "anthropic:claude-sonnet-4-6",
+          "description": "Default model to use (provider:model format)"
+        },
+        "bog-agents.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-approve tool calls without confirmation"
+        },
+        "bog-agents.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to bog-agents CLI binary (auto-detected if empty)"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "bog-agents.openChat",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "eslint": "^8.50.0",
+    "typescript": "^5.3.0"
+  }
+}

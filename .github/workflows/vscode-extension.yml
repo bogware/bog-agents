@@ -1,0 +1,90 @@
+# Builds and publishes the Bog Agents VS Code extension.
+#
+# Triggers:
+# - Manually via workflow_dispatch
+#
+# Requirements:
+# - VSCE_PAT secret: Personal Access Token for VS Code Marketplace
+#   (create at https://dev.azure.com → User Settings → Personal Access Tokens)
+
+name: "🧩 VS Code Extension Release"
+run-name: "Release VS Code Extension v${{ inputs.version }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: "Version to release (e.g., 0.1.0)"
+      publish:
+        required: false
+        type: boolean
+        default: false
+        description: "Publish to VS Code Marketplace (false = build only)"
+
+defaults:
+  run:
+    working-directory: libs/vscode-extension
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile TypeScript
+        run: npm run compile
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Update version
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Package extension
+        run: npx @vscode/vsce package
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension
+          path: libs/vscode-extension/*.vsix
+
+  publish:
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile
+        run: npm run compile
+
+      - name: Update version
+        run: npm version ${{ inputs.version }} --no-git-tag-version
+
+      - name: Publish to VS Code Marketplace
+        run: npx @vscode/vsce publish
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

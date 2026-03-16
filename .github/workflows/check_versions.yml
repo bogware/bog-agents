@@ -1,0 +1,51 @@
+# Ensures version numbers in pyproject.toml and version.py stay in sync.
+#
+# (Prevents releases with mismatched version numbers)
+
+name: "🔍 Check Version Equality"
+
+on:
+  pull_request:
+    paths:
+      - "libs/bog-agents/pyproject.toml"
+      - "libs/bog-agents/bog_agents/_version.py"
+      - "libs/cli/pyproject.toml"
+      - "libs/cli/bog_agents_cli/_version.py"
+
+permissions:
+  contents: read
+
+jobs:
+  check_version_equality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: "✅ Verify pyproject.toml & _version.py Match"
+        run: |
+          # Check bog-agents versions
+          BOG_AGENTS_PYPROJECT_VERSION=$(grep -Po '(?<=^version = ")[^"]*' libs/bog-agents/pyproject.toml)
+          BOG_AGENTS_VERSION_PY_VERSION=$(grep -Po '(?<=^__version__ = ")[^"]*' libs/bog-agents/bog_agents/_version.py)
+
+          if [ "$BOG_AGENTS_PYPROJECT_VERSION" != "$BOG_AGENTS_VERSION_PY_VERSION" ]; then
+            echo "bog-agents versions in pyproject.toml and _version.py do not match!"
+            echo "pyproject.toml version: $BOG_AGENTS_PYPROJECT_VERSION"
+            echo "_version.py version: $BOG_AGENTS_VERSION_PY_VERSION"
+            exit 1
+          else
+            echo "bog-agents versions match: $BOG_AGENTS_PYPROJECT_VERSION"
+          fi
+
+          # Check bog-agents-cli versions
+          CLI_PYPROJECT_VERSION=$(grep -Po '(?<=^version = ")[^"]*' libs/cli/pyproject.toml)
+          CLI_VERSION_PY_VERSION=$(grep -Po '(?<=^__version__ = ")[^"]*' libs/cli/bog_agents_cli/_version.py)
+
+          if [ "$CLI_PYPROJECT_VERSION" != "$CLI_VERSION_PY_VERSION" ]; then
+            echo "bog-agents-cli versions in pyproject.toml and _version.py do not match!"
+            echo "pyproject.toml version: $CLI_PYPROJECT_VERSION"
+            echo "_version.py version: $CLI_VERSION_PY_VERSION"
+            exit 1
+          else
+            echo "bog-agents-cli versions match: $CLI_PYPROJECT_VERSION"
+          fi

@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "bog-agents": "./src/agent.py:agent"
+  },
+  "env": ".env"
+}

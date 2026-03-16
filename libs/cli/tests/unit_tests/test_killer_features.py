@@ -1,0 +1,497 @@
+"""Tests for killer feature CLI modules (Features #1-75)."""
+
+from pathlib import Path
+
+import pytest
+
+
+class TestMultiAgentCLI:
+    """Tests for multi-agent CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.multi_agent import (
+            ThreadInfo,
+            format_thread_list,
+            parse_agent_command,
+        )
+
+        assert parse_agent_command is not None
+        assert format_thread_list is not None
+
+    def test_parse_agent_command_list(self):
+        from bog_agents_cli.multi_agent import parse_agent_command
+
+        result = parse_agent_command("list")
+        assert result["action"] == "list"
+
+    def test_parse_agent_command_spawn(self):
+        from bog_agents_cli.multi_agent import parse_agent_command
+
+        result = parse_agent_command("spawn implement auth feature")
+        assert result["action"] == "spawn"
+        assert "auth" in result["argument"]
+
+    def test_format_empty_threads(self):
+        from bog_agents_cli.multi_agent import format_thread_list
+
+        assert "No active" in format_thread_list([])
+
+    def test_format_threads(self):
+        from bog_agents_cli.multi_agent import ThreadInfo, format_thread_list
+
+        threads = [
+            ThreadInfo(
+                thread_id="t1", label="auth-work", status="running", task="Fix auth"
+            )
+        ]
+        result = format_thread_list(threads)
+        assert "auth-work" in result
+        assert "running" in result
+
+
+class TestPluginMarketplaceCLI:
+    """Tests for plugin marketplace CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.plugin_marketplace import (
+            create_skill_file,
+            list_installed_plugins,
+        )
+
+        assert list_installed_plugins is not None
+
+    def test_list_empty_plugins(self, tmp_path):
+        from bog_agents_cli.plugin_marketplace import list_installed_plugins
+
+        plugins = list_installed_plugins(tmp_path)
+        assert plugins == []
+
+    def test_create_skill(self, tmp_path):
+        from bog_agents_cli.plugin_marketplace import create_skill_file
+
+        path = create_skill_file("test-skill", "A test skill", skills_dir=tmp_path)
+        assert path.exists()
+        content = path.read_text()
+        assert "test-skill" in content
+        assert "A test skill" in content
+
+    def test_format_plugin_list_empty(self):
+        from bog_agents_cli.plugin_marketplace import format_plugin_list
+
+        assert "No plugins" in format_plugin_list([])
+
+    def test_format_plugin_list(self):
+        from bog_agents_cli.plugin_marketplace import PluginInfo, format_plugin_list
+
+        plugins = [PluginInfo(name="test", version="1.0", description="A test plugin")]
+        result = format_plugin_list(plugins)
+        assert "test" in result
+        assert "1.0" in result
+
+    def test_uninstall_missing(self, tmp_path):
+        from bog_agents_cli.plugin_marketplace import uninstall_plugin
+
+        result = uninstall_plugin("nonexistent", plugins_dir=tmp_path)
+        assert "not found" in result
+
+
+class TestSmartContextCLI:
+    """Tests for smart context CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.smart_context_cli import (
+            ContextInfo,
+            format_context_bar,
+            parse_context_command,
+        )
+
+        assert ContextInfo is not None
+
+    def test_context_info(self):
+        from bog_agents_cli.smart_context_cli import ContextInfo
+
+        info = ContextInfo(max_tokens=200000, used_tokens=50000)
+        assert info.percent_used == 25.0
+        assert info.remaining == 150000
+
+    def test_format_context_bar(self):
+        from bog_agents_cli.smart_context_cli import ContextInfo, format_context_bar
+
+        info = ContextInfo(max_tokens=200000, used_tokens=100000)
+        bar = format_context_bar(info)
+        assert "50.0%" in bar
+        assert "█" in bar
+
+    def test_parse_context_command(self):
+        from bog_agents_cli.smart_context_cli import parse_context_command
+
+        result = parse_context_command("breakdown")
+        assert result["action"] == "breakdown"
+
+
+class TestImageCLI:
+    """Tests for image CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.image_cli import (
+            detect_image_in_input,
+            is_image_file,
+            parse_image_command,
+        )
+
+        assert is_image_file is not None
+
+    def test_is_image_file(self):
+        from bog_agents_cli.image_cli import is_image_file
+
+        assert is_image_file("test.png")
+        assert is_image_file("test.jpg")
+        assert is_image_file("test.jpeg")
+        assert not is_image_file("test.py")
+        assert not is_image_file("test.txt")
+
+    def test_parse_image_command(self):
+        from bog_agents_cli.image_cli import parse_image_command
+
+        result = parse_image_command("analyze test.png")
+        assert result["action"] == "analyze"
+        assert result["arg1"] == "test.png"
+
+
+class TestBrowserCLI:
+    """Tests for browser CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.browser_cli import (
+            APIRequest,
+            format_api_response,
+            parse_api_command,
+        )
+
+        assert parse_api_command is not None
+
+    def test_parse_api_get(self):
+        from bog_agents_cli.browser_cli import parse_api_command
+
+        req = parse_api_command("GET https://api.example.com/users")
+        assert req.method == "GET"
+        assert req.url == "https://api.example.com/users"
+
+    def test_parse_api_post(self):
+        from bog_agents_cli.browser_cli import parse_api_command
+
+        req = parse_api_command(
+            'POST https://api.example.com/users -d \'{"name": "test"}\''
+        )
+        assert req.method == "POST"
+        assert req.body
+
+    def test_parse_preview_command(self):
+        from bog_agents_cli.browser_cli import parse_preview_command
+
+        result = parse_preview_command("start npm run dev")
+        assert result["action"] == "start"
+
+
+class TestPRCLI:
+    """Tests for PR management CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.pr_cli import PRInfo, generate_pr_prompt, parse_pr_command
+
+        assert parse_pr_command is not None
+
+    def test_parse_pr_create(self):
+        from bog_agents_cli.pr_cli import parse_pr_command
+
+        result = parse_pr_command("create Add auth feature")
+        assert result["action"] == "create"
+        assert "auth" in result["argument"]
+
+    def test_generate_pr_prompt(self):
+        from bog_agents_cli.pr_cli import PRInfo, generate_pr_prompt
+
+        info = PRInfo(number=0, title="Add auth", base_branch="main")
+        prompt = generate_pr_prompt(info)
+        assert "Add auth" in prompt
+        assert "main" in prompt
+
+    def test_conflict_resolution_prompt(self):
+        from bog_agents_cli.pr_cli import generate_conflict_resolution_prompt
+
+        prompt = generate_conflict_resolution_prompt()
+        assert "conflict" in prompt.lower()
+
+    def test_bisect_prompt(self):
+        from bog_agents_cli.pr_cli import generate_bisect_prompt
+
+        prompt = generate_bisect_prompt("HEAD", "abc123", "pytest")
+        assert "HEAD" in prompt
+        assert "abc123" in prompt
+
+
+class TestTestToolsCLI:
+    """Tests for test tools CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.test_tools_cli import (
+            generate_test_prompt,
+            parse_test_command,
+        )
+
+        assert parse_test_command is not None
+
+    def test_parse_test_generate(self):
+        from bog_agents_cli.test_tools_cli import parse_test_command
+
+        result = parse_test_command("generate src/auth.py")
+        assert result["action"] == "generate"
+        assert "auth" in result["argument"]
+
+    def test_generate_test_prompt(self):
+        from bog_agents_cli.test_tools_cli import generate_test_prompt
+
+        prompt = generate_test_prompt("src/auth.py", "pytest")
+        assert "auth.py" in prompt
+        assert "pytest" in prompt
+
+    def test_audit_prompt(self):
+        from bog_agents_cli.test_tools_cli import generate_audit_prompt
+
+        prompt = generate_audit_prompt()
+        assert "vulnerabilities" in prompt.lower()
+
+
+class TestEnterpriseCLI:
+    """Tests for enterprise CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.enterprise_cli import (
+            TeamSettings,
+            format_team_settings,
+            parse_team_command,
+        )
+
+        assert TeamSettings is not None
+
+    def test_team_settings_default(self):
+        from bog_agents_cli.enterprise_cli import TeamSettings
+
+        settings = TeamSettings()
+        assert settings.name == ""
+        assert settings.members == []
+
+    def test_parse_team_command(self):
+        from bog_agents_cli.enterprise_cli import parse_team_command
+
+        result = parse_team_command("roles")
+        assert result["action"] == "roles"
+
+    def test_format_team_settings(self):
+        from bog_agents_cli.enterprise_cli import TeamSettings, format_team_settings
+
+        settings = TeamSettings(name="My Team")
+        result = format_team_settings(settings)
+        assert "My Team" in result
+
+    def test_load_missing_config(self, tmp_path):
+        from bog_agents_cli.enterprise_cli import load_team_settings
+
+        settings = load_team_settings(tmp_path / "nonexistent.json")
+        assert settings.name == ""
+
+    def test_save_and_load_config(self, tmp_path):
+        from bog_agents_cli.enterprise_cli import (
+            TeamMember,
+            TeamSettings,
+            load_team_settings,
+            save_team_settings,
+        )
+
+        config_path = tmp_path / "team.json"
+        settings = TeamSettings(
+            name="Test Team", members=[TeamMember(name="Alice", role="admin")]
+        )
+        save_team_settings(settings, config_path)
+        loaded = load_team_settings(config_path)
+        assert loaded.name == "Test Team"
+        assert len(loaded.members) == 1
+        assert loaded.members[0].name == "Alice"
+
+
+class TestMultiModelCLI:
+    """Tests for multi-model CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.multi_model_cli import (
+            detect_local_models,
+            recommend_model_for_task,
+        )
+
+        assert detect_local_models is not None
+
+    def test_recommend_simple_task(self):
+        from bog_agents_cli.multi_model_cli import recommend_model_for_task
+
+        model = recommend_model_for_task("fix typo in README")
+        assert model  # Should return some model
+
+    def test_recommend_complex_task(self):
+        from bog_agents_cli.multi_model_cli import recommend_model_for_task
+
+        model = recommend_model_for_task("architect the entire system")
+        assert "opus" in model
+
+    def test_parse_model_route(self):
+        from bog_agents_cli.multi_model_cli import parse_model_route_command
+
+        result = parse_model_route_command("auto")
+        assert result["strategy"] == "auto"
+
+    def test_format_model_list_empty(self):
+        from bog_agents_cli.multi_model_cli import format_model_list
+
+        result = format_model_list([])
+        assert "No local models" in result
+
+
+class TestCodeIntelligenceCLI:
+    """Tests for code intelligence CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.code_intelligence_cli import (
+            generate_health_prompt,
+            parse_health_command,
+        )
+
+        assert parse_health_command is not None
+
+    def test_parse_health_command(self):
+        from bog_agents_cli.code_intelligence_cli import parse_health_command
+
+        result = parse_health_command("quick")
+        assert result["action"] == "quick"
+
+    def test_parse_migrate_command(self):
+        from bog_agents_cli.code_intelligence_cli import parse_migrate_command
+
+        result = parse_migrate_command("javascript typescript")
+        assert result["from"] == "javascript"
+        assert result["to"] == "typescript"
+
+    def test_generate_health_prompt(self):
+        from bog_agents_cli.code_intelligence_cli import generate_health_prompt
+
+        prompt = generate_health_prompt(["src/", "lib/"])
+        assert "src/" in prompt
+
+    def test_generate_onboard_prompt(self):
+        from bog_agents_cli.code_intelligence_cli import generate_onboard_prompt
+
+        prompt = generate_onboard_prompt()
+        assert "onboarding" in prompt.lower()
+
+    def test_generate_docs_prompt(self):
+        from bog_agents_cli.code_intelligence_cli import generate_docs_prompt
+
+        assert "API" in generate_docs_prompt("api")
+        assert "README" in generate_docs_prompt("readme")
+
+
+class TestSessionManager:
+    """Tests for session manager CLI module."""
+
+    def test_import(self):
+        from bog_agents_cli.session_manager import (
+            COMMAND_PALETTE,
+            SessionStats,
+            search_command_palette,
+        )
+
+        assert SessionStats is not None
+        assert len(COMMAND_PALETTE) > 0
+
+    def test_session_stats(self):
+        from bog_agents_cli.session_manager import SessionStats
+
+        stats = SessionStats(name="test", tokens_in=1000, tokens_out=500, cost_usd=0.01)
+        assert stats.name == "test"
+        assert stats.elapsed_seconds > 0
+
+    def test_format_session_stats(self):
+        from bog_agents_cli.session_manager import SessionStats, format_session_stats
+
+        stats = SessionStats(name="test", messages=5)
+        result = format_session_stats(stats)
+        assert "test" in result
+        assert "5" in result
+
+    def test_format_token_counter(self):
+        from bog_agents_cli.session_manager import format_token_counter
+
+        result = format_token_counter(1000, 500, 0.01)
+        assert "1,000" in result
+        assert "500" in result
+
+    def test_search_command_palette(self):
+        from bog_agents_cli.session_manager import search_command_palette
+
+        results = search_command_palette("test")
+        assert len(results) > 0
+        assert any(
+            "test" in r.name.lower() or "test" in r.description.lower() for r in results
+        )
+
+    def test_search_command_palette_empty(self):
+        from bog_agents_cli.session_manager import search_command_palette
+
+        results = search_command_palette("zzzznonexistent")
+        assert len(results) == 0
+
+    def test_format_command_palette(self):
+        from bog_agents_cli.session_manager import (
+            CommandPaletteEntry,
+            format_command_palette,
+        )
+
+        entries = [CommandPaletteEntry("/test", "Test command", "", "testing")]
+        result = format_command_palette(entries)
+        assert "/test" in result
+        assert "Test command" in result
+
+
+class TestSlashCommands:
+    """Tests for new slash commands in autocomplete."""
+
+    def test_new_commands_exist(self):
+        from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
+
+        names = {cmd[0] for cmd in SLASH_COMMANDS}
+        new_commands = {
+            "/agent",
+            "/api",
+            "/audit",
+            "/branch",
+            "/health",
+            "/image",
+            "/infra",
+            "/migrate",
+            "/model-route",
+            "/onboard",
+            "/plugin",
+            "/pr",
+            "/preview",
+            "/resolve",
+            "/session",
+            "/team",
+            "/test",
+            "/worktree",
+        }
+        for cmd in new_commands:
+            assert cmd in names, f"Missing slash command: {cmd}"
+
+    def test_total_command_count(self):
+        from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
+
+        # Should have significantly more commands now
+        assert len(SLASH_COMMANDS) >= 45
