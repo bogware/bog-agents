@@ -1,21 +1,11 @@
 <div align="center">
-  </a>
+  <h3>bog-agents - The deepest swampy cli money can't buy.</h3>
 </div>
-
-<div align="center">
-  <h3>The deepest swampy cli money can't buy.</h3>
-</div>
-
-<div align="center">
-  <a href="https://opensource.org/licenses/MIT" target="_blank"><img src="https://img.shields.io/pypi/l/bog-agents" alt="PyPI - License"></a>
-  <a href="https://pypistats.org/packages/bog-agents" target="_blank"><img src="https://img.shields.io/pepy/dt/bog-agents" alt="PyPI - Downloads"></a>
-  <a href="https://pypi.org/project/bog-agents/#history" target="_blank"><img src="https://img.shields.io/pypi/v/bog-agents?label=%20" alt="Version"></a>
-  <a href="https://x.com/langchain" target="_blank"><img src="https://img.shields.io/twitter/url/https/twitter.com/langchain.svg?style=social&label=Follow%20%40LangChain" alt="Twitter / X"></a>
 </div>
 
 <br>
 
-Bog Agents is an agent harness. An opinionated, ready-to-run agent out of the box. Instead of wiring up prompts, tools, and context management yourself, you get a working agent immediately and customize what you need.
+bog-agents is an agent harness. An opinionated, ready-to-run agent out of the box. Instead of wiring up prompts, tools, and context management yourself, you get a working agent immediately and customize what you need.
 
 **What's included:**
 
