@@ -1,5 +1,5 @@
 <div align="center">
-  <h3>bog-agents - The deepest swampy cli money can't buy.</h3>
+  <h3>bog-agents - The deepest dankest cli money can't buy.</h3>
 </div>
 </div>
 
