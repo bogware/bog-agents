@@ -15,20 +15,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
-from tavily import BadRequestError, InvalidAPIKeyError, UsageLimitExceededError
-from tavily.errors import TimeoutError as TavilyTimeoutError
 
-from bog_agents_cli.clipboard import (
+tavily = pytest.importorskip("tavily", reason="tavily not installed")
+BadRequestError = tavily.BadRequestError
+InvalidAPIKeyError = tavily.InvalidAPIKeyError
+UsageLimitExceededError = tavily.UsageLimitExceededError
+TavilyTimeoutError = tavily.errors.TimeoutError
+
+from bog_agents_cli.clipboard import (  # noqa: E402
     copy_selection_to_clipboard,
     logger as clipboard_logger,
 )
-from bog_agents_cli.file_ops import FileOpTracker, _safe_read
-from bog_agents_cli.media_utils import (
+from bog_agents_cli.file_ops import FileOpTracker, _safe_read  # noqa: E402
+from bog_agents_cli.media_utils import (  # noqa: E402
     _get_clipboard_via_osascript,
     _get_macos_clipboard_image,
     logger as media_utils_logger,
 )
-from bog_agents_cli.tools import http_request, web_search
+from bog_agents_cli.tools import http_request, web_search  # noqa: E402
 
 
 class TestToolsExceptionHandling:

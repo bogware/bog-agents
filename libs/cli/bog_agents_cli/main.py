@@ -49,9 +49,6 @@ def check_cli_dependencies() -> None:
     if importlib.util.find_spec("dotenv") is None:
         missing.append("python-dotenv")
 
-    if importlib.util.find_spec("tavily") is None:
-        missing.append("tavily-python")
-
     if importlib.util.find_spec("textual") is None:
         missing.append("textual")
 
