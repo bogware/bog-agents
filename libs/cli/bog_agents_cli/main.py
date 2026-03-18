@@ -1255,13 +1255,16 @@ def cli_main() -> None:
 
             from bog_agents_cli.config import create_model
 
-            model = create_model(
-                model_name=getattr(args, "model", None),
-                model_params=model_params,
+            model_result = create_model(
+                getattr(args, "model", None),
+                extra_kwargs=model_params,
+                profile_overrides=profile_override,
             )
+            model_result.apply_to_settings()
+
             from bog_agents.graph import create_agent as _create_agent
 
-            agent = _create_agent(model=model)
+            agent = _create_agent(model=model_result.model)
             server_config = ServerConfig(
                 host=getattr(args, "serve_host", "127.0.0.1"),
                 port=getattr(args, "serve_port", 8080),
@@ -1289,13 +1292,16 @@ def cli_main() -> None:
             from bog_agents_cli.config import create_model
             from bog_agents_cli.pr_output import PRConfig, run_pr_mode
 
-            model = create_model(
-                model_name=getattr(args, "model", None),
-                model_params=model_params,
+            model_result = create_model(
+                getattr(args, "model", None),
+                extra_kwargs=model_params,
+                profile_overrides=profile_override,
             )
+            model_result.apply_to_settings()
+
             from bog_agents.graph import create_agent as _create_agent
 
-            agent = _create_agent(model=model)
+            agent = _create_agent(model=model_result.model)
             pr_config = PRConfig(
                 base_branch=getattr(args, "pr_base", "main"),
                 draft=getattr(args, "pr_draft", False),

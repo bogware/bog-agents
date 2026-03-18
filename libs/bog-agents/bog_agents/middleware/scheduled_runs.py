@@ -361,8 +361,11 @@ class ScheduledRunsStore:
         """Load tasks from disk."""
         if not self.store_path.exists():
             return
+        content = self.store_path.read_text().strip()
+        if not content:
+            return
         try:
-            data = json.loads(self.store_path.read_text())
+            data = json.loads(content)
             for task_data in data.get("tasks", []):
                 task = ScheduledTask.from_dict(task_data)
                 self._tasks[task.task_id] = task
