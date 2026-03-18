@@ -10,6 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("bog_agents_acp", reason="bog_agents_acp not installed")
+pytest.importorskip("acp", reason="acp not installed")
+
 from bog_agents_cli.main import cli_main
 
 

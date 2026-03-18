@@ -1916,6 +1916,15 @@ class BogAgentsApp(App):
                 report = "Configuration reloaded. No changes detected."
             report += "\nModel config caches cleared."
             await self._mount_message(AppMessage(report))
+        elif cmd == "/background" or cmd.startswith("/background "):
+            await self._mount_message(UserMessage(command))
+            await self._handle_background_command(command)
+        elif cmd == "/dashboard":
+            await self._mount_message(UserMessage(command))
+            await self._handle_dashboard_command()
+        elif cmd == "/recommend" or cmd.startswith("/recommend "):
+            await self._mount_message(UserMessage(command))
+            await self._handle_recommend_command(command)
         else:
             await self._mount_message(UserMessage(command))
             await self._mount_message(AppMessage(f"Unknown command: {cmd}"))
@@ -1932,6 +1941,149 @@ class BogAgentsApp(App):
                 pass
 
         self.call_after_refresh(_scroll_after_command)
+
+    async def _handle_background_command(self, command: str) -> None:
+        """Handle /background slash command.
+
+        Subcommands:
+            /background <prompt>   — Submit a new background task
+            /background list       — Show all tasks
+            /background status <id> — Show task detail
+            /background cancel <id> — Cancel a running task
+            /background cleanup    — Remove finished tasks
+
+        Args:
+            command: Full command string.
+        """
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        if not hasattr(self, "_bg_manager"):
+            agent_factory = None
+            if self._agent is not None:
+                from bog_agents.graph import create_agent as _create_agent
+
+                agent_factory = lambda: self._agent  # noqa: E731
+            self._bg_manager = BackgroundAgentManager(
+                agent_factory=agent_factory,
+                on_complete=lambda task: logger.info(
+                    "Background task %s finished: %s", task.task_id, task.status
+                ),
+            )
+
+        raw = command.strip()
+        if raw.lower() in ("/background", "/background list"):
+            await self._mount_message(AppMessage(self._bg_manager.format_status_table()))
+            return
+
+        if raw.lower().startswith("/background cancel "):
+            task_id = raw.split()[-1]
+            if self._bg_manager.cancel(task_id):
+                await self._mount_message(AppMessage(f"Cancel requested for {task_id}"))
+            else:
+                await self._mount_message(AppMessage(f"Task {task_id} not found or not running"))
+            return
+
+        if raw.lower().startswith("/background status "):
+            task_id = raw.split()[-1]
+            task = self._bg_manager.get_status(task_id)
+            if task:
+                await self._mount_message(AppMessage(task.status_line))
+            else:
+                await self._mount_message(AppMessage(f"Task {task_id} not found"))
+            return
+
+        if raw.lower() == "/background cleanup":
+            removed = self._bg_manager.cleanup_completed()
+            await self._mount_message(AppMessage(f"Removed {removed} completed tasks"))
+            return
+
+        # Anything else is a prompt to submit
+        prompt = raw[len("/background "):].strip()
+        if not prompt:
+            await self._mount_message(AppMessage(
+                "Usage: /background <prompt> | list | cancel <id> | status <id> | cleanup"
+            ))
+            return
+
+        try:
+            task_id = await self._bg_manager.submit(prompt)
+            await self._mount_message(AppMessage(
+                f"Background task submitted: {task_id}\n"
+                f"Use /background list to check status."
+            ))
+        except RuntimeError as exc:
+            await self._mount_message(AppMessage(f"Error: {exc}"))
+
+    async def _handle_dashboard_command(self) -> None:
+        """Handle /dashboard slash command.
+
+        Shows a text-based dashboard of all running agents (main + background).
+        """
+        from bog_agents_cli.dashboard import DashboardState, create_dashboard_layout
+
+        state = DashboardState()
+
+        # Add the main agent
+        main = state.add_agent("main", "Primary Agent")
+        main.status = "running"
+        main.started_at = self._start_time if hasattr(self, "_start_time") else None
+        if self._token_tracker:
+            main.tokens_used = self._token_tracker.current_context
+
+        # Add background agents if they exist
+        if hasattr(self, "_bg_manager"):
+            for task in self._bg_manager.all_tasks:
+                panel = state.add_agent(task.task_id, f"Background: {task.prompt[:30]}")
+                panel.status = task.status.value
+                panel.started_at = task.started_at
+                panel.completed_at = task.completed_at
+                if task.error:
+                    panel.errors = 1
+
+        output = create_dashboard_layout(state)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_recommend_command(self, command: str) -> None:
+        """Handle /recommend slash command.
+
+        Sends a structured review prompt to the agent based on the provided
+        configuration (persona, focus, scope, etc.).
+
+        Args:
+            command: Full command string.
+        """
+        from bog_agents_cli.recommend import (
+            build_clarifying_prompt,
+            build_review_prompt,
+            format_recommend_help,
+            parse_recommend_args,
+        )
+
+        raw = command.strip()
+        args_str = raw[len("/recommend"):].strip()
+
+        # Show help
+        if args_str in ("--help", "-h", "help"):
+            await self._mount_message(AppMessage(format_recommend_help()))
+            return
+
+        # Parse config
+        config = parse_recommend_args(args_str)
+
+        if config.num_questions > 0:
+            # Phase 1: Ask clarifying questions
+            prompt = build_clarifying_prompt(config)
+            # Store config for when user answers questions
+            self._recommend_config = config
+            await self._handle_user_message(
+                f"Please review this codebase.\n\n{prompt}"
+            )
+        else:
+            # Skip questions, go straight to review
+            prompt = build_review_prompt(config)
+            await self._handle_user_message(
+                f"Please review this codebase.\n\n{prompt}"
+            )
 
     async def _get_conversation_token_count(self) -> int | None:
         """Return the approximate conversation-only token count.

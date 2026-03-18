@@ -49,9 +49,6 @@ def check_cli_dependencies() -> None:
     if importlib.util.find_spec("dotenv") is None:
         missing.append("python-dotenv")
 
-    if importlib.util.find_spec("tavily") is None:
-        missing.append("tavily-python")
-
     if importlib.util.find_spec("textual") is None:
         missing.append("textual")
 
@@ -538,6 +535,39 @@ def parse_args() -> argparse.Namespace:
         "--acp",
         action="store_true",
         help="Run as an ACP server over stdio instead of launching the Textual UI",
+    )
+
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Start an HTTP API server instead of the TUI",
+    )
+    parser.add_argument(
+        "--serve-host",
+        default="127.0.0.1",
+        help="Host for the HTTP API server (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--serve-port",
+        type=int,
+        default=8080,
+        help="Port for the HTTP API server (default: 8080)",
+    )
+
+    parser.add_argument(
+        "--pr",
+        action="store_true",
+        help="PR-output mode: run agent non-interactively and create a pull request",
+    )
+    parser.add_argument(
+        "--pr-base",
+        default="main",
+        help="Base branch for PR creation (default: main)",
+    )
+    parser.add_argument(
+        "--pr-draft",
+        action="store_true",
+        help="Create the PR as a draft",
     )
 
     parser.add_argument(
@@ -1133,9 +1163,8 @@ def cli_main() -> None:
         _run_doctor(_DoctorConsole())
         sys.exit(0)
 
-    # ACP mode does not require Textual, so skip UI dependency checks when
-    # the flag is present in raw argv.
-    if "--acp" not in sys.argv[1:]:
+    # ACP/serve modes do not require Textual, so skip UI dependency checks.
+    if "--acp" not in sys.argv[1:] and "--serve" not in sys.argv[1:]:
         check_cli_dependencies()
 
     from bog_agents_cli.config import console, settings
@@ -1210,6 +1239,80 @@ def cli_main() -> None:
                 )
             )
             sys.exit(exit_code)
+
+        # --serve: start HTTP API server
+        if getattr(args, "serve", False):
+            try:
+                from bog_agents.serve import AgentServer, ServerConfig
+            except ImportError as exc:
+                msg = (
+                    f"Serve dependencies not available: {exc}\n"
+                    "Install with: pip install 'bog-agents[serve]'\n"
+                )
+                sys.stderr.write(msg)
+                sys.stderr.flush()
+                sys.exit(1)
+
+            from bog_agents_cli.config import create_model
+
+            model = create_model(
+                model_name=getattr(args, "model", None),
+                model_params=model_params,
+            )
+            from bog_agents.graph import create_agent as _create_agent
+
+            agent = _create_agent(model=model)
+            server_config = ServerConfig(
+                host=getattr(args, "serve_host", "127.0.0.1"),
+                port=getattr(args, "serve_port", 8080),
+            )
+            server = AgentServer(agent=agent, config=server_config)
+
+            console.print(
+                f"Starting bog-agents HTTP server on "
+                f"{server_config.host}:{server_config.port}"
+            )
+            server.run()
+            sys.exit(0)
+
+        # --pr: PR-output mode (requires -n)
+        if getattr(args, "pr", False):
+            task = getattr(args, "non_interactive_message", None) or getattr(args, "print_message", None)
+            if not task:
+                sys.stderr.write(
+                    "Error: --pr requires a task via -n or --print.\n"
+                    "Usage: bog-agents -n 'fix issue #123' --pr\n"
+                )
+                sys.stderr.flush()
+                sys.exit(2)
+
+            from bog_agents_cli.config import create_model
+            from bog_agents_cli.pr_output import PRConfig, run_pr_mode
+
+            model = create_model(
+                model_name=getattr(args, "model", None),
+                model_params=model_params,
+            )
+            from bog_agents.graph import create_agent as _create_agent
+
+            agent = _create_agent(model=model)
+            pr_config = PRConfig(
+                base_branch=getattr(args, "pr_base", "main"),
+                draft=getattr(args, "pr_draft", False),
+            )
+
+            console.print(f"Running PR mode: {task}")
+            pr_result = asyncio.run(run_pr_mode(task, agent, config=pr_config))
+
+            if pr_result.success:
+                console.print(f"[bold green]PR created:[/bold green] {pr_result.pr_url}")
+                console.print(f"Branch: {pr_result.branch_name}")
+                console.print(f"Files changed: {len(pr_result.files_changed)}")
+                console.print(f"Duration: {pr_result.duration_seconds:.1f}s")
+            else:
+                console.print(f"[bold red]PR failed:[/bold red] {pr_result.error}")
+                sys.exit(1)
+            sys.exit(0)
 
         # --print is a convenience alias for -n TEXT -q
         if getattr(args, "print_message", None):

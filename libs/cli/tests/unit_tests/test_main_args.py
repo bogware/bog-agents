@@ -157,6 +157,7 @@ class TestNoStreamArgument:
         with (
             patch.object(sys, "argv", ["bog-agents", "--no-stream"]),
             patch.object(sys, "stdin", mock_stdin),
+            patch("bog_agents_cli.main.check_cli_dependencies"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_main()
@@ -175,6 +176,7 @@ class TestQuietRequiresNonInteractive:
         with (
             patch.object(sys, "argv", ["bog-agents", "-q"]),
             patch.object(sys, "stdin", mock_stdin),
+            patch("bog_agents_cli.main.check_cli_dependencies"),
             pytest.raises(SystemExit) as exc_info,
         ):
             cli_main()

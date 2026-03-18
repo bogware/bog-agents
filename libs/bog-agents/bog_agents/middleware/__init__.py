@@ -47,6 +47,8 @@ Use a **plain tool** when:
 * The tool is specific to a single consumer (e.g. CLI-only)
 """
 
+from bog_agents.middleware.adaptive_context import AdaptiveContextMiddleware
+from bog_agents.middleware.agent_replay import AgentReplayMiddleware
 from bog_agents.middleware.agent_teams import AgentTeamsMiddleware
 from bog_agents.middleware.air_gapped import AirGappedMiddleware
 from bog_agents.middleware.approval_gates import ApprovalGatesMiddleware
@@ -82,6 +84,8 @@ from bog_agents.middleware.financial_data import FinancialDataMiddleware
 from bog_agents.middleware.firm_deployment import FirmDeploymentMiddleware
 from bog_agents.middleware.git_tools import GitToolsMiddleware
 from bog_agents.middleware.hallucination_detection import HallucinationDetectionMiddleware
+from bog_agents.middleware.hot_reload_skills import HotReloadSkillsMiddleware
+from bog_agents.middleware.http_hooks import HttpHooksMiddleware
 from bog_agents.middleware.image_input import ImageInputMiddleware
 from bog_agents.middleware.image_pdf_input import ImagePdfInputMiddleware
 from bog_agents.middleware.knowledge_graph import KnowledgeGraphMiddleware
@@ -93,11 +97,13 @@ from bog_agents.middleware.market_sentiment import MarketSentimentMiddleware
 from bog_agents.middleware.meeting_prep import MeetingPrepMiddleware
 from bog_agents.middleware.memory import MemoryMiddleware
 from bog_agents.middleware.messaging_integration import MessagingIntegrationMiddleware
+from bog_agents.middleware.model_cascade import ModelCascadeMiddleware
 from bog_agents.middleware.model_portfolio import ModelPortfolioMiddleware
 from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
 from bog_agents.middleware.multi_model import MultiModelMiddleware
 from bog_agents.middleware.nl_query import NLQueryMiddleware
 from bog_agents.middleware.notifications import NotificationsMiddleware
+from bog_agents.middleware.offline_mode import OfflineModeMiddleware
 from bog_agents.middleware.opensearch_rag import OpenSearchRAGMiddleware
 from bog_agents.middleware.parallel_agents import ParallelAgentsMiddleware
 from bog_agents.middleware.peer_comparison import PeerComparisonMiddleware
@@ -114,7 +120,11 @@ from bog_agents.middleware.safe_tools import SafeToolsConfig, is_tool_safe
 from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
 from bog_agents.middleware.scenario_engine import ScenarioEngineMiddleware
 from bog_agents.middleware.scheduled_reports import ScheduledReportsMiddleware
+from bog_agents.middleware.scheduled_runs import ScheduledRunsMiddleware
+from bog_agents.middleware.security_audit import SecurityAuditMiddleware
+from bog_agents.middleware.self_improving import SelfImprovingMiddleware
 from bog_agents.middleware.skills import SkillsMiddleware
+from bog_agents.middleware.smart_approvals import SmartApprovalsMiddleware
 from bog_agents.middleware.smart_context import SmartContextMiddleware
 from bog_agents.middleware.sso_auth import SSOAuthMiddleware
 from bog_agents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
@@ -130,6 +140,8 @@ from bog_agents.middleware.voice_io import VoiceIOMiddleware
 from bog_agents.middleware.worktree import WorktreeMiddleware
 
 __all__ = [
+    "AdaptiveContextMiddleware",
+    "AgentReplayMiddleware",
     "AgentTeamsMiddleware",
     "AirGappedMiddleware",
     "ApprovalGatesMiddleware",
@@ -167,6 +179,8 @@ __all__ = [
     "GitToolsMiddleware",
     "HallucinationDetectionMiddleware",
     "HookEvent",
+    "HotReloadSkillsMiddleware",
+    "HttpHooksMiddleware",
     "ImageInputMiddleware",
     "ImagePdfInputMiddleware",
     "KnowledgeGraphMiddleware",
@@ -175,11 +189,13 @@ __all__ = [
     "MeetingPrepMiddleware",
     "MemoryMiddleware",
     "MessagingIntegrationMiddleware",
+    "ModelCascadeMiddleware",
     "ModelPortfolioMiddleware",
     "MultiAgentOrchestratorMiddleware",
     "MultiModelMiddleware",
     "NLQueryMiddleware",
     "NotificationsMiddleware",
+    "OfflineModeMiddleware",
     "OpenSearchRAGMiddleware",
     "PRManagementMiddleware",
     "ParallelAgentsMiddleware",
@@ -197,7 +213,11 @@ __all__ = [
     "SavedPromptsMiddleware",
     "ScenarioEngineMiddleware",
     "ScheduledReportsMiddleware",
+    "ScheduledRunsMiddleware",
+    "SecurityAuditMiddleware",
+    "SelfImprovingMiddleware",
     "SkillsMiddleware",
+    "SmartApprovalsMiddleware",
     "SmartContextMiddleware",
     "SubAgent",
     "SubAgentMiddleware",

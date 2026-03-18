@@ -1,248 +1,190 @@
-<div align="center">
-  <h3>bog-agents - The deepest dankest cli money can't buy.</h3>
-</div>
-</div>
+# Bog Agents
 
-<br>
+An agent harness. You point it at a problem, it gets to work.
 
-bog-agents is an agent harness. An opinionated, ready-to-run agent out of the box. Instead of wiring up prompts, tools, and context management yourself, you get a working agent immediately and customize what you need.
+No wiring up prompts, tools, or context by hand. You get a working agent out of the box — planning, file access, shell, sub-agents, the whole outfit. Customize what needs customizing. Leave the rest alone.
 
-**What's included:**
+Built on [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview). MIT licensed. Works with any LLM that can call tools.
 
-- **Planning** — `write_todos` for task breakdown and progress tracking
-- **Filesystem** — `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep` for reading and writing context
-- **Shell access** — `execute` for running commands (with sandboxing)
-- **Sub-agents** — `task` for delegating work with isolated context windows
-- **Smart defaults** — Prompts that teach the model how to use these tools effectively
-- **Context management** — Auto-summarization when conversations get long, large outputs saved to files
-
-> [!NOTE]
-> Looking for the JS/TS library? Check out [bog_agents.js](https://github.com/langchain-ai/bog-agentsjs).
-
-## Quickstart
+## Install the SDK
 
 ```bash
 pip install bog-agents
-# or
-uv add bog-agents
 ```
 
 ```python
 from bog_agents import create_agent
 
 agent = create_agent()
-result = agent.invoke({"messages": [{"role": "user", "content": "Research LangGraph and write a summary"}]})
-```
-
-The agent can plan, read/write files, and manage its own context. Add tools, customize prompts, or swap models as needed.
-
-> [!TIP]
-> For developing, debugging, and deploying AI agents and LLM applications, see [LangSmith](https://docs.langchain.com/langsmith/home).
-
-## Customization
-
-Add your own tools, swap models, customize prompts, configure sub-agents, and more. See the [documentation](https://docs.langchain.com/oss/python/bog-agents/overview) for full details.
-
-```python
-from langchain.chat_models import init_chat_model
-
-agent = create_agent(
-    model=init_chat_model("openai:gpt-4o"),
-    tools=[my_custom_tool],
-    system_prompt="You are a research assistant.",
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "Research LangGraph and write a summary"}]}
 )
 ```
 
-MCP is supported via [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
+That's a running agent. It can plan, read and write files, run shell commands, and spin up sub-agents when the job calls for it.
 
-## Bog Agents CLI
-```bash
-curl -LsSf https://raw.githubusercontent.com/langchain-ai/bog-agents/main/libs/cli/scripts/install.sh | bash
+## Make It Yours
+
+Swap the model. Add tools. Change the prompt. The agent doesn't care — it'll use what you give it.
+
+```python
+from bog_agents import create_agent
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-6",
+    tools=[my_custom_tool],
+    system_prompt="You are a research assistant.",
+    enable_git_tools=True,
+    enable_cost_tracking=True,
+)
+
+result = await agent.ainvoke(
+    {"messages": [{"role": "user", "content": "Fix the failing tests"}]},
+    config={"configurable": {"thread_id": "my-session"}},
+)
 ```
 
-Web search, remote sandboxes, persistent memory, human-in-the-loop approval, and more. See the [CLI README](libs/cli/) for the full feature set.
+`create_agent` returns a compiled LangGraph graph. Streaming, Studio, checkpointers — anything LangGraph does, this does too. MCP works through [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
 
-## LangGraph Native
+## The CLI
 
-`create_agent` returns a compiled [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) graph. Use it with streaming, Studio, checkpointers, or any LangGraph feature.
-
-## FAQ
-
-### Why should I use this?
-
-- **100% open source** — MIT licensed, fully extensible
-- **Provider agnostic** — Works with any Large Language Model model that supports tool calling, including both frontier and open models
-- **Built on LangGraph** — Production-ready runtime with streaming, persistence, and checkpointing
-- **Batteries included** — Planning, file access, sub-agents, and context management work out of the box
-- **Get started in seconds** — `uv add bog-agents` and you have a working agent
-- **Customize in minutes** — Add tools, swap models, tune prompts when you need to
-
----
-
-## Documentation
-
-- [docs.langchain.com](https://docs.langchain.com/oss/python/bog-agents/overview) – Comprehensive documentation, including conceptual overviews and guides
-- [reference.langchain.com/python](https://reference.langchain.com/python/bog-agents/) – API reference docs for Bog Agents packages
-- [Chat LangChain](https://chat.langchain.com/) – Chat with the LangChain documentation and get answers to your questions
-
-**Discussions**: Visit the [LangChain Forum](https://forum.langchain.com) to connect with the community and share all of your technical questions, ideas, and feedback.
-
-## Running Locally
-
-### Prerequisites
-
-- Python 3.11+ ([pyenv](https://github.com/pyenv/pyenv) or system Python)
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
-- At least one LLM API key **or** [Ollama](https://ollama.com) for fully local models
-
-### Option 1: Install from PyPI
+A terminal agent that handles its own business. Web search, remote sandboxes, persistent memory, human-in-the-loop approval.
 
 ```bash
-# Install the CLI (includes the SDK)
 pip install bog-agents-cli
 
-# With a specific provider
+# Pick your provider
 pip install 'bog-agents-cli[anthropic]'
-
-# With local Ollama support (no API key needed)
-pip install 'bog-agents-cli[ollama]'
-
-# With everything (all providers + sandbox + web search)
-pip install 'bog-agents-cli[all]'
+pip install 'bog-agents-cli[ollama]'       # no API key needed
+pip install 'bog-agents-cli[all]'          # everything
 ```
 
-### Option 2: Run from Source
-
 ```bash
-# Clone the repo
-git clone https://github.com/langchain-ai/bog-agents.git
-cd bog-agents
+# Set a key and go
+export ANTHROPIC_API_KEY="sk-ant-..."
+bog-agents
 
-# Install SDK
-cd libs/bog-agents && uv sync && cd ../..
-
-# Install CLI (links to local SDK)
-cd libs/cli && uv sync && cd ../..
-
-# Run the CLI
-cd libs/cli && uv run bog-agents
-```
-
-### Using with Ollama (Fully Local, No API Key)
-
-```bash
-# Install Ollama: https://ollama.com
-ollama pull llama3
-
-# Run with Ollama
+# Or pick a model
+bog-agents -M claude-sonnet-4-6
+bog-agents -M gpt-4o
 bog-agents -M ollama:llama3
 ```
 
-### Using with Cloud Providers
-
 ```bash
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
-# or
-export OPENAI_API_KEY="sk-..."
-
-# Run (provider auto-detected from model name)
-bog-agents -M claude-sonnet-4-6
-bog-agents -M gpt-4o
-```
-
-### Using the SDK Programmatically
-
-```python
-from bog_agents import create_agent
-
-# Default model (auto-detected from env)
-agent = create_agent()
-
-# Specific model
-agent = create_agent(model="ollama:llama3")
-
-# With custom tools
-agent = create_agent(
-    model="anthropic:claude-sonnet-4-6",
-    tools=[my_tool],
-    system_prompt="You are a research assistant.",
-)
-
-# Run
-result = agent.invoke({"messages": [{"role": "user", "content": "Hello!"}]})
-```
-
-### Running Tests
-
-```bash
-# SDK tests
-cd libs/bog-agents && make test
-
-# CLI tests
-cd libs/cli && make test
-
-# Lint all packages
-make lint  # from repo root
-```
-
-### Diagnostics
-
-```bash
-# Check your environment
+# Check your setup
 bog-agents --doctor
 ```
 
-## Monorepo Structure
+See the [CLI README](libs/cli/) for the full rundown.
+
+## Run from Source
+
+```bash
+git clone https://github.com/langchain-ai/bog-agents.git
+cd bog-agents
+
+# SDK
+cd libs/bog-agents && uv sync && cd ../..
+
+# CLI (links to local SDK)
+cd libs/cli && uv sync && cd ../..
+
+# Run it
+cd libs/cli && uv run bog-agents
+```
+
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+## Run the Tests
+
+```bash
+# SDK
+cd libs/bog-agents && make test
+
+# CLI
+cd libs/cli && make test
+
+# Single file
+uv run --group test pytest tests/unit_tests/test_specific.py
+
+# Lint everything
+make lint
+```
+
+## What's in the Box
+
+**Tools out of the gate:** `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep`, `execute`, `write_todos`, `task`
+
+**Middleware** — plug in what you need, leave out what you don't:
+
+| Middleware | What It Does |
+|-----------|-------------|
+| `FilesystemMiddleware` | File operations, multi-edit, batch read |
+| `GitToolsMiddleware` | status, diff, log, commit, add, branch, stash, blame, show |
+| `RepoMapMiddleware` | Structural code map — Python, JS, TS, Rust, Go, Java |
+| `CheckpointingMiddleware` | Git-based snapshots before mutations, with undo |
+| `CostTrackerMiddleware` | Token usage, cost, budget enforcement |
+| `PlanModeMiddleware` | Read-only mode, blocks mutating tools |
+| `AutoQualityMiddleware` | Auto-lint and test after edits |
+| `ArchitectMiddleware` | Dual-model architect/reviewer |
+| `ParallelAgentsMiddleware` | Concurrent sub-agents |
+| `SummarizationMiddleware` | Auto-summarize when context fills up |
+| `MemoryMiddleware` | Persistent AGENTS.md memory across sessions |
+| `SkillsMiddleware` | Custom skill and instruction loading |
+
+## Monorepo Layout
 
 ```
 libs/
-├── bog-agents/          # Core SDK (create_agent, middleware, backends)
-├── cli/                 # Interactive terminal AI assistant (bog-agents-cli)
-├── acp/                 # Agent Client Protocol integration (Zed editor)
-├── harbor/              # Evaluation/benchmark framework
-├── vscode-extension/    # VS Code extension (preview)
-└── partners/            # Sandbox integrations
-    ├── daytona/         #   Daytona cloud sandboxes
-    ├── modal/           #   Modal serverless compute
-    ├── runloop/         #   Runloop sandboxes
-    └── quickjs/         #   QuickJS JavaScript sandbox
+├── bog-agents/        # Core SDK
+├── cli/               # Terminal UI
+├── acp/               # Agent Client Protocol (Zed)
+├── harbor/            # Evaluation framework
+├── vscode-extension/  # VS Code extension
+└── partners/          # Sandbox integrations
+    ├── daytona/       #   Daytona cloud sandboxes
+    ├── modal/         #   Modal serverless
+    ├── runloop/       #   Runloop sandboxes
+    └── quickjs/       #   QuickJS JS sandbox
 ```
 
-## Supported Providers
+## Providers
 
-| Provider | Install | Model Example |
-|----------|---------|---------------|
-| Anthropic | `pip install 'bog-agents-cli[anthropic]'` | `anthropic:claude-sonnet-4-6` |
-| OpenAI | *(included by default)* | `openai:gpt-4o` |
-| Ollama (local) | `pip install 'bog-agents-cli[ollama]'` | `ollama:llama3` |
-| Google | `pip install 'bog-agents-cli[google-genai]'` | `google_genai:gemini-2.5-pro` |
-| DeepSeek | `pip install 'bog-agents-cli[deepseek]'` | `deepseek:deepseek-chat` |
-| Groq | `pip install 'bog-agents-cli[groq]'` | `groq:llama-3.3-70b` |
-| AWS Bedrock | `pip install 'bog-agents-cli[bedrock]'` | `bedrock:anthropic.claude-v2` |
-| Fireworks | `pip install 'bog-agents-cli[fireworks]'` | `fireworks:llama-v3p3-70b` |
-| Mistral | `pip install 'bog-agents-cli[mistralai]'` | `mistralai:mistral-large` |
-| NVIDIA | `pip install 'bog-agents-cli[nvidia]'` | `nvidia:nemotron-70b` |
-| OpenRouter | `pip install 'bog-agents-cli[openrouter]'` | `openrouter:meta-llama/llama-3` |
-| Perplexity | `pip install 'bog-agents-cli[perplexity]'` | `perplexity:sonar-pro` |
-| xAI | `pip install 'bog-agents-cli[xai]'` | `xai:grok-2` |
-| LiteLLM | `pip install 'bog-agents-cli[litellm]'` | `litellm:gpt-4o` |
-| HuggingFace | `pip install 'bog-agents-cli[huggingface]'` | `huggingface:meta-llama/Llama-3` |
+Any LangChain-compatible chat model works. Use `provider:model` format.
 
-> Any LangChain-compatible chat model works. Use the `provider:model` format.
-
-## Additional resources
-
-- **[Examples](examples/)** — Working agents and patterns
-- [Contributing Guide](https://docs.langchain.com/oss/python/contributing/overview) – Learn how to contribute to LangChain projects and find good first issues.
-- [Code of Conduct](https://github.com/langchain-ai/langchain/?tab=coc-ov-file) – Our community guidelines and standards for participation.
-
----
-
-## Acknowledgements
-
-This project was primarily inspired by Claude Code, and initially was largely an attempt to see what made Claude Code general purpose, and make it even more so.
+| Provider | Install | Example |
+|----------|---------|---------|
+| Anthropic | `bog-agents-cli[anthropic]` | `anthropic:claude-sonnet-4-6` |
+| OpenAI | *(included)* | `openai:gpt-4o` |
+| Ollama | `bog-agents-cli[ollama]` | `ollama:llama3` |
+| Google | `bog-agents-cli[google-genai]` | `google_genai:gemini-2.5-pro` |
+| DeepSeek | `bog-agents-cli[deepseek]` | `deepseek:deepseek-chat` |
+| Groq | `bog-agents-cli[groq]` | `groq:llama-3.3-70b` |
+| AWS Bedrock | `bog-agents-cli[bedrock]` | `bedrock:anthropic.claude-v2` |
+| Fireworks | `bog-agents-cli[fireworks]` | `fireworks:llama-v3p3-70b` |
+| Mistral | `bog-agents-cli[mistralai]` | `mistralai:mistral-large` |
+| NVIDIA | `bog-agents-cli[nvidia]` | `nvidia:nemotron-70b` |
+| OpenRouter | `bog-agents-cli[openrouter]` | `openrouter:meta-llama/llama-3` |
+| Perplexity | `bog-agents-cli[perplexity]` | `perplexity:sonar-pro` |
+| xAI | `bog-agents-cli[xai]` | `xai:grok-2` |
+| LiteLLM | `bog-agents-cli[litellm]` | `litellm:gpt-4o` |
+| HuggingFace | `bog-agents-cli[huggingface]` | `huggingface:meta-llama/Llama-3` |
 
 ## Security
 
-Bog Agents follows a "trust the LLM" model. The agent can do anything its tools allow. Enforce boundaries at the tool/sandbox level, not by expecting the model to self-police. See the [security policy](https://github.com/langchain-ai/bog-agents?tab=security-ov-file) for more information.
+Bog Agents trusts the LLM to do its job. Boundaries are enforced at the tool and sandbox level — not by expecting the model to hold its own reins. Bubblewrap on Linux, Seatbelt on macOS, Landlock where available.
+
+## Documentation
+
+- [Full docs](https://docs.langchain.com/oss/python/bog-agents/overview)
+- [API reference](https://reference.langchain.com/python/bog-agents/)
+- [Examples](examples/)
+- [Contributing](https://docs.langchain.com/oss/python/contributing/overview)
+
+## Acknowledgements
+
+This project drew its first breath from studying Claude Code — figuring out what made it general purpose, then pushing that further.
+
+---
+
+*The trail's marked. Saddle up.*

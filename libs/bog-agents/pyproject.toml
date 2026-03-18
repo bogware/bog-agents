@@ -54,6 +54,12 @@ test = [
   "build",
 ]
 
+serve = [
+  "starlette>=0.41.0",
+  "uvicorn>=0.34.0",
+  "sse-starlette>=2.0.0",
+]
+
 evals = [
   "langsmith",
   "langchain-xai",
