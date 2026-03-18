@@ -242,7 +242,7 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
         "Use JSON or other safe serialization formats for untrusted data",
     ),
     (
-        r'yaml\.load\s*\([^)]*(?!Loader)',
+        r'yaml\.load\s*\([^)]*\)(?!.*Loader)',
         FindingCategory.INSECURE_DESERIALIZATION,
         Severity.MEDIUM,
         "yaml.load without safe Loader",
@@ -534,7 +534,7 @@ def check_python_dependencies(target_dir: str) -> list[SecurityFinding]:
                             title=f"Vulnerable dependency: {vuln['name']} {vuln.get('version', '')}",
                             description=v.get("description", "Known vulnerability"),
                             file_path=req_file,
-                            recommendation=f"Upgrade {vuln['name']} to {v.get('fix_versions', ['latest'])}",
+                            recommendation=f"Upgrade {vuln.get('name', 'unknown')} to {v.get('fix_versions', ['latest'])[0] if isinstance(v.get('fix_versions'), list) else 'latest'}",
                             cwe_id="CWE-1104",
                         ))
             except (json.JSONDecodeError, KeyError):

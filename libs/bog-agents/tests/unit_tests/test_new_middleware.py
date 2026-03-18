@@ -287,6 +287,27 @@ class TestScheduledRuns:
         # Feb 31 doesn't exist, but we test the logic
         assert isinstance(cron2.matches_time(), bool)
 
+    def test_cron_weekday_mapping(self):
+        """Verify cron uses Sunday=0 convention, not Python's Monday=0."""
+        import datetime
+        from unittest.mock import patch
+        from bog_agents.middleware.scheduled_runs import CronExpression
+
+        # Create a known Sunday: 2026-03-15 is a Sunday
+        sunday_ts = datetime.datetime(2026, 3, 15, 9, 0).timestamp()
+        # Cron 0 = Sunday
+        cron_sunday = CronExpression(minute="0", hour="9", day_of_week="0")
+        assert cron_sunday.matches_time(sunday_ts) is True
+
+        # Cron 1 = Monday — should NOT match Sunday
+        cron_monday = CronExpression(minute="0", hour="9", day_of_week="1")
+        assert cron_monday.matches_time(sunday_ts) is False
+
+        # Monday: 2026-03-16
+        monday_ts = datetime.datetime(2026, 3, 16, 9, 0).timestamp()
+        assert cron_monday.matches_time(monday_ts) is True
+        assert cron_sunday.matches_time(monday_ts) is False
+
 
 class TestSelfImproving:
     """Tests for SelfImprovingMiddleware."""

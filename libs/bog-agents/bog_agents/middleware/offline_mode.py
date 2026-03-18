@@ -247,7 +247,7 @@ def select_best_ollama_model(models: list[OllamaModel]) -> str | None:
     model_names = [m.name.split(":")[0] for m in models]
     for pref in preferred:
         for i, name in enumerate(model_names):
-            if pref in name.lower():
+            if name.lower() == pref or name.lower().startswith(pref + "-"):
                 return models[i].name
 
     # Fall back to largest model

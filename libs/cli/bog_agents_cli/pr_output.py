@@ -216,9 +216,10 @@ def generate_pr_title(task_description: str) -> str:
     # Clean up the description
     title = task_description.strip()
 
-    # Remove common prefixes
+    # Capitalize common action prefixes
     for prefix in ["fix ", "implement ", "add ", "update ", "resolve "]:
         if title.lower().startswith(prefix):
+            title = prefix.capitalize() + title[len(prefix):]
             break
 
     # Truncate to 70 chars

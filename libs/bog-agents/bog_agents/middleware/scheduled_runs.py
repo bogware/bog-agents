@@ -153,7 +153,7 @@ class CronExpression:
             and self._field_matches(self.hour, dt.hour)
             and self._field_matches(self.day_of_month, dt.day)
             and self._field_matches(self.month, dt.month)
-            and self._field_matches(self.day_of_week, dt.weekday())
+            and self._field_matches(self.day_of_week, (dt.weekday() + 1) % 7)
         )
 
     def __str__(self) -> str:
