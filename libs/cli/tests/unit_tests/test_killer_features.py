@@ -495,3 +495,249 @@ class TestSlashCommands:
 
         # Should have significantly more commands now
         assert len(SLASH_COMMANDS) >= 45
+
+    def test_wired_commands_exist(self):
+        """New wired slash commands should be in the list."""
+        from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
+
+        names = {cmd[0] for cmd in SLASH_COMMANDS}
+        wired_commands = {"/background", "/dashboard", "/recommend"}
+        for cmd in wired_commands:
+            assert cmd in names, f"Missing wired slash command: {cmd}"
+
+
+class TestRecommendModule:
+    """Tests for the /recommend command module."""
+
+    def test_parse_defaults(self):
+        from bog_agents_cli.recommend import parse_recommend_args
+
+        config = parse_recommend_args("")
+        assert config.persona.value == "balanced"
+        assert config.focus.value == "general"
+        assert config.num_questions == 3
+        assert config.max_findings == 25
+        assert config.include_examples is True
+
+    def test_parse_all_flags(self):
+        from bog_agents_cli.recommend import parse_recommend_args
+
+        config = parse_recommend_args(
+            "--persona architect --focus security --questions 5 "
+            "--max 10 --severity high --no-examples"
+        )
+        assert config.persona.value == "architect"
+        assert config.focus.value == "security"
+        assert config.num_questions == 5
+        assert config.max_findings == 10
+        assert config.severity_threshold == "high"
+        assert config.include_examples is False
+
+    def test_parse_scope(self):
+        from bog_agents_cli.recommend import parse_recommend_args
+
+        config = parse_recommend_args("--scope libs/bog-agents")
+        assert config.scope_path == "libs/bog-agents"
+        assert config.scope.value == "directory"
+
+    def test_parse_invalid_values_use_defaults(self):
+        from bog_agents_cli.recommend import parse_recommend_args
+
+        config = parse_recommend_args("--persona nonexistent --focus invalid")
+        assert config.persona.value == "balanced"
+        assert config.focus.value == "general"
+
+    def test_build_clarifying_prompt(self):
+        from bog_agents_cli.recommend import RecommendConfig, build_clarifying_prompt
+
+        config = RecommendConfig(num_questions=3)
+        prompt = build_clarifying_prompt(config)
+        assert "3 clarifying questions" in prompt
+        assert "Staff Engineer" in prompt  # balanced persona
+
+    def test_build_clarifying_prompt_no_questions(self):
+        from bog_agents_cli.recommend import RecommendConfig, build_clarifying_prompt
+
+        config = RecommendConfig(num_questions=0)
+        prompt = build_clarifying_prompt(config)
+        assert "clarifying questions" not in prompt
+
+    def test_build_review_prompt(self):
+        from bog_agents_cli.recommend import RecommendConfig, build_review_prompt, Persona
+
+        config = RecommendConfig(persona=Persona.SECURITY)
+        prompt = build_review_prompt(config)
+        assert "Security Engineer" in prompt
+        assert "Executive Summary" in prompt
+        assert "Findings" in prompt
+
+    def test_format_help(self):
+        from bog_agents_cli.recommend import format_recommend_help
+
+        help_text = format_recommend_help()
+        assert "--persona" in help_text
+        assert "--focus" in help_text
+        assert "--questions" in help_text
+        assert "architect" in help_text
+        assert "Examples:" in help_text
+
+    def test_questions_clamped(self):
+        from bog_agents_cli.recommend import parse_recommend_args
+
+        config = parse_recommend_args("--questions 99")
+        assert config.num_questions == 10  # max is 10
+
+        config2 = parse_recommend_args("--questions -5")
+        assert config2.num_questions == 0  # min is 0
+
+
+class TestBackgroundAgentManager:
+    """Tests for the background agent manager."""
+
+    def test_init_empty(self):
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        mgr = BackgroundAgentManager()
+        assert mgr.running_count == 0
+        assert len(mgr.all_tasks) == 0
+        assert "No background tasks" in mgr.format_status_table()
+
+    def test_cleanup_empty(self):
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        mgr = BackgroundAgentManager()
+        assert mgr.cleanup_completed() == 0
+
+    def test_cancel_nonexistent(self):
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        mgr = BackgroundAgentManager()
+        assert mgr.cancel("bg-999") is False
+
+    def test_get_status_nonexistent(self):
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        mgr = BackgroundAgentManager()
+        assert mgr.get_status("bg-999") is None
+
+
+class TestDashboardModule:
+    """Tests for the dashboard module."""
+
+    def test_dashboard_state_basic(self):
+        from bog_agents_cli.dashboard import DashboardState
+
+        state = DashboardState()
+        agent = state.add_agent("a1", "Test Agent")
+        assert state.running_count == 0
+        assert state.completed_count == 0
+
+        agent.status = "running"
+        assert state.running_count == 1
+
+    def test_dashboard_state_totals(self):
+        from bog_agents_cli.dashboard import DashboardState
+
+        state = DashboardState()
+        a1 = state.add_agent("a1", "Agent 1")
+        a1.cost_usd = 0.05
+        a1.tokens_used = 1000
+        a2 = state.add_agent("a2", "Agent 2")
+        a2.cost_usd = 0.03
+        a2.tokens_used = 500
+
+        state.update_totals()
+        assert state.total_cost_usd == 0.08
+        assert state.total_tokens == 1500
+
+    def test_dashboard_layout_rendering(self):
+        from bog_agents_cli.dashboard import DashboardState, create_dashboard_layout
+
+        state = DashboardState()
+        state.add_agent("a1", "Primary")
+        output = create_dashboard_layout(state)
+        assert "BOG AGENTS DASHBOARD" in output
+        assert "Primary" in output
+        assert "Agents: 1" in output
+
+    def test_dashboard_remove_agent(self):
+        from bog_agents_cli.dashboard import DashboardState
+
+        state = DashboardState()
+        state.add_agent("a1", "Test")
+        assert len(state.agents) == 1
+        state.remove_agent("a1")
+        assert len(state.agents) == 0
+
+    def test_dashboard_format_summary(self):
+        from bog_agents_cli.dashboard import DashboardState
+
+        state = DashboardState()
+        a = state.add_agent("a1", "Worker")
+        a.status = "running"
+        a.tool_calls = 5
+        summary = state.format_summary()
+        assert "1 running" in summary
+        assert "Worker" in summary
+
+    def test_dashboard_screen_render(self):
+        from bog_agents_cli.dashboard import DashboardScreen, DashboardState
+
+        def builder():
+            s = DashboardState()
+            s.add_agent("a1", "Test")
+            return s
+
+        screen = DashboardScreen(state_builder=builder)
+        output = screen.render_once()
+        assert "Test" in output
+        assert "BOG AGENTS DASHBOARD" in output
+
+    def test_dashboard_screen_start_stop(self):
+        from bog_agents_cli.dashboard import DashboardScreen
+
+        screen = DashboardScreen()
+        output = screen.start()
+        assert screen.is_running is True
+        assert "DASHBOARD" in output
+        screen.stop()
+        assert screen.is_running is False
+
+
+class TestPROutput:
+    """Tests for the PR output module."""
+
+    def test_generate_pr_title_basic(self):
+        from bog_agents_cli.pr_output import generate_pr_title
+
+        title = generate_pr_title("fix the login bug")
+        assert title == "Fix the login bug"
+
+    def test_generate_pr_title_truncate(self):
+        from bog_agents_cli.pr_output import generate_pr_title
+
+        title = generate_pr_title("x" * 100)
+        assert len(title) <= 70
+        assert title.endswith("...")
+
+    def test_generate_pr_body(self):
+        from bog_agents_cli.pr_output import generate_pr_body
+
+        body = generate_pr_body(
+            "fix login",
+            ["src/auth.py", "tests/test_auth.py"],
+            ["abc1234 fix login"],
+            test_results="5 passed",
+        )
+        assert "## Summary" in body
+        assert "src/auth.py" in body
+        assert "5 passed" in body
+        assert "bog-agents" in body
+
+    def test_pr_config_defaults(self):
+        from bog_agents_cli.pr_output import PRConfig
+
+        config = PRConfig()
+        assert config.base_branch == "main"
+        assert config.draft is False
+        assert config.run_tests_before_pr is True

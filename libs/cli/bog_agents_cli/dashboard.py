@@ -239,3 +239,91 @@ def create_dashboard_layout(state: DashboardState) -> str:
 
     lines.append("=" * width)
     return "\n".join(lines)
+
+
+class DashboardScreen:
+    """Live-updating dashboard screen controller.
+
+    Manages a polling timer that refreshes the dashboard display at a
+    configurable interval. Designed to integrate with the Textual app
+    via a simple callback pattern.
+
+    Example:
+        ```python
+        screen = DashboardScreen(
+            state_builder=build_state,
+            on_render=lambda text: mount_message(text),
+            interval=2.0,
+        )
+        screen.start()
+        # ... later
+        screen.stop()
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        state_builder: Any = None,
+        on_render: Any = None,
+        interval: float = 2.0,
+    ) -> None:
+        """Initialize the dashboard screen.
+
+        Args:
+            state_builder: Callable that returns a DashboardState.
+            on_render: Callback(text) to display the rendered dashboard.
+            interval: Refresh interval in seconds.
+        """
+        self._state_builder = state_builder
+        self._on_render = on_render
+        self._interval = interval
+        self._running = False
+        self._timer: Any = None
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the dashboard is actively refreshing."""
+        return self._running
+
+    def render_once(self) -> str:
+        """Build state and render the dashboard once.
+
+        Returns:
+            Formatted dashboard text.
+        """
+        if self._state_builder:
+            state = self._state_builder()
+        else:
+            state = DashboardState()
+        return create_dashboard_layout(state)
+
+    def start(self, set_interval_fn: Any = None) -> str:
+        """Start live refresh and return the initial render.
+
+        Args:
+            set_interval_fn: Textual's set_interval(seconds, callback).
+                If provided, automatic refresh is enabled.
+
+        Returns:
+            Initial dashboard render.
+        """
+        self._running = True
+        if set_interval_fn is not None:
+            self._timer = set_interval_fn(self._interval, self._tick)
+        return self.render_once()
+
+    def stop(self) -> None:
+        """Stop live refresh."""
+        self._running = False
+        if self._timer is not None:
+            self._timer.stop()
+            self._timer = None
+
+    def _tick(self) -> None:
+        """Timer callback to refresh the dashboard."""
+        if not self._running:
+            return
+        text = self.render_once()
+        if self._on_render:
+            self._on_render(text)
