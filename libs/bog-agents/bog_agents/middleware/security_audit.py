@@ -425,12 +425,14 @@ def scan_directory(
     target_dir: str,
     *,
     max_file_size: int = 1_000_000,
+    exclude_files: list[str] | None = None,
 ) -> SecurityReport:
     """Scan a directory for security issues.
 
     Args:
         target_dir: Directory to scan.
         max_file_size: Maximum file size to scan (bytes).
+        exclude_files: File paths (relative to target_dir) to skip.
 
     Returns:
         SecurityReport with all findings.
@@ -445,12 +447,21 @@ def scan_directory(
         logger.error("Target directory does not exist: %s", target_dir)
         return report
 
+    _exclude_set = set(exclude_files or [])
+    # Always exclude the scanner itself to avoid self-detection
+    _exclude_set.add("middleware/security_audit.py")
+
     for root, dirs, files in os.walk(target):
         # Skip excluded directories
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
 
         for filename in files:
             file_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(file_path, target_dir)
+
+            if rel_path in _exclude_set:
+                continue
+
             ext = Path(filename).suffix.lower()
 
             if ext in SKIP_EXTENSIONS:

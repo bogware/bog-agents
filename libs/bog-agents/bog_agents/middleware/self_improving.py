@@ -305,8 +305,11 @@ class SelfImprovingMiddleware(AgentMiddleware):
             store_path = "~/.bog-agents/improvements.json"
         self._store_path = Path(store_path).expanduser()
         self.record = ImprovementRecord()
-        self.current_metrics = None
+        self.current_metrics: SessionMetrics | None = None
         self._load()
+        # Auto-start a default session so callers don't need to call start_session()
+        if self.current_metrics is None:
+            self.start_session("default")
 
     def _load(self) -> None:
         """Load improvement data from disk."""

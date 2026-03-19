@@ -1958,15 +1958,27 @@ class BogAgentsApp(App):
         from bog_agents_cli.background_agents import BackgroundAgentManager
 
         if not hasattr(self, "_bg_manager"):
-            agent_factory = None
-            if self._agent is not None:
-                from bog_agents.graph import create_agent as _create_agent
+            def _create_bg_agent():
+                """Create an isolated agent instance for background tasks."""
+                from bog_agents_cli.config import create_model, settings
 
-                agent_factory = lambda: self._agent  # noqa: E731
+                model_spec = self._model_override or settings.model_name
+                try:
+                    result = create_model(model_spec)
+                    return result.model
+                except Exception:
+                    logger.debug("Failed to create background agent model", exc_info=True)
+                    return self._agent  # Fallback to shared agent
+
+            def _make_agent():
+                from bog_agents.graph import create_agent as _create_sdk_agent
+                model = _create_bg_agent()
+                return _create_sdk_agent(model=model)
+
             self._bg_manager = BackgroundAgentManager(
-                agent_factory=agent_factory,
-                on_complete=lambda task: logger.info(
-                    "Background task %s finished: %s", task.task_id, task.status
+                agent_factory=_make_agent,
+                on_complete=lambda task: self.call_from_thread(
+                    self._notify_background_complete, task
                 ),
             )
 
@@ -2014,34 +2026,76 @@ class BogAgentsApp(App):
         except RuntimeError as exc:
             await self._mount_message(AppMessage(f"Error: {exc}"))
 
+    async def _notify_background_complete(self, task: object) -> None:
+        """Show a notification when a background task finishes.
+
+        Args:
+            task: The completed BackgroundTask.
+        """
+        from bog_agents_cli.background_agents import BackgroundStatus
+
+        status = getattr(task, "status", "unknown")
+        task_id = getattr(task, "task_id", "?")
+
+        if status == BackgroundStatus.COMPLETED:
+            result_preview = getattr(task, "result", "") or ""
+            if len(result_preview) > 200:
+                result_preview = result_preview[:200] + "..."
+            await self._mount_message(AppMessage(
+                f"Background task {task_id} completed.\n{result_preview}"
+            ))
+        elif status == BackgroundStatus.FAILED:
+            error = getattr(task, "error", "unknown error")
+            await self._mount_message(AppMessage(
+                f"Background task {task_id} failed: {error}"
+            ))
+
     async def _handle_dashboard_command(self) -> None:
         """Handle /dashboard slash command.
 
-        Shows a text-based dashboard of all running agents (main + background).
+        Shows a live-updating dashboard of all agents. Use /dashboard again
+        or /dashboard stop to stop refreshing.
         """
-        from bog_agents_cli.dashboard import DashboardState, create_dashboard_layout
+        from bog_agents_cli.dashboard import DashboardScreen
 
-        state = DashboardState()
+        # Toggle off if already running
+        if hasattr(self, "_dashboard_screen") and self._dashboard_screen.is_running:
+            self._dashboard_screen.stop()
+            await self._mount_message(AppMessage("Dashboard stopped."))
+            return
 
-        # Add the main agent
-        main = state.add_agent("main", "Primary Agent")
-        main.status = "running"
-        main.started_at = self._start_time if hasattr(self, "_start_time") else None
-        if self._token_tracker:
-            main.tokens_used = self._token_tracker.current_context
+        def _build_state():
+            from bog_agents_cli.dashboard import DashboardState
 
-        # Add background agents if they exist
-        if hasattr(self, "_bg_manager"):
-            for task in self._bg_manager.all_tasks:
-                panel = state.add_agent(task.task_id, f"Background: {task.prompt[:30]}")
-                panel.status = task.status.value
-                panel.started_at = task.started_at
-                panel.completed_at = task.completed_at
-                if task.error:
-                    panel.errors = 1
+            state = DashboardState()
 
-        output = create_dashboard_layout(state)
-        await self._mount_message(AppMessage(output))
+            # Main agent
+            main = state.add_agent("main", "Primary Agent")
+            main.status = "running"
+            if self._token_tracker:
+                main.tokens_used = self._token_tracker.current_context
+
+            # Background agents
+            if hasattr(self, "_bg_manager"):
+                for task in self._bg_manager.all_tasks:
+                    panel = state.add_agent(task.task_id, f"BG: {task.prompt[:30]}")
+                    panel.status = task.status.value
+                    panel.started_at = task.started_at
+                    panel.completed_at = task.completed_at
+                    if task.error:
+                        panel.errors = 1
+
+            return state
+
+        self._dashboard_screen = DashboardScreen(
+            state_builder=_build_state,
+            interval=3.0,
+        )
+
+        output = self._dashboard_screen.render_once()
+        await self._mount_message(AppMessage(
+            f"{output}\n\nDashboard showing snapshot. Use /dashboard again to refresh."
+        ))
 
     async def _handle_recommend_command(self, command: str) -> None:
         """Handle /recommend slash command.

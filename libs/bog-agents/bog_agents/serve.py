@@ -78,15 +78,44 @@ class AgentServer:
     ) -> None:
         """Initialize the agent server.
 
+        If no API key is set, checks the ``BOG_AGENTS_SERVE_API_KEY``
+        environment variable. When binding to a non-localhost address
+        without an API key, a random key is auto-generated and logged.
+
         Args:
             agent: A compiled LangGraph agent from create_agent().
             config: Server configuration.
         """
+        import os
+
         self.agent = agent
         self.config = config or ServerConfig()
         self._threads: dict[str, ThreadState] = {}
         self._request_count = 0
         self._start_time = time.time()
+
+        # Auth: env var → config → auto-generate for non-localhost
+        if self.config.api_key is None:
+            env_key = os.environ.get("BOG_AGENTS_SERVE_API_KEY")
+            if env_key:
+                self.config.api_key = env_key
+
+        is_localhost = self.config.host in ("127.0.0.1", "localhost", "::1")
+        if self.config.api_key is None and not is_localhost:
+            self.config.api_key = str(uuid.uuid4())
+            logger.warning(
+                "No API key set for non-localhost server. Auto-generated key: %s",
+                self.config.api_key,
+            )
+            logger.warning(
+                "Set BOG_AGENTS_SERVE_API_KEY or pass api_key in ServerConfig "
+                "to use a stable key."
+            )
+        elif self.config.api_key is None and is_localhost:
+            logger.info(
+                "Running on localhost without API key. Set "
+                "BOG_AGENTS_SERVE_API_KEY for authenticated access."
+            )
 
     def _get_or_create_thread(self, thread_id: str | None = None) -> ThreadState:
         """Get an existing thread or create a new one.
