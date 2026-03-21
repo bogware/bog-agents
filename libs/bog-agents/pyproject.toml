@@ -27,6 +27,12 @@ dependencies = [
     "wcmatch",
 ]
 
+[project.optional-dependencies]
+serve = [
+    "starlette>=0.41.0",
+    "uvicorn>=0.34.0",
+    "sse-starlette>=2.0.0",
+]
 
 [project.urls]
 Homepage = "https://docs.langchain.com/oss/python/bog-agents/overview"

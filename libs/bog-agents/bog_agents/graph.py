@@ -1,5 +1,6 @@
 """Bog Agents come with planning, filesystem, and subagents."""
 
+import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -372,7 +373,21 @@ def create_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logi
         enable_market_sentiment = f.enable_market_sentiment
         enable_competitive_intel = f.enable_competitive_intel
 
-    model = get_default_model() if model is None else resolve_model(model)
+    if model is None:
+        _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
+        if not any(os.environ.get(k) for k in _api_key_vars):
+            import warnings
+
+            warnings.warn(
+                "No API key found (checked ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY). "
+                "The default model (Claude Sonnet) requires ANTHROPIC_API_KEY. "
+                "Set it before calling agent.invoke().",
+                UserWarning,
+                stacklevel=2,
+            )
+        model = get_default_model()
+    else:
+        model = resolve_model(model)
 
     backend = backend if backend is not None else (StateBackend)
 

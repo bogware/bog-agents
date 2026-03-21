@@ -8,7 +8,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_MAX_OUTPUT_LINES = 100
 
 
 @dataclass
@@ -50,14 +55,14 @@ class AgentPanelState:
         return icons.get(self.status, "?")
 
     def add_output(self, line: str) -> None:
-        """Add an output line, keeping last 100.
+        """Add an output line, keeping last ``_MAX_OUTPUT_LINES``.
 
         Args:
             line: Output line to add.
         """
         self.output_lines.append(line)
-        if len(self.output_lines) > 100:
-            self.output_lines = self.output_lines[-100:]
+        if len(self.output_lines) > _MAX_OUTPUT_LINES:
+            self.output_lines = self.output_lines[-_MAX_OUTPUT_LINES:]
 
 
 @dataclass
@@ -69,7 +74,9 @@ class DashboardState:
     total_tokens: int = 0
     session_start: float = field(default_factory=time.time)
 
-    def add_agent(self, agent_id: str, name: str, prompt: str = "") -> AgentPanelState:
+    def add_agent(
+        self, agent_id: str, name: str, prompt: str = ""
+    ) -> AgentPanelState:
         """Register a new agent in the dashboard.
 
         Args:
@@ -78,7 +85,7 @@ class DashboardState:
             prompt: Initial prompt.
 
         Returns:
-            The new AgentPanelState.
+            The new ``AgentPanelState``.
         """
         state = AgentPanelState(
             agent_id=agent_id,
@@ -103,19 +110,23 @@ class DashboardState:
             agent_id: Agent identifier.
 
         Returns:
-            AgentPanelState or None.
+            ``AgentPanelState`` or ``None``.
         """
         return self.agents.get(agent_id)
 
     @property
     def running_count(self) -> int:
         """Number of currently running agents."""
-        return sum(1 for a in self.agents.values() if a.status == "running")
+        return sum(
+            1 for a in self.agents.values() if a.status == "running"
+        )
 
     @property
     def completed_count(self) -> int:
         """Number of completed agents."""
-        return sum(1 for a in self.agents.values() if a.status == "completed")
+        return sum(
+            1 for a in self.agents.values() if a.status == "completed"
+        )
 
     def update_totals(self) -> None:
         """Recalculate total cost and tokens from all agents."""
@@ -130,21 +141,34 @@ class DashboardState:
         """
         self.update_totals()
         elapsed = time.time() - self.session_start
-        lines: list[str] = []
-        lines.append(f"Dashboard: {len(self.agents)} agents | "
-                      f"{self.running_count} running | "
-                      f"{self.completed_count} done | "
-                      f"${self.total_cost_usd:.4f} | "
-                      f"{elapsed:.0f}s")
-        lines.append("-" * 70)
+        lines: list[str] = [
+            (
+                f"Dashboard: {len(self.agents)} agents | "
+                f"{self.running_count} running | "
+                f"{self.completed_count} done | "
+                f"${self.total_cost_usd:.4f} | "
+                f"{elapsed:.0f}s"
+            ),
+            "-" * 70,
+        ]
 
-        for agent in sorted(self.agents.values(), key=lambda a: a.agent_id):
+        for agent in sorted(
+            self.agents.values(), key=lambda a: a.agent_id
+        ):
             icon = agent.status_icon
-            duration = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
-            action = agent.current_action[:40] if agent.current_action else agent.status
+            dur = (
+                f"{agent.duration_seconds:.0f}s"
+                if agent.started_at
+                else "--"
+            )
+            action = (
+                agent.current_action[:40]
+                if agent.current_action
+                else agent.status
+            )
             lines.append(
                 f"  [{icon}] {agent.name:<20} {action:<40} "
-                f"{agent.tool_calls}tc {duration}"
+                f"{agent.tool_calls}tc {dur}"
             )
 
         return "\n".join(lines)
@@ -162,21 +186,23 @@ class DashboardState:
         if agent is None:
             return f"Agent {agent_id} not found."
 
-        lines: list[str] = []
-        lines.append(f"Agent: {agent.name} ({agent.agent_id})")
-        lines.append(f"Status: {agent.status}")
-        lines.append(f"Duration: {agent.duration_seconds:.1f}s")
-        lines.append(f"Tool calls: {agent.tool_calls} ({agent.errors} errors)")
-        lines.append(f"Tokens: {agent.tokens_used:,}")
-        lines.append(f"Cost: ${agent.cost_usd:.4f}")
+        lines: list[str] = [
+            f"Agent: {agent.name} ({agent.agent_id})",
+            f"Status: {agent.status}",
+            f"Duration: {agent.duration_seconds:.1f}s",
+            f"Tool calls: {agent.tool_calls} ({agent.errors} errors)",
+            f"Tokens: {agent.tokens_used:,}",
+            f"Cost: ${agent.cost_usd:.4f}",
+        ]
 
         if agent.prompt:
             lines.append(f"\nPrompt: {agent.prompt[:200]}")
 
         if agent.output_lines:
             lines.append("\nRecent output:")
-            for line in agent.output_lines[-20:]:
-                lines.append(f"  {line}")
+            lines.extend(
+                f"  {line}" for line in agent.output_lines[-20:]
+            )
 
         return "\n".join(lines)
 
@@ -194,35 +220,39 @@ def create_dashboard_layout(state: DashboardState) -> str:
     """
     state.update_totals()
     width = 80
-    lines: list[str] = []
-
-    # Header
-    lines.append("=" * width)
-    lines.append(" BOG AGENTS DASHBOARD".center(width))
-    lines.append("=" * width)
-    lines.append("")
-
-    # Summary bar
     elapsed = time.time() - state.session_start
-    lines.append(
-        f" Agents: {len(state.agents)} | "
-        f"Running: {state.running_count} | "
-        f"Done: {state.completed_count} | "
-        f"Cost: ${state.total_cost_usd:.4f} | "
-        f"Time: {elapsed:.0f}s"
-    )
-    lines.append("-" * width)
-    lines.append("")
 
-    # Agent panels
+    lines: list[str] = [
+        "=" * width,
+        " BOG AGENTS DASHBOARD".center(width),
+        "=" * width,
+        "",
+        (
+            f" Agents: {len(state.agents)} | "
+            f"Running: {state.running_count} | "
+            f"Done: {state.completed_count} | "
+            f"Cost: ${state.total_cost_usd:.4f} | "
+            f"Time: {elapsed:.0f}s"
+        ),
+        "-" * width,
+        "",
+    ]
+
     agents = sorted(state.agents.values(), key=lambda a: a.agent_id)
     for agent in agents:
         icon = agent.status_icon
-        duration = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
-
-        lines.append(f" [{icon}] {agent.name} ({agent.agent_id})")
-        lines.append(f"     Status: {agent.status} | Duration: {duration}")
-        lines.append(f"     Tools: {agent.tool_calls} | Errors: {agent.errors} | Tokens: {agent.tokens_used:,}")
+        dur = (
+            f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
+        )
+        lines.extend((
+            f" [{icon}] {agent.name} ({agent.agent_id})",
+            f"     Status: {agent.status} | Duration: {dur}",
+            (
+                f"     Tools: {agent.tool_calls} | "
+                f"Errors: {agent.errors} | "
+                f"Tokens: {agent.tokens_used:,}"
+            ),
+        ))
 
         if agent.current_action:
             lines.append(f"     Action: {agent.current_action[:60]}")
@@ -234,8 +264,7 @@ def create_dashboard_layout(state: DashboardState) -> str:
         lines.append("")
 
     if not agents:
-        lines.append(" No agents running.")
-        lines.append("")
+        lines.extend((" No agents running.", ""))
 
     lines.append("=" * width)
     return "\n".join(lines)
@@ -264,14 +293,14 @@ class DashboardScreen:
     def __init__(
         self,
         *,
-        state_builder: Any = None,
-        on_render: Any = None,
+        state_builder: Callable[[], DashboardState] | None = None,
+        on_render: Callable[[str], object] | None = None,
         interval: float = 2.0,
     ) -> None:
         """Initialize the dashboard screen.
 
         Args:
-            state_builder: Callable that returns a DashboardState.
+            state_builder: Callable that returns a ``DashboardState``.
             on_render: Callback(text) to display the rendered dashboard.
             interval: Refresh interval in seconds.
         """
@@ -279,7 +308,7 @@ class DashboardScreen:
         self._on_render = on_render
         self._interval = interval
         self._running = False
-        self._timer: Any = None
+        self._timer: object | None = None
 
     @property
     def is_running(self) -> bool:
@@ -292,17 +321,21 @@ class DashboardScreen:
         Returns:
             Formatted dashboard text.
         """
-        if self._state_builder:
-            state = self._state_builder()
-        else:
-            state = DashboardState()
+        state = (
+            self._state_builder()
+            if self._state_builder
+            else DashboardState()
+        )
         return create_dashboard_layout(state)
 
-    def start(self, set_interval_fn: Any = None) -> str:
+    def start(
+        self,
+        set_interval_fn: Callable[..., object] | None = None,
+    ) -> str:
         """Start live refresh and return the initial render.
 
         Args:
-            set_interval_fn: Textual's set_interval(seconds, callback).
+            set_interval_fn: Textual's ``set_interval(seconds, callback)``.
                 If provided, automatic refresh is enabled.
 
         Returns:
@@ -317,7 +350,8 @@ class DashboardScreen:
         """Stop live refresh."""
         self._running = False
         if self._timer is not None:
-            self._timer.stop()
+            if hasattr(self._timer, "stop"):
+                self._timer.stop()  # type: ignore[union-attr]
             self._timer = None
 
     def _tick(self) -> None:
