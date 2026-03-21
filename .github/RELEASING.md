@@ -1,10 +1,12 @@
-# CLI Release Process
+# Release Process
 
-This document describes the release process for the CLI package (`libs/cli`) in the Bog Agents monorepo using [release-please](https://github.com/googleapis/release-please).
+This document describes the release process for packages in the Bog Agents monorepo using [release-please](https://github.com/googleapis/release-please).
+
+Both the **SDK** (`bog-agents`) and the **CLI** (`bog-agents-cli`) are managed by release-please.
 
 ## Overview
 
-CLI releases are managed via release-please, which:
+Releases are managed via release-please, which:
 
 1. Analyzes conventional commits on the `main` branch
 2. Creates/updates a release PR with changelog and version bump
