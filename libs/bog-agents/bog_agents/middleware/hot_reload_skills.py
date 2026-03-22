@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (

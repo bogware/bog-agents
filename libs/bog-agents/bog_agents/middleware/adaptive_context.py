@@ -8,7 +8,7 @@ Supports models from 4K to 1M+ tokens with appropriate strategies for each.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
