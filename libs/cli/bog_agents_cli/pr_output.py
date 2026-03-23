@@ -1,22 +1,26 @@
 """PR-as-Output mode for non-interactive agent execution.
 
-Run: `bog-agents -n "fix issue #123" --pr`
+Run: ``bog-agents -n "fix issue #123" --pr``
 
 Produces a ready-to-merge pull request with description, test plan,
 and changelog entry. Designed for CI/CD and automation workflows.
 """
 
+# ruff: noqa: S607  # Partial executable paths are intentional (git, gh, make, etc.)
+
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
+import re
+import subprocess  # noqa: S404
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_MAX_TITLE_LEN = 70
+_MAX_FILES_IN_BODY = 20
 
 
 @dataclass
@@ -51,7 +55,9 @@ class PRResult:
     duration_seconds: float = 0.0
 
 
-def _run_git(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
+def _run_git(
+    args: list[str], *, cwd: str | None = None
+) -> tuple[bool, str]:
     """Run a git command.
 
     Args:
@@ -62,11 +68,12 @@ def _run_git(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
         Tuple of (success, output).
     """
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603
             ["git", *args],
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
             cwd=cwd,
         )
         return result.returncode == 0, result.stdout.strip()
@@ -74,7 +81,9 @@ def _run_git(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def _run_gh(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
+def _run_gh(
+    args: list[str], *, cwd: str | None = None
+) -> tuple[bool, str]:
     """Run a GitHub CLI command.
 
     Args:
@@ -85,11 +94,12 @@ def _run_gh(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
         Tuple of (success, output).
     """
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603
             ["gh", *args],
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
             cwd=cwd,
         )
         return result.returncode == 0, result.stdout.strip()
@@ -97,7 +107,12 @@ def _run_gh(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
         return False, str(exc)
 
 
-def create_branch(task_description: str, config: PRConfig, *, cwd: str | None = None) -> str:
+def create_branch(
+    task_description: str,
+    config: PRConfig,
+    *,
+    cwd: str | None = None,
+) -> str:
     """Create a new feature branch for the PR.
 
     Args:
@@ -107,28 +122,31 @@ def create_branch(task_description: str, config: PRConfig, *, cwd: str | None = 
 
     Returns:
         Branch name.
-    """
-    # Generate branch name from task description
-    import re
 
-    slug = re.sub(r"[^a-z0-9]+", "-", task_description.lower())[:40].strip("-")
+    Raises:
+        RuntimeError: If branch creation fails.
+    """
+    slug = re.sub(
+        r"[^a-z0-9]+", "-", task_description.lower()
+    )[:40].strip("-")
     timestamp = str(int(time.time()))[-6:]
     branch_name = f"{config.branch_prefix}{slug}-{timestamp}"
 
-    # Ensure we're on the base branch and up to date
     _run_git(["checkout", config.base_branch], cwd=cwd)
     _run_git(["pull", "origin", config.base_branch], cwd=cwd)
 
-    # Create and checkout new branch
     success, _ = _run_git(["checkout", "-b", branch_name], cwd=cwd)
     if not success:
-        raise RuntimeError(f"Failed to create branch: {branch_name}")
+        msg = f"Failed to create branch: {branch_name}"
+        raise RuntimeError(msg)
 
     logger.info("Created branch: %s", branch_name)
     return branch_name
 
 
-def get_changed_files(base_branch: str, *, cwd: str | None = None) -> list[str]:
+def get_changed_files(
+    base_branch: str, *, cwd: str | None = None
+) -> list[str]:
     """Get list of files changed relative to base branch.
 
     Args:
@@ -138,10 +156,13 @@ def get_changed_files(base_branch: str, *, cwd: str | None = None) -> list[str]:
     Returns:
         List of changed file paths.
     """
-    success, output = _run_git(["diff", "--name-only", f"{base_branch}...HEAD"], cwd=cwd)
+    success, output = _run_git(
+        ["diff", "--name-only", f"{base_branch}...HEAD"], cwd=cwd
+    )
     if not success:
-        # Fallback to staged + unstaged changes
-        _, output = _run_git(["diff", "--name-only", "HEAD"], cwd=cwd)
+        _, output = _run_git(
+            ["diff", "--name-only", "HEAD"], cwd=cwd
+        )
     return [f for f in output.split("\n") if f.strip()]
 
 
@@ -163,43 +184,47 @@ def generate_pr_body(
     Returns:
         Formatted PR body in markdown.
     """
-    lines: list[str] = []
-
-    lines.append("## Summary")
-    lines.append("")
-    lines.append(f"Automated changes from bog-agents: {task_description}")
-    lines.append("")
+    lines: list[str] = [
+        "## Summary",
+        "",
+        f"Automated changes from bog-agents: {task_description}",
+        "",
+    ]
 
     if commits:
-        lines.append("## Changes")
-        lines.append("")
-        for commit in commits:
-            lines.append(f"- {commit}")
+        lines.extend(("## Changes", ""))
+        lines.extend(f"- {commit}" for commit in commits)
         lines.append("")
 
     if files_changed:
-        lines.append("## Files Changed")
-        lines.append("")
-        for f in files_changed[:20]:
-            lines.append(f"- `{f}`")
-        if len(files_changed) > 20:
-            lines.append(f"- ... and {len(files_changed) - 20} more")
+        lines.extend(("## Files Changed", ""))
+        lines.extend(
+            f"- `{f}`" for f in files_changed[:_MAX_FILES_IN_BODY]
+        )
+        if len(files_changed) > _MAX_FILES_IN_BODY:
+            extra = len(files_changed) - _MAX_FILES_IN_BODY
+            lines.append(f"- ... and {extra} more")
         lines.append("")
 
-    lines.append("## Test Plan")
-    lines.append("")
+    lines.extend(("## Test Plan", ""))
     if test_results:
-        lines.append("```")
-        lines.append(test_results[:2000])
-        lines.append("```")
+        lines.extend(("```", test_results[:2000], "```"))
     else:
-        lines.append("- [ ] Review changes")
-        lines.append("- [ ] Run test suite")
-        lines.append("- [ ] Verify no regressions")
+        lines.extend((
+            "- [ ] Review changes",
+            "- [ ] Run test suite",
+            "- [ ] Verify no regressions",
+        ))
 
-    lines.append("")
-    lines.append("---")
-    lines.append("*Generated by [bog-agents](https://github.com/langchain-ai/bog-agents)*")
+    lines.extend((
+        "",
+        "---",
+        (
+            "*Generated by "
+            "[bog-agents]"
+            "(https://github.com/langchain-ai/bog-agents)*"
+        ),
+    ))
 
     return "\n".join(lines)
 
@@ -213,23 +238,22 @@ def generate_pr_title(task_description: str) -> str:
     Returns:
         PR title (max 70 chars).
     """
-    # Clean up the description
     title = task_description.strip()
 
-    # Capitalize common action prefixes
-    for prefix in ["fix ", "implement ", "add ", "update ", "resolve "]:
+    for prefix in ("fix ", "implement ", "add ", "update ", "resolve "):
         if title.lower().startswith(prefix):
             title = prefix.capitalize() + title[len(prefix):]
             break
 
-    # Truncate to 70 chars
-    if len(title) > 70:
-        title = title[:67] + "..."
+    if len(title) > _MAX_TITLE_LEN:
+        title = title[: _MAX_TITLE_LEN - 3] + "..."
 
     return title
 
 
-def run_tests(*, cwd: str | None = None) -> tuple[bool, str]:
+def run_tests(
+    *, cwd: str | None = None
+) -> tuple[bool, str]:
     """Run the project's test suite.
 
     Tries common test commands in order until one works.
@@ -250,18 +274,21 @@ def run_tests(*, cwd: str | None = None) -> tuple[bool, str]:
 
     for cmd in test_commands:
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # noqa: S603
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=300,
+                check=False,
                 cwd=cwd,
             )
             output = result.stdout + result.stderr
             if result.returncode == 0:
                 return True, output[-2000:]
-            # If the command exists but tests fail, report that
-            if "command not found" not in output.lower() and "not recognized" not in output.lower():
+            if (
+                "command not found" not in output.lower()
+                and "not recognized" not in output.lower()
+            ):
                 return False, output[-2000:]
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
@@ -285,25 +312,26 @@ def commit_and_push(
     Returns:
         Tuple of (success, list of commit messages).
     """
-    # Stage all changes
     _run_git(["add", "-A"], cwd=cwd)
 
-    # Check if there are changes to commit
-    success, status = _run_git(["status", "--porcelain"], cwd=cwd)
+    _, status = _run_git(["status", "--porcelain"], cwd=cwd)
     if not status.strip():
-        return True, []  # Nothing to commit
+        return True, []
 
-    # Commit
     success, _ = _run_git(["commit", "-m", message], cwd=cwd)
     if not success:
         return False, []
 
-    # Get commit messages
-    _, log_output = _run_git(["log", "--oneline", f"origin/{branch_name}..HEAD"], cwd=cwd)
-    commits = [line.strip() for line in log_output.split("\n") if line.strip()]
+    _, log_output = _run_git(
+        ["log", "--oneline", f"origin/{branch_name}..HEAD"], cwd=cwd
+    )
+    commits = [
+        line.strip() for line in log_output.split("\n") if line.strip()
+    ]
 
-    # Push
-    success, _ = _run_git(["push", "-u", "origin", branch_name], cwd=cwd)
+    success, _ = _run_git(
+        ["push", "-u", "origin", branch_name], cwd=cwd
+    )
     return success, commits
 
 
@@ -328,11 +356,16 @@ def create_pull_request(
         Tuple of (success, pr_url_or_error).
     """
     args = [
-        "pr", "create",
-        "--title", title,
-        "--body", body,
-        "--base", config.base_branch,
-        "--head", branch_name,
+        "pr",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+        "--base",
+        config.base_branch,
+        "--head",
+        branch_name,
     ]
 
     if config.draft:
@@ -349,7 +382,7 @@ def create_pull_request(
 
 async def run_pr_mode(
     task_description: str,
-    agent: Any,
+    agent: Any,  # noqa: ANN401
     *,
     config: PRConfig | None = None,
     cwd: str | None = None,
@@ -369,43 +402,49 @@ async def run_pr_mode(
         cwd: Working directory.
 
     Returns:
-        PRResult with the outcome.
+        ``PRResult`` with the outcome.
     """
     start = time.time()
     cfg = config or PRConfig()
     result = PRResult(success=False)
 
     try:
-        # 1. Create branch
         branch_name = create_branch(task_description, cfg, cwd=cwd)
         result.branch_name = branch_name
 
-        # 2. Run agent
         logger.info("Running agent: %s", task_description)
-        agent_config = {"configurable": {"thread_id": f"pr-{branch_name}"}}
-        agent_result = await agent.ainvoke(
+        agent_config = {
+            "configurable": {"thread_id": f"pr-{branch_name}"}
+        }
+        await agent.ainvoke(
             {"messages": [{"role": "user", "content": task_description}]},
             config=agent_config,
         )
 
-        # 3. Run tests
         if cfg.run_tests_before_pr:
             test_success, test_output = run_tests(cwd=cwd)
             result.test_results = test_output
             if not test_success:
-                logger.warning("Tests failed, but continuing with PR creation")
+                logger.warning(
+                    "Tests failed, continuing with PR creation"
+                )
 
-        # 4. Get changed files
-        result.files_changed = get_changed_files(cfg.base_branch, cwd=cwd)
+        result.files_changed = get_changed_files(
+            cfg.base_branch, cwd=cwd
+        )
 
         if not result.files_changed:
             result.error = "No files changed by the agent"
             result.duration_seconds = time.time() - start
             return result
 
-        # 5. Commit and push
-        commit_msg = f"feat: {task_description[:50]}\n\nAutomated by bog-agents"
-        push_success, commits = commit_and_push(commit_msg, branch_name, cwd=cwd)
+        commit_msg = (
+            f"feat: {task_description[:50]}\n\n"
+            "Automated by bog-agents"
+        )
+        push_success, commits = commit_and_push(
+            commit_msg, branch_name, cwd=cwd
+        )
         result.commits = commits
 
         if not push_success:
@@ -413,7 +452,6 @@ async def run_pr_mode(
             result.duration_seconds = time.time() - start
             return result
 
-        # 6. Create PR
         result.title = generate_pr_title(task_description)
         result.body = generate_pr_body(
             task_description,
@@ -423,7 +461,11 @@ async def run_pr_mode(
         )
 
         pr_success, pr_output = create_pull_request(
-            result.title, result.body, branch_name, cfg, cwd=cwd,
+            result.title,
+            result.body,
+            branch_name,
+            cfg,
+            cwd=cwd,
         )
 
         if pr_success:
@@ -433,9 +475,9 @@ async def run_pr_mode(
         else:
             result.error = f"Failed to create PR: {pr_output}"
 
-    except Exception as exc:
-        result.error = str(exc)
-        logger.error("PR mode failed: %s", exc, exc_info=True)
+    except Exception:
+        logger.exception("PR mode failed")
+        result.error = "PR mode encountered an error"
 
     result.duration_seconds = time.time() - start
     return result

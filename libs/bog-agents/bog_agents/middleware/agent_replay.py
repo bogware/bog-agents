@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -21,9 +21,6 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -563,8 +560,6 @@ class AgentReplayMiddleware(AgentMiddleware):
         runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Record model calls in the replay session."""
-        start = time.time()
-
         if self.recording:
             self.session.record(
                 ActionType.MODEL_CALL,
@@ -581,7 +576,6 @@ class AgentReplayMiddleware(AgentMiddleware):
                 )
             raise
 
-        duration_ms = (time.time() - start) * 1000
         if self.recording and self.auto_save and self.session.total_actions % 10 == 0:
             self.store.save(self.session)
 

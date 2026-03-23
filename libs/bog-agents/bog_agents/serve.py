@@ -1,35 +1,32 @@
 """HTTP API server for bog-agents.
 
 Exposes a running agent as a REST/WebSocket API server. Enables production
-deployments via `bog-agents serve` or programmatic use in Docker containers,
+deployments via ``bog-agents --serve`` or programmatic use in Docker containers,
 microservices, and orchestration systems.
 
-## Endpoints
-
-- POST /invoke          — Run agent synchronously, return final result
-- POST /stream          — Stream agent responses via SSE
-- GET  /health          — Health check
-- GET  /info            — Agent info and capabilities
-- POST /threads         — Create a new thread
-- GET  /threads         — List threads
-- POST /threads/{id}/messages — Send a message to a thread
-- GET  /threads/{id}/history  — Get thread message history
+Endpoints
+---------
+- ``POST /invoke``                    -- Run agent synchronously, return final result
+- ``POST /stream``                    -- Stream agent responses via SSE
+- ``GET  /health``                    -- Health check (no auth required)
+- ``GET  /info``                      -- Agent info and capabilities
+- ``POST /threads``                   -- Create a new thread
+- ``GET  /threads``                   -- List threads
+- ``POST /threads/{id}/messages``     -- Send a message to a thread
+- ``GET  /threads/{id}/history``      -- Get thread message history
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
@@ -72,7 +69,7 @@ class AgentServer:
 
     def __init__(
         self,
-        agent: Any,
+        agent: Any,  # noqa: ANN401
         *,
         config: ServerConfig | None = None,
     ) -> None:
@@ -83,18 +80,16 @@ class AgentServer:
         without an API key, a random key is auto-generated and logged.
 
         Args:
-            agent: A compiled LangGraph agent from create_agent().
+            agent: A compiled LangGraph agent from ``create_agent()``.
             config: Server configuration.
         """
-        import os
-
         self.agent = agent
         self.config = config or ServerConfig()
         self._threads: dict[str, ThreadState] = {}
         self._request_count = 0
         self._start_time = time.time()
 
-        # Auth: env var → config → auto-generate for non-localhost
+        # Auth: env var -> config -> auto-generate for non-localhost
         if self.config.api_key is None:
             env_key = os.environ.get("BOG_AGENTS_SERVE_API_KEY")
             if env_key:
@@ -109,22 +104,22 @@ class AgentServer:
             )
             logger.warning(
                 "Set BOG_AGENTS_SERVE_API_KEY or pass api_key in ServerConfig "
-                "to use a stable key."
+                "to use a stable key.",
             )
         elif self.config.api_key is None and is_localhost:
             logger.info(
                 "Running on localhost without API key. Set "
-                "BOG_AGENTS_SERVE_API_KEY for authenticated access."
+                "BOG_AGENTS_SERVE_API_KEY for authenticated access.",
             )
 
     def _get_or_create_thread(self, thread_id: str | None = None) -> ThreadState:
         """Get an existing thread or create a new one.
 
         Args:
-            thread_id: Optional thread ID. Creates new if None.
+            thread_id: Optional thread ID. Creates new if ``None``.
 
         Returns:
-            ThreadState for the thread.
+            ``ThreadState`` for the thread.
         """
         if thread_id is None:
             thread_id = str(uuid.uuid4())
@@ -139,7 +134,7 @@ class AgentServer:
             provided_key: The key provided in the request.
 
         Returns:
-            True if valid or no key required.
+            ``True`` if valid or no key required.
         """
         if self.config.api_key is None:
             return True
@@ -150,7 +145,7 @@ class AgentServer:
         message: str,
         *,
         thread_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,  # noqa: ARG002
     ) -> dict[str, Any]:
         """Invoke the agent with a message and return the result.
 
@@ -160,44 +155,38 @@ class AgentServer:
             metadata: Optional metadata.
 
         Returns:
-            Dict with 'thread_id', 'response', 'metadata'.
+            Dict with ``thread_id``, ``response``, ``metadata``.
         """
         thread = self._get_or_create_thread(thread_id)
         thread.messages.append({"role": "user", "content": message})
         self._request_count += 1
 
         config = {"configurable": {"thread_id": thread.thread_id}}
-        input_data = {
-            "messages": [{"role": "user", "content": message}],
-        }
+        input_data = {"messages": [{"role": "user", "content": message}]}
 
         try:
             result = await self.agent.ainvoke(input_data, config=config)
-            # Extract the assistant's response
             response_messages = result.get("messages", [])
             assistant_msg = ""
             for msg in reversed(response_messages):
                 if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
                     assistant_msg = msg.content
                     break
-                elif isinstance(msg, dict) and msg.get("role") == "assistant":
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
                     assistant_msg = msg.get("content", "")
                     break
 
             thread.messages.append({"role": "assistant", "content": assistant_msg})
-
             return {
                 "thread_id": thread.thread_id,
                 "response": assistant_msg,
-                "metadata": {
-                    "message_count": len(thread.messages),
-                },
+                "metadata": {"message_count": len(thread.messages)},
             }
-        except Exception as exc:
-            logger.error("Agent invocation failed: %s", exc, exc_info=True)
+        except Exception:
+            logger.exception("Agent invocation failed")
             return {
                 "thread_id": thread.thread_id,
-                "error": str(exc),
+                "error": "Internal server error",
                 "metadata": {},
             }
 
@@ -206,7 +195,7 @@ class AgentServer:
         message: str,
         *,
         thread_id: str | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401
         """Stream agent responses.
 
         Args:
@@ -221,17 +210,17 @@ class AgentServer:
         self._request_count += 1
 
         config = {"configurable": {"thread_id": thread.thread_id}}
-        input_data = {
-            "messages": [{"role": "user", "content": message}],
-        }
+        input_data = {"messages": [{"role": "user", "content": message}]}
 
         try:
-            async for event in self.agent.astream_events(input_data, config=config, version="v2"):
+            async for event in self.agent.astream_events(
+                input_data, config=config, version="v2"
+            ):
                 yield {
                     "event": event.get("event", ""),
                     "data": event.get("data", {}),
                 }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             yield {
                 "event": "error",
                 "data": {"error": str(exc)},
@@ -299,7 +288,7 @@ class AgentServer:
             thread_id: Thread ID.
 
         Returns:
-            Thread history or None if not found.
+            Thread history or ``None`` if not found.
         """
         thread = self._threads.get(thread_id)
         if thread is None:
@@ -310,7 +299,7 @@ class AgentServer:
             "messages": thread.messages,
         }
 
-    def create_app(self) -> Any:
+    def create_app(self) -> Any:  # noqa: ANN401, C901, PLR0915
         """Create a Starlette/ASGI application.
 
         Returns:
@@ -319,52 +308,59 @@ class AgentServer:
         Raises:
             ImportError: If starlette is not installed.
         """
-        try:
-            from starlette.applications import Starlette
-            from starlette.middleware.cors import CORSMiddleware
-            from starlette.requests import Request
-            from starlette.responses import JSONResponse
-            from starlette.routing import Route
-            from sse_starlette.sse import EventSourceResponse
-        except ImportError:
-            raise ImportError(
-                "Server dependencies not installed. Run: pip install 'bog-agents[serve]'"
-            ) from None
+        from sse_starlette.sse import EventSourceResponse  # noqa: PLC0415
+        from starlette.applications import Starlette  # noqa: PLC0415
+        from starlette.middleware.cors import CORSMiddleware  # noqa: PLC0415
+        from starlette.requests import Request  # noqa: PLC0415, TC002
+        from starlette.responses import JSONResponse  # noqa: PLC0415
+        from starlette.routing import Route  # noqa: PLC0415
 
         server = self
 
-        async def health_endpoint(request: Request) -> JSONResponse:
+        def _extract_bearer(request: Request) -> str | None:
+            """Extract Bearer token from Authorization header."""
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                return auth[len("Bearer "):]
+            return auth or None
+
+        def _unauthorized() -> JSONResponse:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+        async def health_endpoint(_request: Request) -> JSONResponse:
             return JSONResponse(server.get_health())
 
         async def info_endpoint(request: Request) -> JSONResponse:
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
             return JSONResponse(server.get_info())
 
         async def invoke_endpoint(request: Request) -> JSONResponse:
-            if not server._check_api_key(request.headers.get("Authorization", "").replace("Bearer ", "")):
-                return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
-            body = await request.json()
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
+            try:
+                body = await request.json()
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
             message = body.get("message", "")
-            thread_id = body.get("thread_id")
-
             if not message:
                 return JSONResponse({"error": "message is required"}, status_code=400)
-
-            result = await server.invoke(message, thread_id=thread_id)
+            result = await server.invoke(message, thread_id=body.get("thread_id"))
             return JSONResponse(result)
 
-        async def stream_endpoint(request: Request) -> Any:
-            if not server._check_api_key(request.headers.get("Authorization", "").replace("Bearer ", "")):
-                return JSONResponse({"error": "Unauthorized"}, status_code=401)
-
-            body = await request.json()
+        async def stream_endpoint(request: Request) -> JSONResponse | EventSourceResponse:
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
+            try:
+                body = await request.json()
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
             message = body.get("message", "")
-            thread_id = body.get("thread_id")
-
             if not message:
                 return JSONResponse({"error": "message is required"}, status_code=400)
+            thread_id = body.get("thread_id")
 
-            async def event_generator() -> Any:
+            async def event_generator() -> Any:  # noqa: ANN401
                 async for event in server.stream(message, thread_id=thread_id):
                     yield {
                         "event": event.get("event", "message"),
@@ -374,30 +370,43 @@ class AgentServer:
             return EventSourceResponse(event_generator())
 
         async def list_threads_endpoint(request: Request) -> JSONResponse:
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
             return JSONResponse({"threads": server.list_threads()})
 
         async def create_thread_endpoint(request: Request) -> JSONResponse:
-            body = await request.json() if await request.body() else {}
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
+            try:
+                raw = await request.body()
+                body = json.loads(raw) if raw else {}
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
             thread = server._get_or_create_thread()
-            if "metadata" in body:
+            if isinstance(body, dict) and "metadata" in body:
                 thread.metadata = body["metadata"]
-            return JSONResponse({
-                "thread_id": thread.thread_id,
-                "created_at": thread.created_at,
-            }, status_code=201)
+            return JSONResponse(
+                {"thread_id": thread.thread_id, "created_at": thread.created_at},
+                status_code=201,
+            )
 
         async def thread_messages_endpoint(request: Request) -> JSONResponse:
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
             thread_id = request.path_params["thread_id"]
-            body = await request.json()
+            try:
+                body = await request.json()
+            except (json.JSONDecodeError, ValueError):
+                return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
             message = body.get("message", "")
-
             if not message:
                 return JSONResponse({"error": "message is required"}, status_code=400)
-
             result = await server.invoke(message, thread_id=thread_id)
             return JSONResponse(result)
 
         async def thread_history_endpoint(request: Request) -> JSONResponse:
+            if not server._check_api_key(_extract_bearer(request)):
+                return _unauthorized()
             thread_id = request.path_params["thread_id"]
             history = server.get_thread_history(thread_id)
             if history is None:
@@ -411,8 +420,16 @@ class AgentServer:
             Route("/stream", stream_endpoint, methods=["POST"]),
             Route("/threads", list_threads_endpoint, methods=["GET"]),
             Route("/threads", create_thread_endpoint, methods=["POST"]),
-            Route("/threads/{thread_id}/messages", thread_messages_endpoint, methods=["POST"]),
-            Route("/threads/{thread_id}/history", thread_history_endpoint, methods=["GET"]),
+            Route(
+                "/threads/{thread_id}/messages",
+                thread_messages_endpoint,
+                methods=["POST"],
+            ),
+            Route(
+                "/threads/{thread_id}/history",
+                thread_history_endpoint,
+                methods=["GET"],
+            ),
         ]
 
         app = Starlette(routes=routes)
@@ -428,18 +445,17 @@ class AgentServer:
         """Run the server (blocking).
 
         Starts a uvicorn server with the configured host and port.
+
+        Raises:
+            ImportError: If uvicorn is not installed.
         """
-        try:
-            import uvicorn
-        except ImportError:
-            raise ImportError(
-                "uvicorn not installed. Run: pip install 'bog-agents[serve]'"
-            ) from None
+        import uvicorn  # noqa: PLC0415
 
         app = self.create_app()
         logger.info(
             "Starting bog-agents server on %s:%d",
-            self.config.host, self.config.port,
+            self.config.host,
+            self.config.port,
         )
         uvicorn.run(
             app,
@@ -452,7 +468,8 @@ class AgentServer:
 def _get_version() -> str:
     """Get the bog-agents version string."""
     try:
-        from bog_agents import __version__
-        return __version__
+        from bog_agents import __version__  # noqa: PLC0415
+
+        return __version__  # noqa: TRY300
     except ImportError:
         return "unknown"

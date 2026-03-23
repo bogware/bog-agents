@@ -550,8 +550,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--serve-port",
         type=int,
-        default=8080,
-        help="Port for the HTTP API server (default: 8080)",
+        default=8420,
+        help="Port for the HTTP API server (default: 8420)",
     )
 
     parser.add_argument(
@@ -1113,6 +1113,7 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
         ("langchain-anthropic", "Anthropic models"),
         ("langchain-ollama", "Local Ollama models"),
         ("bog-agents-acp", "Agent Client Protocol"),
+        ("starlette", "HTTP serve mode"),
         ("daytona", "Daytona sandbox"),
         ("modal", "Modal sandbox"),
     ]
@@ -1248,6 +1249,7 @@ def cli_main() -> None:
                 msg = (
                     f"Serve dependencies not available: {exc}\n"
                     "Install with: pip install 'bog-agents[serve]'\n"
+                    "  or: uv add 'bog-agents[serve]'\n"
                 )
                 sys.stderr.write(msg)
                 sys.stderr.flush()

@@ -8,10 +8,12 @@ version = "0.0.32"
 description = "Bog Agents CLI - interactive AI coding assistant. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama."
 readme = "README.md"
 license = { text = "MIT" }
+authors = [{ name = "bogware", email = "support@bogware.com" }]
+maintainers = [{ name = "bogware", email = "support@bogware.com" }]
 requires-python = ">=3.11,<4.0"
 keywords = ["agents", "ai", "cli", "terminal", "llm", "langgraph", "langchain", "bog-agents", "multi-provider", "ollama"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",

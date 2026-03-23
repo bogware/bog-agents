@@ -18,6 +18,55 @@ pip install bog-agents
 uv add bog-agents
 ```
 
+## Getting Started
+
+1. **Set your API key** (the default model uses Anthropic):
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Or for OpenAI, Google, etc.:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export GOOGLE_API_KEY="AI..."
+```
+
+2. **Create and run an agent**:
+
+```python
+from bog_agents import create_agent
+
+# Uses Claude Sonnet by default (needs ANTHROPIC_API_KEY)
+agent = create_agent()
+
+# Or specify a different provider
+agent = create_agent(model="openai:gpt-4o")
+agent = create_agent(model="google_genai:gemini-2.0-flash")
+
+# Run the agent
+result = agent.invoke(
+    {"messages": [{"role": "user", "content": "Hello!"}]},
+    config={"configurable": {"thread_id": "my-thread"}},
+)
+```
+
+3. **Run as an HTTP server** (optional):
+
+```bash
+pip install 'bog-agents[serve]'
+```
+
+```python
+from bog_agents import create_agent
+from bog_agents.serve import AgentServer
+
+agent = create_agent()
+server = AgentServer(agent)
+server.run()  # Starts on http://127.0.0.1:8420
+```
+
 ## 🤔 What is this?
 
 Using an LLM to call tools in a loop is the simplest form of an agent. This architecture, however, can yield agents that are "shallow" and fail to plan and act over longer, more complex tasks.

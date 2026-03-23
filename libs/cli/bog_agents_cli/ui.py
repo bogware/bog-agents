@@ -140,7 +140,7 @@ def show_help() -> None:
     console.print("  --acp                      Run as an ACP server over stdio")
     console.print("  --serve                    Start an HTTP API server")
     console.print("  --serve-host HOST          HTTP server host (default: 127.0.0.1)")
-    console.print("  --serve-port PORT          HTTP server port (default: 8080)")
+    console.print("  --serve-port PORT          HTTP server port (default: 8420)")
     console.print("  --pr                       Create a PR from agent output (needs -n)")
     console.print("  --pr-base BRANCH           Base branch for PR (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
