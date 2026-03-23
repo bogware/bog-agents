@@ -85,7 +85,7 @@ find . -type f \( -name "*.py" -o -name "*.toml" -o -name "*.md" -o -name "*.yml
 find . -type f \( -name "*.py" -o -name "*.toml" -o -name "*.md" -o -name "*.yml" -o -name "*.yaml" -o -name "*.json" -o -name "*.sh" -o -name "*.ts" -o -name "*.js" -o -name "*.tcss" -o -name "*.txt" \) \
   ! -path "*/.venv/*" ! -path "*/.git/*" ! -path "*/__pycache__/*" ! -path "*/dist/*" ! -path "*/*.egg-info/*" ! -path "*/node_modules/*" ! -path "*/scripts/rebrand.sh" \
   -exec sed -i \
-    -e 's|langchain-ai/hugo|langchain-ai/bog-agents|g' \
+    -e 's|langchain-ai/hugo|bogware/bog-agents|g' \
     -e 's|python/hugo|python/bog-agents|g' \
     -e 's|pypi/hugo|pypi/bog-agents|g' \
     -e 's|packages/hugo|packages/bog-agents|g' \

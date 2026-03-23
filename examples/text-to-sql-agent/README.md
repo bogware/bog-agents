@@ -28,7 +28,7 @@ Uses the [Chinook database](https://github.com/lerocha/chinook-database) - a sam
 1. Clone the bog-agents repository and navigate to this example:
 
 ```bash
-git clone https://github.com/langchain-ai/bog-agents.git
+git clone https://github.com/bogware/bog-agents.git
 cd bog-agents/examples/text-to-sql-agent
 ```
 
@@ -269,7 +269,7 @@ View your traces at: <https://smith.langchain.com/>
 
 ## Resources
 
-- [Bog Agents Documentation](https://docs.langchain.com/oss/python/bog-agents/overview)
+- [Bog Agents Documentation](https://github.com/bogware/bog-agents)
 - [LangChain](https://www.langchain.com/)
 - [Claude Sonnet 4.5](https://www.anthropic.com/claude)
 - [Chinook Database](https://github.com/lerocha/chinook-database)

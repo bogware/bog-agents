@@ -21,7 +21,7 @@ uv tool install bog-agents-cli==0.0.13
 mkdir my-project && cd my-project && git init
 
 # Download the agent
-curl -L https://raw.githubusercontent.com/langchain-ai/bog-agents/main/examples/downloading_agents/content-writer.zip -o agent.zip
+curl -L https://raw.githubusercontent.com/bogware/bog-agents/main/examples/downloading_agents/content-writer.zip -o agent.zip
 
 # Unzip to .bog-agents
 unzip agent.zip -d .bog-agents
@@ -43,5 +43,5 @@ bog-agents
 ## One-Liner
 
 ```bash
-git init && curl -L https://raw.githubusercontent.com/langchain-ai/bog-agents/main/examples/downloading_agents/content-writer.zip -o agent.zip && unzip agent.zip -d .bog-agents && rm agent.zip && bog-agents
+git init && curl -L https://raw.githubusercontent.com/bogware/bog-agents/main/examples/downloading_agents/content-writer.zip -o agent.zip && unzip agent.zip -d .bog-agents && rm agent.zip && bog-agents
 ```

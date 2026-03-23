@@ -379,9 +379,9 @@ class TextualSessionState:
 
 
 _COMMAND_URLS: dict[str, str] = {
-    "/changelog": "https://github.com/langchain-ai/bog-agents/blob/main/libs/cli/CHANGELOG.md",
+    "/changelog": "https://github.com/bogware/bog-agents/blob/main/libs/cli/CHANGELOG.md",
     "/docs": DOCS_URL,
-    "/feedback": "https://github.com/langchain-ai/bog-agents/issues/new/choose",
+    "/feedback": "https://github.com/bogware/bog-agents/issues/new/choose",
 }
 
 # Prompt for /remember command - triggers agent to review conversation and update

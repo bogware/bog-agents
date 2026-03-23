@@ -1305,7 +1305,7 @@ class TestOpenRouterHeaders:
         """Injects app_url and app_title for openrouter provider."""
         kwargs = _get_provider_kwargs("openrouter")
 
-        assert kwargs["app_url"] == "https://github.com/langchain-ai/bog-agents"
+        assert kwargs["app_url"] == "https://github.com/bogware/bog-agents"
         assert kwargs["app_title"] == "Bog Agents CLI"
 
     def test_per_model_attribution_overrides_defaults(self, tmp_path: Path) -> None:
@@ -1325,7 +1325,7 @@ app_title = "My Custom App"
 
         assert kwargs["app_title"] == "My Custom App"
         # Built-in app_url should still be present
-        assert kwargs["app_url"] == "https://github.com/langchain-ai/bog-agents"
+        assert kwargs["app_url"] == "https://github.com/bogware/bog-agents"
 
     def test_no_attribution_for_other_providers(self) -> None:
         """Other providers do not get OpenRouter attribution kwargs."""

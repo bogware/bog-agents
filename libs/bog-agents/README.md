@@ -1,11 +1,8 @@
-# 🧠🤖 Bog Agents
+# Bog Agents
 
-[![PyPI - Version](https://img.shields.io/pypi/v/bog-agents?label=%20)](https://pypi.org/project/bog-agents/#history)
-[![PyPI - License](https://img.shields.io/pypi/l/bog-agents)](https://opensource.org/licenses/MIT)
-[![PyPI - Downloads](https://img.shields.io/pepy/dt/bog-agents)](https://pypistats.org/packages/bog-agents)
-[![Twitter](https://img.shields.io/twitter/url/https/twitter.com/langchain.svg?style=social&label=Follow%20%40LangChain)](https://x.com/langchain)
-
-Looking for the JS/TS version? Check out [Bog Agents.js](https://github.com/langchain-ai/bog-agentsjs).
+[![PyPI](https://img.shields.io/pypi/v/bog-agents)](https://pypi.org/project/bog-agents/)
+[![License](https://img.shields.io/pypi/l/bog-agents)](https://opensource.org/licenses/MIT)
+[![Downloads](https://img.shields.io/pepy/dt/bog-agents)](https://pypistats.org/packages/bog-agents)
 
 To help you ship LangChain apps to production faster, check out [LangSmith](https://smith.langchain.com).
 LangSmith is a unified developer platform for building, testing, and monitoring LLM applications.
@@ -73,7 +70,7 @@ Using an LLM to call tools in a loop is the simplest form of an agent. This arch
 
 Applications like "Deep Research", "Manus", and "Claude Code" have gotten around this limitation by implementing a combination of four things: a **planning tool**, **sub agents**, access to a **file system**, and a **detailed prompt**.
 
-`bog-agents` is a Python package that implements these in a general purpose way so that you can easily create a Bog Agents for your application. For a full overview and quickstart of Bog Agents, the best resource is our [docs](https://docs.langchain.com/oss/python/bog-agents/overview).
+`bog-agents` is a Python package that implements these in a general purpose way so that you can easily create a Bog Agents for your application. For a full overview and quickstart of Bog Agents, the best resource is our [docs](https://github.com/bogware/bog-agents).
 
 **Acknowledgements: This project was primarily inspired by Claude Code, and initially was largely an attempt to see what made Claude Code general purpose, and make it even more so.**
 
@@ -135,16 +132,16 @@ result = await agent.ainvoke(
 
 ## 📖 Resources
 
-- **[Documentation](https://docs.langchain.com/oss/python/bog-agents)** — Full documentation
-- **[API Reference](https://reference.langchain.com/python/bog-agents/)** — Full SDK reference documentation
+- **[Documentation](https://github.com/bogware/bog-agents)** — Full documentation
+- **[API Reference](https://github.com/bogware/bog-agents)** — Full SDK reference documentation
 - **[Chat LangChain](https://chat.langchain.com)** - Chat interactively with the docs
 
 ## 📕 Releases & Versioning
 
-See our [Releases](https://docs.langchain.com/oss/python/release-policy) and [Versioning](https://docs.langchain.com/oss/python/versioning) policies.
+See our [Releases](https://github.com/bogware/bog-agents/releases) and [Versioning](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md#versioning) policies.
 
 ## 💁 Contributing
 
 As an open-source project in a rapidly developing field, we are extremely open to contributions, whether it be in the form of a new feature, improved infrastructure, or better documentation.
 
-For detailed information on how to contribute, see the [Contributing Guide](https://docs.langchain.com/oss/python/contributing/overview).
+For detailed information on how to contribute, see the [Contributing Guide](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).

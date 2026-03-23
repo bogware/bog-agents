@@ -6,21 +6,21 @@ body:
   - type: markdown
     attributes:
       value: |
-        > **All contributions must be in English.** See the [language policy](https://docs.langchain.com/oss/python/contributing/overview#language-policy).
+        > **All contributions must be in English.** See the [language policy](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
 
         Thank you for taking the time to file a bug report.
 
-        For usage questions and general design questions, please use the [Bog Agents Forum](https://forum.langchain.com/c/oss-product-help-lc-and-lg/bog-agents/18).
+        For usage questions and general design questions, please use the [Bog Agents Discussions](https://github.com/bogware/bog-agents/discussions).
 
         Check these before submitting to see if your issue has already been reported, fixed or if there's another way to solve your problem:
 
         Check these before submitting to see if your issue has already been reported, fixed or if there's another way to solve your problem:
 
-        * [Documentation](https://docs.langchain.com/oss/python/bog-agents/overview),
-        * [API Reference Documentation](https://reference.langchain.com/python/bog-agents/),
+        * [Documentation](https://github.com/bogware/bog-agents),
+        * [API Reference Documentation](https://github.com/bogware/bog-agents),
         * [LangChain ChatBot](https://chat.langchain.com/)
-        * [GitHub search](https://github.com/langchain-ai/bog-agents),
-        * [Bog Agents Forum](https://forum.langchain.com/c/oss-product-help-lc-and-lg/bog-agents/18),
+        * [GitHub search](https://github.com/bogware/bog-agents),
+        * [Bog Agents Discussions](https://github.com/bogware/bog-agents/discussions),
 
         **Note:** For bug fixes, please feel free to open a PR contributing a failing test. However, please do not begin to work on a fix unless explicitly assigned to this issue by a maintainer.
   - type: checkboxes

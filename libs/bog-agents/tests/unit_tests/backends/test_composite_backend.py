@@ -1275,7 +1275,7 @@ def test_route_for_path_edge_cases() -> None:
 def test_route_for_path_no_trailing_slash_boundary() -> None:
     """Route without trailing slash must not match at non-boundary positions.
 
-    Regression test for https://github.com/langchain-ai/bog-agents/issues/1654.
+    Regression test for https://github.com/bogware/bog-agents/issues/1654.
     """
     rt = make_runtime("t_route_boundary")
     default = StateBackend(rt)

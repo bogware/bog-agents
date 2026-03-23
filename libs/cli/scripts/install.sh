@@ -2,7 +2,7 @@
 # Install bog-agents-cli via uv.
 #
 # Usage:
-#   curl -LsSf https://raw.githubusercontent.com/langchain-ai/bog-agents/main/libs/cli/scripts/install.sh | bash
+#   curl -LsSf https://raw.githubusercontent.com/bogware/bog-agents/main/libs/cli/scripts/install.sh | bash
 #
 # Environment variables:
 #   BOG_AGENTS_EXTRAS  — comma-separated pip extras, e.g. "anthropic" or "anthropic,groq"
@@ -74,4 +74,4 @@ echo "If the command is not found, restart your shell or run:"
 echo "  source ~/.zshrc   # (or ~/.bashrc)"
 echo ""
 echo "For help and support, see the Bog Agents CLI docs:"
-echo "  https://docs.langchain.com/oss/python/bog-agents/cli/overview"
+echo "  https://github.com/bogware/bog-agents/tree/main/libs/cli"

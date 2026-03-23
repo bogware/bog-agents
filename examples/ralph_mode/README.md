@@ -28,7 +28,7 @@ source .venv/bin/activate
 uv pip install bog-agents-cli
 
 # Download the script (or copy from examples/ralph_mode/ if you have the repo)
-curl -O https://raw.githubusercontent.com/langchain-ai/bog-agents/main/examples/ralph_mode/ralph_mode.py
+curl -O https://raw.githubusercontent.com/bogware/bog-agents/main/examples/ralph_mode/ralph_mode.py
 
 # Run Ralph
 python ralph_mode.py "Build a Python programming course for beginners. Use git."
@@ -72,9 +72,9 @@ python ralph_mode.py "Build an app" --no-stream
 Ralph supports running agent code in isolated remote environments via the
 `--sandbox` flag. The agent runs locally but executes all code operations in the
 remote sandbox. See the
-[sandbox documentation](https://docs.langchain.com/oss/python/bog-agents/cli/overview)
+[sandbox documentation](https://github.com/bogware/bog-agents/tree/main/libs/cli)
 for provider setup (API keys, etc.) and the
-[sandboxes concept guide](https://docs.langchain.com/oss/python/bog-agents/sandboxes)
+[sandboxes concept guide](https://github.com/bogware/bog-agents#remote-sandboxes)
 for architecture details.
 
 Supported providers: **Modal**, **Daytona**, **Runloop**.

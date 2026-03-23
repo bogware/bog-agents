@@ -157,6 +157,6 @@ Makefile shortcuts are available for common workflows:
 
 ## Resources
 
-- [Bog Agents Documentation](https://docs.langchain.com/oss/python/bog-agents/overview)
+- [Bog Agents Documentation](https://github.com/bogware/bog-agents)
 - [Harbor GitHub](https://github.com/laude-institute/harbor)
 - [LangSmith](https://smith.langchain.com)

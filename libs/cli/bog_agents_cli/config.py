@@ -103,7 +103,7 @@ if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
     from langchain_core.runnables import RunnableConfig
 
-DOCS_URL = "https://docs.langchain.com/oss/python/bog-agents/cli"
+DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
@@ -1575,7 +1575,7 @@ def _run_setup_wizard() -> str:
     return model_spec
 
 
-_OPENROUTER_APP_URL = "https://github.com/langchain-ai/bog-agents"
+_OPENROUTER_APP_URL = "https://github.com/bogware/bog-agents"
 """Default `app_url` (maps to `HTTP-Referer`) for OpenRouter attribution.
 
 See https://openrouter.ai/docs/app-attribution for details.

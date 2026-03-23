@@ -3,7 +3,7 @@
 These tests verify that the command templates in BaseSandbox can be properly
 formatted without raising KeyError due to unescaped curly braces.
 
-Related issue: https://github.com/langchain-ai/bog-agents/pull/872
+Related issue: https://github.com/bogware/bog-agents/pull/872
 The heredoc templates introduced in PR #872 contain {e} in exception handlers
 that need to be escaped as {{e}} for Python's .format() method.
 """

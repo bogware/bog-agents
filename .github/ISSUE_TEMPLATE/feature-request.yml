@@ -6,20 +6,20 @@ body:
   - type: markdown
     attributes:
       value: |
-        > **All contributions must be in English.** See the [language policy](https://docs.langchain.com/oss/python/contributing/overview#language-policy).
+        > **All contributions must be in English.** See the [language policy](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
 
         Thank you for taking the time to request a new feature.
 
-        Use this to request NEW FEATURES or ENHANCEMENTS in Bog Agents. For bug reports, please use the bug report template. For usage questions and general design questions, please use the [Bog Agents Forum](https://forum.langchain.com/c/oss-product-help-lc-and-lg/bog-agents/18).
+        Use this to request NEW FEATURES or ENHANCEMENTS in Bog Agents. For bug reports, please use the bug report template. For usage questions and general design questions, please use the [Bog Agents Discussions](https://github.com/bogware/bog-agents/discussions).
 
         Relevant links to check before filing a feature request to see if your request has already been made or
         if there's another way to achieve what you want:
 
-        * [Documentation](https://docs.langchain.com/oss/python/bog-agents/overview),
-        * [API Reference Documentation](https://reference.langchain.com/python/bog-agents/),
+        * [Documentation](https://github.com/bogware/bog-agents),
+        * [API Reference Documentation](https://github.com/bogware/bog-agents),
         * [LangChain ChatBot](https://chat.langchain.com/)
-        * [GitHub search](https://github.com/langchain-ai/bog-agents),
-        * [Bog Agents Forum](https://forum.langchain.com/c/oss-product-help-lc-and-lg/bog-agents/18),
+        * [GitHub search](https://github.com/bogware/bog-agents),
+        * [Bog Agents Discussions](https://github.com/bogware/bog-agents/discussions),
 
         **Note:** Do not begin work on a PR unless explicitly assigned to this issue by a maintainer.
   - type: checkboxes

@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/langchain-ai/bog-agents/tree/main/examples/text-to-sql-agent"
+Repository = "https://github.com/bogware/bog-agents/tree/main/examples/text-to-sql-agent"
 
 [build-system]
 requires = ["setuptools>=61.0"]

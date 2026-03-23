@@ -2,9 +2,9 @@ Fixes #
 
 <!-- Replace everything above this line with a 1-2 sentence description of your change. Keep the "Fixes #xx" keyword and update the issue number. -->
 
-Read the full contributing guidelines: https://docs.langchain.com/oss/python/contributing/overview
+Read the full contributing guidelines: https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md
 
-> **All contributions must be in English.** See the [language policy](https://docs.langchain.com/oss/python/contributing/overview#language-policy).
+> **All contributions must be in English.** See the [language policy](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
 
 If you paste a large clearly AI generated description here your PR may be IGNORED or CLOSED!
 
@@ -16,7 +16,7 @@ Thank you for contributing to Bog Agents! Follow these steps to have your pull r
     - fix(sdk): resolve flag parsing error
     - feat(cli): add multi-tenant support
     - test(acp): update API usage tests
-  - Allowed TYPE and SCOPE values: https://github.com/langchain-ai/bog-agents/blob/main/.github/workflows/pr_lint.yml#L15-L26
+  - Allowed TYPE and SCOPE values: https://github.com/bogware/bog-agents/blob/main/.github/workflows/pr_lint.yml#L15-L26
 
 2. PR description:
 

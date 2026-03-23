@@ -30,9 +30,9 @@ dependencies = [
 packages = ["langchain_quickjs"]
 
 [project.urls]
-Homepage = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/quickjs"
-Repository = "https://github.com/langchain-ai/bog-agents"
-Documentation = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/quickjs"
+Homepage = "https://github.com/bogware/bog-agents/tree/main/libs/partners/quickjs"
+Repository = "https://github.com/bogware/bog-agents"
+Documentation = "https://github.com/bogware/bog-agents/tree/main/libs/partners/quickjs"
 
 [dependency-groups]
 test = [
