@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bog-agents-cli"
-version = "0.0.32"
+version = "0.5.0"
 description = "Bog Agents CLI - interactive AI coding assistant. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     # Framework
-    "bog-agents==0.4.11",
+    "bog-agents==0.5.0",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
