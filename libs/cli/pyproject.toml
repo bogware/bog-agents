@@ -116,12 +116,10 @@ bog-agents = "bog_agents_cli:cli_main"
 bog-agents-cli = "bog_agents_cli:cli_main"
 
 [project.urls]
-Homepage = "https://docs.langchain.com/oss/python/bog-agents/overview"
-Documentation = "https://reference.langchain.com/python/bog-agents/"
-Repository = "https://github.com/langchain-ai/bog-agents"
-Issues = "https://github.com/langchain-ai/bog-agents/issues"
-Changelog = "https://github.com/langchain-ai/bog-agents/blob/main/libs/cli/CHANGELOG.md"
-Twitter = "https://x.com/LangChain"
+Homepage = "https://github.com/bogware/bog-agents"
+Repository = "https://github.com/bogware/bog-agents"
+Issues = "https://github.com/bogware/bog-agents/issues"
+Changelog = "https://github.com/bogware/bog-agents/blob/main/libs/cli/CHANGELOG.md"
 
 [dependency-groups]
 test = [
