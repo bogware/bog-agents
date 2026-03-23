@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.11]
+## [0.5.0]
 
 ### Features
 
