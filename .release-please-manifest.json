@@ -1,4 +1,4 @@
 {
-  "libs/bog-agents": "0.5.0",
-  "libs/cli": "0.5.0"
+  "libs/bog-agents": "0.5.2",
+  "libs/cli": "0.5.2"
 }
