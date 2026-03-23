@@ -261,8 +261,8 @@ Model discovery, credential checking, and UI integration are automatic once `PRO
 
 ## Additional resources
 
-- **Documentation:** https://docs.langchain.com/oss/python/bog-agents/overview and source at https://github.com/langchain-ai/docs or `../docs/`. Prefer the local install and use file search tools for best results. If needed, use the docs MCP server as defined in `.mcp.json` for programmatic access.
-- **Contributing Guide:** [Contributing Guide](https://docs.langchain.com/oss/python/contributing/overview)
+- **Documentation:** https://github.com/bogware/bog-agents — see READMEs in each package directory.
+- **Contributing Guide:** [Contributing Guide](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md)
 - **CLI Release Process:** See `.github/RELEASING.md` for the full CLI release workflow (release-please, version bumping, troubleshooting failed releases, and label management).
 
 - Do NOT use Sphinx-style double backtick formatting (` ``code`` `). Use single backticks (`code`) for inline code references in docstrings and comments.

@@ -2,7 +2,7 @@
 
 ## Problem
 
-PR [#1774](https://github.com/langchain-ai/bog-agents/pull/1774) was missing its `size: S` and `internal` labels despite the size labeler workflow running successfully. Investigation of the issue timeline revealed:
+PR [#1774](https://github.com/bogware/bog-agents/pull/1774) was missing its `size: S` and `internal` labels despite the size labeler workflow running successfully. Investigation of the issue timeline revealed:
 
 ```
 20:12:06Z  labeled    size: S      (by size labeler)

@@ -65,105 +65,167 @@ def show_help() -> None:
     )
     console.print()
     console.print(
-        f"[bold {banner_color}]bog-agents-cli[/bold {banner_color}]"
+        f"[bold {banner_color}]bog-agents[/bold {banner_color}]"
         f" v{__version__}{install_type}"
+        f"  [dim]— the trail's marked, saddle up[/dim]"
     )
     console.print()
     console.print(
-        f"Docs: [link={DOCS_URL}]{DOCS_URL}[/link]",
+        f"  Docs: [link={DOCS_URL}]{DOCS_URL}[/link]",
         style=COLORS["dim"],
     )
     console.print()
+
+    # --- Usage ---
     console.print("[bold]Usage:[/bold]", style=COLORS["primary"])
     console.print(
-        "  bog-agents [OPTIONS]                           Start interactive thread"
+        "  bog-agents                                     Start interactive session"
     )
     console.print(
-        "  bog-agents list                                List all available agents"
+        "  bog-agents -n 'Fix the failing tests'          Run a task and exit"
     )
     console.print(
-        "  bog-agents reset --agent AGENT [--target SRC]  Reset an agent's prompt"
+        "  bog-agents -p 'Explain this function' < f.py   Pipe input, clean output"
     )
     console.print(
-        "  bog-agents skills <list|create|info|delete>    Manage agent skills"
-    )
-    console.print(
-        "  bog-agents threads <list|delete>               Manage conversation threads"
+        "  bog-agents -r                                  Resume last conversation"
     )
     console.print()
 
-    console.print("[bold]Options:[/bold]", style=COLORS["primary"])
+    # --- Subcommands ---
+    console.print("[bold]Subcommands:[/bold]", style=COLORS["primary"])
     console.print(
-        "  -r, --resume [ID]          Resume thread: -r for most recent, -r ID for specific"
-    )
-    console.print("  -a, --agent NAME           Agent to use (e.g., coder, researcher)")
-    console.print("  -M, --model MODEL          Model to use (e.g., gpt-4o)")
-    console.print(
-        "  --model-params JSON        Extra model kwargs (e.g., '{\"temperature\": 0.7}')"
-    )
-    console.print("  --profile-override JSON    Override model profile fields as JSON")
-    console.print("  -m, --message TEXT         Initial prompt to auto-submit on start")
-    console.print(
-        "  --auto-approve             Auto-approve all tool calls (toggle: Shift+Tab)"
-    )
-    console.print("  --sandbox TYPE             Remote sandbox for execution")
-    console.print(
-        "  --sandbox-id ID            Reuse existing sandbox (skips creation/cleanup)"
+        "  list                                List available agents"
     )
     console.print(
-        "  --sandbox-setup PATH       Setup script to run in sandbox after creation"
+        "  reset --agent NAME [--target SRC]   Reset an agent's prompt"
     )
     console.print(
-        "  --mcp-config PATH          Load MCP tools from config file"
-        " (merged on top of auto-discovered configs)"
-    )
-    console.print("  --no-mcp                   Disable all MCP tool loading")
-    console.print(
-        "  --trust-project-mcp        Trust project MCP configs (skip approval prompt)"
-    )
-    console.print("  -n, --non-interactive MSG  Run a single task and exit")
-    console.print("  -p, --print TEXT           Run prompt with clean output (= -n -q)")
-    console.print("  -q, --quiet                Clean output for piping (needs -n)")
-    console.print(
-        "  --no-stream                Buffer full response instead of streaming"
+        "  skills <list|create|info|delete>     Manage agent skills"
     )
     console.print(
-        "  --json                     Emit machine-readable JSON for commands"
+        "  threads <list|delete>                Manage conversation threads"
     )
+    console.print()
+
+    # --- Core Options ---
+    console.print("[bold]Core Options:[/bold]", style=COLORS["primary"])
+    console.print("  -M, --model MODEL          Model (e.g., claude-sonnet-4-6, gpt-4o, ollama:llama3)")
+    console.print("  -a, --agent NAME           Named agent to use (default: agent)")
+    console.print("  -r, --resume [ID]          Resume: -r for most recent, -r ID for specific")
+    console.print("  -m, --message TEXT         Auto-submit this prompt on start")
+    console.print("  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)")
+    console.print("  --doctor                   Diagnose your environment")
+    console.print("  -v, --version              Show CLI and SDK versions")
+    console.print("  -h, --help                 This help screen")
+    console.print()
+
+    # --- Non-Interactive / Automation ---
+    console.print("[bold]Non-Interactive (Automation):[/bold]", style=COLORS["primary"])
+    console.print("  -n, --non-interactive MSG  Run single task, exit with code 0/1")
+    console.print("  -p, --print TEXT           Same as -n + -q (clean stdout for pipes)")
+    console.print("  -q, --quiet                Suppress chrome, pipe-friendly output")
+    console.print("  --no-stream                Buffer full response (don't stream)")
+    console.print("  --json                     Machine-readable JSON output")
     console.print(
-        "  --shell-allow-list CMDS    Comma-separated commands, 'recommended', or 'all'"
+        "  --shell-allow-list CMDS    Shell access: 'recommended', 'all', or comma list"
     )
-    console.print("  --default-model [MODEL]    Set, show, or manage the default model")
-    console.print("  --clear-default-model      Clear the default model")
-    console.print("  --acp                      Run as an ACP server over stdio")
-    console.print("  --serve                    Start an HTTP API server")
-    console.print("  --serve-host HOST          HTTP server host (default: 127.0.0.1)")
-    console.print("  --serve-port PORT          HTTP server port (default: 8420)")
-    console.print(
-        "  --pr                       Create a PR from agent output (needs -n)"
-    )
-    console.print("  --pr-base BRANCH           Base branch for PR (default: main)")
+    console.print("  --pr                       Create a PR from agent output (needs -n)")
+    console.print("  --pr-base BRANCH           PR base branch (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
-    console.print("  --doctor                   Run environment diagnostics")
-    console.print("  -v, --version              Show bog-agents CLI and SDK versions")
-    console.print("  -h, --help                 Show this help message and exit")
     console.print()
 
-    console.print("[bold]Non-Interactive Mode:[/bold]", style=COLORS["primary"])
+    # --- Model Configuration ---
+    console.print("[bold]Model Configuration:[/bold]", style=COLORS["primary"])
+    console.print("  --model-params JSON        Extra kwargs (e.g., '{\"temperature\": 0.7}')")
+    console.print("  --profile-override JSON    Override model profile fields")
+    console.print("  --default-model [MODEL]    Set or show the default model")
+    console.print("  --clear-default-model      Clear default model")
+    console.print()
+
+    # --- Sandboxes & MCP ---
+    console.print("[bold]Sandboxes & MCP:[/bold]", style=COLORS["primary"])
+    console.print("  --sandbox TYPE             Remote sandbox (modal/daytona/runloop/langsmith)")
+    console.print("  --sandbox-id ID            Reuse an existing sandbox")
+    console.print("  --sandbox-setup PATH       Run setup script after sandbox creation")
+    console.print("  --mcp-config PATH          MCP server config (merged with auto-discovered)")
+    console.print("  --no-mcp                   Disable all MCP loading")
+    console.print("  --trust-project-mcp        Trust project MCP configs without prompt")
+    console.print()
+
+    # --- Server Modes ---
+    console.print("[bold]Server Modes:[/bold]", style=COLORS["primary"])
+    console.print("  --serve                    Start HTTP API server")
+    console.print("  --serve-host HOST          Server host (default: 127.0.0.1)")
+    console.print("  --serve-port PORT          Server port (default: 8420)")
+    console.print("  --acp                      Run as ACP server over stdio")
+    console.print()
+
+    # --- Slash Commands ---
+    console.print("[bold]Slash Commands (inside interactive session):[/bold]", style=COLORS["primary"])
+    col1 = [
+        ("/help", "Show this help"),
+        ("/model", "Switch model mid-session"),
+        ("/plan", "Read-only plan mode"),
+        ("/effort", "Set effort (low/med/high/max)"),
+        ("/compact", "Compress context"),
+        ("/diff", "Show pending file diffs"),
+        ("/undo", "Undo last file change"),
+        ("/review", "Code review staged changes"),
+        ("/test", "Run tests with coverage"),
+        ("/cost", "Session cost & token usage"),
+    ]
+    col2 = [
+        ("/pr", "Create/list/review PRs"),
+        ("/remember", "Save to agent memory"),
+        ("/teach", "Teach a workflow as skill"),
+        ("/threads", "Browse/resume threads"),
+        ("/doctor", "Health diagnostics"),
+        ("/agent", "Manage parallel agents"),
+        ("/worktree", "Isolated git worktrees"),
+        ("/record", "Record session for replay"),
+        ("/clear", "New thread"),
+        ("/quit", "Exit"),
+    ]
+    for left, right in zip(col1, col2, strict=True):
+        console.print(
+            f"  {left[0]:<14} {left[1]:<28} {right[0]:<14} {right[1]}"
+        )
+    console.print("  [dim]... and 30+ more. Type / to see all.[/dim]")
+    console.print()
+
+    # --- Examples ---
+    console.print("[bold]Examples:[/bold]", style=COLORS["primary"])
     console.print(
-        "  bog-agents -n 'Summarize README.md'     # Run task (no local shell access)",
+        "  bog-agents                                      # Interactive session",
         style=COLORS["dim"],
     )
     console.print(
-        "  bog-agents -n 'List files' --shell-allow-list recommended  # Use safe commands",
+        "  bog-agents -M ollama:llama3                     # Use local Ollama model",
         style=COLORS["dim"],
     )
     console.print(
-        "  bog-agents -n 'Search logs' --shell-allow-list ls,cat,grep # Specify list",
+        "  bog-agents -n 'Summarize README.md'             # One-shot task",
         style=COLORS["dim"],
     )
     console.print(
-        "  bog-agents -n 'Fix tests' --shell-allow-list all           # Any command",
+        "  bog-agents -n 'Fix tests' --shell-allow-list all  # With shell access",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  bog-agents -p 'Explain this' < file.py          # Pipe-friendly output",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  bog-agents -p 'Review' < file.py | tee review.md  # Pipe to file",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  bog-agents -n 'Fix issue #42' --pr              # Fix + open PR",
+        style=COLORS["dim"],
+    )
+    console.print(
+        "  bog-agents -r                                   # Resume last thread",
         style=COLORS["dim"],
     )
     console.print()

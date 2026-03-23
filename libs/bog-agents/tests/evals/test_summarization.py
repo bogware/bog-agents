@@ -21,7 +21,7 @@ from bog_agents.middleware.summarization import create_summarization_tool_middle
 from tests.evals.utils import AgentTrajectory, run_agent
 
 # URL for a large file that will trigger summarization
-LARGE_FILE_URL = "https://raw.githubusercontent.com/langchain-ai/bog-agents/5c90376c02754c67d448908e55d1e953f54b8acd/libs/bog-agents/bog-agents/middleware/summarization.py"
+LARGE_FILE_URL = "https://raw.githubusercontent.com/bogware/bog-agents/5c90376c02754c67d448908e55d1e953f54b8acd/libs/bog-agents/bog-agents/middleware/summarization.py"
 
 SYSTEM_PROMPT = dedent(
     """
@@ -247,7 +247,7 @@ def test_compact_tool_not_overly_sensitive(tmp_path: Path, model: BaseChatModel)
 @pytest.mark.skip(reason="Requires permissions to read ls_client.read_run")
 @pytest.mark.langsmith
 def test_compact_tool_large_reads(tmp_path: Path, model: BaseChatModel) -> None:
-    another_large_file = "https://raw.githubusercontent.com/langchain-ai/bog-agents/5c90376c02754c67d448908e55d1e953f54b8acd/libs/bog-agents/bog-agents/middleware/filesystem.py"
+    another_large_file = "https://raw.githubusercontent.com/bogware/bog-agents/5c90376c02754c67d448908e55d1e953f54b8acd/libs/bog-agents/bog-agents/middleware/filesystem.py"
 
     response = requests.get(another_large_file, timeout=30)
     response.raise_for_status()

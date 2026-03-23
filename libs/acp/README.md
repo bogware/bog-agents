@@ -1,6 +1,6 @@
 # Bog Agents ACP integration
 
-This directory contains an [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) connector that allows you to run a Python [Bog Agents](https://docs.langchain.com/oss/python/bog-agents/overview) within a text editor that supports ACP such as [Zed](https://zed.dev/).
+This directory contains an [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) connector that allows you to run a Python [Bog Agents](https://github.com/bogware/bog-agents) within a text editor that supports ACP such as [Zed](https://zed.dev/).
 
 ![Bog Agents ACP Demo](./static/img/bog-agents-acp.gif)
 
@@ -13,7 +13,7 @@ First, make sure you have [Zed](https://zed.dev/) and [`uv`](https://docs.astral
 Next, clone this repo:
 
 ```sh
-git clone git@github.com:langchain-ai/bog-agents.git
+git clone git@github.com:bogware/bog-agents.git
 ```
 
 Then, navigate into the newly created folder and run `uv sync`:

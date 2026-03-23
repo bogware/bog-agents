@@ -53,16 +53,16 @@ LangGraph server will open a new browser window with the Studio interface, which
 
 <img width="2869" height="1512" alt="Screenshot 2025-11-17 at 11 42 59 AM" src="https://github.com/user-attachments/assets/03090057-c199-42fe-a0f7-769704c2124b" />
 
-You can also connect the LangGraph server to a [UI specifically designed for bog-agents](https://github.com/langchain-ai/bog-agents-ui):
+You can also connect the LangGraph server to a [UI specifically designed for bog-agents](https://github.com/bogware/bog-agents-ui):
 
 ```bash
-git clone https://github.com/langchain-ai/bog-agents-ui.git
+git clone https://github.com/bogware/bog-agents-ui.git
 cd bog-agents-ui
 yarn install
 yarn dev
 ```
 
-Then follow the instructions in the [bog-agents-ui README](https://github.com/langchain-ai/bog-agents-ui?tab=readme-ov-file#connecting-to-a-langgraph-server) to connect the UI to the running LangGraph server.
+Then follow the instructions in the [bog-agents-ui README](https://github.com/bogware/bog-agents-ui?tab=readme-ov-file#connecting-to-a-langgraph-server) to connect the UI to the running LangGraph server.
 
 This provides a user-friendly chat interface and visualization of files in state.
 
@@ -74,7 +74,7 @@ This provides a user-friendly chat interface and visualization of files in state
 
 ### Custom Model
 
-By default, `bog-agents` uses `"claude-sonnet-4-5-20250929"`. You can customize this by passing any [LangChain model object](https://python.langchain.com/docs/integrations/chat/). See the Bog Agents package [README](https://github.com/langchain-ai/bog-agents?tab=readme-ov-file#model) for more details.
+By default, `bog-agents` uses `"claude-sonnet-4-5-20250929"`. You can customize this by passing any [LangChain model object](https://python.langchain.com/docs/integrations/chat/). See the Bog Agents package [README](https://github.com/bogware/bog-agents?tab=readme-ov-file#model) for more details.
 
 ```python
 from langchain.chat_models import init_chat_model
@@ -104,7 +104,7 @@ The deep research agent uses custom instructions defined in `research_agent/prom
 
 ### Custom Tools
 
-The deep research agent adds the following custom tools beyond the built-in bog-agents tools. You can also use your own tools, including via MCP servers. See the Bog Agents package [README](https://github.com/langchain-ai/bog-agents?tab=readme-ov-file#mcp) for more details.
+The deep research agent adds the following custom tools beyond the built-in bog-agents tools. You can also use your own tools, including via MCP servers. See the Bog Agents package [README](https://github.com/bogware/bog-agents?tab=readme-ov-file#mcp) for more details.
 
 | Tool Name | Description |
 |-----------|-------------|

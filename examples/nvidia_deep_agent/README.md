@@ -191,7 +191,7 @@ For a full enterprise deployment with NeMo Agent Toolkit, evaluation harnesses, 
 
 ## Resources
 
-- [Bog Agents Documentation](https://docs.langchain.com/oss/python/bog-agents/overview)
+- [Bog Agents Documentation](https://github.com/bogware/bog-agents)
 - [Agent Skills Specification](https://agentskills.io/specification)
 - [NVIDIA NIM](https://build.nvidia.com/)
 - [Modal](https://modal.com)

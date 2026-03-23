@@ -308,8 +308,8 @@ class AgentServer:
         from starlette.applications import Starlette  # ty: ignore[unresolved-import]
         from starlette.middleware.cors import CORSMiddleware  # ty: ignore[unresolved-import]
         from starlette.requests import Request  # ty: ignore[unresolved-import]
-        from starlette.responses import JSONResponse  # ty: ignore[unresolved-import]
-        from starlette.routing import Route  # ty: ignore[unresolved-import]
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
 
         server = self
 
@@ -445,7 +445,7 @@ class AgentServer:
         Raises:
             ImportError: If uvicorn is not installed.
         """
-        import uvicorn  # ty: ignore[unresolved-import]
+        import uvicorn
 
         app = self.create_app()
         logger.info(

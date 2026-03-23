@@ -4,9 +4,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        > **All contributions must be in English.** See the [language policy](https://docs.langchain.com/oss/python/contributing/overview#language-policy).
+        > **All contributions must be in English.** See the [language policy](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
 
-        If you are not a Bog Agents maintainer, employee, or were not asked directly by a maintainer to create an issue, then please start the conversation on the [Bog Agents Forum](https://forum.langchain.com/c/oss-product-help-lc-and-lg/bog-agents/18) instead.
+        If you are not a Bog Agents maintainer, employee, or were not asked directly by a maintainer to create an issue, then please start the conversation on the [Bog Agents Discussions](https://github.com/bogware/bog-agents/discussions) instead.
 
         **Note:** Do not begin work on a PR unless explicitly assigned to this issue by a maintainer.
   - type: checkboxes

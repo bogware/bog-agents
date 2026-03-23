@@ -31,9 +31,9 @@ packages = ["langchain_runloop"]
 
 
 [project.urls]
-Homepage = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/runloop"
-Repository = "https://github.com/langchain-ai/bog-agents"
-Documentation = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/runloop"
+Homepage = "https://github.com/bogware/bog-agents/tree/main/libs/partners/runloop"
+Repository = "https://github.com/bogware/bog-agents"
+Documentation = "https://github.com/bogware/bog-agents/tree/main/libs/partners/runloop"
 
 [dependency-groups]
 test = [

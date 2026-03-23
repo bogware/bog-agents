@@ -30,9 +30,9 @@ dependencies = [
 packages = ["langchain_modal"]
 
 [project.urls]
-Homepage = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/modal"
-Repository = "https://github.com/langchain-ai/bog-agents"
-Documentation = "https://github.com/langchain-ai/bog-agents/tree/main/libs/partners/modal"
+Homepage = "https://github.com/bogware/bog-agents/tree/main/libs/partners/modal"
+Repository = "https://github.com/bogware/bog-agents"
+Documentation = "https://github.com/bogware/bog-agents/tree/main/libs/partners/modal"
 
 [dependency-groups]
 test = [
