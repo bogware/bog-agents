@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -24,9 +24,6 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

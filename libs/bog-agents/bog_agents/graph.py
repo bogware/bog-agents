@@ -379,9 +379,10 @@ def create_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logi
             import warnings
 
             warnings.warn(
-                "No API key found (checked ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY). "
-                "The default model (Claude Sonnet) requires ANTHROPIC_API_KEY. "
-                "Set it before calling agent.invoke().",
+                "No API key found. The default model (Claude Sonnet) requires ANTHROPIC_API_KEY.\n"
+                "Set it before calling agent.invoke():\n"
+                "  export ANTHROPIC_API_KEY='sk-ant-...'\n"
+                "Or pass a different model: create_agent(model='openai:gpt-4o')",
                 UserWarning,
                 stacklevel=2,
             )

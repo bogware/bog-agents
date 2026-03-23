@@ -1390,9 +1390,15 @@ def _get_default_model_spec() -> str:
         return "nvidia:nvidia/nemotron-3-super-120b-a12b"
 
     msg = (
-        "No credentials configured. Please set one of: "
-        "ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, "
-        "GOOGLE_CLOUD_PROJECT, or NVIDIA_API_KEY"
+        "No credentials configured.\n\n"
+        "Quick start:\n"
+        "  export ANTHROPIC_API_KEY='sk-ant-...'   # Anthropic (recommended)\n"
+        "  export OPENAI_API_KEY='sk-...'           # OpenAI\n"
+        "  export GOOGLE_API_KEY='AI...'            # Google AI\n\n"
+        "Or use a local model (no API key needed):\n"
+        "  bog-agents -M ollama:llama3\n\n"
+        "Tip: Copy .env.example to .env in your project directory,\n"
+        "or run 'bog-agents --doctor' to check your setup."
     )
     raise ModelConfigError(msg)
 
