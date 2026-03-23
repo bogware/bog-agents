@@ -74,6 +74,12 @@ _bootstrap_start_path = (
 
 _load_dotenv(start_path=_bootstrap_start_path)
 
+# Also load user-level ~/.bog-agents/.env (written by the setup wizard).
+# override=False so project-level .env takes precedence.
+_user_env = Path.home() / ".bog-agents" / ".env"
+if _user_env.is_file():
+    dotenv.load_dotenv(dotenv_path=_user_env, override=False)
+
 # CRITICAL: Override LANGSMITH_PROJECT to route agent traces to separate project
 # LangSmith reads LANGSMITH_PROJECT at invocation time, so we override it here
 # and preserve the user's original value for shell commands
@@ -730,6 +736,33 @@ class Settings:
         return self.tavily_api_key is not None
 
     @property
+    def has_bedrock(self) -> bool:
+        """Check if AWS Bedrock credentials are available.
+
+        Checks for explicit env vars (AWS_ACCESS_KEY_ID, AWS_PROFILE,
+        AWS_DEFAULT_REGION) or the presence of ~/.aws/credentials or
+        ~/.aws/config files (set up by `aws configure`).
+        """
+        if os.environ.get("AWS_ACCESS_KEY_ID"):
+            return True
+        if os.environ.get("AWS_PROFILE"):
+            return True
+        if os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION"):
+            # Region alone isn't enough, but combined with credential files it is
+            aws_dir = Path.home() / ".aws"
+            return (aws_dir / "credentials").is_file() or (aws_dir / "config").is_file()
+        # Fall back to checking credential files directly
+        aws_dir = Path.home() / ".aws"
+        return (aws_dir / "credentials").is_file()
+
+    @property
+    def has_ollama(self) -> bool:
+        """Check if Ollama is available locally."""
+        import shutil
+
+        return shutil.which("ollama") is not None
+
+    @property
     def user_agents_dir(self) -> Path:
         """Get the base user-level .bog-agents directory.
 
@@ -1353,6 +1386,10 @@ def detect_provider(model_name: str) -> str | None:
     if model_lower.startswith(("nemotron", "nvidia/")):
         return "nvidia"
 
+    # AWS Bedrock model IDs use a dot-separated format (e.g., anthropic.claude-*)
+    if model_lower.startswith(("anthropic.", "amazon.", "meta.", "cohere.", "mistral.", "ai21.")):
+        return "bedrock"
+
     return None
 
 
@@ -1364,12 +1401,14 @@ def _get_default_model_spec() -> str:
     1. `[models].default` in config file (user's intentional preference).
     2. `[models].recent` in config file (last `/model` switch).
     3. Auto-detection based on available API credentials.
+    4. Interactive setup wizard if nothing is found.
 
     Returns:
         Model specification in provider:model format.
 
     Raises:
-        ModelConfigError: If no credentials are configured.
+        ModelConfigError: If no credentials are configured and the user
+            cancels the setup wizard.
     """
     config = ModelConfig.load()
     if config.default_model:
@@ -1378,29 +1417,162 @@ def _get_default_model_spec() -> str:
     if config.recent_model:
         return config.recent_model
 
-    if settings.has_openai:
-        return "openai:gpt-5.2"
     if settings.has_anthropic:
         return "anthropic:claude-sonnet-4-6"
+    if settings.has_openai:
+        return "openai:gpt-5.2"
+    if settings.has_bedrock:
+        return "bedrock:anthropic.claude-sonnet-4-6-v1"
     if settings.has_google:
         return "google_genai:gemini-3.1-pro-preview"
     if settings.has_vertex_ai:
         return "google_vertexai:gemini-3.1-pro-preview"
     if settings.has_nvidia:
         return "nvidia:nvidia/nemotron-3-super-120b-a12b"
+    if settings.has_ollama:
+        return "ollama:llama3"
 
-    msg = (
-        "No credentials configured.\n\n"
-        "Quick start:\n"
-        "  export ANTHROPIC_API_KEY='sk-ant-...'   # Anthropic (recommended)\n"
-        "  export OPENAI_API_KEY='sk-...'           # OpenAI\n"
-        "  export GOOGLE_API_KEY='AI...'            # Google AI\n\n"
-        "Or use a local model (no API key needed):\n"
-        "  bog-agents -M ollama:llama3\n\n"
-        "Tip: Copy .env.example to .env in your project directory,\n"
-        "or run 'bog-agents --doctor' to check your setup."
+    # Nothing auto-detected — run the interactive setup wizard
+    return _run_setup_wizard()
+
+
+def _check_aws_credentials() -> bool:
+    """Verify AWS credentials can actually authenticate.
+
+    Returns:
+        True if boto3 can locate valid credentials, False otherwise.
+    """
+    try:
+        import boto3  # type: ignore[import-untyped]
+
+        session = boto3.Session()
+        creds = session.get_credentials()
+        return creds is not None
+    except Exception:
+        return False
+
+
+def _run_setup_wizard() -> str:
+    """Interactive wizard to help the user configure a provider.
+
+    Walks through available providers, prompts for an API key or AWS
+    profile, validates the credential, persists it to `~/.bog-agents/.env`,
+    reloads the environment, and returns the chosen model spec.
+
+    Returns:
+        Model specification string (e.g. ``"anthropic:claude-sonnet-4-6"``).
+
+    Raises:
+        ModelConfigError: If the user cancels or the credential test fails.
+    """
+    from rich.panel import Panel
+    from rich.prompt import Prompt
+
+    con = Console()
+
+    con.print()
+    con.print(
+        Panel(
+            "[bold]Welcome to Bog Agents![/bold]\n\n"
+            "No AI provider credentials were detected.\n"
+            "Let's set one up — it only takes a moment.",
+            title="Setup",
+            border_style="blue",
+        )
     )
-    raise ModelConfigError(msg)
+
+    providers = [
+        ("1", "Anthropic", "ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6", "sk-ant-..."),
+        ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5.2", "sk-..."),
+        ("3", "AWS Bedrock", "__AWS__", "bedrock:anthropic.claude-sonnet-4-6-v1", None),
+        ("4", "Google AI", "GOOGLE_API_KEY", "google_genai:gemini-3.1-pro-preview", "AI..."),
+        ("5", "Ollama (local, free)", "__OLLAMA__", "ollama:llama3", None),
+    ]
+
+    con.print()
+    con.print("[bold]Choose a provider:[/bold]")
+    for num, name, _, _, _ in providers:
+        con.print(f"  [cyan]{num}[/cyan]) {name}")
+    con.print()
+
+    choice = Prompt.ask(
+        "Enter number",
+        choices=[p[0] for p in providers],
+        default="1",
+    )
+
+    _, name, env_var, model_spec, hint = next(p for p in providers if p[0] == choice)
+
+    # --- AWS Bedrock path ---
+    if env_var == "__AWS__":
+        con.print(f"\n[bold]{name}[/bold] uses your local AWS credentials.")
+        con.print("  Run [cyan]aws configure[/cyan] if you haven't already,")
+        con.print("  or set [cyan]AWS_PROFILE[/cyan] to use a named profile.\n")
+
+        if _check_aws_credentials():
+            con.print("[green]AWS credentials detected.[/green]")
+            from bog_agents_cli.model_config import save_default_model
+
+            save_default_model(model_spec)
+            return model_spec
+
+        con.print("[yellow]No valid AWS credentials found.[/yellow]")
+        con.print("Run [cyan]aws configure[/cyan] and try again,")
+        con.print("or choose a different provider.\n")
+        raise ModelConfigError(
+            "AWS credentials not configured. Run 'aws configure' first."
+        )
+
+    # --- Ollama path ---
+    if env_var == "__OLLAMA__":
+        import shutil
+
+        if shutil.which("ollama"):
+            con.print(f"\n[green]Ollama detected.[/green] Using {model_spec}")
+            from bog_agents_cli.model_config import save_default_model
+
+            save_default_model(model_spec)
+            return model_spec
+
+        con.print(
+            "\n[yellow]Ollama not found.[/yellow] Install from https://ollama.com"
+        )
+        raise ModelConfigError(
+            "Ollama is not installed. Visit https://ollama.com to install it."
+        )
+
+    # --- API key path ---
+    con.print(f"\n[bold]{name}[/bold] requires [cyan]{env_var}[/cyan].")
+    if hint:
+        con.print(f"  (starts with [dim]{hint}[/dim])")
+    con.print()
+
+    api_key = Prompt.ask(f"Paste your {name} API key").strip()
+    if not api_key:
+        raise ModelConfigError("No API key provided. Run bog-agents again to retry.")
+
+    # Persist to ~/.bog-agents/.env so it's loaded on future runs
+    env_dir = Path.home() / ".bog-agents"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    env_file = env_dir / ".env"
+
+    # Append (don't overwrite) to preserve any existing keys
+    with open(env_file, "a") as f:
+        f.write(f"\n{env_var}={api_key}\n")
+
+    # Load into current process
+    os.environ[env_var] = api_key
+    settings.reload_from_environment()
+
+    # Set as default model
+    from bog_agents_cli.model_config import save_default_model
+
+    save_default_model(model_spec)
+
+    con.print(f"\n[green]Saved![/green] Key written to [dim]{env_file}[/dim]")
+    con.print(f"Default model set to [bold]{model_spec}[/bold]\n")
+
+    return model_spec
 
 
 _OPENROUTER_APP_URL = "https://github.com/langchain-ai/bog-agents"
