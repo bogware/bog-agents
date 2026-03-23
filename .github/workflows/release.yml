@@ -70,7 +70,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: dist
+          name: dist-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       - name: Extract metadata
@@ -101,7 +101,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: dist-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       # Verify the built package imports correctly
@@ -135,7 +135,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: dist-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       - name: Publish to PyPI
@@ -161,7 +161,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: dist
+          name: dist-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       - name: Create GitHub Release
