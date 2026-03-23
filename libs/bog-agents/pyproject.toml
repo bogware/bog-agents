@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents"
-version = "0.5.0"
+version = "0.5.1"
 
 description = "Bog Agents - batteries-included agent harness for building AI agents. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama. Built on LangGraph."
 readme = "README.md"
