@@ -116,7 +116,7 @@ def show_help() -> None:
     console.print("  -m, --message TEXT         Auto-submit this prompt on start")
     console.print("  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)")
     console.print("  --doctor                   Diagnose your environment")
-    console.print("  -v, --version              Show versions")
+    console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")
     console.print()
 
@@ -163,7 +163,7 @@ def show_help() -> None:
 
     # --- Slash Commands ---
     console.print("[bold]Slash Commands (inside interactive session):[/bold]", style=COLORS["primary"])
-    _col1 = [
+    col1 = [
         ("/help", "Show this help"),
         ("/model", "Switch model mid-session"),
         ("/plan", "Read-only plan mode"),
@@ -175,7 +175,7 @@ def show_help() -> None:
         ("/test", "Run tests with coverage"),
         ("/cost", "Session cost & token usage"),
     ]
-    _col2 = [
+    col2 = [
         ("/pr", "Create/list/review PRs"),
         ("/remember", "Save to agent memory"),
         ("/teach", "Teach a workflow as skill"),
@@ -187,11 +187,11 @@ def show_help() -> None:
         ("/clear", "New thread"),
         ("/quit", "Exit"),
     ]
-    for left, right in zip(_col1, _col2):
+    for left, right in zip(col1, col2, strict=True):
         console.print(
             f"  {left[0]:<14} {left[1]:<28} {right[0]:<14} {right[1]}"
         )
-    console.print(f"  [dim]... and 30+ more. Type / to see all.[/dim]")
+    console.print("  [dim]... and 30+ more. Type / to see all.[/dim]")
     console.print()
 
     # --- Examples ---
