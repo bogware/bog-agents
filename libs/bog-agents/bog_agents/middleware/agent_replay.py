@@ -350,11 +350,13 @@ class ReplayStore:
                 break
             try:
                 data = json.loads(file_path.read_text())
-                sessions.append({
-                    "session_id": data["session_id"],
-                    "started_at": data.get("started_at"),
-                    "action_count": len(data.get("actions", [])),
-                })
+                sessions.append(
+                    {
+                        "session_id": data["session_id"],
+                        "started_at": data.get("started_at"),
+                        "action_count": len(data.get("actions", [])),
+                    }
+                )
             except (json.JSONDecodeError, KeyError):
                 continue
         return sessions
@@ -422,6 +424,7 @@ class AgentReplayMiddleware(AgentMiddleware):
         """
         if session_id is None:
             import uuid
+
             session_id = str(uuid.uuid4())[:12]
 
         self.session = ReplaySession(session_id=session_id)

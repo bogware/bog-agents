@@ -142,10 +142,10 @@ class VersionStore:
                 f"Lines unchanged: {unchanged}",
                 "",
                 f"### v{id_a}: {a.label} ({a.timestamp})",
-                a.content[:500] + ("..." if len(a.content) > 500 else ""),  # noqa: PLR2004
+                a.content[:500] + ("..." if len(a.content) > 500 else ""),
                 "",
                 f"### v{id_b}: {b.label} ({b.timestamp})",
-                b.content[:500] + ("..." if len(b.content) > 500 else ""),  # noqa: PLR2004
+                b.content[:500] + ("..." if len(b.content) > 500 else ""),
             ]
         )
 

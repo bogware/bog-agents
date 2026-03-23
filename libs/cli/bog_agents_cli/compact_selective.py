@@ -172,7 +172,7 @@ def _matches_pattern(message: dict[str, Any], pattern: str) -> bool:
 
     if pattern == "tool_results" and role == "tool":
         return True
-    if pattern == "large_tool_results" and role == "tool" and len(content) > 500:  # noqa: PLR2004
+    if pattern == "large_tool_results" and role == "tool" and len(content) > 500:
         return True
     if pattern == "code_blocks" and "```" in content:
         return True

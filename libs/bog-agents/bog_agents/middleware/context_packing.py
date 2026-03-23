@@ -80,7 +80,7 @@ def _extract_tool_summary(message: ToolMessage) -> ToolCallSummary:
     content = str(message.content) if message.content else ""
 
     # Truncate long results to key info
-    if len(content) > 200:  # noqa: PLR2004
+    if len(content) > 200:
         content = content[:200] + "..."
 
     success = "error" not in content.lower() and "failed" not in content.lower()
@@ -154,7 +154,7 @@ def pack_messages(
     for msg in messages:
         if isinstance(msg, HumanMessage):
             content = str(msg.content) if msg.content else ""
-            if len(content) > 150:  # noqa: PLR2004
+            if len(content) > 150:
                 content = content[:150] + "..."
             user_intents.append(content)
 
@@ -175,7 +175,7 @@ def pack_messages(
             # Extract first sentence or first 100 chars as key decision
             if content:
                 first_line = content.split("\n")[0]
-                if len(first_line) > 100:  # noqa: PLR2004
+                if len(first_line) > 100:
                     first_line = first_line[:100] + "..."
                 if first_line.strip():
                     decisions.append(first_line)
@@ -272,7 +272,7 @@ class ContextPackingMiddleware(AgentMiddleware[ContextPackingState, ContextT, Re
             estimated = self._estimate_tokens(messages)
             threshold = int(self._context_window * self._threshold_pct)
 
-            if estimated > threshold and len(messages) > 10:  # noqa: PLR2004
+            if estimated > threshold and len(messages) > 10:
                 # Pack the older messages, keep recent ones
                 keep_count = min(10, len(messages) // 3)
                 old_messages = messages[:-keep_count]
@@ -307,7 +307,7 @@ class ContextPackingMiddleware(AgentMiddleware[ContextPackingState, ContextT, Re
             estimated = self._estimate_tokens(messages)
             threshold = int(self._context_window * self._threshold_pct)
 
-            if estimated > threshold and len(messages) > 10:  # noqa: PLR2004
+            if estimated > threshold and len(messages) > 10:
                 keep_count = min(10, len(messages) // 3)
                 old_messages = messages[:-keep_count]
                 recent_messages = messages[-keep_count:]

@@ -127,7 +127,7 @@ async def _search_serper(query: str, *, max_results: int = 5) -> list[dict[str, 
     response = await asyncio.to_thread(
         urllib.request.urlopen,
         req,
-        timeout=15,  # noqa: S310
+        timeout=15,
     )
     result = json.loads(response.read())
 
@@ -160,11 +160,11 @@ async def _search_searxng(query: str, *, max_results: int = 5) -> list[dict[str,
     params = urllib.parse.urlencode({"q": query, "format": "json"})
     url = f"{base_url}/search?{params}"
 
-    req = urllib.request.Request(url)  # noqa: S310
+    req = urllib.request.Request(url)
     response = await asyncio.to_thread(
         urllib.request.urlopen,
         req,
-        timeout=15,  # noqa: S310
+        timeout=15,
     )
     result = json.loads(response.read())
 

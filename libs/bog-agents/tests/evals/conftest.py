@@ -18,7 +18,7 @@ from bog_agents.graph import get_default_model
 pytest_plugins = ["tests.evals.pytest_reporter"]
 
 
-def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001  # pytest hook signature
+def pytest_configure(config: pytest.Config) -> None:  # pytest hook signature
     """Fail fast if LangSmith tracing is not enabled.
 
     All eval tests require `@pytest.mark.langsmith` and

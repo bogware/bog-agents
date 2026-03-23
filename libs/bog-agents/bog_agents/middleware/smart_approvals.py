@@ -171,7 +171,10 @@ def _classify_risk(
                             risk = risk_levels[idx + 1]
                         logger.debug(
                             "Risk escalated to %s for %s due to arg %s matching %s",
-                            risk, tool_name, arg_name, pattern,
+                            risk,
+                            tool_name,
+                            arg_name,
+                            pattern,
                         )
                         break
             return risk, policy

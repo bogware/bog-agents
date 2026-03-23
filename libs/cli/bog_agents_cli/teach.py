@@ -140,7 +140,7 @@ def generate_skill_from_session(session: TeachSession) -> str:
                 for key, value in action.tool_args.items():
                     # Generalize paths
                     val_str = str(value)
-                    if len(val_str) > 200:  # noqa: PLR2004
+                    if len(val_str) > 200:
                         val_str = val_str[:200] + "..."
                     lines.append(f"- `{key}`: `{val_str}`")
                 lines.append("")

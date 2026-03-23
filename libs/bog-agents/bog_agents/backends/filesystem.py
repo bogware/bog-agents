@@ -80,7 +80,7 @@ class FilesystemBackend(BackendProtocol):
     def __init__(
         self,
         root_dir: str | Path | None = None,
-        virtual_mode: bool | None = None,  # noqa: FBT001
+        virtual_mode: bool | None = None,
         max_file_size_mb: int = 10,
     ) -> None:
         """Initialize filesystem backend.
@@ -185,7 +185,7 @@ class FilesystemBackend(BackendProtocol):
         """
         return "/" + path.resolve().relative_to(self.cwd).as_posix()
 
-    def ls_info(self, path: str) -> list[FileInfo]:  # noqa: C901, PLR0912, PLR0915  # Complex virtual_mode logic
+    def ls_info(self, path: str) -> list[FileInfo]:  # Complex virtual_mode logic
         """List files and directories in the specified directory (non-recursive).
 
         Args:
@@ -374,7 +374,7 @@ class FilesystemBackend(BackendProtocol):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Edit a file by replacing string occurrences.
 
@@ -459,7 +459,9 @@ class FilesystemBackend(BackendProtocol):
                 matches.append({"path": fpath, "line": int(line_num), "text": line_text})
         return matches
 
-    def _ripgrep_search(self, pattern: str, base_full: Path, include_glob: str | None) -> dict[str, list[tuple[int, str]]] | None:  # noqa: C901  # Split except clauses for logging
+    def _ripgrep_search(
+        self, pattern: str, base_full: Path, include_glob: str | None
+    ) -> dict[str, list[tuple[int, str]]] | None:  # Split except clauses for logging
         """Search using ripgrep with fixed-string (literal) mode.
 
         Args:
@@ -477,7 +479,7 @@ class FilesystemBackend(BackendProtocol):
         cmd.extend(["--", pattern, str(base_full)])
 
         try:
-            proc = subprocess.run(  # noqa: S603
+            proc = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -519,7 +521,7 @@ class FilesystemBackend(BackendProtocol):
 
         return results
 
-    def _python_search(self, pattern: str, base_full: Path, include_glob: str | None) -> dict[str, list[tuple[int, str]]]:  # noqa: C901, PLR0912
+    def _python_search(self, pattern: str, base_full: Path, include_glob: str | None) -> dict[str, list[tuple[int, str]]]:
         """Fallback search using Python when ripgrep is unavailable.
 
         Recursively searches files, respecting `max_file_size_bytes` limit.
@@ -574,7 +576,7 @@ class FilesystemBackend(BackendProtocol):
 
         return results
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:  # noqa: C901, PLR0912  # Complex virtual_mode logic
+    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:  # Complex virtual_mode logic
         """Find files matching a glob pattern.
 
         Args:

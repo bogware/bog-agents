@@ -71,7 +71,7 @@ class ParallelAgentsState(TypedDict):
 
 
 async def _run_single_task(
-    agent: Any,  # noqa: ANN401
+    agent: Any,
     prompt: str,
     index: int,
 ) -> ParallelResult:
@@ -108,7 +108,7 @@ async def _run_single_task(
             description=prompt,
             result=response or "(no response)",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("Parallel task %d failed: %s", index, exc)
         return ParallelResult(
             task_index=index,
@@ -171,7 +171,7 @@ class ParallelAgentsMiddleware(AgentMiddleware[ParallelAgentsState, ContextT, Re
         Returns:
             Combined results string.
         """
-        import json  # noqa: PLC0415
+        import json
 
         try:
             task_list = json.loads(tasks)
@@ -185,15 +185,9 @@ class ParallelAgentsMiddleware(AgentMiddleware[ParallelAgentsState, ContextT, Re
             return f"Error: maximum {MAX_PARALLEL_AGENTS} parallel tasks allowed."
 
         if self._agent_factory is None:
-            return (
-                "Error: parallel_tasks requires an agent_factory. "
-                "Configure ParallelAgentsMiddleware(agent_factory=...) to use this tool."
-            )
+            return "Error: parallel_tasks requires an agent_factory. Configure ParallelAgentsMiddleware(agent_factory=...) to use this tool."
 
-        return (
-            f"Accepted {len(task_list)} tasks. "
-            "Use the async execution path (agent.ainvoke) for true parallelism."
-        )
+        return f"Accepted {len(task_list)} tasks. Use the async execution path (agent.ainvoke) for true parallelism."
 
     async def _parallel_tasks_async(self, tasks: str) -> str:
         """Run all tasks concurrently with ``asyncio.gather``.
@@ -204,7 +198,7 @@ class ParallelAgentsMiddleware(AgentMiddleware[ParallelAgentsState, ContextT, Re
         Returns:
             Combined results string with each task's outcome.
         """
-        import json  # noqa: PLC0415
+        import json
 
         try:
             task_list = json.loads(tasks)
@@ -221,10 +215,7 @@ class ParallelAgentsMiddleware(AgentMiddleware[ParallelAgentsState, ContextT, Re
             return "Error: at least one task is required."
 
         if self._agent_factory is None:
-            return (
-                "Error: parallel_tasks requires an agent_factory. "
-                "Configure ParallelAgentsMiddleware(agent_factory=...) to use this tool."
-            )
+            return "Error: parallel_tasks requires an agent_factory. Configure ParallelAgentsMiddleware(agent_factory=...) to use this tool."
 
         logger.info("Starting %d parallel tasks", len(task_list))
 

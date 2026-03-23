@@ -189,7 +189,7 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             if source.startswith(("http://", "https://", "git@")):
                 # Git install
                 try:
-                    result = subprocess.run(  # noqa: S603
+                    result = subprocess.run(
                         ["git", "clone", "--depth", "1", source, str(plugin_dir)],
                         capture_output=True,
                         text=True,

@@ -51,7 +51,7 @@ def _show_timestamp_toast(widget: Static | Vertical) -> None:
 
     try:
         app = widget.app
-    except Exception:  # noqa: BLE001  # Textual raises when widget has no app
+    except Exception:  # Textual raises when widget has no app
         return
     if not widget.id:
         return

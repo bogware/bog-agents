@@ -357,7 +357,7 @@ class _BogAgentsSummarizationMiddleware(AgentMiddleware):
                 config=config,
                 tool_call_id=None,
             )
-            return self._backend(tool_runtime)  # ty: ignore[call-top-callable, invalid-argument-type]
+            return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
 
     def _get_thread_id(self) -> str:
@@ -573,7 +573,7 @@ A condensed summary follows:
 
         return False
 
-    def _determine_truncate_cutoff_index(self, messages: list[AnyMessage]) -> int:  # noqa: PLR0911
+    def _determine_truncate_cutoff_index(self, messages: list[AnyMessage]) -> int:
         """Determine the cutoff index for argument truncation based on keep policy.
 
         Messages at index >= cutoff should be preserved without truncation.
@@ -691,7 +691,7 @@ A condensed summary follows:
 
                 for tool_call in msg.tool_calls:
                     if tool_call["name"] in {"write_file", "edit_file"}:
-                        truncated_call = self._truncate_tool_call(tool_call)  # ty: ignore[invalid-argument-type]
+                        truncated_call = self._truncate_tool_call(tool_call)
                         if truncated_call != tool_call:
                             msg_modified = True
                         truncated_tool_calls.append(truncated_call)
@@ -750,7 +750,7 @@ A condensed summary follows:
             responses = backend.download_files([path])
             if responses and responses[0].content is not None and responses[0].error is None:
                 existing_content = responses[0].content.decode("utf-8")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # File likely doesn't exist yet, but log for observability
             logger.debug(
                 "Exception reading existing history from %s (treating as new file): %s: %s",
@@ -772,7 +772,7 @@ A condensed summary follows:
                     error_msg,
                 )
                 return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
                 "Exception offloading conversation history to %s (%d messages): %s: %s",
                 path,
@@ -824,7 +824,7 @@ A condensed summary follows:
             responses = await backend.adownload_files([path])
             if responses and responses[0].content is not None and responses[0].error is None:
                 existing_content = responses[0].content.decode("utf-8")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # File likely doesn't exist yet, but log for observability
             logger.debug(
                 "Exception reading existing history from %s (treating as new file): %s: %s",
@@ -848,7 +848,7 @@ A condensed summary follows:
                     error_msg,
                 )
                 return None
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning(
                 "Exception offloading conversation history to %s (%d messages): %s: %s",
                 path,
@@ -951,7 +951,7 @@ A condensed summary follows:
         # Create new summarization event
         new_event: SummarizationEvent = {
             "cutoff_index": state_cutoff_index,
-            "summary_message": new_messages[0],  # The HumanMessage with summary  # ty: ignore[invalid-argument-type]
+            "summary_message": new_messages[0],  # The HumanMessage with summary
             "file_path": file_path,
         }
 
@@ -1055,7 +1055,7 @@ A condensed summary follows:
         # Create new summarization event
         new_event: SummarizationEvent = {
             "cutoff_index": state_cutoff_index,
-            "summary_message": new_messages[0],  # The HumanMessage with summary  # ty: ignore[invalid-argument-type]
+            "summary_message": new_messages[0],  # The HumanMessage with summary
             "file_path": file_path,
         }
 
@@ -1090,7 +1090,7 @@ def create_summarization_middleware(
     Returns:
         Configured `SummarizationMiddleware` instance.
     """
-    from langchain.chat_models import BaseChatModel as RuntimeBaseChatModel  # noqa: PLC0415
+    from langchain.chat_models import BaseChatModel as RuntimeBaseChatModel
 
     if not isinstance(model, RuntimeBaseChatModel):
         msg = "`create_summarization_middleware` expects `model` to be a `BaseChatModel` instance."
@@ -1165,7 +1165,7 @@ def create_summarization_tool_middleware(
         )
         ```
     """
-    from bog_agents._models import resolve_model  # noqa: PLC0415
+    from bog_agents._models import resolve_model
 
     if isinstance(model, str):
         model = resolve_model(model)
@@ -1240,7 +1240,7 @@ class SummarizationToolMiddleware(AgentMiddleware):
         Returns:
             A `StructuredTool` with both sync and async implementations.
         """
-        from langchain_core.tools import StructuredTool  # noqa: PLC0415
+        from langchain_core.tools import StructuredTool
 
         mw = self
 
@@ -1294,7 +1294,7 @@ class SummarizationToolMiddleware(AgentMiddleware):
 
         new_event: SummarizationEvent = {
             "cutoff_index": state_cutoff,
-            "summary_message": summary_msg,  # ty: ignore[invalid-argument-type]
+            "summary_message": summary_msg,
             "file_path": file_path,
         }
 

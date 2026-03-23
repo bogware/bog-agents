@@ -296,7 +296,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
             raise ValueError(msg)
 
         try:
-            result = subprocess.run(  # noqa: S602
+            result = subprocess.run(
                 command,
                 check=False,
                 shell=True,  # Intentional: designed for LLM-controlled shell execution

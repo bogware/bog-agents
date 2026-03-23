@@ -18,7 +18,7 @@ from tests.evals.utils import (
 
 
 @tool
-def get_weather_fake(location: str) -> str:  # noqa: ARG001
+def get_weather_fake(location: str) -> str:
     """Return a fixed weather response for eval scenarios."""
     return "It's sunny at 89 degrees F"
 

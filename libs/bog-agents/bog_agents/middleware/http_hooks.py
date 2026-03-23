@@ -198,24 +198,26 @@ async def fire_webhook(
     for attempt in range(endpoint.retry_count + 1):
         try:
             timeout = aiohttp.ClientTimeout(total=endpoint.timeout_seconds)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.post(
                     endpoint.url,
                     data=payload_bytes,
                     headers=headers,
-                ) as resp:
-                    if resp.status >= 200 and resp.status < 300:
-                        if not endpoint.async_fire:
-                            body = await resp.json()
-                            return WebhookResponse.from_dict(body, resp.status)
-                        return None
-                    logger.warning(
-                        "Webhook %s returned status %d (attempt %d/%d)",
-                        endpoint.name or endpoint.url,
-                        resp.status,
-                        attempt + 1,
-                        endpoint.retry_count + 1,
-                    )
+                ) as resp,
+            ):
+                if resp.status >= 200 and resp.status < 300:
+                    if not endpoint.async_fire:
+                        body = await resp.json()
+                        return WebhookResponse.from_dict(body, resp.status)
+                    return None
+                logger.warning(
+                    "Webhook %s returned status %d (attempt %d/%d)",
+                    endpoint.name or endpoint.url,
+                    resp.status,
+                    attempt + 1,
+                    endpoint.retry_count + 1,
+                )
         except Exception:
             logger.debug(
                 "Webhook %s failed (attempt %d/%d)",

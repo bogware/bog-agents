@@ -158,7 +158,7 @@ class ReviewSession:
             lines.append("")
 
         preview = self.submitted_content[:200]
-        if len(self.submitted_content) > 200:  # noqa: PLR2004
+        if len(self.submitted_content) > 200:
             preview += "..."
         lines.append("### Content Preview")
         lines.append(preview)

@@ -92,7 +92,7 @@ class AlertStore:
         Returns:
             The created alert.
         """
-        alert = RegulatoryAlert(alert_id=self._next_id, **kwargs)  # type: ignore[arg-type]
+        alert = RegulatoryAlert(alert_id=self._next_id, **kwargs)
         self.alerts.append(alert)
         self._next_id += 1
         return alert

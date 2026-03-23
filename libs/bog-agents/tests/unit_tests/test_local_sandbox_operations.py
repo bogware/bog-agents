@@ -1,4 +1,4 @@
-# ruff: noqa: S108, RUF001
+# ruff: noqa: RUF001
 """Unit tests for BaseSandbox file operations using local subprocess.
 
 This module tests the core file operations implemented in BaseSandbox:
@@ -91,7 +91,7 @@ class LocalSubprocessSandbox(BaseSandbox):
         translated_command = self._translate_command_paths(command)
         try:
             # shell=True mimics real sandbox behavior; only runs in CI, poses no risk
-            result = subprocess.run(  # noqa: S602
+            result = subprocess.run(
                 translated_command,
                 check=False,
                 shell=True,
@@ -146,7 +146,7 @@ class LocalSubprocessSandbox(BaseSandbox):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Edit file content at the mapped real path."""
         result = super().edit(

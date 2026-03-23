@@ -7,7 +7,7 @@
 # - VSCE_PAT secret: Personal Access Token for VS Code Marketplace
 #   (create at https://dev.azure.com → User Settings → Personal Access Tokens)
 
-name: "🧩 VS Code Extension Release"
+name: "VS Code Extension Release"
 run-name: "Release VS Code Extension v${{ inputs.version }}"
 
 on:
@@ -29,7 +29,7 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows]
     permissions:
       contents: read
     steps:
@@ -64,7 +64,7 @@ jobs:
   publish:
     needs: build
     if: inputs.publish
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows]
     permissions:
       contents: read
     steps:

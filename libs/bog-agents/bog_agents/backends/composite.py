@@ -453,7 +453,7 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001, S110  # Intentional for best-effort state sync
+            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
                 pass
         return res
 
@@ -476,7 +476,7 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001, S110  # Intentional for best-effort state sync
+            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
                 pass
         return res
 
@@ -485,7 +485,7 @@ class CompositeBackend(BackendProtocol):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Edit a file, routing to appropriate backend.
 
@@ -510,7 +510,7 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001, S110  # Intentional for best-effort state sync
+            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
                 pass
         return res
 
@@ -519,7 +519,7 @@ class CompositeBackend(BackendProtocol):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Async version of edit."""
         backend, stripped_key = self._get_backend_and_key(file_path)
@@ -534,7 +534,7 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001, S110  # Intentional for best-effort state sync
+            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
                 pass
         return res
 

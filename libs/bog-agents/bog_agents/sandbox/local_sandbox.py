@@ -218,8 +218,7 @@ def _build_seatbelt_profile(sandbox: LocalSandbox) -> str:
         profile_parts.append("(allow file-write*)")
 
     # Extra paths
-    for path in sandbox.extra_read_paths:
-        profile_parts.append(f'(allow file-read* (subpath "{path}"))')
+    profile_parts.extend(f'(allow file-read* (subpath "{path}"))' for path in sandbox.extra_read_paths)
     for path in sandbox.extra_write_paths:
         profile_parts.append(f'(allow file-read* (subpath "{path}"))')
         profile_parts.append(f'(allow file-write* (subpath "{path}"))')

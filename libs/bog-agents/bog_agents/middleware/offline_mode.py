@@ -8,7 +8,6 @@ Designed for corporate environments behind firewalls.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -49,41 +48,45 @@ class OfflineCapability(StrEnum):
 
 
 # Tools that require network access
-NETWORK_REQUIRED_TOOLS = frozenset({
-    "web_search",
-    "fetch_url",
-    "http_request",
-    "create_pr",
-    "push_to_remote",
-})
+NETWORK_REQUIRED_TOOLS = frozenset(
+    {
+        "web_search",
+        "fetch_url",
+        "http_request",
+        "create_pr",
+        "push_to_remote",
+    }
+)
 
 # Tools that work fully offline
-OFFLINE_SAFE_TOOLS = frozenset({
-    "read_file",
-    "write_file",
-    "edit_file",
-    "multi_edit",
-    "ls",
-    "glob",
-    "grep",
-    "execute",
-    "write_todos",
-    "read_many_files",
-    "repo_map",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_commit",
-    "git_add",
-    "git_branch",
-    "git_stash",
-    "git_blame",
-    "git_show",
-    "detect_project",
-    "show_cost",
-    "show_context",
-    "task",
-})
+OFFLINE_SAFE_TOOLS = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "multi_edit",
+        "ls",
+        "glob",
+        "grep",
+        "execute",
+        "write_todos",
+        "read_many_files",
+        "repo_map",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_commit",
+        "git_add",
+        "git_branch",
+        "git_stash",
+        "git_blame",
+        "git_show",
+        "detect_project",
+        "show_cost",
+        "show_context",
+        "task",
+    }
+)
 
 
 @dataclass
@@ -100,7 +103,7 @@ class OllamaModel:
     @property
     def size_gb(self) -> float:
         """Size in gigabytes."""
-        return self.size_bytes / (1024 ** 3)
+        return self.size_bytes / (1024**3)
 
 
 @dataclass
@@ -127,16 +130,18 @@ def check_connectivity(*, timeout: float = 3.0) -> ConnectivityStatus:
     """
     try:
         import socket
+
         # Try to resolve a DNS name
         socket.setdefaulttimeout(timeout)
         socket.getaddrinfo("dns.google", 443)
         return ConnectivityStatus.ONLINE
-    except (socket.gaierror, socket.timeout, OSError):
+    except (TimeoutError, socket.gaierror, OSError):
         pass
 
     # Check if local network is reachable
     try:
         import socket
+
         socket.setdefaulttimeout(timeout)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex(("127.0.0.1", 11434))  # Ollama default port
@@ -179,12 +184,12 @@ def detect_ollama_models() -> list[OllamaModel]:
                 for part in parts:
                     if part.endswith("GB"):
                         try:
-                            size_bytes = int(float(part[:-2]) * 1024 ** 3)
+                            size_bytes = int(float(part[:-2]) * 1024**3)
                         except ValueError:
                             pass
                     elif part.endswith("MB"):
                         try:
-                            size_bytes = int(float(part[:-2]) * 1024 ** 2)
+                            size_bytes = int(float(part[:-2]) * 1024**2)
                         except ValueError:
                             pass
 
@@ -203,6 +208,7 @@ def check_ollama_running() -> bool:
     """
     try:
         import socket
+
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(2)
         result = sock.connect_ex(("127.0.0.1", 11434))
@@ -348,10 +354,7 @@ class OfflineModeMiddleware(AgentMiddleware):
         if self.status.ollama_available:
             self.status.ollama_models = detect_ollama_models()
             if not self.status.active_model:
-                self.status.active_model = (
-                    self.preferred_model
-                    or select_best_ollama_model(self.status.ollama_models)
-                )
+                self.status.active_model = self.preferred_model or select_best_ollama_model(self.status.ollama_models)
         else:
             self.status.ollama_models = []
 

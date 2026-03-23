@@ -1,11 +1,10 @@
-# CI: Lint and test SDK + CLI on every PR and push to main.
+# CI: Lint and test SDK + CLI on push to main only.
 
 name: CI
 
 on:
   push:
     branches: [main]
-  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -21,7 +20,7 @@ env:
 jobs:
   lint:
     name: "Lint"
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 10
     strategy:
       matrix:
@@ -41,7 +40,7 @@ jobs:
 
   test:
     name: "Test (${{ matrix.package.name }}, py${{ matrix.python }})"
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 20
     strategy:
       fail-fast: false

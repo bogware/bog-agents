@@ -125,7 +125,7 @@ class TaxPortfolio:
 
     def add_lot(self, **kwargs: object) -> TaxLot:
         """Add a tax lot."""
-        lot = TaxLot(lot_id=self._next_id, **kwargs)  # type: ignore[arg-type]
+        lot = TaxLot(lot_id=self._next_id, **kwargs)
         self.lots.append(lot)
         self._next_id += 1
         return lot

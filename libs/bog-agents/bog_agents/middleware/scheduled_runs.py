@@ -67,6 +67,7 @@ class ScheduleInterval:
         return self.value * multipliers[self.unit]
 
     def __str__(self) -> str:
+        """Return human-readable interval description."""
         return f"every {self.value} {self.unit}"
 
 
@@ -128,9 +129,8 @@ class CronExpression:
                         return True
                 elif value >= int(base) and (value - int(base)) % step_val == 0:
                     return True
-            else:
-                if int(part) == value:
-                    return True
+            elif int(part) == value:
+                return True
         return False
 
     def matches_time(self, timestamp: float | None = None) -> bool:
@@ -154,6 +154,7 @@ class CronExpression:
         )
 
     def __str__(self) -> str:
+        """Return cron expression string."""
         return f"{self.minute} {self.hour} {self.day_of_month} {self.month} {self.day_of_week}"
 
 

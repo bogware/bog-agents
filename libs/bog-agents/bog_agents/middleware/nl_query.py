@@ -228,7 +228,7 @@ class NLQueryMiddleware(AgentMiddleware[NLQueryState, ContextT, ResponseT]):
                 parts = col_def.strip().split(":")
                 col_name = parts[0].strip()
                 col_type = parts[1].strip() if len(parts) > 1 else "text"
-                col_desc = parts[2].strip() if len(parts) > 2 else ""  # noqa: PLR2004
+                col_desc = parts[2].strip() if len(parts) > 2 else ""
                 cols.append(DatasetColumn(name=col_name, dtype=col_type, description=col_desc))
             ds = mw.store.register(name, cols, description)
             return f"Dataset '{name}' registered with {len(cols)} columns."

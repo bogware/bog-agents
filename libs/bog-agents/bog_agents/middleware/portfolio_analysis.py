@@ -104,7 +104,7 @@ class Portfolio:
     def std_dev(self) -> float:
         """Annualized standard deviation."""
         returns = self.portfolio_returns
-        if len(returns) < 2:  # noqa: PLR2004
+        if len(returns) < 2:
             return 0.0
         return statistics.stdev(returns) * math.sqrt(12)
 
@@ -121,7 +121,7 @@ class Portfolio:
         if not returns:
             return 0.0
         downside = [r for r in returns if r < 0]
-        if len(downside) < 2:  # noqa: PLR2004
+        if len(downside) < 2:
             return 0.0
         downside_dev = statistics.stdev(downside) * math.sqrt(12)
         if downside_dev == 0:
@@ -146,7 +146,7 @@ class Portfolio:
     def var_95(self) -> float:
         """Value at Risk at 95% confidence (parametric)."""
         returns = self.portfolio_returns
-        if len(returns) < 2:  # noqa: PLR2004
+        if len(returns) < 2:
             return 0.0
         mean = statistics.mean(returns)
         sd = statistics.stdev(returns)
@@ -282,7 +282,7 @@ class PortfolioAnalysisMiddleware(AgentMiddleware[PortfolioAnalysisState, Contex
             import random
 
             returns = mw.portfolio.portfolio_returns
-            if len(returns) < 2:  # noqa: PLR2004
+            if len(returns) < 2:
                 return "Insufficient return data. Add holdings with historical returns first."
 
             mean = statistics.mean(returns)

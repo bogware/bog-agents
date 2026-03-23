@@ -90,14 +90,14 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             try:
                 import urllib.request
 
-                req = urllib.request.Request(url, method=method)  # noqa: S310
+                req = urllib.request.Request(url, method=method)
                 if headers:
                     for key, value in headers.items():
                         req.add_header(key, value)
                 if body:
                     req.data = body.encode("utf-8")
 
-                with urllib.request.urlopen(req, timeout=30) as response:  # noqa: S310
+                with urllib.request.urlopen(req, timeout=30) as response:
                     content = response.read().decode("utf-8", errors="replace")
                     status = response.status
                     resp_headers = dict(response.headers)
@@ -114,7 +114,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                     else:
                         result += f"Content: {content[:2000]}"
                     return result
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return f"Error fetching {url}: {e}"
 
         def api_request(
@@ -130,7 +130,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
 
             start = time.monotonic()
             try:
-                req = urllib.request.Request(url, method=method)  # noqa: S310
+                req = urllib.request.Request(url, method=method)
                 req.add_header("Content-Type", "application/json")
                 req.add_header("Accept", "application/json")
                 if headers:
@@ -140,7 +140,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                 if data:
                     req.data = data
 
-                with urllib.request.urlopen(req, timeout=30) as response:  # noqa: S310
+                with urllib.request.urlopen(req, timeout=30) as response:
                     elapsed = (time.monotonic() - start) * 1000
                     content = response.read().decode("utf-8", errors="replace")
                     status = response.status
@@ -152,7 +152,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                     except json.JSONDecodeError:
                         result += content[:3000]
                     return result
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 elapsed = (time.monotonic() - start) * 1000
                 return f"Error: {method} {url} ({elapsed:.0f}ms): {e}"
 
@@ -163,7 +163,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
         ) -> str:
             """Start a local dev server for previewing changes."""
             try:
-                process = subprocess.Popen(  # noqa: S603
+                process = subprocess.Popen(
                     command.split(),
                     cwd=middleware._working_dir,
                     stdout=subprocess.PIPE,
@@ -172,7 +172,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                 )
                 middleware._preview_processes[port] = process
                 return f"Started preview server (PID={process.pid}) on port {port}.\nURL: http://localhost:{port}"
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 return f"Error starting server: {e}"
 
         def stop_preview_server(

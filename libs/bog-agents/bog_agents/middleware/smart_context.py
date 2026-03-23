@@ -40,7 +40,7 @@ class ContextChunk:
     def __post_init__(self) -> None:
         """Compute hash if not provided."""
         if not self.chunk_hash:
-            self.chunk_hash = hashlib.md5(self.content.encode()).hexdigest()[:12]  # noqa: S324
+            self.chunk_hash = hashlib.md5(self.content.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -190,9 +190,7 @@ class SmartContextMiddleware(AgentMiddleware[SmartContextState, ContextT, Respon
             total_files = 0
             for pattern in patterns:
                 for file_path in middleware._working_dir.glob(pattern):
-                    if file_path.is_file() and not any(
-                        part.startswith(".") or part == "node_modules" or part == "__pycache__" for part in file_path.parts
-                    ):
+                    if file_path.is_file() and not any(part.startswith(".") or part in {"node_modules", "__pycache__"} for part in file_path.parts):
                         chunks = middleware._index_file(file_path, chunk_size)
                         total_chunks += len(chunks)
                         total_files += 1

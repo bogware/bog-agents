@@ -172,7 +172,7 @@ class FactDatabase:
             status = "contradicted"
         elif matching:
             status = "verified"
-        elif confidence > 0.5:  # noqa: PLR2004
+        elif confidence > 0.5:
             status = "partial"
         else:
             status = "unverified"

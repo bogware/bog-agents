@@ -74,9 +74,7 @@ class DashboardState:
     total_tokens: int = 0
     session_start: float = field(default_factory=time.time)
 
-    def add_agent(
-        self, agent_id: str, name: str, prompt: str = ""
-    ) -> AgentPanelState:
+    def add_agent(self, agent_id: str, name: str, prompt: str = "") -> AgentPanelState:
         """Register a new agent in the dashboard.
 
         Args:
@@ -117,16 +115,12 @@ class DashboardState:
     @property
     def running_count(self) -> int:
         """Number of currently running agents."""
-        return sum(
-            1 for a in self.agents.values() if a.status == "running"
-        )
+        return sum(1 for a in self.agents.values() if a.status == "running")
 
     @property
     def completed_count(self) -> int:
         """Number of completed agents."""
-        return sum(
-            1 for a in self.agents.values() if a.status == "completed"
-        )
+        return sum(1 for a in self.agents.values() if a.status == "completed")
 
     def update_totals(self) -> None:
         """Recalculate total cost and tokens from all agents."""
@@ -152,23 +146,12 @@ class DashboardState:
             "-" * 70,
         ]
 
-        for agent in sorted(
-            self.agents.values(), key=lambda a: a.agent_id
-        ):
+        for agent in sorted(self.agents.values(), key=lambda a: a.agent_id):
             icon = agent.status_icon
-            dur = (
-                f"{agent.duration_seconds:.0f}s"
-                if agent.started_at
-                else "--"
-            )
-            action = (
-                agent.current_action[:40]
-                if agent.current_action
-                else agent.status
-            )
+            dur = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
+            action = agent.current_action[:40] if agent.current_action else agent.status
             lines.append(
-                f"  [{icon}] {agent.name:<20} {action:<40} "
-                f"{agent.tool_calls}tc {dur}"
+                f"  [{icon}] {agent.name:<20} {action:<40} {agent.tool_calls}tc {dur}"
             )
 
         return "\n".join(lines)
@@ -200,9 +183,7 @@ class DashboardState:
 
         if agent.output_lines:
             lines.append("\nRecent output:")
-            lines.extend(
-                f"  {line}" for line in agent.output_lines[-20:]
-            )
+            lines.extend(f"  {line}" for line in agent.output_lines[-20:])
 
         return "\n".join(lines)
 
@@ -241,18 +222,18 @@ def create_dashboard_layout(state: DashboardState) -> str:
     agents = sorted(state.agents.values(), key=lambda a: a.agent_id)
     for agent in agents:
         icon = agent.status_icon
-        dur = (
-            f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
-        )
-        lines.extend((
-            f" [{icon}] {agent.name} ({agent.agent_id})",
-            f"     Status: {agent.status} | Duration: {dur}",
+        dur = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
+        lines.extend(
             (
-                f"     Tools: {agent.tool_calls} | "
-                f"Errors: {agent.errors} | "
-                f"Tokens: {agent.tokens_used:,}"
-            ),
-        ))
+                f" [{icon}] {agent.name} ({agent.agent_id})",
+                f"     Status: {agent.status} | Duration: {dur}",
+                (
+                    f"     Tools: {agent.tool_calls} | "
+                    f"Errors: {agent.errors} | "
+                    f"Tokens: {agent.tokens_used:,}"
+                ),
+            )
+        )
 
         if agent.current_action:
             lines.append(f"     Action: {agent.current_action[:60]}")
@@ -321,11 +302,7 @@ class DashboardScreen:
         Returns:
             Formatted dashboard text.
         """
-        state = (
-            self._state_builder()
-            if self._state_builder
-            else DashboardState()
-        )
+        state = self._state_builder() if self._state_builder else DashboardState()
         return create_dashboard_layout(state)
 
     def start(

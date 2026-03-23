@@ -40,7 +40,7 @@ def build_composite_state_backend(runtime: ToolRuntime, *, routes):
     return CompositeBackend(default=default_state, routes=built_routes)
 
 
-def test_composite_state_backend_routes_and_search(tmp_path: Path):  # noqa: ARG001  # Pytest fixture
+def test_composite_state_backend_routes_and_search(tmp_path: Path):  # Pytest fixture
     rt = make_runtime("t3")
     # route /memories/ to store
     be = build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})

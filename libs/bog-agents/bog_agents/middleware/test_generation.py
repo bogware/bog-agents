@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _run_cmd(working_dir: Path, *args: str, timeout: int = 120) -> str:
     """Run a shell command and return output."""
     try:
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             list(args),
             cwd=working_dir,
             capture_output=True,

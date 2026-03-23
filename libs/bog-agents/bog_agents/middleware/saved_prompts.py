@@ -326,7 +326,7 @@ class SavedPromptsMiddleware(AgentMiddleware[SavedPromptsState, ContextT, Respon
                 config=config,
                 tool_call_id=None,
             )
-            return self._backend(tool_runtime)  # ty: ignore[call-top-callable, invalid-argument-type]
+            return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
 
     def _build_tools(self) -> list[BaseTool]:
@@ -442,7 +442,7 @@ class SavedPromptsMiddleware(AgentMiddleware[SavedPromptsState, ContextT, Respon
             lines.append(f"- **{p['name']}** [{p['category']}]: {p['description']}{vars_str}")
         return "\n".join(lines)
 
-    def before_agent(self, state: SavedPromptsState, runtime: Runtime, config: RunnableConfig) -> SavedPromptsStateUpdate | None:  # ty: ignore[invalid-method-override]
+    def before_agent(self, state: SavedPromptsState, runtime: Runtime, config: RunnableConfig) -> SavedPromptsStateUpdate | None:
         """Load prompts metadata before agent execution.
 
         Args:
@@ -466,7 +466,7 @@ class SavedPromptsMiddleware(AgentMiddleware[SavedPromptsState, ContextT, Respon
 
         return SavedPromptsStateUpdate(prompts_metadata=list(all_prompts.values()))
 
-    async def abefore_agent(self, state: SavedPromptsState, runtime: Runtime, config: RunnableConfig) -> SavedPromptsStateUpdate | None:  # ty: ignore[invalid-method-override]
+    async def abefore_agent(self, state: SavedPromptsState, runtime: Runtime, config: RunnableConfig) -> SavedPromptsStateUpdate | None:
         """Async version of before_agent.
 
         Args:

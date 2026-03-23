@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 class ContextTier(StrEnum):
     """Context window size tiers with different management strategies."""
 
-    SMALL = "small"       # 4K-16K tokens
-    MEDIUM = "medium"     # 16K-64K tokens
-    LARGE = "large"       # 64K-200K tokens
-    XLARGE = "xlarge"     # 200K-500K tokens
-    MASSIVE = "massive"   # 500K-2M+ tokens
+    SMALL = "small"  # 4K-16K tokens
+    MEDIUM = "medium"  # 16K-64K tokens
+    LARGE = "large"  # 64K-200K tokens
+    XLARGE = "xlarge"  # 200K-500K tokens
+    MASSIVE = "massive"  # 500K-2M+ tokens
 
 
 @dataclass
@@ -170,7 +170,7 @@ def detect_context_window(model_name: str, *, default: int = 128_000) -> int:
         Context window size in tokens.
     """
     # Strip provider prefix (e.g., "anthropic:claude-sonnet-4-6" -> "claude-sonnet-4-6")
-    name = model_name.split(":")[-1] if ":" in model_name else model_name
+    name = model_name.rsplit(":", maxsplit=1)[-1] if ":" in model_name else model_name
     # Strip version suffixes for matching
     name_lower = name.lower()
 
@@ -312,11 +312,7 @@ class AdaptiveContextMiddleware(AgentMiddleware):
         if len(output) <= max_chars:
             return output
         half = max_chars // 2
-        return (
-            output[:half]
-            + f"\n\n... [truncated {len(output) - max_chars} characters] ...\n\n"
-            + output[-half:]
-        )
+        return output[:half] + f"\n\n... [truncated {len(output) - max_chars} characters] ...\n\n" + output[-half:]
 
     def update_model(self, model_name: str) -> None:
         """Update configuration when the model changes mid-session.
@@ -330,7 +326,9 @@ class AdaptiveContextMiddleware(AgentMiddleware):
         self.usage.tier = self.tier_config.tier
         logger.info(
             "Adaptive context updated: model=%s, window=%d, tier=%s",
-            model_name, self.context_window, self.tier_config.tier,
+            model_name,
+            self.context_window,
+            self.tier_config.tier,
         )
 
     async def wrap_model_call(

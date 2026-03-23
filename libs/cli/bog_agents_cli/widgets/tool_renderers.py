@@ -104,7 +104,9 @@ class EditFileRenderer(ToolRenderer):
 
         # Skip the first two header lines (--- and +++)
         diff_list = list(diff)
-        return diff_list[2:] if len(diff_list) > 2 else diff_list  # noqa: PLR2004  # Column count threshold
+        return (
+            diff_list[2:] if len(diff_list) > 2 else diff_list
+        )  # Column count threshold
 
 
 # Registry mapping tool names to renderers

@@ -106,7 +106,7 @@ async def submit_remote_task(
     prompt: str,
     *,
     model: str = "",
-    working_dir: Path | None = None,
+    working_dir: Path | None = None,  # noqa: ARG001  # Reserved for future workspace sync
 ) -> RemoteTask:
     """Submit a task for remote execution.
 

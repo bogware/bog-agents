@@ -118,7 +118,7 @@ class GenericFakeChatModel(BaseChatModel):
         generation = ChatGeneration(message=message_)
         return ChatResult(generations=[generation])
 
-    def _stream(  # noqa: C901, PLR0912  # Complex test helper with many message types
+    def _stream(  # Complex test helper with many message types
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,

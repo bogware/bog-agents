@@ -497,7 +497,7 @@ Use `edit_file` to update existing files or `write_file` to create new ones.
 List what you captured and where you stored it:
 - Skills created (with key best practices encoded)
 - Memory entries added (with location)
-"""  # noqa: E501
+"""
 
 
 class BogAgentsApp(App):
@@ -552,7 +552,7 @@ class BogAgentsApp(App):
     class ServerReady(Message):
         """Posted by the background server-startup worker on success."""
 
-        def __init__(  # noqa: D107
+        def __init__(
             self,
             agent: Any,  # noqa: ANN401
             server_proc: Any,  # noqa: ANN401
@@ -566,7 +566,7 @@ class BogAgentsApp(App):
     class ServerStartFailed(Message):
         """Posted by the background server-startup worker on failure."""
 
-        def __init__(self, error: Exception) -> None:  # noqa: D107
+        def __init__(self, error: Exception) -> None:
             super().__init__()
             self.error = error
 
@@ -838,7 +838,7 @@ class BogAgentsApp(App):
 
         try:
             results = await asyncio.gather(*coros, return_exceptions=True)
-        except Exception as exc:  # noqa: BLE001  # defensive catch around gather
+        except Exception as exc:  # defensive catch around gather
             self.post_message(self.ServerStartFailed(error=exc))
             return
 
@@ -1015,7 +1015,7 @@ class BogAgentsApp(App):
         # Sticky scroll: only scroll to bottom if user is near the bottom
         # "Near" means within 100 pixels of the bottom (about 6-7 lines)
         distance_from_bottom = chat.max_scroll_y - chat.scroll_y
-        if distance_from_bottom < 100:  # noqa: PLR2004  # Pixel distance threshold for sticky scroll
+        if distance_from_bottom < 100:  # Pixel distance threshold for sticky scroll
             chat.scroll_end(animate=False)
 
     def _check_hydration_needed(self) -> None:
@@ -1250,7 +1250,7 @@ class BogAgentsApp(App):
                         )
                         await self._mount_before_queued(messages, auto_msg)
                     self._scroll_chat_to_bottom()
-                except Exception:  # noqa: S110, BLE001  # Resilient auto-message display
+                except Exception:  # noqa: S110  # Resilient auto-message display
                     pass  # Don't fail if we can't show the message
 
                 return result_future
@@ -1644,7 +1644,10 @@ class BogAgentsApp(App):
                 asyncio.to_thread(build_langsmith_thread_url, thread_id),
                 timeout=2.0,
             )
-        except (TimeoutError, Exception):  # noqa: BLE001  # Resilient non-interactive mode error handling
+        except (
+            TimeoutError,
+            Exception,
+        ):  # Resilient non-interactive mode error handling
             url = None
 
         if url:
@@ -1804,11 +1807,15 @@ class BogAgentsApp(App):
                     overhead_str = format_token_count(overhead)
                     conv_str = format_token_count(conv_tokens)
 
-                    overhead_unit = " tokens" if overhead < 1000 else ""  # noqa: PLR2004  # not bothersome, cosmetic
-                    conv_unit = " tokens" if conv_tokens < 1000 else ""  # noqa: PLR2004  # not bothersome, cosmetic
+                    overhead_unit = (
+                        " tokens" if overhead < 1000 else ""
+                    )  # not bothersome, cosmetic
+                    conv_unit = (
+                        " tokens" if conv_tokens < 1000 else ""
+                    )  # not bothersome, cosmetic
 
                     msg += (
-                        f"\n\u251c System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"  # noqa: E501
+                        f"\n\u251c System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"
                         f"\n\u2514 Conversation: ~{conv_str}{conv_unit}"
                     )
 
@@ -1958,6 +1965,7 @@ class BogAgentsApp(App):
         from bog_agents_cli.background_agents import BackgroundAgentManager
 
         if not hasattr(self, "_bg_manager"):
+
             def _create_bg_agent():
                 """Create an isolated agent instance for background tasks."""
                 from bog_agents_cli.config import create_model, settings
@@ -1967,11 +1975,14 @@ class BogAgentsApp(App):
                     result = create_model(model_spec)
                     return result.model
                 except Exception:
-                    logger.debug("Failed to create background agent model", exc_info=True)
+                    logger.debug(
+                        "Failed to create background agent model", exc_info=True
+                    )
                     return self._agent  # Fallback to shared agent
 
             def _make_agent():
                 from bog_agents.graph import create_agent as _create_sdk_agent
+
                 model = _create_bg_agent()
                 return _create_sdk_agent(model=model)
 
@@ -1984,7 +1995,9 @@ class BogAgentsApp(App):
 
         raw = command.strip()
         if raw.lower() in ("/background", "/background list"):
-            await self._mount_message(AppMessage(self._bg_manager.format_status_table()))
+            await self._mount_message(
+                AppMessage(self._bg_manager.format_status_table())
+            )
             return
 
         if raw.lower().startswith("/background cancel "):
@@ -1992,7 +2005,9 @@ class BogAgentsApp(App):
             if self._bg_manager.cancel(task_id):
                 await self._mount_message(AppMessage(f"Cancel requested for {task_id}"))
             else:
-                await self._mount_message(AppMessage(f"Task {task_id} not found or not running"))
+                await self._mount_message(
+                    AppMessage(f"Task {task_id} not found or not running")
+                )
             return
 
         if raw.lower().startswith("/background status "):
@@ -2010,19 +2025,23 @@ class BogAgentsApp(App):
             return
 
         # Anything else is a prompt to submit
-        prompt = raw[len("/background "):].strip()
+        prompt = raw[len("/background ") :].strip()
         if not prompt:
-            await self._mount_message(AppMessage(
-                "Usage: /background <prompt> | list | cancel <id> | status <id> | cleanup"
-            ))
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /background <prompt> | list | cancel <id> | status <id> | cleanup"
+                )
+            )
             return
 
         try:
             task_id = await self._bg_manager.submit(prompt)
-            await self._mount_message(AppMessage(
-                f"Background task submitted: {task_id}\n"
-                f"Use /background list to check status."
-            ))
+            await self._mount_message(
+                AppMessage(
+                    f"Background task submitted: {task_id}\n"
+                    f"Use /background list to check status."
+                )
+            )
         except RuntimeError as exc:
             await self._mount_message(AppMessage(f"Error: {exc}"))
 
@@ -2041,14 +2060,14 @@ class BogAgentsApp(App):
             result_preview = getattr(task, "result", "") or ""
             if len(result_preview) > 200:
                 result_preview = result_preview[:200] + "..."
-            await self._mount_message(AppMessage(
-                f"Background task {task_id} completed.\n{result_preview}"
-            ))
+            await self._mount_message(
+                AppMessage(f"Background task {task_id} completed.\n{result_preview}")
+            )
         elif status == BackgroundStatus.FAILED:
             error = getattr(task, "error", "unknown error")
-            await self._mount_message(AppMessage(
-                f"Background task {task_id} failed: {error}"
-            ))
+            await self._mount_message(
+                AppMessage(f"Background task {task_id} failed: {error}")
+            )
 
     async def _handle_dashboard_command(self) -> None:
         """Handle /dashboard slash command.
@@ -2093,9 +2112,11 @@ class BogAgentsApp(App):
         )
 
         output = self._dashboard_screen.render_once()
-        await self._mount_message(AppMessage(
-            f"{output}\n\nDashboard showing snapshot. Use /dashboard again to refresh."
-        ))
+        await self._mount_message(
+            AppMessage(
+                f"{output}\n\nDashboard showing snapshot. Use /dashboard again to refresh."
+            )
+        )
 
     async def _handle_recommend_command(self, command: str) -> None:
         """Handle /recommend slash command.
@@ -2114,7 +2135,7 @@ class BogAgentsApp(App):
         )
 
         raw = command.strip()
-        args_str = raw[len("/recommend"):].strip()
+        args_str = raw[len("/recommend") :].strip()
 
         # Show help
         if args_str in ("--help", "-h", "help"):
@@ -2129,15 +2150,11 @@ class BogAgentsApp(App):
             prompt = build_clarifying_prompt(config)
             # Store config for when user answers questions
             self._recommend_config = config
-            await self._handle_user_message(
-                f"Please review this codebase.\n\n{prompt}"
-            )
+            await self._handle_user_message(f"Please review this codebase.\n\n{prompt}")
         else:
             # Skip questions, go straight to review
             prompt = build_review_prompt(config)
-            await self._handle_user_message(
-                f"Please review this codebase.\n\n{prompt}"
-            )
+            await self._handle_user_message(f"Please review this codebase.\n\n{prompt}")
 
     async def _get_conversation_token_count(self) -> int | None:
         """Return the approximate conversation-only token count.
@@ -2226,7 +2243,7 @@ class BogAgentsApp(App):
 
         try:
             state_values = await self._get_thread_state_values(self._lc_thread_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
             return
 
@@ -2257,7 +2274,7 @@ class BogAgentsApp(App):
                     profile_overrides=self._profile_override,
                 )
                 model = result.model
-            except Exception as exc:  # noqa: BLE001  # surface model config errors to user
+            except Exception as exc:  # surface model config errors to user
                 await self._mount_message(
                     ErrorMessage(
                         f"Compaction requires a working model configuration: {exc}"

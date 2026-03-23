@@ -133,7 +133,7 @@ def run_doctor() -> str:
         value = os.environ.get(env_var)
         if value:
             # Mask the value
-            masked = value[:4] + "..." + value[-4:] if len(value) > 8 else "***"  # noqa: PLR2004
+            masked = value[:4] + "..." + value[-4:] if len(value) > 8 else "***"
             checks.append((f"Env: {env_var}", "OK", masked))
         else:
             checks.append((f"Env: {env_var}", "SKIP", "Not set"))

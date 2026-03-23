@@ -588,7 +588,7 @@ def _info(
                 project_agent_skills_dir=None,
             )
             shadowed_user_skill = any(s["name"] == skill_name for s in user_only)
-        except Exception:  # noqa: BLE001, S110  # Shadow detection is cosmetic, safe to swallow
+        except Exception:  # noqa: S110  # Shadow detection is cosmetic, safe to swallow
             pass
 
     console.print(

@@ -1,5 +1,7 @@
 # Auto-creates release PRs from conventional commits.
 # When a release PR is merged, triggers the release workflow.
+#
+# Requires: BOG_PAT secret (Personal Access Token with repo + pull_request scopes)
 
 name: Release Please
 
@@ -9,7 +11,7 @@ on:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: write
       pull-requests: write
@@ -23,6 +25,7 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          token: ${{ secrets.BOG_PAT }}
 
       - uses: actions/checkout@v6
         with:
@@ -50,13 +53,14 @@ jobs:
   update-lockfiles:
     needs: release-please
     if: needs.release-please.outputs.pr != ''
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
+          token: ${{ secrets.BOG_PAT }}
       - uses: astral-sh/setup-uv@v7
       - name: Update lockfiles
         run: |
@@ -76,6 +80,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       package: bog-agents
+    secrets: inherit
     permissions:
       contents: write
       id-token: write
@@ -86,6 +91,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       package: bog-agents-cli
+    secrets: inherit
     permissions:
       contents: write
       id-token: write

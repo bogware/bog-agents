@@ -176,7 +176,7 @@ class KnowledgeGraph:
         Returns:
             List of relationships where the entity is source or target.
         """
-        return [r for r in self.relationships if r.from_entity == name or r.to_entity == name]
+        return [r for r in self.relationships if name in (r.from_entity, r.to_entity)]
 
     def format_summary(self) -> str:
         """Format a human-readable summary of the knowledge graph.

@@ -64,7 +64,7 @@ class MockSandboxBackend(SandboxBackendProtocol, StateBackend):
         return "mock_sandbox_backend"
 
 
-async def test_composite_state_backend_routes_and_search_async(tmp_path: Path):  # noqa: ARG001  # Pytest fixture
+async def test_composite_state_backend_routes_and_search_async(tmp_path: Path):  # Pytest fixture
     """Test async operations with composite backend routing."""
     rt = make_runtime("t3")
     be = build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})

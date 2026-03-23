@@ -148,7 +148,7 @@ class StoreBackend(BackendProtocol):
         """
         if self._namespace is not None:
             state = getattr(self.runtime, "state", None)
-            ctx = BackendContext(state=state, runtime=self.runtime)  # ty: ignore[invalid-argument-type]
+            ctx = BackendContext(state=state, runtime=self.runtime)
             return _validate_namespace(self._namespace(ctx))
 
         return self._get_namespace_legacy()
@@ -450,7 +450,7 @@ class StoreBackend(BackendProtocol):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Edit a file by replacing string occurrences.
 
@@ -488,7 +488,7 @@ class StoreBackend(BackendProtocol):
         file_path: str,
         old_string: str,
         new_string: str,
-        replace_all: bool = False,  # noqa: FBT001, FBT002
+        replace_all: bool = False,
     ) -> EditResult:
         """Async version of edit using native store async methods.
 

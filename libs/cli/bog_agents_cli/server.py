@@ -199,7 +199,7 @@ async def wait_for_server_healthy(
         try:
             async with httpx.AsyncClient() as client:
                 resp = await client.get(health_url, timeout=2)
-                if resp.status_code == 200:  # noqa: PLR2004
+                if resp.status_code == 200:
                     logger.info("Server is healthy at %s", url)
                     return
                 last_status = resp.status_code

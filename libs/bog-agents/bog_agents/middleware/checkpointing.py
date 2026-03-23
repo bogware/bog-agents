@@ -95,7 +95,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         Returns:
             Completed process result.
         """
-        return subprocess.run(  # noqa: S603
+        return subprocess.run(
             ["git", *args],
             cwd=cwd or self._working_dir,
             capture_output=True,

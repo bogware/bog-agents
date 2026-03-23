@@ -74,12 +74,12 @@ def create_filesystem_backend_virtual(tmp_path: Path) -> BackendProtocol:
     return FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
 
 
-def create_state_backend(tmp_path: Path) -> BackendProtocol:  # noqa: ARG001
+def create_state_backend(tmp_path: Path) -> BackendProtocol:
     """Create a StateBackend."""
     return StateBackend(make_runtime())
 
 
-def create_store_backend(tmp_path: Path) -> BackendProtocol:  # noqa: ARG001
+def create_store_backend(tmp_path: Path) -> BackendProtocol:
     """Create a StoreBackend."""
     return StoreBackend(make_runtime())
 

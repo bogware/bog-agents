@@ -112,7 +112,7 @@ def __getattr__(name: str) -> object:
     raise AttributeError(msg)
 
 
-__all__ = [
+__all__ = [  # noqa: PLE0604
     "FeatureConfig",
     "__version__",
     "create_agent",
