@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bog-agents-cli"
-version = "0.5.1"
+version = "0.5.2"
 description = "Bog Agents CLI - interactive AI coding assistant. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama."
 readme = "README.md"
 license = { text = "MIT" }
