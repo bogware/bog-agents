@@ -12,7 +12,7 @@ Usage::
     /recommend --questions 5            -- Ask 5 clarifying questions first
 """
 
-# ruff: noqa: S105  # False positives: "token" variable compared to CLI flag strings
+# False positives: "token" variable compared to CLI flag strings
 
 from __future__ import annotations
 
@@ -213,19 +213,13 @@ def parse_recommend_args(args_str: str) -> RecommendConfig:
             try:
                 config.persona = Persona(parts[i].lower())
             except ValueError:
-                logger.warning(
-                    "Unknown persona: %s, using balanced", parts[i]
-                )
+                logger.warning("Unknown persona: %s, using balanced", parts[i])
         elif token == "--focus" and i + 1 < len(parts):
             i += 1
             try:
-                config.focus = Focus(
-                    parts[i].lower().replace("-", "_")
-                )
+                config.focus = Focus(parts[i].lower().replace("-", "_"))
             except ValueError:
-                logger.warning(
-                    "Unknown focus: %s, using general", parts[i]
-                )
+                logger.warning("Unknown focus: %s, using general", parts[i])
         elif token == "--scope" and i + 1 < len(parts):
             i += 1
             config.scope_path = parts[i]
@@ -309,9 +303,7 @@ def build_review_prompt(config: RecommendConfig) -> str:
     persona_desc = PERSONA_SYSTEM_PROMPTS.get(
         config.persona, PERSONA_SYSTEM_PROMPTS[Persona.BALANCED]
     )
-    focus_desc = FOCUS_INSTRUCTIONS.get(
-        config.focus, FOCUS_INSTRUCTIONS[Focus.GENERAL]
-    )
+    focus_desc = FOCUS_INSTRUCTIONS.get(config.focus, FOCUS_INSTRUCTIONS[Focus.GENERAL])
 
     example_section = ""
     if config.include_examples:
@@ -357,40 +349,42 @@ def format_recommend_help() -> str:
     Returns:
         Help text string.
     """
-    return "\n".join((  # noqa: FLY002
-        "/recommend — AI-powered code review and recommendations",
-        "",
-        "Usage: /recommend [options]",
-        "",
-        "Options:",
-        "  --persona <name>     Review persona (default: balanced)",
-        "    architect          Senior architect — design, coupling",
-        "    security           Security engineer — OWASP, auth",
-        "    performance        Performance engineer — algorithms, I/O",
-        "    dx                 Developer experience — ergonomics, docs",
-        "    balanced           Staff engineer — comprehensive review",
-        "",
-        "  --focus <area>       Focus area (default: general)",
-        "    architecture       Module boundaries, abstractions",
-        "    security           Vulnerabilities, auth, secrets",
-        "    performance        Bottlenecks, algorithms, caching",
-        "    testing            Coverage, quality, edge cases",
-        "    code-quality       Readability, consistency, dead code",
-        "    documentation      Docstrings, README, API docs",
-        "    dependencies       Outdated packages, licenses, CVEs",
-        "    deployment         CI/CD, health checks, observability",
-        "    general            Comprehensive review",
-        "",
-        "  --scope <path>       Path to review (default: full project)",
-        "  --questions <n>      Clarifying questions (default: 3)",
-        "  --severity <level>   Minimum: low, medium, high, critical",
-        "  --max <n>            Max findings to report (default: 25)",
-        "  --no-examples        Skip code examples in output",
-        "",
-        "Examples:",
-        "  /recommend",
-        "  /recommend --persona architect --focus architecture",
-        "  /recommend --focus security --scope libs/bog-agents",
-        "  /recommend --persona dx --questions 5",
-        "  /recommend --focus testing --questions 0",
-    ))
+    return "\n".join(
+        (
+            "/recommend — AI-powered code review and recommendations",
+            "",
+            "Usage: /recommend [options]",
+            "",
+            "Options:",
+            "  --persona <name>     Review persona (default: balanced)",
+            "    architect          Senior architect — design, coupling",
+            "    security           Security engineer — OWASP, auth",
+            "    performance        Performance engineer — algorithms, I/O",
+            "    dx                 Developer experience — ergonomics, docs",
+            "    balanced           Staff engineer — comprehensive review",
+            "",
+            "  --focus <area>       Focus area (default: general)",
+            "    architecture       Module boundaries, abstractions",
+            "    security           Vulnerabilities, auth, secrets",
+            "    performance        Bottlenecks, algorithms, caching",
+            "    testing            Coverage, quality, edge cases",
+            "    code-quality       Readability, consistency, dead code",
+            "    documentation      Docstrings, README, API docs",
+            "    dependencies       Outdated packages, licenses, CVEs",
+            "    deployment         CI/CD, health checks, observability",
+            "    general            Comprehensive review",
+            "",
+            "  --scope <path>       Path to review (default: full project)",
+            "  --questions <n>      Clarifying questions (default: 3)",
+            "  --severity <level>   Minimum: low, medium, high, critical",
+            "  --max <n>            Max findings to report (default: 25)",
+            "  --no-examples        Skip code examples in output",
+            "",
+            "Examples:",
+            "  /recommend",
+            "  /recommend --persona architect --focus architecture",
+            "  /recommend --focus security --scope libs/bog-agents",
+            "  /recommend --persona dx --questions 5",
+            "  /recommend --focus testing --questions 0",
+        )
+    )

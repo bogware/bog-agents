@@ -19,7 +19,7 @@ def _get_tavily_client() -> TavilyClient | None:
     """
     global _tavily_client  # noqa: PLW0603  # Module-level cache requires global statement
     if _tavily_client is not _UNSET:
-        return _tavily_client  # type: ignore[return-value]  # narrowed by sentinel check
+        return _tavily_client  # narrowed by sentinel check
 
     from bog_agents_cli.config import settings
 
@@ -76,7 +76,7 @@ def http_request(
             content = response.text
 
         return {
-            "success": response.status_code < 400,  # noqa: PLR2004  # HTTP status code threshold
+            "success": response.status_code < 400,  # HTTP status code threshold
             "status_code": response.status_code,
             "headers": dict(response.headers),
             "content": content,

@@ -181,20 +181,20 @@ SECRET_PATTERNS: list[tuple[str, str, Severity]] = [
     (r'(?i)(api[_-]?key|apikey)\s*[=:]\s*["\']([a-zA-Z0-9_\-]{20,})["\']', "API key in source code", Severity.HIGH),
     (r'(?i)(secret[_-]?key|secretkey)\s*[=:]\s*["\']([a-zA-Z0-9_\-]{20,})["\']', "Secret key in source code", Severity.CRITICAL),
     # AWS
-    (r'AKIA[0-9A-Z]{16}', "AWS Access Key ID", Severity.CRITICAL),
+    (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID", Severity.CRITICAL),
     (r'(?i)aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*["\']([a-zA-Z0-9/+=]{40})["\']', "AWS Secret Access Key", Severity.CRITICAL),
     # Passwords
     (r'(?i)(password|passwd|pwd)\s*[=:]\s*["\']([^\s"\']{8,})["\']', "Hardcoded password", Severity.HIGH),
     # Tokens
     (r'(?i)(token|bearer)\s*[=:]\s*["\']([a-zA-Z0-9_\-.]{20,})["\']', "Hardcoded token", Severity.HIGH),
     # Private keys
-    (r'-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----', "Private key in source", Severity.CRITICAL),
+    (r"-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----", "Private key in source", Severity.CRITICAL),
     # Connection strings
     (r'(?i)(mongodb|postgres|mysql|redis)://[^\s"\']+:[^\s"\']+@', "Database connection string with credentials", Severity.HIGH),
     # GitHub tokens
-    (r'gh[pousr]_[a-zA-Z0-9]{36,}', "GitHub token", Severity.CRITICAL),
+    (r"gh[pousr]_[a-zA-Z0-9]{36,}", "GitHub token", Severity.CRITICAL),
     # Slack tokens
-    (r'xox[bpors]-[a-zA-Z0-9-]+', "Slack token", Severity.HIGH),
+    (r"xox[bpors]-[a-zA-Z0-9-]+", "Slack token", Severity.HIGH),
 ]
 
 # ── Code Pattern Detectors ──────────────────────────────────────
@@ -209,7 +209,7 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
         "Use parameterized queries instead of string formatting",
     ),
     (
-        r'(?:execute|cursor\.execute)\s*\(\s*.*%\s*\(',
+        r"(?:execute|cursor\.execute)\s*\(\s*.*%\s*\(",
         FindingCategory.INJECTION,
         Severity.HIGH,
         "Potential SQL injection via % formatting",
@@ -224,7 +224,7 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
         "Use subprocess.run with a list of arguments instead of shell=True",
     ),
     (
-        r'subprocess\.\w+\(.*shell\s*=\s*True',
+        r"subprocess\.\w+\(.*shell\s*=\s*True",
         FindingCategory.COMMAND_INJECTION,
         Severity.MEDIUM,
         "subprocess with shell=True",
@@ -232,14 +232,14 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
     ),
     # Insecure deserialization
     (
-        r'pickle\.loads?\(',
+        r"pickle\.loads?\(",
         FindingCategory.INSECURE_DESERIALIZATION,
         Severity.HIGH,
         "Pickle deserialization (arbitrary code execution risk)",
         "Use JSON or other safe serialization formats for untrusted data",
     ),
     (
-        r'yaml\.load\s*\([^)]*\)(?!.*Loader)',
+        r"yaml\.load\s*\([^)]*\)(?!.*Loader)",
         FindingCategory.INSECURE_DESERIALIZATION,
         Severity.MEDIUM,
         "yaml.load without safe Loader",
@@ -255,14 +255,14 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
     ),
     # Insecure crypto
     (
-        r'(?:md5|sha1)\s*\(',
+        r"(?:md5|sha1)\s*\(",
         FindingCategory.INSECURE_CRYPTO,
         Severity.LOW,
         "Weak hash function (MD5/SHA1)",
         "Use SHA-256 or stronger for security-sensitive hashing",
     ),
     (
-        r'(?:DES|Blowfish|RC4)',
+        r"(?:DES|Blowfish|RC4)",
         FindingCategory.INSECURE_CRYPTO,
         Severity.MEDIUM,
         "Weak encryption algorithm",
@@ -278,14 +278,14 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
     ),
     # Eval
     (
-        r'\beval\s*\(',
+        r"\beval\s*\(",
         FindingCategory.INJECTION,
         Severity.HIGH,
         "Use of eval() — arbitrary code execution risk",
         "Replace eval() with ast.literal_eval() or a safe parser",
     ),
     (
-        r'\bexec\s*\(',
+        r"\bexec\s*\(",
         FindingCategory.INJECTION,
         Severity.HIGH,
         "Use of exec() — arbitrary code execution risk",
@@ -295,28 +295,28 @@ PYTHON_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
 
 JS_PATTERNS: list[tuple[str, FindingCategory, Severity, str, str]] = [
     (
-        r'innerHTML\s*=',
+        r"innerHTML\s*=",
         FindingCategory.XSS,
         Severity.MEDIUM,
         "Direct innerHTML assignment (XSS risk)",
         "Use textContent or a sanitization library like DOMPurify",
     ),
     (
-        r'document\.write\s*\(',
+        r"document\.write\s*\(",
         FindingCategory.XSS,
         Severity.MEDIUM,
         "document.write usage (XSS risk)",
         "Use DOM manipulation methods instead",
     ),
     (
-        r'\beval\s*\(',
+        r"\beval\s*\(",
         FindingCategory.INJECTION,
         Severity.HIGH,
         "Use of eval() — arbitrary code execution",
         "Use JSON.parse() or structured alternatives",
     ),
     (
-        r'dangerouslySetInnerHTML',
+        r"dangerouslySetInnerHTML",
         FindingCategory.XSS,
         Severity.MEDIUM,
         "React dangerouslySetInnerHTML usage",
@@ -348,25 +348,27 @@ def scan_file_for_secrets(
 
     for pattern, title, severity in SECRET_PATTERNS:
         for match in re.finditer(pattern, content):
-            line_num = content[:match.start()].count("\n") + 1
+            line_num = content[: match.start()].count("\n") + 1
             # Get the line for context
             lines = content.split("\n")
             snippet = lines[line_num - 1].strip() if line_num <= len(lines) else ""
 
             finding_counter[0] += 1
-            findings.append(SecurityFinding(
-                finding_id=f"SEC-{finding_counter[0]:04d}",
-                category=FindingCategory.SECRET_LEAK,
-                severity=severity,
-                title=title,
-                description=f"Potential secret found in {file_path}",
-                file_path=file_path,
-                line_number=line_num,
-                code_snippet=snippet[:200],
-                recommendation="Move secrets to environment variables or a secrets manager",
-                cwe_id="CWE-798",
-                owasp_category="A07:2021-Identification and Authentication Failures",
-            ))
+            findings.append(
+                SecurityFinding(
+                    finding_id=f"SEC-{finding_counter[0]:04d}",
+                    category=FindingCategory.SECRET_LEAK,
+                    severity=severity,
+                    title=title,
+                    description=f"Potential secret found in {file_path}",
+                    file_path=file_path,
+                    line_number=line_num,
+                    code_snippet=snippet[:200],
+                    recommendation="Move secrets to environment variables or a secrets manager",
+                    cwe_id="CWE-798",
+                    owasp_category="A07:2021-Identification and Authentication Failures",
+                )
+            )
 
     return findings
 
@@ -398,22 +400,24 @@ def scan_file_for_patterns(
 
     for pattern, category, severity, title, recommendation in patterns:
         for match in re.finditer(pattern, content):
-            line_num = content[:match.start()].count("\n") + 1
+            line_num = content[: match.start()].count("\n") + 1
             lines = content.split("\n")
             snippet = lines[line_num - 1].strip() if line_num <= len(lines) else ""
 
             finding_counter[0] += 1
-            findings.append(SecurityFinding(
-                finding_id=f"SEC-{finding_counter[0]:04d}",
-                category=category,
-                severity=severity,
-                title=title,
-                description=f"Found in {file_path}:{line_num}",
-                file_path=file_path,
-                line_number=line_num,
-                code_snippet=snippet[:200],
-                recommendation=recommendation,
-            ))
+            findings.append(
+                SecurityFinding(
+                    finding_id=f"SEC-{finding_counter[0]:04d}",
+                    category=category,
+                    severity=severity,
+                    title=title,
+                    description=f"Found in {file_path}:{line_num}",
+                    file_path=file_path,
+                    line_number=line_num,
+                    code_snippet=snippet[:200],
+                    recommendation=recommendation,
+                )
+            )
 
     return findings
 
@@ -476,14 +480,10 @@ def scan_directory(
                 rel_path = os.path.relpath(file_path, target_dir)
 
                 # Secret scanning
-                report.findings.extend(
-                    scan_file_for_secrets(rel_path, content, finding_counter)
-                )
+                report.findings.extend(scan_file_for_secrets(rel_path, content, finding_counter))
 
                 # Pattern scanning
-                report.findings.extend(
-                    scan_file_for_patterns(rel_path, content, finding_counter)
-                )
+                report.findings.extend(scan_file_for_patterns(rel_path, content, finding_counter))
             except (OSError, UnicodeDecodeError):
                 continue
 
@@ -496,7 +496,9 @@ def scan_directory(
 
     logger.info(
         "Security scan complete: %d files, %d findings in %.1fs",
-        files_scanned, len(report.findings), report.duration_seconds,
+        files_scanned,
+        len(report.findings),
+        report.duration_seconds,
     )
     return report
 
@@ -535,16 +537,18 @@ def check_python_dependencies(target_dir: str) -> list[SecurityFinding]:
                 for vuln in audit_data.get("dependencies", []):
                     for v in vuln.get("vulns", []):
                         counter[0] += 1
-                        findings.append(SecurityFinding(
-                            finding_id=f"DEP-{counter[0]:04d}",
-                            category=FindingCategory.INSECURE_DEPENDENCY,
-                            severity=Severity.HIGH,
-                            title=f"Vulnerable dependency: {vuln['name']} {vuln.get('version', '')}",
-                            description=v.get("description", "Known vulnerability"),
-                            file_path=req_file,
-                            recommendation=f"Upgrade {vuln.get('name', 'unknown')} to {v.get('fix_versions', ['latest'])[0] if isinstance(v.get('fix_versions'), list) else 'latest'}",
-                            cwe_id="CWE-1104",
-                        ))
+                        findings.append(
+                            SecurityFinding(
+                                finding_id=f"DEP-{counter[0]:04d}",
+                                category=FindingCategory.INSECURE_DEPENDENCY,
+                                severity=Severity.HIGH,
+                                title=f"Vulnerable dependency: {vuln['name']} {vuln.get('version', '')}",
+                                description=v.get("description", "Known vulnerability"),
+                                file_path=req_file,
+                                recommendation=f"Upgrade {vuln.get('name', 'unknown')} to {v.get('fix_versions', ['latest'])[0] if isinstance(v.get('fix_versions'), list) else 'latest'}",
+                                cwe_id="CWE-1104",
+                            )
+                        )
             except (json.JSONDecodeError, KeyError):
                 pass
         except (FileNotFoundError, subprocess.TimeoutExpired):

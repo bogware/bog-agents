@@ -228,7 +228,7 @@ class LifecycleHooksMiddleware(AgentMiddleware[LifecycleHooksState, ContextT, Re
 
         try:
             payload_bytes = json.dumps(payload).encode()
-            result = subprocess.run(  # noqa: S603
+            result = subprocess.run(
                 hook.command,
                 input=payload_bytes,
                 capture_output=True,

@@ -556,7 +556,7 @@ def _token_to_path(token: str) -> Path | None:
             path_text = f"//{parsed.netloc}{path_text}"
         if (
             path_text.startswith("/")
-            and len(path_text) > 2  # noqa: PLR2004  # '/C:' minimum for Windows file URI
+            and len(path_text) > 2  # '/C:' minimum for Windows file URI
             and path_text[2] == ":"
             and path_text[1].isalpha()
         ):

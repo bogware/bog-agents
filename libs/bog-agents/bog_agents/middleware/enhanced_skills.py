@@ -151,7 +151,7 @@ def _clone_git_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
     try:
         if clone_dir.exists():
             # Pull latest
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 ["git", "-C", str(clone_dir), "pull", "--quiet"],
                 capture_output=True,
                 timeout=30,
@@ -159,7 +159,7 @@ def _clone_git_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
             )
         else:
             clone_dir.mkdir(parents=True, exist_ok=True)
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 ["git", "clone", "--depth", "1", "--quiet", git_url, str(clone_dir)],
                 capture_output=True,
                 timeout=60,
@@ -217,8 +217,8 @@ def _fetch_http_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
     try:
         # Try fetching index.json first
         index_url = f"{source_url}/index.json"
-        req = urllib.request.Request(index_url, headers={"User-Agent": "bog-agents-skills/1.0"})  # noqa: S310
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+        req = urllib.request.Request(index_url, headers={"User-Agent": "bog-agents-skills/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
             index_data = json.loads(resp.read().decode("utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         logger.debug("No index.json at %s, skipping HTTP source", source_url)
@@ -232,8 +232,8 @@ def _fetch_http_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
     for skill_name in index_data["skills"]:
         skill_md_url = f"{source_url}/{skill_name}/SKILL.md"
         try:
-            req = urllib.request.Request(skill_md_url, headers={"User-Agent": "bog-agents-skills/1.0"})  # noqa: S310
-            with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            req = urllib.request.Request(skill_md_url, headers={"User-Agent": "bog-agents-skills/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 content = resp.read().decode("utf-8")
         except OSError:
             logger.debug("Could not fetch %s", skill_md_url)
@@ -316,7 +316,7 @@ class EnhancedSkillsMiddleware(AgentMiddleware[EnhancedSkillsState, ContextT, Re
                 config=config,
                 tool_call_id=None,
             )
-            return self._backend(tool_runtime)  # ty: ignore[call-top-callable, invalid-argument-type]
+            return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
 
     def _load_all_skills(self, backend: BackendProtocol) -> list[SkillMetadata]:
@@ -410,7 +410,7 @@ class EnhancedSkillsMiddleware(AgentMiddleware[EnhancedSkillsState, ContextT, Re
                 lines.append(f"**Local**: `{source}`")
         return "\n".join(lines)
 
-    def before_agent(self, state: EnhancedSkillsState, runtime: Runtime, config: RunnableConfig) -> EnhancedSkillsStateUpdate | None:  # ty: ignore[invalid-method-override]
+    def before_agent(self, state: EnhancedSkillsState, runtime: Runtime, config: RunnableConfig) -> EnhancedSkillsStateUpdate | None:
         """Load skills from all sources before agent execution.
 
         Args:

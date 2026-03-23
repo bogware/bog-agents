@@ -441,7 +441,7 @@ def _format_task_description(
 
     # Truncate description if too long for display
     description_preview = description
-    if len(description) > 500:  # noqa: PLR2004  # Subagent description length threshold
+    if len(description) > 500:  # Subagent description length threshold
         description_preview = description[:500] + "..."
 
     glyphs = get_glyphs()
@@ -481,7 +481,7 @@ def _format_execute_description(
         summary = summarize_issues(issues)
         lines.append(f"{get_glyphs().warning}  Hidden Unicode detected: {summary}")
         raw_marked = render_with_unicode_markers(command_raw)
-        if len(raw_marked) > 220:  # noqa: PLR2004  # UI display truncation threshold
+        if len(raw_marked) > 220:  # UI display truncation threshold
             raw_marked = raw_marked[:220] + "..."
         lines.append(f"Raw: {raw_marked}")
 

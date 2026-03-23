@@ -121,7 +121,7 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
-        """Apply runtime overrides and delegate to the next handler."""  # noqa: DOC201
+        """Apply runtime overrides and delegate to the next handler."""
         return handler(_apply_overrides(request))
 
     async def awrap_model_call(  # noqa: PLR6301
@@ -129,5 +129,5 @@ class ConfigurableModelMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        """Apply runtime overrides and delegate to the next async handler."""  # noqa: DOC201
+        """Apply runtime overrides and delegate to the next async handler."""
         return await handler(_apply_overrides(request))

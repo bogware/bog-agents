@@ -766,7 +766,7 @@ class TestSubAgents:
         """
         received_configs: list[RunnableConfig] = []
 
-        def lambda_subagent(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:  # noqa: ARG001
+        def lambda_subagent(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
             received_configs.append(config)
             return {"messages": [AIMessage(content="Lambda response")]}
 

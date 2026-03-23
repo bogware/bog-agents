@@ -234,7 +234,7 @@ user: "Hello"
 Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
 </commentary>
 assistant: "I'm going to use the Task tool to launch with the greeting-responder agent"
-</example>"""  # noqa: E501
+</example>"""
 
 TASK_SYSTEM_PROMPT = """## `task` (subagent spawner)
 
@@ -262,10 +262,10 @@ When NOT to use the task tool:
 ## Important Task Tool Usage Notes to Remember
 - Whenever possible, parallelize the work that you do. This is true for both tool_calls, and for tasks. Whenever you have independent steps to complete - make tool_calls, or kick off tasks (subagents) in parallel to accomplish them faster. This saves time for the user, which is incredibly important.
 - Remember to use the `task` tool to silo independent tasks within a multi-part objective.
-- You should use the `task` tool whenever you have a complex task that will take multiple steps, and is independent from other tasks that the agent needs to complete. These agents are highly competent and efficient."""  # noqa: E501
+- You should use the `task` tool whenever you have a complex task that will take multiple steps, and is independent from other tasks that the agent needs to complete. These agents are highly competent and efficient."""
 
 
-DEFAULT_GENERAL_PURPOSE_DESCRIPTION = "General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent."  # noqa: E501
+DEFAULT_GENERAL_PURPOSE_DESCRIPTION = "General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent."
 
 # Base spec for general-purpose subagent (caller adds model, tools, middleware)
 GENERAL_PURPOSE_SUBAGENT: SubAgent = {
@@ -371,7 +371,7 @@ def _get_subagents_legacy(
     return specs
 
 
-def _build_task_tool(  # noqa: C901
+def _build_task_tool(
     subagents: list[_SubagentSpec],
     task_description: str | None = None,
 ) -> BaseTool:
@@ -430,7 +430,7 @@ def _build_task_tool(  # noqa: C901
     def task(
         description: Annotated[
             str,
-            "A detailed description of the task for the subagent to perform autonomously. Include all necessary context and specify the expected output format.",  # noqa: E501
+            "A detailed description of the task for the subagent to perform autonomously. Include all necessary context and specify the expected output format.",
         ],
         subagent_type: Annotated[str, "The type of subagent to use. Must be one of the available agent types listed in the tool description."],
         runtime: ToolRuntime,
@@ -448,7 +448,7 @@ def _build_task_tool(  # noqa: C901
     async def atask(
         description: Annotated[
             str,
-            "A detailed description of the task for the subagent to perform autonomously. Include all necessary context and specify the expected output format.",  # noqa: E501
+            "A detailed description of the task for the subagent to perform autonomously. Include all necessary context and specify the expected output format.",
         ],
         subagent_type: Annotated[str, "The type of subagent to use. Must be one of the available agent types listed in the tool description."],
         runtime: ToolRuntime,
@@ -589,7 +589,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         if using_old_api and not using_new_api:
             # Legacy API - build subagents from deprecated args
             subagent_specs = _get_subagents_legacy(
-                default_model=default_model,  # ty: ignore[invalid-argument-type]
+                default_model=default_model,
                 default_tools=default_tools or [],
                 default_middleware=default_middleware,
                 default_interrupt_on=default_interrupt_on,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -67,7 +68,9 @@ def clipboard_to_image(output_path: Path | None = None) -> Path | None:
     import platform
 
     if output_path is None:
-        output_path = Path(tempfile.mktemp(suffix=".png", prefix="clipboard-"))
+        fd, tmp = tempfile.mkstemp(suffix=".png", prefix="clipboard-")
+        os.close(fd)
+        output_path = Path(tmp)
 
     system = platform.system()
     try:
@@ -82,7 +85,7 @@ def clipboard_to_image(output_path: Path | None = None) -> Path | None:
                 output_path.write_bytes(result.stdout)
                 return output_path
         elif system == "Darwin":
-            result = subprocess.run(  # noqa: S603
+            result = subprocess.run(
                 ["pngpaste", str(output_path)],
                 capture_output=True,
                 timeout=5,

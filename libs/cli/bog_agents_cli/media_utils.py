@@ -368,7 +368,7 @@ def _get_clipboard_via_osascript() -> ImageData | None:
             write pngData to theFile
             close access theFile
             return "success"
-            """  # noqa: E501
+            """
         else:
             get_script = f"""
             set tiffData to the clipboard as TIFF picture
@@ -376,7 +376,7 @@ def _get_clipboard_via_osascript() -> ImageData | None:
             write tiffData to theFile
             close access theFile
             return "success"
-            """  # noqa: E501
+            """
 
         # S603: osascript_path validated via shutil.which(), script is internal
         result = subprocess.run(  # noqa: S603

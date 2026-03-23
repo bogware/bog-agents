@@ -201,7 +201,7 @@ class DaytonaProvider(SandboxProvider):
                 result = sandbox.process.exec("echo ready", timeout=5)
                 if result.exit_code == 0:
                     break
-            except Exception:  # noqa: S110, BLE001  # Sandbox not ready yet, continue polling
+            except Exception:  # noqa: S110  # Sandbox not ready yet, continue polling
                 pass
             time.sleep(2)
         else:

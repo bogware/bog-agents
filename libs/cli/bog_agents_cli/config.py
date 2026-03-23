@@ -1240,7 +1240,7 @@ def fetch_langsmith_project_url(project_name: str) -> str | None:
         try:
             project = Client().read_project(project_name=project_name)
             result = project.url or None
-        except Exception as exc:  # noqa: BLE001  # LangSmith SDK error types are not stable
+        except Exception as exc:  # LangSmith SDK error types are not stable
             lookup_error = exc
         finally:
             done.set()
@@ -1827,7 +1827,7 @@ def validate_model_capabilities(model: BaseChatModel, model_name: str) -> None:
 
     # Warn about potentially limited context (< 8k tokens)
     max_input_tokens = profile.get("max_input_tokens")
-    if max_input_tokens and max_input_tokens < 8000:  # noqa: PLR2004  # Model context window default
+    if max_input_tokens and max_input_tokens < 8000:  # Model context window default
         console.print(
             f"[dim][yellow]Warning:[/yellow] Model '{model_name}' has limited context "
             f"({max_input_tokens:,} tokens). Agent performance may be affected.[/dim]"

@@ -127,10 +127,7 @@ def detect_changes(
 
     added = sorted(new_keys - old_keys)
     removed = sorted(old_keys - new_keys)
-    modified = [
-        path for path in old_keys & new_keys
-        if old_states[path].content_hash != new_states[path].content_hash
-    ]
+    modified = [path for path in old_keys & new_keys if old_states[path].content_hash != new_states[path].content_hash]
 
     return added, modified, removed
 
@@ -175,7 +172,7 @@ class HotReloadSkillsMiddleware(AgentMiddleware):
             on_reload: Optional callback(added, modified, removed) on changes.
         """
         resolved_dirs: list[str] = []
-        for d in (watch_dirs or []):
+        for d in watch_dirs or []:
             resolved = os.path.expanduser(d)
             resolved_dirs.append(resolved)
 
@@ -212,7 +209,10 @@ class HotReloadSkillsMiddleware(AgentMiddleware):
             self.state.reload_count += 1
             logger.info(
                 "Skills changed: +%d modified=%d -%d (reload #%d)",
-                len(added), len(modified), len(removed), self.state.reload_count,
+                len(added),
+                len(modified),
+                len(removed),
+                self.state.reload_count,
             )
             if self._on_reload:
                 try:

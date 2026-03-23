@@ -120,7 +120,7 @@ Use this tool when:
 Do NOT use this tool for:
 - Simple yes/no confirmations (just proceed with your best judgment)
 - Questions you can answer yourself from context
-- Trivial decisions that don't meaningfully affect the outcome"""  # noqa: E501
+- Trivial decisions that don't meaningfully affect the outcome"""
 
 ASK_USER_SYSTEM_PROMPT = """## `ask_user`
 
@@ -132,7 +132,7 @@ When using `ask_user`:
 - Use multiple choice when there are clear options to choose from
 - Use text input when you need free-form responses
 - Group related questions into a single ask_user call rather than making multiple calls
-- Never ask questions you can answer yourself from the available context"""  # noqa: E501
+- Never ask questions you can answer yourself from the available context"""
 
 
 def _validate_questions(questions: list[Question]) -> None:

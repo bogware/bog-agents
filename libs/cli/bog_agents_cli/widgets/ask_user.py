@@ -51,17 +51,17 @@ class AskUserMenu(Container):
     class Answered(Message):
         """Message sent when user submits all answers."""
 
-        def __init__(self, answers: list[str]) -> None:  # noqa: D107
+        def __init__(self, answers: list[str]) -> None:
             super().__init__()
             self.answers = answers
 
     class Cancelled(Message):
         """Message sent when user cancels the ask_user prompt."""
 
-        def __init__(self) -> None:  # noqa: D107
+        def __init__(self) -> None:
             super().__init__()
 
-    def __init__(  # noqa: D107
+    def __init__(
         self,
         questions: list[Question],
         id: str | None = None,  # noqa: A002

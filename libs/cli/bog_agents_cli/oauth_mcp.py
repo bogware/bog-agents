@@ -265,14 +265,14 @@ async def exchange_code_for_token(
 
     encoded = urllib.parse.urlencode(data).encode()
 
-    req = urllib.request.Request(  # noqa: S310
+    req = urllib.request.Request(
         config.token_url,
         data=encoded,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
 
     try:
-        response = await asyncio.to_thread(urllib.request.urlopen, req, timeout=30)  # noqa: S310
+        response = await asyncio.to_thread(urllib.request.urlopen, req, timeout=30)
         result = json.loads(response.read())
 
         expires_in = result.get("expires_in", 0)

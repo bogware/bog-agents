@@ -30,9 +30,9 @@ def _format_timeout(seconds: int) -> str:
     Returns:
         Human-readable timeout string (e.g., '5m', '1h', '300s').
     """
-    if seconds < 60:  # noqa: PLR2004  # Time unit boundary
+    if seconds < 60:  # Time unit boundary
         return f"{seconds}s"
-    if seconds < 3600 and seconds % 60 == 0:  # noqa: PLR2004  # Time unit boundaries
+    if seconds < 3600 and seconds % 60 == 0:  # Time unit boundaries
         return f"{seconds // 60}m"
     if seconds % 3600 == 0:
         return f"{seconds // 3600}h"
@@ -143,7 +143,7 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
             # If absolute path is reasonable length, use it
             if len(path_str) <= max_length:
                 return path_str
-        except Exception:  # noqa: BLE001  # Fallback to original string on any path resolution error
+        except Exception:  # Fallback to original string on any path resolution error
             return truncate_value(path_str, max_length)
         else:
             # Otherwise, just show basename (filename only)

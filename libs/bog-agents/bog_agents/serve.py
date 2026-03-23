@@ -69,7 +69,7 @@ class AgentServer:
 
     def __init__(
         self,
-        agent: Any,  # noqa: ANN401
+        agent: Any,
         *,
         config: ServerConfig | None = None,
     ) -> None:
@@ -103,13 +103,11 @@ class AgentServer:
                 self.config.api_key,
             )
             logger.warning(
-                "Set BOG_AGENTS_SERVE_API_KEY or pass api_key in ServerConfig "
-                "to use a stable key.",
+                "Set BOG_AGENTS_SERVE_API_KEY or pass api_key in ServerConfig to use a stable key.",
             )
         elif self.config.api_key is None and is_localhost:
             logger.info(
-                "Running on localhost without API key. Set "
-                "BOG_AGENTS_SERVE_API_KEY for authenticated access.",
+                "Running on localhost without API key. Set BOG_AGENTS_SERVE_API_KEY for authenticated access.",
             )
 
     def _get_or_create_thread(self, thread_id: str | None = None) -> ThreadState:
@@ -195,7 +193,7 @@ class AgentServer:
         message: str,
         *,
         thread_id: str | None = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Any:
         """Stream agent responses.
 
         Args:
@@ -213,14 +211,12 @@ class AgentServer:
         input_data = {"messages": [{"role": "user", "content": message}]}
 
         try:
-            async for event in self.agent.astream_events(
-                input_data, config=config, version="v2"
-            ):
+            async for event in self.agent.astream_events(input_data, config=config, version="v2"):
                 yield {
                     "event": event.get("event", ""),
                     "data": event.get("data", {}),
                 }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             yield {
                 "event": "error",
                 "data": {"error": str(exc)},
@@ -299,7 +295,7 @@ class AgentServer:
             "messages": thread.messages,
         }
 
-    def create_app(self) -> Any:  # noqa: ANN401, C901, PLR0915
+    def create_app(self) -> Any:
         """Create a Starlette/ASGI application.
 
         Returns:
@@ -308,12 +304,12 @@ class AgentServer:
         Raises:
             ImportError: If starlette is not installed.
         """
-        from sse_starlette.sse import EventSourceResponse  # noqa: PLC0415
-        from starlette.applications import Starlette  # noqa: PLC0415
-        from starlette.middleware.cors import CORSMiddleware  # noqa: PLC0415
-        from starlette.requests import Request  # noqa: PLC0415, TC002
-        from starlette.responses import JSONResponse  # noqa: PLC0415
-        from starlette.routing import Route  # noqa: PLC0415
+        from sse_starlette.sse import EventSourceResponse
+        from starlette.applications import Starlette
+        from starlette.middleware.cors import CORSMiddleware
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
 
         server = self
 
@@ -321,7 +317,7 @@ class AgentServer:
             """Extract Bearer token from Authorization header."""
             auth = request.headers.get("Authorization", "")
             if auth.startswith("Bearer "):
-                return auth[len("Bearer "):]
+                return auth[len("Bearer ") :]
             return auth or None
 
         def _unauthorized() -> JSONResponse:
@@ -360,7 +356,7 @@ class AgentServer:
                 return JSONResponse({"error": "message is required"}, status_code=400)
             thread_id = body.get("thread_id")
 
-            async def event_generator() -> Any:  # noqa: ANN401
+            async def event_generator() -> Any:
                 async for event in server.stream(message, thread_id=thread_id):
                     yield {
                         "event": event.get("event", "message"),
@@ -449,7 +445,7 @@ class AgentServer:
         Raises:
             ImportError: If uvicorn is not installed.
         """
-        import uvicorn  # noqa: PLC0415
+        import uvicorn
 
         app = self.create_app()
         logger.info(
@@ -468,8 +464,8 @@ class AgentServer:
 def _get_version() -> str:
     """Get the bog-agents version string."""
     try:
-        from bog_agents import __version__  # noqa: PLC0415
+        from bog_agents import __version__
 
-        return __version__  # noqa: TRY300
+        return __version__
     except ImportError:
         return "unknown"

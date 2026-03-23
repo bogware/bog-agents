@@ -72,7 +72,7 @@ def send_desktop_notification(title: str, message: str) -> bool:
     system = platform.system()
     try:
         if system == "Linux":
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 ["notify-send", title, message],
                 timeout=5,
                 check=False,
@@ -80,7 +80,7 @@ def send_desktop_notification(title: str, message: str) -> bool:
             return True
         if system == "Darwin":
             script = f'display notification "{message}" with title "{title}"'
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 ["osascript", "-e", script],
                 timeout=5,
                 check=False,
@@ -94,7 +94,7 @@ def send_desktop_notification(title: str, message: str) -> bool:
                 f'$template = "<toast><visual><binding template=\\"ToastText02\\"><text id=\\"1\\">{title}</text>'
                 f'<text id=\\"2\\">{message}</text></binding></visual></toast>"'
             )
-            subprocess.run(  # noqa: S603
+            subprocess.run(
                 ["powershell", "-Command", ps_script],
                 timeout=5,
                 check=False,
@@ -119,7 +119,7 @@ def copy_to_clipboard(text: str) -> bool:
 
         pyperclip.copy(text)
         return True
-    except (ImportError, Exception):  # noqa: BLE001
+    except (ImportError, Exception):
         pass
 
     # Fallback to system commands

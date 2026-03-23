@@ -1090,7 +1090,7 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
     for env_var, label in key_vars:
         val = os.environ.get(env_var)
         if val:
-            masked = val[:4] + "..." + val[-4:] if len(val) > 8 else "***"  # noqa: PLR2004
+            masked = val[:4] + "..." + val[-4:] if len(val) > 8 else "***"
             console.print(f"  {label + ':':<19}[green]set[/green] ({masked})")
         else:
             console.print(f"  {label + ':':<19}[dim]not set[/dim]")
@@ -1141,7 +1141,10 @@ def cli_main() -> None:
     # user's original LANGSMITH_PROJECT (via LocalShellBackend env).
 
     # Fast path: print version without loading heavy dependencies
-    if len(sys.argv) == 2 and sys.argv[1] in {"-v", "--version"}:  # noqa: PLR2004  # argv length check for fast-path
+    if len(sys.argv) == 2 and sys.argv[1] in {
+        "-v",
+        "--version",
+    }:  # argv length check for fast-path
         try:
             from importlib.metadata import (
                 PackageNotFoundError,
@@ -1158,7 +1161,7 @@ def cli_main() -> None:
         sys.exit(0)
 
     # --doctor fast path: skip Textual dependency checks
-    if len(sys.argv) == 2 and sys.argv[1] == "--doctor":  # noqa: PLR2004
+    if len(sys.argv) == 2 and sys.argv[1] == "--doctor":
         from rich.console import Console as _DoctorConsole
 
         _run_doctor(_DoctorConsole())
@@ -1282,7 +1285,9 @@ def cli_main() -> None:
 
         # --pr: PR-output mode (requires -n)
         if getattr(args, "pr", False):
-            task = getattr(args, "non_interactive_message", None) or getattr(args, "print_message", None)
+            task = getattr(args, "non_interactive_message", None) or getattr(
+                args, "print_message", None
+            )
             if not task:
                 sys.stderr.write(
                     "Error: --pr requires a task via -n or --print.\n"
@@ -1313,7 +1318,9 @@ def cli_main() -> None:
             pr_result = asyncio.run(run_pr_mode(task, agent, config=pr_config))
 
             if pr_result.success:
-                console.print(f"[bold green]PR created:[/bold green] {pr_result.pr_url}")
+                console.print(
+                    f"[bold green]PR created:[/bold green] {pr_result.pr_url}"
+                )
                 console.print(f"Branch: {pr_result.branch_name}")
                 console.print(f"Files changed: {len(pr_result.files_changed)}")
                 console.print(f"Duration: {pr_result.duration_seconds:.1f}s")
@@ -1608,7 +1615,7 @@ def cli_main() -> None:
                 # session; use the final thread ID for teardown messages.
                 thread_id = result.thread_id or thread_id
                 _print_session_stats(result.session_stats, console)
-            except Exception as e:  # noqa: BLE001  # Top-level error handler for the application
+            except Exception as e:  # Top-level error handler for the application
                 error_msg = Text("\nApplication error: ", style="red")
                 error_msg.append(str(e))
                 console.print(error_msg)

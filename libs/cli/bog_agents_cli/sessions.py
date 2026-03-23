@@ -173,19 +173,19 @@ def format_relative_timestamp(iso_timestamp: str | None) -> str:
     seconds = int(delta.total_seconds())
     if seconds < 0:
         return "just now"
-    if seconds < 60:  # noqa: PLR2004
+    if seconds < 60:
         return f"{seconds}s ago"
     minutes = seconds // 60
-    if minutes < 60:  # noqa: PLR2004
+    if minutes < 60:
         return f"{minutes}m ago"
     hours = minutes // 60
-    if hours < 24:  # noqa: PLR2004
+    if hours < 24:
         return f"{hours}h ago"
     days = hours // 24
-    if days < 30:  # noqa: PLR2004
+    if days < 30:
         return f"{days}d ago"
     months = days // 30
-    if months < 12:  # noqa: PLR2004
+    if months < 12:
         return f"{months}mo ago"
     years = days // 365
     return f"{years}y ago"

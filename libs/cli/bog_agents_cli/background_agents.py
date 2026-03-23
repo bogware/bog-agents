@@ -31,11 +31,13 @@ class BackgroundStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-_TERMINAL_STATUSES = frozenset({
-    BackgroundStatus.COMPLETED,
-    BackgroundStatus.FAILED,
-    BackgroundStatus.CANCELLED,
-})
+_TERMINAL_STATUSES = frozenset(
+    {
+        BackgroundStatus.COMPLETED,
+        BackgroundStatus.FAILED,
+        BackgroundStatus.CANCELLED,
+    }
+)
 
 
 @dataclass
@@ -52,9 +54,7 @@ class BackgroundTask:
     error: str | None = None
     model: str | None = None
     working_dir: str | None = None
-    _task: asyncio.Task[Any] | None = field(
-        default=None, repr=False
-    )
+    _task: asyncio.Task[Any] | None = field(default=None, repr=False)
 
     @property
     def duration_seconds(self) -> float | None:
@@ -75,10 +75,7 @@ class BackgroundTask:
             if len(self.prompt) > _PROMPT_PREVIEW_LEN
             else self.prompt
         )
-        return (
-            f"[{self.task_id}] {self.status}"
-            f"{duration}: {prompt_preview}"
-        )
+        return f"[{self.task_id}] {self.status}{duration}: {prompt_preview}"
 
 
 class BackgroundAgentManager:
@@ -127,17 +124,13 @@ class BackgroundAgentManager:
     def running_count(self) -> int:
         """Number of currently running tasks."""
         return sum(
-            1
-            for t in self._tasks.values()
-            if t.status == BackgroundStatus.RUNNING
+            1 for t in self._tasks.values() if t.status == BackgroundStatus.RUNNING
         )
 
     @property
     def all_tasks(self) -> list[BackgroundTask]:
         """All tasks sorted by creation time."""
-        return sorted(
-            self._tasks.values(), key=lambda t: t.created_at
-        )
+        return sorted(self._tasks.values(), key=lambda t: t.created_at)
 
     async def submit(
         self,
@@ -204,13 +197,9 @@ class BackgroundAgentManager:
                 raise RuntimeError(msg)  # noqa: TRY301
 
             agent = self._agent_factory()
-            config = {
-                "configurable": {"thread_id": f"bg-{task.task_id}"}
-            }
+            config = {"configurable": {"thread_id": f"bg-{task.task_id}"}}
             input_data = {
-                "messages": [
-                    {"role": "user", "content": task.prompt}
-                ],
+                "messages": [{"role": "user", "content": task.prompt}],
             }
 
             result = await agent.ainvoke(input_data, config=config)
@@ -218,16 +207,10 @@ class BackgroundAgentManager:
             messages = result.get("messages", [])
             response = ""
             for msg in reversed(messages):
-                if (
-                    hasattr(msg, "content")
-                    and getattr(msg, "type", None) == "ai"
-                ):
+                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
                     response = msg.content
                     break
-                if (
-                    isinstance(msg, dict)
-                    and msg.get("role") == "assistant"
-                ):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
                     response = msg.get("content", "")
                     break
 
@@ -242,23 +225,17 @@ class BackgroundAgentManager:
         except asyncio.CancelledError:
             task.status = BackgroundStatus.CANCELLED
             task.completed_at = time.time()
-            logger.info(
-                "Background task %s cancelled", task.task_id
-            )
+            logger.info("Background task %s cancelled", task.task_id)
         except Exception:
             task.status = BackgroundStatus.FAILED
             task.completed_at = time.time()
-            logger.exception(
-                "Background task %s failed", task.task_id
-            )
+            logger.exception("Background task %s failed", task.task_id)
 
         if self._on_complete:
             try:
                 self._on_complete(task)
             except Exception:
-                logger.debug(
-                    "on_complete callback failed", exc_info=True
-                )
+                logger.debug("on_complete callback failed", exc_info=True)
 
     def get_status(self, task_id: str) -> BackgroundTask | None:
         """Get status of a background task.
@@ -297,8 +274,7 @@ class BackgroundAgentManager:
         return [
             t
             for t in self._tasks.values()
-            if t.status
-            in {BackgroundStatus.COMPLETED, BackgroundStatus.FAILED}
+            if t.status in {BackgroundStatus.COMPLETED, BackgroundStatus.FAILED}
         ]
 
     def format_status_table(self) -> str:

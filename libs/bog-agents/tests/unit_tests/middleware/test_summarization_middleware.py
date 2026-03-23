@@ -168,7 +168,7 @@ class MockBackend(BackendProtocol):
             raise RuntimeError(msg)
         return self.write(path, content)
 
-    def edit(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:  # noqa: FBT001, FBT002
+    def edit(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
         """Edit a file by replacing string occurrences."""
         self.edit_calls.append((path, old_string, new_string))
         if self.write_raises:
@@ -178,7 +178,7 @@ class MockBackend(BackendProtocol):
             return EditResult(error=self.error_message or "Mock edit failure")
         return EditResult(path=path, occurrences=1)
 
-    async def aedit(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:  # noqa: FBT001, FBT002
+    async def aedit(self, path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
         """Async version of edit."""
         if self.write_raises:
             msg = "Mock aedit exception"

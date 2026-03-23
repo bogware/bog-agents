@@ -146,9 +146,9 @@ def format_token_count(count: int) -> str:
     Returns:
         Formatted string like `"12.5K"`, `"1.2M"`, or `"500"`.
     """
-    if count >= 1_000_000:  # noqa: PLR2004
+    if count >= 1_000_000:
         return f"{count / 1_000_000:.1f}M"
-    if count >= 1000:  # noqa: PLR2004
+    if count >= 1000:
         return f"{count / 1000:.1f}K"
     return str(count)
 
@@ -170,7 +170,7 @@ def print_usage_table(
     """
     from rich.table import Table
 
-    has_time = wall_time >= 0.1  # noqa: PLR2004
+    has_time = wall_time >= 0.1
     if not (stats.request_count or stats.input_tokens or has_time):
         return
 
@@ -242,7 +242,7 @@ def _get_git_branch() -> str | None:
 
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],  # noqa: S607
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             capture_output=True,
             text=True,
             timeout=2,
@@ -542,7 +542,7 @@ async def execute_task_textual(
                         f"\n### {file_path.name}\n"
                         f"Path: `{file_path}`\n```\n{content}\n```"
                     )
-            except Exception as e:  # noqa: BLE001  # Resilient adapter error handling
+            except Exception as e:  # Resilient adapter error handling
                 context_parts.append(
                     f"\n### {file_path.name}\n[Error reading file: {e}]"
                 )
@@ -616,7 +616,9 @@ async def execute_task_textual(
                 context=context,
                 durability="exit",
             ):
-                if not isinstance(chunk, tuple) or len(chunk) != 3:  # noqa: PLR2004  # stream chunk is a 3-tuple (namespace, mode, data)
+                if (
+                    not isinstance(chunk, tuple) or len(chunk) != 3
+                ):  # stream chunk is a 3-tuple (namespace, mode, data)
                     logger.debug("Skipping non-3-tuple chunk: %s", type(chunk).__name__)
                     continue
 
@@ -690,7 +692,9 @@ async def execute_task_textual(
                         logger.debug("Skipping subagent message ns=%s", ns_key)
                         continue
 
-                    if not isinstance(data, tuple) or len(data) != 2:  # noqa: PLR2004  # message stream data is a 2-tuple (message, metadata)
+                    if (
+                        not isinstance(data, tuple) or len(data) != 2
+                    ):  # message stream data is a 2-tuple (message, metadata)
                         logger.debug(
                             "Skipping non-2-tuple message data: type=%s",
                             type(data).__name__,

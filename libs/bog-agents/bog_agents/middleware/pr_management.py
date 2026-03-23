@@ -40,7 +40,7 @@ def _run_cmd(working_dir: Path, *args: str, timeout: int = 30) -> str:
         Command output.
     """
     try:
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             list(args),
             cwd=working_dir,
             capture_output=True,

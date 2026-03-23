@@ -116,7 +116,9 @@ def create_sandbox(
                     f"[dim]{glyphs.checkmark} {provider.capitalize()} sandbox "
                     f"{backend.id} terminated[/dim]"
                 )
-            except Exception as e:  # noqa: BLE001  # Cleanup errors should not mask the original sandbox failure
+            except (
+                Exception
+            ) as e:  # Cleanup errors should not mask the original sandbox failure
                 warning = get_glyphs().warning
                 console.print(
                     f"[yellow]{warning} Cleanup failed for {provider} sandbox "

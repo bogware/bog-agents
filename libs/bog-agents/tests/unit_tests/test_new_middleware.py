@@ -5,13 +5,10 @@ agent replay, offline mode.
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import time
 from pathlib import Path
-
-import pytest
 
 
 class TestSmartApprovals:
@@ -19,30 +16,36 @@ class TestSmartApprovals:
 
     def test_safe_tool_auto_approved(self):
         from bog_agents.middleware.smart_approvals import (
-            ApprovalHistory,
             DEFAULT_POLICIES,
+            ApprovalHistory,
             RiskLevel,
             evaluate_tool_call,
         )
 
         history = ApprovalHistory()
         decision = evaluate_tool_call(
-            "read_file", {"path": "/tmp/test.txt"}, DEFAULT_POLICIES, history,
+            "read_file",
+            {"path": "/tmp/test.txt"},
+            DEFAULT_POLICIES,
+            history,
         )
         assert decision.approved is True
         assert decision.risk_level == RiskLevel.SAFE
 
     def test_execute_classified_as_medium(self):
         from bog_agents.middleware.smart_approvals import (
-            ApprovalHistory,
             DEFAULT_POLICIES,
+            ApprovalHistory,
             RiskLevel,
             evaluate_tool_call,
         )
 
         history = ApprovalHistory()
         decision = evaluate_tool_call(
-            "execute", {"command": "ls -la"}, DEFAULT_POLICIES, history,
+            "execute",
+            {"command": "ls -la"},
+            DEFAULT_POLICIES,
+            history,
         )
         assert decision.risk_level == RiskLevel.MEDIUM
 
@@ -54,7 +57,9 @@ class TestSmartApprovals:
         )
 
         risk, _ = _classify_risk(
-            "execute", {"command": "rm -rf /"}, DEFAULT_POLICIES,
+            "execute",
+            {"command": "rm -rf /"},
+            DEFAULT_POLICIES,
         )
         assert risk == RiskLevel.HIGH
 
@@ -67,10 +72,14 @@ class TestSmartApprovals:
 
         history = ApprovalHistory()
         for _ in range(5):
-            history.record(ApprovalDecision(
-                approved=True, risk_level=RiskLevel.LOW,
-                reason="test", tool_name="edit_file",
-            ))
+            history.record(
+                ApprovalDecision(
+                    approved=True,
+                    risk_level=RiskLevel.LOW,
+                    reason="test",
+                    tool_name="edit_file",
+                )
+            )
 
         assert history.tool_approval_ratio("edit_file") == 1.0
         assert history.tool_approval_ratio("unknown") == 0.5
@@ -151,15 +160,12 @@ class TestModelCascade:
     def test_complex_task_classified(self):
         from bog_agents.middleware.model_cascade import TaskComplexity, classify_complexity
 
-        assert classify_complexity(
-            "debug the performance issue in the authentication system"
-        ) == TaskComplexity.COMPLEX
+        assert classify_complexity("debug the performance issue in the authentication system") == TaskComplexity.COMPLEX
 
     def test_select_cheapest_tier(self):
         from bog_agents.middleware.model_cascade import (
-            CascadeHistory,
             DEFAULT_CASCADE,
-            ModelTier,
+            CascadeHistory,
             TaskComplexity,
             select_model_tier,
         )
@@ -167,21 +173,27 @@ class TestModelCascade:
         history = CascadeHistory()
         # Use cascade without vision requirement to avoid socket issues
         tier = select_model_tier(
-            TaskComplexity.TRIVIAL, DEFAULT_CASCADE, history, require_tools=False,
+            TaskComplexity.TRIVIAL,
+            DEFAULT_CASCADE,
+            history,
+            require_tools=False,
         )
         assert tier.name == "fast"
 
     def test_expert_gets_frontier(self):
         from bog_agents.middleware.model_cascade import (
-            CascadeHistory,
             DEFAULT_CASCADE,
+            CascadeHistory,
             TaskComplexity,
             select_model_tier,
         )
 
         history = CascadeHistory()
         tier = select_model_tier(
-            TaskComplexity.EXPERT, DEFAULT_CASCADE, history, require_tools=False,
+            TaskComplexity.EXPERT,
+            DEFAULT_CASCADE,
+            history,
+            require_tools=False,
         )
         assert tier.name == "frontier"
 
@@ -227,9 +239,9 @@ class TestScheduledRuns:
 
     def test_task_is_due(self):
         from bog_agents.middleware.scheduled_runs import (
-            ScheduleInterval,
-            ScheduledTask,
             IntervalUnit,
+            ScheduledTask,
+            ScheduleInterval,
         )
 
         task = ScheduledTask(
@@ -243,9 +255,9 @@ class TestScheduledRuns:
 
     def test_task_not_due(self):
         from bog_agents.middleware.scheduled_runs import (
-            ScheduleInterval,
-            ScheduledTask,
             IntervalUnit,
+            ScheduledTask,
+            ScheduleInterval,
         )
 
         task = ScheduledTask(
@@ -290,7 +302,7 @@ class TestScheduledRuns:
     def test_cron_weekday_mapping(self):
         """Verify cron uses Sunday=0 convention, not Python's Monday=0."""
         import datetime
-        from unittest.mock import patch
+
         from bog_agents.middleware.scheduled_runs import CronExpression
 
         # Create a known Sunday: 2026-03-15 is a Sunday
@@ -362,15 +374,17 @@ class TestSelfImproving:
         )
 
         record = ImprovementRecord()
-        record.add_assessment(SelfAssessment(
-            session_id="s1",
-            rating="good",
-            efficiency_score=0.8,
-            lessons_learned=["test early"],
-            suggested_improvements=["run linter"],
-            patterns_to_remember=["check tests after changes"],
-            patterns_to_avoid=["blind edits"],
-        ))
+        record.add_assessment(
+            SelfAssessment(
+                session_id="s1",
+                rating="good",
+                efficiency_score=0.8,
+                lessons_learned=["test early"],
+                suggested_improvements=["run linter"],
+                patterns_to_remember=["check tests after changes"],
+                patterns_to_avoid=["blind edits"],
+            )
+        )
 
         prompt = generate_improvement_prompt(record)
         assert "Self-Improvement" in prompt
@@ -398,7 +412,7 @@ class TestSecurityAudit:
     def test_detect_eval_usage(self):
         from bog_agents.middleware.security_audit import scan_file_for_patterns
 
-        content = 'result = eval(user_input)'
+        content = "result = eval(user_input)"
         findings = scan_file_for_patterns("app.py", content, [0])
         assert len(findings) >= 1
         assert any("eval" in f.title.lower() for f in findings)
@@ -434,7 +448,7 @@ class TestSecurityAudit:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             test_file = Path(tmpdir) / "app.py"
-            test_file.write_text('x = eval(input())')
+            test_file.write_text("x = eval(input())")
 
             mw = SecurityAuditMiddleware(working_dir=tmpdir)
             findings = mw.scan_file("app.py")
@@ -598,9 +612,11 @@ class TestOfflineMode:
 
         from bog_agents.middleware.offline_mode import ConnectivityStatus, OfflineModeMiddleware
 
-        with patch("bog_agents.middleware.offline_mode.check_connectivity", return_value=ConnectivityStatus.OFFLINE), \
-             patch("bog_agents.middleware.offline_mode.check_ollama_running", return_value=False), \
-             patch("bog_agents.middleware.offline_mode.detect_ollama_models", return_value=[]):
+        with (
+            patch("bog_agents.middleware.offline_mode.check_connectivity", return_value=ConnectivityStatus.OFFLINE),
+            patch("bog_agents.middleware.offline_mode.check_ollama_running", return_value=False),
+            patch("bog_agents.middleware.offline_mode.detect_ollama_models", return_value=[]),
+        ):
             mw = OfflineModeMiddleware(enforce_offline=True, check_interval=0)
         assert mw.is_tool_allowed("read_file") is True
         assert mw.is_tool_allowed("web_search") is False
@@ -628,9 +644,11 @@ class TestOfflineMode:
 
         from bog_agents.middleware.offline_mode import ConnectivityStatus, OfflineModeMiddleware
 
-        with patch("bog_agents.middleware.offline_mode.check_connectivity", return_value=ConnectivityStatus.OFFLINE), \
-             patch("bog_agents.middleware.offline_mode.check_ollama_running", return_value=False), \
-             patch("bog_agents.middleware.offline_mode.detect_ollama_models", return_value=[]):
+        with (
+            patch("bog_agents.middleware.offline_mode.check_connectivity", return_value=ConnectivityStatus.OFFLINE),
+            patch("bog_agents.middleware.offline_mode.check_ollama_running", return_value=False),
+            patch("bog_agents.middleware.offline_mode.detect_ollama_models", return_value=[]),
+        ):
             mw = OfflineModeMiddleware(enforce_offline=True, check_interval=99999)
         summary = mw.get_status_summary()
         assert "Connectivity" in summary

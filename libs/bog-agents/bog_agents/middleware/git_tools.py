@@ -39,7 +39,7 @@ def _run_git(working_dir: Path, *args: str, timeout: int = 30) -> str:
         Combined stdout/stderr output.
     """
     try:
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             ["git", *args],
             cwd=working_dir,
             capture_output=True,

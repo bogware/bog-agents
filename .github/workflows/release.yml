@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   setup:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     outputs:
       package: ${{ steps.parse.outputs.package }}
       working-dir: ${{ steps.parse.outputs.working-dir }}
@@ -50,7 +50,7 @@ jobs:
   build:
     needs: setup
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: read
     env:
@@ -87,7 +87,7 @@ jobs:
 
   test:
     needs: [setup, build]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: read
     timeout-minutes: 20
@@ -126,7 +126,7 @@ jobs:
 
   publish:
     needs: [setup, build, test]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       id-token: write  # Required for trusted publishing
     env:
@@ -149,7 +149,7 @@ jobs:
   github-release:
     needs: [setup, build, publish]
     if: always() && needs.publish.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux]
     permissions:
       contents: write
     env:

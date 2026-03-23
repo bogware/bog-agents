@@ -103,7 +103,7 @@ Files not intended to be loaded into context, but rather used within the output 
 ---
 
 **Any unneeded directories can be deleted.** Not every skill requires all three types of resources.
-"""  # noqa: E501
+"""
 
 EXAMPLE_SCRIPT = '''#!/usr/bin/env python3
 """
@@ -160,7 +160,7 @@ Reference docs are ideal for:
 - Common patterns
 - Troubleshooting
 - Best practices
-"""  # noqa: E501
+"""
 
 EXAMPLE_ASSET = """# Example Asset File
 
@@ -186,7 +186,7 @@ Example asset files from other skills:
 - Data files: .csv, .json, .xml, .yaml
 
 Note: This is a text placeholder. Actual assets can be any file type.
-"""  # noqa: E501
+"""
 
 
 def _validate_name(name: str) -> tuple[bool, str]:

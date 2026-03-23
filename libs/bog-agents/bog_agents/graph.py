@@ -81,7 +81,7 @@ def get_default_model() -> ChatAnthropic:
     )
 
 
-def create_agent(  # noqa: C901, PLR0912, PLR0915  # Complex graph assembly logic with many conditional branches
+def create_agent(  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,

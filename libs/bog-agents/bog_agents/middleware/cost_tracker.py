@@ -253,9 +253,9 @@ class CostTracker:
             f"Remaining: {remaining:,} tokens",
         ]
 
-        if pct > 80:  # noqa: PLR2004
+        if pct > 80:
             lines.append("WARNING: Context window is getting full. Consider using /compact.")
-        elif pct > 60:  # noqa: PLR2004
+        elif pct > 60:
             lines.append("Note: Over 60% of context used. Auto-compaction may trigger soon.")
 
         return "\n".join(lines)

@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 class TaskComplexity(StrEnum):
     """Complexity classification for tasks."""
 
-    TRIVIAL = "trivial"     # Simple questions, file reads
-    SIMPLE = "simple"       # Single-file edits, basic searches
-    MODERATE = "moderate"   # Multi-file changes, test writing
-    COMPLEX = "complex"     # Architecture changes, debugging
-    EXPERT = "expert"       # System design, complex refactoring
+    TRIVIAL = "trivial"  # Simple questions, file reads
+    SIMPLE = "simple"  # Single-file edits, basic searches
+    MODERATE = "moderate"  # Multi-file changes, test writing
+    COMPLEX = "complex"  # Architecture changes, debugging
+    EXPERT = "expert"  # System design, complex refactoring
 
 
 @dataclass
@@ -155,12 +155,7 @@ class CascadeHistory:
         Returns:
             Success ratio (0.0-1.0), or 0.5 if no data.
         """
-        relevant = [
-            d for d in self.decisions
-            if d.selected_tier == tier_name
-            and d.complexity == complexity
-            and d.success is not None
-        ]
+        relevant = [d for d in self.decisions if d.selected_tier == tier_name and d.complexity == complexity and d.success is not None]
         if not relevant:
             return 1.0  # No data — assume the tier works
         return sum(1 for d in relevant if d.success) / len(relevant)
@@ -188,7 +183,7 @@ def classify_complexity(
         Estimated TaskComplexity.
     """
     message_lower = message.lower()
-    scores: dict[TaskComplexity, float] = {level: 0.0 for level in TaskComplexity}
+    scores: dict[TaskComplexity, float] = dict.fromkeys(TaskComplexity, 0.0)
 
     # Pattern matching
     for complexity, patterns in COMPLEXITY_SIGNALS.items():
@@ -264,7 +259,9 @@ def select_model_tier(
                 return tier
             logger.info(
                 "Skipping tier %s for %s: historical success rate %.0f%%",
-                tier.name, complexity, success_rate * 100,
+                tier.name,
+                complexity,
+                success_rate * 100,
             )
             continue
 
@@ -345,7 +342,9 @@ class ModelCascadeMiddleware(AgentMiddleware):
             Selected ModelTier.
         """
         complexity = classify_complexity(
-            message, tool_count=tool_count, turn_count=turn_count,
+            message,
+            tool_count=tool_count,
+            turn_count=turn_count,
         )
         tier = select_model_tier(
             complexity,
@@ -365,7 +364,9 @@ class ModelCascadeMiddleware(AgentMiddleware):
 
         logger.info(
             "Model cascade: complexity=%s -> tier=%s (%s)",
-            complexity, tier.name, tier.model_id,
+            complexity,
+            tier.name,
+            tier.model_id,
         )
         return tier
 

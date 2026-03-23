@@ -563,7 +563,11 @@ class TestRecommendModule:
         assert "clarifying questions" not in prompt
 
     def test_build_review_prompt(self):
-        from bog_agents_cli.recommend import RecommendConfig, build_review_prompt, Persona
+        from bog_agents_cli.recommend import (
+            Persona,
+            RecommendConfig,
+            build_review_prompt,
+        )
 
         config = RecommendConfig(persona=Persona.SECURITY)
         prompt = build_review_prompt(config)

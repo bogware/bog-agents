@@ -344,7 +344,7 @@ class StatusBar(Horizontal):
 
         if new_value > 0:
             # Format with K suffix for thousands
-            if new_value >= 1000:  # noqa: PLR2004  # Count formatting threshold
+            if new_value >= 1000:  # Count formatting threshold
                 display.update(f"{new_value / 1000:.1f}K tokens")
             else:
                 display.update(f"{new_value} tokens")
