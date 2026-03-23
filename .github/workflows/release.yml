@@ -75,15 +75,12 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        shell: python
         working-directory: ${{ env.WORKING_DIR }}
         run: |
-          import os, tomllib
-          with open("pyproject.toml", "rb") as f:
-              data = tomllib.load(f)
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"pkg-name={data['project']['name']}\n")
-              f.write(f"version={data['project']['version']}\n")
+          PKG_NAME=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])")
+          VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "pkg-name=$PKG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
   test:
     needs: [setup, build]
