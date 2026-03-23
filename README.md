@@ -80,7 +80,7 @@ See the [CLI README](libs/cli/) for the full rundown.
 ## Run from Source
 
 ```bash
-git clone https://github.com/langchain-ai/bog-agents.git
+git clone https://github.com/bogware/bog-agents.git
 cd bog-agents
 
 # SDK
@@ -176,10 +176,9 @@ Bog Agents trusts the LLM to do its job. Boundaries are enforced at the tool and
 
 ## Documentation
 
-- [Full docs](https://docs.langchain.com/oss/python/bog-agents/overview)
-- [API reference](https://reference.langchain.com/python/bog-agents/)
 - [Examples](examples/)
-- [Contributing](https://docs.langchain.com/oss/python/contributing/overview)
+- [Publishing](PUBLISHING.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Acknowledgements
 
