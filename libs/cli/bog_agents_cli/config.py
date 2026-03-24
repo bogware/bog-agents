@@ -1405,10 +1405,6 @@ def _get_default_model_spec() -> str:
 
     Returns:
         Model specification in provider:model format.
-
-    Raises:
-        ModelConfigError: If no credentials are configured and the user
-            cancels the setup wizard.
     """
     config = ModelConfig.load()
     if config.default_model:
@@ -1519,9 +1515,8 @@ def _run_setup_wizard() -> str:
         con.print("[yellow]No valid AWS credentials found.[/yellow]")
         con.print("Run [cyan]aws configure[/cyan] and try again,")
         con.print("or choose a different provider.\n")
-        raise ModelConfigError(
-            "AWS credentials not configured. Run 'aws configure' first."
-        )
+        msg = "AWS credentials not configured. Run 'aws configure' first."
+        raise ModelConfigError(msg)
 
     # --- Ollama path ---
     if env_var == "__OLLAMA__":
@@ -1537,9 +1532,8 @@ def _run_setup_wizard() -> str:
         con.print(
             "\n[yellow]Ollama not found.[/yellow] Install from https://ollama.com"
         )
-        raise ModelConfigError(
-            "Ollama is not installed. Visit https://ollama.com to install it."
-        )
+        msg = "Ollama is not installed. Visit https://ollama.com to install it."
+        raise ModelConfigError(msg)
 
     # --- API key path ---
     con.print(f"\n[bold]{name}[/bold] requires [cyan]{env_var}[/cyan].")
@@ -1549,7 +1543,8 @@ def _run_setup_wizard() -> str:
 
     api_key = Prompt.ask(f"Paste your {name} API key").strip()
     if not api_key:
-        raise ModelConfigError("No API key provided. Run bog-agents again to retry.")
+        msg = "No API key provided. Run bog-agents again to retry."
+        raise ModelConfigError(msg)
 
     # Persist to ~/.bog-agents/.env so it's loaded on future runs
     env_dir = Path.home() / ".bog-agents"
@@ -1557,7 +1552,7 @@ def _run_setup_wizard() -> str:
     env_file = env_dir / ".env"
 
     # Append (don't overwrite) to preserve any existing keys
-    with open(env_file, "a") as f:
+    with env_file.open("a") as f:
         f.write(f"\n{env_var}={api_key}\n")
 
     # Load into current process
