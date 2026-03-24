@@ -94,27 +94,25 @@ def show_help() -> None:
 
     # --- Subcommands ---
     console.print("[bold]Subcommands:[/bold]", style=COLORS["primary"])
-    console.print(
-        "  list                                List available agents"
-    )
-    console.print(
-        "  reset --agent NAME [--target SRC]   Reset an agent's prompt"
-    )
-    console.print(
-        "  skills <list|create|info|delete>     Manage agent skills"
-    )
-    console.print(
-        "  threads <list|delete>                Manage conversation threads"
-    )
+    console.print("  list                                List available agents")
+    console.print("  reset --agent NAME [--target SRC]   Reset an agent's prompt")
+    console.print("  skills <list|create|info|delete>     Manage agent skills")
+    console.print("  threads <list|delete>                Manage conversation threads")
     console.print()
 
     # --- Core Options ---
     console.print("[bold]Core Options:[/bold]", style=COLORS["primary"])
-    console.print("  -M, --model MODEL          Model (e.g., claude-sonnet-4-6, gpt-4o, ollama:llama3)")
+    console.print(
+        "  -M, --model MODEL          Model (e.g., claude-sonnet-4-6, gpt-4o, ollama:llama3)"
+    )
     console.print("  -a, --agent NAME           Named agent to use (default: agent)")
-    console.print("  -r, --resume [ID]          Resume: -r for most recent, -r ID for specific")
+    console.print(
+        "  -r, --resume [ID]          Resume: -r for most recent, -r ID for specific"
+    )
     console.print("  -m, --message TEXT         Auto-submit this prompt on start")
-    console.print("  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)")
+    console.print(
+        "  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)"
+    )
     console.print("  --doctor                   Diagnose your environment")
     console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")
@@ -123,21 +121,27 @@ def show_help() -> None:
     # --- Non-Interactive / Automation ---
     console.print("[bold]Non-Interactive (Automation):[/bold]", style=COLORS["primary"])
     console.print("  -n, --non-interactive MSG  Run single task, exit with code 0/1")
-    console.print("  -p, --print TEXT           Same as -n + -q (clean stdout for pipes)")
+    console.print(
+        "  -p, --print TEXT           Same as -n + -q (clean stdout for pipes)"
+    )
     console.print("  -q, --quiet                Suppress chrome, pipe-friendly output")
     console.print("  --no-stream                Buffer full response (don't stream)")
     console.print("  --json                     Machine-readable JSON output")
     console.print(
         "  --shell-allow-list CMDS    Shell access: 'recommended', 'all', or comma list"
     )
-    console.print("  --pr                       Create a PR from agent output (needs -n)")
+    console.print(
+        "  --pr                       Create a PR from agent output (needs -n)"
+    )
     console.print("  --pr-base BRANCH           PR base branch (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
     console.print()
 
     # --- Model Configuration ---
     console.print("[bold]Model Configuration:[/bold]", style=COLORS["primary"])
-    console.print("  --model-params JSON        Extra kwargs (e.g., '{\"temperature\": 0.7}')")
+    console.print(
+        "  --model-params JSON        Extra kwargs (e.g., '{\"temperature\": 0.7}')"
+    )
     console.print("  --profile-override JSON    Override model profile fields")
     console.print("  --default-model [MODEL]    Set or show the default model")
     console.print("  --clear-default-model      Clear default model")
@@ -145,12 +149,20 @@ def show_help() -> None:
 
     # --- Sandboxes & MCP ---
     console.print("[bold]Sandboxes & MCP:[/bold]", style=COLORS["primary"])
-    console.print("  --sandbox TYPE             Remote sandbox (modal/daytona/runloop/langsmith)")
+    console.print(
+        "  --sandbox TYPE             Remote sandbox (modal/daytona/runloop/langsmith)"
+    )
     console.print("  --sandbox-id ID            Reuse an existing sandbox")
-    console.print("  --sandbox-setup PATH       Run setup script after sandbox creation")
-    console.print("  --mcp-config PATH          MCP server config (merged with auto-discovered)")
+    console.print(
+        "  --sandbox-setup PATH       Run setup script after sandbox creation"
+    )
+    console.print(
+        "  --mcp-config PATH          MCP server config (merged with auto-discovered)"
+    )
     console.print("  --no-mcp                   Disable all MCP loading")
-    console.print("  --trust-project-mcp        Trust project MCP configs without prompt")
+    console.print(
+        "  --trust-project-mcp        Trust project MCP configs without prompt"
+    )
     console.print()
 
     # --- Server Modes ---
@@ -162,7 +174,10 @@ def show_help() -> None:
     console.print()
 
     # --- Slash Commands ---
-    console.print("[bold]Slash Commands (inside interactive session):[/bold]", style=COLORS["primary"])
+    console.print(
+        "[bold]Slash Commands (inside interactive session):[/bold]",
+        style=COLORS["primary"],
+    )
     col1 = [
         ("/help", "Show this help"),
         ("/model", "Switch model mid-session"),
@@ -188,9 +203,7 @@ def show_help() -> None:
         ("/quit", "Exit"),
     ]
     for left, right in zip(col1, col2, strict=True):
-        console.print(
-            f"  {left[0]:<14} {left[1]:<28} {right[0]:<14} {right[1]}"
-        )
+        console.print(f"  {left[0]:<14} {left[1]:<28} {right[0]:<14} {right[1]}")
     console.print("  [dim]... and 30+ more. Type / to see all.[/dim]")
     console.print()
 

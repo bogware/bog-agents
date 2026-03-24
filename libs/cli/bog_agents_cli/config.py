@@ -1387,7 +1387,9 @@ def detect_provider(model_name: str) -> str | None:
         return "nvidia"
 
     # AWS Bedrock model IDs use a dot-separated format (e.g., anthropic.claude-*)
-    if model_lower.startswith(("anthropic.", "amazon.", "meta.", "cohere.", "mistral.", "ai21.")):
+    if model_lower.startswith(
+        ("anthropic.", "amazon.", "meta.", "cohere.", "mistral.", "ai21.")
+    ):
         return "bedrock"
 
     return None
@@ -1478,10 +1480,22 @@ def _run_setup_wizard() -> str:
     )
 
     providers = [
-        ("1", "Anthropic", "ANTHROPIC_API_KEY", "anthropic:claude-sonnet-4-6", "sk-ant-..."),
+        (
+            "1",
+            "Anthropic",
+            "ANTHROPIC_API_KEY",
+            "anthropic:claude-sonnet-4-6",
+            "sk-ant-...",
+        ),
         ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5.2", "sk-..."),
         ("3", "AWS Bedrock", "__AWS__", "bedrock:anthropic.claude-sonnet-4-6-v1", None),
-        ("4", "Google AI", "GOOGLE_API_KEY", "google_genai:gemini-3.1-pro-preview", "AI..."),
+        (
+            "4",
+            "Google AI",
+            "GOOGLE_API_KEY",
+            "google_genai:gemini-3.1-pro-preview",
+            "AI...",
+        ),
         ("5", "Ollama (local, free)", "__OLLAMA__", "ollama:llama3", None),
     ]
 
