@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.5.2...bog-agents-cli==0.6.0) (2026-03-24)
+
+
+### Features
+
+* **cli:** comprehensive docs, help screen, and rebrand sweep ([c053d58](https://github.com/bogware/bog-agents/commit/c053d58))
+* **cli:** resilient credential detection and interactive setup wizard ([8460244](https://github.com/bogware/bog-agents/commit/8460244))
+
+
+### Bug Fixes
+
+* **cli:** resolve merge conflicts with main (v0.5.2) ([42aa364](https://github.com/bogware/bog-agents/commit/42aa364))
+* **cli,sdk:** fix lint errors and failing test ([a6d2f58](https://github.com/bogware/bog-agents/commit/a6d2f58))
+
 ## [0.5.2](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.5.1...bog-agents-cli==0.5.2) (2026-03-23)
 
 
