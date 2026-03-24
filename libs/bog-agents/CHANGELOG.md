@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/bogware/bog-agents/compare/bog-agents==0.5.2...bog-agents==0.6.0) (2026-03-24)
+
+
+### Features
+
+* **sdk:** comprehensive docs, help screen, and rebrand sweep ([e5e4c72](https://github.com/bogware/bog-agents/commit/e5e4c72))
+
+
+### Bug Fixes
+
+* **sdk:** add missing ty:ignore comments for starlette/uvicorn imports ([e5e4c72](https://github.com/bogware/bog-agents/commit/e5e4c72))
+* **cli,sdk:** fix lint errors and failing test ([a6d2f58](https://github.com/bogware/bog-agents/commit/a6d2f58))
+
 ## [0.5.2](https://github.com/bogware/bog-agents/compare/bog-agents==0.5.1...bog-agents==0.5.2) (2026-03-23)
 
 
