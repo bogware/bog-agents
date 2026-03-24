@@ -128,10 +128,15 @@ class TestApplyServerConfig:
 class TestStartServerAndGetAgent:
     """Tests for server bootstrap wiring."""
 
-    async def test_uses_absolute_graph_and_checkpointer_refs(
+    async def test_uses_relative_graph_and_checkpointer_refs(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Generated LangGraph config should use absolute bootstrap paths."""
+        """Generated LangGraph config should use relative module references.
+
+        LangGraph's ``importlib.import_module`` cannot handle absolute file-system
+        paths.  The server process runs with ``cwd=work_dir``, so ``./file.py``
+        style references resolve correctly.
+        """
         project_root = tmp_path / "project"
         project_root.mkdir()
         monkeypatch.chdir(project_root)
@@ -169,16 +174,8 @@ class TestStartServerAndGetAgent:
         assert manager is None
 
         kwargs = mock_generate_langgraph_json.call_args.kwargs
-        graph_path, _graph_attr = kwargs["graph_ref"].rsplit(":", 1)
-        checkpointer_path, _checkpointer_attr = kwargs["checkpointer_path"].rsplit(
-            ":",
-            1,
-        )
-
-        assert Path(graph_path).is_absolute()
-        assert Path(checkpointer_path).is_absolute()
-        assert Path(graph_path).parent == work_dir
-        assert Path(checkpointer_path).parent == work_dir
+        assert kwargs["graph_ref"] == "./server_graph.py:graph"
+        assert kwargs["checkpointer_path"] == "./checkpointer.py:create_checkpointer"
 
 
 class TestWritePyproject:

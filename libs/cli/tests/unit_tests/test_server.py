@@ -203,7 +203,7 @@ class TestServerProcess:
         ):
             await server.start()
 
-        process.send_signal.assert_called_once()
+        process.terminate.assert_called_once()
         process.wait.assert_called_once()
         log_file.close.assert_called_once()
         assert server._process is None

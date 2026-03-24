@@ -11,7 +11,6 @@ import contextlib
 import json
 import logging
 import os
-import signal
 import subprocess  # noqa: S404
 import sys
 import tempfile
@@ -421,7 +420,11 @@ class ServerProcess:
         if self._process.poll() is None:
             logger.info("Stopping langgraph dev server (pid=%d)", self._process.pid)
             try:
-                self._process.send_signal(signal.SIGTERM)
+                # On Windows, SIGTERM is not reliably delivered to child
+                # processes. Use terminate() which calls TerminateProcess()
+                # on Windows and sends SIGTERM on POSIX — the correct
+                # cross-platform graceful shutdown signal.
+                self._process.terminate()
                 self._process.wait(timeout=_SHUTDOWN_TIMEOUT)
             except subprocess.TimeoutExpired:
                 logger.warning("Server did not stop gracefully, killing")

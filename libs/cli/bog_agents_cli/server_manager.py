@@ -103,11 +103,10 @@ def _scaffold_workspace(work_dir: Path) -> None:
     _write_checkpointer(work_dir)
     _write_pyproject(work_dir)
 
-    checkpointer_path = work_dir / "checkpointer.py"
     generate_langgraph_json(
         work_dir,
-        graph_ref=f"{server_graph_dst.resolve()}:graph",
-        checkpointer_path=f"{checkpointer_path.resolve()}:create_checkpointer",
+        graph_ref="./server_graph.py:graph",
+        checkpointer_path="./checkpointer.py:create_checkpointer",
     )
 
 
@@ -165,13 +164,16 @@ def _write_pyproject(work_dir: Path) -> None:
     Args:
         work_dir: Server working directory.
     """
-    cli_dir = Path(__file__).parent.parent
+    cli_dir = Path(__file__).parent.parent.resolve()
+    # Path.as_uri() produces correct file URIs on all platforms
+    # (e.g. file:///C:/Users/... on Windows, file:///home/... on Linux).
+    cli_uri = cli_dir.as_uri()
     content = f"""[project]
 name = "bog-agents-server-runtime"
 version = "0.0.1"
 requires-python = ">=3.11"
 dependencies = [
-    "bog-agents-cli @ file://{cli_dir}",
+    "bog-agents-cli @ {cli_uri}",
 ]
 
 [build-system]
