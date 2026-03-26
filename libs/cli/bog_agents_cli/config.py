@@ -361,7 +361,7 @@ _UNICODE_BANNER = f"""\
    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████║
    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
 
-   ▸ The batteries-included agent harness ─── v{__version__}\
+   ▸ pass through in harmony ─── v{__version__}\
 """
 _ASCII_BANNER = f"""\
 
@@ -377,7 +377,7 @@ _ASCII_BANNER = f"""\
    / ___ \\ |_| || |___| |\\  | | |  ___) |
   /_/   \\_\\____||_____|_| \\_| |_| |____/
 
-  > The batteries-included agent harness --- v{__version__}\
+  > pass through in harmony --- v{__version__}\
 """
 
 
