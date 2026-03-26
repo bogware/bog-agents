@@ -65,7 +65,7 @@
         "bog_agents/_version.py"
       ],
       "changelog-path": "CHANGELOG.md",
-      "bootstrap-sha": "1b917cac5edd46287bc2a42914cbeefb6d48ff6f"
+      "last-release-sha": "89c07173c63cd019b2d2dc0fa25f78e14c81945e"
     },
     "libs/cli": {
       "release-type": "python",
@@ -78,7 +78,7 @@
         "bog_agents_cli/_version.py"
       ],
       "changelog-path": "CHANGELOG.md",
-      "bootstrap-sha": "1b917cac5edd46287bc2a42914cbeefb6d48ff6f"
+      "last-release-sha": "d47f743d6607a95a01bfe82aade6fdc642977c87"
     }
   },
   "tag-separator": "==",
