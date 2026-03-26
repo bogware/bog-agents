@@ -51,6 +51,7 @@ class TestServerGraph:
         config_module = _module_with_attrs(
             "bog_agents_cli.config",
             create_model=MagicMock(return_value=model_result),
+            create_model_with_fallback=MagicMock(return_value=model_result),
             settings=SimpleNamespace(
                 has_tavily=False,
                 reload_from_environment=MagicMock(),

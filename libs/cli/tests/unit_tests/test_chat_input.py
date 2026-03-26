@@ -270,7 +270,7 @@ class TestPromptIndicator:
             chat_input = app.query_one(ChatInput)
             prompt = chat_input.query_one("#prompt", Static)
 
-            assert _prompt_text(prompt) == ">"
+            assert _prompt_text(prompt) == "<>"
             assert not chat_input.has_class("mode-shell")
 
             chat_input.mode = "shell"
@@ -304,7 +304,7 @@ class TestPromptIndicator:
 
             chat_input.mode = "normal"
             await pilot.pause()
-            assert _prompt_text(prompt) == ">"
+            assert _prompt_text(prompt) == "<>"
             assert not chat_input.has_class("mode-shell")
             assert not chat_input.has_class("mode-command")
 
