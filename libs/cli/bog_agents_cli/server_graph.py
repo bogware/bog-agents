@@ -104,7 +104,10 @@ def make_graph() -> Any:  # noqa: ANN401
     project_context = get_server_project_context()
 
     from bog_agents_cli.agent import create_cli_agent
-    from bog_agents_cli.config import create_model, settings
+    from bog_agents_cli.config import (
+        create_model_with_fallback as create_model,
+        settings,
+    )
 
     if project_context is not None:
         settings.reload_from_environment(start_path=project_context.user_cwd)

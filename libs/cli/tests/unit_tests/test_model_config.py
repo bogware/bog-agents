@@ -2536,3 +2536,131 @@ max_input_tokens = 8192
         assert entry["profile"]["max_output_tokens"] == 2048
         assert "max_output_tokens" in entry["overridden_keys"]
         assert "max_input_tokens" in entry["overridden_keys"]
+
+
+class TestBedrockCredentialDetection:
+    """Tests for _has_bedrock_credentials() and SSO support."""
+
+    def test_detects_access_key_id(self):
+        """Returns True when AWS_ACCESS_KEY_ID is set."""
+        with patch.dict("os.environ", {"AWS_ACCESS_KEY_ID": "AKIA..."}, clear=True):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_detects_aws_profile(self):
+        """Returns True when AWS_PROFILE is set (SSO profile)."""
+        with patch.dict("os.environ", {"AWS_PROFILE": "my-sso-profile"}, clear=True):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_detects_web_identity_token(self):
+        """Returns True when AWS_WEB_IDENTITY_TOKEN_FILE is set (EKS/OIDC)."""
+        with patch.dict(
+            "os.environ", {"AWS_WEB_IDENTITY_TOKEN_FILE": "/tmp/token"}, clear=True
+        ):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_detects_credentials_file(self, tmp_path):
+        """Returns True when ~/.aws/credentials file exists."""
+        aws_dir = tmp_path / ".aws"
+        aws_dir.mkdir()
+        (aws_dir / "credentials").write_text("[default]\naws_access_key_id=AKIA\n")
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_detects_config_file(self, tmp_path):
+        """Returns True when ~/.aws/config file exists (SSO config)."""
+        aws_dir = tmp_path / ".aws"
+        aws_dir.mkdir()
+        (aws_dir / "config").write_text("[profile my-sso]\nsso_start_url=https://...\n")
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_detects_sso_cache(self, tmp_path):
+        """Returns True when ~/.aws/sso/cache/ has cached tokens."""
+        sso_cache = tmp_path / ".aws" / "sso" / "cache"
+        sso_cache.mkdir(parents=True)
+        (sso_cache / "abc123.json").write_text("{}")
+
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_returns_false_when_nothing_available(self, tmp_path):
+        """Returns False when no AWS credentials are found anywhere."""
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            assert has_provider_credentials("bedrock") is False
+
+
+class TestFallbackConfig:
+    """Tests for fallback model configuration."""
+
+    def test_load_fallbacks_from_config(self, tmp_path):
+        """Fallbacks are loaded from [models].fallbacks in config.toml."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("""
+[models]
+default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+fallbacks = ["ollama:llama3", "anthropic:claude-haiku-4-5"]
+""")
+        config = ModelConfig.load(config_path)
+        assert config.fallbacks == (
+            "ollama:llama3",
+            "anthropic:claude-haiku-4-5",
+        )
+
+    def test_load_empty_fallbacks(self, tmp_path):
+        """Empty fallbacks list is handled correctly."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("""
+[models]
+default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+fallbacks = []
+""")
+        config = ModelConfig.load(config_path)
+        assert config.fallbacks == ()
+
+    def test_load_no_fallbacks_key(self, tmp_path):
+        """Missing fallbacks key defaults to empty tuple."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("""
+[models]
+default = "anthropic:claude-sonnet-4-6"
+""")
+        config = ModelConfig.load(config_path)
+        assert config.fallbacks == ()
+
+    def test_save_and_load_fallbacks_round_trip(self, tmp_path):
+        """Saved fallbacks can be loaded back."""
+        from bog_agents_cli.model_config import save_fallbacks
+
+        config_path = tmp_path / "config.toml"
+        fallbacks = ["ollama:llama3", "bedrock:anthropic.claude-sonnet-4-6-v1"]
+        assert save_fallbacks(fallbacks, config_path) is True
+
+        config = ModelConfig.load(config_path)
+        assert config.fallbacks == tuple(fallbacks)
+
+    def test_save_empty_fallbacks_removes_key(self, tmp_path):
+        """Saving empty fallbacks removes the key from config."""
+        from bog_agents_cli.model_config import save_fallbacks
+
+        config_path = tmp_path / "config.toml"
+        # First save some fallbacks
+        save_fallbacks(["ollama:llama3"], config_path)
+        # Then clear them
+        save_fallbacks([], config_path)
+
+        config = ModelConfig.load(config_path)
+        assert config.fallbacks == ()

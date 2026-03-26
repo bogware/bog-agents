@@ -643,11 +643,11 @@ async def run_textual_cli_async(
     from rich.text import Text
 
     from bog_agents_cli.app import run_textual_app
-    from bog_agents_cli.config import console, create_model
+    from bog_agents_cli.config import console, create_model_with_fallback
     from bog_agents_cli.model_config import ModelConfigError, save_recent_model
 
     try:
-        result = create_model(
+        result = create_model_with_fallback(
             model_name,
             extra_kwargs=model_params,
             profile_overrides=profile_override,
@@ -742,7 +742,10 @@ async def _run_acp_cli_async(
         Exit code for ACP mode.
     """
     from bog_agents_cli.agent import create_cli_agent
-    from bog_agents_cli.config import create_model, settings
+    from bog_agents_cli.config import (
+        create_model_with_fallback as create_model,
+        settings,
+    )
     from bog_agents_cli.model_config import ModelConfigError, save_recent_model
     from bog_agents_cli.tools import fetch_url, http_request, web_search
 
@@ -1258,9 +1261,9 @@ def cli_main() -> None:
                 sys.stderr.flush()
                 sys.exit(1)
 
-            from bog_agents_cli.config import create_model
+            from bog_agents_cli.config import create_model_with_fallback
 
-            model_result = create_model(
+            model_result = create_model_with_fallback(
                 getattr(args, "model", None),
                 extra_kwargs=model_params,
                 profile_overrides=profile_override,
@@ -1296,10 +1299,10 @@ def cli_main() -> None:
                 sys.stderr.flush()
                 sys.exit(2)
 
-            from bog_agents_cli.config import create_model
+            from bog_agents_cli.config import create_model_with_fallback
             from bog_agents_cli.pr_output import PRConfig, run_pr_mode
 
-            model_result = create_model(
+            model_result = create_model_with_fallback(
                 getattr(args, "model", None),
                 extra_kwargs=model_params,
                 profile_overrides=profile_override,

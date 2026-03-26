@@ -1932,6 +1932,16 @@ class BogAgentsApp(App):
         elif cmd == "/recommend" or cmd.startswith("/recommend "):
             await self._mount_message(UserMessage(command))
             await self._handle_recommend_command(command)
+        elif cmd == "/settings" or cmd.startswith("/settings "):
+            if cmd == "/settings" or "show" in cmd:
+                await self._show_settings_screen()
+            elif "path" in cmd:
+                from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(AppMessage(str(DEFAULT_CONFIG_PATH)))
+            else:
+                await self._show_settings_screen()
         else:
             await self._mount_message(UserMessage(command))
             await self._mount_message(AppMessage(f"Unknown command: {cmd}"))
@@ -2620,7 +2630,29 @@ class BogAgentsApp(App):
             # when streaming aborts before tool results arrive.
             if self._ui_adapter:
                 self._ui_adapter.finalize_pending_tools_with_error(f"Agent error: {e}")
-            await self._mount_message(ErrorMessage(f"Agent error: {e}"))
+
+            # Detect auth / credential errors and suggest fallback actions
+            err_name = type(e).__name__
+            err_str = str(e).lower()
+            is_auth_error = any(
+                keyword in err_name.lower() or keyword in err_str
+                for keyword in (
+                    "token", "credential", "auth", "forbidden",
+                    "accessdenied", "expired", "sso",
+                )
+            )
+            if is_auth_error:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Agent error: {e}\n\n"
+                        "This looks like an authentication/credential error. Try:\n"
+                        "  - `/settings` to configure providers and fallbacks\n"
+                        "  - `/model` to switch to a different provider\n"
+                        "  - For AWS Bedrock: run `aws sso login` to refresh credentials"
+                    )
+                )
+            else:
+                await self._mount_message(ErrorMessage(f"Agent error: {e}"))
         finally:
             # Clean up loading widget and agent state
             await self._cleanup_agent_task()
@@ -3526,6 +3558,30 @@ class BogAgentsApp(App):
             cli_profile_override=self._profile_override,
         )
         self.push_screen(screen, handle_result)
+
+    async def _show_settings_screen(self) -> None:
+        """Show interactive settings screen as a modal."""
+        from bog_agents_cli.widgets.settings_screen import SettingsScreen
+
+        def handle_result(changed: bool | None) -> None:
+            """Handle the settings screen result."""
+            if changed:
+                self.call_later(self._reload_after_settings)
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        screen = SettingsScreen()
+        self.push_screen(screen, handle_result)
+
+    async def _reload_after_settings(self) -> None:
+        """Reload config caches after settings changes."""
+        from bog_agents_cli.model_config import clear_caches
+
+        clear_caches()
+        settings.reload_from_environment()
+        await self._mount_message(
+            AppMessage("Settings updated. Configuration reloaded.")
+        )
 
     async def _show_mcp_viewer(self) -> None:
         """Show read-only MCP server/tool viewer as a modal screen."""
