@@ -1942,6 +1942,10 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(str(DEFAULT_CONFIG_PATH)))
             else:
                 await self._show_settings_screen()
+        elif cmd == "/init":
+            await self._handle_init_command()
+        elif cmd == "/onboard":
+            await self._handle_onboard_command()
         else:
             await self._mount_message(UserMessage(command))
             await self._mount_message(AppMessage(f"Unknown command: {cmd}"))
@@ -2637,8 +2641,13 @@ class BogAgentsApp(App):
             is_auth_error = any(
                 keyword in err_name.lower() or keyword in err_str
                 for keyword in (
-                    "token", "credential", "auth", "forbidden",
-                    "accessdenied", "expired", "sso",
+                    "token",
+                    "credential",
+                    "auth",
+                    "forbidden",
+                    "accessdenied",
+                    "expired",
+                    "sso",
                 )
             )
             if is_auth_error:
@@ -3582,6 +3591,74 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage("Settings updated. Configuration reloaded.")
         )
+
+    async def _handle_init_command(self) -> None:
+        """Handle /init — generate AGENTS.md for the current repository."""
+        from bog_agents_cli.project_utils import find_project_agent_md
+
+        await self._mount_message(UserMessage("/init"))
+
+        project_root = settings.project_root
+        if project_root is None:
+            await self._mount_message(
+                AppMessage(
+                    "No project root detected. Run /init from within a git repository."
+                )
+            )
+            return
+
+        existing = find_project_agent_md(project_root)
+        agents_md_path = project_root / "AGENTS.md"
+
+        if any(p.name == "AGENTS.md" for p in existing):
+            await self._mount_message(
+                AppMessage(
+                    f"AGENTS.md already exists at: {', '.join(str(p) for p in existing if p.name == 'AGENTS.md')}\n"
+                    "Regenerating will overwrite it. Sending analysis to agent..."
+                )
+            )
+
+        prompt = (
+            f"Analyze this repository at `{project_root}` and generate an `AGENTS.md` file.\n\n"
+            "The AGENTS.md file provides persistent context that is loaded into your system "
+            "prompt on every session. It helps you navigate and work with this codebase.\n\n"
+            "Please:\n"
+            "1. Scan the directory structure, key files (README, package manifests, config files)\n"
+            "2. Identify the language(s), frameworks, build system, and test framework\n"
+            "3. Understand the architecture and module organization\n"
+            "4. Find coding conventions (linters, formatters, style guides)\n"
+            "5. Identify common development commands (build, test, lint, run)\n\n"
+            f"Then write the file to `{agents_md_path}` with these sections:\n\n"
+            "```markdown\n"
+            "# AGENTS.md\n\n"
+            "## Project Overview\n"
+            "Brief description, purpose, and tech stack.\n\n"
+            "## Architecture\n"
+            "Key modules/packages and how they relate.\n\n"
+            "## Development\n"
+            "### Setup\n"
+            "How to install dependencies and get started.\n\n"
+            "### Common Commands\n"
+            "Build, test, lint, format, run commands.\n\n"
+            "### Testing\n"
+            "Test framework, how to run tests, test conventions.\n\n"
+            "## Code Conventions\n"
+            "Style guide, linting rules, naming conventions, patterns to follow.\n\n"
+            "## Key Files\n"
+            "Important entry points and configuration files.\n"
+            "```\n\n"
+            "Be thorough but concise. This file will be loaded on every session."
+        )
+
+        await self._handle_user_message(prompt)
+
+    async def _handle_onboard_command(self) -> None:
+        """Handle /onboard — interactive codebase tour."""
+        from bog_agents_cli.code_intelligence_cli import generate_onboard_prompt
+
+        await self._mount_message(UserMessage("/onboard"))
+        prompt = generate_onboard_prompt()
+        await self._handle_user_message(prompt)
 
     async def _show_mcp_viewer(self) -> None:
         """Show read-only MCP server/tool viewer as a modal screen."""
