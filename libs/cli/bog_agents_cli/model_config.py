@@ -166,6 +166,19 @@ class ProviderConfig(TypedDict, total=False):
     individual values for that model only; the merge is shallow.
     """
 
+    credential_check: str
+    """Credential verification strategy for this provider.
+
+    Supported values:
+    - `'thorough'` (default): Resolves credentials via boto3 and freezes
+      them to verify the access key is non-empty. Catches expired SSO
+      tokens and misconfigured profiles.
+    - `'boto3'`: Delegates entirely to boto3's credential chain. Faster
+      but does not validate that resolved credentials are still valid.
+    - `'files'`: Legacy file-existence checks (env vars, ~/.aws/ files).
+      Fastest but cannot detect expired credentials.
+    """
+
 
 DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
 """Directory for user-level Bog Agents configuration (`~/.bog-agents`)."""
@@ -663,39 +676,125 @@ def has_provider_credentials(provider: str) -> bool | None:
 def _has_bedrock_credentials() -> bool:
     """Check if AWS credentials are available for Bedrock.
 
-    Covers the full AWS credential chain: explicit env vars, SSO profiles,
-    shared credentials file, and config file with SSO sessions.
+    The check strategy is controlled by the `credential_check` setting in
+    `[models.providers.bedrock]` of the user's config.toml:
+
+    - `'thorough'` (default): Resolves credentials via boto3, then freezes
+      them to verify the access key is present. Catches expired SSO tokens
+      and misconfigured profiles without making a network call.
+    - `'boto3'`: Asks boto3 if *any* credential source exists. Faster but
+      won't detect expired tokens until call time.
+    - `'files'`: Fast file/env-var existence checks only.
+
+    Returns:
+        True if credentials are detected per the chosen strategy.
+    """
+    config = ModelConfig.load()
+    bedrock_cfg = config.providers.get("bedrock", {})
+    mode = bedrock_cfg.get("credential_check", "thorough")
+
+    if mode == "thorough":
+        return _check_bedrock_thorough()
+    if mode == "boto3":
+        return _check_bedrock_boto3()
+    if mode == "files":
+        return _check_bedrock_files()
+
+    logger.warning(
+        "Unknown bedrock credential_check mode '%s'; falling back to 'thorough'",
+        mode,
+    )
+    return _check_bedrock_thorough()
+
+
+def _check_bedrock_thorough() -> bool:
+    """Resolve credentials via boto3 and verify the access key is non-empty.
+
+    This catches expired SSO tokens and misconfigured profiles without
+    making any network calls — it only checks that boto3 can produce a
+    frozen credential set with a non-empty access key.
+
+    Returns:
+        True if boto3 resolves valid-looking credentials.
+    """
+    try:
+        import boto3  # type: ignore[import-untyped]
+
+        session = boto3.Session()
+        creds = session.get_credentials()
+        if creds is None:
+            logger.debug("boto3 returned no credentials")
+            return False
+        frozen = creds.get_frozen_credentials()
+        has_key = bool(frozen.access_key)
+        if not has_key:
+            logger.debug("boto3 credentials resolved but access_key is empty")
+        else:
+            logger.debug("boto3 credentials resolved successfully (thorough check)")
+        return has_key
+    except Exception:
+        logger.debug("boto3 credential resolution failed", exc_info=True)
+        return False
+
+
+def _check_bedrock_boto3() -> bool:
+    """Delegate credential detection entirely to boto3.
+
+    Faster than the thorough check — only asks if boto3 can locate *any*
+    credential source, without freezing or inspecting the result.
+
+    Returns:
+        True if boto3 locates any credential source.
+    """
+    try:
+        import boto3  # type: ignore[import-untyped]
+
+        session = boto3.Session()
+        creds = session.get_credentials()
+        found = creds is not None
+        logger.debug("boto3 credential check: found=%s", found)
+        return found
+    except Exception:
+        logger.debug("boto3 credential check failed", exc_info=True)
+        return False
+
+
+def _check_bedrock_files() -> bool:
+    """Fast file/env-var existence checks for AWS credentials.
+
+    Does not import boto3 or validate credential freshness. Useful when
+    startup speed matters or boto3 is not installed.
 
     Returns:
         True if any recognized AWS credential source is present.
     """
-    # 1. Explicit access key (static credentials or assumed role)
+    # Explicit access key (static credentials or assumed role)
     if os.environ.get("AWS_ACCESS_KEY_ID"):
         return True
 
-    # 2. Named profile (SSO or otherwise) — boto3 resolves the rest
+    # Named profile (SSO or otherwise)
     if os.environ.get("AWS_PROFILE"):
         return True
 
-    # 3. Web identity token (EKS, GitHub Actions OIDC, etc.)
+    # Web identity token (EKS, GitHub Actions OIDC, etc.)
     if os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
         return True
 
-    # 4. Session token (temporary credentials)
+    # Session token (temporary credentials)
     if os.environ.get("AWS_SESSION_TOKEN") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
         return True
 
     aws_dir = Path.home() / ".aws"
 
-    # 5. Shared credentials file (~/.aws/credentials)
+    # Shared credentials file (~/.aws/credentials)
     if (aws_dir / "credentials").is_file():
         return True
 
-    # 6. AWS config with SSO sessions (~/.aws/config)
+    # AWS config with SSO sessions (~/.aws/config)
     if (aws_dir / "config").is_file():
         return True
 
-    # 7. SSO cache directory (populated by `aws sso login`)
+    # SSO cache directory (populated by `aws sso login`)
     sso_cache = aws_dir / "sso" / "cache"
     if sso_cache.is_dir() and any(sso_cache.iterdir()):
         return True
@@ -1596,6 +1695,53 @@ def save_fallbacks(fallbacks: list[str], config_path: Path | None = None) -> boo
             raise
     except (OSError, tomllib.TOMLDecodeError):
         logger.exception("Could not save fallback models")
+        return False
+    else:
+        global _default_config_cache  # noqa: PLW0603
+        _default_config_cache = None
+        return True
+
+
+def save_bedrock_credential_check(mode: str, config_path: Path | None = None) -> bool:
+    """Update the Bedrock credential check mode in config file.
+
+    Writes to `[models.providers.bedrock].credential_check`.
+
+    Args:
+        mode: One of `'thorough'`, `'boto3'`, or `'files'`.
+        config_path: Path to config file. Defaults to `~/.bog-agents/config.toml`.
+
+    Returns:
+        True if save succeeded, False on I/O error.
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+        else:
+            data = {}
+
+        data.setdefault("models", {}).setdefault("providers", {}).setdefault(
+            "bedrock", {}
+        )
+        data["models"]["providers"]["bedrock"]["credential_check"] = mode
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.exception("Could not save Bedrock credential check mode")
         return False
     else:
         global _default_config_cache  # noqa: PLW0603
