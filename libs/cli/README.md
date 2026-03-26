@@ -47,7 +47,7 @@ automatically. No key? The setup wizard walks you through it — 30 seconds and 
 bog-agents -M claude-sonnet-4-6
 bog-agents -M gpt-4o
 bog-agents -M ollama:llama3            # No API key needed
-bog-agents -M bedrock:anthropic.claude-sonnet-4-6-v1  # AWS credentials
+bog-agents -M bedrock:anthropic.claude-sonnet-4-6  # AWS credentials
 ```
 
 Check your setup any time:
@@ -288,7 +288,7 @@ Any LangChain-compatible chat model works. Use `provider:model` format.
 |----------|--------------|---------|
 | Anthropic | `anthropic` | `anthropic:claude-sonnet-4-6` |
 | OpenAI | *(included)* | `openai:gpt-4o` |
-| AWS Bedrock | `bedrock` | `bedrock:anthropic.claude-sonnet-4-6-v1` |
+| AWS Bedrock | `bedrock` | `bedrock:anthropic.claude-sonnet-4-6` |
 | Google AI | `google-genai` | `google_genai:gemini-2.5-pro` |
 | Vertex AI | `vertexai` | `google_vertexai:gemini-2.5-pro` |
 | Ollama | `ollama` | `ollama:llama3` |

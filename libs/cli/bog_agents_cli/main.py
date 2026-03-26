@@ -381,7 +381,7 @@ def parse_args() -> argparse.Namespace:
         "-M",
         "--model",
         metavar="MODEL",
-        help="Model to use (e.g., claude-sonnet-4-6, gpt-5.2). "
+        help="Model to use (e.g., claude-sonnet-4-6, gpt-5). "
         "Provider is auto-detected from model name.",
     )
 

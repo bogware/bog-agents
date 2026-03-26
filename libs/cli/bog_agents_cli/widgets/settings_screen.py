@@ -156,7 +156,7 @@ class SettingsScreen(ModalScreen[bool]):
                         classes="settings-value settings-value-dim",
                     )
                 yield Input(
-                    placeholder="provider:model (e.g., bedrock:anthropic.claude-sonnet-4-6-v1)",
+                    placeholder="provider:model (e.g., bedrock:anthropic.claude-sonnet-4-6)",
                     id="default-model-input",
                     classes="settings-input",
                 )
@@ -175,7 +175,7 @@ class SettingsScreen(ModalScreen[bool]):
                         classes="settings-value settings-value-dim",
                     )
                 yield Input(
-                    placeholder="Comma-separated: bedrock:anthropic.claude-sonnet-4-6-v1, ollama:llama3",
+                    placeholder="Comma-separated: bedrock:anthropic.claude-sonnet-4-6, ollama:llama3",
                     id="fallbacks-input",
                     classes="settings-input",
                 )

@@ -2611,7 +2611,7 @@ class TestFallbackConfig:
         config_path = tmp_path / "config.toml"
         config_path.write_text("""
 [models]
-default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+default = "bedrock:anthropic.claude-sonnet-4-6"
 fallbacks = ["ollama:llama3", "anthropic:claude-haiku-4-5"]
 """)
         config = ModelConfig.load(config_path)
@@ -2625,7 +2625,7 @@ fallbacks = ["ollama:llama3", "anthropic:claude-haiku-4-5"]
         config_path = tmp_path / "config.toml"
         config_path.write_text("""
 [models]
-default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+default = "bedrock:anthropic.claude-sonnet-4-6"
 fallbacks = []
 """)
         config = ModelConfig.load(config_path)
@@ -2646,7 +2646,7 @@ default = "anthropic:claude-sonnet-4-6"
         from bog_agents_cli.model_config import save_fallbacks
 
         config_path = tmp_path / "config.toml"
-        fallbacks = ["ollama:llama3", "bedrock:anthropic.claude-sonnet-4-6-v1"]
+        fallbacks = ["ollama:llama3", "bedrock:anthropic.claude-sonnet-4-6"]
         assert save_fallbacks(fallbacks, config_path) is True
 
         config = ModelConfig.load(config_path)

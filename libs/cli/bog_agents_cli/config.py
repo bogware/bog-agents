@@ -740,20 +740,17 @@ class Settings:
         """Check if AWS Bedrock credentials are available.
 
         Checks for explicit env vars (AWS_ACCESS_KEY_ID, AWS_PROFILE,
-        AWS_DEFAULT_REGION) or the presence of ~/.aws/credentials or
-        ~/.aws/config files (set up by `aws configure`).
+        AWS_WEB_IDENTITY_TOKEN_FILE) or the presence of ~/.aws/credentials
+        or ~/.aws/config files (used by SSO and `aws configure`).
         """
         if os.environ.get("AWS_ACCESS_KEY_ID"):
             return True
         if os.environ.get("AWS_PROFILE"):
             return True
-        if os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION"):
-            # Region alone isn't enough, but combined with credential files it is
-            aws_dir = Path.home() / ".aws"
-            return (aws_dir / "credentials").is_file() or (aws_dir / "config").is_file()
-        # Fall back to checking credential files directly
+        if os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
+            return True
         aws_dir = Path.home() / ".aws"
-        return (aws_dir / "credentials").is_file()
+        return (aws_dir / "credentials").is_file() or (aws_dir / "config").is_file()
 
     @property
     def has_ollama(self) -> bool:
@@ -1410,27 +1407,42 @@ def _get_default_model_spec() -> str:
     """
     config = ModelConfig.load()
     if config.default_model:
+        logger.info("Using config default_model: %s", config.default_model)
         return config.default_model
 
     if config.recent_model:
+        logger.info("Using config recent_model: %s", config.recent_model)
         return config.recent_model
+
+    logger.debug(
+        "Auto-detecting provider: anthropic=%s, openai=%s, bedrock=%s, "
+        "google=%s, vertexai=%s, nvidia=%s, ollama=%s",
+        settings.has_anthropic,
+        settings.has_openai,
+        settings.has_bedrock,
+        settings.has_google,
+        settings.has_vertex_ai,
+        settings.has_nvidia,
+        settings.has_ollama,
+    )
 
     if settings.has_anthropic:
         return "anthropic:claude-sonnet-4-6"
     if settings.has_openai:
-        return "openai:gpt-5.2"
+        return "openai:gpt-5"
     if settings.has_bedrock:
-        return "bedrock:anthropic.claude-sonnet-4-6-v1"
+        return "bedrock:anthropic.claude-sonnet-4-6"
     if settings.has_google:
-        return "google_genai:gemini-3.1-pro-preview"
+        return "google_genai:gemini-2.5-pro"
     if settings.has_vertex_ai:
-        return "google_vertexai:gemini-3.1-pro-preview"
+        return "google_vertexai:gemini-2.5-pro"
     if settings.has_nvidia:
         return "nvidia:nvidia/nemotron-3-super-120b-a12b"
     if settings.has_ollama:
         return "ollama:llama3"
 
     # Nothing auto-detected — run the interactive setup wizard
+    logger.warning("No provider credentials detected; launching setup wizard")
     return _run_setup_wizard()
 
 
@@ -1487,13 +1499,13 @@ def _run_setup_wizard() -> str:
             "anthropic:claude-sonnet-4-6",
             "sk-ant-...",
         ),
-        ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5.2", "sk-..."),
-        ("3", "AWS Bedrock", "__AWS__", "bedrock:anthropic.claude-sonnet-4-6-v1", None),
+        ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5", "sk-..."),
+        ("3", "AWS Bedrock", "__AWS__", "bedrock:anthropic.claude-sonnet-4-6", None),
         (
             "4",
             "Google AI",
             "GOOGLE_API_KEY",
-            "google_genai:gemini-3.1-pro-preview",
+            "google_genai:gemini-2.5-pro",
             "AI...",
         ),
         ("5", "Ollama (local, free)", "__OLLAMA__", "ollama:llama3", None),
@@ -1746,10 +1758,12 @@ def _create_model_via_init(
     except ImportError as e:
         package_map = {
             "anthropic": "langchain-anthropic",
+            "bedrock": "langchain-aws",
             "openai": "langchain-openai",
             "google_genai": "langchain-google-genai",
             "google_vertexai": "langchain-google-vertexai",
             "nvidia": "langchain-nvidia-ai-endpoints",
+            "ollama": "langchain-ollama",
         }
         package = package_map.get(provider, f"langchain-{provider}")
         msg = (
@@ -1882,6 +1896,7 @@ def create_model(
     """
     if not model_spec:
         model_spec = _get_default_model_spec()
+        logger.info("No model_spec provided; auto-detected: %s", model_spec)
 
     # Parse provider:model syntax
     provider: str
@@ -1890,6 +1905,7 @@ def create_model(
     if parsed:
         # Explicit provider:model (e.g., "anthropic:claude-sonnet-4-5")
         provider, model_name = parsed.provider, parsed.model
+        logger.info("Parsed model spec: provider=%s, model=%s", provider, model_name)
     elif ":" in model_spec:
         # Contains colon but ModelSpec rejected it (empty provider or model)
         _, _, after = model_spec.partition(":")
@@ -1910,19 +1926,38 @@ def create_model(
 
     # Provider-specific kwargs (with per-model overrides)
     kwargs = _get_provider_kwargs(provider, model_name=model_name)
+    logger.debug(
+        "Provider kwargs for %s:%s: %s",
+        provider,
+        model_name,
+        {k: v for k, v in kwargs.items() if k != "api_key"},
+    )
 
     # CLI --model-params take highest priority
     if extra_kwargs:
         kwargs.update(extra_kwargs)
+        logger.debug("Applied extra_kwargs: %s", list(extra_kwargs.keys()))
 
     # Check if this provider uses a custom BaseChatModel class
     config = ModelConfig.load()
     class_path = config.get_class_path(provider) if provider else None
 
     if class_path:
+        logger.info("Using custom class_path for %s: %s", provider, class_path)
         model = _create_model_from_class(class_path, model_name, provider, kwargs)
     else:
-        model = _create_model_via_init(model_name, provider, kwargs)
+        logger.info(
+            "Creating model via init_chat_model: provider=%s, model=%s",
+            provider,
+            model_name,
+        )
+        try:
+            model = _create_model_via_init(model_name, provider, kwargs)
+        except Exception:
+            logger.exception(
+                "init_chat_model failed for provider=%s model=%s", provider, model_name
+            )
+            raise
 
     resolved_provider = provider or getattr(model, "_model_provider", provider)
 
@@ -1955,6 +1990,13 @@ def create_model(
     if isinstance(profile, dict) and isinstance(profile.get("max_input_tokens"), int):
         context_limit = profile["max_input_tokens"]
 
+    logger.info(
+        "Model created: provider=%s, model=%s, context_limit=%s, class=%s",
+        resolved_provider,
+        model_name,
+        context_limit,
+        type(model).__name__,
+    )
     return ModelResult(
         model=model,
         model_name=model_name,
