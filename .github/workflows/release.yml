@@ -170,3 +170,4 @@ jobs:
           commit: ${{ github.sha }}
           generateReleaseNotes: true
           draft: false
+          allowUpdates: true
