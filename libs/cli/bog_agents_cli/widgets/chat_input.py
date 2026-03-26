@@ -748,7 +748,7 @@ class ChatInput(Vertical):
     }
 
     ChatInput .input-prompt {
-        width: 3;
+        width: 4;
         height: 1;
         padding: 0 1;
         color: $primary;
@@ -860,7 +860,7 @@ class ChatInput(Vertical):
             Widgets for the input row and completion popup.
         """
         with Horizontal(classes="input-row"):
-            yield Static(">", classes="input-prompt", id="prompt")
+            yield Static("<>", classes="input-prompt", id="prompt")
             yield ChatTextArea(id="chat-input")
 
         yield CompletionPopup(id="completion-popup")
@@ -1502,10 +1502,10 @@ class ChatInput(Vertical):
         else:
             if mode != "normal":
                 logger.warning(
-                    "No display glyph for mode %r; falling back to '>'",
+                    "No display glyph for mode %r; falling back to '<>'",
                     mode,
                 )
-            prompt.update(">")
+            prompt.update("<>")
         self.post_message(self.ModeChanged(mode))
 
     def focus_input(self) -> None:

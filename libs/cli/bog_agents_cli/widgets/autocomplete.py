@@ -157,6 +157,7 @@ SLASH_COMMANDS: list[tuple[str, str, str]] = [
     ("/resolve", "AI-assisted merge conflict resolution", "conflict merge"),
     ("/review", "Run code review on staged changes or files", "lint check"),
     ("/session", "Show session info and name session", "name duration"),
+    ("/settings", "Configure providers, models, and fallbacks", "config preferences setup"),
     ("/teach", "Start teaching mode to learn a workflow", "learn skill"),
     ("/team", "Team settings and roles management", "enterprise org"),
     ("/test", "Run tests with coverage and generate test skeletons", "coverage pytest"),

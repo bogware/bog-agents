@@ -361,7 +361,7 @@ _UNICODE_BANNER = f"""\
    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████║
    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
 
-   ▸ The batteries-included agent harness ─── v{__version__}\
+   ▸ pass through in harmony ─── v{__version__}\
 """
 _ASCII_BANNER = f"""\
 
@@ -377,7 +377,7 @@ _ASCII_BANNER = f"""\
    / ___ \\ |_| || |___| |\\  | | |  ___) |
   /_/   \\_\\____||_____|_| \\_| |_| |____/
 
-  > The batteries-included agent harness --- v{__version__}\
+  > pass through in harmony --- v{__version__}\
 """
 
 
@@ -1961,6 +1961,76 @@ def create_model(
         provider=resolved_provider,
         context_limit=context_limit,
     )
+
+
+def create_model_with_fallback(
+    model_spec: str | None = None,
+    *,
+    extra_kwargs: dict[str, Any] | None = None,
+    profile_overrides: dict[str, Any] | None = None,
+) -> ModelResult:
+    """Create a chat model, falling back to configured alternatives on failure.
+
+    Wraps `create_model` with fallback logic: if the primary model fails to
+    instantiate (missing package, bad credentials, etc.), each model in
+    `[models].fallbacks` from config.toml is tried in order.
+
+    Args:
+        model_spec: Primary model specification (same as `create_model`).
+        extra_kwargs: Additional kwargs for the model constructor.
+        profile_overrides: Extra profile fields from `--profile-override`.
+
+    Returns:
+        A `ModelResult` from the first model that succeeds.
+
+    Raises:
+        ModelConfigError: If all models (primary + fallbacks) fail.
+    """
+    from bog_agents_cli.model_config import ModelConfig
+
+    primary_error: Exception | None = None
+
+    # Try the primary model first
+    try:
+        return create_model(
+            model_spec, extra_kwargs=extra_kwargs, profile_overrides=profile_overrides
+        )
+    except Exception as e:
+        primary_error = e
+        resolved_spec = model_spec or "(auto-detected)"
+        logger.warning("Primary model %s failed: %s", resolved_spec, e)
+
+    # Try fallbacks from config
+    config = ModelConfig.load()
+    if not config.fallbacks:
+        msg = f"Primary model failed and no fallbacks configured: {primary_error}"
+        raise ModelConfigError(msg) from primary_error
+
+    errors: list[tuple[str, Exception]] = [(model_spec or "(auto)", primary_error)]
+
+    for fallback_spec in config.fallbacks:
+        # Skip if it's the same as the primary
+        if fallback_spec == model_spec:
+            continue
+        try:
+            logger.info("Trying fallback model: %s", fallback_spec)
+            result = create_model(
+                fallback_spec,
+                extra_kwargs=extra_kwargs,
+                profile_overrides=profile_overrides,
+            )
+            console.print(
+                f"[yellow]Primary model failed, using fallback: {fallback_spec}[/yellow]"
+            )
+            return result
+        except Exception as e:
+            logger.warning("Fallback model %s failed: %s", fallback_spec, e)
+            errors.append((fallback_spec, e))
+
+    # All failed
+    details = "; ".join(f"{spec}: {err}" for spec, err in errors)
+    msg = f"All models failed (primary + {len(config.fallbacks)} fallbacks): {details}"
+    raise ModelConfigError(msg) from primary_error
 
 
 def validate_model_capabilities(model: BaseChatModel, model_name: str) -> None:

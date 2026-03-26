@@ -41,7 +41,7 @@ from bog_agents_cli.config import (
     SHELL_ALLOW_ALL,
     SHELL_TOOL_NAMES,
     build_langsmith_thread_url,
-    create_model,
+    create_model_with_fallback as create_model,
     is_shell_command_allowed,
     settings,
 )

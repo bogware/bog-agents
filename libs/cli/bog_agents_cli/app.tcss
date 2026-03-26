@@ -1,5 +1,10 @@
 /* Bog Agents CLI Textual Stylesheet */
 
+/* Override Textual default $primary (blue) with the Bog Agents brand green */
+$primary: #10b981;
+$primary-lighten-1: #34d399;
+$primary-lighten-2: #6ee7b7;
+
 /* Define layers for z-ordering */
 Screen {
     layout: vertical;
@@ -225,7 +230,7 @@ Screen {
     height: auto;
     max-height: 12;
     width: 100%;
-    margin-left: 3;
+    margin-left: 4;
     margin-top: 0;
     padding: 0;
     background: $background;

@@ -640,6 +640,11 @@ def has_provider_credentials(provider: str) -> bool | None:
             return result
         # No api_key_env in config — fall through to hardcoded map.
 
+    # Bedrock uses AWS credential chain (SSO, profiles, instance roles) —
+    # checking a single env var is insufficient.
+    if provider == "bedrock":
+        return _has_bedrock_credentials()
+
     # Fall back to hardcoded well-known providers.
     env_var = PROVIDER_API_KEY_ENV.get(provider)
     if env_var:
@@ -653,6 +658,49 @@ def has_provider_credentials(provider: str) -> bool | None:
         provider,
     )
     return None
+
+
+def _has_bedrock_credentials() -> bool:
+    """Check if AWS credentials are available for Bedrock.
+
+    Covers the full AWS credential chain: explicit env vars, SSO profiles,
+    shared credentials file, and config file with SSO sessions.
+
+    Returns:
+        True if any recognized AWS credential source is present.
+    """
+    # 1. Explicit access key (static credentials or assumed role)
+    if os.environ.get("AWS_ACCESS_KEY_ID"):
+        return True
+
+    # 2. Named profile (SSO or otherwise) — boto3 resolves the rest
+    if os.environ.get("AWS_PROFILE"):
+        return True
+
+    # 3. Web identity token (EKS, GitHub Actions OIDC, etc.)
+    if os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE"):
+        return True
+
+    # 4. Session token (temporary credentials)
+    if os.environ.get("AWS_SESSION_TOKEN") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
+        return True
+
+    aws_dir = Path.home() / ".aws"
+
+    # 5. Shared credentials file (~/.aws/credentials)
+    if (aws_dir / "credentials").is_file():
+        return True
+
+    # 6. AWS config with SSO sessions (~/.aws/config)
+    if (aws_dir / "config").is_file():
+        return True
+
+    # 7. SSO cache directory (populated by `aws sso login`)
+    sso_cache = aws_dir / "sso" / "cache"
+    if sso_cache.is_dir() and any(sso_cache.iterdir()):
+        return True
+
+    return False
 
 
 def get_credential_env_var(provider: str) -> str | None:
@@ -688,6 +736,13 @@ class ModelConfig:
 
     recent_model: str | None = None
     """The most recently switched-to model (from config file `[models].recent`)."""
+
+    fallbacks: tuple[str, ...] = ()
+    """Ordered fallback model specs tried when the primary model fails.
+
+    Each entry is a `provider:model` string (e.g., `'ollama:llama3'`).
+    Populated from `[models].fallbacks` in the config file.
+    """
 
     providers: Mapping[str, ProviderConfig] = field(default_factory=dict)
     """Read-only mapping of provider names to their configurations."""
@@ -748,9 +803,16 @@ class ModelConfig:
             return fallback
 
         models_section = data.get("models", {})
+        raw_fallbacks = models_section.get("fallbacks", [])
+        if isinstance(raw_fallbacks, list):
+            fallbacks = tuple(str(f) for f in raw_fallbacks)
+        else:
+            logger.warning("models.fallbacks should be a list; ignoring")
+            fallbacks = ()
         config = cls(
             default_model=models_section.get("default"),
             recent_model=models_section.get("recent"),
+            fallbacks=fallbacks,
             providers=models_section.get("providers", {}),
         )
 
@@ -1485,3 +1547,59 @@ def save_recent_model(model_spec: str, config_path: Path | None = None) -> bool:
         This function does not preserve comments in the config file.
     """
     return _save_model_field("recent", model_spec, config_path)
+
+
+def save_fallbacks(
+    fallbacks: list[str], config_path: Path | None = None
+) -> bool:
+    """Update the fallback models list in config file.
+
+    Writes to `[models].fallbacks` as an ordered list of `provider:model`
+    strings tried when the primary model fails (auth errors, connection
+    failures, etc.).
+
+    Args:
+        fallbacks: Ordered list of model specs in `provider:model` format.
+        config_path: Path to config file.
+
+            Defaults to `~/.bog-agents/config.toml`.
+
+    Returns:
+        True if save succeeded, False if it failed due to I/O errors.
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+        else:
+            data = {}
+
+        if "models" not in data:
+            data["models"] = {}
+
+        if fallbacks:
+            data["models"]["fallbacks"] = fallbacks
+        else:
+            data["models"].pop("fallbacks", None)
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.exception("Could not save fallback models")
+        return False
+    else:
+        global _default_config_cache  # noqa: PLW0603
+        _default_config_cache = None
+        return True
