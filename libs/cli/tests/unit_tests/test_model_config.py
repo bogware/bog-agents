@@ -5,7 +5,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -2539,68 +2539,224 @@ max_input_tokens = 8192
 
 
 class TestBedrockCredentialDetection:
-    """Tests for _has_bedrock_credentials() and SSO support."""
+    """Tests for _has_bedrock_credentials() and credential check modes."""
 
-    def test_detects_access_key_id(self):
-        """Returns True when AWS_ACCESS_KEY_ID is set."""
+    def _make_config(self, tmp_path, mode):
+        """Helper to write a config.toml with a bedrock credential_check mode."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(f"""
+[models.providers.bedrock]
+credential_check = "{mode}"
+""")
+        return config_path
+
+    # --- 'files' mode tests (env vars and file existence) ---
+
+    def test_files_mode_detects_access_key_id(self, tmp_path):
+        """Files mode: Returns True when AWS_ACCESS_KEY_ID is set."""
+        config_path = self._make_config(tmp_path, "files")
         with patch.dict("os.environ", {"AWS_ACCESS_KEY_ID": "AKIA..."}, clear=True):
-            assert has_provider_credentials("bedrock") is True
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
 
-    def test_detects_aws_profile(self):
-        """Returns True when AWS_PROFILE is set (SSO profile)."""
+    def test_files_mode_detects_aws_profile(self, tmp_path):
+        """Files mode: Returns True when AWS_PROFILE is set (SSO profile)."""
+        config_path = self._make_config(tmp_path, "files")
         with patch.dict("os.environ", {"AWS_PROFILE": "my-sso-profile"}, clear=True):
-            assert has_provider_credentials("bedrock") is True
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
 
-    def test_detects_web_identity_token(self):
-        """Returns True when AWS_WEB_IDENTITY_TOKEN_FILE is set (EKS/OIDC)."""
+    def test_files_mode_detects_web_identity_token(self, tmp_path):
+        """Files mode: Returns True when AWS_WEB_IDENTITY_TOKEN_FILE is set."""
+        config_path = self._make_config(tmp_path, "files")
         with patch.dict(
             "os.environ", {"AWS_WEB_IDENTITY_TOKEN_FILE": "/tmp/token"}, clear=True
         ):
-            assert has_provider_credentials("bedrock") is True
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
 
-    def test_detects_credentials_file(self, tmp_path):
-        """Returns True when ~/.aws/credentials file exists."""
+    def test_files_mode_detects_credentials_file(self, tmp_path):
+        """Files mode: Returns True when ~/.aws/credentials file exists."""
         aws_dir = tmp_path / ".aws"
         aws_dir.mkdir()
         (aws_dir / "credentials").write_text("[default]\naws_access_key_id=AKIA\n")
+        config_path = self._make_config(tmp_path, "files")
 
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
         ):
-            assert has_provider_credentials("bedrock") is True
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
 
-    def test_detects_config_file(self, tmp_path):
-        """Returns True when ~/.aws/config file exists (SSO config)."""
+    def test_files_mode_detects_config_file(self, tmp_path):
+        """Files mode: Returns True when ~/.aws/config file exists (SSO)."""
         aws_dir = tmp_path / ".aws"
         aws_dir.mkdir()
         (aws_dir / "config").write_text("[profile my-sso]\nsso_start_url=https://...\n")
+        config_path = self._make_config(tmp_path, "files")
 
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
         ):
-            assert has_provider_credentials("bedrock") is True
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
 
-    def test_detects_sso_cache(self, tmp_path):
-        """Returns True when ~/.aws/sso/cache/ has cached tokens."""
+    def test_files_mode_detects_sso_cache(self, tmp_path):
+        """Files mode: Returns True when ~/.aws/sso/cache/ has cached tokens."""
         sso_cache = tmp_path / ".aws" / "sso" / "cache"
         sso_cache.mkdir(parents=True)
         (sso_cache / "abc123.json").write_text("{}")
+        config_path = self._make_config(tmp_path, "files")
 
         with (
             patch.dict("os.environ", {}, clear=True),
             patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is True
+
+    def test_files_mode_returns_false_when_nothing_available(self, tmp_path):
+        """Files mode: Returns False when no AWS credentials are found."""
+        config_path = self._make_config(tmp_path, "files")
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+        ):
+            config = ModelConfig.load(config_path)
+            with patch(
+                "bog_agents_cli.model_config.ModelConfig.load", return_value=config
+            ):
+                assert has_provider_credentials("bedrock") is False
+
+    # --- 'boto3' mode tests ---
+
+    def test_boto3_mode_returns_true_when_creds_found(self, tmp_path):
+        """boto3 mode: Returns True when boto3 session finds credentials."""
+        config_path = self._make_config(tmp_path, "boto3")
+        config = ModelConfig.load(config_path)
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = MagicMock()
+
+        with (
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
         ):
             assert has_provider_credentials("bedrock") is True
 
-    def test_returns_false_when_nothing_available(self, tmp_path):
-        """Returns False when no AWS credentials are found anywhere."""
+    def test_boto3_mode_returns_false_when_no_creds(self, tmp_path):
+        """boto3 mode: Returns False when boto3 session finds no credentials."""
+        config_path = self._make_config(tmp_path, "boto3")
+        config = ModelConfig.load(config_path)
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = None
+
         with (
-            patch.dict("os.environ", {}, clear=True),
-            patch("bog_agents_cli.model_config.Path.home", return_value=tmp_path),
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
         ):
             assert has_provider_credentials("bedrock") is False
+
+    # --- 'thorough' mode tests ---
+
+    def test_thorough_mode_returns_true_when_frozen_creds_valid(self, tmp_path):
+        """Thorough mode: Returns True when boto3 frozen creds have access_key."""
+        config_path = self._make_config(tmp_path, "thorough")
+        config = ModelConfig.load(config_path)
+        frozen = MagicMock(access_key="AKIAIOSFODNN7EXAMPLE")
+        mock_creds = MagicMock()
+        mock_creds.get_frozen_credentials.return_value = frozen
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = mock_creds
+
+        with (
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
+        ):
+            assert has_provider_credentials("bedrock") is True
+
+    def test_thorough_mode_returns_false_when_access_key_empty(self, tmp_path):
+        """Thorough mode: Returns False when frozen creds have empty access_key."""
+        config_path = self._make_config(tmp_path, "thorough")
+        config = ModelConfig.load(config_path)
+        frozen = MagicMock(access_key="")
+        mock_creds = MagicMock()
+        mock_creds.get_frozen_credentials.return_value = frozen
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = mock_creds
+
+        with (
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
+        ):
+            assert has_provider_credentials("bedrock") is False
+
+    def test_thorough_mode_returns_false_when_no_creds(self, tmp_path):
+        """Thorough mode: Returns False when boto3 returns no credentials."""
+        config_path = self._make_config(tmp_path, "thorough")
+        config = ModelConfig.load(config_path)
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = None
+
+        with (
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
+        ):
+            assert has_provider_credentials("bedrock") is False
+
+    # --- default mode (no config) ---
+
+    def test_default_mode_is_thorough(self):
+        """Default mode (no config) uses thorough check."""
+        config = ModelConfig()  # Empty config, no bedrock provider section
+        frozen = MagicMock(access_key="AKIAIOSFODNN7EXAMPLE")
+        mock_creds = MagicMock()
+        mock_creds.get_frozen_credentials.return_value = frozen
+        mock_session = MagicMock()
+        mock_session.get_credentials.return_value = mock_creds
+
+        with (
+            patch("bog_agents_cli.model_config.ModelConfig.load", return_value=config),
+            patch.dict(
+                "sys.modules",
+                {"boto3": MagicMock(Session=MagicMock(return_value=mock_session))},
+            ),
+        ):
+            assert has_provider_credentials("bedrock") is True
 
 
 class TestFallbackConfig:
@@ -2611,7 +2767,7 @@ class TestFallbackConfig:
         config_path = tmp_path / "config.toml"
         config_path.write_text("""
 [models]
-default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+default = "bedrock:anthropic.claude-sonnet-4-6"
 fallbacks = ["ollama:llama3", "anthropic:claude-haiku-4-5"]
 """)
         config = ModelConfig.load(config_path)
@@ -2625,7 +2781,7 @@ fallbacks = ["ollama:llama3", "anthropic:claude-haiku-4-5"]
         config_path = tmp_path / "config.toml"
         config_path.write_text("""
 [models]
-default = "bedrock:anthropic.claude-sonnet-4-6-v1"
+default = "bedrock:anthropic.claude-sonnet-4-6"
 fallbacks = []
 """)
         config = ModelConfig.load(config_path)
@@ -2646,7 +2802,7 @@ default = "anthropic:claude-sonnet-4-6"
         from bog_agents_cli.model_config import save_fallbacks
 
         config_path = tmp_path / "config.toml"
-        fallbacks = ["ollama:llama3", "bedrock:anthropic.claude-sonnet-4-6-v1"]
+        fallbacks = ["ollama:llama3", "bedrock:anthropic.claude-sonnet-4-6"]
         assert save_fallbacks(fallbacks, config_path) is True
 
         config = ModelConfig.load(config_path)
@@ -2664,3 +2820,34 @@ default = "anthropic:claude-sonnet-4-6"
 
         config = ModelConfig.load(config_path)
         assert config.fallbacks == ()
+
+
+class TestBedrockCredentialCheckConfig:
+    """Tests for save_bedrock_credential_check round-trip."""
+
+    def test_save_and_load_round_trip(self, tmp_path):
+        """Saved credential_check mode can be loaded back."""
+        from bog_agents_cli.model_config import save_bedrock_credential_check
+
+        config_path = tmp_path / "config.toml"
+        assert save_bedrock_credential_check("boto3", config_path) is True
+
+        config = ModelConfig.load(config_path)
+        bedrock_cfg = config.providers.get("bedrock", {})
+        assert bedrock_cfg.get("credential_check") == "boto3"
+
+    def test_preserves_existing_config(self, tmp_path):
+        """Saving credential_check mode preserves other config keys."""
+        from bog_agents_cli.model_config import save_bedrock_credential_check
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("""
+[models]
+default = "anthropic:claude-sonnet-4-6"
+""")
+        assert save_bedrock_credential_check("files", config_path) is True
+
+        config = ModelConfig.load(config_path)
+        assert config.default_model == "anthropic:claude-sonnet-4-6"
+        bedrock_cfg = config.providers.get("bedrock", {})
+        assert bedrock_cfg.get("credential_check") == "files"

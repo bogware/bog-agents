@@ -17,6 +17,7 @@ from bog_agents_cli.model_config import (
     DEFAULT_CONFIG_PATH,
     ModelConfig,
     has_provider_credentials,
+    save_bedrock_credential_check as _save_bedrock_credential_check,
     save_default_model,
     save_fallbacks,
 )
@@ -156,7 +157,7 @@ class SettingsScreen(ModalScreen[bool]):
                         classes="settings-value settings-value-dim",
                     )
                 yield Input(
-                    placeholder="provider:model (e.g., bedrock:anthropic.claude-sonnet-4-6-v1)",
+                    placeholder="provider:model (e.g., bedrock:anthropic.claude-sonnet-4-6)",
                     id="default-model-input",
                     classes="settings-input",
                 )
@@ -175,7 +176,7 @@ class SettingsScreen(ModalScreen[bool]):
                         classes="settings-value settings-value-dim",
                     )
                 yield Input(
-                    placeholder="Comma-separated: bedrock:anthropic.claude-sonnet-4-6-v1, ollama:llama3",
+                    placeholder="Comma-separated: bedrock:anthropic.claude-sonnet-4-6, ollama:llama3",
                     id="fallbacks-input",
                     classes="settings-input",
                 )
@@ -185,6 +186,22 @@ class SettingsScreen(ModalScreen[bool]):
                 yield Static(
                     f"  {config.recent_model or '(none)'}",
                     classes="settings-value settings-value-dim",
+                )
+
+                # Bedrock credential check mode
+                yield Static(
+                    "Bedrock Credential Check", classes="settings-section-header"
+                )
+                bedrock_cfg = config.providers.get("bedrock", {})
+                bedrock_mode = bedrock_cfg.get("credential_check", "thorough")
+                yield Static(
+                    f"  Current: {bedrock_mode}",
+                    classes="settings-value settings-value-highlight",
+                )
+                yield Input(
+                    placeholder="thorough (default), boto3, or files",
+                    id="bedrock-cred-check-input",
+                    classes="settings-input",
                 )
 
                 # Provider status
@@ -280,6 +297,28 @@ class SettingsScreen(ModalScreen[bool]):
                 clear_caches()
             else:
                 status_bar.update("[red]Failed to save fallbacks[/red]")
+
+        elif event.input.id == "bedrock-cred-check-input":
+            value = event.value.strip().lower()
+            if value not in ("thorough", "boto3", "files"):
+                status_bar.update(
+                    "[red]Invalid mode. Use: thorough, boto3, or files[/red]"
+                )
+                return
+            if _save_bedrock_credential_check(value):
+                self._changed = True
+                status_bar.update(
+                    f"[green]Bedrock credential check set to: {value}[/green]"
+                )
+                event.input.value = ""
+                from bog_agents_cli.model_config import clear_caches
+
+                clear_caches()
+                self._refresh_provider_status()
+            else:
+                status_bar.update(
+                    "[red]Failed to save Bedrock credential check mode[/red]"
+                )
 
     def action_cancel(self) -> None:
         """Close the settings screen."""
