@@ -1549,9 +1549,7 @@ def save_recent_model(model_spec: str, config_path: Path | None = None) -> bool:
     return _save_model_field("recent", model_spec, config_path)
 
 
-def save_fallbacks(
-    fallbacks: list[str], config_path: Path | None = None
-) -> bool:
+def save_fallbacks(fallbacks: list[str], config_path: Path | None = None) -> bool:
     """Update the fallback models list in config file.
 
     Writes to `[models].fallbacks` as an ordered list of `provider:model`

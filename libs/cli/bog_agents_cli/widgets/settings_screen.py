@@ -137,18 +137,14 @@ class SettingsScreen(ModalScreen[bool]):
 
             with VerticalScroll(classes="settings-list"):
                 # Config file path
-                yield Static(
-                    "Config File", classes="settings-section-header"
-                )
+                yield Static("Config File", classes="settings-section-header")
                 yield Static(
                     f"  {DEFAULT_CONFIG_PATH}",
                     classes="settings-value settings-value-dim",
                 )
 
                 # Default model
-                yield Static(
-                    "Default Model", classes="settings-section-header"
-                )
+                yield Static("Default Model", classes="settings-section-header")
                 if config.default_model:
                     yield Static(
                         f"  {config.default_model}",
@@ -166,9 +162,7 @@ class SettingsScreen(ModalScreen[bool]):
                 )
 
                 # Fallback models
-                yield Static(
-                    "Fallback Models", classes="settings-section-header"
-                )
+                yield Static("Fallback Models", classes="settings-section-header")
                 if config.fallbacks:
                     for i, fb in enumerate(config.fallbacks, 1):
                         yield Static(
@@ -187,18 +181,14 @@ class SettingsScreen(ModalScreen[bool]):
                 )
 
                 # Recent model
-                yield Static(
-                    "Recent Model", classes="settings-section-header"
-                )
+                yield Static("Recent Model", classes="settings-section-header")
                 yield Static(
                     f"  {config.recent_model or '(none)'}",
                     classes="settings-value settings-value-dim",
                 )
 
                 # Provider status
-                yield Static(
-                    "Provider Status", classes="settings-section-header"
-                )
+                yield Static("Provider Status", classes="settings-section-header")
                 yield Static(
                     id="provider-status",
                     classes="settings-section-content",

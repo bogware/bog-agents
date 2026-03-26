@@ -157,26 +157,30 @@ def find_project_root(start_path: str | Path | None = None) -> Path | None:
 
 
 def find_project_agent_md(project_root: Path) -> list[Path]:
-    """Find project-specific AGENTS.md file(s).
+    """Find project-specific AGENTS.md and CLAUDE.md file(s).
 
-    Checks two locations and returns ALL that exist:
+    Checks these locations and returns ALL that exist:
     1. project_root/.bog-agents/AGENTS.md
     2. project_root/AGENTS.md
+    3. project_root/CLAUDE.md
 
-    Both files will be loaded and combined if both exist.
+    Both AGENTS.md and CLAUDE.md are loaded into the agent's memory context
+    to provide project-specific guidance. CLAUDE.md follows the convention
+    used by Claude Code for repository instructions.
 
     Args:
         project_root: Path to the project root directory.
 
     Returns:
-        Existing AGENTS.md paths.
+        Existing context file paths.
 
-            Empty if neither file exists, one entry if only one is present, or
-            two entries if both locations have the file.
+            Empty if no files exist, otherwise all found paths in discovery
+            order.
     """
     candidates = [
         project_root / ".bog-agents" / "AGENTS.md",
         project_root / "AGENTS.md",
+        project_root / "CLAUDE.md",
     ]
     paths: list[Path] = []
     for candidate in candidates:
