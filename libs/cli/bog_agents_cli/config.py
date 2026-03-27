@@ -1387,7 +1387,7 @@ def detect_provider(model_name: str) -> str | None:
     if model_lower.startswith(
         ("anthropic.", "amazon.", "meta.", "cohere.", "mistral.", "ai21.")
     ):
-        return "bedrock"
+        return "bedrock_converse"
 
     return None
 
@@ -1431,7 +1431,7 @@ def _get_default_model_spec() -> str:
     if settings.has_openai:
         return "openai:gpt-5"
     if settings.has_bedrock:
-        return "bedrock:anthropic.claude-sonnet-4-6"
+        return "bedrock_converse:anthropic.claude-sonnet-4-6"
     if settings.has_google:
         return "google_genai:gemini-2.5-pro"
     if settings.has_vertex_ai:
@@ -1500,7 +1500,13 @@ def _run_setup_wizard() -> str:
             "sk-ant-...",
         ),
         ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5", "sk-..."),
-        ("3", "AWS Bedrock", "__AWS__", "bedrock:anthropic.claude-sonnet-4-6", None),
+        (
+            "3",
+            "AWS Bedrock",
+            "__AWS__",
+            "bedrock_converse:anthropic.claude-sonnet-4-6",
+            None,
+        ),
         (
             "4",
             "Google AI",
@@ -1759,6 +1765,7 @@ def _create_model_via_init(
         package_map = {
             "anthropic": "langchain-anthropic",
             "bedrock": "langchain-aws",
+            "bedrock_converse": "langchain-aws",
             "openai": "langchain-openai",
             "google_genai": "langchain-google-genai",
             "google_vertexai": "langchain-google-vertexai",

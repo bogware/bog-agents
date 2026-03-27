@@ -191,6 +191,7 @@ PROVIDER_API_KEY_ENV: dict[str, str] = {
     "azure_openai": "AZURE_OPENAI_API_KEY",
     "baseten": "BASETEN_API_KEY",
     "bedrock": "AWS_ACCESS_KEY_ID",
+    "bedrock_converse": "AWS_ACCESS_KEY_ID",
     "cohere": "COHERE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
@@ -655,7 +656,7 @@ def has_provider_credentials(provider: str) -> bool | None:
 
     # Bedrock uses AWS credential chain (SSO, profiles, instance roles) —
     # checking a single env var is insufficient.
-    if provider == "bedrock":
+    if provider in ("bedrock", "bedrock_converse"):
         return _has_bedrock_credentials()
 
     # Fall back to hardcoded well-known providers.
@@ -690,7 +691,9 @@ def _has_bedrock_credentials() -> bool:
         True if credentials are detected per the chosen strategy.
     """
     config = ModelConfig.load()
-    bedrock_cfg = config.providers.get("bedrock", {})
+    bedrock_cfg = config.providers.get("bedrock_converse") or config.providers.get(
+        "bedrock", {}
+    )
     mode = bedrock_cfg.get("credential_check", "thorough")
 
     if mode == "thorough":
