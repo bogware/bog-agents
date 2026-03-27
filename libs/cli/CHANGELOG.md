@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.6.2...bog-agents-cli==0.6.3) (2026-03-27)
+
+
+### Features
+
+* **cli:** Bedrock credential check modes and provider model fixes ([#26](https://github.com/bogware/bog-agents/issues/26)) ([39e8fb2](https://github.com/bogware/bog-agents/commit/39e8fb2f556741e2354a6f5c857939caaf763790))
+
 ## [0.6.0](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.5.2...bog-agents-cli==0.6.0) (2026-03-24)
 
 
