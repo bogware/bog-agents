@@ -19,12 +19,14 @@ from typing import TYPE_CHECKING, Any
 import dotenv
 from rich.console import Console
 
+from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli._version import __version__
 from bog_agents_cli.project_utils import (
     get_server_project_context as _get_server_project_context,
 )
 
 logger = logging.getLogger(__name__)
+configure_debug_logging(logger)
 
 
 def _find_dotenv_from_start_path(start_path: Path) -> Path | None:

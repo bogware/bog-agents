@@ -26,6 +26,7 @@ from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
 
+from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.clipboard import copy_selection_to_clipboard
 from bog_agents_cli.config import (
     DOCS_URL,
@@ -76,6 +77,7 @@ from bog_agents_cli.widgets.thread_selector import (
 from bog_agents_cli.widgets.welcome import WelcomeBanner
 
 logger = logging.getLogger(__name__)
+configure_debug_logging(logger)
 _monotonic = time.monotonic
 
 if TYPE_CHECKING:
@@ -1944,6 +1946,8 @@ class BogAgentsApp(App):
                 await self._show_settings_screen()
         elif cmd == "/init":
             await self._handle_init_command()
+        elif cmd == "/logs":
+            await self._handle_logs_command()
         elif cmd == "/onboard":
             await self._handle_onboard_command()
         else:
@@ -3591,6 +3595,40 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage("Settings updated. Configuration reloaded.")
         )
+
+    async def _handle_logs_command(self) -> None:
+        """Handle /logs — show log file path and recent errors."""
+        from bog_agents_cli._debug import get_log_path
+
+        await self._mount_message(UserMessage("/logs"))
+
+        log_path = get_log_path()
+        if not log_path.exists():
+            await self._mount_message(
+                AppMessage(f"Log file: {log_path}\n(No logs yet — file will be created on first warning/error.)")
+            )
+            return
+
+        # Show path and tail of recent errors
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            # Filter to WARNING/ERROR/CRITICAL for the summary
+            error_lines = [ln for ln in lines if any(lvl in ln for lvl in (" WARNING ", " ERROR ", " CRITICAL "))]
+            recent = error_lines[-20:] if error_lines else []
+        except OSError:
+            recent = []
+
+        parts = [f"Log file: {log_path}"]
+        if recent:
+            parts.append(f"\nRecent warnings/errors ({len(recent)} of {len(error_lines)}):")
+            parts.append("```")
+            parts.extend(recent)
+            parts.append("```")
+        else:
+            parts.append("No warnings or errors recorded.")
+        parts.append("\nFor verbose logging, restart with: BOG_AGENTS_DEBUG=1 bog-agents")
+
+        await self._mount_message(AppMessage("\n".join(parts)))
 
     async def _handle_init_command(self) -> None:
         """Handle /init — generate AGENTS.md for the current repository."""

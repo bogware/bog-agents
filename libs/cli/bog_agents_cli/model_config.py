@@ -22,7 +22,10 @@ import tomli_w
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+from bog_agents_cli._debug import configure_debug_logging
+
 logger = logging.getLogger(__name__)
+configure_debug_logging(logger)
 
 
 class ModelConfigError(Exception):
