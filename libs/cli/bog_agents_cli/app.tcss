@@ -18,6 +18,14 @@ Screen {
     height: 1fr;
     padding: 1 2;
     background: $background;
+    scrollbar-size-vertical: 1;
+    overflow-y: scroll;
+}
+
+#chat:focus-within {
+    scrollbar-color: $primary;
+    scrollbar-color-hover: $primary-lighten-1;
+    scrollbar-color-active: $primary-lighten-2;
 }
 
 /* Welcome banner */

@@ -7,6 +7,7 @@ enable composition without fragile string parsing.
 
 import os
 import re
+import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,8 @@ from typing import Any, Literal, overload
 import wcmatch.glob as wcglob
 
 from bog_agents.backends.protocol import FileInfo as _FileInfo, GrepMatch as _GrepMatch
+
+_IS_WINDOWS = sys.platform == "win32"
 
 EMPTY_CONTENT_WARNING = "System reminder: File exists but has empty contents"
 MAX_LINE_LENGTH = 5000
@@ -274,7 +277,21 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
         msg = f"Path traversal not allowed: {path}"
         raise ValueError(msg)
 
-    # Reject Windows absolute paths (e.g., C:\..., D:/...)
+    if _IS_WINDOWS:
+        # On Windows, accept native absolute paths (C:\Users\..., D:/data/...)
+        # and normalize them while preserving the drive letter.
+        normalized = os.path.normpath(path)
+        normalized = normalized.replace("\\", "/")
+        # Defense-in-depth: verify normpath didn't produce traversal
+        if ".." in normalized.split("/"):
+            msg = f"Path traversal detected after normalization: {path} -> {normalized}"
+            raise ValueError(msg)
+        if allowed_prefixes is not None and not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+            msg = f"Path must start with one of {allowed_prefixes}: {path}"
+            raise ValueError(msg)
+        return normalized
+
+    # Non-Windows: reject Windows absolute paths to prevent format ambiguity
     if re.match(r"^[a-zA-Z]:", path):
         msg = f"Windows absolute paths are not supported: {path}. Please use virtual paths starting with / (e.g., /workspace/file.txt)"
         raise ValueError(msg)
