@@ -597,6 +597,18 @@ class Settings:
             shell_allow_list=shell_allow_list,
         )
 
+    def __repr__(self) -> str:
+        """Return a string representation with sensitive fields redacted."""
+        sensitive_keywords = ("key", "token", "secret")
+        fields = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if any(kw in f.name.lower() for kw in sensitive_keywords) and value:
+                fields.append(f"{f.name}='***'")
+            else:
+                fields.append(f"{f.name}={value!r}")
+        return f"{type(self).__name__}({', '.join(fields)})"
+
     def reload_from_environment(self, *, start_path: Path | None = None) -> list[str]:
         """Reload selected settings from environment variables and project files.
 
