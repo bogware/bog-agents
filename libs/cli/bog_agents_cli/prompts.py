@@ -102,17 +102,27 @@ def save_custom_prompt(command: str, prompt: str, config_path: Path | None = Non
 
 
 def _write_toml(path: Path, data: dict[str, Any]) -> None:
-    """Write a dict to a TOML file (simple top-level sections only).
+    """Atomically write a dict to a TOML file.
 
-    Handles the common config.toml structure with string values, lists,
-    and nested tables. Not a full TOML serializer — covers the
-    ``config.toml`` schema used by bog-agents.
+    Uses temp-file-then-rename to prevent corruption if the write is
+    interrupted (e.g. crash, power loss, concurrent CLI instances).
 
     Args:
         path: File path to write.
         data: Dictionary to serialize.
     """
+    import contextlib
+    import os
+    import tempfile
+
     import tomli_w
 
-    with path.open("wb") as f:
-        tomli_w.dump(data, f)
+    fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            tomli_w.dump(data, f)
+        Path(tmp_path).replace(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            Path(tmp_path).unlink()
+        raise
