@@ -3630,7 +3630,9 @@ class BogAgentsApp(App):
         log_path = get_log_path()
         if not log_path.exists():
             await self._mount_message(
-                AppMessage(f"Log file: {log_path}\n(No logs yet — file will be created on first warning/error.)")
+                AppMessage(
+                    f"Log file: {log_path}\n(No logs yet — file will be created on first warning/error.)"
+                )
             )
             return
 
@@ -3638,20 +3640,28 @@ class BogAgentsApp(App):
         try:
             lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
             # Filter to WARNING/ERROR/CRITICAL for the summary
-            error_lines = [ln for ln in lines if any(lvl in ln for lvl in (" WARNING ", " ERROR ", " CRITICAL "))]
+            error_lines = [
+                ln
+                for ln in lines
+                if any(lvl in ln for lvl in (" WARNING ", " ERROR ", " CRITICAL "))
+            ]
             recent = error_lines[-20:] if error_lines else []
         except OSError:
             recent = []
 
         parts = [f"Log file: {log_path}"]
         if recent:
-            parts.append(f"\nRecent warnings/errors ({len(recent)} of {len(error_lines)}):")
+            parts.append(
+                f"\nRecent warnings/errors ({len(recent)} of {len(error_lines)}):"
+            )
             parts.append("```")
             parts.extend(recent)
             parts.append("```")
         else:
             parts.append("No warnings or errors recorded.")
-        parts.append("\nFor verbose logging, restart with: BOG_AGENTS_DEBUG=1 bog-agents")
+        parts.append(
+            "\nFor verbose logging, restart with: BOG_AGENTS_DEBUG=1 bog-agents"
+        )
 
         await self._mount_message(AppMessage("\n".join(parts)))
 
@@ -3716,7 +3726,9 @@ class BogAgentsApp(App):
 
         prompt = get_prompt("init", default_prompt)
         await self._mount_message(
-            AppMessage(f"Analyzing repository and generating AGENTS.md at `{agents_md_path}`...")
+            AppMessage(
+                f"Analyzing repository and generating AGENTS.md at `{agents_md_path}`..."
+            )
         )
         await self._send_prompt_to_agent(prompt)
 

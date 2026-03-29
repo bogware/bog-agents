@@ -42,7 +42,9 @@ class TestPatchBedrockForAsync:
         _patch_bedrock_for_async(model)
         model._generate("test")
 
-        assert observed_values == [True], f"Expected blockbuster_skip=True during call, got {observed_values}"
+        assert observed_values == [True], (
+            f"Expected blockbuster_skip=True during call, got {observed_values}"
+        )
         # After the call, blockbuster_skip should be reset
         assert blockbuster_skip.get(False) is False
 

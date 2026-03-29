@@ -1785,7 +1785,9 @@ def _patch_bedrock_for_async(model: BaseChatModel) -> None:
 
         @functools.wraps(original)
         def _wrapper(
-            *args: Any, _orig: object = original, **kwargs: Any,
+            *args: Any,
+            _orig: object = original,
+            **kwargs: Any,
         ) -> object:
             token = blockbuster_skip.set(True)
             try:
@@ -1795,7 +1797,9 @@ def _patch_bedrock_for_async(model: BaseChatModel) -> None:
 
         setattr(model, method_name, _wrapper)
 
-    logger.debug("Patched %s to bypass blockbuster blocking detection", type(model).__name__)
+    logger.debug(
+        "Patched %s to bypass blockbuster blocking detection", type(model).__name__
+    )
 
 
 def _create_model_via_init(

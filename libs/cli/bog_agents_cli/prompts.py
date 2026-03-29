@@ -70,7 +70,9 @@ def get_prompt(command: str, default: str) -> str:
     return default
 
 
-def save_custom_prompt(command: str, prompt: str, config_path: Path | None = None) -> None:
+def save_custom_prompt(
+    command: str, prompt: str, config_path: Path | None = None
+) -> None:
     """Save a custom prompt override to config.toml.
 
     Creates the ``[prompts]`` section if it doesn't exist. Preserves all

@@ -24,7 +24,9 @@ class TestConfigureDebugLogging:
         _reset_shared_handler()
         logger = logging.getLogger("test.debug.always_on")
         log_file = tmp_path / "test.log"
-        with patch.dict(os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True):
+        with patch.dict(
+            os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True
+        ):
             configure_debug_logging(logger)
         rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
         assert len(rotating) == 1
@@ -92,7 +94,9 @@ class TestConfigureDebugLogging:
         _reset_shared_handler()
         logger = logging.getLogger("test.debug.idempotent")
         log_file = tmp_path / "idem.log"
-        with patch.dict(os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True):
+        with patch.dict(
+            os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True
+        ):
             configure_debug_logging(logger)
             configure_debug_logging(logger)
         rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
