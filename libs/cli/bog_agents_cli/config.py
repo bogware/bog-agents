@@ -1752,6 +1752,52 @@ def _create_model_from_class(
         raise ModelConfigError(msg) from e
 
 
+def _patch_bedrock_for_async(model: BaseChatModel) -> None:
+    """Wrap a Bedrock model's sync methods to bypass blockbuster detection.
+
+    ``langgraph-runtime-inmem`` activates `blockbuster
+    <https://pypi.org/project/blockbuster/>`_ which monkey-patches blocking
+    I/O functions to raise ``BlockingError`` in async contexts. boto3 is
+    inherently synchronous, so LangChain wraps calls via ``run_in_executor``,
+    but blockbuster still catches the socket-level calls inside the thread.
+
+    This patch sets the ``blockbuster_skip`` context variable around the
+    model's ``_generate`` and ``_stream`` methods so that blocking detection
+    is suppressed for legitimate boto3 calls.
+
+    Args:
+        model: A ``ChatBedrockConverse`` (or ``ChatBedrock``) instance.
+    """
+    try:
+        from blockbuster.blockbuster import (
+            blockbuster_skip,  # type: ignore[import-untyped]
+        )
+    except ImportError:
+        # blockbuster not installed — nothing to patch
+        return
+
+    import functools
+
+    for method_name in ("_generate", "_stream"):
+        original = getattr(model, method_name, None)
+        if original is None:
+            continue
+
+        @functools.wraps(original)
+        def _wrapper(
+            *args: Any, _orig: object = original, **kwargs: Any,
+        ) -> object:
+            token = blockbuster_skip.set(True)
+            try:
+                return _orig(*args, **kwargs)  # type: ignore[operator]
+            finally:
+                blockbuster_skip.reset(token)
+
+        setattr(model, method_name, _wrapper)
+
+    logger.debug("Patched %s to bypass blockbuster blocking detection", type(model).__name__)
+
+
 def _create_model_via_init(
     model_name: str,
     provider: str,
@@ -2011,6 +2057,13 @@ def create_model(
     profile = getattr(model, "profile", None)
     if isinstance(profile, dict) and isinstance(profile.get("max_input_tokens"), int):
         context_limit = profile["max_input_tokens"]
+
+    # Patch Bedrock models to bypass blockbuster's blocking-call detection.
+    # boto3 is inherently synchronous; LangChain wraps it in run_in_executor
+    # but blockbuster still flags the socket-level calls, causing BlockingError
+    # in multi-turn tool-use loops.
+    if resolved_provider in ("bedrock", "bedrock_converse"):
+        _patch_bedrock_for_async(model)
 
     logger.info(
         "Model created: provider=%s, model=%s, context_limit=%s, class=%s",
