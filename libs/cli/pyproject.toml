@@ -42,7 +42,7 @@ dependencies = [
     "langchain-openai>=1.1.8,<2.0.0",
 
     # Observability
-    "langsmith>=0.7.7",
+    "langsmith>=0.7.7,<1.0.0",
 
     # UI/Terminal
     "textual>=8.0.0,<9.0.0",

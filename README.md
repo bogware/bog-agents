@@ -160,7 +160,7 @@ Any LangChain-compatible chat model works. Use `provider:model` format.
 | Google | `bog-agents-cli[google-genai]` | `google_genai:gemini-2.5-pro` |
 | DeepSeek | `bog-agents-cli[deepseek]` | `deepseek:deepseek-chat` |
 | Groq | `bog-agents-cli[groq]` | `groq:llama-3.3-70b` |
-| AWS Bedrock | `bog-agents-cli[bedrock]` | `bedrock:anthropic.claude-v2` |
+| AWS Bedrock | `bog-agents-cli[bedrock]` | `bedrock_converse:anthropic.claude-sonnet-4-6` |
 | Fireworks | `bog-agents-cli[fireworks]` | `fireworks:llama-v3p3-70b` |
 | Mistral | `bog-agents-cli[mistralai]` | `mistralai:mistral-large` |
 | NVIDIA | `bog-agents-cli[nvidia]` | `nvidia:nemotron-70b` |

@@ -134,6 +134,7 @@ SLASH_COMMANDS: list[tuple[str, str, str]] = [
     ),
     ("/infra", "Generate infrastructure code (Docker/K8s/Terraform)", "devops deploy"),
     ("/keybindings", "Show or customize keybindings", "keys shortcuts"),
+    ("/logs", "Show log file path and recent errors", "debug trace errors"),
     ("/mcp", "Show active MCP servers and tools", "servers"),
     ("/migrate", "Plan technology migration", "upgrade convert"),
     (

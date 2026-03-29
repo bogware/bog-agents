@@ -261,6 +261,11 @@ def _build_server_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["LANGGRAPH_AUTH_TYPE"] = "noop"
+    # Allow synchronous blocking I/O (e.g. boto3 in ChatBedrockConverse).
+    # The CLI runs a single-user local dev server where blockbuster's
+    # blocking-call detection adds no value but breaks providers that
+    # use sync HTTP clients wrapped in run_in_executor.
+    env["LANGGRAPH_ALLOW_BLOCKING"] = "true"
     for key in (
         "LANGGRAPH_AUTH",
         "LANGGRAPH_CLOUD_LICENSE_KEY",

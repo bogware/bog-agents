@@ -4,37 +4,59 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 from unittest.mock import patch
 
+import bog_agents_cli._debug as _debug_mod
 from bog_agents_cli._debug import configure_debug_logging
 
 
-class TestConfigureDebugLogging:
-    def test_noop_when_env_unset(self) -> None:
-        """No handlers should be added when BOG_AGENTS_DEBUG is unset."""
-        logger = logging.getLogger("test.debug.noop")
-        original_count = len(logger.handlers)
-        with patch.dict(os.environ, {}, clear=True):
-            configure_debug_logging(logger)
-        assert len(logger.handlers) == original_count
+def _reset_shared_handler() -> None:
+    """Reset the module-level shared handler so tests start clean."""
+    if _debug_mod._shared_handler is not None:
+        _debug_mod._shared_handler.close()
+        _debug_mod._shared_handler = None
 
-    def test_adds_handler_when_env_set(self, tmp_path) -> None:
-        logger = logging.getLogger("test.debug.add")
+
+class TestConfigureDebugLogging:
+    def test_always_attaches_handler(self, tmp_path) -> None:
+        """A rotating file handler is always attached (even without BOG_AGENTS_DEBUG)."""
+        _reset_shared_handler()
+        logger = logging.getLogger("test.debug.always_on")
+        log_file = tmp_path / "test.log"
+        with patch.dict(
+            os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True
+        ):
+            configure_debug_logging(logger)
+        rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rotating) == 1
+        assert rotating[0].level == logging.WARNING
+        # Cleanup
+        _reset_shared_handler()
+        for h in rotating:
+            logger.removeHandler(h)
+
+    def test_debug_env_lowers_level(self, tmp_path) -> None:
+        """When BOG_AGENTS_DEBUG is set, handler level drops to DEBUG."""
+        _reset_shared_handler()
+        logger = logging.getLogger("test.debug.debug_level")
         log_file = tmp_path / "debug.log"
         with patch.dict(
             os.environ,
             {"BOG_AGENTS_DEBUG": "1", "BOG_AGENTS_DEBUG_FILE": str(log_file)},
         ):
             configure_debug_logging(logger)
-        assert any(isinstance(h, logging.FileHandler) for h in logger.handlers)
+        rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rotating) == 1
+        assert rotating[0].level == logging.DEBUG
         assert logger.level == logging.DEBUG
         # Cleanup
-        for h in logger.handlers[:]:
-            if isinstance(h, logging.FileHandler):
-                h.close()
-                logger.removeHandler(h)
+        _reset_shared_handler()
+        for h in rotating:
+            logger.removeHandler(h)
 
     def test_custom_path_used(self, tmp_path) -> None:
+        _reset_shared_handler()
         logger = logging.getLogger("test.debug.custom_path")
         log_file = tmp_path / "custom.log"
         with patch.dict(
@@ -42,28 +64,44 @@ class TestConfigureDebugLogging:
             {"BOG_AGENTS_DEBUG": "1", "BOG_AGENTS_DEBUG_FILE": str(log_file)},
         ):
             configure_debug_logging(logger)
-        file_handlers = [
-            h for h in logger.handlers if isinstance(h, logging.FileHandler)
-        ]
-        assert len(file_handlers) >= 1
-        assert str(log_file) in file_handlers[-1].baseFilename
+        rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rotating) >= 1
+        assert str(log_file) in rotating[-1].baseFilename
         # Cleanup
-        for h in file_handlers:
-            h.close()
+        _reset_shared_handler()
+        for h in rotating:
             logger.removeHandler(h)
 
     def test_bad_path_prints_warning_no_crash(self, capsys) -> None:
         """Invalid log path should print warning to stderr, not crash."""
+        _reset_shared_handler()
         logger = logging.getLogger("test.debug.bad_path")
         original_count = len(logger.handlers)
+        # Use /dev/null as a directory (can't mkdir inside a file)
         with patch.dict(
             os.environ,
-            {
-                "BOG_AGENTS_DEBUG": "1",
-                "BOG_AGENTS_DEBUG_FILE": "/nonexistent_dir/debug.log",
-            },
+            {"BOG_AGENTS_DEBUG_FILE": "/dev/null/impossible/debug.log"},
+            clear=True,
         ):
             configure_debug_logging(logger)
         assert len(logger.handlers) == original_count
         captured = capsys.readouterr()
         assert "Warning" in captured.err
+        _reset_shared_handler()
+
+    def test_idempotent(self, tmp_path) -> None:
+        """Calling configure_debug_logging twice doesn't add duplicate handlers."""
+        _reset_shared_handler()
+        logger = logging.getLogger("test.debug.idempotent")
+        log_file = tmp_path / "idem.log"
+        with patch.dict(
+            os.environ, {"BOG_AGENTS_DEBUG_FILE": str(log_file)}, clear=True
+        ):
+            configure_debug_logging(logger)
+            configure_debug_logging(logger)
+        rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rotating) == 1
+        # Cleanup
+        _reset_shared_handler()
+        for h in rotating:
+            logger.removeHandler(h)

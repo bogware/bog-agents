@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 from bog_agents import __version__ as bog_agents_version
 from bog_agents.graph import get_default_model
 
+# This conftest is the effective root for evals (invoked via `make evals`
+# which targets tests/evals/ directly), so pytest_plugins is valid here.
 pytest_plugins = ["tests.evals.pytest_reporter"]
 
 

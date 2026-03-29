@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import string
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -58,7 +59,7 @@ def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) 
 
 _PROVIDER_TO_WORKING_DIR = {
     "daytona": "/home/daytona",
-    "langsmith": "/tmp",  # noqa: S108  # LangSmith sandbox working directory
+    "langsmith": tempfile.gettempdir(),
     "modal": "/workspace",
     "runloop": "/home/user",
 }

@@ -1,9 +1,11 @@
-# CI: Lint and test SDK + CLI on push to main only.
+# CI: Lint and test SDK + CLI on push to main and PRs.
 
 name: CI
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
 
 concurrency:
@@ -38,7 +40,8 @@ jobs:
       - run: make lint
         working-directory: ${{ matrix.package.dir }}
 
-  # TODO: Re-enable tests once the project is more mature.
+  # TODO: Re-enable test matrix (SDK + CLI × Python 3.11/3.12/3.13) once
+  # self-hosted runners are fully provisioned.
   # test:
   #   name: "Test (${{ matrix.package.name }}, py${{ matrix.python }})"
   #   runs-on: [self-hosted, Linux]
@@ -60,5 +63,3 @@ jobs:
   #       working-directory: ${{ matrix.package.dir }}
   #     - run: make test
   #       working-directory: ${{ matrix.package.dir }}
-  #       env:
-  #         RUN_SANDBOX_TESTS: "true"

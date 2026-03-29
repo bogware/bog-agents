@@ -26,12 +26,11 @@ from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
 
+from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.clipboard import copy_selection_to_clipboard
 from bog_agents_cli.config import (
     DOCS_URL,
     SHELL_TOOL_NAMES,
-    CharsetMode,
-    _detect_charset_mode,
     build_langsmith_thread_url,
     create_model,
     detect_provider,
@@ -76,6 +75,7 @@ from bog_agents_cli.widgets.thread_selector import (
 from bog_agents_cli.widgets.welcome import WelcomeBanner
 
 logger = logging.getLogger(__name__)
+configure_debug_logging(logger)
 _monotonic = time.monotonic
 
 if TYPE_CHECKING:
@@ -712,10 +712,6 @@ class BogAgentsApp(App):
 
     async def on_mount(self) -> None:
         """Initialize components after mount."""
-        if _detect_charset_mode() == CharsetMode.ASCII:
-            chat = self.query_one("#chat", VerticalScroll)
-            chat.styles.scrollbar_size_vertical = 0
-
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._chat_input = self.query_one("#input-area", ChatInput)
 
@@ -1944,6 +1940,8 @@ class BogAgentsApp(App):
                 await self._show_settings_screen()
         elif cmd == "/init":
             await self._handle_init_command()
+        elif cmd == "/logs":
+            await self._handle_logs_command()
         elif cmd == "/onboard":
             await self._handle_onboard_command()
         else:
@@ -2569,6 +2567,37 @@ class BogAgentsApp(App):
 
         logger.debug("Offloaded %d messages to %s", len(filtered), path)
         return path
+
+    async def _send_prompt_to_agent(self, prompt: str) -> None:
+        """Send a prompt to the agent without displaying it as a user message.
+
+        Use this for slash commands that construct long internal prompts.
+        The calling command should display its own friendly user-facing
+        message before calling this method.
+
+        Args:
+            prompt: The full prompt to send to the agent.
+        """
+        # Scroll to bottom
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+            if chat.max_scroll_y > 0:
+                chat.scroll_end(animate=False)
+        except NoMatches:
+            pass
+
+        if self._agent and self._ui_adapter and self._session_state:
+            self._agent_running = True
+            if self._chat_input:
+                self._chat_input.set_cursor_active(active=False)
+            self._agent_worker = self.run_worker(
+                self._run_agent_task(prompt),
+                exclusive=False,
+            )
+        else:
+            await self._mount_message(
+                AppMessage("Agent not configured for this session.")
+            )
 
     async def _handle_user_message(self, message: str) -> None:
         """Handle a user message to send to the agent.
@@ -3592,9 +3621,54 @@ class BogAgentsApp(App):
             AppMessage("Settings updated. Configuration reloaded.")
         )
 
+    async def _handle_logs_command(self) -> None:
+        """Handle /logs — show log file path and recent errors."""
+        from bog_agents_cli._debug import get_log_path
+
+        await self._mount_message(UserMessage("/logs"))
+
+        log_path = get_log_path()
+        if not log_path.exists():
+            await self._mount_message(
+                AppMessage(
+                    f"Log file: {log_path}\n(No logs yet — file will be created on first warning/error.)"
+                )
+            )
+            return
+
+        # Show path and tail of recent errors
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            # Filter to WARNING/ERROR/CRITICAL for the summary
+            error_lines = [
+                ln
+                for ln in lines
+                if any(lvl in ln for lvl in (" WARNING ", " ERROR ", " CRITICAL "))
+            ]
+            recent = error_lines[-20:] if error_lines else []
+        except OSError:
+            recent = []
+
+        parts = [f"Log file: {log_path}"]
+        if recent:
+            parts.append(
+                f"\nRecent warnings/errors ({len(recent)} of {len(error_lines)}):"
+            )
+            parts.append("```")
+            parts.extend(recent)
+            parts.append("```")
+        else:
+            parts.append("No warnings or errors recorded.")
+        parts.append(
+            "\nFor verbose logging, restart with: BOG_AGENTS_DEBUG=1 bog-agents"
+        )
+
+        await self._mount_message(AppMessage("\n".join(parts)))
+
     async def _handle_init_command(self) -> None:
         """Handle /init — generate AGENTS.md for the current repository."""
         from bog_agents_cli.project_utils import find_project_agent_md
+        from bog_agents_cli.prompts import get_prompt
 
         await self._mount_message(UserMessage("/init"))
 
@@ -3614,11 +3688,11 @@ class BogAgentsApp(App):
             await self._mount_message(
                 AppMessage(
                     f"AGENTS.md already exists at: {', '.join(str(p) for p in existing if p.name == 'AGENTS.md')}\n"
-                    "Regenerating will overwrite it. Sending analysis to agent..."
+                    "Regenerating will overwrite it."
                 )
             )
 
-        prompt = (
+        default_prompt = (
             f"Analyze this repository at `{project_root}` and generate an `AGENTS.md` file.\n\n"
             "The AGENTS.md file provides persistent context that is loaded into your system "
             "prompt on every session. It helps you navigate and work with this codebase.\n\n"
@@ -3650,15 +3724,24 @@ class BogAgentsApp(App):
             "Be thorough but concise. This file will be loaded on every session."
         )
 
-        await self._handle_user_message(prompt)
+        prompt = get_prompt("init", default_prompt)
+        await self._mount_message(
+            AppMessage(
+                f"Analyzing repository and generating AGENTS.md at `{agents_md_path}`..."
+            )
+        )
+        await self._send_prompt_to_agent(prompt)
 
     async def _handle_onboard_command(self) -> None:
         """Handle /onboard — interactive codebase tour."""
         from bog_agents_cli.code_intelligence_cli import generate_onboard_prompt
+        from bog_agents_cli.prompts import get_prompt
 
         await self._mount_message(UserMessage("/onboard"))
-        prompt = generate_onboard_prompt()
-        await self._handle_user_message(prompt)
+        default_prompt = generate_onboard_prompt()
+        prompt = get_prompt("onboard", default_prompt)
+        await self._mount_message(AppMessage("Starting interactive codebase tour..."))
+        await self._send_prompt_to_agent(prompt)
 
     async def _show_mcp_viewer(self) -> None:
         """Show read-only MCP server/tool viewer as a modal screen."""

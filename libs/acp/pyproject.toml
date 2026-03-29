@@ -7,12 +7,10 @@ name = "bog-agents-acp"
 version = "0.0.4"
 description = "Agent Client Protocol integration for Bog Agents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<4.0"
 license = {text = "MIT"}
-authors = [
-]
-maintainers = [
-]
+authors = [{name = "bogware"}]
+maintainers = [{name = "bogware"}]
 keywords = ["agent", "acp", "agent-client-protocol", "bog-agents", "ai-agents"]
 classifiers = [
     "Development Status :: 3 - Alpha",
