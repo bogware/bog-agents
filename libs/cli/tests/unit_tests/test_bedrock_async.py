@@ -31,7 +31,7 @@ class TestPatchBedrockForAsync:
 
         observed_values: list[bool] = []
 
-        def fake_generate(*args: object, **kwargs: object) -> str:
+        def fake_generate(*_args: object, **_kwargs: object) -> str:
             observed_values.append(blockbuster_skip.get(False))
             return "ok"
 
@@ -49,11 +49,8 @@ class TestPatchBedrockForAsync:
     def test_noop_when_blockbuster_not_installed(self) -> None:
         """When blockbuster isn't available, patch is a silent no-op."""
         model = MagicMock()
-        original_generate = model._generate
-        # This should not raise even if blockbuster isn't installed
         _patch_bedrock_for_async(model)
-        # If blockbuster IS installed, methods get wrapped; if not, they stay the same.
-        # Either way, calling them should work.
+        # Whether blockbuster is installed or not, calling patched methods should work.
         model._generate("test")
 
     def test_skips_missing_methods(self) -> None:
