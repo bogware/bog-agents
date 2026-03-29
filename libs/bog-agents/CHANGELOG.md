@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.6.2...bog-agents==0.6.3) (2026-03-29)
+
+
+### Bug Fixes
+
+* **ci:** update uv from 0.5.25 to 0.8.17 to match lockfile format ([#33](https://github.com/bogware/bog-agents/issues/33)) ([59f2ada](https://github.com/bogware/bog-agents/commit/59f2adac2b54fa260bb15ca95b2df132e1e9014c))
+* **cli:** switch Bedrock provider from bedrock to bedrock_converse  ([#31](https://github.com/bogware/bog-agents/issues/31)) ([77bcca3](https://github.com/bogware/bog-agents/commit/77bcca31db3d58e98958184a8075295ea6c31b3b))
+
 ## [0.6.0](https://github.com/bogware/bog-agents/compare/bog-agents==0.5.2...bog-agents==0.6.0) (2026-03-24)
 
 
