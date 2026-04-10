@@ -14,6 +14,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "AgentReplayMiddleware": ("bog_agents.middleware.agent_replay", "AgentReplayMiddleware"),
     "AgentTeamsMiddleware": ("bog_agents.middleware.agent_teams", "AgentTeamsMiddleware"),
     "AirGappedMiddleware": ("bog_agents.middleware.air_gapped", "AirGappedMiddleware"),
+    "AsyncSubAgent": ("bog_agents.middleware.async_subagents", "AsyncSubAgent"),
+    "AsyncSubAgentMiddleware": ("bog_agents.middleware.async_subagents", "AsyncSubAgentMiddleware"),
     "ApprovalGatesMiddleware": ("bog_agents.middleware.approval_gates", "ApprovalGatesMiddleware"),
     "ArchitectMiddleware": ("bog_agents.middleware.architect", "ArchitectMiddleware"),
     "AuditTrailMiddleware": ("bog_agents.middleware.audit_trail", "AuditTrailMiddleware"),

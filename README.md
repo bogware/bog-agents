@@ -83,6 +83,9 @@ See the [CLI README](libs/cli/) for the full rundown.
 git clone https://github.com/bogware/bog-agents.git
 cd bog-agents
 
+# Windows PowerShell bootstrap for the main development packages
+./scripts/repo.ps1 init
+
 # SDK
 cd libs/bog-agents && uv sync && cd ../..
 
@@ -94,6 +97,21 @@ cd libs/cli && uv run bog-agents
 ```
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
+## Upgrade Workflow
+
+Use the repo script to check or refresh lockfiles across the maintained packages:
+
+```bash
+# Check lockfiles for the SDK + CLI
+./scripts/repo.ps1 lock-check
+
+# Check every managed package under libs/
+./scripts/repo.ps1 lock-check -AllPackages
+
+# Regenerate lockfiles for every managed package under libs/
+./scripts/repo.ps1 lock -AllPackages
+```
 
 ## Run the Tests
 

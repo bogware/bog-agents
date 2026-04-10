@@ -29,6 +29,9 @@ Each package has its own `pyproject.toml`, `uv.lock`, and `Makefile`.
 git clone https://github.com/bogware/bog-agents.git
 cd bog-agents
 
+# Windows PowerShell bootstrap for the main development packages
+./scripts/repo.ps1 init
+
 # Install SDK dependencies
 cd libs/bog-agents && uv sync && cd ../..
 
@@ -51,9 +54,22 @@ make format                  # Auto-format
 # Single test file:
 uv run --group test pytest tests/unit_tests/test_specific.py
 
-# From repo root — lint/format all packages:
+# From repo root - lint/format all packages:
 make lint
 make format
+```
+
+## Upgrades and Lockfiles
+
+```bash
+# Check lockfiles for the SDK + CLI
+./scripts/repo.ps1 lock-check
+
+# Check lockfiles for every managed package under libs/
+./scripts/repo.ps1 lock-check -AllPackages
+
+# Refresh lockfiles for every managed package under libs/
+./scripts/repo.ps1 lock -AllPackages
 ```
 
 ## Code Conventions

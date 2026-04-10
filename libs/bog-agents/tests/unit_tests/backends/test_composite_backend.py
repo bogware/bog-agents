@@ -29,7 +29,7 @@ def make_runtime(tid: str = "tc"):
     )
 
 
-def build_composite_state_backend(runtime: ToolRuntime, *, routes):
+def build_composite_state_backend(runtime: ToolRuntime, *, routes, artifacts_root: str = "/"):
     built_routes = {}
     for prefix, backend_or_factory in routes.items():
         if callable(backend_or_factory):
@@ -37,7 +37,7 @@ def build_composite_state_backend(runtime: ToolRuntime, *, routes):
         else:
             built_routes[prefix] = backend_or_factory
     default_state = StateBackend(runtime)
-    return CompositeBackend(default=default_state, routes=built_routes)
+    return CompositeBackend(default=default_state, routes=built_routes, artifacts_root=artifacts_root)
 
 
 def test_composite_state_backend_routes_and_search(tmp_path: Path):  # Pytest fixture
@@ -428,6 +428,31 @@ def test_composite_backend_intercept_large_tool_result_routed_to_store():
     assert "/large_tool_results/test_routed_123" in result.content
 
     stored_item = rt.store.get(("filesystem",), "/test_routed_123")
+    assert stored_item is not None
+    assert stored_item.value["content"] == [large_content]
+
+
+def test_composite_backend_artifacts_root_is_used_for_large_tool_results():
+    """Large tool result offloading should honor CompositeBackend.artifacts_root."""
+    rt = make_runtime("t12")
+
+    middleware = FilesystemMiddleware(
+        backend=lambda r: build_composite_state_backend(
+            r,
+            routes={"/artifacts/": (StoreBackend)},
+            artifacts_root="/artifacts",
+        ),
+        tool_token_limit_before_evict=1000,
+    )
+
+    large_content = "artifact" * 1000
+    tool_message = ToolMessage(content=large_content, tool_call_id="test_artifact_123")
+    result = middleware._intercept_large_tool_result(tool_message, rt)
+
+    assert isinstance(result, ToolMessage)
+    assert "/artifacts/test_artifact_123" in result.content
+
+    stored_item = rt.store.get(("filesystem",), "/test_artifact_123")
     assert stored_item is not None
     assert stored_item.value["content"] == [large_content]
 

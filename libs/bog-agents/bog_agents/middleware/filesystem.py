@@ -259,7 +259,7 @@ All file paths must start with a /. Follow the tool docs for the available tools
 
 ## Large Tool Results
 
-When a tool result is too large, it may be offloaded into the filesystem instead of being returned inline. In those cases, use `read_file` to inspect the saved result in chunks, or use `grep` within `/large_tool_results/` if you need to search across offloaded tool results and do not know the exact file path. Offloaded tool results are stored under `/large_tool_results/<tool_call_id>`."""
+When a tool result is too large, it may be offloaded into the filesystem instead of being returned inline. In those cases, use `read_file` to inspect the saved result in chunks, or use `grep` within the configured artifacts root if you need to search across offloaded tool results and do not know the exact file path. By default, offloaded tool results are stored under `/large_tool_results/<tool_call_id>`."""
 
 EXECUTION_SYSTEM_PROMPT = """## Execute Tool `execute`
 
@@ -461,6 +461,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         custom_tool_descriptions: dict[str, str] | None = None,
         tool_token_limit_before_evict: int | None = 20000,
         max_execute_timeout: int = 3600,
+        artifacts_root: str | None = None,
     ) -> None:
         """Initialize the filesystem middleware.
 
@@ -472,6 +473,9 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             tool_token_limit_before_evict: Optional token limit before evicting a tool result to the filesystem.
             max_execute_timeout: Maximum allowed value in seconds for per-command timeout
                 overrides on the execute tool.
+            artifacts_root: Optional override for where large tool results are
+                offloaded. When omitted, composite backends may provide their
+                own `artifacts_root`, otherwise `/large_tool_results` is used.
 
                 Defaults to 3600 seconds (1 hour). Any per-command timeout
                 exceeding this value will be rejected with an error message.
@@ -490,6 +494,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         self._custom_tool_descriptions = custom_tool_descriptions or {}
         self._tool_token_limit_before_evict = tool_token_limit_before_evict
         self._max_execute_timeout = max_execute_timeout
+        self._artifacts_root = artifacts_root
 
         self.tools = [
             self._create_ls_tool(),
@@ -523,6 +528,17 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         if callable(self.backend):
             return self.backend(runtime)  # ty: ignore[call-top-callable]
         return self.backend
+
+    def _artifact_path(self, resolved_backend: BackendProtocol, tool_call_id: str) -> str:
+        """Build the storage path for an offloaded tool result."""
+        root = self._artifacts_root
+        if root is None and isinstance(resolved_backend, CompositeBackend):
+            root = resolved_backend.artifacts_root
+        artifact_root = (root or "/large_tool_results").rstrip("/") or "/"
+        sanitized_id = sanitize_tool_call_id(tool_call_id)
+        if artifact_root == "/":
+            return f"/{sanitized_id}"
+        return f"{artifact_root}/{sanitized_id}"
 
     def _create_ls_tool(self) -> BaseTool:
         """Create the ls (list files) tool."""
@@ -1167,8 +1183,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             return message, None
 
         # Write content to filesystem
-        sanitized_id = sanitize_tool_call_id(message.tool_call_id)
-        file_path = f"/large_tool_results/{sanitized_id}"
+        file_path = self._artifact_path(resolved_backend, message.tool_call_id)
         result = resolved_backend.write(file_path, content_str)
         if result.error:
             return message, None
@@ -1214,8 +1229,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             return message, None
 
         # Write content to filesystem using async method
-        sanitized_id = sanitize_tool_call_id(message.tool_call_id)
-        file_path = f"/large_tool_results/{sanitized_id}"
+        file_path = self._artifact_path(resolved_backend, message.tool_call_id)
         result = await resolved_backend.awrite(file_path, content_str)
         if result.error:
             return message, None

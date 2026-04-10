@@ -51,6 +51,7 @@ from bog_agents.middleware.adaptive_context import AdaptiveContextMiddleware
 from bog_agents.middleware.agent_replay import AgentReplayMiddleware
 from bog_agents.middleware.agent_teams import AgentTeamsMiddleware
 from bog_agents.middleware.air_gapped import AirGappedMiddleware
+from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from bog_agents.middleware.approval_gates import ApprovalGatesMiddleware
 from bog_agents.middleware.architect import ArchitectMiddleware
 from bog_agents.middleware.audit_trail import AuditTrailMiddleware
@@ -144,6 +145,8 @@ __all__ = [
     "AgentReplayMiddleware",
     "AgentTeamsMiddleware",
     "AirGappedMiddleware",
+    "AsyncSubAgent",
+    "AsyncSubAgentMiddleware",
     "ApprovalGatesMiddleware",
     "ArchitectMiddleware",
     "AuditTrailMiddleware",

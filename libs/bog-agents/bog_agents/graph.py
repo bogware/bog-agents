@@ -3,7 +3,7 @@
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents import create_agent as _langchain_create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig, TodoListMiddleware
@@ -20,9 +20,11 @@ from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 
 from bog_agents._models import resolve_model
+from bog_agents._version import __version__
 from bog_agents.backends import StateBackend
 from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 from bog_agents.feature_config import FeatureConfig
+from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from bog_agents.middleware.filesystem import FilesystemMiddleware
 from bog_agents.middleware.memory import MemoryMiddleware
 from bog_agents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -42,7 +44,7 @@ BASE_AGENT_PROMPT = """You are a Bog Agents agent, an AI assistant that helps us
 - Be concise and direct. Don't over-explain unless asked.
 - NEVER add unnecessary preamble (\"Sure!\", \"Great question!\", \"I'll now...\").
 - Don't say \"I'll now do X\" — just do it.
-- If the request is ambiguous, ask questions before acting.
+- If the request is underspecified, ask only the minimum follow-up needed to take the next useful action.
 - If asked how to approach something, explain first, then act.
 
 ## Professional Objectivity
@@ -64,6 +66,15 @@ Keep working until the task is fully complete. Don't stop partway and explain wh
 **When things go wrong:**
 - If something fails repeatedly, stop and analyze *why* — don't keep retrying the same approach.
 - If you're blocked, tell the user what's wrong and ask for guidance.
+
+## Clarifying Requests
+
+- Do not ask for details the user already supplied.
+- Use reasonable defaults when the request clearly implies them.
+- Prioritize missing semantics like content, delivery, detail level, or alert criteria.
+- Avoid opening with a long explanation of tool, scheduling, or integration limitations when a concise blocking follow-up question would move the task forward.
+- Ask domain-defining questions before implementation questions.
+- For monitoring or alerting requests, ask what signals, thresholds, or conditions should trigger an alert.
 
 ## Progress Updates
 
@@ -87,7 +98,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     *,
     system_prompt: str | SystemMessage | None = None,
     middleware: Sequence[AgentMiddleware] = (),
-    subagents: list[SubAgent | CompiledSubAgent] | None = None,
+    subagents: list[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[str] | None = None,
     memory: list[str] | None = None,
     response_format: ResponseFormat | None = None,
@@ -397,13 +408,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         TodoListMiddleware(),
         FilesystemMiddleware(backend=backend),
         create_summarization_middleware(model, backend),
-        AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
         PatchToolCallsMiddleware(),
     ]
     if skills is not None:
         gp_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
-    if interrupt_on is not None:
-        gp_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+    gp_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
 
     general_purpose_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
         **GENERAL_PURPOSE_SUBAGENT,
@@ -411,10 +420,16 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         "tools": tools or [],
         "middleware": gp_middleware,
     }
+    if interrupt_on is not None:
+        general_purpose_spec["interrupt_on"] = interrupt_on
 
     # Process user-provided subagents to fill in defaults for model, tools, and middleware
     processed_subagents: list[SubAgent | CompiledSubAgent] = []
+    async_subagents: list[AsyncSubAgent] = []
     for spec in subagents or []:
+        if "graph_id" in spec:
+            async_subagents.append(cast("AsyncSubAgent", spec))
+            continue
         if "runnable" in spec:
             # CompiledSubAgent - use as-is
             processed_subagents.append(spec)
@@ -428,13 +443,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
                 TodoListMiddleware(),
                 FilesystemMiddleware(backend=backend),
                 create_summarization_middleware(subagent_model, backend),
-                AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
                 PatchToolCallsMiddleware(),
             ]
             subagent_skills = spec.get("skills")
             if subagent_skills:
                 subagent_middleware.append(SkillsMiddleware(backend=backend, sources=subagent_skills))
             subagent_middleware.extend(spec.get("middleware", []))
+            subagent_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+
+            subagent_interrupt_on = spec.get("interrupt_on", interrupt_on)
 
             processed_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
                 **spec,
@@ -442,6 +459,8 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
                 "tools": spec.get("tools", tools or []),
                 "middleware": subagent_middleware,
             }
+            if subagent_interrupt_on is not None:
+                processed_spec["interrupt_on"] = subagent_interrupt_on
             processed_subagents.append(processed_spec)
 
     if any(spec["name"] == GENERAL_PURPOSE_SUBAGENT["name"] for spec in processed_subagents):
@@ -456,8 +475,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     agents_middleware: list[AgentMiddleware[Any, Any, Any]] = [
         TodoListMiddleware(),
     ]
-    if memory is not None:
-        agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if skills is not None:
         agents_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
 
@@ -827,13 +844,17 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
                 subagents=all_subagents,
             ),
             create_summarization_middleware(model, backend),
-            AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"),
             PatchToolCallsMiddleware(),
         ]
     )
+    if async_subagents:
+        agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
 
     if middleware:
         agents_middleware.extend(middleware)
+    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    if memory is not None:
+        agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
 
@@ -860,9 +881,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         cache=cache,
     ).with_config(
         {
-            "recursion_limit": 1000,
+            "recursion_limit": 9999,
             "metadata": {
                 "ls_integration": "bog-agents",
+                "versions": {"bog-agents": __version__},
+                "lc_agent_name": name,
             },
         }
     )

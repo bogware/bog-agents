@@ -137,6 +137,8 @@ class CompositeBackend(BackendProtocol):
         self,
         default: BackendProtocol | StateBackend,
         routes: dict[str, BackendProtocol],
+        *,
+        artifacts_root: str = "/",
     ) -> None:
         """Initialize composite backend.
 
@@ -144,12 +146,15 @@ class CompositeBackend(BackendProtocol):
             default: Backend for paths that don't match any route.
             routes: Map of path prefixes to backends. Prefixes must start with "/"
                 and should end with "/" (e.g., "/memories/").
+            artifacts_root: Root path for middleware-generated artifacts such as
+                offloaded tool results.
         """
         # Default backend
         self.default = default
 
         # Virtual routes
         self.routes = routes
+        self.artifacts_root = artifacts_root
 
         # Sort routes by length (longest first) for correct prefix matching
         self.sorted_routes = sorted(routes.items(), key=lambda x: len(x[0]), reverse=True)
