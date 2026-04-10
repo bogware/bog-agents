@@ -8,6 +8,11 @@ import argparse
 from collections.abc import Callable
 
 from bog_agents_cli._version import __version__
+from bog_agents_cli.command_registry import (
+    FEATURED_HELP_COMMANDS_LEFT,
+    FEATURED_HELP_COMMANDS_RIGHT,
+    describe_commands,
+)
 from bog_agents_cli.config import (
     COLORS,
     DOCS_URL,
@@ -178,33 +183,11 @@ def show_help() -> None:
         "[bold]Slash Commands (inside interactive session):[/bold]",
         style=COLORS["primary"],
     )
-    col1 = [
-        ("/help", "Show this help"),
-        ("/model", "Switch model mid-session"),
-        ("/plan", "Read-only plan mode"),
-        ("/effort", "Set effort (low/med/high/max)"),
-        ("/compact", "Compress context"),
-        ("/diff", "Show pending file diffs"),
-        ("/undo", "Undo last file change"),
-        ("/review", "Code review staged changes"),
-        ("/test", "Run tests with coverage"),
-        ("/cost", "Session cost & token usage"),
-    ]
-    col2 = [
-        ("/pr", "Create/list/review PRs"),
-        ("/remember", "Save to agent memory"),
-        ("/teach", "Teach a workflow as skill"),
-        ("/threads", "Browse/resume threads"),
-        ("/doctor", "Health diagnostics"),
-        ("/agent", "Manage parallel agents"),
-        ("/worktree", "Isolated git worktrees"),
-        ("/record", "Record session for replay"),
-        ("/clear", "New thread"),
-        ("/quit", "Exit"),
-    ]
+    col1 = describe_commands(FEATURED_HELP_COMMANDS_LEFT)
+    col2 = describe_commands(FEATURED_HELP_COMMANDS_RIGHT)
     for left, right in zip(col1, col2, strict=True):
         console.print(f"  {left[0]:<14} {left[1]:<28} {right[0]:<14} {right[1]}")
-    console.print("  [dim]... and 30+ more. Type / to see all.[/dim]")
+    console.print("  [dim]... and more. Type / to see all.[/dim]")
     console.print()
 
     # --- Examples ---

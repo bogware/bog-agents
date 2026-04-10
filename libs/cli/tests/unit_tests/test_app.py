@@ -22,6 +22,7 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Input, Static
 
+import bog_agents_cli.app as app_module
 from bog_agents_cli.app import (
     _ITERM_CURSOR_GUIDE_OFF,
     _ITERM_CURSOR_GUIDE_ON,
@@ -1215,6 +1216,199 @@ class TestTraceCommand:
 
             app_msgs = app.query(AppMessage)
             assert any("No active session" in str(w._content) for w in app_msgs)
+
+
+class TestCommandSurfaceEnhancements:
+    """Tests for added slash command handlers."""
+
+    async def test_resume_uses_most_recent_other_thread(self) -> None:
+        """`/resume` should switch to the latest thread that is not current."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._session_state is not None
+            current_thread = app._session_state.thread_id
+
+            with (
+                patch(
+                    "bog_agents_cli.sessions.list_threads",
+                    new=AsyncMock(
+                        return_value=[
+                            {"thread_id": current_thread},
+                            {"thread_id": "thread-other"},
+                        ]
+                    ),
+                ),
+                patch.object(
+                    app, "_resume_thread", new_callable=AsyncMock
+                ) as mock_resume,
+            ):
+                await app._handle_command("/resume")
+                await pilot.pause()
+
+            mock_resume.assert_awaited_once_with("thread-other")
+
+    async def test_session_command_shows_session_details(self) -> None:
+        """`/session` should render a compact session summary."""
+        app = BogAgentsApp(thread_id="thread-session-123")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/session")
+            await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Thread: thread-session-123" in str(w._content)
+                for w in app_msgs
+            )
+            assert any("Agent: agent" in str(w._content) for w in app_msgs)
+
+    async def test_permissions_command_shows_shell_policy(self) -> None:
+        """`/permissions` should display approval state and shell policy."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(app_module.settings, "shell_allow_list", None):
+                await app._handle_command("/permissions")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Auto-approve: off" in str(w._content) for w in app_msgs)
+            assert any(
+                "Shell allow-list: disabled" in str(w._content)
+                for w in app_msgs
+            )
+
+    async def test_keybindings_command_shows_formatted_bindings(self) -> None:
+        """`/keybindings` should render the current keybinding config."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.keybindings.load_keybindings",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.keybindings.format_keybindings",
+                    return_value="## Keybindings\nsubmit enter",
+                ),
+            ):
+                await app._handle_command("/keybindings")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Keybindings file:" in str(w._content) for w in app_msgs)
+            assert any("submit enter" in str(w._content) for w in app_msgs)
+
+    async def test_skills_command_shows_skill_summary(self) -> None:
+        """`/skills` should summarize loaded skills and their sources."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.skills.load.list_skills",
+                return_value=[
+                    {"name": "alpha", "source": "project"},
+                    {"name": "beta", "source": "user"},
+                    {"name": "gamma", "source": "built-in"},
+                ],
+            ):
+                await app._handle_command("/skills")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Loaded skills: 3" in str(w._content) for w in app_msgs)
+            assert any("Project skills: 1" in str(w._content) for w in app_msgs)
+            assert any(
+                "Examples: alpha, beta, gamma" in str(w._content)
+                for w in app_msgs
+            )
+
+    async def test_help_query_surfaces_matching_commands(self) -> None:
+        """`/help <term>` should act like a command browser."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/help perm")
+            await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("/permissions" in str(w._content) for w in app_msgs)
+
+    async def test_unknown_command_shows_suggestions(self) -> None:
+        """Unknown slash commands should suggest close matches."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/permisions")
+            await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Closest matches:" in str(w._content) for w in app_msgs)
+            assert any("/permissions" in str(w._content) for w in app_msgs)
+
+    async def test_cost_alias_routes_to_token_view(self) -> None:
+        """`/cost` should reuse the `/tokens` handler."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/cost")
+            await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("No token usage yet" in str(w._content) for w in app_msgs)
+
+    async def test_doctor_command_runs_local_diagnostics(self) -> None:
+        """`/doctor` should render the diagnostic report."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch("bog_agents_cli.doctor.run_doctor", return_value="doctor ok"):
+                await app._handle_command("/doctor")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("doctor ok" in str(w._content) for w in app_msgs)
+
+    async def test_review_command_builds_prompt_and_sends_to_agent(self) -> None:
+        """`/review` should generate a review prompt and send it."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.review_command.generate_review_prompt",
+                    return_value="review prompt",
+                ),
+                patch.object(app, "_send_prompt_to_agent", new=AsyncMock()) as mock_send,
+            ):
+                await app._handle_command("/review src/foo.py")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once_with("review prompt")
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Starting structured code review" in str(w._content)
+                for w in app_msgs
+            )
+
+    def test_handler_registry_covers_supported_commands(self) -> None:
+        """Every supported command and alias should have a handler mapping."""
+        from bog_agents_cli.command_registry import get_registered_command_names
+
+        supported_names = set(get_registered_command_names(include_aliases=True))
+        handler_names = set(BogAgentsApp._COMMAND_HANDLER_NAMES)
+        assert supported_names <= handler_names
 
 
 class TestRunAgentTaskMediaTracker:

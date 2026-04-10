@@ -407,18 +407,27 @@ class TestSlashCommands:
         from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
 
         command_names = {cmd for cmd, _, _ in SLASH_COMMANDS}
-        assert "/diff" in command_names
-        assert "/undo" in command_names
         assert "/review" in command_names
         assert "/doctor" in command_names
-        assert "/cost" in command_names
-        assert "/context" in command_names
-        assert "/profile" in command_names
-        assert "/plan" in command_names
-        assert "/effort" in command_names
-        assert "/extensions" in command_names
-        assert "/teach" in command_names
-        assert "/replay" in command_names
-        assert "/record" in command_names
-        assert "/remote" in command_names
+        assert "/commands" in command_names
+        assert "/dashboard" in command_names
+        assert "/logs" in command_names
+        assert "/onboard" in command_names
         assert "/keybindings" in command_names
+        assert "/permissions" in command_names
+        assert "/resume" in command_names
+        assert "/skills" in command_names
+        assert "/tokens" in command_names
+
+    def test_command_registry_drives_autocomplete(self) -> None:
+        """Autocomplete commands should be derived from the central registry."""
+        from bog_agents_cli.command_registry import (
+            get_slash_commands,
+            get_registered_command_names,
+        )
+        from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
+
+        assert SLASH_COMMANDS == get_slash_commands()
+        assert {name for name, _, _ in SLASH_COMMANDS} == set(
+            get_registered_command_names()
+        )

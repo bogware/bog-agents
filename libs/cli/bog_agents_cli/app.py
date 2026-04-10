@@ -79,7 +79,7 @@ configure_debug_logging(logger)
 _monotonic = time.monotonic
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from bog_agents.backends import CompositeBackend
     from bog_agents.backends.protocol import BackendProtocol
@@ -548,6 +548,41 @@ class BogAgentsApp(App):
         Binding("3", "approval_no", "No", show=False),
         Binding("n", "approval_no", "No", show=False),
     ]
+    _COMMAND_HANDLER_NAMES: ClassVar[dict[str, str]] = {
+        "/background": "_dispatch_background_command",
+        "/changelog": "_handle_reference_url_command",
+        "/clear": "_handle_clear_command",
+        "/commands": "_handle_help_command",
+        "/compact": "_handle_compact_command",
+        "/context": "_handle_tokens_command",
+        "/cost": "_handle_tokens_command",
+        "/dashboard": "_dispatch_dashboard_command",
+        "/docs": "_handle_reference_url_command",
+        "/doctor": "_handle_doctor_command",
+        "/feedback": "_handle_reference_url_command",
+        "/help": "_handle_help_command",
+        "/init": "_dispatch_init_command",
+        "/keybindings": "_handle_keybindings_command",
+        "/logs": "_dispatch_logs_command",
+        "/mcp": "_handle_mcp_command",
+        "/model": "_handle_model_command",
+        "/onboard": "_dispatch_onboard_command",
+        "/permissions": "_handle_permissions_command",
+        "/q": "_handle_quit_command",
+        "/quit": "_handle_quit_command",
+        "/recommend": "_dispatch_recommend_command",
+        "/reload": "_handle_reload_command",
+        "/remember": "_handle_remember_command",
+        "/resume": "_handle_resume_command",
+        "/review": "_handle_review_command",
+        "/session": "_handle_session_command",
+        "/settings": "_handle_settings_command",
+        "/skills": "_handle_skills_command",
+        "/threads": "_handle_threads_command",
+        "/tokens": "_handle_tokens_command",
+        "/trace": "_handle_trace_command",
+        "/version": "_handle_version_command",
+    }
 
     class ServerReady(Message):
         """Posted by the background server-startup worker on success."""
@@ -634,6 +669,7 @@ class BogAgentsApp(App):
         self._mcp_tool_count = sum(len(s.tools) for s in (mcp_server_info or []))
         self._status_bar: StatusBar | None = None
         self._chat_input: ChatInput | None = None
+        self._session_name: str | None = None
         self._quit_pending = False
         self._session_state: TextualSessionState | None = None
         self._ui_adapter: TextualUIAdapter | None = None
@@ -1692,22 +1728,397 @@ class BogAgentsApp(App):
         link.stylize(f"link {url}", 0)
         await self._mount_message(AppMessage(link))
 
-    async def _handle_command(self, command: str) -> None:
-        """Handle a slash command.
+    @staticmethod
+    def _match_slash_commands(query: str, *, limit: int = 8) -> list[tuple[str, str]]:
+        """Return best matching slash commands for a help/typo query.
 
         Args:
-            command: The slash command (including /)
-        """
-        cmd = command.lower().strip()
+            query: Search text, with or without leading `/`.
+            limit: Maximum number of matches to return.
 
-        if cmd in {"/quit", "/q"}:
-            self.exit()
-        elif cmd == "/help":
+        Returns:
+            List of `(command, description)` tuples ordered by best match first.
+        """
+        from bog_agents_cli.command_registry import search_slash_commands
+
+        return [
+            (spec.name, spec.description)
+            for spec in search_slash_commands(query, limit=limit)
+        ]
+
+    @classmethod
+    def _build_command_reference(cls, query: str = "") -> str:
+        """Build a human-friendly slash-command reference snippet.
+
+        Args:
+            query: Optional command or keyword filter.
+
+        Returns:
+            Renderable plain-text command reference.
+        """
+        matches = cls._match_slash_commands(query)
+        if not matches:
+            return (
+                f"No slash commands matched '{query}'.\n"
+                "Try `/commands` to browse everything."
+            )
+
+        title = (
+            f"Slash commands matching '{query}':"
+            if query
+            else "Available slash commands:"
+        )
+        lines = [title]
+        lines.extend(f"  {name:<14} {desc}" for name, desc in matches)
+        if query:
+            lines.append("")
+            lines.append(
+                "Tip: run the command directly or use `/commands` "
+                "for a broader list."
+            )
+        else:
+            lines.append("")
+            lines.append(
+                "Tip: use `/help <command-or-keyword>` to narrow this list."
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _command_name(command: str) -> str:
+        """Return the normalized slash command name without arguments."""
+        stripped = command.strip().lower()
+        if not stripped:
+            return ""
+        return stripped.split(maxsplit=1)[0]
+
+    def _resolve_command_handler(
+        self, command_name: str
+    ) -> Callable[[str], Awaitable[None]] | None:
+        """Return the bound handler for a slash command."""
+        handler_name = self._COMMAND_HANDLER_NAMES.get(command_name)
+        if handler_name is None:
+            return None
+        handler = getattr(self, handler_name, None)
+        if handler is None:
+            logger.warning("No handler method found for slash command %s", command_name)
+            return None
+        return handler
+
+    async def _handle_reference_url_command(self, command: str) -> None:
+        """Open a slash-command reference URL in the browser."""
+        await self._open_url_command(command, self._command_name(command))
+
+    async def _handle_quit_command(self, _command: str) -> None:
+        """Exit the app."""
+        self.exit()
+
+    async def _handle_version_command(self, command: str) -> None:
+        """Show CLI and SDK versions."""
+        await self._mount_message(UserMessage(command))
+        try:
+            from bog_agents_cli._version import __version__ as cli_version
+
+            cli_line = f"bog-agents-cli version: {cli_version}"
+        except ImportError:
+            logger.debug("bog_agents_cli._version module not found")
+            cli_line = "bog-agents-cli version: unknown"
+        except Exception:
+            logger.warning("Unexpected error looking up CLI version", exc_info=True)
+            cli_line = "bog-agents-cli version: unknown"
+        try:
+            from importlib.metadata import (
+                PackageNotFoundError,
+                version as _pkg_version,
+            )
+
+            sdk_version = _pkg_version("bog-agents")
+            sdk_line = f"bog-agents (SDK) version: {sdk_version}"
+        except PackageNotFoundError:
+            logger.debug("bog-agents SDK package not found in environment")
+            sdk_line = "bog-agents (SDK) version: unknown"
+        except Exception:
+            logger.warning("Unexpected error looking up SDK version", exc_info=True)
+            sdk_line = "bog-agents (SDK) version: unknown"
+        await self._mount_message(AppMessage(f"{cli_line}\n{sdk_line}"))
+
+    async def _handle_clear_command(self, _command: str) -> None:
+        """Clear the current chat session and start a fresh thread."""
+        self._pending_messages.clear()
+        self._queued_widgets.clear()
+        await self._clear_messages()
+        if self._token_tracker:
+            self._token_tracker.reset()
+        self._update_status("")
+        if self._session_state:
+            new_thread_id = self._session_state.reset_thread()
+            try:
+                banner = self.query_one("#welcome-banner", WelcomeBanner)
+                banner.update_thread_id(new_thread_id)
+            except NoMatches:
+                pass
+            await self._mount_message(AppMessage(f"Started new thread: {new_thread_id}"))
+
+    async def _handle_compact_command(self, command: str) -> None:
+        """Trigger conversation compaction."""
+        await self._mount_message(UserMessage(command))
+        await self._handle_compact()
+
+    async def _handle_threads_command(self, _command: str) -> None:
+        """Open the interactive thread selector."""
+        await self._show_thread_selector()
+
+    async def _dispatch_background_command(self, command: str) -> None:
+        """Mount the slash command and forward to the background handler."""
+        await self._mount_message(UserMessage(command))
+        await self._handle_background_command(command)
+
+    async def _dispatch_dashboard_command(self, command: str) -> None:
+        """Mount the slash command and forward to the dashboard handler."""
+        await self._mount_message(UserMessage(command))
+        await self._handle_dashboard_command()
+
+    async def _dispatch_recommend_command(self, command: str) -> None:
+        """Mount the slash command and forward to the recommend handler."""
+        await self._mount_message(UserMessage(command))
+        await self._handle_recommend_command(command)
+
+    async def _dispatch_init_command(self, _command: str) -> None:
+        """Forward to the repo-init helper."""
+        await self._handle_init_command()
+
+    async def _dispatch_logs_command(self, _command: str) -> None:
+        """Forward to the log viewer helper."""
+        await self._handle_logs_command()
+
+    async def _dispatch_onboard_command(self, _command: str) -> None:
+        """Forward to the onboarding helper."""
+        await self._handle_onboard_command()
+
+    async def _handle_tokens_command(self, command: str) -> None:
+        """Show token usage and context breakdown."""
+        await self._mount_message(UserMessage(command))
+        if self._token_tracker and self._token_tracker.current_context > 0:
+            count = self._token_tracker.current_context
+            formatted = format_token_count(count)
+
+            model_name = settings.model_name
+            context_limit = settings.model_context_limit
+
+            if context_limit is not None:
+                limit_str = format_token_count(context_limit)
+                pct = count / context_limit * 100
+                usage = f"{formatted} / {limit_str} tokens ({pct:.0f}%)"
+            else:
+                usage = f"{formatted} tokens used"
+
+            msg = f"{usage} | {model_name}" if model_name else usage
+
+            conv_tokens = await self._get_conversation_token_count()
+            if conv_tokens is not None:
+                overhead = max(0, count - conv_tokens)
+                overhead_str = format_token_count(overhead)
+                conv_str = format_token_count(conv_tokens)
+
+                overhead_unit = " tokens" if overhead < 1000 else ""
+                conv_unit = " tokens" if conv_tokens < 1000 else ""
+
+                msg += (
+                    f"\n|- System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"
+                    f"\n`- Conversation: ~{conv_str}{conv_unit}"
+                )
+
+            await self._mount_message(AppMessage(msg))
+            return
+
+        model_name = settings.model_name
+        context_limit = settings.model_context_limit
+
+        parts: list[str] = ["No token usage yet"]
+        if context_limit is not None:
+            limit_str = format_token_count(context_limit)
+            parts.append(f"{limit_str} token context window")
+        if model_name:
+            parts.append(model_name)
+
+        await self._mount_message(AppMessage(" | ".join(parts)))
+
+    async def _handle_remember_command(self, command: str) -> None:
+        """Build and send the memory-capture prompt."""
+        cmd = command.lower().strip()
+        additional_context = ""
+        if cmd.startswith("/remember "):
+            additional_context = command.strip()[len("/remember ") :].strip()
+
+        if additional_context:
+            final_prompt = (
+                f"{REMEMBER_PROMPT}\n\n"
+                f"**Additional context from user:** {additional_context}"
+            )
+        else:
+            final_prompt = REMEMBER_PROMPT
+
+        await self._handle_user_message(final_prompt)
+
+    async def _handle_mcp_command(self, _command: str) -> None:
+        """Open the MCP viewer."""
+        await self._show_mcp_viewer()
+
+    async def _handle_model_command(self, command: str) -> None:
+        """Switch models or manage the default model."""
+        cmd = command.lower().strip()
+        model_arg = None
+        set_default = False
+        extra_kwargs: dict[str, Any] | None = None
+        if cmd.startswith("/model "):
+            raw_arg = command.strip()[len("/model ") :].strip()
+            try:
+                raw_arg, extra_kwargs = _extract_model_params_flag(raw_arg)
+            except (ValueError, TypeError) as exc:
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(ErrorMessage(str(exc)))
+                return
+            if raw_arg.startswith("--default"):
+                set_default = True
+                model_arg = raw_arg[len("--default") :].strip() or None
+            else:
+                model_arg = raw_arg or None
+
+        if set_default:
             await self._mount_message(UserMessage(command))
-            help_text = Text(
-                "Commands: /quit, /clear, /compact, /mcp, "
-                "/model [--model-params JSON] [--default], /reload, /remember, "
-                "/tokens, /threads, /trace, /changelog, /docs, /feedback, /help\n\n"
+            if extra_kwargs:
+                await self._mount_message(
+                    ErrorMessage(
+                        "--model-params cannot be used with --default. "
+                        "Model params are applied per-session, not persisted."
+                    )
+                )
+            elif model_arg == "--clear":
+                await self._clear_default_model()
+            elif model_arg:
+                await self._set_default_model(model_arg)
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /model --default provider:model\n"
+                        "       /model --default --clear"
+                    )
+                )
+            return
+
+        if model_arg:
+            await self._mount_message(UserMessage(command))
+            await self._switch_model(model_arg, extra_kwargs=extra_kwargs)
+            return
+
+        await self._show_model_selector(extra_kwargs=extra_kwargs)
+
+    async def _handle_reload_command(self, command: str) -> None:
+        """Reload config from environment variables and `.env`."""
+        await self._mount_message(UserMessage(command))
+        try:
+            changes = settings.reload_from_environment()
+
+            from bog_agents_cli.model_config import clear_caches
+
+            clear_caches()
+        except (OSError, ValueError):
+            logger.exception("Failed to reload configuration")
+            await self._mount_message(
+                AppMessage(
+                    "Failed to reload configuration. Check your .env file and "
+                    "environment variables for syntax errors, then try again."
+                )
+            )
+            return
+        if changes:
+            report = "Configuration reloaded. Changes:\n" + "\n".join(
+                f"  - {change}" for change in changes
+            )
+        else:
+            report = "Configuration reloaded. No changes detected."
+        report += "\nModel config caches cleared."
+        await self._mount_message(AppMessage(report))
+
+    async def _handle_doctor_command(self, command: str) -> None:
+        """Run local health diagnostics from inside the TUI."""
+        from bog_agents_cli.doctor import run_doctor
+
+        await self._mount_message(UserMessage(command))
+        report = await asyncio.to_thread(run_doctor)
+        await self._mount_message(AppMessage(report))
+
+    async def _handle_review_command(self, command: str) -> None:
+        """Generate a structured code-review prompt and send it to the agent."""
+        from bog_agents_cli.review_command import (
+            generate_review_prompt,
+            parse_review_args,
+        )
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/review") :].strip()
+        target = parse_review_args(raw_arg)
+        prompt = generate_review_prompt(target)
+        await self._mount_message(AppMessage("Starting structured code review..."))
+        await self._send_prompt_to_agent(prompt)
+
+    async def _handle_settings_command(self, command: str) -> None:
+        """Show settings UI or print the settings path."""
+        cmd = command.lower().strip()
+        if cmd == "/settings" or "show" in cmd:
+            await self._show_settings_screen()
+            return
+        if "path" in cmd:
+            from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(AppMessage(str(DEFAULT_CONFIG_PATH)))
+            return
+        await self._show_settings_screen()
+
+    async def _handle_unknown_command(self, command: str) -> None:
+        """Render an unknown-command message with suggestions."""
+        cmd = self._command_name(command)
+        await self._mount_message(UserMessage(command))
+        suggestions = self._match_slash_commands(cmd, limit=3)
+        if suggestions:
+            suggestion_lines = "\n".join(
+                f"  {name} - {desc}" for name, desc in suggestions
+            )
+            message = (
+                f"Unknown command: {cmd}\n\n"
+                "Closest matches:\n"
+                f"{suggestion_lines}\n\n"
+                "Tip: use `/help <command-or-keyword>` or `/commands`."
+            )
+        else:
+            message = (
+                f"Unknown command: {cmd}\n\n"
+                "Use `/commands` to browse available slash commands."
+            )
+        await self._mount_message(AppMessage(message))
+
+    async def _handle_help_command(self, command: str) -> None:
+        """Handle `/help` and `/commands` command discovery.
+
+        Args:
+            command: Full slash command text.
+        """
+        await self._mount_message(UserMessage(command))
+
+        if command.startswith("/commands"):
+            raw_arg = command.strip()[len("/commands") :].strip()
+        else:
+            raw_arg = command.strip()[len("/help") :].strip()
+
+        if raw_arg:
+            help_text = self._build_command_reference(raw_arg)
+        else:
+            help_text = (
+                "Commands: /help, /commands, /quit, /clear, /compact, /resume, "
+                "/threads, /mcp, /model [--model-params JSON] [--default], "
+                "/reload, /remember, /tokens, /session, /permissions, "
+                "/keybindings, /skills, /review, /doctor, /trace, /logs, "
+                "/init, /changelog, /docs, /feedback\n\n"
                 "Interactive Features:\n"
                 "  Enter           Submit your message\n"
                 f"  {newline_shortcut():<15} Insert newline\n"
@@ -1715,238 +2126,282 @@ class BogAgentsApp(App):
                 "  @filename       Auto-complete files and inject content\n"
                 "  /command        Slash commands (/help, /clear, /quit)\n"
                 "  !command        Run shell commands directly\n\n"
-                f"Docs: {DOCS_URL}",
-                style="dim italic",
+                f"{self._build_command_reference()}\n\n"
+                f"Docs: {DOCS_URL}"
             )
-            help_text.stylize(f"link {DOCS_URL}", help_text.plain.index(DOCS_URL))
-            await self._mount_message(AppMessage(help_text))
 
-        elif cmd in {"/changelog", "/docs", "/feedback"}:
-            await self._open_url_command(command, cmd)
-        elif cmd == "/version":
-            await self._mount_message(UserMessage(command))
-            # Show CLI and SDK package versions
-            try:
-                from bog_agents_cli._version import (
-                    __version__ as cli_version,
-                )
+        help_text_rich = Text(help_text, style="dim italic")
+        if DOCS_URL in help_text:
+            help_text_rich.stylize(f"link {DOCS_URL}", help_text.index(DOCS_URL))
+        await self._mount_message(AppMessage(help_text_rich))
 
-                cli_line = f"bog-agents-cli version: {cli_version}"
-            except ImportError:
-                logger.debug("bog_agents_cli._version module not found")
-                cli_line = "bog-agents-cli version: unknown"
-            except Exception:
-                logger.warning("Unexpected error looking up CLI version", exc_info=True)
-                cli_line = "bog-agents-cli version: unknown"
-            try:
-                from importlib.metadata import (
-                    PackageNotFoundError,
-                    version as _pkg_version,
-                )
+    async def _handle_resume_command(self, command: str) -> None:
+        """Handle `/resume` for fast thread switching.
 
-                sdk_version = _pkg_version("bog-agents")
-                sdk_line = f"bog-agents (SDK) version: {sdk_version}"
-            except PackageNotFoundError:
-                logger.debug("bog-agents SDK package not found in environment")
-                sdk_line = "bog-agents (SDK) version: unknown"
-            except Exception:
-                logger.warning("Unexpected error looking up SDK version", exc_info=True)
-                sdk_line = "bog-agents (SDK) version: unknown"
-            await self._mount_message(AppMessage(f"{cli_line}\n{sdk_line}"))
-        elif cmd == "/clear":
-            self._pending_messages.clear()
-            self._queued_widgets.clear()
-            await self._clear_messages()
-            if self._token_tracker:
-                self._token_tracker.reset()
-            # Clear status message (e.g., "Interrupted" from previous session)
-            self._update_status("")
-            # Reset thread to start fresh conversation
-            if self._session_state:
-                new_thread_id = self._session_state.reset_thread()
-                try:
-                    banner = self.query_one("#welcome-banner", WelcomeBanner)
-                    banner.update_thread_id(new_thread_id)
-                except NoMatches:
-                    pass
-                await self._mount_message(
-                    AppMessage(f"Started new thread: {new_thread_id}")
-                )
-        elif cmd == "/compact":
-            await self._mount_message(UserMessage(command))
-            await self._handle_compact()
-        elif cmd == "/threads":
+        Args:
+            command: Full slash command text.
+        """
+        raw_arg = command.strip()[len("/resume") :].strip()
+        lowered = raw_arg.lower()
+
+        if lowered in {"list", "browse"}:
             await self._show_thread_selector()
-        elif cmd == "/trace":
-            await self._handle_trace_command(command)
-        elif cmd == "/tokens":
-            await self._mount_message(UserMessage(command))
-            if self._token_tracker and self._token_tracker.current_context > 0:
-                count = self._token_tracker.current_context
-                formatted = format_token_count(count)
+            return
 
-                model_name = settings.model_name
-                context_limit = settings.model_context_limit
+        if not raw_arg or lowered in {"last", "latest", "recent"}:
+            from bog_agents_cli.sessions import list_threads
 
-                if context_limit is not None:
-                    limit_str = format_token_count(context_limit)
-                    pct = count / context_limit * 100
-                    usage = f"{formatted} / {limit_str} tokens ({pct:.0f}%)"
-                else:
-                    usage = f"{formatted} tokens used"
-
-                msg = f"{usage} \u00b7 {model_name}" if model_name else usage
-
-                conv_tokens = await self._get_conversation_token_count()
-                if conv_tokens is not None:
-                    overhead = max(0, count - conv_tokens)
-                    overhead_str = format_token_count(overhead)
-                    conv_str = format_token_count(conv_tokens)
-
-                    overhead_unit = (
-                        " tokens" if overhead < 1000 else ""
-                    )  # not bothersome, cosmetic
-                    conv_unit = (
-                        " tokens" if conv_tokens < 1000 else ""
-                    )  # not bothersome, cosmetic
-
-                    msg += (
-                        f"\n\u251c System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"
-                        f"\n\u2514 Conversation: ~{conv_str}{conv_unit}"
-                    )
-
-                await self._mount_message(AppMessage(msg))
-            else:
-                model_name = settings.model_name
-                context_limit = settings.model_context_limit
-
-                parts: list[str] = ["No token usage yet"]
-                if context_limit is not None:
-                    limit_str = format_token_count(context_limit)
-                    parts.append(f"{limit_str} token context window")
-                if model_name:
-                    parts.append(model_name)
-
-                await self._mount_message(AppMessage(" · ".join(parts)))
-        elif cmd == "/remember" or cmd.startswith("/remember "):
-            # Extract any additional context after /remember
-            additional_context = ""
-            if cmd.startswith("/remember "):
-                additional_context = command.strip()[len("/remember ") :].strip()
-
-            # Build the final prompt
-            if additional_context:
-                final_prompt = (
-                    f"{REMEMBER_PROMPT}\n\n"
-                    f"**Additional context from user:** {additional_context}"
-                )
-            else:
-                final_prompt = REMEMBER_PROMPT
-
-            # Send as a user message to the agent
-            await self._handle_user_message(final_prompt)
-            return  # _handle_user_message already mounts the message
-        elif cmd == "/mcp":
-            await self._show_mcp_viewer()
-        elif cmd == "/model" or cmd.startswith("/model "):
-            model_arg = None
-            set_default = False
-            extra_kwargs: dict[str, Any] | None = None
-            if cmd.startswith("/model "):
-                raw_arg = command.strip()[len("/model ") :].strip()
-                try:
-                    raw_arg, extra_kwargs = _extract_model_params_flag(raw_arg)
-                except (ValueError, TypeError) as exc:
-                    await self._mount_message(UserMessage(command))
-                    await self._mount_message(ErrorMessage(str(exc)))
-                    return
-                if raw_arg.startswith("--default"):
-                    set_default = True
-                    model_arg = raw_arg[len("--default") :].strip() or None
-                else:
-                    model_arg = raw_arg or None
-
-            if set_default:
-                await self._mount_message(UserMessage(command))
-                if extra_kwargs:
-                    await self._mount_message(
-                        ErrorMessage(
-                            "--model-params cannot be used with --default. "
-                            "Model params are applied per-session, not "
-                            "persisted."
-                        )
-                    )
-                elif model_arg == "--clear":
-                    await self._clear_default_model()
-                elif model_arg:
-                    await self._set_default_model(model_arg)
-                else:
-                    await self._mount_message(
-                        AppMessage(
-                            "Usage: /model --default provider:model\n"
-                            "       /model --default --clear"
-                        )
-                    )
-            elif model_arg:
-                # Direct switch: /model claude-sonnet-4-5
-                await self._mount_message(UserMessage(command))
-                await self._switch_model(model_arg, extra_kwargs=extra_kwargs)
-            else:
-                await self._show_model_selector(extra_kwargs=extra_kwargs)
-        elif cmd == "/reload":
-            await self._mount_message(UserMessage(command))
-            try:
-                changes = settings.reload_from_environment()
-
-                from bog_agents_cli.model_config import clear_caches
-
-                clear_caches()
-            except (OSError, ValueError):
-                logger.exception("Failed to reload configuration")
+            current_thread = (
+                self._session_state.thread_id if self._session_state else None
+            )
+            threads = await list_threads(limit=10)
+            target = next(
+                (
+                    thread["thread_id"]
+                    for thread in threads
+                    if thread["thread_id"] != current_thread
+                ),
+                None,
+            )
+            if target is None:
                 await self._mount_message(
                     AppMessage(
-                        "Failed to reload configuration. Check your .env "
-                        "file and environment variables for syntax errors, "
-                        "then try again."
+                        "No other saved threads found. "
+                        "Use /threads to browse available history."
                     )
                 )
                 return
-            if changes:
-                report = "Configuration reloaded. Changes:\n" + "\n".join(
-                    f"  - {change}" for change in changes
-                )
-            else:
-                report = "Configuration reloaded. No changes detected."
-            report += "\nModel config caches cleared."
-            await self._mount_message(AppMessage(report))
-        elif cmd == "/background" or cmd.startswith("/background "):
-            await self._mount_message(UserMessage(command))
-            await self._handle_background_command(command)
-        elif cmd == "/dashboard":
-            await self._mount_message(UserMessage(command))
-            await self._handle_dashboard_command()
-        elif cmd == "/recommend" or cmd.startswith("/recommend "):
-            await self._mount_message(UserMessage(command))
-            await self._handle_recommend_command(command)
-        elif cmd == "/settings" or cmd.startswith("/settings "):
-            if cmd == "/settings" or "show" in cmd:
-                await self._show_settings_screen()
-            elif "path" in cmd:
-                from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+            await self._resume_thread(target)
+            return
 
-                await self._mount_message(UserMessage(command))
-                await self._mount_message(AppMessage(str(DEFAULT_CONFIG_PATH)))
-            else:
-                await self._show_settings_screen()
-        elif cmd == "/init":
-            await self._handle_init_command()
-        elif cmd == "/logs":
-            await self._handle_logs_command()
-        elif cmd == "/onboard":
-            await self._handle_onboard_command()
+        await self._resume_thread(raw_arg)
+
+    async def _handle_session_command(self, command: str) -> None:
+        """Handle `/session` display and naming actions.
+
+        Args:
+            command: Full slash command text.
+        """
+        await self._mount_message(UserMessage(command))
+
+        raw_arg = command.strip()[len("/session") :].strip()
+        lowered = raw_arg.lower()
+        if lowered.startswith("name "):
+            name = raw_arg[5:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /session name <label>"))
+                return
+            self._session_name = name
+            await self._mount_message(AppMessage(f"Session named: {name}"))
+            return
+
+        if lowered in {"clear-name", "name --clear"}:
+            self._session_name = None
+            await self._mount_message(AppMessage("Session name cleared."))
+            return
+
+        if raw_arg and lowered not in {"show", "info", "status"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /session | /session name <label> | /session clear-name"
+                )
+            )
+            return
+
+        from bog_agents_cli.sessions import format_path
+
+        branch = _get_git_branch() or "(not a git repo)"
+        current_model = self._model_override or settings.model_name or "auto"
+        token_usage = (
+            format_token_count(self._token_tracker.current_context)
+            if self._token_tracker is not None
+            and self._token_tracker.current_context > 0
+            else "0"
+        )
+        thread_id = (
+            self._session_state.thread_id
+            if self._session_state
+            else self._lc_thread_id or "(none)"
+        )
+        lines = [
+            f"Session: {self._session_name or '(unnamed)'}",
+            f"Agent: {self._assistant_id}",
+            f"Thread: {thread_id}",
+            f"Model: {current_model}",
+            f"Auto-approve: {'on' if self._auto_approve else 'off'}",
+            f"CWD: {format_path(self._cwd)}",
+            f"Git branch: {branch}",
+            f"Visible messages: {self._message_store.total_count}",
+            f"Requests this session: {self._session_stats.request_count}",
+            (
+                "Session token totals: "
+                f"{format_token_count(self._session_stats.input_tokens)} in / "
+                f"{format_token_count(self._session_stats.output_tokens)} out"
+            ),
+            f"Current context: {token_usage} tokens",
+            (
+                "Tip: `/session name <label>` stores a local label "
+                "for this CLI session."
+            ),
+        ]
+        await self._mount_message(AppMessage("\n".join(lines)))
+
+    async def _handle_permissions_command(self, command: str) -> None:
+        """Handle `/permissions` by showing approval posture and shell policy.
+
+        Args:
+            command: Full slash command text.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.config import RECOMMENDED_SAFE_SHELL_COMMANDS
+
+        allow_list = settings.shell_allow_list
+        if allow_list is None:
+            shell_summary = "disabled"
+            shell_detail = (
+                "Start the CLI with `--shell-allow-list recommended` or "
+                "`--shell-allow-list all` to enable shell access."
+            )
+        elif list(allow_list) == ["__ALL__"]:
+            shell_summary = "all commands auto-approved"
+            shell_detail = "Any shell command can run without an approval prompt."
+        elif list(allow_list) == list(RECOMMENDED_SAFE_SHELL_COMMANDS):
+            shell_summary = "recommended safe list"
+            shell_detail = ", ".join(list(allow_list)[:10])
         else:
-            await self._mount_message(UserMessage(command))
-            await self._mount_message(AppMessage(f"Unknown command: {cmd}"))
+            shell_summary = f"{len(allow_list)} auto-approved commands"
+            preview = ", ".join(list(allow_list)[:10])
+            remainder = len(allow_list) - 10
+            suffix = f", +{remainder} more" if remainder > 0 else ""
+            shell_detail = preview + suffix
+
+        lines = [
+            "Permissions",
+            f"Auto-approve: {'on' if self._auto_approve else 'off'}",
+            f"Shell allow-list: {shell_summary}",
+            f"Shell detail: {shell_detail}",
+            "Shift+Tab toggles auto-approve for the current session.",
+            (
+                "Tool approvals still appear when a command or tool is not "
+                "covered by the current policy."
+            ),
+        ]
+        await self._mount_message(AppMessage("\n".join(lines)))
+
+    async def _handle_keybindings_command(self, command: str) -> None:
+        """Handle `/keybindings` by showing current keybinding configuration.
+
+        Args:
+            command: Full slash command text.
+        """
+        await self._mount_message(UserMessage(command))
+
+        raw_arg = command.strip()[len("/keybindings") :].strip().lower()
+        config_dir = Path.home() / ".bog-agents"
+        keybindings_path = config_dir / "keybindings.json"
+
+        if raw_arg == "path":
+            await self._mount_message(AppMessage(str(keybindings_path)))
+            return
+
+        from bog_agents_cli.keybindings import format_keybindings, load_keybindings
+
+        config = load_keybindings(config_dir)
+        message = (
+            f"Keybindings file: {keybindings_path}\n\n"
+            f"{format_keybindings(config)}\n\n"
+            "Edit the JSON file to override defaults."
+        )
+        await self._mount_message(AppMessage(message))
+
+    async def _handle_skills_command(self, command: str) -> None:
+        """Handle `/skills` by summarizing currently discoverable skills.
+
+        Args:
+            command: Full slash command text.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.skills.load import list_skills
+
+        user_skills_dir = settings.get_user_skills_dir(self._assistant_id)
+        project_skills_dir = settings.get_project_skills_dir()
+        user_agent_skills_dir = settings.get_user_agent_skills_dir()
+        project_agent_skills_dir = settings.get_project_agent_skills_dir()
+        built_in_skills_dir = settings.get_built_in_skills_dir()
+
+        skills = list_skills(
+            built_in_skills_dir=built_in_skills_dir,
+            user_skills_dir=user_skills_dir,
+            project_skills_dir=project_skills_dir,
+            user_agent_skills_dir=user_agent_skills_dir,
+            project_agent_skills_dir=project_agent_skills_dir,
+        )
+
+        if not skills:
+            await self._mount_message(
+                AppMessage(
+                    "No skills are currently discoverable.\n\n"
+                    "Use `bog-agents skills list` for full CLI management."
+                )
+            )
+            return
+
+        counts = {"project": 0, "user": 0, "built-in": 0}
+        for skill in skills:
+            source = skill.get("source", "user")
+            if source in counts:
+                counts[source] += 1
+
+        names = sorted(str(skill["name"]) for skill in skills)
+        preview_names = ", ".join(names[:8])
+        if len(names) > 8:
+            preview_names += f", +{len(names) - 8} more"
+
+        precedence_paths = [
+            (".agents/skills", project_agent_skills_dir),
+            (".bog-agents/skills", project_skills_dir),
+            ("~/.agents/skills", user_agent_skills_dir),
+            (f"~/.bog-agents/{self._assistant_id}/skills", user_skills_dir),
+            ("built-in", built_in_skills_dir),
+        ]
+        path_lines = [
+            f"- {label}: {path}"
+            for label, path in precedence_paths
+            if path is not None
+        ]
+
+        message = "\n".join(
+            [
+                f"Loaded skills: {len(skills)}",
+                f"Project skills: {counts['project']}",
+                f"User skills: {counts['user']}",
+                f"Built-in skills: {counts['built-in']}",
+                f"Examples: {preview_names}",
+                "",
+                "Search paths:",
+                *path_lines,
+                "",
+                (
+                    "Use `bog-agents skills list` for detailed metadata "
+                    "and precedence debugging."
+                ),
+            ]
+        )
+        await self._mount_message(AppMessage(message))
+
+    async def _handle_command(self, command: str) -> None:
+        """Handle a slash command.
+
+        Args:
+            command: The slash command (including /)
+        """
+        handler = self._resolve_command_handler(self._command_name(command))
+        if handler is None:
+            await self._handle_unknown_command(command)
+        else:
+            await handler(command)
 
         # Scroll to bottom after command output is rendered.
         # Use call_after_refresh so the layout pass completes first;

@@ -436,11 +436,9 @@ class TestSessionManager:
     def test_search_command_palette(self):
         from bog_agents_cli.session_manager import search_command_palette
 
-        results = search_command_palette("test")
+        results = search_command_palette("model")
         assert len(results) > 0
-        assert any(
-            "test" in r.name.lower() or "test" in r.description.lower() for r in results
-        )
+        assert any("/model" == r.name for r in results)
 
     def test_search_command_palette_empty(self):
         from bog_agents_cli.session_manager import search_command_palette
@@ -459,6 +457,14 @@ class TestSessionManager:
         assert "/test" in result
         assert "Test command" in result
 
+    def test_command_palette_stays_in_sync_with_registry(self):
+        from bog_agents_cli.command_registry import get_command_palette_specs
+        from bog_agents_cli.session_manager import COMMAND_PALETTE
+
+        palette_names = {entry.name for entry in COMMAND_PALETTE}
+        registry_names = {spec.name for spec in get_command_palette_specs()}
+        assert palette_names == registry_names
+
 
 class TestSlashCommands:
     """Tests for new slash commands in autocomplete."""
@@ -468,24 +474,13 @@ class TestSlashCommands:
 
         names = {cmd[0] for cmd in SLASH_COMMANDS}
         new_commands = {
-            "/agent",
-            "/api",
-            "/audit",
-            "/branch",
-            "/health",
-            "/image",
-            "/infra",
-            "/migrate",
-            "/model-route",
+            "/commands",
+            "/doctor",
+            "/logs",
             "/onboard",
-            "/plugin",
-            "/pr",
-            "/preview",
-            "/resolve",
+            "/review",
             "/session",
-            "/team",
-            "/test",
-            "/worktree",
+            "/skills",
         }
         for cmd in new_commands:
             assert cmd in names, f"Missing slash command: {cmd}"
@@ -493,8 +488,7 @@ class TestSlashCommands:
     def test_total_command_count(self):
         from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
 
-        # Should have significantly more commands now
-        assert len(SLASH_COMMANDS) >= 45
+        assert len(SLASH_COMMANDS) >= 25
 
     def test_wired_commands_exist(self):
         """New wired slash commands should be in the list."""

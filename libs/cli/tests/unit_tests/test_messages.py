@@ -6,6 +6,7 @@ import pytest
 from rich.markup import render
 from rich.style import Style
 from rich.text import Text
+from textual.markup import MarkupError
 
 from bog_agents_cli.config import COLORS
 from bog_agents_cli.input import INPUT_HIGHLIGHT_PATTERN
@@ -140,6 +141,32 @@ class TestToolCallMessageMarkupSafety:
         rendered = render(content)
         assert "[foo]" in rendered.plain
         assert "[/dim]" in rendered.plain
+
+    def test_safe_widget_update_falls_back_to_plain_text(self) -> None:
+        """Tool output rendering should fall back instead of crashing on bad markup."""
+        msg = ToolCallMessage("test_tool", {})
+        widget = MagicMock()
+        widget.update.side_effect = [MarkupError("boom"), None]
+
+        msg._update_widget_safely(
+            widget,
+            "[bad=value]",
+            fallback_plain="literal [bad=value]",
+        )
+
+        assert widget.update.call_count == 2
+        fallback_arg = widget.update.call_args_list[1].args[0]
+        assert isinstance(fallback_arg, Text)
+        assert fallback_arg.plain == "literal [bad=value]"
+
+    def test_web_dict_keys_are_escaped(self) -> None:
+        """Generic web dict rendering should escape markup in keys as well as values."""
+        msg = ToolCallMessage("fetch_url", {})
+        result = msg._format_web_dict({"[foo=1.0),\n": "bar"}, is_preview=False)
+
+        rendered = render(result.content)
+        assert "[foo=1.0),\n" in rendered.plain
+        assert "bar" in rendered.plain
 
 
 class TestToolCallMessageShellCommand:

@@ -17,6 +17,8 @@ import subprocess  # noqa: S404
 import time
 from dataclasses import dataclass, field
 
+from bog_agents_cli.command_registry import get_command_palette_specs, search_slash_commands
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,29 +64,13 @@ class CommandPaletteEntry:
 
 # Built-in command palette entries
 COMMAND_PALETTE: list[CommandPaletteEntry] = [
-    CommandPaletteEntry("/help", "Show help information", "?", "general"),
-    CommandPaletteEntry("/model", "Switch model", "", "config"),
-    CommandPaletteEntry("/context", "Show context usage", "", "info"),
-    CommandPaletteEntry("/health", "Codebase health report", "", "analysis"),
-    CommandPaletteEntry("/test", "Run tests with coverage", "", "quality"),
-    CommandPaletteEntry("/pr", "Pull request management", "", "git"),
-    CommandPaletteEntry("/agent", "Agent thread management", "", "agent"),
-    CommandPaletteEntry("/plugin", "Plugin management", "", "config"),
-    CommandPaletteEntry("/team", "Team settings", "", "enterprise"),
-    CommandPaletteEntry("/migrate", "Migration assistant", "", "analysis"),
-    CommandPaletteEntry("/onboard", "Codebase onboarding", "", "info"),
-    CommandPaletteEntry("/changelog", "Generate changelog", "", "git"),
-    CommandPaletteEntry("/image", "Image analysis", "", "multimodal"),
-    CommandPaletteEntry("/api", "API testing", "", "web"),
-    CommandPaletteEntry("/preview", "Dev server preview", "", "web"),
-    CommandPaletteEntry("/session", "Session info", "", "info"),
-    CommandPaletteEntry("/cost", "Cost breakdown", "", "info"),
-    CommandPaletteEntry("/compact", "Compact conversation", "", "config"),
-    CommandPaletteEntry("/diff", "Show diff preview", "", "git"),
-    CommandPaletteEntry("/profile", "Switch profile", "", "config"),
-    CommandPaletteEntry("/review", "Code review", "", "quality"),
-    CommandPaletteEntry("/doctor", "Diagnose setup", "", "config"),
-    CommandPaletteEntry("/effort", "Set effort level", "", "config"),
+    CommandPaletteEntry(
+        spec.name,
+        spec.description,
+        spec.shortcut,
+        spec.category,
+    )
+    for spec in get_command_palette_specs()
 ]
 
 
@@ -162,22 +148,11 @@ def search_command_palette(query: str) -> list[CommandPaletteEntry]:
     Returns:
         Matching commands.
     """
-    query_lower = query.lower()
-    results: list[tuple[int, CommandPaletteEntry]] = []
-
-    for entry in COMMAND_PALETTE:
-        score = 0
-        if query_lower in entry.name.lower():
-            score += 10
-        if query_lower in entry.description.lower():
-            score += 5
-        if query_lower in entry.category.lower():
-            score += 3
-        if score > 0:
-            results.append((score, entry))
-
-    results.sort(key=lambda x: x[0], reverse=True)
-    return [entry for _, entry in results]
+    specs = search_slash_commands(query, limit=len(COMMAND_PALETTE))
+    return [
+        CommandPaletteEntry(spec.name, spec.description, spec.shortcut, spec.category)
+        for spec in specs
+    ]
 
 
 def format_command_palette(entries: list[CommandPaletteEntry]) -> str:

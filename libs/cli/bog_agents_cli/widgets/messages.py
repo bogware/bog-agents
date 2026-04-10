@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from rich.markup import escape as escape_markup
 from rich.text import Text
 from textual.containers import Vertical
+from textual.markup import MarkupError
 from textual.widgets import Markdown, Static
 
 from bog_agents_cli.config import (
@@ -762,6 +763,52 @@ class ToolCallMessage(Vertical):
             prefixed += "\n" + "\n".join(f"  {line}" for line in lines[1:])
         return prefixed
 
+    def _plain_output_for_display(
+        self, output: str, *, is_preview: bool
+    ) -> str:  # noqa: PLR6301  # Grouped as method for widget cohesion
+        """Build a plain-text fallback for tool output rendering.
+
+        Args:
+            output: Raw tool output.
+            is_preview: Whether the fallback is for preview mode.
+
+        Returns:
+            Plain-text output trimmed to the preview budget when needed.
+        """
+        stripped = output.strip()
+        if not stripped:
+            return ""
+
+        lines = stripped.split("\n")
+        max_lines = self._PREVIEW_LINES if is_preview else len(lines)
+        limited = "\n".join(lines[:max_lines])
+        if is_preview and len(limited) > self._PREVIEW_CHARS:
+            limited = limited[: self._PREVIEW_CHARS]
+        return limited
+
+    @staticmethod
+    def _update_widget_safely(
+        widget: Static,
+        content: str,
+        *,
+        fallback_plain: str,
+    ) -> None:
+        """Update a `Static` widget with markup, falling back to plain text.
+
+        Args:
+            widget: Widget to update.
+            content: Preferred Rich-markup content.
+            fallback_plain: Plain-text fallback shown if markup parsing fails.
+        """
+        try:
+            widget.update(content)
+        except MarkupError:
+            logger.warning(
+                "Failed to render tool output markup; falling back to plain text.",
+                exc_info=True,
+            )
+            widget.update(Text(fallback_plain))
+
     def _format_todos_output(
         self, output: str, *, is_preview: bool = False
     ) -> FormattedOutput:
@@ -878,16 +925,22 @@ class ToolCallMessage(Vertical):
                     name = path.name
                     # Color by file type
                     if path.suffix in {".py", ".pyx"}:
-                        lines.append(f"    [#3b82f6]{name}[/#3b82f6]")
+                        lines.append(
+                            f"    [#3b82f6]{escape_markup(name)}[/#3b82f6]"
+                        )
                     elif path.suffix in {".md", ".txt", ".rst"}:
-                        lines.append(f"    {name}")
+                        lines.append(f"    {escape_markup(name)}")
                     elif path.suffix in {".json", ".yaml", ".yml", ".toml"}:
-                        lines.append(f"    [#f59e0b]{name}[/#f59e0b]")
+                        lines.append(
+                            f"    [#f59e0b]{escape_markup(name)}[/#f59e0b]"
+                        )
                     elif not path.suffix:
                         # Likely a directory or no extension
-                        lines.append(f"    [#10b981]{name}/[/#10b981]")
+                        lines.append(
+                            f"    [#10b981]{escape_markup(name)}/[/#10b981]"
+                        )
                     else:
-                        lines.append(f"    {name}")
+                        lines.append(f"    {escape_markup(name)}")
 
                 truncation = None
                 if is_preview and len(items) > max_items:
@@ -942,7 +995,7 @@ class ToolCallMessage(Vertical):
                         display = str(rel)
                     except ValueError:
                         display = path.name
-                    lines.append(f"    {display}")
+                    lines.append(f"    {escape_markup(display)}")
 
                 truncation = None
                 if is_preview and len(items) > max_items:
@@ -1059,7 +1112,7 @@ class ToolCallMessage(Vertical):
             v_str = str(v)
             if is_preview and len(v_str) > _MAX_WEB_CONTENT_LEN:
                 v_str = v_str[:_MAX_WEB_CONTENT_LEN] + "..."
-            lines.append(f"  {k}: {escape_markup(v_str)}")
+            lines.append(f"  {escape_markup(str(k))}: {escape_markup(v_str)}")
         truncation = None
         if is_preview and len(data) > max_keys:
             truncation = f"{len(data) - max_keys} more"
@@ -1152,7 +1205,14 @@ class ToolCallMessage(Vertical):
             self._preview_widget.display = False
             result = self._format_output(self._output, is_preview=False)
             prefixed = self._prefix_output(result.content)
-            self._full_widget.update(prefixed)
+            fallback_prefixed = self._prefix_output(
+                self._plain_output_for_display(self._output, is_preview=False)
+            )
+            self._update_widget_safely(
+                self._full_widget,
+                prefixed,
+                fallback_plain=fallback_prefixed,
+            )
             self._full_widget.display = True
             # Show collapse hint underneath
             self._hint_widget.update(
@@ -1165,7 +1225,14 @@ class ToolCallMessage(Vertical):
             if needs_truncation:
                 result = self._format_output(self._output, is_preview=True)
                 prefixed = self._prefix_output(result.content)
-                self._preview_widget.update(prefixed)
+                fallback_prefixed = self._prefix_output(
+                    self._plain_output_for_display(self._output, is_preview=True)
+                )
+                self._update_widget_safely(
+                    self._preview_widget,
+                    prefixed,
+                    fallback_plain=fallback_prefixed,
+                )
                 self._preview_widget.display = True
 
                 # Build hint with truncation info if available
@@ -1183,7 +1250,14 @@ class ToolCallMessage(Vertical):
                 # Output fits in preview, show formatted
                 result = self._format_output(output_stripped, is_preview=False)
                 prefixed = self._prefix_output(result.content)
-                self._preview_widget.update(prefixed)
+                fallback_prefixed = self._prefix_output(
+                    self._plain_output_for_display(output_stripped, is_preview=False)
+                )
+                self._update_widget_safely(
+                    self._preview_widget,
+                    prefixed,
+                    fallback_plain=fallback_prefixed,
+                )
                 self._preview_widget.display = True
                 self._hint_widget.display = False
             else:

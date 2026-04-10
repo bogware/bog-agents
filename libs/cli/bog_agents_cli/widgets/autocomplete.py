@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from bog_agents_cli.command_registry import get_slash_commands
 from bog_agents_cli.project_utils import find_project_root
 
 
@@ -94,90 +95,7 @@ class CompletionController(Protocol):
 # Slash Command Completion
 # ============================================================================
 
-SLASH_COMMANDS: list[tuple[str, str, str]] = [
-    ("/help", "Show help", ""),
-    (
-        "/agent",
-        "Manage parallel agent threads (list/spawn/switch/stop)",
-        "thread multi parallel",
-    ),
-    ("/api", "Send API requests and test endpoints", "http rest curl"),
-    ("/audit", "Audit dependencies for vulnerabilities", "security deps"),
-    (
-        "/background",
-        "Manage background agent tasks (run/list/cancel/status)",
-        "bg task async",
-    ),
-    ("/branch", "Create or switch conversation branches", "fork explore"),
-    ("/changelog", "Generate changelog from git history", "release notes"),
-    ("/clear", "Clear chat and start new thread", "reset"),
-    ("/compact", "Summarize conversation to reduce context usage", "retain keep drop"),
-    ("/context", "Show context window usage with breakdown", "tokens window rag"),
-    ("/cost", "Show session cost and token usage", "tokens budget spend"),
-    (
-        "/dashboard",
-        "Show multi-agent dashboard with status and costs",
-        "agents monitor panel",
-    ),
-    ("/diff", "Show pending file changes as a diff", "changes git"),
-    ("/doctor", "Run health check diagnostics", "check status"),
-    ("/docs", "Generate or open documentation", "readme api"),
-    ("/effort", "Set effort level (low/medium/high/max)", "quality speed"),
-    ("/extensions", "Manage extensions (list/install/uninstall)", "plugins"),
-    ("/feedback", "Submit a bug report or feature request", ""),
-    ("/health", "Codebase health score and analysis", "quality complexity coverage"),
-    ("/image", "Analyze images or paste from clipboard", "screenshot multimodal"),
-    (
-        "/init",
-        "Generate AGENTS.md for this repo (codebase context)",
-        "setup agents onboard",
-    ),
-    ("/infra", "Generate infrastructure code (Docker/K8s/Terraform)", "devops deploy"),
-    ("/keybindings", "Show or customize keybindings", "keys shortcuts"),
-    ("/logs", "Show log file path and recent errors", "debug trace errors"),
-    ("/mcp", "Show active MCP servers and tools", "servers"),
-    ("/migrate", "Plan technology migration", "upgrade convert"),
-    (
-        "/model",
-        "Switch model mid-session (supports local models)",
-        "provider swap ollama",
-    ),
-    ("/model-route", "Configure automatic model routing", "auto cost optimize"),
-    ("/onboard", "Interactive codebase onboarding guide", "tour walkthrough new"),
-    ("/plan", "Toggle read-only plan mode", "readonly architect"),
-    ("/plugin", "Manage plugins (list/install/uninstall/create)", "marketplace skills"),
-    ("/pr", "Pull request management (create/list/review)", "github merge"),
-    ("/preview", "Start/stop local dev server preview", "serve browser"),
-    ("/profile", "Switch configuration profile", "config preset"),
-    ("/quit", "Exit app", "close leave"),
-    (
-        "/recommend",
-        "AI-powered code review and recommendations",
-        "review audit advise persona focus",
-    ),
-    ("/record", "Start/stop recording session for replay", "capture"),
-    ("/reload", "Reload config from environment variables and .env", "refresh"),
-    ("/remember", "Update memory and skills from conversation", ""),
-    ("/remote", "Submit task for remote/cloud execution", "cloud"),
-    ("/replay", "Replay agent actions for debugging", "debug trace"),
-    ("/resolve", "AI-assisted merge conflict resolution", "conflict merge"),
-    ("/review", "Run code review on staged changes or files", "lint check"),
-    ("/session", "Show session info and name session", "name duration"),
-    (
-        "/settings",
-        "Configure providers, models, and fallbacks",
-        "config preferences setup",
-    ),
-    ("/teach", "Start teaching mode to learn a workflow", "learn skill"),
-    ("/team", "Team settings and roles management", "enterprise org"),
-    ("/test", "Run tests with coverage and generate test skeletons", "coverage pytest"),
-    ("/threads", "Browse and resume previous threads", "continue history sessions"),
-    ("/tokens", "Token usage", "cost"),
-    ("/trace", "Open current thread in LangSmith", ""),
-    ("/undo", "Undo last file change (git checkpoint)", "revert rollback"),
-    ("/version", "Show version", ""),
-    ("/worktree", "Manage git worktrees for isolated work", "isolate parallel"),
-]
+SLASH_COMMANDS: list[tuple[str, str, str]] = get_slash_commands()
 """Built-in slash commands: (name, description, hidden_keywords).
 
 Hidden keywords are space-separated terms that participate in fuzzy matching

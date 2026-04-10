@@ -233,7 +233,18 @@ The `bog-agents --help` screen is hand-maintained in `ui.show_help()`, separate 
 
 **Slash commands:**
 
-Slash commands are defined in `SLASH_COMMANDS` in `libs/cli/bog_agents_cli/widgets/autocomplete.py` as `(name, description, hidden_keywords)` tuples. Hidden keywords are space-separated terms that participate in fuzzy matching but are never displayed. To add an alias for an existing command, append it to the `hidden_keywords` string — do not create a duplicate command entry. For example, `/threads` has `sessions` as a hidden keyword so typing "sessions" surfaces it.
+Slash command metadata lives in `libs/cli/bog_agents_cli/command_registry.py` as `SlashCommandSpec` entries. The registry is the source of truth for command name, description, hidden keywords, category, shortcuts, aliases, and whether the command is currently exposed in the interactive CLI.
+
+- Use `available=True` only for commands that are actually wired and supported in the Textual app.
+- Put discovery terms in `hidden_keywords`; these improve fuzzy search without adding duplicate visible commands.
+- Use `aliases` for typed synonyms such as `/q` or `/cost` rather than creating another visible command entry.
+- Execution routing is centralized in `BogAgentsApp._COMMAND_HANDLER_NAMES` in `libs/cli/bog_agents_cli/app.py`.
+
+When adding or changing a slash command, update all of the following in the same PR:
+
+1. `libs/cli/bog_agents_cli/command_registry.py` for metadata and discoverability
+2. `libs/cli/bog_agents_cli/app.py` for execution routing and handler behavior
+3. Unit tests covering app routing plus any affected help, autocomplete, or command-palette behavior
 
 **Adding a new model provider:**
 

@@ -245,6 +245,22 @@ class TestSlashCommandController:
         suggestions = mock_view.render_completion_suggestions.call_args[0][0]
         assert any("/threads" in s[0] for s in suggestions)
 
+    def test_resume_command_available(self, controller, mock_view):
+        """Typing '/res' should surface the new `/resume` command."""
+        controller.on_text_changed("/res", 4)
+
+        mock_view.render_completion_suggestions.assert_called()
+        suggestions = mock_view.render_completion_suggestions.call_args[0][0]
+        assert any("/resume" in s[0] for s in suggestions)
+
+    def test_commands_command_available(self, controller, mock_view):
+        """Typing '/comm' should surface the new `/commands` browser."""
+        controller.on_text_changed("/comm", 5)
+
+        mock_view.render_completion_suggestions.assert_called()
+        suggestions = mock_view.render_completion_suggestions.call_args[0][0]
+        assert any("/commands" in s[0] for s in suggestions)
+
     def test_substring_description_match_exit(self, controller, mock_view):
         """Typing 'exit' surfaces /quit via substring match on 'Exit app'."""
         controller.on_text_changed("/exit", 5)

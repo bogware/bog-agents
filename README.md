@@ -1,207 +1,297 @@
-# Bog Agents
+﻿# Bog Agents
 
-An agent harness. You point it at a problem, it gets to work.
+Bog Agents is an open-source agent framework for software work.
 
-No wiring up prompts, tools, or context by hand. You get a working agent out of the box — planning, file access, shell, sub-agents, the whole outfit. Customize what needs customizing. Leave the rest alone.
+It gives you two things:
 
-Built on [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview). MIT licensed. Works with any LLM that can call tools.
+- `bog-agents`: a Python SDK for building agentic workflows on top of LangGraph
+- `bog-agents-cli`: a terminal-first coding agent for day-to-day engineering work
 
-## Install the SDK
+The project is designed for teams that want real agents, not a pile of prompt glue. Out of the box you get file tools, shell execution, thread history, model switching, memory, skills, MCP integration, background work, and a practical human-in-the-loop approval model.
+
+Built on [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview). MIT licensed.
+
+## Why Bog Agents
+
+- Production-minded SDK: start with a compiled LangGraph graph and extend it with middleware instead of rebuilding the basics for every project.
+- Serious CLI: use one tool for interactive coding, non-interactive automation, diagnostics, thread resume, and review workflows.
+- Model flexibility: works with LangChain-compatible tool-calling models, including Anthropic, OpenAI, Ollama, Bedrock, Google, and more.
+- Monorepo architecture: SDK, CLI, protocol support, evaluation tooling, and partner integrations live together and evolve together.
+
+## Install
+
+### SDK
 
 ```bash
 pip install bog-agents
 ```
 
-```python
-from bog_agents import create_agent
+### CLI
 
-agent = create_agent()
-result = agent.invoke(
-    {"messages": [{"role": "user", "content": "Research LangGraph and write a summary"}]}
-)
+```bash
+pip install bog-agents-cli
+
+# Provider extras
+pip install 'bog-agents-cli[anthropic]'
+pip install 'bog-agents-cli[ollama]'
+pip install 'bog-agents-cli[all-providers]'
 ```
 
-That's a running agent. It can plan, read and write files, run shell commands, and spin up sub-agents when the job calls for it.
+With `uv`:
 
-## Make It Yours
+```bash
+uv tool install 'bog-agents-cli[anthropic]'
+```
 
-Swap the model. Add tools. Change the prompt. The agent doesn't care — it'll use what you give it.
+The CLI includes OpenAI support by default. Other providers are enabled through extras.
+
+## SDK Quick Start
 
 ```python
 from bog_agents import create_agent
 
 agent = create_agent(
     model="anthropic:claude-sonnet-4-6",
-    tools=[my_custom_tool],
-    system_prompt="You are a research assistant.",
     enable_git_tools=True,
     enable_cost_tracking=True,
 )
 
-result = await agent.ainvoke(
-    {"messages": [{"role": "user", "content": "Fix the failing tests"}]},
-    config={"configurable": {"thread_id": "my-session"}},
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Inspect this repository and summarize the testing strategy.",
+            }
+        ]
+    },
+    config={"configurable": {"thread_id": "demo-thread"}},
 )
 ```
 
-`create_agent` returns a compiled LangGraph graph. Streaming, Studio, checkpointers — anything LangGraph does, this does too. MCP works through [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
+`create_agent()` returns a compiled LangGraph graph. That means you can use streaming, checkpointers, Studio, remote execution, and the rest of the LangGraph ecosystem without wrapping Bog Agents in another orchestration layer.
 
-## The CLI
+## CLI Quick Start
 
-A terminal agent that handles its own business. Web search, remote sandboxes, persistent memory, human-in-the-loop approval.
+Start an interactive session:
 
 ```bash
-pip install bog-agents-cli
-
-# Pick your provider
-pip install 'bog-agents-cli[anthropic]'
-pip install 'bog-agents-cli[ollama]'       # no API key needed
-pip install 'bog-agents-cli[all]'          # everything
+bog-agents
 ```
 
-```bash
-# Set a key and go
-export ANTHROPIC_API_KEY="sk-ant-..."
-bog-agents
+Pick a model explicitly:
 
-# Or pick a model
+```bash
 bog-agents -M claude-sonnet-4-6
 bog-agents -M gpt-4o
 bog-agents -M ollama:llama3
 ```
 
+Verify your environment:
+
 ```bash
-# Check your setup
 bog-agents --doctor
 ```
 
-See the [CLI README](libs/cli/) for the full rundown.
+Resume a previous session:
 
-## Run from Source
+```bash
+bog-agents -r
+bog-agents -r <thread-id>
+```
+
+## CLI In Depth
+
+### Interactive workflow
+
+`bog-agents-cli` is built around a Textual terminal UI. It is optimized for long-running coding sessions where the agent needs to inspect files, use tools, ask for approval when appropriate, and keep enough state to be useful across turns.
+
+Inside the app, type `/` to browse commands or use `/commands` and `/help <keyword>` to search the command surface.
+
+Representative interactive commands:
+
+| Command | Purpose |
+| --- | --- |
+| `/commands` | Browse available slash commands with descriptions |
+| `/model` | Switch models or manage the default model |
+| `/resume` | Resume the most recent thread or a specific thread |
+| `/session` | Show session details or assign a local label |
+| `/permissions` | Inspect approval and shell policy |
+| `/keybindings` | Show active keybindings or the config path |
+| `/skills` | Show loaded skills and search paths |
+| `/review` | Send a structured review request to the agent |
+| `/recommend` | Run configurable recommendation and review flows |
+| `/background` | Submit and monitor background agent tasks |
+| `/dashboard` | Show a multi-agent status snapshot |
+| `/doctor` | Run local environment diagnostics |
+| `/logs` | Show the log path and recent warnings or errors |
+| `/trace` | Open the current thread in LangSmith |
+| `/mcp` | Inspect active MCP servers and tools |
+| `/compact` | Reduce context pressure by summarizing history |
+| `/clear` | Start a fresh thread |
+| `/init` | Generate an `AGENTS.md` for the current repository |
+| `/onboard` | Start an interactive codebase tour |
+
+### Threading, memory, and continuity
+
+The CLI is designed for iterative work rather than one-shot prompts.
+
+- Conversations are stored as threads and can be resumed later.
+- `/resume`, `/threads`, and `-r` make it practical to jump back into unfinished work.
+- `/remember` can capture project knowledge into durable memory and skills.
+- Session metadata such as the active thread, model, and current context are visible from the interface instead of being hidden state.
+
+### Safety model
+
+Bog Agents treats tool execution as a policy problem, not a prompt problem.
+
+- Tool and shell approvals are explicit when the current policy requires them.
+- `Shift+Tab` toggles auto-approve for the active session.
+- `/permissions` shows the current posture so users can see what is allowed before they run a task.
+- Non-interactive shell access is opt-in via `--shell-allow-list`.
+
+### Non-interactive mode
+
+The CLI also works well in scripts, CI jobs, and local automation.
+
+```bash
+# One-shot task
+bog-agents -n "Summarize the current repository status"
+
+# Pipe-friendly output
+bog-agents -p "Explain this module" < path/to/file.py
+
+# Machine-readable output
+bog-agents -n "List TODO comments" --json
+
+# Allow a curated shell command set
+bog-agents -n "Run the tests and explain failures" --shell-allow-list recommended
+
+# Allow specific commands only
+bog-agents -n "Search logs for errors" --shell-allow-list cat,grep,find
+
+# Full shell access in a trusted environment
+bog-agents -n "Fix the failing tests and commit the result" --shell-allow-list all
+```
+
+Exit codes are intended to be automation-friendly:
+
+- `0`: success
+- `1`: failure
+- `130`: interrupted
+
+### Models and providers
+
+Use the `provider:model` form when you want to be explicit.
+
+| Provider | Example |
+| --- | --- |
+| Anthropic | `anthropic:claude-sonnet-4-6` |
+| OpenAI | `openai:gpt-4o` |
+| Ollama | `ollama:llama3` |
+| Google | `google_genai:gemini-2.5-pro` |
+| Bedrock | `bedrock_converse:anthropic.claude-sonnet-4-6` |
+| OpenRouter | `openrouter:meta-llama/llama-3` |
+| Perplexity | `perplexity:sonar-pro` |
+| xAI | `xai:grok-2` |
+
+The CLI can also infer a provider from your configuration and available credentials. Use `--doctor` or `/doctor` when setup does not behave as expected.
+
+### Remote execution, MCP, and server modes
+
+Bog Agents is not limited to a single local terminal process.
+
+```bash
+# Reuse or create a sandbox-backed session
+bog-agents --sandbox modal
+bog-agents --sandbox daytona
+bog-agents --sandbox runloop
+
+# MCP configuration
+bog-agents --mcp-config ./mcp.json
+bog-agents --no-mcp
+bog-agents --trust-project-mcp
+
+# Serve over HTTP
+bog-agents --serve
+bog-agents --serve --serve-host 0.0.0.0 --serve-port 9000
+
+# Run as an ACP server
+bog-agents --acp
+```
+
+## Run From Source
+
+Requirements:
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
 
 ```bash
 git clone https://github.com/bogware/bog-agents.git
 cd bog-agents
 
-# Windows PowerShell bootstrap for the main development packages
+# Bootstrap the main development packages
 ./scripts/repo.ps1 init
 
-# SDK
-cd libs/bog-agents && uv sync && cd ../..
-
-# CLI (links to local SDK)
-cd libs/cli && uv sync && cd ../..
-
-# Run it
-cd libs/cli && uv run bog-agents
+# Run the CLI from source
+cd libs/cli
+uv run bog-agents
 ```
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+The repository is a Python monorepo. The main package areas are:
+
+```text
+libs/
+|- bog-agents        # core SDK
+|- cli               # interactive and automation CLI
+|- acp               # Agent Context Protocol support
+|- harbor            # evaluation and benchmarking
+|- partners/         # sandbox and integration packages
+```
 
 ## Upgrade Workflow
 
-Use the repo script to check or refresh lockfiles across the maintained packages:
+Use the repository script to validate or refresh lockfiles across the managed packages:
 
 ```bash
-# Check lockfiles for the SDK + CLI
+# Check the primary development packages
 ./scripts/repo.ps1 lock-check
 
 # Check every managed package under libs/
 ./scripts/repo.ps1 lock-check -AllPackages
 
-# Regenerate lockfiles for every managed package under libs/
+# Regenerate lockfiles
 ./scripts/repo.ps1 lock -AllPackages
 ```
 
-## Run the Tests
+## Development
+
+Common top-level tasks:
 
 ```bash
-# SDK
-cd libs/bog-agents && make test
+make lint
+make format
+```
 
-# CLI
-cd libs/cli && make test
+Package-level work usually happens inside the package directory with `uv`:
 
-# Single file
+```bash
+cd libs/bog-agents
 uv run --group test pytest tests/unit_tests/test_specific.py
 
-# Lint everything
-make lint
+cd ../cli
+uv run --group test pytest tests/unit_tests/test_specific.py
 ```
 
-## What's in the Box
-
-**Tools out of the gate:** `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep`, `execute`, `write_todos`, `task`
-
-**Middleware** — plug in what you need, leave out what you don't:
-
-| Middleware | What It Does |
-|-----------|-------------|
-| `FilesystemMiddleware` | File operations, multi-edit, batch read |
-| `GitToolsMiddleware` | status, diff, log, commit, add, branch, stash, blame, show |
-| `RepoMapMiddleware` | Structural code map — Python, JS, TS, Rust, Go, Java |
-| `CheckpointingMiddleware` | Git-based snapshots before mutations, with undo |
-| `CostTrackerMiddleware` | Token usage, cost, budget enforcement |
-| `PlanModeMiddleware` | Read-only mode, blocks mutating tools |
-| `AutoQualityMiddleware` | Auto-lint and test after edits |
-| `ArchitectMiddleware` | Dual-model architect/reviewer |
-| `ParallelAgentsMiddleware` | Concurrent sub-agents |
-| `SummarizationMiddleware` | Auto-summarize when context fills up |
-| `MemoryMiddleware` | Persistent AGENTS.md memory across sessions |
-| `SkillsMiddleware` | Custom skill and instruction loading |
-
-## Monorepo Layout
-
-```
-libs/
-├── bog-agents/        # Core SDK
-├── cli/               # Terminal UI
-├── acp/               # Agent Client Protocol (Zed)
-├── harbor/            # Evaluation framework
-├── vscode-extension/  # VS Code extension
-└── partners/          # Sandbox integrations
-    ├── daytona/       #   Daytona cloud sandboxes
-    ├── modal/         #   Modal serverless
-    ├── runloop/       #   Runloop sandboxes
-    └── quickjs/       #   QuickJS JS sandbox
-```
-
-## Providers
-
-Any LangChain-compatible chat model works. Use `provider:model` format.
-
-| Provider | Install | Example |
-|----------|---------|---------|
-| Anthropic | `bog-agents-cli[anthropic]` | `anthropic:claude-sonnet-4-6` |
-| OpenAI | *(included)* | `openai:gpt-4o` |
-| Ollama | `bog-agents-cli[ollama]` | `ollama:llama3` |
-| Google | `bog-agents-cli[google-genai]` | `google_genai:gemini-2.5-pro` |
-| DeepSeek | `bog-agents-cli[deepseek]` | `deepseek:deepseek-chat` |
-| Groq | `bog-agents-cli[groq]` | `groq:llama-3.3-70b` |
-| AWS Bedrock | `bog-agents-cli[bedrock]` | `bedrock_converse:anthropic.claude-sonnet-4-6` |
-| Fireworks | `bog-agents-cli[fireworks]` | `fireworks:llama-v3p3-70b` |
-| Mistral | `bog-agents-cli[mistralai]` | `mistralai:mistral-large` |
-| NVIDIA | `bog-agents-cli[nvidia]` | `nvidia:nemotron-70b` |
-| OpenRouter | `bog-agents-cli[openrouter]` | `openrouter:meta-llama/llama-3` |
-| Perplexity | `bog-agents-cli[perplexity]` | `perplexity:sonar-pro` |
-| xAI | `bog-agents-cli[xai]` | `xai:grok-2` |
-| LiteLLM | `bog-agents-cli[litellm]` | `litellm:gpt-4o` |
-| HuggingFace | `bog-agents-cli[huggingface]` | `huggingface:meta-llama/Llama-3` |
-
-## Security
-
-Bog Agents trusts the LLM to do its job. Boundaries are enforced at the tool and sandbox level — not by expecting the model to hold its own reins. Bubblewrap on Linux, Seatbelt on macOS, Landlock where available.
+The repo guidance for contributors and coding agents lives in `AGENTS.md`, and the broader contribution process lives in `CONTRIBUTING.md`.
 
 ## Documentation
 
-- [Examples](examples/)
-- [Publishing](PUBLISHING.md)
+- [CLI package README](libs/cli/README.md)
 - [Contributing](CONTRIBUTING.md)
+- [Publishing](PUBLISHING.md)
 
 ## Acknowledgements
 
-This project drew its first breath from studying Claude Code — figuring out what made it general purpose, then pushing that further.
-
----
-
-*The trail's marked. Saddle up.*
+Bog Agents began by studying the strengths of general-purpose coding agents and then pushing toward a more open, composable, terminal-native implementation.
