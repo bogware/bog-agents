@@ -15,6 +15,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -32,16 +33,23 @@ class PluginInfo:
     rating: float = 0.0
     installed: bool = False
     enabled: bool = True
+    install_path: Path | None = None
+    skills: tuple[str, ...] = ()
+    commands: tuple[str, ...] = ()
 
 
-def get_plugins_dir() -> Path:
+def get_plugins_dir(*, create: bool = True) -> Path:
     """Get the plugins directory.
+
+    Args:
+        create: When `True`, create the directory if missing.
 
     Returns:
         Path to plugins directory.
     """
     plugins_dir = Path.home() / ".bog-agents" / "plugins"
-    plugins_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        plugins_dir.mkdir(parents=True, exist_ok=True)
     return plugins_dir
 
 
@@ -56,6 +64,25 @@ def get_skills_dir() -> Path:
     return skills_dir
 
 
+def read_plugin_manifest(manifest_path: Path) -> dict[str, Any]:
+    """Read a plugin manifest from disk.
+
+    Args:
+        manifest_path: Path to the plugin `manifest.json`.
+
+    Returns:
+        Parsed manifest dictionary.
+
+    Raises:
+        ValueError: If the manifest cannot be parsed.
+    """
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        msg = f"Could not read plugin manifest at {manifest_path}: {exc}"
+        raise ValueError(msg) from exc
+
+
 def list_installed_plugins(plugins_dir: Path | None = None) -> list[PluginInfo]:
     """List all installed plugins.
 
@@ -65,15 +92,23 @@ def list_installed_plugins(plugins_dir: Path | None = None) -> list[PluginInfo]:
     Returns:
         List of installed plugin info.
     """
-    directory = plugins_dir or get_plugins_dir()
+    directory = plugins_dir or get_plugins_dir(create=False)
+    if not directory.exists():
+        return []
     plugins: list[PluginInfo] = []
 
-    for plugin_dir in directory.iterdir():
+    try:
+        plugin_paths = sorted(directory.iterdir())
+    except OSError:
+        logger.warning("Could not read plugins directory: %s", directory, exc_info=True)
+        return []
+
+    for plugin_dir in plugin_paths:
         if plugin_dir.is_dir():
             manifest_path = plugin_dir / "manifest.json"
             if manifest_path.exists():
                 try:
-                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    data = read_plugin_manifest(manifest_path)
                     plugins.append(
                         PluginInfo(
                             name=data.get("name", plugin_dir.name),
@@ -81,16 +116,32 @@ def list_installed_plugins(plugins_dir: Path | None = None) -> list[PluginInfo]:
                             description=data.get("description", ""),
                             author=data.get("author", ""),
                             homepage=data.get("homepage", ""),
+                            enabled=not (plugin_dir / ".disabled").exists(),
                             installed=True,
+                            install_path=plugin_dir,
+                            skills=tuple(
+                                entry
+                                for entry in data.get("skills", [])
+                                if isinstance(entry, str)
+                            ),
+                            commands=tuple(
+                                entry.get("name", "").strip()
+                                for entry in data.get("commands", [])
+                                if isinstance(entry, dict)
+                                and isinstance(entry.get("name"), str)
+                                and entry.get("name", "").strip()
+                            ),
                         )
                     )
-                except (json.JSONDecodeError, OSError):
+                except ValueError:
                     plugins.append(
                         PluginInfo(
                             name=plugin_dir.name,
                             version="unknown",
                             description="(invalid manifest)",
                             installed=True,
+                            enabled=not (plugin_dir / ".disabled").exists(),
+                            install_path=plugin_dir,
                         )
                     )
 

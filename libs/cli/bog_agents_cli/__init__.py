@@ -1,7 +1,14 @@
 """Bog Agents CLI - Interactive AI coding assistant."""
 
 from bog_agents_cli._version import __version__
-from bog_agents_cli.main import cli_main
+
+
+def cli_main() -> None:  # noqa: RUF067
+    """Run the CLI entry point without importing heavy modules on package import."""
+    from bog_agents_cli.main import cli_main as _cli_main
+
+    _cli_main()
+
 
 __all__ = [
     "__version__",

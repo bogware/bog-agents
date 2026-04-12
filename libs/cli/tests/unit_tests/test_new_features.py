@@ -6,7 +6,9 @@ Tests for features: #4, #6, #14, #18, #20, #21, #22, #24, #27, #28, #31, #33, #4
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
+from uuid import uuid4
 
 
 class TestProfiles:
@@ -46,6 +48,16 @@ class TestDoctor:
         from bog_agents_cli.doctor import run_doctor
 
         assert callable(run_doctor)
+
+    def test_report_contains_expected_sections(self) -> None:
+        """Doctor output should include the primary diagnostic sections."""
+        from bog_agents_cli.doctor import run_doctor
+
+        report = run_doctor()
+
+        assert "Bog Agents" in report
+        assert "Python" in report
+        assert "Config" in report
 
 
 class TestExtensions:
@@ -411,6 +423,7 @@ class TestSlashCommands:
         assert "/doctor" in command_names
         assert "/commands" in command_names
         assert "/dashboard" in command_names
+        assert "/extensions" in command_names
         assert "/logs" in command_names
         assert "/onboard" in command_names
         assert "/keybindings" in command_names
@@ -418,16 +431,61 @@ class TestSlashCommands:
         assert "/resume" in command_names
         assert "/skills" in command_names
         assert "/tokens" in command_names
+        assert "/agent" in command_names
+        assert "/diff" in command_names
+        assert "/effort" in command_names
+        assert "/plan" in command_names
+        assert "/plugin" in command_names
+        assert "/profile" in command_names
+        assert "/remote" in command_names
+        assert "/worktree" in command_names
 
     def test_command_registry_drives_autocomplete(self) -> None:
         """Autocomplete commands should be derived from the central registry."""
         from bog_agents_cli.command_registry import (
-            get_slash_commands,
             get_registered_command_names,
+            get_slash_commands,
         )
         from bog_agents_cli.widgets.autocomplete import SLASH_COMMANDS
 
-        assert SLASH_COMMANDS == get_slash_commands()
+        assert get_slash_commands() == SLASH_COMMANDS
         assert {name for name, _, _ in SLASH_COMMANDS} == set(
             get_registered_command_names()
         )
+
+    def test_extension_commands_appear_in_registry(self) -> None:
+        """Enabled extension commands should flow into the central registry."""
+        from bog_agents_cli.command_registry import get_command_spec, get_slash_commands
+
+        tmp_path = Path("E:/Code/bog-agents/libs/cli/.tmp-command-tests") / uuid4().hex
+        ext_dir = tmp_path / ".bog-agents" / "extensions" / "review-pack"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "bog-agents-extension.json").write_text(
+            json.dumps(
+                {
+                    "name": "review-pack",
+                    "version": "1.0.0",
+                    "commands": [
+                        {
+                            "name": "/scout",
+                            "description": "Scout a codebase slice",
+                            "prompt": "Scout: {args}",
+                            "aliases": ["/survey"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        from unittest.mock import patch
+
+        try:
+            with patch("pathlib.Path.home", return_value=tmp_path):
+                command_names = {name for name, _, _ in get_slash_commands()}
+                assert "/scout" in command_names
+                spec = get_command_spec("/survey")
+                assert spec is not None
+                assert spec.name == "/scout"
+        finally:
+            shutil.rmtree(tmp_path, ignore_errors=True)

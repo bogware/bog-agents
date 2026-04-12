@@ -64,7 +64,7 @@ server = AgentServer(agent)
 server.run()  # Starts on http://127.0.0.1:8420
 ```
 
-## 🤔 What is this?
+## What Is This?
 
 Using an LLM to call tools in a loop is the simplest form of an agent. This architecture, however, can yield agents that are "shallow" and fail to plan and act over longer, more complex tasks.
 
@@ -74,7 +74,7 @@ Applications like "Deep Research", "Manus", and "Claude Code" have gotten around
 
 **Acknowledgements: This project was primarily inspired by Claude Code, and initially was largely an attempt to see what made Claude Code general purpose, and make it even more so.**
 
-## 🚀 Features
+## Features
 
 ### Core Agent
 - **LangGraph-powered** — composable agent with middleware architecture
@@ -107,7 +107,7 @@ Applications like "Deep Research", "Manus", and "Claude Code" have gotten around
 - **OS-level sandbox** — bubblewrap (Linux), seatbelt (macOS), landlock isolation
 - **Human-in-the-loop** — configurable tool approval with interrupt handling
 
-## 📦 Quick Start
+## Quick Start
 
 ```python
 from bog_agents import create_agent
@@ -130,17 +130,17 @@ result = await agent.ainvoke(
 )
 ```
 
-## 📖 Resources
+## Resources
 
 - **[Documentation](https://github.com/bogware/bog-agents)** — Full documentation
 - **[API Reference](https://github.com/bogware/bog-agents)** — Full SDK reference documentation
 - **[Chat LangChain](https://chat.langchain.com)** - Chat interactively with the docs
 
-## 📕 Releases & Versioning
+## Releases & Versioning
 
 See our [Releases](https://github.com/bogware/bog-agents/releases) and [Versioning](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md#versioning) policies.
 
-## 💁 Contributing
+## Contributing
 
 As an open-source project in a rapidly developing field, we are extremely open to contributions, whether it be in the form of a new feature, improved infrastructure, or better documentation.
 

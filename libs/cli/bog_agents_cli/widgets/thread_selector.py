@@ -1094,6 +1094,10 @@ class ThreadSelectorScreen(ModalScreen[str | None]):
         parts = [
             thread["thread_id"],
             thread.get("agent_name") or "",
+            thread.get("label") or "",
+            thread.get("project") or "",
+            " ".join(thread.get("tags", [])),
+            thread.get("summary") or "",
             thread.get("git_branch") or "",
             thread.get("initial_prompt") or "",
         ]

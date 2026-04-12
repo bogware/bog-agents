@@ -724,6 +724,40 @@ class TestListAgents:
         joined = "\n".join(output)
         assert "(default)" not in joined
 
+    def test_reserved_cli_state_dirs_are_not_listed(self, tmp_path: Path) -> None:
+        """Global CLI state folders should not appear in `bog-agents list`."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        real_agent = agents_dir / "researcher"
+        real_agent.mkdir()
+        (real_agent / "AGENTS.md").touch()
+
+        for name in ("logs", "plugins", "skills"):
+            (agents_dir / name).mkdir()
+
+        mock_settings = Mock()
+        mock_settings.user_agents_dir = agents_dir
+
+        output: list[str] = []
+
+        def capture_print(*args: object, **kwargs: object) -> None:
+            del kwargs
+            output.append(" ".join(str(a) for a in args))
+
+        with (
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("bog_agents_cli.agent.console") as mock_console,
+        ):
+            mock_console.print = capture_print
+            list_agents()
+
+        joined = "\n".join(output)
+        assert "researcher" in joined
+        assert "logs" not in joined
+        assert "plugins" not in joined
+        assert "skills" not in joined
+
 
 class TestListAgentsJson:
     """Tests for list_agents JSON output."""
@@ -787,6 +821,35 @@ class TestListAgentsJson:
 
         result = json.loads(buf.getvalue())
         assert result["data"] == []
+
+    def test_json_output_excludes_reserved_cli_state_dirs(self, tmp_path: Path) -> None:
+        """JSON output should filter global CLI state directories."""
+        import json
+        from io import StringIO
+
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        real_agent = agents_dir / "agent"
+        real_agent.mkdir()
+        (real_agent / "AGENTS.md").touch()
+
+        for name in ("logs", "plugins", "skills"):
+            (agents_dir / name).mkdir()
+
+        mock_settings = Mock()
+        mock_settings.user_agents_dir = agents_dir
+
+        buf = StringIO()
+        with (
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("sys.stdout", buf),
+        ):
+            list_agents(output_format="json")
+
+        result = json.loads(buf.getvalue())
+        names = {agent["name"] for agent in result["data"]}
+        assert names == {"agent"}
 
 
 class TestResetAgentJson:

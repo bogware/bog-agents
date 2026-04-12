@@ -36,8 +36,10 @@ class WelcomeBanner(Static):
     DEFAULT_CSS = """
     WelcomeBanner {
         height: auto;
-        padding: 1;
+        padding: 1 2;
         margin-bottom: 1;
+        background: $surface-darken-1;
+        border: round $primary;
     }
     """
 
@@ -144,10 +146,21 @@ class WelcomeBanner(Static):
         )
         raw_banner = get_banner()
         banner.append(raw_banner + "\n", style=Style(bold=True, color=banner_color))
+        banner.append(
+            "Terminal engineering cockpit for code, context, and execution.\n",
+            style=Style(color=COLORS["dim"], italic=True),
+        )
 
         if self._project_name:
-            banner.append(f"{get_glyphs().checkmark} ", style="green")
-            banner.append("LangSmith tracing: ")
+            banner.append(
+                "LangSmith",
+                style=Style(
+                    bold=True,
+                    color="#08131c",
+                    bgcolor=COLORS["thinking"],
+                ),
+            )
+            banner.append(" tracing: ", style=Style(color=COLORS["dim"]))
             if project_url:
                 banner.append(
                     f"'{self._project_name}'",
@@ -167,16 +180,40 @@ class WelcomeBanner(Static):
                     "?utm_source=bog-agents-cli"
                 )
                 thread_line = Text.assemble(
-                    ("Thread: ", "dim"),
+                    (
+                        "Thread",
+                        Style(
+                            bold=True,
+                            color="#08131c",
+                            bgcolor=COLORS["primary"],
+                        ),
+                    ),
+                    (": ", "dim"),
                     (self._cli_thread_id, Style(dim=True, link=thread_url)),
                     ("\n", "dim"),
                 )
                 banner.append_text(thread_line)
             else:
-                banner.append(f"Thread: {self._cli_thread_id}\n", style="dim")
+                banner.append(
+                    "Thread",
+                    style=Style(
+                        bold=True,
+                        color="#08131c",
+                        bgcolor=COLORS["primary"],
+                    ),
+                )
+                banner.append(f": {self._cli_thread_id}\n", style="dim")
 
         if self._mcp_tool_count > 0:
-            banner.append(f"{get_glyphs().checkmark} ", style="green")
+            banner.append(
+                "MCP",
+                style=Style(
+                    bold=True,
+                    color="#08131c",
+                    bgcolor=COLORS["tool"],
+                ),
+            )
+            banner.append(" ready: ", style=Style(color=COLORS["dim"]))
             label = "MCP tool" if self._mcp_tool_count == 1 else "MCP tools"
             banner.append(f"Loaded {self._mcp_tool_count} {label}\n")
 
@@ -224,14 +261,16 @@ def build_welcome_footer() -> Text:
     """
     footer = Text()
     footer.append(
-        "\nReady to code! What would you like to build?\n", style=COLORS["primary"]
+        "\nReady to code! What would you like to build?\n",
+        style=Style(color=COLORS["user"], bold=True),
     )
     bullet = get_glyphs().bullet
-    footer.append(
-        (
-            f"Enter send {bullet} {newline_shortcut()} newline "
-            f"{bullet} @ files {bullet} / commands"
-        ),
-        style="dim",
-    )
+    footer.append("Enter send", style=Style(color=COLORS["primary"], bold=True))
+    footer.append(f" {bullet} ", style=Style(color=COLORS["dim"]))
+    footer.append(newline_shortcut(), style=Style(color=COLORS["thinking"]))
+    footer.append(" newline", style=Style(color=COLORS["dim"]))
+    footer.append(f" {bullet} ", style=Style(color=COLORS["dim"]))
+    footer.append("@ files", style=Style(color=COLORS["thinking"]))
+    footer.append(f" {bullet} ", style=Style(color=COLORS["dim"]))
+    footer.append("/ commands", style=Style(color=COLORS["tool"]))
     return footer

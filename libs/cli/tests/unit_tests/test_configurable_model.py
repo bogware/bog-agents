@@ -45,6 +45,16 @@ def _make_response() -> ModelResponse[Any]:
     return ModelResponse(result=[AIMessage(content="response")])
 
 
+def _system_text(request: ModelRequest) -> str:
+    """Extract a string representation of the system prompt for assertions."""
+    system_message = request.system_message
+    if system_message is None:
+        return ""
+    return (
+        f"{system_message.content!s} {getattr(system_message, 'content_blocks', '')!s}"
+    )
+
+
 _mw = ConfigurableModelMiddleware()
 
 
@@ -126,6 +136,76 @@ class TestNoOverride:
             request, lambda r: (captured.append(r), _make_response())[1]
         )
         assert captured[0] is request
+
+
+class TestRuntimeWorkflowControls:
+    """Runtime workflow controls beyond model selection."""
+
+    def test_effort_level_merges_reasoning_defaults(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(effort_level="max"),
+            model_settings={"top_p": 0.9},
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings["max_tokens"] == 16384
+        assert captured[0].model_settings["temperature"] == 1.0
+        assert captured[0].model_settings["top_p"] == 0.9
+
+    def test_model_params_override_effort_defaults(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(
+                effort_level="high",
+                model_params={"temperature": 0.2},
+            ),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings["max_tokens"] == 8192
+        assert captured[0].model_settings["temperature"] == 0.2
+
+    def test_plan_mode_appends_system_prompt_and_filters_tools(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(plan_mode=True),
+        )
+        request = request.override(
+            tools=[
+                cast("Any", SimpleNamespace(name="read_file")),
+                cast("Any", SimpleNamespace(name="write_file")),
+            ]
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert "Plan Mode Active" in _system_text(captured[0])
+        assert [tool.name for tool in captured[0].tools] == ["read_file"]
+
+    def test_profile_prompt_is_appended_to_system_message(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(system_prompt_append="Follow the review workflow."),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert "Follow the review workflow." in _system_text(captured[0])
 
 
 class TestModelSwap:

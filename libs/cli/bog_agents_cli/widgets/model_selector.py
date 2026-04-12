@@ -119,8 +119,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         width: 80;
         max-width: 90%;
         height: 80%;
-        background: $surface;
-        border: solid $primary;
+        background: $surface-darken-1;
+        border: round $primary;
         padding: 1 2;
     }
 
@@ -133,18 +133,18 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
 
     ModelSelectorScreen #model-filter {
         margin-bottom: 1;
-        border: solid $primary-lighten-2;
+        border: round $surface-lighten-1;
     }
 
     ModelSelectorScreen #model-filter:focus {
-        border: solid $primary;
+        border: round $primary;
     }
 
     ModelSelectorScreen .model-list {
         height: 1fr;
         min-height: 5;
         scrollbar-gutter: stable;
-        background: $background;
+        background: $surface;
     }
 
     ModelSelectorScreen #model-options {
@@ -171,6 +171,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
 
     ModelSelectorScreen .model-option-selected {
         background: $primary;
+        color: #08131c;
         text-style: bold;
     }
 

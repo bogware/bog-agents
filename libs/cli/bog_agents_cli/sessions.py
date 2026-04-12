@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
@@ -29,6 +30,7 @@ _initial_prompt_cache: dict[str, tuple[str | None, str | None]] = {}
 _MAX_INITIAL_PROMPT_CACHE = 4096
 _recent_threads_cache: dict[tuple[str | None, int], list[ThreadInfo]] = {}
 _MAX_RECENT_THREADS_CACHE_KEYS = 16
+_UNSET = object()
 
 
 def _patch_aiosqlite() -> None:
@@ -109,6 +111,53 @@ class ThreadInfo(TypedDict):
     cwd: NotRequired[str | None]
     """Working directory where the thread was last used."""
 
+    label: NotRequired[str | None]
+    """Optional user-defined label for the thread."""
+
+    tags: NotRequired[list[str]]
+    """Optional user-defined tags for the thread."""
+
+    project: NotRequired[str | None]
+    """Optional project grouping name for the thread."""
+
+    summary: NotRequired[str | None]
+    """Optional human-readable thread summary."""
+
+
+class CheckpointInfo(TypedDict):
+    """Checkpoint metadata returned for rewind and recovery workflows."""
+
+    checkpoint_id: str
+    """Unique checkpoint identifier."""
+
+    updated_at: NotRequired[str | None]
+    """ISO timestamp recorded for the checkpoint, when available."""
+
+    git_branch: NotRequired[str | None]
+    """Git branch associated with the checkpoint, when available."""
+
+    cwd: NotRequired[str | None]
+    """Working directory stored on the checkpoint metadata, when available."""
+
+    message_count: int
+    """Number of messages in the checkpoint snapshot."""
+
+    initial_prompt: str | None
+    """First human prompt visible at this checkpoint, if any."""
+
+
+class CheckpointPayload(CheckpointInfo):
+    """Decoded checkpoint payload used to seed rewinded threads."""
+
+    thread_id: str
+    """Source thread identifier for the checkpoint."""
+
+    messages: list[object]
+    """Decoded checkpoint message objects."""
+
+    summarization_event: NotRequired[object]
+    """Optional compacted-context event stored with the checkpoint."""
+
 
 class _CheckpointSummary(NamedTuple):
     """Structured data extracted from a thread's latest checkpoint."""
@@ -133,12 +182,9 @@ def format_timestamp(iso_timestamp: str | None) -> str:
         return ""
     try:
         dt = datetime.fromisoformat(iso_timestamp).astimezone()
-        return (
-            dt.strftime("%b %d, %-I:%M%p")
-            .lower()
-            .replace("am", "am")
-            .replace("pm", "pm")
-        )
+        hour = dt.strftime("%I").lstrip("0") or "0"
+        minute_ampm = dt.strftime("%M%p").lower()
+        return f"{dt.strftime('%b %d').lower()}, {hour}:{minute_ampm}"
     except (ValueError, TypeError):
         logger.debug(
             "Failed to parse timestamp %r; displaying as blank",
@@ -254,6 +300,36 @@ async def _table_exists(conn: aiosqlite.Connection, table: str) -> bool:
         return await cursor.fetchone() is not None
 
 
+async def _ensure_thread_metadata_table(conn: aiosqlite.Connection) -> bool:
+    """Ensure the thread metadata table exists.
+
+    Returns:
+        `True` when metadata storage is available, `False` when the backing
+        database is read-only and metadata should be treated as unavailable.
+    """
+    try:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_metadata (
+                thread_id TEXT PRIMARY KEY,
+                label TEXT,
+                tags_json TEXT,
+                project TEXT,
+                summary TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        await conn.commit()
+    except sqlite3.OperationalError:
+        logger.debug(
+            "Thread metadata table is unavailable; continuing without metadata",
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 async def list_threads(
     agent_name: str | None = None,
     limit: int = 20,
@@ -281,6 +357,7 @@ async def list_threads(
     async with _connect() as conn:
         if not await _table_exists(conn, "checkpoints"):
             return []
+        metadata_available = await _ensure_thread_metadata_table(conn)
 
         if sort_by not in {"updated", "created"}:
             msg = f"Invalid sort_by {sort_by!r}; expected 'updated' or 'created'"
@@ -333,6 +410,8 @@ async def list_threads(
         # Fetch message counts if requested
         if include_message_count and threads:
             await _populate_message_counts(conn, threads)
+        if metadata_available and threads:
+            await _populate_thread_metadata(conn, threads)
 
         # Only cache unfiltered results so the thread selector modal
         # doesn't receive branch-filtered or differently-sorted data.
@@ -514,6 +593,77 @@ def apply_cached_thread_initial_prompts(threads: list[ThreadInfo]) -> int:
         thread["initial_prompt"] = cached[1]
         populated += 1
     return populated
+
+
+async def _populate_thread_metadata(
+    conn: aiosqlite.Connection,
+    threads: list[ThreadInfo],
+) -> None:
+    """Populate persisted thread metadata onto thread rows."""
+    if not threads:
+        return
+
+    thread_ids = [thread["thread_id"] for thread in threads]
+    placeholders = ",".join("?" for _ in thread_ids)
+    query = f"""
+        SELECT thread_id, label, tags_json, project, summary
+        FROM thread_metadata
+        WHERE thread_id IN ({placeholders})
+    """  # noqa: S608  # placeholder count derives from thread_ids length; values use ? params
+    async with conn.execute(query, tuple(thread_ids)) as cursor:
+        rows = await cursor.fetchall()
+
+    metadata_by_thread: dict[
+        str, tuple[str | None, list[str], str | None, str | None]
+    ] = {}
+    for row in rows:
+        tags = _decode_tags_json(row[2])
+        metadata_by_thread[row[0]] = (row[1], tags, row[3], row[4])
+
+    for thread in threads:
+        metadata = metadata_by_thread.get(thread["thread_id"])
+        if metadata is None:
+            continue
+        label, tags, project, summary = metadata
+        thread["label"] = label
+        thread["tags"] = tags
+        thread["project"] = project
+        thread["summary"] = summary
+
+
+def _decode_tags_json(raw_tags: str | None) -> list[str]:
+    """Decode a JSON tag list into normalized strings."""
+    if not raw_tags:
+        return []
+    try:
+        data = json.loads(raw_tags)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(tag).strip() for tag in data if str(tag).strip()]
+
+
+def _normalize_tags(tags: list[str] | tuple[str, ...]) -> list[str]:
+    """Return stable deduplicated tags preserving order."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        cleaned = tag.strip()
+        lowered = cleaned.lower()
+        if not cleaned or lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _invalidate_thread_listing_cache(thread_id: str | None = None) -> None:
+    """Drop cached thread-derived state after persistence changes."""
+    if thread_id is not None:
+        _message_count_cache.pop(thread_id, None)
+        _initial_prompt_cache.pop(thread_id, None)
+    _recent_threads_cache.clear()
 
 
 async def _populate_message_counts(
@@ -888,6 +1038,321 @@ def _coerce_prompt_text(content: object) -> str | None:
     return str(content)
 
 
+async def list_thread_checkpoints(
+    thread_id: str,
+    *,
+    limit: int = 12,
+) -> list[CheckpointInfo]:
+    """List recent checkpoints for a thread.
+
+    Args:
+        thread_id: Thread identifier to inspect.
+        limit: Maximum checkpoints to return.
+
+    Returns:
+        Recent checkpoint rows ordered newest-first.
+    """
+    if limit < 1:
+        return []
+
+    async with _connect() as conn:
+        if not await _table_exists(conn, "checkpoints"):
+            return []
+        serde = await _get_jsonplus_serializer()
+        query = """
+            SELECT checkpoint_id,
+                   json_extract(metadata, '$.updated_at') as updated_at,
+                   json_extract(metadata, '$.git_branch') as git_branch,
+                   json_extract(metadata, '$.cwd') as cwd,
+                   type,
+                   checkpoint
+            FROM checkpoints
+            WHERE thread_id = ?
+            ORDER BY checkpoint_id DESC
+            LIMIT ?
+        """
+        async with conn.execute(query, (thread_id, limit)) as cursor:
+            rows = await cursor.fetchall()
+
+    loop = asyncio.get_running_loop()
+    checkpoints: list[CheckpointInfo] = []
+    for row in rows:
+        checkpoint_id, updated_at, git_branch, cwd, type_str, checkpoint_blob = row
+        summary = _CheckpointSummary(message_count=0, initial_prompt=None)
+        if type_str and checkpoint_blob:
+            try:
+                data = await loop.run_in_executor(
+                    None, serde.loads_typed, (type_str, checkpoint_blob)
+                )
+                summary = _summarize_checkpoint(data)
+            except Exception:
+                logger.warning(
+                    "Failed to deserialize checkpoint %s for thread %s",
+                    checkpoint_id,
+                    thread_id,
+                    exc_info=True,
+                )
+        checkpoints.append(
+            CheckpointInfo(
+                checkpoint_id=str(checkpoint_id),
+                updated_at=updated_at,
+                git_branch=git_branch,
+                cwd=cwd,
+                message_count=summary.message_count,
+                initial_prompt=summary.initial_prompt,
+            )
+        )
+
+    return checkpoints
+
+
+async def get_thread_checkpoint_payload(
+    thread_id: str,
+    checkpoint_id: str,
+) -> CheckpointPayload | None:
+    """Return decoded checkpoint state for one thread checkpoint.
+
+    Args:
+        thread_id: Thread identifier to inspect.
+        checkpoint_id: Exact checkpoint identifier to load.
+
+    Returns:
+        Decoded checkpoint payload, or `None` when not found.
+    """
+    async with _connect() as conn:
+        if not await _table_exists(conn, "checkpoints"):
+            return None
+        serde = await _get_jsonplus_serializer()
+        query = """
+            SELECT json_extract(metadata, '$.updated_at') as updated_at,
+                   json_extract(metadata, '$.git_branch') as git_branch,
+                   json_extract(metadata, '$.cwd') as cwd,
+                   type,
+                   checkpoint
+            FROM checkpoints
+            WHERE thread_id = ? AND checkpoint_id = ?
+            LIMIT 1
+        """
+        async with conn.execute(query, (thread_id, checkpoint_id)) as cursor:
+            row = await cursor.fetchone()
+    if row is None or not row[3] or not row[4]:
+        return None
+
+    updated_at, git_branch, cwd, type_str, checkpoint_blob = row
+    try:
+        data = serde.loads_typed((type_str, checkpoint_blob))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        logger.warning(
+            "Could not decode checkpoint %s for thread %s",
+            checkpoint_id,
+            thread_id,
+            exc_info=True,
+        )
+        return None
+
+    messages = _checkpoint_messages(data)
+    payload_dict = cast("dict[str, object]", data) if isinstance(data, dict) else {}
+    channel_values = payload_dict.get("channel_values")
+    summarization_event = None
+    if isinstance(channel_values, dict):
+        summarization_event = cast("dict[str, object]", channel_values).get(
+            "_summarization_event"
+        )
+
+    payload = CheckpointPayload(
+        checkpoint_id=checkpoint_id,
+        thread_id=thread_id,
+        updated_at=updated_at,
+        git_branch=git_branch,
+        cwd=cwd,
+        message_count=len(messages),
+        initial_prompt=_initial_prompt_from_messages(messages),
+        messages=messages,
+    )
+    if summarization_event is not None:
+        payload["summarization_event"] = summarization_event
+    return payload
+
+
+async def get_thread_metadata(thread_id: str) -> dict[str, object]:
+    """Return persisted metadata for one thread."""
+    async with _connect() as conn:
+        if not await _ensure_thread_metadata_table(conn):
+            return {}
+        query = """
+            SELECT label, tags_json, project, summary
+            FROM thread_metadata
+            WHERE thread_id = ?
+        """
+        async with conn.execute(query, (thread_id,)) as cursor:
+            row = await cursor.fetchone()
+    if row is None:
+        return {}
+    return {
+        "label": row[0],
+        "tags": _decode_tags_json(row[1]),
+        "project": row[2],
+        "summary": row[3],
+    }
+
+
+async def _upsert_thread_metadata(
+    thread_id: str,
+    *,
+    label: str | object | None = _UNSET,
+    tags: list[str] | object | None = _UNSET,
+    project: str | object | None = _UNSET,
+    summary: str | object | None = _UNSET,
+) -> None:
+    """Insert or update a thread metadata row.
+
+    Raises:
+        sqlite3.OperationalError: If metadata storage is not writable.
+    """
+    current = await get_thread_metadata(thread_id)
+    next_label = current.get("label") if label is _UNSET else label
+    next_tags = current.get("tags") if tags is _UNSET else tags
+    next_project = current.get("project") if project is _UNSET else project
+    next_summary = current.get("summary") if summary is _UNSET else summary
+    normalized_tags = _normalize_tags(next_tags) if isinstance(next_tags, list) else []
+
+    async with _connect() as conn:
+        if not await _ensure_thread_metadata_table(conn):
+            msg = "Thread metadata storage is not writable."
+            raise sqlite3.OperationalError(msg)
+        await conn.execute(
+            """
+            INSERT INTO thread_metadata (
+                thread_id, label, tags_json, project, summary, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(thread_id) DO UPDATE SET
+                label = excluded.label,
+                tags_json = excluded.tags_json,
+                project = excluded.project,
+                summary = excluded.summary,
+                updated_at = excluded.updated_at
+            """,
+            (
+                thread_id,
+                next_label if isinstance(next_label, str) and next_label else None,
+                json.dumps(normalized_tags),
+                next_project
+                if isinstance(next_project, str) and next_project
+                else None,
+                next_summary
+                if isinstance(next_summary, str) and next_summary
+                else None,
+                datetime.now().astimezone().isoformat(),
+            ),
+        )
+        await conn.commit()
+    _invalidate_thread_listing_cache(thread_id)
+
+
+async def set_thread_label(thread_id: str, label: str | None) -> None:
+    """Set or clear the persisted label for a thread."""
+    await _upsert_thread_metadata(thread_id, label=label)
+
+
+async def set_thread_tags(thread_id: str, tags: list[str]) -> list[str]:
+    """Replace the persisted tag list for a thread."""
+    normalized_tags = _normalize_tags(tags)
+    await _upsert_thread_metadata(thread_id, tags=normalized_tags)
+    return normalized_tags
+
+
+async def set_thread_project(thread_id: str, project: str | None) -> None:
+    """Set or clear the persisted project grouping for a thread."""
+    await _upsert_thread_metadata(thread_id, project=project)
+
+
+async def set_thread_summary(thread_id: str, summary: str | None) -> None:
+    """Set or clear the persisted summary for a thread."""
+    await _upsert_thread_metadata(thread_id, summary=summary)
+
+
+async def export_thread(thread_id: str) -> dict[str, object]:
+    """Export thread metadata and the latest checkpoint transcript."""
+    async with _connect() as conn:
+        if not await _table_exists(conn, "checkpoints"):
+            return {}
+        metadata_available = await _ensure_thread_metadata_table(conn)
+        serde = await _get_jsonplus_serializer()
+
+        summary_query = """
+            SELECT thread_id,
+                   json_extract(metadata, '$.agent_name') as agent_name,
+                   MAX(json_extract(metadata, '$.updated_at')) as updated_at,
+                   MIN(json_extract(metadata, '$.updated_at')) as created_at,
+                   MAX(json_extract(metadata, '$.git_branch')) as git_branch,
+                   MAX(json_extract(metadata, '$.cwd')) as cwd,
+                   MAX(checkpoint_id) as latest_checkpoint_id
+            FROM checkpoints
+            WHERE thread_id = ?
+            GROUP BY thread_id
+        """
+        async with conn.execute(summary_query, (thread_id,)) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return {}
+
+        thread: ThreadInfo = ThreadInfo(
+            thread_id=row[0],
+            agent_name=row[1],
+            updated_at=row[2],
+            created_at=row[3],
+            git_branch=row[4],
+            cwd=row[5],
+            latest_checkpoint_id=row[6],
+        )
+        if metadata_available:
+            await _populate_thread_metadata(conn, [thread])
+
+        checkpoint_query = """
+            SELECT type, checkpoint
+            FROM checkpoints
+            WHERE thread_id = ?
+            ORDER BY checkpoint_id DESC
+            LIMIT 1
+        """
+        async with conn.execute(checkpoint_query, (thread_id,)) as cursor:
+            latest = await cursor.fetchone()
+
+    transcript: list[dict[str, str]] = []
+    if latest and latest[0] and latest[1]:
+        try:
+            data = serde.loads_typed((latest[0], latest[1]))
+            for message in _checkpoint_messages(data):
+                role = getattr(message, "type", None) or "unknown"
+                content = _coerce_prompt_text(getattr(message, "content", None))
+                transcript.append({"role": str(role), "content": content or ""})
+        except (ValueError, TypeError, KeyError, AttributeError):
+            logger.warning("Could not export transcript for thread %s", thread_id)
+
+    return {
+        "thread": dict(thread),
+        "transcript": transcript,
+    }
+
+
+async def find_threads_with_metadata(
+    *,
+    project: str | None = None,
+    tag: str | None = None,
+    limit: int = 20,
+) -> list[ThreadInfo]:
+    """Find recent threads filtered by persisted project or tag metadata."""
+    threads = await list_threads(limit=max(limit * 10, 200))
+    filtered = [
+        thread
+        for thread in threads
+        if (project is None or (thread.get("project") or "").lower() == project.lower())
+        and (tag is None or tag.lower() in {t.lower() for t in thread.get("tags", [])})
+    ]
+    return filtered[:limit]
+
+
 async def get_most_recent(agent_name: str | None = None) -> str | None:
     """Get most recent thread_id, optionally filtered by agent.
 
@@ -990,6 +1455,7 @@ async def delete_thread(thread_id: str) -> bool:
     async with _connect() as conn:
         if not await _table_exists(conn, "checkpoints"):
             return False
+        metadata_available = await _ensure_thread_metadata_table(conn)
 
         cursor = await conn.execute(
             "DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,)
@@ -997,12 +1463,13 @@ async def delete_thread(thread_id: str) -> bool:
         deleted = cursor.rowcount > 0
         if await _table_exists(conn, "writes"):
             await conn.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
+        if metadata_available:
+            await conn.execute(
+                "DELETE FROM thread_metadata WHERE thread_id = ?", (thread_id,)
+            )
         await conn.commit()
         if deleted:
-            _message_count_cache.pop(thread_id, None)
-            for key, rows in list(_recent_threads_cache.items()):
-                filtered = [row for row in rows if row["thread_id"] != thread_id]
-                _recent_threads_cache[key] = filtered
+            _invalidate_thread_listing_cache(thread_id)
         return deleted
 
 

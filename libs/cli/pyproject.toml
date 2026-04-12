@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     # Framework
-    "bog-agents>=0.5.0,<1.0.0",
+    "bog-agents==0.6.4",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
@@ -280,7 +280,7 @@ omit = ["tests/*"]
 [tool.pytest.ini_options]
 timeout = 30  # Default timeout for all tests (can be overridden per-test)
 
-addopts = "--strict-markers --strict-config --durations=5"
+addopts = "--strict-markers --strict-config --durations=5 -p no:cacheprovider"
 # pytest-benchmark warns once per xdist worker that benchmarks are disabled
 # under parallel execution. Both plugins are needed: xdist for `make test`,
 # benchmark for `make benchmark`. Suppress the noise here.

@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ def test_filesystem_backend_normal_mode(tmp_path: Path):
     paths = {i["path"] for i in infos}
     assert str(f1) in paths  # File in root should be listed
     assert str(f2) not in paths  # File in subdirectory should NOT be listed
-    assert (str(root) + "/dir/") in paths  # Directory should be listed
+    assert (str(root / "dir") + "/") in paths  # Directory should be listed
 
     # read, edit, write
     txt = be.read(str(f1))
@@ -91,6 +92,25 @@ def test_filesystem_backend_virtual_mode(tmp_path: Path, monkeypatch: pytest.Mon
     # path traversal blocked
     with pytest.raises(ValueError, match="traversal"):
         be.read("/../a.txt")
+
+
+def test_filesystem_backend_grep_falls_back_when_ripgrep_launch_denied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """grep_raw should fall back to Python search when ripgrep cannot launch."""
+    root = tmp_path
+    target = root / "a.txt"
+    write_file(target, "hello fallback")
+
+    def deny_launch(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        msg = "access denied"
+        raise PermissionError(msg)
+
+    monkeypatch.setattr(subprocess, "run", deny_launch)
+
+    backend = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+    matches = backend.grep_raw("hello", path=str(root))
+
+    assert isinstance(matches, list)
+    assert any(match["path"].endswith("a.txt") for match in matches)
 
 
 def test_filesystem_backend_ls_nested_directories(tmp_path: Path):

@@ -729,17 +729,17 @@ class ChatInput(Vertical):
         height: auto;
         min-height: 3;
         max-height: 25;
-        padding: 0;
-        background: $surface;
-        border: solid $primary;
+        padding: 0 1;
+        background: $surface-darken-1;
+        border: round $primary-lighten-1;
     }
 
     ChatInput.mode-shell {
-        border: solid __MODE_SHELL__;
+        border: round __MODE_SHELL__;
     }
 
     ChatInput.mode-command {
-        border: solid __MODE_CMD__;
+        border: round __MODE_CMD__;
     }
 
     ChatInput .input-row {
@@ -770,7 +770,7 @@ class ChatInput(Vertical):
         max-height: 8;
         border: none;
         background: transparent;
-        padding: 0;
+        padding: 0 0 0 1;
     }
 
     ChatInput ChatTextArea:focus {

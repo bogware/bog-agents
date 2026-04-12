@@ -92,14 +92,21 @@ if _bog_agents_project:
     # Override LANGSMITH_PROJECT for agent traces
     os.environ["LANGSMITH_PROJECT"] = _bog_agents_project
 
-from bog_agents_cli.model_config import (  # noqa: E402  # Import after os.environ setup above
+from bog_agents_cli.model_config import (  # noqa: E402
     ModelConfig,
     ModelConfigError,
     ModelSpec,
+    get_available_models,
+    has_provider_credentials,
 )
 from bog_agents_cli.project_utils import (  # noqa: E402
     find_project_agent_md as _find_project_agent_md,
     find_project_root as _find_project_root,
+)
+from bog_agents_cli.provider_catalog import (  # noqa: E402
+    choose_preferred_model,
+    detects_openai_model,
+    is_bedrock_model_id,
 )
 
 if TYPE_CHECKING:
@@ -110,15 +117,15 @@ DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
-    "primary": "#10b981",
-    "primary_dev": "#f97316",
-    "dim": "#6b7280",
-    "user": "#ffffff",
-    "agent": "#10b981",
-    "thinking": "#34d399",
+    "primary": "#34d399",
+    "primary_dev": "#fb923c",
+    "dim": "#94a3b8",
+    "user": "#f8fafc",
+    "agent": "#6ee7b7",
+    "thinking": "#67e8f9",
     "tool": "#fbbf24",
-    "mode_shell": "#ff1493",
-    "mode_command": "#8b5cf6",
+    "mode_shell": "#fb923c",
+    "mode_command": "#38bdf8",
 }
 """App color scheme."""
 
@@ -1361,6 +1368,16 @@ def get_default_coding_instructions() -> str:
     return default_prompt_path.read_text()
 
 
+def _get_recommended_model_spec(provider: str) -> str | None:
+    """Return the preferred `provider:model` spec for a provider."""
+    model_name = choose_preferred_model(
+        provider, get_available_models().get(provider, ())
+    )
+    if model_name is None:
+        return None
+    return f"{provider}:{model_name}"
+
+
 def detect_provider(model_name: str) -> str | None:
     """Auto-detect provider from model name.
 
@@ -1382,7 +1399,7 @@ def detect_provider(model_name: str) -> str | None:
     """
     model_lower = model_name.lower()
 
-    if model_lower.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):
+    if detects_openai_model(model_lower):
         return "openai"
 
     if model_lower.startswith("claude"):
@@ -1398,10 +1415,9 @@ def detect_provider(model_name: str) -> str | None:
     if model_lower.startswith(("nemotron", "nvidia/")):
         return "nvidia"
 
-    # AWS Bedrock model IDs use a dot-separated format (e.g., anthropic.claude-*)
-    if model_lower.startswith(
-        ("anthropic.", "amazon.", "meta.", "cohere.", "mistral.", "ai21.")
-    ):
+    # AWS Bedrock model IDs use a dot-separated format and may include a
+    # cross-region inference-profile prefix (for example `us.anthropic...`).
+    if is_bedrock_model_id(model_lower):
         return "bedrock_converse"
 
     return None
@@ -1441,20 +1457,31 @@ def _get_default_model_spec() -> str:
         settings.has_ollama,
     )
 
-    if settings.has_anthropic:
-        return "anthropic:claude-sonnet-4-6"
-    if settings.has_openai:
-        return "openai:gpt-5"
-    if settings.has_bedrock:
-        return "bedrock_converse:anthropic.claude-sonnet-4-6"
-    if settings.has_google:
-        return "google_genai:gemini-2.5-pro"
-    if settings.has_vertex_ai:
-        return "google_vertexai:gemini-2.5-pro"
-    if settings.has_nvidia:
-        return "nvidia:nvidia/nemotron-3-super-120b-a12b"
+    provider_checks = (
+        ("anthropic", lambda: has_provider_credentials("anthropic") is True),
+        ("openai", lambda: has_provider_credentials("openai") is True),
+        (
+            "bedrock_converse",
+            lambda: has_provider_credentials("bedrock_converse") is True,
+        ),
+        ("google_genai", lambda: has_provider_credentials("google_genai") is True),
+        (
+            "google_vertexai",
+            lambda: has_provider_credentials("google_vertexai") is True,
+        ),
+        ("nvidia", lambda: has_provider_credentials("nvidia") is True),
+    )
+    for provider, is_available in provider_checks:
+        if not is_available():
+            continue
+        preferred = _get_recommended_model_spec(provider)
+        if preferred:
+            return preferred
+
     if settings.has_ollama:
-        return "ollama:llama3"
+        preferred = _get_recommended_model_spec("ollama")
+        if preferred:
+            return preferred
 
     # Nothing auto-detected — run the interactive setup wizard
     logger.warning("No provider credentials detected; launching setup wizard")
@@ -1506,30 +1533,42 @@ def _run_setup_wizard() -> str:
         )
     )
 
+    anthropic_spec = _get_recommended_model_spec("anthropic") or (
+        "anthropic:claude-sonnet-4-6"
+    )
+    openai_spec = _get_recommended_model_spec("openai") or "openai:gpt-5.4"
+    bedrock_spec = _get_recommended_model_spec("bedrock_converse") or (
+        "bedrock_converse:anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    google_spec = _get_recommended_model_spec("google_genai") or (
+        "google_genai:gemini-2.5-pro"
+    )
+    ollama_spec = _get_recommended_model_spec("ollama") or "ollama:llama3"
+
     providers = [
         (
             "1",
             "Anthropic",
             "ANTHROPIC_API_KEY",
-            "anthropic:claude-sonnet-4-6",
+            anthropic_spec,
             "sk-ant-...",
         ),
-        ("2", "OpenAI", "OPENAI_API_KEY", "openai:gpt-5", "sk-..."),
+        ("2", "OpenAI", "OPENAI_API_KEY", openai_spec, "sk-..."),
         (
             "3",
             "AWS Bedrock",
             "__AWS__",
-            "bedrock_converse:anthropic.claude-sonnet-4-6",
+            bedrock_spec,
             None,
         ),
         (
             "4",
             "Google AI",
             "GOOGLE_API_KEY",
-            "google_genai:gemini-2.5-pro",
+            google_spec,
             "AI...",
         ),
-        ("5", "Ollama (local, free)", "__OLLAMA__", "ollama:llama3", None),
+        ("5", "Ollama (local, free)", "__OLLAMA__", ollama_spec, None),
     ]
 
     con.print()
@@ -1584,6 +1623,11 @@ def _run_setup_wizard() -> str:
 
     # --- API key path ---
     con.print(f"\n[bold]{name}[/bold] requires [cyan]{env_var}[/cyan].")
+    if env_var == "OPENAI_API_KEY":
+        con.print(
+            "  [dim]ChatGPT/Codex subscriptions and API billing are separate; "
+            "Bog Agents uses an API key here.[/dim]"
+        )
     if hint:
         con.print(f"  (starts with [dim]{hint}[/dim])")
     con.print()

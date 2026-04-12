@@ -131,6 +131,39 @@ MAX_SKILL_DESCRIPTION_LENGTH = 1024
 MAX_SKILL_COMPATIBILITY_LENGTH = 500
 
 
+def _backend_path_name(path: str) -> str:
+    """Return the final path component from a backend path.
+
+    Backend implementations usually expose POSIX-style paths, but local
+    filesystem backends on Windows can surface native absolute paths with
+    backslashes. Normalize separators before extracting the directory name so
+    spec validation stays stable across platforms.
+
+    Args:
+        path: Backend path to inspect.
+
+    Returns:
+        Final path component.
+    """
+    normalized = path.rstrip("/\\").replace("\\", "/")
+    return PurePosixPath(normalized).name
+
+
+def _join_backend_path(parent: str, child: str) -> str:
+    """Join a backend path while preserving the parent's separator style.
+
+    Args:
+        parent: Parent directory path returned by a backend.
+        child: Child path component to append.
+
+    Returns:
+        Joined backend path.
+    """
+    separator = "\\" if parent.count("\\") > parent.count("/") else "/"
+    trimmed_parent = parent.removesuffix("/").removesuffix("\\")
+    return f"{trimmed_parent}{separator}{child}"
+
+
 class SkillMetadata(TypedDict):
     """Metadata for a skill per Agent Skills specification (https://agentskills.io/specification)."""
 
@@ -438,9 +471,7 @@ def _list_skills(backend: BackendProtocol, source_path: str) -> list[SkillMetada
     # For each skill directory, check if SKILL.md exists and download it
     skill_md_paths = []
     for skill_dir_path in skill_dirs:
-        # Construct SKILL.md path using PurePosixPath for safe, standardized path operations
-        skill_dir = PurePosixPath(skill_dir_path)
-        skill_md_path = str(skill_dir / "SKILL.md")
+        skill_md_path = _join_backend_path(skill_dir_path, "SKILL.md")
         skill_md_paths.append((skill_dir_path, skill_md_path))
 
     paths_to_download = [skill_md_path for _, skill_md_path in skill_md_paths]
@@ -462,8 +493,7 @@ def _list_skills(backend: BackendProtocol, source_path: str) -> list[SkillMetada
             logger.warning("Error decoding %s: %s", skill_md_path, e)
             continue
 
-        # Extract directory name from path using PurePosixPath
-        directory_name = PurePosixPath(skill_dir_path).name
+        directory_name = _backend_path_name(skill_dir_path)
 
         # Parse metadata
         skill_metadata = _parse_skill_metadata(
@@ -515,9 +545,7 @@ async def _alist_skills(backend: BackendProtocol, source_path: str) -> list[Skil
     # For each skill directory, check if SKILL.md exists and download it
     skill_md_paths = []
     for skill_dir_path in skill_dirs:
-        # Construct SKILL.md path using PurePosixPath for safe, standardized path operations
-        skill_dir = PurePosixPath(skill_dir_path)
-        skill_md_path = str(skill_dir / "SKILL.md")
+        skill_md_path = _join_backend_path(skill_dir_path, "SKILL.md")
         skill_md_paths.append((skill_dir_path, skill_md_path))
 
     paths_to_download = [skill_md_path for _, skill_md_path in skill_md_paths]
@@ -539,8 +567,7 @@ async def _alist_skills(backend: BackendProtocol, source_path: str) -> list[Skil
             logger.warning("Error decoding %s: %s", skill_md_path, e)
             continue
 
-        # Extract directory name from path using PurePosixPath
-        directory_name = PurePosixPath(skill_dir_path).name
+        directory_name = _backend_path_name(skill_dir_path)
 
         # Parse metadata
         skill_metadata = _parse_skill_metadata(

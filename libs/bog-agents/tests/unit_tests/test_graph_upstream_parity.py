@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.unit_tests.chat_model import GenericFakeChatModel
-
 import bog_agents.graph as bog_graph
+from tests.unit_tests.chat_model import GenericFakeChatModel
 
 
 class _DummyCompiledGraph:
@@ -15,16 +14,16 @@ class _DummyCompiledGraph:
     def __init__(self) -> None:
         self.config: dict[str, Any] | None = None
 
-    def with_config(self, config: dict[str, Any]) -> "_DummyCompiledGraph":
+    def with_config(self, config: dict[str, Any]) -> _DummyCompiledGraph:
         self.config = config
         return self
 
 
 def test_create_agent_inherits_interrupts_and_adds_async_subagents(monkeypatch) -> None:
     """Graph assembly should mirror key upstream deepagents subagent behavior."""
-    captured: dict[str, Any] = {}
+    captured: dict[str, object] = {}
 
-    def fake_create_agent(model, **kwargs):  # noqa: ANN001, ANN202
+    def fake_create_agent(model: object, **kwargs: object) -> _DummyCompiledGraph:
         captured["model"] = model
         captured["kwargs"] = kwargs
         return _DummyCompiledGraph()

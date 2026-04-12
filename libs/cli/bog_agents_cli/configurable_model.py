@@ -16,6 +16,7 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
+from langchain_core.messages import ContentBlock, SystemMessage
 from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
@@ -39,6 +40,15 @@ class CLIContext(TypedDict, total=False):
     """Invocation params (e.g. `temperature`, `max_tokens`) to merge
     into `model_settings`."""
 
+    effort_level: str | None
+    """Runtime reasoning preset (`low`, `medium`, `high`, or `max`)."""
+
+    plan_mode: bool
+    """Whether read-only plan mode should be enforced for this turn."""
+
+    system_prompt_append: str | None
+    """Additional system guidance appended to the request's system prompt."""
+
 
 def _is_anthropic_model(model: object) -> bool:
     """Check whether a resolved model is an Anthropic `ChatAnthropic` instance.
@@ -60,6 +70,51 @@ _ANTHROPIC_ONLY_SETTINGS: set[str] = {"cache_control"}
 """Keys injected by Anthropic-specific middleware (e.g.
 `AnthropicPromptCachingMiddleware`) that are not accepted by other providers and
 must be stripped on cross-provider swap."""
+
+_EFFORT_LEVEL_SETTINGS: dict[str, dict[str, Any]] = {
+    "low": {"max_tokens": 1024, "temperature": 0.3},
+    "medium": {"max_tokens": 4096, "temperature": 0.5},
+    "high": {"max_tokens": 8192, "temperature": 0.7},
+    "max": {"max_tokens": 16384, "temperature": 1.0},
+}
+"""Best-effort runtime model settings for effort presets."""
+
+_PLAN_MODE_MUTATING_TOOLS = frozenset(
+    {
+        "write_file",
+        "edit_file",
+        "multi_edit_file",
+        "execute",
+        "git_commit",
+        "git_add",
+        "git_stash",
+    }
+)
+"""Tool names hidden from the model when runtime plan mode is enabled."""
+
+_PLAN_MODE_PROMPT = """
+## Plan Mode Active
+
+You are currently in plan mode for this turn.
+- Read, inspect, search, and reason about the codebase
+- Do not write files, edit code, or execute mutating actions
+- Produce a concrete plan the user can approve or refine
+"""
+"""Runtime system guidance injected when plan mode is enabled."""
+
+
+def _append_system_message(
+    system_message: SystemMessage | None,
+    text: str,
+) -> SystemMessage:
+    """Append text to an existing system message or create a new one."""
+    new_content: list[ContentBlock] = (
+        list(system_message.content_blocks) if system_message else []
+    )
+    if new_content:
+        text = f"\n\n{text}"
+    new_content.append({"type": "text", "text": text})
+    return SystemMessage(content_blocks=new_content)
 
 
 def _apply_overrides(request: ModelRequest) -> ModelRequest:
@@ -89,28 +144,64 @@ def _apply_overrides(request: ModelRequest) -> ModelRequest:
 
     # Param merge
     model_params = ctx.get("model_params", {})
-    if model_params:
-        overrides["model_settings"] = {**request.model_settings, **model_params}
+    effort_level = ctx.get("effort_level")
+    effort_settings = (
+        _EFFORT_LEVEL_SETTINGS.get(effort_level, {})
+        if isinstance(effort_level, str)
+        else {}
+    )
+    base_model_settings = request.model_settings or {}
+    merged_model_settings = {
+        **base_model_settings,
+        **effort_settings,
+        **model_params,
+    }
+    if merged_model_settings != base_model_settings:
+        overrides["model_settings"] = merged_model_settings
 
-    if not overrides:
-        return request
+    if overrides:
+        request = request.override(**overrides)
 
     # When switching away from Anthropic, strip provider-specific settings
     # that would cause errors on other providers (e.g. cache_control passed
     # to the OpenAI SDK raises TypeError).
     if new_model is not None and not _is_anthropic_model(new_model):
-        settings = overrides.get("model_settings", request.model_settings)
+        settings = request.model_settings or {}
         dropped = settings.keys() & _ANTHROPIC_ONLY_SETTINGS
         if dropped:
             logger.debug(
                 "Stripped Anthropic-only settings %s for non-Anthropic model",
                 dropped,
             )
-            overrides["model_settings"] = {
-                k: v for k, v in settings.items() if k not in dropped
-            }
+            request = request.override(
+                model_settings={k: v for k, v in settings.items() if k not in dropped}
+            )
 
-    return request.override(**overrides)
+    system_prompt_append = ctx.get("system_prompt_append")
+    plan_mode = bool(ctx.get("plan_mode"))
+    prompt_parts = []
+    if system_prompt_append:
+        prompt_parts.append(system_prompt_append)
+    if plan_mode:
+        prompt_parts.append(_PLAN_MODE_PROMPT.strip())
+    if prompt_parts:
+        request = request.override(
+            system_message=_append_system_message(
+                request.system_message,
+                "\n\n".join(prompt_parts),
+            )
+        )
+
+    if plan_mode:
+        request = request.override(
+            tools=[
+                tool
+                for tool in request.tools
+                if getattr(tool, "name", "") not in _PLAN_MODE_MUTATING_TOOLS
+            ]
+        )
+
+    return request
 
 
 class ConfigurableModelMiddleware(AgentMiddleware):

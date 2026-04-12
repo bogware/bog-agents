@@ -177,7 +177,7 @@ async def fire_webhook(
         WebhookResponse if sync, None if async fire-and-forget.
     """
     try:
-        import aiohttp  # ty: ignore[unresolved-import]
+        import aiohttp
     except ImportError:
         logger.warning("aiohttp not installed; falling back to synchronous requests for webhooks")
         return _fire_webhook_sync(endpoint, payload)

@@ -1,0 +1,22 @@
+[
+  {
+    "fork_id": "d7bdc4d9",
+    "parent_thread_id": "thread-1",
+    "fork_thread_id": "thread-1-fork-d7bdc4d9",
+    "name": "fork 1",
+    "description": "",
+    "created_at": 1776003486.3443024,
+    "message_count": 0,
+    "metadata": {}
+  },
+  {
+    "fork_id": "30ae563a",
+    "parent_thread_id": "thread-1",
+    "fork_thread_id": "thread-1-fork-30ae563a",
+    "name": "fork 2",
+    "description": "",
+    "created_at": 1776003486.3448882,
+    "message_count": 0,
+    "metadata": {}
+  }
+]

@@ -138,7 +138,7 @@ class CompositeBackend(BackendProtocol):
         default: BackendProtocol | StateBackend,
         routes: dict[str, BackendProtocol],
         *,
-        artifacts_root: str = "/",
+        artifacts_root: str = "/large_tool_results",
     ) -> None:
         """Initialize composite backend.
 
@@ -148,6 +148,9 @@ class CompositeBackend(BackendProtocol):
                 and should end with "/" (e.g., "/memories/").
             artifacts_root: Root path for middleware-generated artifacts such as
                 offloaded tool results.
+
+                Defaults to `/large_tool_results` to match the filesystem
+                middleware's standard offload location.
         """
         # Default backend
         self.default = default

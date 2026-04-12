@@ -28,7 +28,7 @@ from bog_agents_cli.textual_adapter import (
     format_token_count,
     print_usage_table,
 )
-from bog_agents_cli.widgets.messages import SummarizationMessage
+from bog_agents_cli.widgets.messages import AppMessage, SummarizationMessage
 
 
 async def _mock_mount(widget: object) -> None:
@@ -402,6 +402,71 @@ class TestExecuteTaskTextualSummarizationFeedback:
         assert any(
             isinstance(widget, SummarizationMessage) for widget in mounted_widgets
         )
+
+    async def test_mounts_and_updates_todo_state_from_updates_stream(self) -> None:
+        """Todo updates should render as an app message in the Textual UI."""
+        mounted_widgets: list[object] = []
+
+        async def mount_message(widget: object) -> None:
+            await asyncio.sleep(0)
+            mounted_widgets.append(widget)
+
+        chunks = [
+            (
+                (),
+                "updates",
+                {
+                    "model": {
+                        "todos": [
+                            {
+                                "content": "Inspect failing tests",
+                                "status": "in_progress",
+                            },
+                            {
+                                "content": "Write regression coverage",
+                                "status": "pending",
+                            },
+                        ]
+                    }
+                },
+            ),
+            (
+                (),
+                "updates",
+                {
+                    "model": {
+                        "todos": [
+                            {"content": "Inspect failing tests", "status": "completed"},
+                            {
+                                "content": "Write regression coverage",
+                                "status": "in_progress",
+                            },
+                        ]
+                    }
+                },
+            ),
+        ]
+
+        adapter = TextualUIAdapter(
+            mount_message=mount_message,
+            update_status=_noop_status,
+            request_approval=_mock_approval,
+        )
+
+        await execute_task_textual(
+            user_input="hello",
+            agent=_FakeAgent(chunks),
+            assistant_id="assistant",
+            session_state=SimpleNamespace(thread_id="thread-1", auto_approve=False),
+            adapter=adapter,
+        )
+
+        todo_widgets = [
+            widget for widget in mounted_widgets if isinstance(widget, AppMessage)
+        ]
+        assert len(todo_widgets) == 1
+        assert "Todo list" in str(todo_widgets[0]._content)
+        assert "done" in str(todo_widgets[0]._content)
 
     async def test_mounts_notification_when_stream_ends_mid_summarization(self) -> None:
         """Notification should still render if stream exhausts during summarization."""

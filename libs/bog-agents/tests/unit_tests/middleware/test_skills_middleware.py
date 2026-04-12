@@ -674,6 +674,41 @@ Content
     ]
 
 
+def test_list_skills_from_backend_windows_style_paths() -> None:
+    """Windows-style backend paths should still validate against directory names."""
+
+    class FakeWindowsBackend:
+        def ls_info(self, path: str) -> list[dict[str, object]]:
+            assert path == "."
+            return [{"path": "E:\\skills\\skill-creator\\", "is_dir": True}]
+
+        def download_files(self, paths: list[str]) -> list[SimpleNamespace]:
+            assert paths == [r"E:\skills\skill-creator\SKILL.md"]
+            return [
+                SimpleNamespace(
+                    error=None,
+                    content=make_skill_content(
+                        "skill-creator",
+                        "Windows path handling should still work.",
+                    ).encode("utf-8"),
+                )
+            ]
+
+    skills = _list_skills(FakeWindowsBackend(), ".")  # type: ignore[arg-type]
+
+    assert skills == [
+        {
+            "name": "skill-creator",
+            "description": "Windows path handling should still work.",
+            "path": r"E:\skills\skill-creator\SKILL.md",
+            "metadata": {},
+            "license": None,
+            "compatibility": None,
+            "allowed_tools": [],
+        }
+    ]
+
+
 def test_list_skills_from_backend_with_helper_files(tmp_path: Path) -> None:
     """Test that skills can have additional helper files."""
     backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=False)

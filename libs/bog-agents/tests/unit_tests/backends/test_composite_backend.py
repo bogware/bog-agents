@@ -29,7 +29,7 @@ def make_runtime(tid: str = "tc"):
     )
 
 
-def build_composite_state_backend(runtime: ToolRuntime, *, routes, artifacts_root: str = "/"):
+def build_composite_state_backend(runtime: ToolRuntime, *, routes, artifacts_root: str = "/large_tool_results"):
     built_routes = {}
     for prefix, backend_or_factory in routes.items():
         if callable(backend_or_factory):

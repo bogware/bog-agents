@@ -17,6 +17,7 @@ from bog_agents_cli.skills.commands import (
     _generate_template,
     _info,
     _list,
+    _validate_agent_name,
     _validate_name,
     _validate_skill_path,
     execute_skills_command,
@@ -61,6 +62,19 @@ class TestValidateSkillName:
             is_valid, error = _validate_name(name)
             assert not is_valid, f"Invalid name '{name}' ({reason}) was accepted"
             assert error != ""
+
+
+class TestValidateAgentName:
+    """Test agent-name validation for skills subcommands."""
+
+    def test_allows_underscores_and_spaces(self) -> None:
+        """Agent names should follow settings validation, not skill-name rules."""
+        valid_agents = ["my_agent", "team bot", "agent-2"]
+
+        for agent_name in valid_agents:
+            is_valid, error = _validate_agent_name(agent_name)
+            assert is_valid, f"Agent name '{agent_name}' was rejected: {error}"
+            assert error == ""
 
     def test_path_traversal_attacks(self):
         """Test that path traversal attempts are blocked."""

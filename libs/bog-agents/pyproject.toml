@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents"
-version = "0.6.3"
+version = "0.6.4"
 
 description = "Bog Agents - batteries-included agent harness for building AI agents. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama. Built on LangGraph."
 readme = "README.md"
@@ -222,6 +222,7 @@ ignore-var-parameters = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "-p no:cacheprovider"
 filterwarnings = [
     "ignore:.*virtual_mode.*:DeprecationWarning",
     "ignore:.*StoreBackend without explicit.*:DeprecationWarning",

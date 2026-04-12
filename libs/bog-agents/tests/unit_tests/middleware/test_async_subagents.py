@@ -54,7 +54,7 @@ def _install_fake_langgraph_sdk(monkeypatch) -> dict[str, object]:
             return self.get_state(thread_id)
 
     class FakeRuns:
-        def create(self, *args, **kwargs):
+        def create(self, *args: object, **kwargs: object) -> dict[str, str]:
             thread_id = kwargs.get("thread_id") or args[0]
             graph_id = kwargs.get("assistant_id") or args[1]
             input_payload = kwargs.get("input")
@@ -70,7 +70,7 @@ def _install_fake_langgraph_sdk(monkeypatch) -> dict[str, object]:
             }
             return {"run_id": run_id}
 
-        async def acreate(self, *args, **kwargs):
+        async def acreate(self, *args: object, **kwargs: object) -> dict[str, str]:
             return self.create(*args, **kwargs)
 
         def get(self, thread_id: str, run_id: str):
@@ -86,12 +86,12 @@ def _install_fake_langgraph_sdk(monkeypatch) -> dict[str, object]:
             self.cancel(thread_id, run_id)
 
     class FakeSyncClient:
-        def __init__(self):
+        def __init__(self) -> None:
             self.threads = FakeThreads()
             self.runs = FakeRuns()
 
     class FakeAsyncClient:
-        def __init__(self):
+        def __init__(self) -> None:
             self.threads = types.SimpleNamespace(
                 create=FakeThreads().acreate,
                 get_state=FakeThreads().aget_state,

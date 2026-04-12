@@ -16,7 +16,7 @@ from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from rich.text import Text
 from textual.app import App
@@ -301,6 +301,31 @@ class QueuedMessage:
     mode: InputMode
 
 
+@dataclass(slots=True)
+class PreviewServerRecord:
+    """Tracked preview server process for `/preview`."""
+
+    preview_id: str
+    command: str
+    cwd: str
+    port: int | None = None
+    url: str | None = None
+    process: asyncio.subprocess.Process | None = None
+    started_at: float = field(default_factory=time.time)
+
+
+@dataclass(slots=True)
+class RecordingSessionState:
+    """Ephemeral replay-recording state for `/record`."""
+
+    session_id: str
+    name: str
+    thread_id: str
+    cwd: str
+    started_at: float
+    baseline_message_count: int = 0
+
+
 class TextualTokenTracker:
     """Token tracker that updates the status bar."""
 
@@ -549,7 +574,10 @@ class BogAgentsApp(App):
         Binding("n", "approval_no", "No", show=False),
     ]
     _COMMAND_HANDLER_NAMES: ClassVar[dict[str, str]] = {
+        "/agent": "_handle_agent_command",
+        "/audit": "_handle_audit_command",
         "/background": "_dispatch_background_command",
+        "/branch": "_handle_branch_command",
         "/changelog": "_handle_reference_url_command",
         "/clear": "_handle_clear_command",
         "/commands": "_handle_help_command",
@@ -557,31 +585,49 @@ class BogAgentsApp(App):
         "/context": "_handle_tokens_command",
         "/cost": "_handle_tokens_command",
         "/dashboard": "_dispatch_dashboard_command",
+        "/diff": "_handle_diff_command",
         "/docs": "_handle_reference_url_command",
         "/doctor": "_handle_doctor_command",
+        "/effort": "_handle_effort_command",
+        "/extensions": "_handle_plugin_command",
         "/feedback": "_handle_reference_url_command",
+        "/health": "_handle_health_command",
         "/help": "_handle_help_command",
         "/init": "_dispatch_init_command",
+        "/infra": "_handle_infra_command",
         "/keybindings": "_handle_keybindings_command",
         "/logs": "_dispatch_logs_command",
         "/mcp": "_handle_mcp_command",
+        "/migrate": "_handle_migrate_command",
         "/model": "_handle_model_command",
         "/onboard": "_dispatch_onboard_command",
+        "/plan": "_handle_plan_command",
         "/permissions": "_handle_permissions_command",
+        "/plugin": "_handle_plugin_command",
+        "/preview": "_handle_preview_command",
+        "/profile": "_handle_profile_command",
         "/q": "_handle_quit_command",
         "/quit": "_handle_quit_command",
+        "/record": "_handle_record_command",
         "/recommend": "_dispatch_recommend_command",
         "/reload": "_handle_reload_command",
         "/remember": "_handle_remember_command",
+        "/remote": "_handle_remote_command",
+        "/replay": "_handle_replay_command",
+        "/rewind": "_handle_rewind_command",
+        "/resolve": "_handle_resolve_command",
         "/resume": "_handle_resume_command",
         "/review": "_handle_review_command",
         "/session": "_handle_session_command",
         "/settings": "_handle_settings_command",
         "/skills": "_handle_skills_command",
+        "/test": "_handle_test_command",
         "/threads": "_handle_threads_command",
         "/tokens": "_handle_tokens_command",
         "/trace": "_handle_trace_command",
+        "/undo": "_handle_undo_command",
         "/version": "_handle_version_command",
+        "/worktree": "_handle_worktree_command",
     }
 
     class ServerReady(Message):
@@ -651,7 +697,7 @@ class BogAgentsApp(App):
         """
         super().__init__(**kwargs)
         self._agent = agent
-        self._assistant_id = assistant_id
+        self._assistant_id = assistant_id or "agent"
         self._backend = backend
         self._auto_approve = auto_approve
         self._cwd = str(cwd) if cwd else str(Path.cwd())
@@ -670,6 +716,16 @@ class BogAgentsApp(App):
         self._status_bar: StatusBar | None = None
         self._chat_input: ChatInput | None = None
         self._session_name: str | None = None
+        self._active_profile_name: str | None = None
+        self._active_profile_prompt: str | None = None
+        self._plan_mode_enabled = False
+        self._effort_level = "high"
+        self._base_auto_approve = auto_approve
+        self._base_model_spec = (
+            f"{settings.model_provider}:{settings.model_name}"
+            if settings.model_provider and settings.model_name
+            else settings.model_name
+        )
         self._quit_pending = False
         self._session_state: TextualSessionState | None = None
         self._ui_adapter: TextualUIAdapter | None = None
@@ -694,6 +750,9 @@ class BogAgentsApp(App):
         self._model_switching = False
         # Message virtualization store
         self._message_store = MessageStore()
+        self._preview_servers: dict[str, PreviewServerRecord] = {}
+        self._recording_state: RecordingSessionState | None = None
+        self._remote_tasks: dict[str, Any] = {}
         # Lazily imported here to avoid pulling image dependencies into
         # argument parsing paths.
         from bog_agents_cli.input import MediaTracker
@@ -1632,9 +1691,10 @@ class BogAgentsApp(App):
                 "Shell process (pid=%s) did not exit after SIGTERM; sending SIGKILL",
                 proc.pid,
             )
+            kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
             with suppress(ProcessLookupError, OSError):
                 if sys.platform != "win32":
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    os.killpg(os.getpgid(proc.pid), kill_signal)
                 else:
                     proc.kill()
             with suppress(ProcessLookupError, OSError):
@@ -1773,14 +1833,11 @@ class BogAgentsApp(App):
         if query:
             lines.append("")
             lines.append(
-                "Tip: run the command directly or use `/commands` "
-                "for a broader list."
+                "Tip: run the command directly or use `/commands` for a broader list."
             )
         else:
             lines.append("")
-            lines.append(
-                "Tip: use `/help <command-or-keyword>` to narrow this list."
-            )
+            lines.append("Tip: use `/help <command-or-keyword>` to narrow this list.")
         return "\n".join(lines)
 
     @staticmethod
@@ -1803,6 +1860,365 @@ class BogAgentsApp(App):
             logger.warning("No handler method found for slash command %s", command_name)
             return None
         return handler
+
+    @staticmethod
+    def _refresh_slash_command_cache() -> None:
+        """Refresh the shared slash-command cache used by autocomplete."""
+        from bog_agents_cli.command_registry import get_slash_commands
+        from bog_agents_cli.widgets import autocomplete
+
+        autocomplete.SLASH_COMMANDS[:] = get_slash_commands()
+
+    async def _current_thread_metadata(self) -> dict[str, object]:
+        """Load persisted metadata for the active thread, if available."""
+        from bog_agents_cli.sessions import get_thread_metadata
+
+        thread_id = self._current_thread_id()
+        if not thread_id:
+            return {}
+        metadata = await get_thread_metadata(thread_id)
+        label = metadata.get("label")
+        if isinstance(label, str) and label.strip():
+            self._session_name = label.strip()
+        return metadata
+
+    def _build_session_summary_from_messages(self) -> str:
+        """Create a compact session summary from the current message store."""
+        from bog_agents_cli.widgets.message_store import MessageType
+
+        snippets: list[str] = []
+        for message in self._message_store.get_all_messages():
+            if message.type not in {
+                MessageType.USER,
+                MessageType.ASSISTANT,
+                MessageType.ERROR,
+            }:
+                continue
+            content = " ".join(message.content.split())
+            if not content:
+                continue
+            snippets.append(content)
+            if len(snippets) >= 4:
+                break
+        summary = " | ".join(snippets)
+        if len(summary) > 240:
+            return summary[:237].rstrip() + "..."
+        return summary or "Conversation in progress."
+
+    @staticmethod
+    def _expand_user_path(value: str) -> Path:
+        """Resolve a user-provided filesystem path."""
+        return Path(value).expanduser()
+
+    def _build_cli_context(self) -> CLIContext:
+        """Build per-turn runtime context for middleware-aware commands."""
+        return CLIContext(
+            model=self._model_override,
+            model_params=self._model_params_override or {},
+            effort_level=self._effort_level,
+            plan_mode=self._plan_mode_enabled,
+            system_prompt_append=self._active_profile_prompt,
+        )
+
+    async def _ensure_background_manager(self) -> None:
+        """Create the background task manager on first use."""
+        if hasattr(self, "_bg_manager"):
+            return
+
+        from bog_agents_cli.background_agents import BackgroundAgentManager
+
+        def _create_bg_agent():
+            """Create an isolated agent instance for background tasks."""
+            from bog_agents_cli.config import create_model, settings
+
+            model_spec = self._model_override or settings.model_name
+            try:
+                result = create_model(model_spec)
+                return result.model
+            except Exception:
+                logger.debug("Failed to create background agent model", exc_info=True)
+                return self._agent
+
+        def _make_agent():
+            from bog_agents.graph import create_agent as _create_sdk_agent
+
+            model = _create_bg_agent()
+            return _create_sdk_agent(model=model)
+
+        self._bg_manager = BackgroundAgentManager(
+            agent_factory=_make_agent,
+            on_complete=lambda task: self.call_from_thread(
+                self._notify_background_complete, task
+            ),
+        )
+
+    async def _apply_runtime_model_override(
+        self,
+        model_spec: str,
+        *,
+        extra_kwargs: dict[str, Any] | None = None,
+    ) -> str:
+        """Apply a session-local model override without recreating the graph."""
+        display = model_spec.removeprefix(":")
+        parsed = ModelSpec.try_parse(display)
+        if parsed is None:
+            provider = detect_provider(display)
+            if provider:
+                display = f"{provider}:{display}"
+
+        create_model(
+            display,
+            extra_kwargs=extra_kwargs,
+            profile_overrides=self._profile_override,
+        ).apply_to_settings()
+        self._model_override = display
+        self._model_params_override = extra_kwargs
+        if self._status_bar:
+            self._status_bar.set_model(
+                provider=settings.model_provider or "",
+                model=settings.model_name or "",
+            )
+        return display
+
+    async def _run_git(
+        self,
+        args: list[str],
+        *,
+        cwd: str | Path | None = None,
+    ) -> tuple[bool, str]:
+        """Run a git command in the current working directory."""
+        from bog_agents_cli.pr_output import _run_git
+
+        resolved_cwd = str(cwd) if cwd is not None else str(self._cwd)
+        return await asyncio.to_thread(_run_git, args, cwd=resolved_cwd)
+
+    async def _get_repo_root(self) -> Path | None:
+        """Resolve the current git repository root, if any."""
+        success, output = await self._run_git(["rev-parse", "--show-toplevel"])
+        if not success or not output:
+            return None
+        return Path(output.strip())
+
+    def _current_thread_id(self) -> str | None:
+        """Return the current interactive thread identifier, if any."""
+        if self._session_state and self._session_state.thread_id:
+            return self._session_state.thread_id
+        return self._lc_thread_id
+
+    @staticmethod
+    def _slugify_branch_fragment(value: str) -> str:
+        """Convert free-form text into a git-branch-friendly fragment."""
+        chars = []
+        previous_dash = False
+        for char in value.lower():
+            if char.isalnum():
+                chars.append(char)
+                previous_dash = False
+                continue
+            if not previous_dash:
+                chars.append("-")
+                previous_dash = True
+        slug = "".join(chars).strip("-")
+        return slug or "task"
+
+    @staticmethod
+    def _build_agent_task_label(prompt: str, *, label: str = "", index: int = 1) -> str:
+        """Build a stable human-readable label for managed worker tasks."""
+        base = label or (prompt[:32].strip() or "task")
+        if index > 1:
+            return f"{base} #{index}"
+        return base
+
+    def _build_background_runner(self) -> Callable[[Any], Awaitable[Any]]:
+        """Create the async runner used for managed local agent tasks."""
+
+        async def _run(task: Any) -> Any:  # noqa: ANN401
+            from bog_agents_cli.agent import create_cli_agent
+            from bog_agents_cli.config import settings
+
+            model_spec = (
+                task.model
+                or self._model_override
+                or settings.model_name
+                or self._base_model_spec
+                or "openai:gpt-5.4-mini"
+            )
+            agent_graph, _backend = create_cli_agent(
+                model=model_spec,
+                assistant_id=self._assistant_id,
+                auto_approve=self._auto_approve,
+                enable_plan_mode=self._plan_mode_enabled,
+                effort_level=self._effort_level,
+                profile=self._active_profile_name or "",
+                cwd=task.working_dir or self._cwd,
+            )
+            config: RunnableConfig = {
+                "configurable": {"thread_id": f"bg-{task.task_id}"}
+            }
+            input_data = {"messages": [{"role": "user", "content": task.prompt}]}
+            return await agent_graph.ainvoke(
+                input_data,
+                config=config,
+                context=cast("Any", self._build_cli_context()),
+            )
+
+        return _run
+
+    async def _submit_managed_local_task(
+        self,
+        prompt: str,
+        *,
+        label: str = "",
+        model: str | None = None,
+        working_dir: str | None = None,
+        strategy: str = "local",
+        worktree_branch: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Submit a managed local worker task through the background manager."""
+        await self._ensure_background_manager()
+        return await self._bg_manager.submit(
+            prompt,
+            model=model,
+            working_dir=working_dir,
+            label=label,
+            strategy=strategy,
+            parent_thread_id=self._current_thread_id(),
+            worktree_branch=worktree_branch,
+            metadata=metadata,
+            runner=self._build_background_runner(),
+        )
+
+    async def _refresh_remote_tasks(self) -> None:
+        """Refresh all tracked remote tasks in-place."""
+        await self._load_persisted_remote_tasks()
+        if not self._remote_tasks:
+            return
+        from bog_agents_cli.remote import check_remote_task, load_remote_config
+
+        config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+        refreshed = [
+            await check_remote_task(config, task)
+            for task in self._remote_tasks.values()
+        ]
+        self._remote_tasks = {task.task_id: task for task in refreshed}
+        await self._persist_remote_tasks()
+
+    async def _load_persisted_remote_tasks(self) -> int:
+        """Merge persisted remote tasks into the in-memory registry."""
+        from bog_agents_cli.remote import load_remote_tasks
+
+        loaded = await asyncio.to_thread(load_remote_tasks, settings.user_agents_dir)
+        added = 0
+        for task in loaded:
+            if task.task_id in self._remote_tasks:
+                continue
+            self._remote_tasks[task.task_id] = task
+            added += 1
+        return added
+
+    async def _persist_remote_tasks(self) -> None:
+        """Persist tracked remote tasks for restart-safe recovery."""
+        from bog_agents_cli.remote import save_remote_tasks
+
+        try:
+            await asyncio.to_thread(
+                save_remote_tasks,
+                settings.user_agents_dir,
+                list(self._remote_tasks.values()),
+            )
+        except OSError:
+            logger.debug("Could not persist remote task registry", exc_info=True)
+
+    async def _store_remote_task(self, task: Any) -> None:  # noqa: ANN401
+        """Track and persist a remote task."""
+        self._remote_tasks[task.task_id] = task
+        await self._persist_remote_tasks()
+
+    async def _drop_remote_tasks(self, task_ids: list[str]) -> int:
+        """Remove tracked remote tasks by ID and persist the change."""
+        removed = 0
+        for task_id in task_ids:
+            if self._remote_tasks.pop(task_id, None) is not None:
+                removed += 1
+        if removed:
+            await self._persist_remote_tasks()
+        return removed
+
+    async def _resolve_remote_task(self, task_id: str) -> Any | None:  # noqa: ANN401
+        """Return a tracked remote task, loading persisted state if needed."""
+        task = self._remote_tasks.get(task_id)
+        if task is not None:
+            return task
+        await self._load_persisted_remote_tasks()
+        return self._remote_tasks.get(task_id)
+
+    @staticmethod
+    def _format_rewind_checkpoint_token(index: int, checkpoint_id: str) -> str:
+        """Render a concise numbered checkpoint selector token."""
+        return f"{index}. {checkpoint_id[:12]}"
+
+    @staticmethod
+    def _checkpoint_match_score(checkpoint_id: str, token: str, index: int) -> int:
+        """Return a simple match score for resolving checkpoint selectors."""
+        normalized = token.strip().lower()
+        candidate = checkpoint_id.lower()
+        if not normalized:
+            return 0
+        if normalized.isdigit() and int(normalized) == index:
+            return 100
+        if normalized == candidate:
+            return 95
+        if candidate.startswith(normalized):
+            return 80
+        if normalized in candidate:
+            return 40
+        return 0
+
+    async def _seed_thread_from_checkpoint(
+        self,
+        new_thread_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Create a new thread state from a decoded checkpoint payload.
+
+        Raises:
+            RuntimeError: If no active agent is available for rewind seeding.
+        """
+        if self._agent is None:
+            msg = "Cannot rewind without an active agent."
+            raise RuntimeError(msg)
+        config: RunnableConfig = {"configurable": {"thread_id": new_thread_id}}
+        if remote := self._remote_agent():
+            await remote.aensure_thread(config)  # ty: ignore[invalid-argument-type]
+        state_update: dict[str, Any] = {"messages": list(payload.get("messages", []))}
+        if "summarization_event" in payload:
+            state_update["_summarization_event"] = payload["summarization_event"]
+        await self._agent.aupdate_state(config, state_update)
+
+    @staticmethod
+    def _format_background_task_detail(task: Any) -> str:  # noqa: ANN401
+        """Format one managed background task for `/agent status`."""
+        lines = [
+            f"Task: {task.task_id}",
+            f"Status: {task.status}",
+            f"Strategy: {task.strategy}",
+            f"Label: {task.label or '(none)'}",
+            f"Model: {task.model or '(default)'}",
+            f"CWD: {task.working_dir or '(session cwd)'}",
+        ]
+        if task.worktree_branch:
+            lines.append(f"Worktree branch: {task.worktree_branch}")
+        if task.parent_thread_id:
+            lines.append(f"Parent thread: {task.parent_thread_id}")
+        if task.result:
+            preview = (
+                task.result if len(task.result) <= 400 else task.result[:400] + "..."
+            )
+            lines.extend(["", "Result:", preview])
+        if task.error:
+            lines.append(f"Error: {task.error}")
+        return "\n".join(lines)
 
     async def _handle_reference_url_command(self, command: str) -> None:
         """Open a slash-command reference URL in the browser."""
@@ -1856,7 +2272,9 @@ class BogAgentsApp(App):
                 banner.update_thread_id(new_thread_id)
             except NoMatches:
                 pass
-            await self._mount_message(AppMessage(f"Started new thread: {new_thread_id}"))
+            await self._mount_message(
+                AppMessage(f"Started new thread: {new_thread_id}")
+            )
 
     async def _handle_compact_command(self, command: str) -> None:
         """Trigger conversation compaction."""
@@ -2061,6 +2479,264 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage("Starting structured code review..."))
         await self._send_prompt_to_agent(prompt)
 
+    async def _run_prompt_backed_command(
+        self,
+        command: str,
+        *,
+        prompt_key: str,
+        default_prompt: str,
+        announcement: str,
+    ) -> None:
+        """Run a slash command that translates into an agent prompt."""
+        from bog_agents_cli.prompts import get_prompt
+
+        await self._mount_message(UserMessage(command))
+        prompt = get_prompt(prompt_key, default_prompt)
+        await self._mount_message(AppMessage(announcement))
+        await self._send_prompt_to_agent(prompt)
+
+    async def _handle_audit_command(self, command: str) -> None:
+        """Handle `/audit` as a dependency and project risk audit."""
+        from bog_agents_cli.test_tools_cli import generate_audit_prompt
+
+        await self._run_prompt_backed_command(
+            command,
+            prompt_key="audit",
+            default_prompt=generate_audit_prompt(),
+            announcement="Auditing dependencies and project risk posture...",
+        )
+
+    async def _handle_health_command(self, command: str) -> None:
+        """Handle `/health` as a codebase health analysis command."""
+        from bog_agents_cli.code_intelligence_cli import generate_health_prompt
+
+        raw_arg = command.strip()[len("/health") :].strip()
+        lowered = raw_arg.lower()
+        if lowered in {"help", "--help", "-h"}:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /health | /health quick [paths...] | "
+                    "/health detail <area> | /health <paths...>"
+                )
+            )
+            return
+
+        paths: list[str] | None = None
+        default_prompt = generate_health_prompt()
+        announcement = "Analyzing codebase health..."
+        if lowered.startswith("quick"):
+            suffix = raw_arg[5:].strip()
+            paths = shlex.split(suffix) if suffix else None
+            default_prompt = generate_health_prompt(paths)
+            default_prompt += (
+                "\nKeep the report concise and executive-ready. "
+                "Focus on the biggest health risks first."
+            )
+            announcement = "Running a quick health scan..."
+        elif lowered.startswith("detail "):
+            area = raw_arg[7:].strip()
+            if not area:
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(AppMessage("Usage: /health detail <area>"))
+                return
+            default_prompt = generate_health_prompt()
+            default_prompt += (
+                f"\nFocus deeply on `{area}`. "
+                "Include concrete file-level findings and recommended fixes."
+            )
+            announcement = f"Inspecting health details for {area}..."
+        elif raw_arg and lowered != "full":
+            paths = shlex.split(raw_arg)
+            default_prompt = generate_health_prompt(paths)
+            announcement = "Analyzing targeted codebase health..."
+
+        await self._run_prompt_backed_command(
+            command,
+            prompt_key="health",
+            default_prompt=default_prompt,
+            announcement=announcement,
+        )
+
+    async def _handle_migrate_command(self, command: str) -> None:
+        """Handle `/migrate` as a migration-planning workflow."""
+        from bog_agents_cli.code_intelligence_cli import generate_migration_prompt
+
+        raw_arg = command.strip()[len("/migrate") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(AppMessage(f"Could not parse /migrate: {exc}"))
+            return
+        if len(tokens) < 2:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(
+                AppMessage("Usage: /migrate <from-tech> <to-tech> [constraints...]")
+            )
+            return
+        from_tech, to_tech = tokens[0], tokens[1]
+        default_prompt = generate_migration_prompt(from_tech, to_tech)
+        if len(tokens) > 2:
+            default_prompt += (
+                f"\nAdditional constraints and context:\n{' '.join(tokens[2:])}\n"
+            )
+        await self._run_prompt_backed_command(
+            command,
+            prompt_key="migrate",
+            default_prompt=default_prompt,
+            announcement=f"Planning migration from {from_tech} to {to_tech}...",
+        )
+
+    async def _handle_infra_command(self, command: str) -> None:
+        """Handle `/infra` as infrastructure generation guidance."""
+        from bog_agents_cli.code_intelligence_cli import generate_infra_prompt
+
+        raw_arg = command.strip()[len("/infra") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(AppMessage(f"Could not parse /infra: {exc}"))
+            return
+        if len(tokens) < 2:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(AppMessage("Usage: /infra <type> <description>"))
+            return
+        infra_type = tokens[0]
+        description = " ".join(tokens[1:])
+        await self._run_prompt_backed_command(
+            command,
+            prompt_key="infra",
+            default_prompt=generate_infra_prompt(infra_type, description),
+            announcement=f"Designing {infra_type} infrastructure plan...",
+        )
+
+    async def _handle_test_command(self, command: str) -> None:
+        """Handle `/test` for test generation and quality analysis."""
+        from bog_agents_cli.test_tools_cli import (
+            generate_audit_prompt,
+            generate_coverage_prompt,
+            generate_test_prompt,
+            parse_test_command,
+        )
+
+        raw_arg = command.strip()[len("/test") :].strip()
+        if raw_arg.lower() in {"help", "--help", "-h"}:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /test generate <file> [framework] | "
+                    "/test coverage [path] | /test gaps <file-or-path> | "
+                    "/test benchmark [path] | /test audit"
+                )
+            )
+            return
+
+        parsed = parse_test_command(raw_arg)
+        action = parsed["action"].lower()
+        argument = parsed["argument"].strip()
+        default_prompt = ""
+        announcement = "Preparing test workflow..."
+
+        if action in {"", "coverage"}:
+            target = argument or "tests/"
+            default_prompt = generate_coverage_prompt(target)
+            announcement = f"Analyzing test coverage for {target}..."
+        elif action == "generate":
+            try:
+                tokens = shlex.split(argument)
+            except ValueError as exc:
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(
+                    AppMessage(f"Could not parse /test generate: {exc}")
+                )
+                return
+            if not tokens:
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(
+                    AppMessage("Usage: /test generate <file> [framework]")
+                )
+                return
+            source_file = tokens[0]
+            framework = tokens[1] if len(tokens) > 1 else "pytest"
+            default_prompt = generate_test_prompt(source_file, framework)
+            announcement = f"Generating {framework} tests for {source_file}..."
+        elif action == "gaps":
+            if not argument:
+                await self._mount_message(UserMessage(command))
+                await self._mount_message(
+                    AppMessage("Usage: /test gaps <file-or-path>")
+                )
+                return
+            default_prompt = (
+                f"Analyze test gaps for {argument}.\n"
+                "Report which functions, methods, and error paths are not covered.\n"
+                "Recommend the highest-value tests to add next.\n"
+            )
+            announcement = f"Reviewing test gaps for {argument}..."
+        elif action == "benchmark":
+            target = argument or "."
+            default_prompt = (
+                f"Design a benchmark plan for {target}.\n"
+                "Identify critical hot paths, propose benchmark cases, and "
+                "suggest tools or commands to run them locally.\n"
+            )
+            announcement = f"Preparing benchmark plan for {target}..."
+        elif action == "audit":
+            default_prompt = generate_audit_prompt()
+            announcement = "Auditing dependencies and test-related risks..."
+        else:
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /test generate <file> [framework] | "
+                    "/test coverage [path] | /test gaps <file-or-path> | "
+                    "/test benchmark [path] | /test audit"
+                )
+            )
+            return
+
+        await self._run_prompt_backed_command(
+            command,
+            prompt_key="test",
+            default_prompt=default_prompt,
+            announcement=announcement,
+        )
+
+    async def _handle_resolve_command(self, command: str) -> None:
+        """Handle `/resolve` as a merge-conflict resolution workflow."""
+        from bog_agents_cli.pr_cli import generate_conflict_resolution_prompt
+
+        await self._mount_message(UserMessage(command))
+        success, output = await self._run_git(
+            ["diff", "--name-only", "--diff-filter=U"]
+        )
+        if not success:
+            await self._mount_message(
+                AppMessage(
+                    "Could not inspect merge conflicts in this working directory.\n"
+                    f"{output or 'Make sure you are inside a git repository.'}"
+                )
+            )
+            return
+        conflicted_files = [
+            line.strip() for line in output.splitlines() if line.strip()
+        ]
+        if not conflicted_files:
+            await self._mount_message(AppMessage("No merge conflicts detected."))
+            return
+
+        prompt = generate_conflict_resolution_prompt()
+        prompt += "\nCurrently conflicted files:\n"
+        prompt += "\n".join(f"- {path}" for path in conflicted_files)
+        await self._mount_message(
+            AppMessage(
+                f"Preparing merge-conflict resolution plan for {len(conflicted_files)} file(s)..."
+            )
+        )
+        await self._send_prompt_to_agent(prompt)
+
     async def _handle_settings_command(self, command: str) -> None:
         """Show settings UI or print the settings path."""
         cmd = command.lower().strip()
@@ -2078,6 +2754,29 @@ class BogAgentsApp(App):
     async def _handle_unknown_command(self, command: str) -> None:
         """Render an unknown-command message with suggestions."""
         cmd = self._command_name(command)
+        from bog_agents_cli.extensibility import (
+            find_extension_command,
+            render_extension_command_prompt,
+        )
+
+        extension_command = await asyncio.to_thread(
+            find_extension_command,
+            settings.user_agents_dir,
+            cmd,
+        )
+        if extension_command is not None:
+            await self._mount_message(UserMessage(command))
+            raw_args = command.strip()[len(cmd) :].strip()
+            prompt = render_extension_command_prompt(extension_command, raw_args)
+            await self._mount_message(
+                AppMessage(
+                    f"Running extension command {extension_command.name} "
+                    f"from {extension_command.extension_name}..."
+                )
+            )
+            await self._send_prompt_to_agent(prompt)
+            return
+
         await self._mount_message(UserMessage(command))
         suggestions = self._match_slash_commands(cmd, limit=3)
         if suggestions:
@@ -2115,10 +2814,12 @@ class BogAgentsApp(App):
         else:
             help_text = (
                 "Commands: /help, /commands, /quit, /clear, /compact, /resume, "
-                "/threads, /mcp, /model [--model-params JSON] [--default], "
-                "/reload, /remember, /tokens, /session, /permissions, "
-                "/keybindings, /skills, /review, /doctor, /trace, /logs, "
-                "/init, /changelog, /docs, /feedback\n\n"
+                "/threads, /agent, /background, /diff, /worktree, /remote, "
+                "/plugin, /profile, /plan, /effort, /mcp, "
+                "/model [--model-params JSON] [--default], /reload, "
+                "/remember, /tokens, /session, /permissions, /keybindings, "
+                "/skills, /review, /doctor, /trace, /logs, /init, "
+                "/changelog, /docs, /feedback\n\n"
                 "Interactive Features:\n"
                 "  Enter           Submit your message\n"
                 f"  {newline_shortcut():<15} Insert newline\n"
@@ -2174,6 +2875,58 @@ class BogAgentsApp(App):
             await self._resume_thread(target)
             return
 
+        if lowered.startswith("project "):
+            from bog_agents_cli.sessions import find_threads_with_metadata
+
+            project_name = raw_arg[8:].strip()
+            if not project_name:
+                await self._mount_message(
+                    AppMessage("Usage: /resume project <project-name>")
+                )
+                return
+            matches = await find_threads_with_metadata(project=project_name, limit=5)
+            if not matches:
+                await self._mount_message(
+                    AppMessage(f"No saved threads found for project '{project_name}'.")
+                )
+                return
+            await self._resume_thread(matches[0]["thread_id"])
+            return
+
+        if lowered.startswith("tag "):
+            from bog_agents_cli.sessions import find_threads_with_metadata
+
+            tag = raw_arg[4:].strip()
+            if not tag:
+                await self._mount_message(AppMessage("Usage: /resume tag <tag>"))
+                return
+            matches = await find_threads_with_metadata(tag=tag, limit=5)
+            if not matches:
+                await self._mount_message(
+                    AppMessage(f"No saved threads found with tag '{tag}'.")
+                )
+                return
+            await self._resume_thread(matches[0]["thread_id"])
+            return
+
+        from bog_agents_cli.sessions import find_similar_threads, thread_exists
+
+        if not await thread_exists(raw_arg):
+            matches = await find_similar_threads(raw_arg, limit=5)
+            if len(matches) == 1:
+                await self._resume_thread(matches[0])
+                return
+            if matches:
+                lines = "\n".join(f"  {match}" for match in matches)
+                await self._mount_message(
+                    AppMessage(
+                        f"No exact thread matched '{raw_arg}'.\n\nClosest thread IDs:\n"
+                        f"{lines}\n\nUse `/resume <thread-id>` with one of the "
+                        "matches above, or `/resume browse`."
+                    )
+                )
+                return
+
         await self._resume_thread(raw_arg)
 
     async def _handle_session_command(self, command: str) -> None:
@@ -2184,31 +2937,157 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
+        from bog_agents_cli.sessions import (
+            export_thread,
+            format_path,
+            get_thread_metadata,
+            set_thread_label,
+            set_thread_project,
+            set_thread_summary,
+            set_thread_tags,
+        )
+
         raw_arg = command.strip()[len("/session") :].strip()
         lowered = raw_arg.lower()
-        if lowered.startswith("name "):
-            name = raw_arg[5:].strip()
-            if not name:
-                await self._mount_message(AppMessage("Usage: /session name <label>"))
-                return
-            self._session_name = name
-            await self._mount_message(AppMessage(f"Session named: {name}"))
-            return
-
-        if lowered in {"clear-name", "name --clear"}:
-            self._session_name = None
-            await self._mount_message(AppMessage("Session name cleared."))
-            return
-
-        if raw_arg and lowered not in {"show", "info", "status"}:
+        thread_id = self._current_thread_id()
+        if thread_id is None:
             await self._mount_message(
-                AppMessage(
-                    "Usage: /session | /session name <label> | /session clear-name"
-                )
+                AppMessage("No active thread is available for session metadata.")
             )
             return
 
-        from bog_agents_cli.sessions import format_path
+        if lowered.startswith(("rename ", "name ")):
+            parts = raw_arg.split(maxsplit=1)
+            name = parts[1].strip() if len(parts) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage("Usage: /session rename <label>"))
+                return
+            self._session_name = name
+            await set_thread_label(thread_id, name)
+            await self._mount_message(AppMessage(f"Session label saved: {name}"))
+            return
+
+        if lowered in {"clear-name", "name --clear", "rename --clear"}:
+            self._session_name = None
+            await set_thread_label(thread_id, None)
+            await self._mount_message(AppMessage("Session label cleared."))
+            return
+
+        metadata = await get_thread_metadata(thread_id)
+        metadata_tags = metadata.get("tags")
+        current_tags = (
+            [tag for tag in metadata_tags if isinstance(tag, str)]
+            if isinstance(metadata_tags, list)
+            else []
+        )
+
+        if lowered.startswith("tag add "):
+            new_tags = raw_arg[8:].split()
+            if not new_tags:
+                await self._mount_message(
+                    AppMessage("Usage: /session tag add <tag> [more-tags]")
+                )
+                return
+            updated_tags = await set_thread_tags(thread_id, [*current_tags, *new_tags])
+            await self._mount_message(
+                AppMessage(f"Session tags: {', '.join(updated_tags)}")
+            )
+            return
+
+        if lowered.startswith("tag remove "):
+            remove_tags = {tag.lower() for tag in raw_arg[11:].split() if tag.strip()}
+            if not remove_tags:
+                await self._mount_message(
+                    AppMessage("Usage: /session tag remove <tag> [more-tags]")
+                )
+                return
+            updated_tags = await set_thread_tags(
+                thread_id,
+                [tag for tag in current_tags if tag.lower() not in remove_tags],
+            )
+            tag_text = ", ".join(updated_tags) if updated_tags else "(none)"
+            await self._mount_message(AppMessage(f"Session tags: {tag_text}"))
+            return
+
+        if lowered in {"tag clear", "tags clear"}:
+            await set_thread_tags(thread_id, [])
+            await self._mount_message(AppMessage("Session tags cleared."))
+            return
+
+        if lowered.startswith("project "):
+            project_name = raw_arg[8:].strip()
+            if not project_name:
+                await self._mount_message(
+                    AppMessage("Usage: /session project <project-name>")
+                )
+                return
+            await set_thread_project(thread_id, project_name)
+            await self._mount_message(
+                AppMessage(f"Session project saved: {project_name}")
+            )
+            return
+
+        if lowered in {"project clear", "clear-project"}:
+            await set_thread_project(thread_id, None)
+            await self._mount_message(AppMessage("Session project cleared."))
+            return
+
+        if lowered == "summary refresh":
+            summary = self._build_session_summary_from_messages()
+            await set_thread_summary(thread_id, summary)
+            await self._mount_message(AppMessage(f"Session summary saved:\n{summary}"))
+            return
+
+        if lowered.startswith("summary "):
+            summary = raw_arg[8:].strip()
+            if not summary:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /session summary <text> | /session summary refresh"
+                    )
+                )
+                return
+            await set_thread_summary(thread_id, summary)
+            await self._mount_message(AppMessage("Session summary updated."))
+            return
+
+        if lowered.startswith("export"):
+            export_arg = raw_arg[6:].strip()
+            if export_arg:
+                raw_export_path = await asyncio.to_thread(
+                    self._expand_user_path, export_arg
+                )
+                export_path = (
+                    raw_export_path
+                    if raw_export_path.is_absolute()
+                    else Path(str(self._cwd)) / raw_export_path
+                )
+            else:
+                export_path = Path(str(self._cwd)) / f"bog-session-{thread_id[:8]}.json"
+            payload = await export_thread(thread_id)
+            if not payload:
+                await self._mount_message(
+                    AppMessage(f"Could not export thread '{thread_id}'.")
+                )
+                return
+            export_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=True),
+                encoding="utf-8",
+            )
+            await self._mount_message(
+                AppMessage(f"Session export written to {export_path}")
+            )
+            return
+
+        if raw_arg and lowered not in {"show", "info", "status", "summary"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /session | /session rename <label> | /session tag add <tag> "
+                    "| /session project <name> | /session summary refresh "
+                    "| /session export [path]"
+                )
+            )
+            return
 
         branch = _get_git_branch() or "(not a git repo)"
         current_model = self._model_override or settings.model_name or "auto"
@@ -2218,16 +3097,26 @@ class BogAgentsApp(App):
             and self._token_tracker.current_context > 0
             else "0"
         )
-        thread_id = (
-            self._session_state.thread_id
-            if self._session_state
-            else self._lc_thread_id or "(none)"
-        )
+        metadata = await get_thread_metadata(thread_id)
+        label = metadata.get("label")
+        if isinstance(label, str) and label.strip():
+            self._session_name = label.strip()
+        tags_value = metadata.get("tags")
+        tags = tags_value if isinstance(tags_value, list) else []
+        tag_text = ", ".join(str(tag) for tag in tags) if tags else "(none)"
+        project = metadata.get("project") or "(none)"
+        summary = metadata.get("summary") or "(none)"
         lines = [
             f"Session: {self._session_name or '(unnamed)'}",
             f"Agent: {self._assistant_id}",
             f"Thread: {thread_id}",
+            f"Project: {project}",
+            f"Tags: {tag_text}",
+            f"Summary: {summary}",
             f"Model: {current_model}",
+            f"Profile: {self._active_profile_name or '(none)'}",
+            f"Plan mode: {'on' if self._plan_mode_enabled else 'off'}",
+            f"Effort: {self._effort_level}",
             f"Auto-approve: {'on' if self._auto_approve else 'off'}",
             f"CWD: {format_path(self._cwd)}",
             f"Git branch: {branch}",
@@ -2240,11 +3129,1213 @@ class BogAgentsApp(App):
             ),
             f"Current context: {token_usage} tokens",
             (
-                "Tip: `/session name <label>` stores a local label "
-                "for this CLI session."
+                "Tip: `/session rename`, `/session tag add`, `/session project`, "
+                "and `/session summary refresh` persist metadata to the thread."
             ),
         ]
         await self._mount_message(AppMessage("\n".join(lines)))
+
+    async def _handle_rewind_command(self, command: str) -> None:
+        """Handle `/rewind` checkpoint browsing and forked recovery."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.sessions import (
+            format_path,
+            format_timestamp,
+            get_thread_checkpoint_payload,
+            get_thread_metadata,
+            list_thread_checkpoints,
+            set_thread_label,
+            set_thread_project,
+            set_thread_tags,
+        )
+
+        if self._agent is None:
+            await self._mount_message(
+                AppMessage("`/rewind` requires an active agent session.")
+            )
+            return
+
+        thread_id = self._current_thread_id()
+        if thread_id is None:
+            await self._mount_message(
+                AppMessage("No active thread is available to rewind.")
+            )
+            return
+
+        raw_arg = command.strip()[len("/rewind") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /rewind arguments: {exc}")
+            )
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+        checkpoint_token = ""
+        if action in {"list", "browse"}:
+            checkpoint_token = ""
+        elif action in {"show", "preview", "to", "use"}:
+            checkpoint_token = tokens[1] if len(tokens) > 1 else ""
+        else:
+            action = "to"
+            checkpoint_token = tokens[0] if tokens else ""
+
+        checkpoints = await list_thread_checkpoints(thread_id, limit=12)
+        if not checkpoints:
+            await self._mount_message(
+                AppMessage(
+                    "No rewind checkpoints were found for this thread yet. "
+                    "Run another turn and try again."
+                )
+            )
+            return
+
+        if action in {"list", "browse"}:
+            lines = [f"Checkpoint history for {thread_id}:"]
+            for index, checkpoint in enumerate(checkpoints, start=1):
+                timestamp = format_timestamp(checkpoint.get("updated_at"))
+                prompt = " ".join((checkpoint.get("initial_prompt") or "").split())
+                preview = prompt[:72] + "..." if len(prompt) > 72 else prompt
+                if not preview:
+                    preview = "(no prompt preview)"
+                lines.append(
+                    "  "
+                    + " | ".join(
+                        [
+                            self._format_rewind_checkpoint_token(
+                                index, checkpoint["checkpoint_id"]
+                            ),
+                            timestamp or "time unknown",
+                            f"{checkpoint['message_count']} msg",
+                            preview,
+                        ]
+                    )
+                )
+            lines.extend(
+                [
+                    "",
+                    "Usage: /rewind show <checkpoint-id|index>",
+                    "Usage: /rewind to <checkpoint-id|index>",
+                ]
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if not checkpoint_token:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /rewind | /rewind show <checkpoint-id|index> | "
+                    "/rewind to <checkpoint-id|index>"
+                )
+            )
+            return
+
+        scored_matches = [
+            (
+                self._checkpoint_match_score(
+                    checkpoint["checkpoint_id"], checkpoint_token, index
+                ),
+                index,
+                checkpoint,
+            )
+            for index, checkpoint in enumerate(checkpoints, start=1)
+        ]
+        scored_matches.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        best_score, best_index, best_checkpoint = scored_matches[0]
+        if best_score <= 0:
+            await self._mount_message(
+                AppMessage(
+                    f"No checkpoint matched '{checkpoint_token}'. "
+                    "Run `/rewind` to browse the available checkpoints."
+                )
+            )
+            return
+
+        checkpoint_id = best_checkpoint["checkpoint_id"]
+        if action in {"show", "preview"}:
+            lines = [
+                f"Checkpoint {checkpoint_id}",
+                f"Index: {best_index}",
+                f"Thread: {thread_id}",
+                f"Captured: {format_timestamp(best_checkpoint.get('updated_at')) or 'time unknown'}",
+                f"Messages: {best_checkpoint['message_count']}",
+            ]
+            if branch := best_checkpoint.get("git_branch"):
+                lines.append(f"Branch: {branch}")
+            if cwd := best_checkpoint.get("cwd"):
+                lines.append(f"Workspace: {format_path(cwd)}")
+            if prompt := best_checkpoint.get("initial_prompt"):
+                lines.extend(["", "Initial prompt:", prompt])
+            lines.extend(
+                ["", f"Use `/rewind to {checkpoint_id}` to continue from here."]
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        payload = await get_thread_checkpoint_payload(thread_id, checkpoint_id)
+        if payload is None or not payload["messages"]:
+            await self._mount_message(
+                AppMessage(
+                    f"Checkpoint {checkpoint_id} could not be restored into a new thread."
+                )
+            )
+            return
+
+        new_thread_id = _new_thread_id()
+        await self._seed_thread_from_checkpoint(new_thread_id, payload)
+
+        metadata = await get_thread_metadata(thread_id)
+        label = metadata.get("label")
+        project = metadata.get("project")
+        tags = metadata.get("tags")
+        rewind_label = (
+            f"{label.strip()} (rewind)"
+            if isinstance(label, str) and label.strip()
+            else f"rewind-{thread_id[:8]}"
+        )
+        with suppress(Exception):
+            await set_thread_label(new_thread_id, rewind_label)
+        if isinstance(project, str) and project.strip():
+            with suppress(Exception):
+                await set_thread_project(new_thread_id, project.strip())
+        if isinstance(tags, list):
+            rewind_tags = [*(str(tag) for tag in tags), "rewind"]
+            with suppress(Exception):
+                await set_thread_tags(new_thread_id, rewind_tags)
+
+        await self._resume_thread(new_thread_id)
+        await self._mount_message(
+            AppMessage(
+                "\n".join(
+                    [
+                        f"Forked rewind thread {new_thread_id}",
+                        f"Source thread: {thread_id}",
+                        f"Checkpoint: {checkpoint_id}",
+                        f"Messages restored: {payload['message_count']}",
+                    ]
+                )
+            )
+        )
+
+    @staticmethod
+    def _format_replay_timestamp(timestamp: float) -> str:
+        """Return a compact local timestamp string for replay metadata."""
+        from datetime import UTC, datetime
+
+        if timestamp <= 0:
+            return "unknown"
+        return datetime.fromtimestamp(timestamp, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+    @staticmethod
+    def _replay_match_score(name: str, token: str) -> int:
+        """Return a simple match score for resolving replay sessions."""
+        normalized_name = name.strip().lower()
+        normalized_token = token.strip().lower()
+        if normalized_name == normalized_token:
+            return 100
+        if normalized_name.startswith(normalized_token):
+            return 80
+        if normalized_token in normalized_name:
+            return 50
+        return 0
+
+    async def _find_replay_session(self, token: str) -> tuple[Any, Path] | None:
+        """Resolve a replay session by session ID, file stem, or name."""
+        from bog_agents_cli.replay import list_replay_sessions
+
+        replays_dir = settings.user_agents_dir / "replays"
+        sessions = await asyncio.to_thread(
+            list_replay_sessions, settings.user_agents_dir
+        )
+        if not sessions:
+            return None
+
+        scored: list[tuple[int, Any, Path]] = []
+        for session in sessions:
+            file_path = replays_dir / f"{session.session_id}.json"
+            best = max(
+                self._replay_match_score(session.session_id, token),
+                self._replay_match_score(file_path.stem, token),
+                self._replay_match_score(session.name or "", token),
+            )
+            if best:
+                scored.append((best, session, file_path))
+        if not scored:
+            return None
+        scored.sort(key=lambda item: (-item[0], item[1].session_id))
+        _score, session, file_path = scored[0]
+        return session, file_path
+
+    async def _handle_record_command(self, command: str) -> None:
+        """Handle `/record` for replay capture management."""
+        await self._mount_message(UserMessage(command))
+
+        raw_arg = command.strip()[len("/record") :].strip()
+        lowered = raw_arg.lower()
+        thread_id = self._current_thread_id()
+
+        if lowered in {"", "status"}:
+            if self._recording_state is None:
+                await self._mount_message(AppMessage("No replay recording is active."))
+                return
+            state = self._recording_state
+            await self._mount_message(
+                AppMessage(
+                    "\n".join(
+                        [
+                            f"Recording: {state.name}",
+                            f"Thread: {state.thread_id}",
+                            f"Started: {self._format_replay_timestamp(state.started_at)}",
+                            f"Baseline messages: {state.baseline_message_count}",
+                        ]
+                    )
+                )
+            )
+            return
+
+        if lowered.startswith("start"):
+            if thread_id is None:
+                await self._mount_message(
+                    AppMessage("No active thread is available to record.")
+                )
+                return
+            if self._recording_state is not None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Recording already active: {self._recording_state.name}. "
+                        "Use `/record stop` before starting another one."
+                    )
+                )
+                return
+            from bog_agents_cli.sessions import export_thread
+
+            payload = await export_thread(thread_id)
+            transcript = (
+                payload.get("transcript", []) if isinstance(payload, dict) else []
+            )
+            baseline = len(transcript) if isinstance(transcript, list) else 0
+            name = raw_arg[5:].strip() or f"Replay {thread_id[:8]}"
+            self._recording_state = RecordingSessionState(
+                session_id=f"replay-{uuid.uuid4().hex[:8]}",
+                name=name,
+                thread_id=thread_id,
+                cwd=str(self._cwd),
+                started_at=time.time(),
+                baseline_message_count=baseline,
+            )
+            await self._mount_message(
+                AppMessage(f"Started replay recording `{name}` on thread {thread_id}.")
+            )
+            return
+
+        if lowered == "stop":
+            if self._recording_state is None:
+                await self._mount_message(AppMessage("No replay recording is active."))
+                return
+            from bog_agents_cli.replay import (
+                ReplayAction,
+                ReplaySession,
+                save_replay_session,
+            )
+            from bog_agents_cli.sessions import export_thread
+
+            state = self._recording_state
+            payload = await export_thread(state.thread_id)
+            transcript = (
+                payload.get("transcript", []) if isinstance(payload, dict) else []
+            )
+            transcript_list = transcript if isinstance(transcript, list) else []
+            entries = transcript_list[state.baseline_message_count :]
+            actions: list[Any] = []
+            step = 0
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                entry_dict = cast("dict[str, object]", entry)
+                role = str(entry_dict.get("role", "")).lower()
+                content = str(entry_dict.get("content", "")).strip()
+                if not content:
+                    continue
+                if role == "human":
+                    action_type = "user_message"
+                elif role == "ai":
+                    action_type = "ai_message"
+                else:
+                    continue
+                step += 1
+                actions.append(
+                    ReplayAction(
+                        step=step,
+                        action_type=action_type,
+                        content=content[:500],
+                    )
+                )
+
+            if not actions:
+                self._recording_state = None
+                await self._mount_message(
+                    AppMessage(
+                        "Recording stopped, but no new replayable conversation steps were captured."
+                    )
+                )
+                return
+
+            session = ReplaySession(
+                session_id=state.session_id,
+                name=state.name,
+                description=f"Recorded from thread {state.thread_id}",
+                recorded_at=state.started_at,
+                original_context={"cwd": state.cwd, "thread_id": state.thread_id},
+                actions=actions,
+            )
+            file_path = await asyncio.to_thread(
+                save_replay_session,
+                settings.user_agents_dir,
+                session,
+            )
+            self._recording_state = None
+            await self._mount_message(
+                AppMessage(
+                    f"Saved replay session `{session.name}` with {len(actions)} step(s) to {file_path}"
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /record start [name] | /record status | /record stop")
+        )
+
+    async def _handle_replay_command(self, command: str) -> None:
+        """Handle `/replay` for inspecting and rerunning recorded sessions."""
+        from bog_agents_cli.replay import generate_replay_prompt, list_replay_sessions
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/replay") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /replay arguments: {exc}")
+            )
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /replay | /replay list | /replay show <id-or-name> | "
+                    "/replay run <id-or-name> [extra-context]"
+                )
+            )
+            return
+
+        if action in {"", "list"}:
+            sessions = await asyncio.to_thread(
+                list_replay_sessions, settings.user_agents_dir
+            )
+            if not sessions:
+                await self._mount_message(AppMessage("No replay sessions saved yet."))
+                return
+            lines = ["Saved replay sessions:"]
+            for session in sessions:
+                label = session.name or session.session_id
+                lines.append(
+                    "  "
+                    f"{label} ({session.session_id}) - "
+                    f"{len(session.actions)} step(s), "
+                    f"{self._format_replay_timestamp(session.recorded_at)}"
+                )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if len(tokens) < 2:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /replay show <id-or-name> | /replay run <id-or-name> [extra-context]"
+                )
+            )
+            return
+
+        match = await self._find_replay_session(tokens[1])
+        if match is None:
+            await self._mount_message(
+                AppMessage(f"No replay session matched '{tokens[1]}'.")
+            )
+            return
+        session, file_path = match
+
+        if action == "show":
+            lines = [
+                f"Replay: {session.name or session.session_id}",
+                f"ID: {session.session_id}",
+                f"Recorded: {self._format_replay_timestamp(session.recorded_at)}",
+                f"File: {file_path}",
+                f"Steps: {len(session.actions)}",
+                "",
+            ]
+            if session.description:
+                lines.append(session.description)
+                lines.append("")
+            for action_item in session.actions[:12]:
+                preview = (
+                    action_item.content.strip() or action_item.tool_name or "(empty)"
+                )
+                lines.append(
+                    f"{action_item.step}. {action_item.action_type}: {preview[:120]}"
+                )
+            if len(session.actions) > 12:
+                lines.append("...")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "run":
+            extra_context = " ".join(tokens[2:]).strip()
+            prompt = generate_replay_prompt(
+                session,
+                {"cwd": str(self._cwd)},
+            )
+            if extra_context:
+                prompt += f"\n\n## Extra Context\n\n{extra_context}\n"
+            await self._mount_message(
+                AppMessage(
+                    f"Replaying session `{session.name or session.session_id}`..."
+                )
+            )
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /replay | /replay list | /replay show <id-or-name> | "
+                "/replay run <id-or-name> [extra-context]"
+            )
+        )
+
+    async def _handle_profile_command(self, command: str) -> None:
+        """Handle `/profile` for runtime workflow presets."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.profiles import load_profiles
+
+        profiles = load_profiles(settings.user_agents_dir)
+        raw_arg = command.strip()[len("/profile") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered in {"list", "show", "status"}:
+            active = self._active_profile_name or "(none)"
+            lines = [
+                f"Active profile: {active}",
+                f"Plan mode: {'on' if self._plan_mode_enabled else 'off'}",
+                f"Effort: {self._effort_level}",
+                f"Auto-approve: {'on' if self._auto_approve else 'off'}",
+                "",
+                "Available profiles:",
+            ]
+            for name, profile in sorted(profiles.items()):
+                marker = " (active)" if name == self._active_profile_name else ""
+                summary = profile.description or "No description"
+                lines.append(f"  {name}{marker} - {summary}")
+            lines.append("")
+            lines.append("Usage: /profile <name> | /profile clear")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered in {"clear", "none", "off"}:
+            self._active_profile_name = None
+            self._active_profile_prompt = None
+            self._plan_mode_enabled = False
+            self._effort_level = "high"
+            self._auto_approve = self._base_auto_approve
+            if self._status_bar:
+                self._status_bar.auto_approve = self._auto_approve
+            if self._base_model_spec:
+                with suppress(Exception):
+                    await self._apply_runtime_model_override(self._base_model_spec)
+            await self._mount_message(
+                AppMessage(
+                    "Profile cleared. Session returned to direct controls "
+                    "(plan off, effort high, profile prompt removed)."
+                )
+            )
+            return
+
+        target = raw_arg[4:].strip() if lowered.startswith("use ") else raw_arg
+        profile = profiles.get(target)
+        if profile is None:
+            suggestions = ", ".join(
+                sorted(name for name in profiles if target.lower() in name.lower())
+            )
+            suffix = f" Closest matches: {suggestions}" if suggestions else ""
+            await self._mount_message(
+                AppMessage(f"Unknown profile '{target}'.{suffix}")
+            )
+            return
+
+        self._active_profile_name = profile.name
+        self._active_profile_prompt = profile.system_prompt_append
+        if profile.auto_approve is not None:
+            self._auto_approve = profile.auto_approve
+            if self._status_bar:
+                self._status_bar.auto_approve = self._auto_approve
+        if profile.plan_mode is not None:
+            self._plan_mode_enabled = profile.plan_mode
+        if profile.effort_level:
+            self._effort_level = profile.effort_level
+
+        lines = [
+            f"Profile activated: {profile.name}",
+            profile.description or "No description provided.",
+            f"Plan mode: {'on' if self._plan_mode_enabled else 'off'}",
+            f"Effort: {self._effort_level}",
+            f"Auto-approve: {'on' if self._auto_approve else 'off'}",
+        ]
+
+        if profile.model:
+            try:
+                model_display = await self._apply_runtime_model_override(profile.model)
+            except Exception as exc:
+                lines.append(f"Model override failed: {exc}")
+            else:
+                lines.append(f"Model: {model_display}")
+
+        if profile.system_prompt_append:
+            lines.append("Additional workflow guidance will be applied next turn.")
+
+        await self._mount_message(AppMessage("\n".join(lines)))
+
+    async def _handle_plan_command(self, command: str) -> None:
+        """Handle `/plan` runtime read-only mode toggles."""
+        await self._mount_message(UserMessage(command))
+
+        raw_arg = command.strip()[len("/plan") :].strip().lower()
+        if not raw_arg or raw_arg in {"show", "status"}:
+            await self._mount_message(
+                AppMessage(
+                    "Plan mode is "
+                    f"{'ON' if self._plan_mode_enabled else 'OFF'}.\n"
+                    "When enabled, mutating tools are hidden from the model and "
+                    "the system prompt is constrained to planning-only behavior.\n"
+                    "Usage: /plan on | /plan off | /plan toggle"
+                )
+            )
+            return
+
+        if raw_arg == "toggle":
+            self._plan_mode_enabled = not self._plan_mode_enabled
+        elif raw_arg in {"on", "enable", "enabled"}:
+            self._plan_mode_enabled = True
+        elif raw_arg in {"off", "disable", "disabled"}:
+            self._plan_mode_enabled = False
+        else:
+            await self._mount_message(
+                AppMessage("Usage: /plan on | /plan off | /plan toggle")
+            )
+            return
+
+        state = "enabled" if self._plan_mode_enabled else "disabled"
+        await self._mount_message(
+            AppMessage(
+                f"Plan mode {state}. The new mode will apply on the next agent turn."
+            )
+        )
+
+    async def _handle_effort_command(self, command: str) -> None:
+        """Handle `/effort` runtime reasoning presets."""
+        await self._mount_message(UserMessage(command))
+
+        descriptions = {
+            "low": "Quick responses with minimal reasoning overhead.",
+            "medium": "Balanced reasoning and speed.",
+            "high": "Thorough analysis for most coding tasks.",
+            "max": "Maximum reasoning depth for complex work.",
+        }
+        raw_arg = command.strip()[len("/effort") :].strip().lower()
+        if not raw_arg or raw_arg in {"show", "status"}:
+            lines = [f"Current effort: {self._effort_level}", ""]
+            lines.extend(f"  {level} - {desc}" for level, desc in descriptions.items())
+            lines.append("")
+            lines.append("Usage: /effort low|medium|high|max")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if raw_arg not in descriptions:
+            await self._mount_message(AppMessage("Usage: /effort low|medium|high|max"))
+            return
+
+        self._effort_level = raw_arg
+        await self._mount_message(
+            AppMessage(
+                f"Effort set to {raw_arg}. {descriptions[raw_arg]} "
+                "The new preset will apply on the next agent turn."
+            )
+        )
+
+    async def _handle_diff_command(self, command: str) -> None:
+        """Handle `/diff` for local git change inspection."""
+        await self._mount_message(UserMessage(command))
+
+        raw_arg = command.strip()[len("/diff") :].strip()
+        if raw_arg in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /diff | /diff --cached | /diff --stat | "
+                    "/diff --name-only | /diff <git-diff-args>"
+                )
+            )
+            return
+
+        if raw_arg.lower() in {"cached", "staged"}:
+            args = ["diff", "--cached", "--minimal"]
+        elif raw_arg.lower() in {"stat", "--stat"}:
+            args = ["diff", "--stat"]
+        elif raw_arg.lower() in {"names", "name-only", "--name-only"}:
+            args = ["diff", "--name-only"]
+        elif raw_arg:
+            args = ["diff", *shlex.split(raw_arg)]
+        else:
+            args = ["diff", "--minimal"]
+
+        success, output = await self._run_git(args)
+        if not success:
+            await self._mount_message(
+                AppMessage(
+                    "Could not read git diff for this working directory.\n"
+                    f"{output or 'Make sure you are inside a git repository.'}"
+                )
+            )
+            return
+        if not output.strip():
+            await self._mount_message(AppMessage("No pending git changes."))
+            return
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_branch_command(self, command: str) -> None:
+        """Handle `/branch` as a lightweight local git-branch helper."""
+        await self._mount_message(UserMessage(command))
+
+        repo_root = await self._get_repo_root()
+        if repo_root is None:
+            await self._mount_message(
+                AppMessage("`/branch` requires a git repository.")
+            )
+            return
+
+        raw_arg = command.strip()[len("/branch") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /branch arguments: {exc}")
+            )
+            return
+        lowered = tokens[0].lower() if tokens else "list"
+
+        if lowered in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /branch | /branch status | /branch create <name> [start-point] | "
+                    "/branch switch <name>"
+                )
+            )
+            return
+
+        if not tokens or lowered in {"list", "ls"}:
+            success, output = await self._run_git(
+                [
+                    "branch",
+                    "--sort=-committerdate",
+                    "--format=%(HEAD) %(refname:short) %(upstream:short) %(subject)",
+                ],
+                cwd=repo_root,
+            )
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or "Could not list branches.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(
+                    "Branches:\n"
+                    + (output.strip() or "(no local branches)")
+                    + "\n\nUse `/branch create <name>` or `/branch switch <name>`."
+                )
+            )
+            return
+
+        if lowered == "status":
+            success, output = await self._run_git(
+                ["status", "--short", "--branch"],
+                cwd=repo_root,
+            )
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or "Could not read branch status.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(output.strip() or "Working tree is clean.")
+            )
+            return
+
+        if lowered == "create":
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: /branch create <name> [start-point]")
+                )
+                return
+            branch_name = tokens[1]
+            args = ["switch", "-c", branch_name]
+            if len(tokens) > 2:
+                args.append(tokens[2])
+            success, output = await self._run_git(args, cwd=repo_root)
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or f"Could not create branch {branch_name}.")
+                )
+                return
+            if self._status_bar:
+                self._status_bar.branch = _get_git_branch() or ""
+            message = output.strip() or f"Switched to a new branch `{branch_name}`."
+            await self._mount_message(AppMessage(message))
+            return
+
+        if lowered in {"switch", "checkout"} or len(tokens) == 1:
+            branch_name = tokens[1] if lowered in {"switch", "checkout"} else tokens[0]
+            if not branch_name:
+                await self._mount_message(AppMessage("Usage: /branch switch <name>"))
+                return
+            success, output = await self._run_git(
+                ["switch", branch_name],
+                cwd=repo_root,
+            )
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or f"Could not switch to branch {branch_name}.")
+                )
+                return
+            if self._status_bar:
+                self._status_bar.branch = _get_git_branch() or ""
+            message = output.strip() or f"Switched to branch `{branch_name}`."
+            await self._mount_message(AppMessage(message))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /branch | /branch status | /branch create <name> [start-point] | "
+                "/branch switch <name>"
+            )
+        )
+
+    async def _handle_undo_command(self, command: str) -> None:
+        """Handle `/undo` as a safe git-backed restore helper."""
+        await self._mount_message(UserMessage(command))
+
+        repo_root = await self._get_repo_root()
+        if repo_root is None:
+            await self._mount_message(AppMessage("`/undo` requires a git repository."))
+            return
+
+        raw_arg = command.strip()[len("/undo") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /undo arguments: {exc}")
+            )
+            return
+        lowered = tokens[0].lower() if tokens else "status"
+
+        if lowered in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /undo | /undo status | /undo diff | "
+                    "/undo restore <path...> | /undo restore --all\n"
+                    "Note: `/undo` only restores tracked changes. Untracked files are left alone."
+                )
+            )
+            return
+
+        if lowered in {"status", ""}:
+            success, output = await self._run_git(
+                ["status", "--short"],
+                cwd=repo_root,
+            )
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or "Could not inspect pending changes.")
+                )
+                return
+            if not output.strip():
+                await self._mount_message(AppMessage("Working tree is clean."))
+                return
+            await self._mount_message(
+                AppMessage(
+                    "Tracked changes pending:\n"
+                    f"{output}\n\nUse `/undo restore <path...>` to restore tracked files."
+                )
+            )
+            return
+
+        if lowered == "diff":
+            success, output = await self._run_git(
+                ["diff", "--stat"],
+                cwd=repo_root,
+            )
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or "Could not inspect diff stats.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(output.strip() or "No tracked diff to undo.")
+            )
+            return
+
+        if lowered == "restore":
+            targets = tokens[1:]
+            if not targets:
+                await self._mount_message(
+                    AppMessage("Usage: /undo restore <path...> | /undo restore --all")
+                )
+                return
+            pathspecs = ["."] if targets == ["--all"] else targets
+            args = [
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                *pathspecs,
+            ]
+            success, output = await self._run_git(args, cwd=repo_root)
+            if not success:
+                await self._mount_message(
+                    AppMessage(output or "Could not restore the requested files.")
+                )
+                return
+            status_success, status_output = await self._run_git(
+                ["status", "--short"],
+                cwd=repo_root,
+            )
+            if self._status_bar:
+                self._status_bar.branch = _get_git_branch() or ""
+            lines = [
+                f"Restored tracked changes for: {', '.join(pathspecs)}",
+            ]
+            if output.strip():
+                lines.append(output.strip())
+            if status_success:
+                lines.extend(
+                    [
+                        "",
+                        "Remaining changes:",
+                        status_output.strip() or "(clean)",
+                    ]
+                )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /undo | /undo status | /undo diff | "
+                "/undo restore <path...> | /undo restore --all"
+            )
+        )
+
+    async def _handle_agent_command(self, command: str) -> None:
+        """Handle `/agent` as a first-class supervisor over managed workers."""
+        await self._mount_message(UserMessage(command))
+        await self._ensure_background_manager()
+
+        from bog_agents.middleware.worktree import create_worktree
+
+        from bog_agents_cli.remote import (
+            RemoteStatus,
+            cancel_remote_task,
+            format_remote_tasks,
+            load_remote_config,
+            submit_remote_task,
+        )
+
+        raw_arg = command.strip()[len("/agent") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered in {"list", "status"}:
+            await self._refresh_remote_tasks()
+            current_thread = self._current_thread_id() or "(none)"
+            lines = [
+                f"Current thread: {current_thread}",
+                "",
+                self._bg_manager.format_status_table(),
+                "",
+                format_remote_tasks(list(self._remote_tasks.values())),
+                "",
+                (
+                    "Usage: /agent spawn [--count N] [--label LABEL] [--model MODEL] "
+                    "[--remote] [--worktree] [--branch-prefix PREFIX] <prompt>"
+                ),
+                "Usage: /agent status <id> | /agent stop <id> | /agent cleanup",
+                "Usage: /agent switch <thread-id>",
+            ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered == "cleanup":
+            local_removed = self._bg_manager.cleanup_completed()
+            remote_removed = 0
+            remote_done = {
+                RemoteStatus.COMPLETED,
+                RemoteStatus.FAILED,
+                RemoteStatus.CANCELLED,
+            }
+            for task_id in list(self._remote_tasks):
+                if self._remote_tasks[task_id].status in remote_done:
+                    remote_removed += 1
+            if remote_removed:
+                done_ids = [
+                    task_id
+                    for task_id, task in self._remote_tasks.items()
+                    if task.status in remote_done
+                ]
+                await self._drop_remote_tasks(done_ids)
+            await self._mount_message(
+                AppMessage(
+                    f"Cleaned up {local_removed} local tasks and "
+                    f"{remote_removed} remote tasks."
+                )
+            )
+            return
+
+        if lowered.startswith("status "):
+            task_id = raw_arg[7:].strip()
+            if not task_id:
+                await self._mount_message(AppMessage("Usage: /agent status <id>"))
+                return
+            if local_task := self._bg_manager.get_status(task_id):
+                await self._mount_message(
+                    AppMessage(self._format_background_task_detail(local_task))
+                )
+                return
+            remote_task = await self._resolve_remote_task(task_id)
+            if remote_task is not None:
+                await self._refresh_remote_tasks()
+                refreshed = self._remote_tasks.get(task_id, remote_task)
+                await self._mount_message(AppMessage(format_remote_tasks([refreshed])))
+                return
+            await self._mount_message(AppMessage(f"Managed task {task_id} not found."))
+            return
+
+        if lowered.startswith("stop "):
+            task_id = raw_arg[5:].strip()
+            if not task_id:
+                await self._mount_message(AppMessage("Usage: /agent stop <id>"))
+                return
+            if self._bg_manager.cancel(task_id):
+                await self._mount_message(AppMessage(f"Stop requested for {task_id}."))
+                return
+            remote_task = await self._resolve_remote_task(task_id)
+            if remote_task is not None:
+                remote_config = await asyncio.to_thread(
+                    load_remote_config, settings.user_agents_dir
+                )
+                updated = await cancel_remote_task(
+                    remote_config,
+                    remote_task,
+                )
+                await self._store_remote_task(updated)
+                await self._mount_message(AppMessage(format_remote_tasks([updated])))
+                return
+            await self._mount_message(
+                AppMessage(f"Task {task_id} was not found or is not running.")
+            )
+            return
+
+        if lowered.startswith("switch "):
+            thread_id = raw_arg[7:].strip()
+            if not thread_id:
+                await self._mount_message(
+                    AppMessage("Usage: /agent switch <thread-id>")
+                )
+                return
+            await self._resume_thread(thread_id)
+            return
+
+        if lowered.startswith("spawn "):
+            raw_spawn = raw_arg[6:].strip()
+            try:
+                tokens = shlex.split(raw_spawn)
+            except ValueError as exc:
+                await self._mount_message(
+                    AppMessage(f"Could not parse spawn command: {exc}")
+                )
+                return
+
+            count = 1
+            label = ""
+            model: str | None = None
+            use_remote = False
+            use_worktree = False
+            branch_prefix = ""
+            idx = 0
+            while idx < len(tokens) and tokens[idx].startswith("--"):
+                flag = tokens[idx]
+                if flag == "--remote":
+                    use_remote = True
+                    idx += 1
+                    continue
+                if flag == "--worktree":
+                    use_worktree = True
+                    idx += 1
+                    continue
+                if flag in {"--count", "--label", "--model", "--branch-prefix"}:
+                    if idx + 1 >= len(tokens):
+                        await self._mount_message(
+                            AppMessage(f"Missing value for {flag}.")
+                        )
+                        return
+                    value = tokens[idx + 1]
+                    if flag == "--count":
+                        try:
+                            count = int(value)
+                        except ValueError:
+                            await self._mount_message(
+                                AppMessage("--count must be an integer.")
+                            )
+                            return
+                    elif flag == "--label":
+                        label = value
+                    elif flag == "--model":
+                        model = value
+                    else:
+                        branch_prefix = value
+                    idx += 2
+                    continue
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /agent spawn [--count N] [--label LABEL] "
+                        "[--model MODEL] [--remote] [--worktree] "
+                        "[--branch-prefix PREFIX] <prompt>"
+                    )
+                )
+                return
+
+            prompt = " ".join(tokens[idx:]).strip()
+            if not prompt:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /agent spawn [--count N] [--label LABEL] "
+                        "[--model MODEL] [--remote] [--worktree] "
+                        "[--branch-prefix PREFIX] <prompt>"
+                    )
+                )
+                return
+
+            if count < 1 or count > 16:
+                await self._mount_message(
+                    AppMessage("--count must be between 1 and 16.")
+                )
+                return
+            if use_remote and use_worktree:
+                await self._mount_message(
+                    AppMessage(
+                        "Choose either `--remote` or `--worktree` for a spawn batch, not both."
+                    )
+                )
+                return
+
+            repo_root: Path | None = None
+            if use_worktree:
+                repo_root = await self._get_repo_root()
+                if repo_root is None:
+                    await self._mount_message(
+                        AppMessage(
+                            "`/agent spawn --worktree` requires a git repository."
+                        )
+                    )
+                    return
+
+            remote_config = None
+            if use_remote:
+                remote_config = await asyncio.to_thread(
+                    load_remote_config, settings.user_agents_dir
+                )
+
+            lines = [f"Spawned {count} managed agent task(s):"]
+            for index in range(1, count + 1):
+                task_label = self._build_agent_task_label(
+                    prompt,
+                    label=label,
+                    index=index if count > 1 else 1,
+                )
+                model_spec = model or self._model_override or settings.model_name or ""
+                if use_remote:
+                    remote_task = await submit_remote_task(
+                        remote_config,
+                        prompt,
+                        model=model_spec,
+                        label=task_label,
+                        working_dir=Path(self._cwd),
+                        assistant_id=self._assistant_id,
+                        branch_prefix=branch_prefix,
+                    )
+                    await self._store_remote_task(remote_task)
+                    lines.append(
+                        f"  {remote_task.task_id} [remote] {task_label or prompt[:24]}"
+                    )
+                    continue
+
+                working_dir = self._cwd
+                strategy = "local"
+                worktree_branch = None
+                metadata: dict[str, Any] = {}
+                if use_worktree and repo_root is not None:
+                    prefix = branch_prefix or label or prompt
+                    slug = self._slugify_branch_fragment(prefix)
+                    worktree_branch = f"agent/{slug}-{uuid.uuid4().hex[:6]}"
+                    worktree = await asyncio.to_thread(
+                        create_worktree,
+                        repo_root,
+                        worktree_branch,
+                    )
+                    working_dir = str(worktree.path)
+                    strategy = "worktree"
+                    metadata["worktree_path"] = str(worktree.path)
+
+                try:
+                    task_id = await self._submit_managed_local_task(
+                        prompt,
+                        label=task_label,
+                        model=model,
+                        working_dir=working_dir,
+                        strategy=strategy,
+                        worktree_branch=worktree_branch,
+                        metadata=metadata,
+                    )
+                except RuntimeError as exc:
+                    lines.append(f"  failed: {exc}")
+                    break
+
+                detail = f"  {task_id} [{strategy}] {task_label or prompt[:24]}"
+                if worktree_branch:
+                    detail += f" -> {worktree_branch}"
+                lines.append(detail)
+
+            lines.append("")
+            lines.append(
+                "Use `/agent` to monitor the fleet or `/agent status <id>` for detail."
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /agent | /agent spawn [--count N] [--remote] [--worktree] <prompt> | "
+                "/agent status <id> | /agent stop <id> | /agent cleanup | "
+                "/agent switch <thread-id>"
+            )
+        )
 
     async def _handle_permissions_command(self, command: str) -> None:
         """Handle `/permissions` by showing approval posture and shell policy.
@@ -2323,6 +4414,7 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
+        from bog_agents_cli.extensibility import get_extension_skill_dirs
         from bog_agents_cli.skills.load import list_skills
 
         user_skills_dir = settings.get_user_skills_dir(self._assistant_id)
@@ -2330,9 +4422,11 @@ class BogAgentsApp(App):
         user_agent_skills_dir = settings.get_user_agent_skills_dir()
         project_agent_skills_dir = settings.get_project_agent_skills_dir()
         built_in_skills_dir = settings.get_built_in_skills_dir()
+        extension_skill_dirs = get_extension_skill_dirs(settings.user_agents_dir)
 
         skills = list_skills(
             built_in_skills_dir=built_in_skills_dir,
+            extension_skills_dirs=extension_skill_dirs,
             user_skills_dir=user_skills_dir,
             project_skills_dir=project_skills_dir,
             user_agent_skills_dir=user_agent_skills_dir,
@@ -2348,7 +4442,7 @@ class BogAgentsApp(App):
             )
             return
 
-        counts = {"project": 0, "user": 0, "built-in": 0}
+        counts = {"project": 0, "user": 0, "built-in": 0, "extension": 0}
         for skill in skills:
             source = skill.get("source", "user")
             if source in counts:
@@ -2364,12 +4458,11 @@ class BogAgentsApp(App):
             (".bog-agents/skills", project_skills_dir),
             ("~/.agents/skills", user_agent_skills_dir),
             (f"~/.bog-agents/{self._assistant_id}/skills", user_skills_dir),
+            *[(f"extension:{path.name}", path) for path in extension_skill_dirs],
             ("built-in", built_in_skills_dir),
         ]
         path_lines = [
-            f"- {label}: {path}"
-            for label, path in precedence_paths
-            if path is not None
+            f"- {label}: {path}" for label, path in precedence_paths if path is not None
         ]
 
         message = "\n".join(
@@ -2377,6 +4470,7 @@ class BogAgentsApp(App):
                 f"Loaded skills: {len(skills)}",
                 f"Project skills: {counts['project']}",
                 f"User skills: {counts['user']}",
+                f"Extension skills: {counts['extension']}",
                 f"Built-in skills: {counts['built-in']}",
                 f"Examples: {preview_names}",
                 "",
@@ -2390,6 +4484,682 @@ class BogAgentsApp(App):
             ]
         )
         await self._mount_message(AppMessage(message))
+
+    async def _handle_plugin_command(self, command: str) -> None:
+        """Handle `/plugin` and `/extensions` for extensibility management."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.extensibility import (
+            describe_extensibility_item,
+            disable_extensibility_item,
+            enable_extensibility_item,
+            find_extensibility_item,
+            format_extensibility_list,
+            install_extensibility_item,
+            uninstall_extensibility_item,
+        )
+
+        config_dir = settings.user_agents_dir
+        command_name = self._command_name(command)
+        raw_arg = command.strip()[len(command_name) :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered in {"list", "status"}:
+            listing = await asyncio.to_thread(format_extensibility_list, config_dir)
+            message = "\n\n".join(
+                [
+                    listing,
+                    (
+                        "Usage: /plugin install <path-or-url> | /plugin info <name> | "
+                        "/plugin enable <name> | /plugin disable <name> | "
+                        "/plugin uninstall <name>"
+                    ),
+                ]
+            )
+            await self._mount_message(AppMessage(message))
+            return
+
+        if lowered.startswith("info "):
+            name = raw_arg[5:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /plugin info <name>"))
+                return
+            item = await asyncio.to_thread(find_extensibility_item, config_dir, name)
+            if item is None:
+                await self._mount_message(
+                    AppMessage(f"Plugin or extension '{name}' not found.")
+                )
+                return
+            await self._mount_message(AppMessage(describe_extensibility_item(item)))
+            return
+
+        if lowered.startswith("install "):
+            source = raw_arg[8:].strip()
+            if not source:
+                await self._mount_message(
+                    AppMessage("Usage: /plugin install <path-or-url>")
+                )
+                return
+            try:
+                installed = await asyncio.to_thread(
+                    install_extensibility_item,
+                    config_dir,
+                    source,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"Plugin install failed: {exc}"))
+                return
+            self._refresh_slash_command_cache()
+            message = (
+                f"Installed {installed.kind} {installed.name} v{installed.version}"
+            )
+            await self._mount_message(AppMessage(message))
+            return
+
+        if lowered.startswith("uninstall "):
+            name = raw_arg[10:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /plugin uninstall <name>"))
+                return
+            removed = await asyncio.to_thread(
+                uninstall_extensibility_item,
+                config_dir,
+                name,
+            )
+            if removed:
+                self._refresh_slash_command_cache()
+                await self._mount_message(AppMessage(f"Uninstalled '{name}'"))
+            else:
+                await self._mount_message(
+                    AppMessage(f"Plugin or extension '{name}' not found.")
+                )
+            return
+
+        if lowered.startswith("enable "):
+            name = raw_arg[7:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /plugin enable <name>"))
+                return
+            if await asyncio.to_thread(enable_extensibility_item, config_dir, name):
+                self._refresh_slash_command_cache()
+                await self._mount_message(AppMessage(f"Enabled '{name}'"))
+            else:
+                await self._mount_message(AppMessage(f"'{name}' was not found."))
+            return
+
+        if lowered.startswith("disable "):
+            name = raw_arg[8:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /plugin disable <name>"))
+                return
+            if await asyncio.to_thread(disable_extensibility_item, config_dir, name):
+                self._refresh_slash_command_cache()
+                await self._mount_message(AppMessage(f"Disabled '{name}'"))
+            else:
+                await self._mount_message(AppMessage(f"'{name}' was not found."))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /plugin | /plugin info <name> | /plugin install <path-or-url> | "
+                "/plugin uninstall <name> | /plugin enable <name> | "
+                "/plugin disable <name>"
+            )
+        )
+
+    @staticmethod
+    def _format_runtime_age(started_at: float) -> str:
+        """Format a short elapsed time string for status displays."""
+        elapsed = max(0, int(time.time() - started_at))
+        minutes, seconds = divmod(elapsed, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
+
+    @staticmethod
+    def _parse_preview_launch_spec(raw_spec: str) -> tuple[str, int | None]:
+        """Split a preview start spec into shell command and optional port."""
+        tokens = shlex.split(raw_spec)
+        if not tokens:
+            return "", None
+
+        port: int | None = None
+        normalized: list[str] = []
+        idx = 0
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token == "--port" and idx + 1 < len(tokens):
+                try:
+                    port = int(tokens[idx + 1])
+                except ValueError:
+                    port = None
+                idx += 2
+                continue
+            normalized.append(token)
+            idx += 1
+
+        if port is None and len(normalized) > 1 and normalized[-1].isdigit():
+            port = int(normalized[-1])
+            normalized = normalized[:-1]
+
+        return shlex.join(normalized), port
+
+    def _preview_target_candidates(self, token: str) -> list[PreviewServerRecord]:
+        """Return preview servers matching an ID or port token."""
+        if not token:
+            return []
+        normalized = token.strip().lower()
+        matches: list[PreviewServerRecord] = []
+        for server in self._preview_servers.values():
+            if server.preview_id.lower().startswith(normalized):
+                matches.append(server)
+                continue
+            if server.port is not None and str(server.port) == normalized:
+                matches.append(server)
+        return matches
+
+    @staticmethod
+    async def _stop_preview_server(server: PreviewServerRecord) -> None:
+        """Terminate one tracked preview server process."""
+        proc = server.process
+        if proc is None or proc.returncode is not None:
+            return
+        with suppress(ProcessLookupError, OSError):
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except TimeoutError:
+            with suppress(ProcessLookupError, OSError):
+                proc.kill()
+            with suppress(ProcessLookupError, OSError):
+                await proc.wait()
+
+    async def _handle_preview_command(self, command: str) -> None:
+        """Handle `/preview` for local preview-server lifecycle management."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.browser_cli import parse_preview_command
+
+        raw_arg = command.strip()[len("/preview") :].strip()
+        parsed = parse_preview_command(raw_arg)
+        action = parsed["action"].lower()
+        action_arg = parsed["command"].strip()
+
+        finished = [
+            preview_id
+            for preview_id, server in self._preview_servers.items()
+            if server.process is not None and server.process.returncode is not None
+        ]
+        for preview_id in finished:
+            self._preview_servers.pop(preview_id, None)
+
+        if action in {"", "status"}:
+            if not self._preview_servers:
+                await self._mount_message(AppMessage("No preview servers are running."))
+                return
+            lines = ["Preview servers:"]
+            for server in self._preview_servers.values():
+                url = server.url or "(URL unknown)"
+                lines.append(
+                    "  "
+                    f"{server.preview_id} - {url} - "
+                    f"{self._format_runtime_age(server.started_at)} - {server.command}"
+                )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "start":
+            launch_command, port = self._parse_preview_launch_spec(action_arg)
+            if not launch_command:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /preview start <command> [--port N]\n"
+                        "Example: /preview start uv run mkdocs serve --port 8000"
+                    )
+                )
+                return
+            proc = await asyncio.create_subprocess_shell(
+                launch_command,
+                cwd=str(self._cwd),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            preview_id = f"preview-{uuid.uuid4().hex[:6]}"
+            url = f"http://127.0.0.1:{port}" if port is not None else None
+            server = PreviewServerRecord(
+                preview_id=preview_id,
+                command=launch_command,
+                cwd=str(self._cwd),
+                port=port,
+                url=url,
+                process=proc,
+            )
+            self._preview_servers[preview_id] = server
+            if url:
+                with suppress(Exception):
+                    webbrowser.open(url)
+            lines = [
+                f"Started preview server {preview_id}.",
+                f"Command: {launch_command}",
+                f"CWD: {self._cwd}",
+            ]
+            if url:
+                lines.append(f"URL: {url}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "stop":
+            if not self._preview_servers:
+                await self._mount_message(AppMessage("No preview servers are running."))
+                return
+            if action_arg.lower() in {"all", "*"} or (
+                not action_arg and len(self._preview_servers) == 1
+            ):
+                servers = list(self._preview_servers.values())
+            else:
+                servers = self._preview_target_candidates(action_arg)
+            if not servers:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /preview stop <preview-id|port>|all\n"
+                        "Run `/preview` to see active preview servers."
+                    )
+                )
+                return
+            for server in servers:
+                await self._stop_preview_server(server)
+                self._preview_servers.pop(server.preview_id, None)
+            await self._mount_message(
+                AppMessage(
+                    "Stopped preview server(s): "
+                    + ", ".join(server.preview_id for server in servers)
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /preview | /preview status | /preview start <command> [--port N] | "
+                "/preview stop <preview-id|port>|all"
+            )
+        )
+
+    async def _handle_remote_command(self, command: str) -> None:
+        """Handle `/remote` for remote task submission and inspection."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.remote import (
+            RemoteStatus,
+            cancel_remote_task,
+            check_remote_task,
+            format_remote_config_summary,
+            format_remote_recovery,
+            format_remote_tasks,
+            load_remote_config,
+            submit_remote_task,
+        )
+
+        raw_arg = command.strip()[len("/remote") :].strip()
+        lowered = raw_arg.lower()
+        config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+
+        if not raw_arg or lowered in {"list", "status"}:
+            await self._refresh_remote_tasks()
+            message = "\n".join(
+                [
+                    format_remote_config_summary(config),
+                    "",
+                    format_remote_tasks(list(self._remote_tasks.values())),
+                    "",
+                    (
+                        "Usage: /remote config | /remote refresh | /remote cleanup | "
+                        "/remote reattach [id|all]"
+                    ),
+                    (
+                        "Usage: /remote submit [--label LABEL] [--model MODEL] "
+                        "[--branch-prefix PREFIX] <prompt> | /remote status <id> | "
+                        "/remote stop <id> | /remote recover <id>"
+                    ),
+                ]
+            )
+            await self._mount_message(AppMessage(message))
+            return
+
+        if lowered == "config":
+            lines = [
+                format_remote_config_summary(config),
+                "",
+                (f"Config file: {settings.user_agents_dir / 'remote.json'}"),
+            ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered == "refresh":
+            await self._refresh_remote_tasks()
+            await self._mount_message(
+                AppMessage(format_remote_tasks(list(self._remote_tasks.values())))
+            )
+            return
+
+        if lowered == "cleanup":
+            done_ids = [
+                task_id
+                for task_id, task in self._remote_tasks.items()
+                if task.status
+                in {
+                    RemoteStatus.COMPLETED,
+                    RemoteStatus.FAILED,
+                    RemoteStatus.CANCELLED,
+                }
+            ]
+            removed = await self._drop_remote_tasks(done_ids)
+            await self._mount_message(
+                AppMessage(f"Removed {removed} completed remote task(s).")
+            )
+            return
+
+        if lowered == "reattach" or lowered.startswith("reattach "):
+            token = raw_arg[8:].strip()
+            if not token or token.lower() == "all":
+                added = await self._load_persisted_remote_tasks()
+                await self._refresh_remote_tasks()
+                await self._mount_message(
+                    AppMessage(
+                        "\n".join(
+                            [
+                                f"Reattached {added} persisted remote task(s).",
+                                "",
+                                format_remote_tasks(list(self._remote_tasks.values())),
+                            ]
+                        )
+                    )
+                )
+                return
+            task = await self._resolve_remote_task(token)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"Remote task {token} not found in persisted state.")
+                )
+                return
+            updated = await check_remote_task(config, task)
+            await self._store_remote_task(updated)
+            await self._mount_message(AppMessage(format_remote_tasks([updated])))
+            return
+
+        if lowered.startswith("status "):
+            task_id = raw_arg[7:].strip()
+            task = await self._resolve_remote_task(task_id)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"Remote task {task_id} not found.")
+                )
+                return
+            updated = await check_remote_task(config, task)
+            await self._store_remote_task(updated)
+            await self._mount_message(AppMessage(format_remote_tasks([updated])))
+            return
+
+        if lowered.startswith("stop "):
+            task_id = raw_arg[5:].strip()
+            task = await self._resolve_remote_task(task_id)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"Remote task {task_id} not found.")
+                )
+                return
+            updated = await cancel_remote_task(config, task)
+            await self._store_remote_task(updated)
+            await self._mount_message(AppMessage(format_remote_tasks([updated])))
+            return
+
+        if lowered.startswith("recover "):
+            task_id = raw_arg[8:].strip()
+            task = await self._resolve_remote_task(task_id)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"Remote task {task_id} not found.")
+                )
+                return
+            updated = await check_remote_task(config, task)
+            await self._store_remote_task(updated)
+            recovery = format_remote_recovery(updated)
+            branch = str(updated.metadata.get("branch", "") or "")
+            if branch:
+                recovery += (
+                    "\n\nLocal follow-up:\n"
+                    "  If the sandbox pushed its branch to origin, recover it with:\n"
+                    f"  git fetch origin {branch}\n"
+                    f"  git switch {branch}"
+                )
+            await self._mount_message(AppMessage(recovery))
+            return
+
+        if lowered.startswith("submit "):
+            raw_submit = raw_arg[7:].strip()
+            try:
+                tokens = shlex.split(raw_submit)
+            except ValueError as exc:
+                await self._mount_message(
+                    AppMessage(f"Could not parse remote command: {exc}")
+                )
+                return
+
+            label = ""
+            model: str | None = None
+            branch_prefix = ""
+            idx = 0
+            while idx < len(tokens) and tokens[idx].startswith("--"):
+                flag = tokens[idx]
+                if flag in {"--label", "--model", "--branch-prefix"}:
+                    if idx + 1 >= len(tokens):
+                        await self._mount_message(
+                            AppMessage(f"Missing value for {flag}.")
+                        )
+                        return
+                    value = tokens[idx + 1]
+                    if flag == "--label":
+                        label = value
+                    elif flag == "--model":
+                        model = value
+                    else:
+                        branch_prefix = value
+                    idx += 2
+                    continue
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /remote submit [--label LABEL] [--model MODEL] "
+                        "[--branch-prefix PREFIX] <prompt>"
+                    )
+                )
+                return
+
+            prompt = " ".join(tokens[idx:]).strip()
+            if not prompt:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /remote submit [--label LABEL] [--model MODEL] "
+                        "[--branch-prefix PREFIX] <prompt>"
+                    )
+                )
+                return
+            task = await submit_remote_task(
+                config,
+                prompt,
+                model=model or self._model_override or settings.model_name or "",
+                label=label,
+                working_dir=Path(self._cwd),
+                assistant_id=self._assistant_id,
+                branch_prefix=branch_prefix,
+            )
+            await self._store_remote_task(task)
+            await self._mount_message(AppMessage(format_remote_tasks([task])))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /remote | /remote config | /remote refresh | "
+                "/remote cleanup | /remote reattach [id|all] | "
+                "/remote submit [--label LABEL] [--model MODEL] "
+                "[--branch-prefix PREFIX] <prompt> | /remote status <id> | "
+                "/remote stop <id> | /remote recover <id>"
+            )
+        )
+
+    async def _handle_worktree_command(self, command: str) -> None:
+        """Handle `/worktree` git worktree management."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.worktree import (
+            create_worktree,
+            list_worktrees,
+            remove_worktree,
+        )
+
+        repo_root = await self._get_repo_root()
+        if repo_root is None:
+            await self._mount_message(
+                AppMessage("`/worktree` requires a git repository.")
+            )
+            return
+
+        raw_arg = command.strip()[len("/worktree") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered in {"list", "status"}:
+            worktrees = await asyncio.to_thread(list_worktrees, repo_root)
+            if not worktrees:
+                await self._mount_message(AppMessage("No git worktrees found."))
+                return
+            lines = [
+                "Git worktrees:",
+                f"Repository: {repo_root}",
+                f"Current cwd: {self._cwd}",
+                "",
+            ]
+            for worktree in worktrees:
+                marker = " (main)" if worktree.is_main else ""
+                commit = f" @ {worktree.commit[:8]}" if worktree.commit else ""
+                lines.append(f"  {worktree.branch}{marker}: {worktree.path}{commit}")
+            lines.append("")
+            lines.append("Usage: /worktree create <branch> | /worktree status <branch>")
+            lines.append(
+                "Usage: /worktree merge <source-branch> [target-branch] | "
+                "/worktree remove <branch>"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("create "):
+            branch = raw_arg[7:].strip()
+            if not branch:
+                await self._mount_message(
+                    AppMessage("Usage: /worktree create <branch>")
+                )
+                return
+            worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
+            await self._mount_message(
+                AppMessage(
+                    f"Created worktree on branch {worktree.branch}\n"
+                    f"Path: {worktree.path}"
+                )
+            )
+            return
+
+        if lowered.startswith("status "):
+            branch = raw_arg[7:].strip()
+            if not branch:
+                await self._mount_message(
+                    AppMessage("Usage: /worktree status <branch>")
+                )
+                return
+            worktrees = await asyncio.to_thread(list_worktrees, repo_root)
+            target = next((wt for wt in worktrees if wt.branch == branch), None)
+            if target is None:
+                await self._mount_message(
+                    AppMessage(f"Worktree for branch '{branch}' was not found.")
+                )
+                return
+            lines = [
+                f"Branch: {target.branch}",
+                f"Path: {target.path}",
+                f"Commit: {target.commit or '(unknown)'}",
+                f"Main worktree: {'yes' if target.is_main else 'no'}",
+            ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("merge "):
+            args = raw_arg[6:].strip().split()
+            if not args:
+                await self._mount_message(
+                    AppMessage("Usage: /worktree merge <source-branch> [target-branch]")
+                )
+                return
+            source_branch = args[0]
+            target_branch = args[1] if len(args) > 1 else "main"
+
+            ok_checkout, checkout_output = await self._run_git(
+                ["checkout", target_branch],
+                cwd=repo_root,
+            )
+            if not ok_checkout:
+                await self._mount_message(
+                    AppMessage(
+                        f"Failed to checkout {target_branch} before merge:\n{checkout_output}"
+                    )
+                )
+                return
+
+            ok_merge, merge_output = await self._run_git(
+                ["merge", source_branch],
+                cwd=repo_root,
+            )
+            status = (
+                "Merge complete." if ok_merge else "Merge reported conflicts/errors."
+            )
+            await self._mount_message(
+                AppMessage(
+                    "\n".join(
+                        [
+                            f"Merged {source_branch} into {target_branch}.",
+                            status,
+                            merge_output or "(no git output)",
+                        ]
+                    )
+                )
+            )
+            return
+
+        if lowered.startswith("remove "):
+            branch = raw_arg[7:].strip()
+            if not branch:
+                await self._mount_message(
+                    AppMessage("Usage: /worktree remove <branch>")
+                )
+                return
+            worktrees = await asyncio.to_thread(list_worktrees, repo_root)
+            target = next((wt for wt in worktrees if wt.branch == branch), None)
+            if target is None or target.is_main:
+                await self._mount_message(
+                    AppMessage(
+                        f"Could not find removable worktree for branch '{branch}'."
+                    )
+                )
+                return
+            result = await asyncio.to_thread(remove_worktree, repo_root, target.path)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /worktree | /worktree create <branch> | "
+                "/worktree status <branch> | /worktree merge <source> [target] | "
+                "/worktree remove <branch>"
+            )
+        )
 
     async def _handle_command(self, command: str) -> None:
         """Handle a slash command.
@@ -2429,36 +5199,7 @@ class BogAgentsApp(App):
         Args:
             command: Full command string.
         """
-        from bog_agents_cli.background_agents import BackgroundAgentManager
-
-        if not hasattr(self, "_bg_manager"):
-
-            def _create_bg_agent():
-                """Create an isolated agent instance for background tasks."""
-                from bog_agents_cli.config import create_model, settings
-
-                model_spec = self._model_override or settings.model_name
-                try:
-                    result = create_model(model_spec)
-                    return result.model
-                except Exception:
-                    logger.debug(
-                        "Failed to create background agent model", exc_info=True
-                    )
-                    return self._agent  # Fallback to shared agent
-
-            def _make_agent():
-                from bog_agents.graph import create_agent as _create_sdk_agent
-
-                model = _create_bg_agent()
-                return _create_sdk_agent(model=model)
-
-            self._bg_manager = BackgroundAgentManager(
-                agent_factory=_make_agent,
-                on_complete=lambda task: self.call_from_thread(
-                    self._notify_background_complete, task
-                ),
-            )
+        await self._ensure_background_manager()
 
         raw = command.strip()
         if raw.lower() in ("/background", "/background list"):
@@ -2502,7 +5243,14 @@ class BogAgentsApp(App):
             return
 
         try:
-            task_id = await self._bg_manager.submit(prompt)
+            task_id = await self._submit_managed_local_task(
+                prompt,
+                label=self._build_agent_task_label(prompt),
+                model=self._model_override,
+                working_dir=str(self._cwd),
+                strategy="background",
+                metadata={"command": "/background"},
+            )
             await self._mount_message(
                 AppMessage(
                     f"Background task submitted: {task_id}\n"
@@ -3107,10 +5855,7 @@ class BogAgentsApp(App):
                 adapter=self._ui_adapter,
                 backend=self._backend,
                 image_tracker=self._image_tracker,
-                context=CLIContext(
-                    model=self._model_override,
-                    model_params=self._model_params_override or {},
-                ),
+                context=self._build_cli_context(),
             )
         except Exception as e:  # Resilient tool rendering
             logger.exception("Agent execution failed")
@@ -3862,6 +6607,12 @@ class BogAgentsApp(App):
             self._shell_worker.cancel()
         if self._agent_running and self._agent_worker:
             self._agent_worker.cancel()
+        for server in self._preview_servers.values():
+            proc = server.process
+            if proc is None or proc.returncode is not None:
+                continue
+            with suppress(ProcessLookupError, OSError):
+                proc.terminate()
 
         # Dispatch synchronously — the event loop is about to be torn down by
         # super().exit(), so an async task would never complete.
@@ -4310,6 +7061,10 @@ class BogAgentsApp(App):
             # Switch to the selected thread
             self._session_state.thread_id = thread_id
             self._lc_thread_id = thread_id
+            metadata = await self._current_thread_metadata()
+            label = metadata.get("label")
+            if not isinstance(label, str) or not label.strip():
+                self._session_name = None
 
             self._update_welcome_banner(
                 thread_id,

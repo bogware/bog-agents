@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import tomllib
+from importlib import import_module
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +28,29 @@ def test_version_matches_pyproject() -> None:
     assert __version__ == pyproject_version, (
         f"Version mismatch: _version.py has '{__version__}' "
         f"but pyproject.toml has '{pyproject_version}'"
+    )
+
+
+def test_sdk_dependency_is_exactly_pinned_to_workspace_version() -> None:
+    """Verify the CLI depends on the exact local SDK version.
+
+    This keeps release-time behavior aligned with the SDK shipped from this
+    monorepo instead of silently accepting an older or newer compatible range.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    cli_pyproject_path = project_root / "pyproject.toml"
+    sdk_pyproject_path = project_root.parent / "bog-agents" / "pyproject.toml"
+
+    with cli_pyproject_path.open("rb") as f:
+        cli_pyproject = tomllib.load(f)
+    with sdk_pyproject_path.open("rb") as f:
+        sdk_pyproject = tomllib.load(f)
+
+    sdk_version = sdk_pyproject["project"]["version"]
+    cli_dependencies = cli_pyproject["project"]["dependencies"]
+
+    assert f"bog-agents=={sdk_version}" in cli_dependencies, (
+        f"CLI must pin bog-agents=={sdk_version}, got dependencies: {cli_dependencies!r}"
     )
 
 
@@ -122,6 +146,17 @@ def test_help_mentions_version_flag() -> None:
     assert "SDK" in result.stdout
 
 
+def test_package_import_does_not_eager_import_main() -> None:
+    """Importing `bog_agents_cli` should not eagerly import `main`."""
+    sys.modules.pop("bog_agents_cli", None)
+    sys.modules.pop("bog_agents_cli.main", None)
+
+    package = import_module("bog_agents_cli")
+
+    assert callable(package.cli_main)
+    assert "bog_agents_cli.main" not in sys.modules
+
+
 def test_cli_help_flag() -> None:
     """Verify that `--help` flag shows help and exits with code 0."""
     result = subprocess.run(
@@ -135,6 +170,21 @@ def test_cli_help_flag() -> None:
     # Help output should mention key options
     assert "--version" in result.stdout
     assert "--agent" in result.stdout
+
+
+def test_doctor_flag_uses_shared_report() -> None:
+    """`--doctor` should render the same shared report used by `/doctor`."""
+    from bog_agents_cli.doctor import run_doctor
+
+    result = subprocess.run(
+        [sys.executable, "-m", "bog_agents_cli.main", "--doctor"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert run_doctor().splitlines()[0] in result.stdout
 
 
 def test_cli_help_flag_short() -> None:

@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,8 @@ class BackgroundTask:
 
     task_id: str
     prompt: str
+    label: str = ""
+    strategy: str = "local"
     status: BackgroundStatus = BackgroundStatus.QUEUED
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -54,7 +56,13 @@ class BackgroundTask:
     error: str | None = None
     model: str | None = None
     working_dir: str | None = None
+    parent_thread_id: str | None = None
+    worktree_branch: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     _task: asyncio.Task[Any] | None = field(default=None, repr=False)
+    _runner: Callable[[BackgroundTask], Awaitable[Any]] | None = field(
+        default=None, repr=False
+    )
 
     @property
     def duration_seconds(self) -> float | None:
@@ -70,12 +78,17 @@ class BackgroundTask:
         duration = ""
         if self.duration_seconds is not None:
             duration = f" ({self.duration_seconds:.0f}s)"
+        label = f" {self.label}" if self.label else ""
+        strategy = f" {self.strategy}" if self.strategy else ""
         prompt_preview = (
             self.prompt[:_PROMPT_PREVIEW_LEN] + "..."
             if len(self.prompt) > _PROMPT_PREVIEW_LEN
             else self.prompt
         )
-        return f"[{self.task_id}] {self.status}{duration}: {prompt_preview}"
+        return (
+            f"[{self.task_id}] {self.status}{duration}{strategy}{label}: "
+            f"{prompt_preview}"
+        )
 
 
 class BackgroundAgentManager:
@@ -138,6 +151,12 @@ class BackgroundAgentManager:
         *,
         model: str | None = None,
         working_dir: str | None = None,
+        label: str = "",
+        strategy: str = "local",
+        parent_thread_id: str | None = None,
+        worktree_branch: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        runner: Callable[[BackgroundTask], Awaitable[Any]] | None = None,
     ) -> str:
         """Submit a new background agent task.
 
@@ -145,6 +164,12 @@ class BackgroundAgentManager:
             prompt: The task prompt for the agent.
             model: Optional model override.
             working_dir: Optional working directory.
+            label: Optional human-readable label.
+            strategy: Execution strategy label (`local`, `worktree`, etc.).
+            parent_thread_id: Parent interactive thread ID when available.
+            worktree_branch: Associated worktree branch for isolated tasks.
+            metadata: Extra structured metadata for status/reporting.
+            runner: Optional custom async task runner.
 
         Returns:
             Task ID.
@@ -164,8 +189,14 @@ class BackgroundAgentManager:
         task = BackgroundTask(
             task_id=task_id,
             prompt=prompt,
+            label=label,
+            strategy=strategy,
             model=model,
             working_dir=working_dir,
+            parent_thread_id=parent_thread_id,
+            worktree_branch=worktree_branch,
+            metadata=dict(metadata or {}),
+            _runner=runner,
         )
         self._tasks[task_id] = task
 
@@ -192,29 +223,26 @@ class BackgroundAgentManager:
         task.started_at = time.time()
 
         try:
-            if self._agent_factory is None:
-                msg = "No agent_factory configured"
-                raise RuntimeError(msg)  # noqa: TRY301
+            if task._runner is not None:
+                result = await task._runner(task)
+            else:
+                if self._agent_factory is None:
+                    msg = "No agent_factory configured"
+                    raise RuntimeError(msg)  # noqa: TRY301
 
-            agent = self._agent_factory()
-            config = {"configurable": {"thread_id": f"bg-{task.task_id}"}}
-            input_data = {
-                "messages": [{"role": "user", "content": task.prompt}],
-            }
+                agent = self._agent_factory()
+                config = {"configurable": {"thread_id": f"bg-{task.task_id}"}}
+                input_data = {
+                    "messages": [{"role": "user", "content": task.prompt}],
+                }
 
-            result = await agent.ainvoke(input_data, config=config)
+                result = await agent.ainvoke(input_data, config=config)
 
-            messages = result.get("messages", [])
-            response = ""
-            for msg in reversed(messages):
-                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
-                    response = msg.content
-                    break
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    response = msg.get("content", "")
-                    break
-
-            task.result = response
+            task.result = self._extract_result_text(result)
+            if isinstance(result, dict):
+                metadata = result.get("metadata")
+                if isinstance(metadata, dict):
+                    task.metadata.update(metadata)
             task.status = BackgroundStatus.COMPLETED
             task.completed_at = time.time()
             logger.info(
@@ -276,6 +304,25 @@ class BackgroundAgentManager:
             for t in self._tasks.values()
             if t.status in {BackgroundStatus.COMPLETED, BackgroundStatus.FAILED}
         ]
+
+    @staticmethod
+    def _extract_result_text(result: object) -> str:
+        """Extract a user-facing result string from a task result payload."""
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            result_text = result.get("result")
+            if isinstance(result_text, str):
+                return result_text
+            messages = result.get("messages")
+            if not isinstance(messages, list):
+                return ""
+            for msg in reversed(messages):
+                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
+                    return str(msg.content)
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    return str(msg.get("content", ""))
+        return ""
 
     def format_status_table(self) -> str:
         """Format a status table of all tasks.
