@@ -5,6 +5,7 @@ import contextlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
@@ -261,7 +262,7 @@ class TestThreadMetadata:
     """Tests for persisted thread labels, tags, projects, and exports."""
 
     @pytest.fixture
-    def shared_metadata_db(self) -> None:
+    def shared_metadata_db(self) -> Iterator[None]:
         """Create a shared in-memory database with one checkpointed thread."""
         db_uri = f"file:threadmeta_{uuid.uuid4().hex}?mode=memory&cache=shared"
         conn = sqlite3.connect(db_uri, uri=True)
@@ -393,10 +394,10 @@ class TestThreadMetadata:
         asyncio.run(sessions.set_thread_label("thread-meta-1", "Release Prep"))
         exported = asyncio.run(sessions.export_thread("thread-meta-1"))
 
-        assert exported["thread"]["thread_id"] == "thread-meta-1"
-        assert exported["thread"]["label"] == "Release Prep"
-        assert exported["transcript"][0]["role"] == "human"
-        assert "Ship the release" in exported["transcript"][0]["content"]
+        assert exported["thread"]["thread_id"] == "thread-meta-1"  # ty: ignore[not-subscriptable]
+        assert exported["thread"]["label"] == "Release Prep"  # ty: ignore[not-subscriptable]
+        assert exported["transcript"][0]["role"] == "human"  # ty: ignore[not-subscriptable]
+        assert "Ship the release" in exported["transcript"][0]["content"]  # ty: ignore[not-subscriptable]
 
 
 class TestGetCheckpointer:

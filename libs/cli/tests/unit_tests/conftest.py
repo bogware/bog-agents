@@ -1,13 +1,14 @@
 """Shared fixtures for CLI unit tests."""
 
 import contextlib
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _mock_ollama_http() -> None:
+def _mock_ollama_http() -> Iterator[None]:
     """Block Ollama HTTP discovery during unit tests.
 
     ``_fetch_ollama_models_via_http`` hits ``localhost/api/tags`` which fails

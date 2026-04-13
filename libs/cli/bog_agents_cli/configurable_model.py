@@ -178,7 +178,7 @@ def _apply_ollama_runtime_model_updates(
     if not updates:
         return model, model_settings
 
-    cloned_model = model.model_copy(update=updates)
+    cloned_model = model.model_copy(update=updates)  # ty: ignore[unresolved-attribute]
     remaining_settings = {k: v for k, v in model_settings.items() if k not in updates}
     return cloned_model, remaining_settings
 

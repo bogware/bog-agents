@@ -223,8 +223,8 @@ class TestRuntimeWorkflowControls:
         )
 
         assert captured[0].model_settings == {}
-        assert captured[0].model.num_predict == 8192
-        assert captured[0].model.temperature == 0.7
+        assert captured[0].model.num_predict == 8192  # ty: ignore[unresolved-attribute]
+        assert captured[0].model.temperature == 0.7  # ty: ignore[unresolved-attribute]
 
 
 class TestModelSwap:
@@ -524,8 +524,8 @@ class TestModelParams:
         )
 
         assert captured[0].model_settings == {}
-        assert captured[0].model.num_predict == 1024
-        assert captured[0].model.temperature == 0.2
+        assert captured[0].model.num_predict == 1024  # ty: ignore[unresolved-attribute]
+        assert captured[0].model.temperature == 0.2  # ty: ignore[unresolved-attribute]
 
     def test_ollama_explicit_num_predict_wins_over_alias(self) -> None:
         ollama_mod = pytest.importorskip("langchain_ollama")
@@ -544,7 +544,7 @@ class TestModelParams:
         )
 
         assert captured[0].model_settings == {}
-        assert captured[0].model.num_predict == 2048
+        assert captured[0].model.num_predict == 2048  # ty: ignore[unresolved-attribute]
 
 
 class TestIsOllamaModel:

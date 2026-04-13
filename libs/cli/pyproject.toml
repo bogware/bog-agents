@@ -149,6 +149,9 @@ packages = ["bog_agents_cli"]
 bog_agents = { path = "../bog-agents", editable = true }
 bog-agents-acp = { path = "../acp", editable = true }
 
+[tool.ty.src]
+exclude = [".pytest-tmp-runtime"]
+
 [tool.ty.environment]
 python-version = "3.11"
 extra-paths = ["../bog-agents"]
