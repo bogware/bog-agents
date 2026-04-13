@@ -220,6 +220,7 @@ TEXTUAL_REFACTOR_PLAN.md
 libs/cli/TEXTUAL_PROGRESS.md
 
 /tmp/
+.tmp*/
 
 # macOS
 .DS_Store
