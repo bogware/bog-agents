@@ -1867,13 +1867,15 @@ class TestCommandSurfaceEnhancements:
             assert mock_submit.await_args_list[0].kwargs["label"] == "scout"
             assert mock_submit.await_args_list[1].kwargs["label"] == "scout #2"
 
-    async def test_agent_command_spawn_worktree_creates_isolated_branch(self) -> None:
+    async def test_agent_command_spawn_worktree_creates_isolated_branch(self, tmp_path: app_module.Path) -> None:
         """`/agent spawn --worktree` should create a worktree-backed task."""
+        worktree_path = tmp_path / "review-branch"
+        repo_path = tmp_path / "repo"
         app = BogAgentsApp()
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            worktree = MagicMock(path=app_module.Path("E:/tmp/review-branch"))
+            worktree = MagicMock(path=worktree_path)
             with (
                 patch.object(
                     app,
@@ -1883,7 +1885,7 @@ class TestCommandSurfaceEnhancements:
                 patch.object(
                     app,
                     "_get_repo_root",
-                    new=AsyncMock(return_value=app_module.Path("E:/repo")),
+                    new=AsyncMock(return_value=repo_path),
                 ),
                 patch(
                     "bog_agents.middleware.worktree.create_worktree",
@@ -1904,7 +1906,7 @@ class TestCommandSurfaceEnhancements:
             assert mock_submit.await_args is not None
             assert mock_submit.await_args.kwargs["strategy"] == "worktree"
             assert (
-                mock_submit.await_args.kwargs["working_dir"] == "E:\\tmp\\review-branch"
+                mock_submit.await_args.kwargs["working_dir"] == str(worktree_path)
             )
             assert mock_submit.await_args.kwargs["worktree_branch"].startswith(
                 "agent/review-"
@@ -2281,15 +2283,10 @@ class TestCommandSurfaceEnhancements:
             assert app._session_name == "Launch Prep"
             mock_set_label.assert_awaited_once_with("thread-session-123", "Launch Prep")
 
-    async def test_session_export_writes_json(self) -> None:
+    async def test_session_export_writes_json(self, tmp_path: app_module.Path) -> None:
         """`/session export` should write a JSON export file."""
         app = BogAgentsApp(thread_id="thread-export-123")
-        export_path = app_module.Path(
-            "E:/Code/bog-agents/libs/cli/tmp-session-export.json"
-        )
-        if export_path.exists():
-            with contextlib.suppress(PermissionError):
-                export_path.unlink()
+        export_path = tmp_path / "tmp-session-export.json"
         async with app.run_test() as pilot:
             await pilot.pause()
 
@@ -2302,13 +2299,8 @@ class TestCommandSurfaceEnhancements:
                 await app._handle_command(f"/session export {export_path}")
                 await pilot.pause()
 
-        try:
-            assert export_path.exists()
-            assert '"thread-export-123"' in export_path.read_text(encoding="utf-8")
-        finally:
-            if export_path.exists():
-                with contextlib.suppress(PermissionError):
-                    export_path.unlink()
+        assert export_path.exists()
+        assert '"thread-export-123"' in export_path.read_text(encoding="utf-8")
 
     async def test_rewind_lists_available_checkpoints(self) -> None:
         """`/rewind` should render a numbered checkpoint browser."""

@@ -54,12 +54,19 @@ class TestProjectRootDetection:
         result = _find_project_root(subdir)
         assert result == project_root
 
-    def test_find_project_root_no_git(self, tmp_path: Path) -> None:
+    def test_find_project_root_no_git(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that None is returned when no .git directory exists."""
         # Create directory without .git
         no_git_dir = tmp_path / "no-git"
         no_git_dir.mkdir()
 
+        # Block detection of the host repo's .git when walking up from tmp_path
+        original_exists = Path.exists
+        monkeypatch.setattr(
+            Path,
+            "exists",
+            lambda self: False if self.name == ".git" else original_exists(self),
+        )
         result = _find_project_root(no_git_dir)
         assert result is None
 
@@ -397,12 +404,19 @@ class TestAgentsAliasDirectories:
         expected = project_root / ".agents" / "skills"
         assert settings.get_project_agent_skills_dir() == expected
 
-    def test_get_project_agent_skills_dir_without_project(self, tmp_path: Path) -> None:
+    def test_get_project_agent_skills_dir_without_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test get_project_agent_skills_dir returns None when not in a project."""
         # Create a directory without .git
         no_project = tmp_path / "no-project"
         no_project.mkdir()
 
+        # Block detection of the host repo's .git when walking up from tmp_path
+        original_exists = Path.exists
+        monkeypatch.setattr(
+            Path,
+            "exists",
+            lambda self: False if self.name == ".git" else original_exists(self),
+        )
         settings = Settings.from_environment(start_path=no_project)
         assert settings.get_project_agent_skills_dir() is None
 
@@ -1670,7 +1684,8 @@ class TestDetectProvider:
             ("some-unknown-model", None),
         ],
     )
-    def test_detect_known_patterns(self, model_name: str, expected: str | None) -> None:
+    @patch("bog_agents_cli.provider_catalog.get_local_ollama_models", return_value=())
+    def test_detect_known_patterns(self, _mock_ollama: object, model_name: str, expected: str | None) -> None:
         """detect_provider returns the correct provider for known patterns."""
         # Ensure both Anthropic and Google credentials are "available" so the
         # default paths are taken (not the Vertex AI fallbacks).

@@ -96,7 +96,7 @@ class TestConfigureDebugLogging:
         """Default logging should quietly fall back when home path is unavailable."""
         _reset_shared_handler()
         logger = logging.getLogger("test.debug.default_fallback")
-        fallback_log = tmp_path / "temp_logs" / "bog_agents.log"
+        fallback_log = tmp_path / "bog-agents" / "logs" / "bog_agents.log"
 
         with (
             patch.object(

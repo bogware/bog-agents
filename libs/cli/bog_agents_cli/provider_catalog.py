@@ -209,6 +209,7 @@ def _fetch_ollama_models_via_http() -> tuple[str, ...]:
         URLError,
         TimeoutError,
         OSError,
+        RuntimeError,
         ValueError,
         json.JSONDecodeError,
     ):

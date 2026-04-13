@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock
@@ -429,7 +430,13 @@ class TestLocalContextMiddleware:
 # ---------------------------------------------------------------------------
 
 
-def _run_section(section_bash: str, cwd: Path, *, with_header: bool = False) -> str:
+def _run_section(
+    section_bash: str,
+    cwd: Path,
+    *,
+    with_header: bool = False,
+    env: dict[str, str] | None = None,
+) -> str:
     """Run a bash section snippet and return stdout.
 
     Note: bash scripts may return exit code 1 when their last conditional
@@ -442,6 +449,7 @@ def _run_section(section_bash: str, cwd: Path, *, with_header: bool = False) -> 
         capture_output=True,
         text=True,
         cwd=cwd,
+        env=env,
         check=False,
     )
     # Fail on genuine bash errors (syntax errors, etc.) indicated by stderr
@@ -476,11 +484,14 @@ class TestSectionHeader:
     def test_in_git_false_outside_repo(self, tmp_path: Path) -> None:
         # Append a check so we can see the value
         script = _section_header() + '\necho "IN_GIT=$IN_GIT"'
+        # GIT_CEILING_DIRECTORIES prevents git from climbing above tmp_path,
+        # so no .git inside tmp_path means git returns false.
         result = subprocess.run(
             ["bash", "-c", script],
             capture_output=True,
             text=True,
             cwd=tmp_path,
+            env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)},
             check=False,
         )
         assert "IN_GIT=false" in result.stdout
@@ -529,7 +540,9 @@ class TestSectionProject:
         assert "Environments: .venv" in out
 
     def test_no_project_files_no_output(self, tmp_path: Path) -> None:
-        out = _run_section(_section_project(), tmp_path, with_header=True)
+        # Prevent git from climbing above tmp_path to the host repo
+        no_git_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)}
+        out = _run_section(_section_project(), tmp_path, with_header=True, env=no_git_env)
         assert "**Project**:" not in out
 
 
@@ -643,7 +656,9 @@ class TestSectionGit:
         assert "2 uncommitted changes" in out
 
     def test_no_output_outside_git(self, tmp_path: Path) -> None:
-        out = _run_section(_section_git(), tmp_path, with_header=True)
+        # Prevent git from climbing above tmp_path to the host repo
+        no_git_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)}
+        out = _run_section(_section_git(), tmp_path, with_header=True, env=no_git_env)
         assert "**Git**" not in out
 
 

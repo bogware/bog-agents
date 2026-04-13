@@ -166,6 +166,9 @@ possibly-missing-attribute = "ignore"
 unused-ignore-comment = "ignore"
 unused-type-ignore-comment = "ignore"
 
+[tool.ruff]
+exclude = [".pytest-tmp-runtime"]
+
 [tool.ruff.format]
 docstring-code-format = true
 docstring-code-line-length = 100

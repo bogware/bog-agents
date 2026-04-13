@@ -40,7 +40,7 @@ def _get_ollama_version() -> str | None:
             import json
 
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+    except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, ValueError):
         return None
 
     version = payload.get("version")

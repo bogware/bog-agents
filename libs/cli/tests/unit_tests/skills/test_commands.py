@@ -620,6 +620,7 @@ class TestInfoShadowWarning:
                     "get_project_skills_dir": lambda _: project_dir,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -656,6 +657,7 @@ class TestInfoShadowWarning:
                     "get_project_skills_dir": lambda _: project_dir,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -710,6 +712,7 @@ class TestInfoBuiltInSkill:
                     "get_project_skills_dir": lambda _: None,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -748,6 +751,7 @@ class TestInfoBuiltInSkill:
                     "get_project_skills_dir": lambda _: None,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -797,6 +801,7 @@ class TestListBuiltInSkillsDisplay:
                     "get_project_skills_dir": lambda _: None,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -833,6 +838,7 @@ class TestListBuiltInSkillsDisplay:
                     "get_project_skills_dir": lambda _: None,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
@@ -873,6 +879,7 @@ class TestSkillsLsDispatch:
                     "get_project_skills_dir": lambda _: None,
                     "get_user_agent_skills_dir": lambda _: None,
                     "get_project_agent_skills_dir": lambda _: None,
+                    "user_agents_dir": None,
                 },
             )(),
         )
