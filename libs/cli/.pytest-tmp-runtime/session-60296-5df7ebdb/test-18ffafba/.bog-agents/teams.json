@@ -1,0 +1,18 @@
+{
+  "active_team": "",
+  "teams": [
+    {
+      "name": "Core",
+      "summary": "",
+      "members": [],
+      "messages": [
+        {
+          "body": "Please verify the fix",
+          "sender": "to:bg-404",
+          "created_at": 1776051407.5309346
+        }
+      ],
+      "updated_at": 1776051407.5309367
+    }
+  ]
+}

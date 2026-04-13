@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.provider_catalog import (
+    clear_provider_catalog_caches,
+    get_local_ollama_models,
     get_profile_overrides as get_curated_profile_overrides,
     get_supplemental_model_profiles,
 )
@@ -247,6 +249,7 @@ def clear_caches() -> None:
     _default_config_cache = None
     _profiles_cache = None
     _profiles_override_cache = None
+    clear_provider_catalog_caches()
     invalidate_thread_config_cache()
 
 
@@ -518,6 +521,19 @@ def get_available_models() -> dict[str, list[str]]:
             provider_models.append(model_name)
             existing.add(model_name)
         provider_models.sort()
+
+    # Merge in live local Ollama models so the catalog reflects what the user
+    # can actually run on this machine, not just static profile snapshots.
+    if _provider_package_is_installed("ollama"):
+        local_ollama_models = get_local_ollama_models()
+        if local_ollama_models:
+            provider_models = available.setdefault("ollama", [])
+            existing = set(provider_models)
+            for model_name in local_ollama_models:
+                if model_name in existing:
+                    continue
+                provider_models.append(model_name)
+                existing.add(model_name)
 
     _available_models_cache = available
     return available

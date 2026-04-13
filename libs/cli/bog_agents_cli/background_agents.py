@@ -80,13 +80,17 @@ class BackgroundTask:
             duration = f" ({self.duration_seconds:.0f}s)"
         label = f" {self.label}" if self.label else ""
         strategy = f" {self.strategy}" if self.strategy else ""
+        team = ""
+        team_name = self.metadata.get("team_name")
+        if isinstance(team_name, str) and team_name.strip():
+            team = f" team={team_name.strip()}"
         prompt_preview = (
             self.prompt[:_PROMPT_PREVIEW_LEN] + "..."
             if len(self.prompt) > _PROMPT_PREVIEW_LEN
             else self.prompt
         )
         return (
-            f"[{self.task_id}] {self.status}{duration}{strategy}{label}: "
+            f"[{self.task_id}] {self.status}{duration}{strategy}{team}{label}: "
             f"{prompt_preview}"
         )
 

@@ -66,6 +66,22 @@ def _is_anthropic_model(model: object) -> bool:
     return isinstance(model, ChatAnthropic)
 
 
+def _is_ollama_model(model: object) -> bool:
+    """Check whether a resolved model is an Ollama `ChatOllama` instance.
+
+    Returns `False` if `langchain-ollama` is not installed.
+
+    Returns:
+        `True` if the model is a `ChatOllama` instance.
+    """
+    try:
+        from langchain_ollama import ChatOllama
+    except ImportError:
+        logger.debug("langchain_ollama not installed; assuming non-Ollama model")
+        return False
+    return isinstance(model, ChatOllama)
+
+
 _ANTHROPIC_ONLY_SETTINGS: set[str] = {"cache_control"}
 """Keys injected by Anthropic-specific middleware (e.g.
 `AnthropicPromptCachingMiddleware`) that are not accepted by other providers and
@@ -78,6 +94,11 @@ _EFFORT_LEVEL_SETTINGS: dict[str, dict[str, Any]] = {
     "max": {"max_tokens": 16384, "temperature": 1.0},
 }
 """Best-effort runtime model settings for effort presets."""
+
+_OLLAMA_SETTING_ALIASES: dict[str, str] = {
+    "max_tokens": "num_predict",
+}
+"""Runtime setting aliases required by Ollama-compatible model calls."""
 
 _PLAN_MODE_MUTATING_TOOLS = frozenset(
     {
@@ -115,6 +136,51 @@ def _append_system_message(
         text = f"\n\n{text}"
     new_content.append({"type": "text", "text": text})
     return SystemMessage(content_blocks=new_content)
+
+
+def _normalize_model_settings(
+    model: object,
+    model_settings: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Normalize provider-specific `model_settings` before invocation."""
+    if model_settings is None:
+        return None
+
+    normalized = dict(model_settings)
+
+    if _is_ollama_model(model):
+        for source_key, target_key in _OLLAMA_SETTING_ALIASES.items():
+            if source_key not in normalized:
+                continue
+            if target_key not in normalized:
+                normalized[target_key] = normalized[source_key]
+            normalized.pop(source_key, None)
+
+    return normalized
+
+
+def _apply_ollama_runtime_model_updates(
+    model: object,
+    model_settings: dict[str, Any] | None,
+) -> tuple[object, dict[str, Any] | None]:
+    """Apply Ollama generation settings onto the model instance itself.
+
+    `langchain-ollama` expects controls like `temperature` and `num_predict`
+    on the `ChatOllama` model rather than as per-call invocation kwargs.
+    """
+    if model_settings is None or not _is_ollama_model(model):
+        return model, model_settings
+
+    field_names = set(getattr(type(model), "model_fields", {}))
+    updates = {
+        key: value for key, value in model_settings.items() if key in field_names
+    }
+    if not updates:
+        return model, model_settings
+
+    cloned_model = model.model_copy(update=updates)
+    remaining_settings = {k: v for k, v in model_settings.items() if k not in updates}
+    return cloned_model, remaining_settings
 
 
 def _apply_overrides(request: ModelRequest) -> ModelRequest:
@@ -176,6 +242,22 @@ def _apply_overrides(request: ModelRequest) -> ModelRequest:
             request = request.override(
                 model_settings={k: v for k, v in settings.items() if k not in dropped}
             )
+
+    normalized_settings = _normalize_model_settings(
+        request.model, request.model_settings
+    )
+    runtime_model, normalized_settings = _apply_ollama_runtime_model_updates(
+        request.model,
+        normalized_settings,
+    )
+    if (
+        runtime_model is not request.model
+        or normalized_settings != request.model_settings
+    ):
+        request = request.override(
+            model=runtime_model,
+            model_settings=normalized_settings,
+        )
 
     system_prompt_append = ctx.get("system_prompt_append")
     plan_mode = bool(ctx.get("plan_mode"))

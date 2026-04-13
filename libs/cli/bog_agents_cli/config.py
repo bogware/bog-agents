@@ -93,6 +93,7 @@ if _bog_agents_project:
     os.environ["LANGSMITH_PROJECT"] = _bog_agents_project
 
 from bog_agents_cli.model_config import (  # noqa: E402
+    PROVIDER_API_KEY_ENV,
     ModelConfig,
     ModelConfigError,
     ModelSpec,
@@ -107,6 +108,7 @@ from bog_agents_cli.provider_catalog import (  # noqa: E402
     choose_preferred_model,
     detects_openai_model,
     is_bedrock_model_id,
+    is_known_ollama_model,
 )
 
 if TYPE_CHECKING:
@@ -1420,6 +1422,9 @@ def detect_provider(model_name: str) -> str | None:
     if is_bedrock_model_id(model_lower):
         return "bedrock_converse"
 
+    if is_known_ollama_model(model_lower):
+        return "ollama"
+
     return None
 
 
@@ -2019,9 +2024,37 @@ def create_model(
     model_name: str
     parsed = ModelSpec.try_parse(model_spec)
     if parsed:
-        # Explicit provider:model (e.g., "anthropic:claude-sonnet-4-5")
-        provider, model_name = parsed.provider, parsed.model
-        logger.info("Parsed model spec: provider=%s, model=%s", provider, model_name)
+        known_providers = set(PROVIDER_API_KEY_ENV) | {
+            "bedrock",
+            "bedrock_converse",
+            "ollama",
+        }
+        known_providers.update(ModelConfig.load().providers)
+        if parsed.provider in known_providers:
+            # Explicit provider:model (e.g., "anthropic:claude-sonnet-4-5")
+            provider, model_name = parsed.provider, parsed.model
+            logger.info(
+                "Parsed model spec: provider=%s, model=%s",
+                provider,
+                model_name,
+            )
+        else:
+            detected_provider = detect_provider(model_spec)
+            if detected_provider:
+                provider = detected_provider
+                model_name = model_spec
+                logger.info(
+                    "Interpreting colon-bearing model name as bare model: provider=%s, model=%s",
+                    provider,
+                    model_name,
+                )
+            else:
+                provider, model_name = parsed.provider, parsed.model
+                logger.info(
+                    "Parsed model spec: provider=%s, model=%s",
+                    provider,
+                    model_name,
+                )
     elif ":" in model_spec:
         # Contains colon but ModelSpec rejected it (empty provider or model)
         _, _, after = model_spec.partition(":")

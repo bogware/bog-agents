@@ -1,0 +1,17 @@
+{
+  "active_team": "Core",
+  "teams": [
+    {
+      "name": "Core",
+      "summary": "Release coordination lane",
+      "members": [
+        {
+          "name": "scout",
+          "role": "reviewer"
+        }
+      ],
+      "messages": [],
+      "updated_at": 1776022628.2432952
+    }
+  ]
+}

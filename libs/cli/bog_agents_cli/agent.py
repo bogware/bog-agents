@@ -676,6 +676,11 @@ def create_cli_agent(
                 for execution
             - `composite_backend`: `CompositeBackend` for file operations
     """
+    if isinstance(model, str):
+        from bog_agents_cli.config import create_model as _create_model
+
+        model = _create_model(model).model
+
     tools = tools or []
     effective_cwd = (
         Path(cwd)

@@ -1,0 +1,14 @@
+[
+  {
+    "task_id": "run-999",
+    "prompt": "recover me",
+    "label": "worker",
+    "status": "pending",
+    "model": "",
+    "working_dir": "",
+    "output": "",
+    "files_changed": [],
+    "error": "",
+    "metadata": {}
+  }
+]

@@ -13,6 +13,7 @@ from bog_agents_cli.configurable_model import (
     CLIContext,
     ConfigurableModelMiddleware,
     _is_anthropic_model,
+    _is_ollama_model,
 )
 
 
@@ -206,6 +207,23 @@ class TestRuntimeWorkflowControls:
         )
 
         assert "Follow the review workflow." in _system_text(captured[0])
+
+    def test_effort_level_normalizes_ollama_token_setting(self) -> None:
+        from langchain_ollama import ChatOllama
+
+        request = _make_request(
+            ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(effort_level="high"),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 8192
+        assert captured[0].model.temperature == 0.7
 
 
 class TestModelSwap:
@@ -490,3 +508,56 @@ class TestModelParams:
 
         await _mw.awrap_model_call(request, handler)
         assert captured[0].model_settings == {"temperature": 0.3}
+
+    def test_ollama_model_params_normalize_max_tokens(self) -> None:
+        from langchain_ollama import ChatOllama
+
+        request = _make_request(
+            ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(model_params={"max_tokens": 1024, "temperature": 0.2}),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 1024
+        assert captured[0].model.temperature == 0.2
+
+    def test_ollama_explicit_num_predict_wins_over_alias(self) -> None:
+        from langchain_ollama import ChatOllama
+
+        request = _make_request(
+            ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(
+                effort_level="medium",
+                model_params={"num_predict": 2048},
+            ),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 2048
+
+
+class TestIsOllamaModel:
+    """Direct tests for the `_is_ollama_model` helper."""
+
+    def test_returns_true_for_ollama(self) -> None:
+        from langchain_ollama import ChatOllama
+
+        model = ChatOllama(model="deepseek-coder:6.7b")
+        assert _is_ollama_model(model) is True
+
+    def test_returns_false_for_non_ollama(self) -> None:
+        assert _is_ollama_model(_make_model("gpt-4o")) is False
+
+    def test_returns_false_when_import_missing(self) -> None:
+        with patch.dict("sys.modules", {"langchain_ollama": None}):
+            assert _is_ollama_model(_make_model("anything")) is False

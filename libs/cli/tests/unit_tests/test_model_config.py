@@ -500,7 +500,8 @@ models = ["llama3"]
         assert any("invalid TOML syntax" in r.message for r in caplog.records)
 
     @pytest.mark.skipif(
-        os.getuid() == 0, reason="Root can read any file regardless of permissions"
+        hasattr(os, "getuid") and os.getuid() == 0,
+        reason="Root can read any file regardless of permissions",
     )
     def test_unreadable_file_returns_empty_config(self, tmp_path, caplog):
         """Unreadable config file returns empty config and logs a warning."""
@@ -938,6 +939,36 @@ class TestGetAvailableModels:
         assert any(
             "Could not import profiles" in record.message for record in caplog.records
         )
+
+    def test_merges_live_local_ollama_models(self) -> None:
+        """Live Ollama discovery should enrich the available-model catalog."""
+        fake_registry = {
+            "ollama": ("langchain_ollama", "ChatOllama", None),
+        }
+        with (
+            patch(
+                "bog_agents_cli.model_config._get_builtin_providers",
+                return_value=fake_registry,
+            ),
+            patch(
+                "bog_agents_cli.model_config._provider_package_is_installed",
+                return_value=True,
+            ),
+            patch(
+                "bog_agents_cli.model_config._load_provider_profiles",
+                return_value={},
+            ),
+            patch(
+                "bog_agents_cli.model_config.get_local_ollama_models",
+                return_value=("deepseek-coder-v2:16b", "qwen3-coder-next:latest"),
+            ),
+        ):
+            models = get_available_models()
+
+        assert models["ollama"] == [
+            "deepseek-coder-v2:16b",
+            "qwen3-coder-next:latest",
+        ]
 
 
 class TestGetAvailableModelsMergesConfig:
@@ -2586,8 +2617,12 @@ max_input_tokens = 4096
             get_model_profiles()
 
         assert model_config._profiles_cache is not None
-        clear_caches()
+        with patch(
+            "bog_agents_cli.model_config.clear_provider_catalog_caches"
+        ) as mock_clear_provider_catalog:
+            clear_caches()
         assert model_config._profiles_cache is None
+        mock_clear_provider_catalog.assert_called_once()
 
     def test_overridden_keys_subset_of_profile(self, tmp_path: Path) -> None:
         """overridden_keys is always a subset of profile keys."""

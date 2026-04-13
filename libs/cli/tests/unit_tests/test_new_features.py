@@ -59,6 +59,15 @@ class TestDoctor:
         assert "Python" in report
         assert "Config" in report
 
+    def test_report_includes_ollama_checks(self) -> None:
+        """Doctor output should mention the Ollama provider and daemon checks."""
+        from bog_agents_cli.doctor import run_doctor
+
+        report = run_doctor()
+
+        assert "langchain-ollama" in report
+        assert "Ollama daemon" in report
+
 
 class TestExtensions:
     """Tests for extension system (#18, #32)."""

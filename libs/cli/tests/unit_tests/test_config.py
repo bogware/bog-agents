@@ -1605,6 +1605,30 @@ class TestCreateModelEdgeCaseParsing:
         with pytest.raises(ModelConfigError, match="model name is required"):
             create_model("anthropic:")
 
+    @patch("langchain.chat_models.init_chat_model")
+    def test_colon_bearing_ollama_model_is_treated_as_bare_model(
+        self, mock_init_chat_model: Mock
+    ) -> None:
+        """Local model tags like `name:tag` should not be misread as provider specs."""
+        mock_model = Mock()
+        mock_model.profile = None
+        mock_init_chat_model.return_value = mock_model
+
+        with (
+            patch(
+                "bog_agents_cli.config.detect_provider",
+                side_effect=lambda name: (
+                    "ollama" if name == "deepseek-coder:6.7b" else None
+                ),
+            ),
+            patch.object(model_config, "DEFAULT_CONFIG_PATH", Path("E:/missing.toml")),
+        ):
+            result = create_model("deepseek-coder:6.7b")
+
+        assert result.model_name == "deepseek-coder:6.7b"
+        _, call_kwargs = mock_init_chat_model.call_args
+        assert call_kwargs["model_provider"] == "ollama"
+
     @patch("bog_agents_cli.config._get_default_model_spec")
     @patch("langchain.chat_models.init_chat_model")
     def test_empty_string_uses_default(
@@ -1697,3 +1721,14 @@ class TestDetectProvider:
             assert detect_provider("GPT-4o") == "openai"
         finally:
             settings.anthropic_api_key = None
+
+    def test_detects_local_ollama_model_names(self) -> None:
+        """Installed Ollama model names should resolve to the Ollama provider."""
+        with patch(
+            "bog_agents_cli.config.is_known_ollama_model",
+            side_effect=lambda name: (
+                name in {"deepseek-coder-v2:16b", "qwen3-coder-next"}
+            ),
+        ):
+            assert detect_provider("deepseek-coder-v2:16b") == "ollama"
+            assert detect_provider("qwen3-coder-next") == "ollama"

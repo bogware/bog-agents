@@ -29,10 +29,12 @@ class AgentPanelState:
     errors: int = 0
     tokens_used: int = 0
     cost_usd: float = 0.0
+    team_name: str = ""
     started_at: float | None = None
     completed_at: float | None = None
     output_lines: list[str] = field(default_factory=list)
     progress_pct: float = 0.0
+    inbox_count: int = 0
 
     @property
     def duration_seconds(self) -> float:
@@ -73,6 +75,7 @@ class DashboardState:
     total_cost_usd: float = 0.0
     total_tokens: int = 0
     session_start: float = field(default_factory=time.time)
+    team_summaries: dict[str, str] = field(default_factory=dict)
 
     def add_agent(self, agent_id: str, name: str, prompt: str = "") -> AgentPanelState:
         """Register a new agent in the dashboard.
@@ -146,12 +149,25 @@ class DashboardState:
             "-" * 70,
         ]
 
+        if self.team_summaries:
+            lines.append("Teams:")
+            for team_name in sorted(self.team_summaries):
+                summary = self.team_summaries[team_name]
+                member_count = sum(
+                    1 for agent in self.agents.values() if agent.team_name == team_name
+                )
+                lines.append(f"  {team_name:<18} {member_count} agents  {summary[:42]}")
+            lines.append("-" * 70)
+
         for agent in sorted(self.agents.values(), key=lambda a: a.agent_id):
             icon = agent.status_icon
             dur = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
             action = agent.current_action[:40] if agent.current_action else agent.status
+            team = f" [{agent.team_name}]" if agent.team_name else ""
+            inbox = f" inbox={agent.inbox_count}" if agent.inbox_count else ""
             lines.append(
-                f"  [{icon}] {agent.name:<20} {action:<40} {agent.tool_calls}tc {dur}"
+                f"  [{icon}] {agent.name:<20}{team:<18} {action:<22} "
+                f"{agent.tool_calls}tc{inbox} {dur}"
             )
 
         return "\n".join(lines)
@@ -177,6 +193,10 @@ class DashboardState:
             f"Tokens: {agent.tokens_used:,}",
             f"Cost: ${agent.cost_usd:.4f}",
         ]
+        if agent.team_name:
+            lines.append(f"Team: {agent.team_name}")
+        if agent.inbox_count:
+            lines.append(f"Inbox messages: {agent.inbox_count}")
 
         if agent.prompt:
             lines.append(f"\nPrompt: {agent.prompt[:200]}")
@@ -202,7 +222,6 @@ def create_dashboard_layout(state: DashboardState) -> str:
     state.update_totals()
     width = 80
     elapsed = time.time() - state.session_start
-
     lines: list[str] = [
         "=" * width,
         " BOG AGENTS DASHBOARD".center(width),
@@ -220,6 +239,18 @@ def create_dashboard_layout(state: DashboardState) -> str:
     ]
 
     agents = sorted(state.agents.values(), key=lambda a: a.agent_id)
+    if state.team_summaries:
+        lines.extend((" Teams:", ""))
+        for team_name in sorted(state.team_summaries):
+            summary = state.team_summaries[team_name]
+            member_count = sum(
+                1 for agent in state.agents.values() if agent.team_name == team_name
+            )
+            lines.append(
+                f"  - {team_name} | agents: {member_count} | summary: {summary[:52]}"
+            )
+        lines.append("")
+
     for agent in agents:
         icon = agent.status_icon
         dur = f"{agent.duration_seconds:.0f}s" if agent.started_at else "--"
@@ -234,6 +265,10 @@ def create_dashboard_layout(state: DashboardState) -> str:
                 ),
             )
         )
+        if agent.team_name:
+            lines.append(f"     Team: {agent.team_name}")
+        if agent.inbox_count:
+            lines.append(f"     Inbox: {agent.inbox_count} pending messages")
 
         if agent.current_action:
             lines.append(f"     Action: {agent.current_action[:60]}")

@@ -8,6 +8,7 @@ import io
 import os
 import signal
 import webbrowser
+from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -168,6 +169,99 @@ class TestAppBindings:
         bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
         bindings_by_key = {b.key: b for b in bindings}
         assert "ctrl+o" not in bindings_by_key
+
+    def test_copy_binding_exists(self) -> None:
+        """Copy should be available without overloading Ctrl+C."""
+        bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
+        assert any(
+            b.key == "ctrl+shift+c,ctrl+insert" and b.action == "copy_selection"
+            for b in bindings
+        )
+
+    def test_paste_binding_exists(self) -> None:
+        """Paste should be available even when the terminal paste path fails."""
+        bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
+        assert any(
+            b.key == "ctrl+shift+v,shift+insert" and b.action == "paste_clipboard"
+            for b in bindings
+        )
+
+
+class TestClipboardActions:
+    """Tests for clipboard shortcuts and lighter mouse handling."""
+
+    async def test_action_paste_clipboard_routes_to_chat_input(self) -> None:
+        """Clipboard paste should route through the shared chat-input handler."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._chat_input is not None
+
+            with (
+                patch("bog_agents_cli.app.read_clipboard_text", return_value="hello"),
+                patch.object(
+                    app._chat_input,
+                    "handle_external_paste",
+                    return_value=True,
+                ) as mock_paste,
+            ):
+                app.action_paste_clipboard()
+
+            mock_paste.assert_called_once_with("hello")
+
+    async def test_action_paste_clipboard_warns_when_unavailable(self) -> None:
+        """Empty or unavailable clipboard should produce a small warning."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch("bog_agents_cli.app.read_clipboard_text", return_value=None),
+                patch.object(app, "notify") as mock_notify,
+            ):
+                app.action_paste_clipboard()
+
+            mock_notify.assert_called_once()
+
+    async def test_mouse_up_skips_copy_without_drag(self) -> None:
+        """Simple clicks should not trigger whole-app clipboard scans."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 0
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+                app.on_mouse_up(SimpleNamespace())
+
+            mock_copy.assert_not_called()
+
+    async def test_mouse_up_copies_after_drag_selection(self) -> None:
+        """Drag selections should still auto-copy on mouse release."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 3
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+                app.on_mouse_up(SimpleNamespace())
+
+            mock_copy.assert_called_once_with(app)
+
+    async def test_click_after_drag_does_not_refocus_input(self) -> None:
+        """Selection drags should not be followed by eager input refocus."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 3
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._chat_input is not None
+
+            with patch.object(app._chat_input, "focus_input") as mock_focus:
+                app.on_click(SimpleNamespace(widget=None))
+
+            mock_focus.assert_not_called()
 
 
 class TestITerm2CursorGuide:
@@ -1866,12 +1960,179 @@ class TestCommandSurfaceEnhancements:
             assert mock_submit.await_args.args[0] == "inspect the repository"
             assert mock_submit.await_args.kwargs["strategy"] == "background"
             assert mock_submit.await_args.kwargs["metadata"] == {
-                "command": "/background"
+                "command": "/background",
+                "effective_prompt": "inspect the repository",
             }
             app_msgs = app.query(AppMessage)
             assert any(
                 "Background task submitted: bg-201" in str(w._content) for w in app_msgs
             )
+
+    async def test_agent_spawn_inherits_active_team_context(
+        self, tmp_path: Path
+    ) -> None:
+        """`/agent spawn` should attach active team metadata and prompt context."""
+        from bog_agents_cli.team_orchestration import (
+            TeamMember,
+            TeamMessage,
+            TeamProfile,
+            TeamRegistry,
+            save_team_registry,
+        )
+
+        save_team_registry(
+            TeamRegistry(
+                active_team="Core",
+                teams=[
+                    TeamProfile(
+                        name="Core",
+                        summary="Stabilize release readiness",
+                        members=[TeamMember(name="Scout", role="reviewer")],
+                        messages=[
+                            TeamMessage(
+                                body="Prioritize install and runtime regressions",
+                                sender="lead",
+                            )
+                        ],
+                    )
+                ],
+            ),
+            tmp_path,
+        )
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+                patch.object(
+                    app,
+                    "_submit_managed_local_task",
+                    new=AsyncMock(return_value="bg-777"),
+                ) as mock_submit,
+            ):
+                await app._handle_command("/agent spawn inspect repo")
+                await pilot.pause()
+
+            metadata = mock_submit.await_args.kwargs["metadata"]
+            assert metadata["team_name"] == "Core"
+            assert (
+                "Shared summary: Stabilize release readiness" in metadata["team_brief"]
+            )
+            assert metadata["effective_prompt"].startswith("# Team coordination brief")
+            assert metadata["effective_prompt"].endswith(
+                "# Assigned task\ninspect repo"
+            )
+            app_msgs = app.query(AppMessage)
+            assert any("[Core]" in str(w._content) for w in app_msgs)
+
+    async def test_team_command_create_summary_and_status(self, tmp_path: Path) -> None:
+        """`/team` should persist created teams and mixed-case summary updates."""
+        from bog_agents_cli.team_orchestration import load_team_registry
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team create Core")
+            await app._handle_command("/team add-member Core scout reviewer")
+            await app._handle_command(
+                "/team summary Core set Release coordination lane"
+            )
+            await app._handle_command("/team status core")
+            await pilot.pause()
+
+        registry = load_team_registry(tmp_path)
+        assert registry.active_team == "Core"
+        assert len(registry.teams) == 1
+        assert registry.teams[0].summary == "Release coordination lane"
+        assert registry.teams[0].members[0].name == "scout"
+        assert registry.teams[0].members[0].role == "reviewer"
+        status_text = app._build_team_status("Core")
+        assert "Release coordination lane" in status_text
+        assert "scout (reviewer)" in status_text
+
+    async def test_team_command_message_to_task_queues_inbox(
+        self, tmp_path: Path
+    ) -> None:
+        """`/team message <task-id>` should queue inbox work and persist a team note."""
+        from bog_agents_cli.team_orchestration import load_team_registry
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        task = SimpleNamespace(task_id="bg-404", metadata={"team_name": "Core"})
+        app._bg_manager = MagicMock()
+        app._bg_manager.get_status.return_value = task
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team message bg-404 Please verify the fix")
+            await pilot.pause()
+
+        inbox = task.metadata["inbox"]
+        assert len(inbox) == 1
+        assert inbox[0]["body"] == "Please verify the fix"
+        registry = load_team_registry(tmp_path)
+        assert registry.teams[0].name == "Core"
+        assert registry.teams[0].messages[-1].body == "Please verify the fix"
+        assert app._task_inbox_count(task) == 1
+
+    async def test_team_command_sync_updates_shared_summary(
+        self, tmp_path: Path
+    ) -> None:
+        """`/team sync` should summarize existing team notes and worker results."""
+        from bog_agents_cli.team_orchestration import (
+            TeamMessage,
+            TeamProfile,
+            TeamRegistry,
+            load_team_registry,
+            save_team_registry,
+        )
+
+        save_team_registry(
+            TeamRegistry(
+                active_team="Core",
+                teams=[
+                    TeamProfile(
+                        name="Core",
+                        messages=[TeamMessage(body="Focus on install regressions")],
+                    )
+                ],
+            ),
+            tmp_path,
+        )
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        app._bg_manager = MagicMock()
+        app._bg_manager.all_tasks = [
+            SimpleNamespace(
+                metadata={"team_name": "Core"},
+                result="Resolved the provider fallback failure.",
+                output="",
+                status_line="[bg-201] completed",
+            )
+        ]
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team sync Core")
+            await pilot.pause()
+
+        registry = load_team_registry(tmp_path)
+        assert "Focus on install regressions" in registry.teams[0].summary
+        assert "Resolved the provider fallback failure." in registry.teams[0].summary
+        status_text = app._build_team_status("Core")
+        assert "Resolved the provider fallback failure." in status_text
 
     async def test_worktree_command_lists_current_worktrees(self) -> None:
         """`/worktree` should render known git worktrees."""
@@ -2405,6 +2666,25 @@ class TestRunAgentTaskMediaTracker:
 
             errors = app.query(ErrorMessage)
             assert any("Agent error: boom" in str(w._content) for w in errors)
+
+    async def test_run_agent_task_surfaces_tool_capability_help(self) -> None:
+        """Tool capability failures should not be mislabeled as auth errors."""
+        app = BogAgentsApp(agent=MagicMock())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.app.execute_task_textual",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("model does not support tools"),
+            ):
+                await app._run_agent_task("hello")
+                await pilot.pause()
+
+            errors = app.query(ErrorMessage)
+            rendered = "\n".join(str(widget._content) for widget in errors)
+            assert "This model does not support tool use in the CLI." in rendered
+            assert "authentication/credential error" not in rendered
 
 
 class TestAppFocusRestoresChatInput:

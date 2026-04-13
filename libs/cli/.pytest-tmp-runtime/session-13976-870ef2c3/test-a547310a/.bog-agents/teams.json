@@ -1,0 +1,23 @@
+{
+  "active_team": "Core",
+  "teams": [
+    {
+      "name": "Core",
+      "summary": "Stabilize release readiness",
+      "members": [
+        {
+          "name": "Scout",
+          "role": "reviewer"
+        }
+      ],
+      "messages": [
+        {
+          "body": "Prioritize install and runtime regressions",
+          "sender": "lead",
+          "created_at": 1776051347.5972848
+        }
+      ],
+      "updated_at": 1776051347.5972896
+    }
+  ]
+}

@@ -27,7 +27,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 
 from bog_agents_cli._debug import configure_debug_logging
-from bog_agents_cli.clipboard import copy_selection_to_clipboard
+from bog_agents_cli.clipboard import copy_selection_to_clipboard, read_clipboard_text
 from bog_agents_cli.config import (
     DOCS_URL,
     SHELL_TOOL_NAMES,
@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
     from langgraph.pregel import Pregel
     from textual.app import ComposeResult
-    from textual.events import Click, MouseUp, Paste
+    from textual.events import Click, MouseDown, MouseMove, MouseUp, Paste
     from textual.scrollbar import ScrollUp
     from textual.widget import Widget
     from textual.widgets import Static
@@ -534,6 +534,7 @@ class BogAgentsApp(App):
 
     # Scroll speed (default is 3 lines per scroll event)
     SCROLL_SENSITIVITY_Y = 1.0
+    _SELECTION_DRAG_THRESHOLD = 1
 
     BINDINGS: ClassVar[list[BindingType]] = [
         Binding("escape", "interrupt", "Interrupt", show=False, priority=True),
@@ -545,6 +546,13 @@ class BogAgentsApp(App):
             priority=True,
         ),
         Binding("ctrl+d", "quit_app", "Quit", show=False, priority=True),
+        Binding("ctrl+shift+c,ctrl+insert", "copy_selection", "Copy", show=False),
+        Binding(
+            "ctrl+shift+v,shift+insert",
+            "paste_clipboard",
+            "Paste",
+            show=False,
+        ),
         Binding("ctrl+t", "toggle_auto_approve", "Toggle Auto-Approve", show=False),
         Binding(
             "shift+tab",
@@ -622,6 +630,7 @@ class BogAgentsApp(App):
         "/settings": "_handle_settings_command",
         "/skills": "_handle_skills_command",
         "/test": "_handle_test_command",
+        "/team": "_handle_team_command",
         "/threads": "_handle_threads_command",
         "/tokens": "_handle_tokens_command",
         "/trace": "_handle_trace_command",
@@ -716,6 +725,7 @@ class BogAgentsApp(App):
         self._status_bar: StatusBar | None = None
         self._chat_input: ChatInput | None = None
         self._session_name: str | None = None
+        self._active_team_name: str | None = None
         self._active_profile_name: str | None = None
         self._active_profile_prompt: str | None = None
         self._plan_mode_enabled = False
@@ -747,6 +757,8 @@ class BogAgentsApp(App):
         self._queued_widgets: deque[QueuedUserMessage] = deque()
         self._processing_pending = False
         self._thread_switching = False
+        self._mouse_down_position: tuple[int, int] | None = None
+        self._mouse_drag_distance = 0
         self._model_switching = False
         # Message virtualization store
         self._message_store = MessageStore()
@@ -2005,6 +2017,122 @@ class BogAgentsApp(App):
             return self._session_state.thread_id
         return self._lc_thread_id
 
+    def _load_team_registry(self) -> Any:  # noqa: ANN401
+        """Load the workspace-local team registry."""
+        from bog_agents_cli.team_orchestration import load_team_registry
+
+        return load_team_registry(Path(self._cwd))
+
+    def _save_team_registry(self, registry: Any) -> None:  # noqa: ANN401
+        """Persist the workspace-local team registry."""
+        from bog_agents_cli.team_orchestration import save_team_registry
+
+        save_team_registry(registry, Path(self._cwd))
+
+    def _active_team(self) -> str | None:
+        """Return the active team name, loading persisted state when needed."""
+        if self._active_team_name:
+            return self._active_team_name
+        registry = self._load_team_registry()
+        if registry.active_team:
+            self._active_team_name = registry.active_team
+        return self._active_team_name
+
+    @staticmethod
+    def _task_team_name(task: Any) -> str | None:  # noqa: ANN401
+        """Return the team name recorded on a task, if any."""
+        metadata = getattr(task, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        team_name = metadata.get("team_name")
+        if isinstance(team_name, str) and team_name.strip():
+            return team_name.strip()
+        return None
+
+    @staticmethod
+    def _task_inbox_count(task: Any) -> int:  # noqa: ANN401
+        """Return queued coordination messages for a task."""
+        metadata = getattr(task, "metadata", None)
+        if not isinstance(metadata, dict):
+            return 0
+        inbox = metadata.get("inbox")
+        return len(inbox) if isinstance(inbox, list) else 0
+
+    def _team_task_snapshot(self, team_name: str) -> tuple[list[Any], list[Any]]:
+        """Return local and remote tasks assigned to one team."""
+        local_tasks: list[Any] = []
+        if hasattr(self, "_bg_manager"):
+            local_tasks = [
+                task
+                for task in self._bg_manager.all_tasks
+                if self._task_team_name(task) == team_name
+            ]
+        remote_tasks = [
+            task
+            for task in self._remote_tasks.values()
+            if self._task_team_name(task) == team_name
+        ]
+        return local_tasks, remote_tasks
+
+    def _build_team_effective_prompt(
+        self,
+        prompt: str,
+        team_name: str | None,
+    ) -> tuple[str, str | None]:
+        """Augment a task prompt with persisted team memory when available."""
+        if not team_name:
+            return prompt, None
+        from bog_agents_cli.team_orchestration import build_team_brief, find_team
+
+        registry = self._load_team_registry()
+        team = find_team(registry, team_name)
+        if team is None:
+            return prompt, None
+        brief = build_team_brief(team).strip()
+        if not brief:
+            return prompt, None
+        effective_prompt = (
+            f"# Team coordination brief\n{brief}\n\n# Assigned task\n{prompt}"
+        )
+        return effective_prompt, brief
+
+    def _build_team_status(self, team_name: str) -> str:
+        """Build a readable status report for one team."""
+        from bog_agents_cli.team_orchestration import find_team, format_team_profile
+
+        registry = self._load_team_registry()
+        team = find_team(registry, team_name)
+        if team is None:
+            return f"Team '{team_name}' was not found."
+
+        local_tasks, remote_tasks = self._team_task_snapshot(team.name)
+        inbox_count = sum(
+            self._task_inbox_count(task) for task in [*local_tasks, *remote_tasks]
+        )
+        lines = [
+            format_team_profile(
+                team,
+                active=registry.active_team.lower() == team.name.lower()
+                if registry.active_team
+                else False,
+                local_tasks=len(local_tasks),
+                remote_tasks=len(remote_tasks),
+                inbox_count=inbox_count,
+            )
+        ]
+        if local_tasks:
+            lines.append("")
+            lines.append("Local workers:")
+            lines.extend(f"  {task.status_line}" for task in local_tasks)
+        if remote_tasks:
+            lines.append("")
+            lines.append("Remote workers:")
+            for task in remote_tasks:
+                lines.append(
+                    f"  [{task.task_id}] {task.status} {task.label or task.prompt[:32]}"
+                )
+        return "\n".join(lines)
+
     @staticmethod
     def _slugify_branch_fragment(value: str) -> str:
         """Convert free-form text into a git-branch-friendly fragment."""
@@ -2055,7 +2183,14 @@ class BogAgentsApp(App):
             config: RunnableConfig = {
                 "configurable": {"thread_id": f"bg-{task.task_id}"}
             }
-            input_data = {"messages": [{"role": "user", "content": task.prompt}]}
+            metadata = getattr(task, "metadata", None)
+            effective_prompt = (
+                metadata.get("effective_prompt", task.prompt)
+                if isinstance(metadata, dict)
+                else task.prompt
+            )
+            prompt_text = str(effective_prompt)
+            input_data = {"messages": [{"role": "user", "content": prompt_text}]}
             return await agent_graph.ainvoke(
                 input_data,
                 config=config,
@@ -2196,8 +2331,7 @@ class BogAgentsApp(App):
             state_update["_summarization_event"] = payload["summarization_event"]
         await self._agent.aupdate_state(config, state_update)
 
-    @staticmethod
-    def _format_background_task_detail(task: Any) -> str:  # noqa: ANN401
+    def _format_background_task_detail(self, task: Any) -> str:  # noqa: ANN401
         """Format one managed background task for `/agent status`."""
         lines = [
             f"Task: {task.task_id}",
@@ -2207,6 +2341,10 @@ class BogAgentsApp(App):
             f"Model: {task.model or '(default)'}",
             f"CWD: {task.working_dir or '(session cwd)'}",
         ]
+        if team_name := self._task_team_name(task):
+            lines.append(f"Team: {team_name}")
+        if inbox_count := self._task_inbox_count(task):
+            lines.append(f"Inbox: {inbox_count} queued message(s)")
         if task.worktree_branch:
             lines.append(f"Worktree branch: {task.worktree_branch}")
         if task.parent_thread_id:
@@ -4065,8 +4203,10 @@ class BogAgentsApp(App):
         if not raw_arg or lowered in {"list", "status"}:
             await self._refresh_remote_tasks()
             current_thread = self._current_thread_id() or "(none)"
+            active_team = self._active_team() or "(none)"
             lines = [
                 f"Current thread: {current_thread}",
+                f"Active team: {active_team}",
                 "",
                 self._bg_manager.format_status_table(),
                 "",
@@ -4074,7 +4214,8 @@ class BogAgentsApp(App):
                 "",
                 (
                     "Usage: /agent spawn [--count N] [--label LABEL] [--model MODEL] "
-                    "[--remote] [--worktree] [--branch-prefix PREFIX] <prompt>"
+                    "[--team TEAM] [--remote] [--worktree] "
+                    "[--branch-prefix PREFIX] <prompt>"
                 ),
                 "Usage: /agent status <id> | /agent stop <id> | /agent cleanup",
                 "Usage: /agent switch <thread-id>",
@@ -4175,6 +4316,7 @@ class BogAgentsApp(App):
             count = 1
             label = ""
             model: str | None = None
+            team_name: str | None = self._active_team()
             use_remote = False
             use_worktree = False
             branch_prefix = ""
@@ -4189,7 +4331,13 @@ class BogAgentsApp(App):
                     use_worktree = True
                     idx += 1
                     continue
-                if flag in {"--count", "--label", "--model", "--branch-prefix"}:
+                if flag in {
+                    "--count",
+                    "--label",
+                    "--model",
+                    "--branch-prefix",
+                    "--team",
+                }:
                     if idx + 1 >= len(tokens):
                         await self._mount_message(
                             AppMessage(f"Missing value for {flag}.")
@@ -4208,6 +4356,8 @@ class BogAgentsApp(App):
                         label = value
                     elif flag == "--model":
                         model = value
+                    elif flag == "--team":
+                        team_name = value
                     else:
                         branch_prefix = value
                     idx += 2
@@ -4215,7 +4365,7 @@ class BogAgentsApp(App):
                 await self._mount_message(
                     AppMessage(
                         "Usage: /agent spawn [--count N] [--label LABEL] "
-                        "[--model MODEL] [--remote] [--worktree] "
+                        "[--model MODEL] [--team TEAM] [--remote] [--worktree] "
                         "[--branch-prefix PREFIX] <prompt>"
                     )
                 )
@@ -4226,7 +4376,7 @@ class BogAgentsApp(App):
                 await self._mount_message(
                     AppMessage(
                         "Usage: /agent spawn [--count N] [--label LABEL] "
-                        "[--model MODEL] [--remote] [--worktree] "
+                        "[--model MODEL] [--team TEAM] [--remote] [--worktree] "
                         "[--branch-prefix PREFIX] <prompt>"
                     )
                 )
@@ -4270,19 +4420,30 @@ class BogAgentsApp(App):
                     index=index if count > 1 else 1,
                 )
                 model_spec = model or self._model_override or settings.model_name or ""
+                effective_prompt, team_brief = self._build_team_effective_prompt(
+                    prompt,
+                    team_name,
+                )
                 if use_remote:
                     remote_task = await submit_remote_task(
                         remote_config,
-                        prompt,
+                        effective_prompt,
                         model=model_spec,
                         label=task_label,
                         working_dir=Path(self._cwd),
                         assistant_id=self._assistant_id,
                         branch_prefix=branch_prefix,
                     )
+                    remote_task.prompt = prompt
+                    if team_name:
+                        remote_task.metadata["team_name"] = team_name
+                    if team_brief:
+                        remote_task.metadata["team_brief"] = team_brief
                     await self._store_remote_task(remote_task)
                     lines.append(
-                        f"  {remote_task.task_id} [remote] {task_label or prompt[:24]}"
+                        f"  {remote_task.task_id} [remote]"
+                        f"{f' [{team_name}]' if team_name else ''} "
+                        f"{task_label or prompt[:24]}"
                     )
                     continue
 
@@ -4290,6 +4451,11 @@ class BogAgentsApp(App):
                 strategy = "local"
                 worktree_branch = None
                 metadata: dict[str, Any] = {}
+                if team_name:
+                    metadata["team_name"] = team_name
+                if team_brief:
+                    metadata["team_brief"] = team_brief
+                metadata["effective_prompt"] = effective_prompt
                 if use_worktree and repo_root is not None:
                     prefix = branch_prefix or label or prompt
                     slug = self._slugify_branch_fragment(prefix)
@@ -4317,7 +4483,11 @@ class BogAgentsApp(App):
                     lines.append(f"  failed: {exc}")
                     break
 
-                detail = f"  {task_id} [{strategy}] {task_label or prompt[:24]}"
+                detail = (
+                    f"  {task_id} [{strategy}]"
+                    f"{f' [{team_name}]' if team_name else ''} "
+                    f"{task_label or prompt[:24]}"
+                )
                 if worktree_branch:
                     detail += f" -> {worktree_branch}"
                 lines.append(detail)
@@ -4331,7 +4501,8 @@ class BogAgentsApp(App):
 
         await self._mount_message(
             AppMessage(
-                "Usage: /agent | /agent spawn [--count N] [--remote] [--worktree] <prompt> | "
+                "Usage: /agent | /agent spawn [--count N] [--team TEAM] "
+                "[--remote] [--worktree] <prompt> | "
                 "/agent status <id> | /agent stop <id> | /agent cleanup | "
                 "/agent switch <thread-id>"
             )
@@ -5222,7 +5393,9 @@ class BogAgentsApp(App):
             task_id = raw.split()[-1]
             task = self._bg_manager.get_status(task_id)
             if task:
-                await self._mount_message(AppMessage(task.status_line))
+                await self._mount_message(
+                    AppMessage(self._format_background_task_detail(task))
+                )
             else:
                 await self._mount_message(AppMessage(f"Task {task_id} not found"))
             return
@@ -5243,18 +5416,31 @@ class BogAgentsApp(App):
             return
 
         try:
+            team_name = self._active_team()
+            effective_prompt, team_brief = self._build_team_effective_prompt(
+                prompt,
+                team_name,
+            )
+            metadata: dict[str, Any] = {"command": "/background"}
+            if team_name:
+                metadata["team_name"] = team_name
+            if team_brief:
+                metadata["team_brief"] = team_brief
+            metadata["effective_prompt"] = effective_prompt
             task_id = await self._submit_managed_local_task(
                 prompt,
                 label=self._build_agent_task_label(prompt),
                 model=self._model_override,
                 working_dir=str(self._cwd),
                 strategy="background",
-                metadata={"command": "/background"},
+                metadata=metadata,
             )
+            team_line = f"Team: {team_name}\n" if team_name else ""
             await self._mount_message(
                 AppMessage(
                     f"Background task submitted: {task_id}\n"
-                    f"Use /background list to check status."
+                    f"{team_line}"
+                    "Use /background list to check status."
                 )
             )
         except RuntimeError as exc:
@@ -5300,12 +5486,19 @@ class BogAgentsApp(App):
 
         def _build_state():
             from bog_agents_cli.dashboard import DashboardState
+            from bog_agents_cli.team_orchestration import load_team_registry
 
             state = DashboardState()
+            registry = load_team_registry(Path(self._cwd))
+            for team in registry.teams:
+                if team.summary:
+                    state.team_summaries[team.name] = team.summary
 
             # Main agent
             main = state.add_agent("main", "Primary Agent")
             main.status = "running"
+            if active_team := self._active_team():
+                main.team_name = active_team
             if self._token_tracker:
                 main.tokens_used = self._token_tracker.current_context
 
@@ -5316,8 +5509,22 @@ class BogAgentsApp(App):
                     panel.status = task.status.value
                     panel.started_at = task.started_at
                     panel.completed_at = task.completed_at
+                    panel.team_name = self._task_team_name(task) or ""
+                    panel.inbox_count = self._task_inbox_count(task)
                     if task.error:
                         panel.errors = 1
+
+            for task in self._remote_tasks.values():
+                panel = state.add_agent(
+                    task.task_id, f"RM: {task.label or task.prompt[:30]}"
+                )
+                panel.status = str(task.status)
+                panel.team_name = self._task_team_name(task) or ""
+                panel.inbox_count = self._task_inbox_count(task)
+                if task.error:
+                    panel.errors = 1
+                if task.output:
+                    panel.add_output(task.output)
 
             return state
 
@@ -5330,6 +5537,326 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage(
                 f"{output}\n\nDashboard showing snapshot. Use /dashboard again to refresh."
+            )
+        )
+
+    async def _handle_team_command(self, command: str) -> None:
+        """Handle `/team` coordination and shared-memory workflows."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.team_orchestration import (
+            add_team_member,
+            append_team_message,
+            ensure_team,
+            find_team,
+            format_team_profile,
+            remove_team_member,
+            set_active_team,
+            set_team_summary,
+            summarize_team_activity,
+        )
+
+        raw_arg = command.strip()[len("/team") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /team arguments: {exc}")
+            )
+            return
+
+        registry = self._load_team_registry()
+        action = tokens[0].lower() if tokens else "list"
+
+        if action in {"list", "show"} and len(tokens) <= 1:
+            if not registry.teams:
+                await self._mount_message(
+                    AppMessage(
+                        "No teams configured yet.\n\n"
+                        "Usage: /team create <name> | /team use <name>"
+                    )
+                )
+                return
+            lines = [f"Active team: {registry.active_team or '(none)'}", ""]
+            for team in registry.teams:
+                local_tasks, remote_tasks = self._team_task_snapshot(team.name)
+                inbox_count = sum(
+                    self._task_inbox_count(task)
+                    for task in [*local_tasks, *remote_tasks]
+                )
+                lines.append(
+                    format_team_profile(
+                        team,
+                        active=registry.active_team.lower() == team.name.lower()
+                        if registry.active_team
+                        else False,
+                        local_tasks=len(local_tasks),
+                        remote_tasks=len(remote_tasks),
+                        inbox_count=inbox_count,
+                    )
+                )
+                lines.append("")
+            lines.append(
+                "Usage: /team create <name> | /team use <name> | "
+                "/team status <name> | /team message <team|task-id> <text>"
+            )
+            await self._mount_message(AppMessage("\n".join(lines).strip()))
+            return
+
+        if action == "create":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /team create <name>"))
+                return
+            team = ensure_team(registry, tokens[1])
+            if not registry.active_team:
+                set_active_team(registry, team.name)
+                self._active_team_name = team.name
+            self._save_team_registry(registry)
+            await self._mount_message(
+                AppMessage(
+                    f"Created team `{team.name}`.\n"
+                    f"Active team: {registry.active_team or '(unchanged)'}"
+                )
+            )
+            return
+
+        if action in {"use", "activate"}:
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /team use <name>"))
+                return
+            team = find_team(registry, tokens[1])
+            if team is None:
+                await self._mount_message(
+                    AppMessage(f"Team '{tokens[1]}' was not found.")
+                )
+                return
+            set_active_team(registry, team.name)
+            self._active_team_name = team.name
+            self._save_team_registry(registry)
+            await self._mount_message(AppMessage(f"Active team set to `{team.name}`."))
+            return
+
+        if action in {"clear", "none"}:
+            set_active_team(registry, None)
+            self._active_team_name = None
+            self._save_team_registry(registry)
+            await self._mount_message(AppMessage("Active team cleared."))
+            return
+
+        if action == "status":
+            team_name = tokens[1] if len(tokens) > 1 else registry.active_team
+            if not team_name:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /team status <name> or set an active team first."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage(self._build_team_status(team_name)))
+            return
+
+        if action in {"add-member", "member-add"}:
+            if len(tokens) < 3:
+                await self._mount_message(
+                    AppMessage("Usage: /team add-member <team> <member> [role]")
+                )
+                return
+            role = tokens[3] if len(tokens) > 3 else "worker"
+            team = add_team_member(registry, tokens[1], tokens[2], role)
+            self._save_team_registry(registry)
+            await self._mount_message(
+                AppMessage(f"Added {tokens[2]} ({role}) to team `{team.name}`.")
+            )
+            return
+
+        if action in {"remove-member", "member-remove"}:
+            if len(tokens) < 3:
+                await self._mount_message(
+                    AppMessage("Usage: /team remove-member <team> <member>")
+                )
+                return
+            removed = remove_team_member(registry, tokens[1], tokens[2])
+            if not removed:
+                await self._mount_message(
+                    AppMessage(
+                        f"Member '{tokens[2]}' was not found on team '{tokens[1]}'."
+                    )
+                )
+                return
+            self._save_team_registry(registry)
+            await self._mount_message(
+                AppMessage(f"Removed {tokens[2]} from team `{tokens[1]}`.")
+            )
+            return
+
+        if action == "assign":
+            if len(tokens) < 3:
+                await self._mount_message(
+                    AppMessage("Usage: /team assign <task-id> <team>")
+                )
+                return
+            task_id = tokens[1]
+            team_name = tokens[2]
+            task = (
+                self._bg_manager.get_status(task_id)
+                if hasattr(self, "_bg_manager")
+                else None
+            )
+            if task is None:
+                task = await self._resolve_remote_task(task_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Task {task_id} was not found."))
+                return
+            ensure_team(registry, team_name)
+            metadata = getattr(task, "metadata", None)
+            if not isinstance(metadata, dict):
+                metadata = {}
+                task.metadata = metadata
+            metadata["team_name"] = team_name
+            self._save_team_registry(registry)
+            if task_id in self._remote_tasks:
+                await self._persist_remote_tasks()
+            await self._mount_message(
+                AppMessage(f"Assigned task {task_id} to team `{team_name}`.")
+            )
+            return
+
+        if action == "message":
+            if len(tokens) < 3:
+                await self._mount_message(
+                    AppMessage("Usage: /team message <team|task-id> <text>")
+                )
+                return
+            target = tokens[1]
+            body = raw_arg.split(None, 2)[2].strip()
+            task = (
+                self._bg_manager.get_status(target)
+                if hasattr(self, "_bg_manager")
+                else None
+            )
+            if task is None:
+                task = await self._resolve_remote_task(target)
+            if task is not None:
+                metadata = getattr(task, "metadata", None)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                    task.metadata = metadata
+                inbox = metadata.get("inbox")
+                if not isinstance(inbox, list):
+                    inbox = []
+                    metadata["inbox"] = inbox
+                inbox.append(
+                    {"body": body, "sender": "supervisor", "created_at": time.time()}
+                )
+                team_name = self._task_team_name(task)
+                if team_name:
+                    append_team_message(
+                        registry,
+                        team_name,
+                        body,
+                        sender=f"to:{target}",
+                    )
+                    self._save_team_registry(registry)
+                if target in self._remote_tasks:
+                    await self._persist_remote_tasks()
+                await self._mount_message(
+                    AppMessage(
+                        f"Queued message for {target}."
+                        f"{f' Team: {team_name}.' if team_name else ''}"
+                    )
+                )
+                return
+
+            team = ensure_team(registry, target)
+            append_team_message(registry, team.name, body, sender="supervisor")
+            self._save_team_registry(registry)
+            await self._mount_message(AppMessage(f"Saved team note for `{team.name}`."))
+            return
+
+        if action == "summary":
+            if len(tokens) == 1:
+                team_name = registry.active_team
+                if not team_name:
+                    await self._mount_message(
+                        AppMessage("Usage: /team summary <team> [set <text>]")
+                    )
+                    return
+                team = find_team(registry, team_name)
+                await self._mount_message(
+                    AppMessage(
+                        team.summary
+                        if team and team.summary
+                        else f"No summary set for `{team_name}`."
+                    )
+                )
+                return
+            team_name = tokens[1]
+            team = find_team(registry, team_name)
+            if team is None:
+                await self._mount_message(
+                    AppMessage(f"Team '{team_name}' was not found.")
+                )
+                return
+            if len(tokens) >= 3 and tokens[2].lower() == "set":
+                parts = raw_arg.split(None, 3)
+                summary = parts[3].strip() if len(parts) >= 4 else ""
+                if not summary:
+                    await self._mount_message(
+                        AppMessage("Usage: /team summary <team> set <text>")
+                    )
+                    return
+                set_team_summary(registry, team.name, summary)
+                self._save_team_registry(registry)
+                await self._mount_message(
+                    AppMessage(f"Updated summary for `{team.name}`.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(team.summary or f"No summary set for `{team.name}`.")
+            )
+            return
+
+        if action == "sync":
+            team_name = tokens[1] if len(tokens) > 1 else registry.active_team
+            if not team_name:
+                await self._mount_message(
+                    AppMessage("Usage: /team sync <name> or set an active team first.")
+                )
+                return
+            team = find_team(registry, team_name)
+            if team is None:
+                await self._mount_message(
+                    AppMessage(f"Team '{team_name}' was not found.")
+                )
+                return
+            local_tasks, remote_tasks = self._team_task_snapshot(team.name)
+            task_summaries: list[str] = []
+            for task in [*local_tasks, *remote_tasks]:
+                result = getattr(task, "result", "") or getattr(task, "output", "")
+                if isinstance(result, str) and result.strip():
+                    task_summaries.append(result.strip())
+            summary = summarize_team_activity(team, task_summaries)
+            set_team_summary(registry, team.name, summary)
+            self._save_team_registry(registry)
+            await self._mount_message(
+                AppMessage(f"Synced shared summary for `{team.name}`.\n\n{summary}")
+            )
+            return
+
+        if action == "show":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /team show <name>"))
+                return
+            await self._mount_message(AppMessage(self._build_team_status(tokens[1])))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /team | /team create <name> | /team use <name> | "
+                "/team status <name> | /team add-member <team> <member> [role] | "
+                "/team remove-member <team> <member> | /team assign <task-id> <team> | "
+                "/team message <team|task-id> <text> | /team summary <team> [set <text>] | "
+                "/team sync <team>"
             )
         )
 
@@ -5864,9 +6391,18 @@ class BogAgentsApp(App):
             if self._ui_adapter:
                 self._ui_adapter.finalize_pending_tools_with_error(f"Agent error: {e}")
 
-            # Detect auth / credential errors and suggest fallback actions
+            # Classify common provider/runtime failures so the recovery hint
+            # matches the real problem instead of defaulting to auth advice.
             err_name = type(e).__name__
             err_str = str(e).lower()
+            is_tool_capability_error = any(
+                keyword in err_str
+                for keyword in (
+                    "does not support tools",
+                    "tool calling is not supported",
+                    "tools are not supported",
+                )
+            )
             is_auth_error = any(
                 keyword in err_name.lower() or keyword in err_str
                 for keyword in (
@@ -5879,7 +6415,17 @@ class BogAgentsApp(App):
                     "sso",
                 )
             )
-            if is_auth_error:
+            if is_tool_capability_error:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Agent error: {e}\n\n"
+                        "This model does not support tool use in the CLI. Try:\n"
+                        "  - `/model` to switch to a tool-capable model\n"
+                        "  - For local Ollama, prefer coding/chat models with tool support such as `qwen3-coder-next:latest`\n"
+                        "  - Use `--doctor` to confirm Ollama is reachable and the selected model is available"
+                    )
+                )
+            elif is_auth_error:
                 await self._mount_message(
                     ErrorMessage(
                         f"Agent error: {e}\n\n"
@@ -6736,6 +7282,63 @@ class BogAgentsApp(App):
             event.prevent_default()
             event.stop()
 
+    def action_copy_selection(self) -> None:
+        """Copy the current selection to the system clipboard."""
+        copy_selection_to_clipboard(self)
+
+    def action_paste_clipboard(self) -> None:
+        """Paste clipboard text into the chat input."""
+        if not self._chat_input:
+            return
+        pasted = read_clipboard_text()
+        if not pasted:
+            self.notify(
+                "Clipboard is empty or unavailable",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        self._chat_input.handle_external_paste(pasted)
+
+    @staticmethod
+    def _mouse_position(event: object) -> tuple[int, int] | None:
+        """Extract a stable `(x, y)` pair from a Textual mouse event."""
+        x = getattr(event, "screen_x", getattr(event, "x", None))
+        y = getattr(event, "screen_y", getattr(event, "y", None))
+        if not isinstance(x, int) or not isinstance(y, int):
+            return None
+        return x, y
+
+    @staticmethod
+    def _is_widget_within(widget: object, ancestor: object) -> bool:
+        """Return whether `widget` is `ancestor` or one of its descendants."""
+        current = widget
+        while current is not None:
+            if current is ancestor:
+                return True
+            current = getattr(current, "parent", None)
+        return False
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        """Track drag distance so selection/copy does not run on every click."""
+        self._mouse_down_position = self._mouse_position(event)
+        self._mouse_drag_distance = 0
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        """Track the largest drag distance since the last mouse-down."""
+        if self._mouse_down_position is None:
+            return
+        current = self._mouse_position(event)
+        if current is None:
+            return
+        start_x, start_y = self._mouse_down_position
+        cur_x, cur_y = current
+        self._mouse_drag_distance = max(
+            self._mouse_drag_distance,
+            abs(cur_x - start_x),
+            abs(cur_y - start_y),
+        )
+
     def on_app_focus(self) -> None:
         """Restore chat input focus when the terminal regains OS focus.
 
@@ -6752,18 +7355,34 @@ class BogAgentsApp(App):
             return
         self._chat_input.focus_input()
 
-    def on_click(self, _event: Click) -> None:
+    def on_click(self, event: Click) -> None:
         """Handle clicks anywhere in the terminal to focus on the command line."""
         if not self._chat_input:
             return
         # Don't steal focus from approval or ask_user widgets
         if self._pending_approval_widget or self._pending_ask_user_widget:
             return
+        if self._mouse_drag_distance >= self._SELECTION_DRAG_THRESHOLD:
+            return
+        try:
+            messages_container = self.query_one("#messages", Container)
+        except NoMatches:
+            messages_container = None
+        widget = getattr(event, "widget", None)
+        if messages_container is not None and self._is_widget_within(
+            widget, messages_container
+        ):
+            return
         self.call_after_refresh(self._chat_input.focus_input)
 
-    def on_mouse_up(self, event: MouseUp) -> None:  # noqa: ARG002  # Textual event handler signature
+    def on_mouse_up(self, _event: MouseUp) -> None:
         """Copy selection to clipboard on mouse release."""
-        copy_selection_to_clipboard(self)
+        try:
+            if self._mouse_drag_distance >= self._SELECTION_DRAG_THRESHOLD:
+                copy_selection_to_clipboard(self)
+        finally:
+            self._mouse_down_position = None
+            self._mouse_drag_distance = 0
 
     # =========================================================================
     # Model Switching

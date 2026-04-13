@@ -368,9 +368,10 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/team",
-        "Team settings and roles management",
-        "enterprise org",
+        "Manage named teams, shared summaries, and worker coordination",
+        "enterprise org swarm coordination",
         "enterprise",
+        available=True,
     ),
     SlashCommandSpec(
         "/test",

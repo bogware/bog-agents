@@ -13,8 +13,38 @@ import platform
 import shutil
 import sys
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_ollama_host(raw_host: str | None) -> str:
+    """Normalize Ollama host configuration into an HTTP base URL."""
+    host = (raw_host or "").strip() or "http://127.0.0.1:11434"
+    if "://" not in host:
+        host = f"http://{host}"
+    parsed = urlparse(host)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    return f"{scheme}://{netloc}{path}".rstrip("/")
+
+
+def _get_ollama_version() -> str | None:
+    """Return the Ollama daemon version when the local API is reachable."""
+    base_url = _normalize_ollama_host(os.environ.get("OLLAMA_HOST"))
+    try:
+        with urlopen(f"{base_url}/api/version", timeout=1.5) as response:
+            import json
+
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+        return None
+
+    version = payload.get("version")
+    return str(version).strip() if version else None
 
 
 def run_doctor() -> str:
@@ -62,15 +92,20 @@ def run_doctor() -> str:
         ("langchain-anthropic", "ANTHROPIC_API_KEY"),
         ("langchain-openai", "OPENAI_API_KEY"),
         ("langchain-google-genai", "GOOGLE_API_KEY"),
+        ("langchain-ollama", None),
     ]
     for pkg, env_key in providers:
         try:
             dist = importlib.metadata.distribution(pkg)
-            has_key = bool(os.environ.get(env_key))
-            status = "OK" if has_key else "WARN"
-            detail = f"v{dist.version}" + (
-                " (API key set)" if has_key else f" ({env_key} not set)"
-            )
+            if env_key is None:
+                status = "OK"
+                detail = f"v{dist.version} (local provider)"
+            else:
+                has_key = bool(os.environ.get(env_key))
+                status = "OK" if has_key else "WARN"
+                detail = f"v{dist.version}" + (
+                    " (API key set)" if has_key else f" ({env_key} not set)"
+                )
             checks.append((f"Provider: {pkg}", status, detail))
         except importlib.metadata.PackageNotFoundError:
             checks.append((f"Provider: {pkg}", "SKIP", "Not installed (optional)"))
@@ -78,6 +113,7 @@ def run_doctor() -> str:
     # 5. CLI tools
     for tool, purpose in [
         ("git", "Version control"),
+        ("ollama", "Local model runtime"),
         ("rg", "Fast text search (ripgrep)"),
         ("ruff", "Python linter"),
         ("uv", "Package manager"),
@@ -88,6 +124,18 @@ def run_doctor() -> str:
             checks.append((f"Tool: {tool}", "OK", f"Found at {path}"))
         else:
             checks.append((f"Tool: {tool}", "WARN", f"Not found ({purpose})"))
+
+    ollama_version = _get_ollama_version()
+    if ollama_version:
+        checks.append(("Ollama daemon", "OK", f"Reachable (v{ollama_version})"))
+    elif shutil.which("ollama"):
+        checks.append(
+            (
+                "Ollama daemon",
+                "WARN",
+                f"Not reachable at {_normalize_ollama_host(os.environ.get('OLLAMA_HOST'))}",
+            )
+        )
 
     # 6. Sandbox support
     system = platform.system().lower()

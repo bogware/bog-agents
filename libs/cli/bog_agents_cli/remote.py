@@ -659,6 +659,8 @@ def format_remote_tasks(tasks: list[RemoteTask]) -> str:
             detail_parts.append(f"host={ssh_target}")
         if branch := str(task.metadata.get("branch", "") or ""):
             detail_parts.append(f"branch={branch}")
+        if team_name := str(task.metadata.get("team_name", "") or ""):
+            detail_parts.append(f"team={team_name}")
         if repo_name := str(task.metadata.get("repo_name", "") or ""):
             detail_parts.append(f"repo={repo_name}")
         if detail_parts:

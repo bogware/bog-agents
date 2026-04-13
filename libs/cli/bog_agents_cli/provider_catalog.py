@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess  # noqa: S404
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 OPENAI_DETECTION_EXACT: frozenset[str] = frozenset(
     {
@@ -157,6 +165,116 @@ PROFILE_OVERRIDES: Mapping[str, Mapping[str, dict[str, Any]]] = MappingProxyType
 """Curated overrides for installed profile entries that need fresher metadata."""
 
 
+def clear_provider_catalog_caches() -> None:
+    """Clear module-level caches used for provider discovery."""
+    get_local_ollama_models.cache_clear()
+
+
+def _normalize_ollama_host(raw_host: str | None) -> str:
+    """Normalize the configured Ollama host into an HTTP base URL."""
+    host = (raw_host or "").strip() or "http://127.0.0.1:11434"
+    if "://" not in host:
+        host = f"http://{host}"
+    parsed = urlparse(host)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    return f"{scheme}://{netloc}{path}".rstrip("/")
+
+
+def _dedupe_preserving_order(items: Sequence[str]) -> tuple[str, ...]:
+    """Return unique strings in the order they first appeared."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        cleaned = item.strip()
+        if not cleaned:
+            continue
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        result.append(cleaned)
+    return tuple(result)
+
+
+def _fetch_ollama_models_via_http() -> tuple[str, ...]:
+    """Read the local Ollama model list from the daemon HTTP API."""
+    base_url = _normalize_ollama_host(os.environ.get("OLLAMA_HOST"))
+    try:
+        with urlopen(f"{base_url}/api/tags", timeout=1.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (
+        HTTPError,
+        URLError,
+        TimeoutError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
+        return ()
+
+    models = payload.get("models")
+    if not isinstance(models, list):
+        return ()
+
+    names = [
+        str(model.get("name", "")).strip()
+        for model in models
+        if isinstance(model, dict)
+    ]
+    return _dedupe_preserving_order(names)
+
+
+def _fetch_ollama_models_via_cli() -> tuple[str, ...]:
+    """Read the local Ollama model list via `ollama list`."""
+    if shutil.which("ollama") is None:
+        return ()
+
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return ()
+
+    if result.returncode != 0:
+        return ()
+
+    lines = result.stdout.splitlines()
+    names = [parts[0] for line in lines[1:] if (parts := line.split())]
+    return _dedupe_preserving_order(names)
+
+
+@lru_cache(maxsize=1)
+def get_local_ollama_models() -> tuple[str, ...]:
+    """Return locally available Ollama model IDs from the running daemon or CLI."""
+    models = _fetch_ollama_models_via_http()
+    if models:
+        return models
+    return _fetch_ollama_models_via_cli()
+
+
+def is_known_ollama_model(model_name: str) -> bool:
+    """Return whether a bare model name matches a locally available Ollama model."""
+    cleaned = model_name.strip().lower()
+    if not cleaned:
+        return False
+
+    available = {name.lower() for name in get_local_ollama_models()}
+    if cleaned in available:
+        return True
+    if f"{cleaned}:latest" in available:
+        return True
+    if cleaned.endswith(":latest") and cleaned.removesuffix(":latest") in available:
+        return True
+    return False
+
+
 def detects_openai_model(model_name: str) -> bool:
     """Return whether a bare model name should route to OpenAI."""
     model_lower = model_name.lower()
@@ -187,15 +305,15 @@ def choose_preferred_model(
 ) -> str | None:
     """Choose the best model for a provider from available and fallback options."""
     candidates = get_default_model_candidates(provider)
-    if not candidates:
-        return None
-
     if available_models:
         available = set(available_models)
         for candidate in candidates:
             if candidate in available:
                 return candidate
+        return next(iter(available_models), None)
 
+    if not candidates:
+        return None
     return candidates[0]
 
 
