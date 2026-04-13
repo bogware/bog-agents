@@ -54,7 +54,9 @@ class TestProjectRootDetection:
         result = _find_project_root(subdir)
         assert result == project_root
 
-    def test_find_project_root_no_git(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_find_project_root_no_git(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test that None is returned when no .git directory exists."""
         # Create directory without .git
         no_git_dir = tmp_path / "no-git"
@@ -404,7 +406,9 @@ class TestAgentsAliasDirectories:
         expected = project_root / ".agents" / "skills"
         assert settings.get_project_agent_skills_dir() == expected
 
-    def test_get_project_agent_skills_dir_without_project(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_get_project_agent_skills_dir_without_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test get_project_agent_skills_dir returns None when not in a project."""
         # Create a directory without .git
         no_project = tmp_path / "no-project"

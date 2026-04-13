@@ -14,12 +14,15 @@ def _mock_ollama_http() -> None:
     under ``--disable-socket``.  Returning an empty tuple is the correct
     no-daemon fallback and keeps tests hermetic.
     """
-    with patch(
-        "bog_agents_cli.provider_catalog._fetch_ollama_models_via_http",
-        return_value=(),
-    ), patch(
-        "bog_agents_cli.doctor._get_ollama_version",
-        return_value=None,
+    with (
+        patch(
+            "bog_agents_cli.provider_catalog._fetch_ollama_models_via_http",
+            return_value=(),
+        ),
+        patch(
+            "bog_agents_cli.doctor._get_ollama_version",
+            return_value=None,
+        ),
     ):
         yield
 

@@ -1867,7 +1867,9 @@ class TestCommandSurfaceEnhancements:
             assert mock_submit.await_args_list[0].kwargs["label"] == "scout"
             assert mock_submit.await_args_list[1].kwargs["label"] == "scout #2"
 
-    async def test_agent_command_spawn_worktree_creates_isolated_branch(self, tmp_path: app_module.Path) -> None:
+    async def test_agent_command_spawn_worktree_creates_isolated_branch(
+        self, tmp_path: app_module.Path
+    ) -> None:
         """`/agent spawn --worktree` should create a worktree-backed task."""
         worktree_path = tmp_path / "review-branch"
         repo_path = tmp_path / "repo"
@@ -1905,9 +1907,7 @@ class TestCommandSurfaceEnhancements:
             assert mock_submit.await_count == 1
             assert mock_submit.await_args is not None
             assert mock_submit.await_args.kwargs["strategy"] == "worktree"
-            assert (
-                mock_submit.await_args.kwargs["working_dir"] == str(worktree_path)
-            )
+            assert mock_submit.await_args.kwargs["working_dir"] == str(worktree_path)
             assert mock_submit.await_args.kwargs["worktree_branch"].startswith(
                 "agent/review-"
             )
