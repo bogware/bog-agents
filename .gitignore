@@ -194,6 +194,9 @@ node_modules/
 # Ruff stuff:
 .ruff_cache/
 
+# Pytest temporary runtime directories (created by conftest.py test isolation)
+.pytest-tmp-runtime/
+
 # PyPI configuration file
 .pypirc
 
