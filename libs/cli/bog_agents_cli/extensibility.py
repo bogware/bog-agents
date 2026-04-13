@@ -222,7 +222,7 @@ def describe_extensibility_item(item: ExtensibilityItem) -> str:
     return "\n".join(lines)
 
 
-def get_extension_skill_dirs(config_dir: Path) -> list[Path]:
+def get_extension_skill_dirs(config_dir: Path | None) -> list[Path]:
     """Return directories that contain enabled extension-provided skills."""
     directories: list[Path] = []
     seen: set[Path] = set()

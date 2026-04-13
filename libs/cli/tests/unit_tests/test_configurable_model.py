@@ -6,7 +6,6 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -211,10 +210,10 @@ class TestRuntimeWorkflowControls:
         assert "Follow the review workflow." in _system_text(captured[0])
 
     def test_effort_level_normalizes_ollama_token_setting(self) -> None:
-        ChatOllama = pytest.importorskip("langchain_ollama").ChatOllama
+        ollama_mod = pytest.importorskip("langchain_ollama")
 
         request = _make_request(
-            ChatOllama(model="deepseek-coder:6.7b"),
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
             context=CLIContext(effort_level="high"),
         )
         captured: list[ModelRequest] = []
@@ -512,10 +511,10 @@ class TestModelParams:
         assert captured[0].model_settings == {"temperature": 0.3}
 
     def test_ollama_model_params_normalize_max_tokens(self) -> None:
-        ChatOllama = pytest.importorskip("langchain_ollama").ChatOllama
+        ollama_mod = pytest.importorskip("langchain_ollama")
 
         request = _make_request(
-            ChatOllama(model="deepseek-coder:6.7b"),
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
             context=CLIContext(model_params={"max_tokens": 1024, "temperature": 0.2}),
         )
         captured: list[ModelRequest] = []
@@ -529,10 +528,10 @@ class TestModelParams:
         assert captured[0].model.temperature == 0.2
 
     def test_ollama_explicit_num_predict_wins_over_alias(self) -> None:
-        ChatOllama = pytest.importorskip("langchain_ollama").ChatOllama
+        ollama_mod = pytest.importorskip("langchain_ollama")
 
         request = _make_request(
-            ChatOllama(model="deepseek-coder:6.7b"),
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
             context=CLIContext(
                 effort_level="medium",
                 model_params={"num_predict": 2048},
@@ -552,9 +551,9 @@ class TestIsOllamaModel:
     """Direct tests for the `_is_ollama_model` helper."""
 
     def test_returns_true_for_ollama(self) -> None:
-        ChatOllama = pytest.importorskip("langchain_ollama").ChatOllama
+        ollama_mod = pytest.importorskip("langchain_ollama")
 
-        model = ChatOllama(model="deepseek-coder:6.7b")
+        model = ollama_mod.ChatOllama(model="deepseek-coder:6.7b")
         assert _is_ollama_model(model) is True
 
     def test_returns_false_for_non_ollama(self) -> None:

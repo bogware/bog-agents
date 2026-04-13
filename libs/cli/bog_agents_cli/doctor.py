@@ -136,6 +136,8 @@ def run_doctor() -> str:
                 f"Not reachable at {_normalize_ollama_host(os.environ.get('OLLAMA_HOST'))}",
             )
         )
+    else:
+        checks.append(("Ollama daemon", "SKIP", "ollama not installed"))
 
     # 6. Sandbox support
     system = platform.system().lower()

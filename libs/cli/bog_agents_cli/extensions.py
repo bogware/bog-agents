@@ -141,15 +141,17 @@ def get_extensions_dir(config_dir: Path, *, create: bool = True) -> Path:
     return ext_dir
 
 
-def list_extensions(config_dir: Path) -> list[InstalledExtension]:
+def list_extensions(config_dir: Path | None) -> list[InstalledExtension]:
     """List all installed extensions.
 
     Args:
-        config_dir: Base config directory.
+        config_dir: Base config directory. Returns an empty list when ``None``.
 
     Returns:
         List of installed extensions.
     """
+    if config_dir is None:
+        return []
     ext_dir = get_extensions_dir(config_dir, create=False)
     if not ext_dir.exists():
         return []

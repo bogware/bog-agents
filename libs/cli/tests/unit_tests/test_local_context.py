@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
+import shutil
 import subprocess
-from typing import TYPE_CHECKING, Any
+import tempfile
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, Mock
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 import pytest
 
@@ -481,20 +480,21 @@ class TestSectionHeader:
         assert "## Local Context" in out
         assert f"**Current Directory**: `{tmp_path}`" in out
 
-    def test_in_git_false_outside_repo(self, tmp_path: Path) -> None:
-        # Append a check so we can see the value
-        script = _section_header() + '\necho "IN_GIT=$IN_GIT"'
-        # GIT_CEILING_DIRECTORIES prevents git from climbing above tmp_path,
-        # so no .git inside tmp_path means git returns false.
-        result = subprocess.run(
-            ["bash", "-c", script],
-            capture_output=True,
-            text=True,
-            cwd=tmp_path,
-            env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)},
-            check=False,
-        )
-        assert "IN_GIT=false" in result.stdout
+    def test_in_git_false_outside_repo(self) -> None:
+        # Use a real /tmp directory that is guaranteed to be outside any git repo.
+        real_tmp = Path(tempfile.mkdtemp(dir="/tmp"))
+        try:
+            script = _section_header() + '\necho "IN_GIT=$IN_GIT"'
+            result = subprocess.run(
+                ["bash", "-c", script],
+                capture_output=True,
+                text=True,
+                cwd=real_tmp,
+                check=False,
+            )
+            assert "IN_GIT=false" in result.stdout
+        finally:
+            shutil.rmtree(real_tmp, ignore_errors=True)
 
     def test_in_git_true_inside_repo(self, tmp_path: Path) -> None:
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=False)
@@ -539,11 +539,14 @@ class TestSectionProject:
         out = _run_section(_section_project(), tmp_path, with_header=True)
         assert "Environments: .venv" in out
 
-    def test_no_project_files_no_output(self, tmp_path: Path) -> None:
-        # Prevent git from climbing above tmp_path to the host repo
-        no_git_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)}
-        out = _run_section(_section_project(), tmp_path, with_header=True, env=no_git_env)
-        assert "**Project**:" not in out
+    def test_no_project_files_no_output(self) -> None:
+        # Use a real /tmp directory that is guaranteed to be outside any git repo.
+        real_tmp = Path(tempfile.mkdtemp(dir="/tmp"))
+        try:
+            out = _run_section(_section_project(), real_tmp, with_header=True)
+            assert "**Project**:" not in out
+        finally:
+            shutil.rmtree(real_tmp, ignore_errors=True)
 
 
 class TestSectionPackageManagers:
@@ -655,11 +658,14 @@ class TestSectionGit:
         out = _run_section(_section_git(), tmp_path, with_header=True)
         assert "2 uncommitted changes" in out
 
-    def test_no_output_outside_git(self, tmp_path: Path) -> None:
-        # Prevent git from climbing above tmp_path to the host repo
-        no_git_env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)}
-        out = _run_section(_section_git(), tmp_path, with_header=True, env=no_git_env)
-        assert "**Git**" not in out
+    def test_no_output_outside_git(self) -> None:
+        # Use a real /tmp directory that is guaranteed to be outside any git repo.
+        real_tmp = Path(tempfile.mkdtemp(dir="/tmp"))
+        try:
+            out = _run_section(_section_git(), real_tmp, with_header=True)
+            assert "**Git**" not in out
+        finally:
+            shutil.rmtree(real_tmp, ignore_errors=True)
 
 
 class TestSectionTestCommand:

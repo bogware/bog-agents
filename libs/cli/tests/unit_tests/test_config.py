@@ -1684,8 +1684,8 @@ class TestDetectProvider:
             ("some-unknown-model", None),
         ],
     )
-    @patch("bog_agents_cli.provider_catalog.get_local_ollama_models", return_value=())
-    def test_detect_known_patterns(self, _mock_ollama: object, model_name: str, expected: str | None) -> None:
+    @patch("bog_agents_cli.provider_catalog.get_local_ollama_models", new=lambda: ())
+    def test_detect_known_patterns(self, model_name: str, expected: str | None) -> None:
         """detect_provider returns the correct provider for known patterns."""
         # Ensure both Anthropic and Google credentials are "available" so the
         # default paths are taken (not the Vertex AI fallbacks).
