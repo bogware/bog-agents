@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.6.4...bog-agents-cli==0.6.5) (2026-04-14)
+
+
+### Features
+
+* **cli:** add deeper slash support/ui fixes/etc ([#35](https://github.com/bogware/bog-agents/issues/35)) ([5a0dbe3](https://github.com/bogware/bog-agents/commit/5a0dbe39c99a9d905ae146adf12f51a732d5ac9a))
+
 ## [0.6.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.6.3...bog-agents-cli==0.6.4) (2026-03-29)
 
 
