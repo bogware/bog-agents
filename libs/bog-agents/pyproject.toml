@@ -243,3 +243,6 @@ invalid-argument-type = "ignore"
 invalid-assignment = "ignore"
 no-matching-overload = "ignore"
 not-iterable = "ignore"
+# Optional extras (serve: starlette, uvicorn, sse-starlette; middleware: aiohttp)
+# are not installed in the base venv — suppress unresolved import errors.
+unresolved-import = "ignore"
