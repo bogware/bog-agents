@@ -1,0 +1,12 @@
+[
+  {
+    "fork_id": "2c97773b",
+    "parent_thread_id": "thread-1",
+    "fork_thread_id": "thread-1-fork-2c97773b",
+    "name": "test fork",
+    "description": "",
+    "created_at": 1776003264.3316636,
+    "message_count": 0,
+    "metadata": {}
+  }
+]

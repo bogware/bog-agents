@@ -1,8 +1,31 @@
 """Shared fixtures for CLI unit tests."""
 
 import contextlib
+from collections.abc import Iterator
+from unittest.mock import patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _mock_ollama_http() -> Iterator[None]:
+    """Block Ollama HTTP discovery during unit tests.
+
+    ``_fetch_ollama_models_via_http`` hits ``localhost/api/tags`` which fails
+    under ``--disable-socket``.  Returning an empty tuple is the correct
+    no-daemon fallback and keeps tests hermetic.
+    """
+    with (
+        patch(
+            "bog_agents_cli.provider_catalog._fetch_ollama_models_via_http",
+            return_value=(),
+        ),
+        patch(
+            "bog_agents_cli.doctor._get_ollama_version",
+            return_value=None,
+        ),
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True, scope="session")

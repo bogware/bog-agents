@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     # Framework
-    "bog-agents>=0.5.0,<1.0.0",
+    "bog-agents==0.6.4",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
@@ -149,6 +149,9 @@ packages = ["bog_agents_cli"]
 bog_agents = { path = "../bog-agents", editable = true }
 bog-agents-acp = { path = "../acp", editable = true }
 
+[tool.ty.src]
+exclude = [".pytest-tmp-runtime"]
+
 [tool.ty.environment]
 python-version = "3.11"
 extra-paths = ["../bog-agents"]
@@ -165,6 +168,9 @@ possibly-missing-attribute = "ignore"
 # Many stale type: ignore comments from pre-ty migration; clean up incrementally
 unused-ignore-comment = "ignore"
 unused-type-ignore-comment = "ignore"
+
+[tool.ruff]
+exclude = [".pytest-tmp-runtime"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -280,7 +286,7 @@ omit = ["tests/*"]
 [tool.pytest.ini_options]
 timeout = 30  # Default timeout for all tests (can be overridden per-test)
 
-addopts = "--strict-markers --strict-config --durations=5"
+addopts = "--strict-markers --strict-config --durations=5 -p no:cacheprovider"
 # pytest-benchmark warns once per xdist worker that benchmarks are disabled
 # under parallel execution. Both plugins are needed: xdist for `make test`,
 # benchmark for `make benchmark`. Suppress the noise here.

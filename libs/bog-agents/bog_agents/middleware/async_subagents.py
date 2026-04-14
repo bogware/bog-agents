@@ -303,12 +303,16 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
 
         available_agents = "\n".join(f"- {spec['name']}: {spec['description']}" for spec in async_subagents)
         start_description = (task_description or ASYNC_TASK_TOOL_DESCRIPTION).format(available_agents=available_agents)
+        start_tool = self._build_start_tool(start_description)
+        check_tool = self._build_check_tool()
+        update_tool = self._build_update_tool()
+        cancel_tool = self._build_cancel_tool()
         self.tools = [
-            self._build_start_tool(start_description),
-            self._build_check_tool(),
-            self._build_update_tool(),
-            self._build_cancel_tool(),
-            self._build_list_tool(),
+            start_tool,
+            check_tool,
+            update_tool,
+            cancel_tool,
+            self._build_list_tool(check_tool),
         ]
         self.system_prompt = system_prompt
 
@@ -329,7 +333,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 client = self._clients.get_sync(subagent_type)
                 thread = client.threads.create()
                 run = _create_run_sync(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to launch async subagent '%s': %s", subagent_type, exc)
                 return f"Failed to launch async subagent '{subagent_type}': {exc}"
 
@@ -362,7 +366,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 client = self._clients.get_async(subagent_type)
                 thread = await client.threads.create()
                 run = await _acreate_run(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to launch async subagent '%s': %s", subagent_type, exc)
                 return f"Failed to launch async subagent '{subagent_type}': {exc}"
 
@@ -402,7 +406,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 client = self._clients.get_sync(tracked["agent_name"])
                 run = client.runs.get(tracked["thread_id"], tracked["run_id"])
                 state = client.threads.get_state(tracked["thread_id"])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to check async task '%s': %s", task_id, exc)
                 return f"Failed to check async task '{task_id}': {exc}"
 
@@ -429,7 +433,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 client = self._clients.get_async(tracked["agent_name"])
                 run = await client.runs.get(tracked["thread_id"], tracked["run_id"])
                 state = await client.threads.get_state(tracked["thread_id"])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to check async task '%s': %s", task_id, exc)
                 return f"Failed to check async task '{task_id}': {exc}"
 
@@ -468,7 +472,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             try:
                 client = self._clients.get_sync(tracked["agent_name"])
                 run = _create_run_sync(client, thread_id=tracked["thread_id"], graph_id=spec["graph_id"], description=message)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to update async task '%s': %s", task_id, exc)
                 return f"Failed to update async task '{task_id}': {exc}"
 
@@ -490,7 +494,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             try:
                 client = self._clients.get_async(tracked["agent_name"])
                 run = await _acreate_run(client, thread_id=tracked["thread_id"], graph_id=spec["graph_id"], description=message)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to update async task '%s': %s", task_id, exc)
                 return f"Failed to update async task '{task_id}': {exc}"
 
@@ -526,7 +530,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 if cancel is None:
                     return f"Async task cancellation is not supported for `{tracked['agent_name']}`."
                 cancel(tracked["thread_id"], tracked["run_id"])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to cancel async task '%s': %s", task_id, exc)
                 return f"Failed to cancel async task '{task_id}': {exc}"
 
@@ -550,7 +554,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
                 if cancel is None:
                     return f"Async task cancellation is not supported for `{tracked['agent_name']}`."
                 await cancel(tracked["thread_id"], tracked["run_id"])
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Failed to cancel async task '%s': %s", task_id, exc)
                 return f"Failed to cancel async task '{task_id}': {exc}"
 
@@ -572,7 +576,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             args_schema=CancelAsyncTaskSchema,
         )
 
-    def _build_list_tool(self) -> StructuredTool:
+    def _build_list_tool(self, check_tool: StructuredTool) -> StructuredTool:
         """Build the `list_async_tasks` tool."""
 
         def list_async_tasks(status_filter: Literal["running", "success", "error", "cancelled", "all"] | None, runtime: ToolRuntime) -> str | Command:
@@ -580,11 +584,14 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             tasks = runtime.state.get("async_tasks", {})
             refreshed_tasks: dict[str, AsyncTask] = {}
             visible_tasks: list[dict[str, str]] = []
+            check_func = check_tool.func
+            if check_func is None:
+                return "Async task refresh is unavailable because the check tool has no synchronous implementation."
 
             for task_id, tracked in tasks.items():
                 updated = tracked
                 if tracked["status"] not in {"success", "error", "cancelled"}:
-                    result = self.tools[1].func(task_id=task_id, runtime=runtime)
+                    result = check_func(task_id=task_id, runtime=runtime)
                     if isinstance(result, Command):
                         updated = result.update["async_tasks"][task_id]
                 refreshed_tasks[task_id] = updated
@@ -606,11 +613,17 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             tasks = runtime.state.get("async_tasks", {})
             refreshed_tasks: dict[str, AsyncTask] = {}
             visible_tasks: list[dict[str, str]] = []
+            check_coroutine = check_tool.coroutine
+            if check_coroutine is None:
+                return "Async task refresh is unavailable because the check tool has no async implementation."
 
             for task_id, tracked in tasks.items():
                 updated = tracked
                 if tracked["status"] not in {"success", "error", "cancelled"}:
-                    result = await self.tools[1].coroutine(task_id=task_id, runtime=runtime)
+                    result = await check_coroutine(
+                        task_id=task_id,
+                        runtime=runtime,
+                    )
                     if isinstance(result, Command):
                         updated = result.update["async_tasks"][task_id]
                 refreshed_tasks[task_id] = updated

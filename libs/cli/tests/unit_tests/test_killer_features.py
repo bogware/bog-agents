@@ -438,7 +438,7 @@ class TestSessionManager:
 
         results = search_command_palette("model")
         assert len(results) > 0
-        assert any("/model" == r.name for r in results)
+        assert any(r.name == "/model" for r in results)
 
     def test_search_command_palette_empty(self):
         from bog_agents_cli.session_manager import search_command_palette

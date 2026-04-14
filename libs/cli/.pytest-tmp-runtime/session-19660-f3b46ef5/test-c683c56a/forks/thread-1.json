@@ -1,0 +1,12 @@
+[
+  {
+    "fork_id": "fa1f899e",
+    "parent_thread_id": "thread-1",
+    "fork_thread_id": "thread-1-fork-fa1f899e",
+    "name": "test fork",
+    "description": "",
+    "created_at": 1776003486.3405552,
+    "message_count": 0,
+    "metadata": {}
+  }
+]

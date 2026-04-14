@@ -1054,81 +1054,9 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
     Args:
         console: Rich console for output.
     """
-    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    from bog_agents_cli.doctor import run_doctor
 
-    console.print("[bold]Bog Agents Diagnostics[/bold]\n")
-
-    # Python version
-    console.print(f"  Python:          {sys.version.split()[0]}")
-    console.print(f"  Platform:        {sys.platform}")
-
-    # Package versions
-    for pkg in ("bog-agents-cli", "bog-agents", "langchain-core", "langgraph"):
-        try:
-            ver = _pkg_version(pkg)
-        except PackageNotFoundError:
-            ver = "[red]not installed[/red]"
-        console.print(f"  {pkg + ':':<19}{ver}")
-
-    console.print()
-
-    # Optional tools
-    console.print("[bold]External Tools[/bold]")
-    for tool_name, cmd in [("ripgrep", "rg"), ("git", "git"), ("node", "node")]:
-        if shutil.which(cmd):
-            console.print(f"  {tool_name + ':':<19}[green]found[/green]")
-        else:
-            console.print(f"  {tool_name + ':':<19}[yellow]not found[/yellow]")
-
-    console.print()
-
-    # API key detection
-    console.print("[bold]API Keys[/bold]")
-    key_vars = [
-        ("ANTHROPIC_API_KEY", "Anthropic"),
-        ("OPENAI_API_KEY", "OpenAI"),
-        ("GOOGLE_API_KEY", "Google"),
-        ("TAVILY_API_KEY", "Tavily (web search)"),
-    ]
-    for env_var, label in key_vars:
-        val = os.environ.get(env_var)
-        if val:
-            masked = val[:4] + "..." + val[-4:] if len(val) > 8 else "***"
-            console.print(f"  {label + ':':<19}[green]set[/green] ({masked})")
-        else:
-            console.print(f"  {label + ':':<19}[dim]not set[/dim]")
-
-    console.print()
-
-    # Config file
-    config_dir = Path.home() / ".bog-agents"
-    config_file = config_dir / "config.toml"
-    console.print("[bold]Configuration[/bold]")
-    if config_file.exists():
-        console.print(f"  Config file:     [green]{config_file}[/green]")
-    else:
-        console.print(f"  Config file:     [dim]{config_file} (not created yet)[/dim]")
-
-    # Optional dependency checks
-    console.print()
-    console.print("[bold]Optional Dependencies[/bold]")
-    optional_pkgs = [
-        ("langchain-anthropic", "Anthropic models"),
-        ("langchain-ollama", "Local Ollama models"),
-        ("bog-agents-acp", "Agent Client Protocol"),
-        ("starlette", "HTTP serve mode"),
-        ("daytona", "Daytona sandbox"),
-        ("modal", "Modal sandbox"),
-    ]
-    for pkg, desc in optional_pkgs:
-        try:
-            _pkg_version(pkg)
-            console.print(f"  {desc + ':':<19}[green]installed[/green]")
-        except PackageNotFoundError:
-            console.print(f"  {desc + ':':<19}[dim]not installed[/dim]")
-
-    console.print()
-    console.print("[green bold]Diagnostics complete.[/green bold]")
+    console.print(run_doctor(), markup=False)
 
 
 def cli_main() -> None:

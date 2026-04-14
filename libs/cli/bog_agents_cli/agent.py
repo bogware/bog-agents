@@ -62,6 +62,29 @@ DEFAULT_AGENT_NAME = "agent"
 REQUIRE_COMPACT_TOOL_APPROVAL: bool = True
 """When `True`, `compact_conversation` requires HITL approval like other gated tools."""
 
+_RESERVED_AGENT_HOME_DIRS = frozenset({"logs", "plugins", "skills"})
+"""Directories under `~/.bog-agents` reserved for global CLI state, not agents."""
+
+
+def _iter_listed_agent_dirs(agents_dir: Path) -> list[Path]:
+    """Return agent directories that should appear in `bog-agents list`.
+
+    The user-level `.bog-agents` directory also contains shared CLI state
+    such as logs and plugin installs. Filter those reserved directories
+    so `list` only shows real agent workspaces.
+
+    Args:
+        agents_dir: Base `~/.bog-agents` directory.
+
+    Returns:
+        Sorted list of agent directories.
+    """
+    return [
+        agent_path
+        for agent_path in sorted(agents_dir.iterdir())
+        if (agent_path.is_dir() and agent_path.name not in _RESERVED_AGENT_HOME_DIRS)
+    ]
+
 
 def list_agents(*, output_format: OutputFormat = "text") -> None:
     """List all available agents.
@@ -85,47 +108,61 @@ def list_agents(*, output_format: OutputFormat = "text") -> None:
         )
         return
 
+    agent_dirs = _iter_listed_agent_dirs(agents_dir)
+
+    if not agent_dirs:
+        if output_format == "json":
+            from bog_agents_cli.output import write_json
+
+            write_json("list", [])
+            return
+        console.print("[yellow]No agents found.[/yellow]")
+        console.print(
+            "[dim]Agents will be created in ~/.bog-agents/ "
+            "when you first use them.[/dim]",
+            style=COLORS["dim"],
+        )
+        return
+
     if output_format == "json":
         from bog_agents_cli.output import write_json
 
         agents = []
-        for agent_path in sorted(agents_dir.iterdir()):
-            if agent_path.is_dir():
-                agent_name = agent_path.name
-                agents.append(
-                    {
-                        "name": agent_name,
-                        "path": str(agent_path),
-                        "has_agents_md": (agent_path / "AGENTS.md").exists(),
-                        "is_default": agent_name == DEFAULT_AGENT_NAME,
-                    }
-                )
+        for agent_path in agent_dirs:
+            agent_name = agent_path.name
+            agents.append(
+                {
+                    "name": agent_name,
+                    "path": str(agent_path),
+                    "has_agents_md": (agent_path / "AGENTS.md").exists(),
+                    "is_default": agent_name == DEFAULT_AGENT_NAME,
+                }
+            )
         write_json("list", agents)
         return
 
     console.print("\n[bold]Available Agents:[/bold]\n", style=COLORS["primary"])
 
-    for agent_path in sorted(agents_dir.iterdir()):
-        if agent_path.is_dir():
-            agent_name = agent_path.name
-            agent_md = agent_path / "AGENTS.md"
-            is_default = agent_name == DEFAULT_AGENT_NAME
-            default_label = " [dim](default)[/dim]" if is_default else ""
+    for agent_path in agent_dirs:
+        agent_name = agent_path.name
+        agent_md = agent_path / "AGENTS.md"
+        is_default = agent_name == DEFAULT_AGENT_NAME
+        default_label = " [dim](default)[/dim]" if is_default else ""
 
-            bullet = get_glyphs().bullet
-            if agent_md.exists():
-                console.print(
-                    f"  {bullet} [bold]{agent_name}[/bold]{default_label}",
-                    style=COLORS["primary"],
-                )
-                console.print(f"    {agent_path}", style=COLORS["dim"])
-            else:
-                console.print(
-                    f"  {bullet} [bold]{agent_name}[/bold]{default_label}"
-                    " [dim](incomplete)[/dim]",
-                    style=COLORS["tool"],
-                )
-                console.print(f"    {agent_path}", style=COLORS["dim"])
+        bullet = get_glyphs().bullet
+        if agent_md.exists():
+            console.print(
+                f"  {bullet} [bold]{agent_name}[/bold]{default_label}",
+                style=COLORS["primary"],
+            )
+            console.print(f"    {agent_path}", style=COLORS["dim"])
+        else:
+            console.print(
+                f"  {bullet} [bold]{agent_name}[/bold]{default_label}"
+                " [dim](incomplete)[/dim]",
+                style=COLORS["tool"],
+            )
+            console.print(f"    {agent_path}", style=COLORS["dim"])
 
     console.print()
 
@@ -639,6 +676,11 @@ def create_cli_agent(
                 for execution
             - `composite_backend`: `CompositeBackend` for file operations
     """
+    if isinstance(model, str):
+        from bog_agents_cli.config import create_model as _create_model
+
+        model = _create_model(model).model
+
     tools = tools or []
     effective_cwd = (
         Path(cwd)
@@ -724,10 +766,24 @@ def create_cli_agent(
 
     # Add skills middleware
     if enable_skills:
+        from bog_agents_cli.extensibility import get_extension_skill_dirs
+
         # Lowest to highest precedence:
-        # built-in -> user .bog-agents -> user .agents
+        # built-in -> extensions -> user .bog-agents -> user .agents
         # -> project .bog-agents -> project .agents
+        extension_config_dir = (
+            settings.user_agents_dir
+            if isinstance(getattr(settings, "user_agents_dir", None), Path)
+            else (
+                user_agents_dir.parent
+                if user_agents_dir.name == "agents"
+                else user_agents_dir
+            )
+        )
         sources = [str(settings.get_built_in_skills_dir())]
+        sources.extend(
+            str(path) for path in get_extension_skill_dirs(extension_config_dir)
+        )
         sources.extend([str(skills_dir), str(user_agent_skills_dir)])
         if project_skills_dir:
             sources.append(str(project_skills_dir))

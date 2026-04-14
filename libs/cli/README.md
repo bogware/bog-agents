@@ -65,10 +65,10 @@ bog-agents --doctor
 A rich terminal interface with streaming responses, syntax highlighting, inline diffs, and
 tool-call approval. Everything happens in the terminal — no browser, no Electron, no nonsense.
 
-### 50+ Slash Commands
+### Slash Commands
 
-Type `/` in the interactive session and the autocomplete shows you everything. Here are the
-ones that separate the greenhorns from the trail bosses:
+Type `/` in the interactive session and the autocomplete shows you everything. The list below
+focuses on the commands that are shipped, wired, and ready to use today:
 
 | Command | What It Does |
 |---------|-------------|
@@ -76,35 +76,29 @@ ones that separate the greenhorns from the trail bosses:
 | `/plan` | Read-only plan mode. Agent sees the lay of the land without touching a thing |
 | `/effort` | Set reasoning depth: `low` (fast), `medium`, `high`, `max` (thorough) |
 | `/review` | Code review on staged changes, a commit, or specific files |
-| `/test` | Run tests with coverage analysis and generate test skeletons |
-| `/pr` | Create, list, or review pull requests without leaving the session |
 | `/diff` | Show pending file changes as unified diffs |
-| `/undo` | Revert the last file change (git-checkpoint backed) |
 | `/compact` | Compress conversation context (`aggressive`, `moderate`, or custom rules) |
 | `/cost` | Real-time token usage, cost estimate, and budget enforcement |
 | `/context` | Show context window usage with breakdown |
-| `/teach` | Teach the agent a workflow — it learns and saves it as a reusable skill |
 | `/remember` | Persist insights to agent memory (survives across sessions) |
 | `/agent` | Spawn and manage parallel agent threads |
+| `/background` | Queue local background work and monitor status |
+| `/dashboard` | Show a live multi-agent snapshot |
 | `/worktree` | Isolated git worktrees for parallel work streams |
-| `/record` | Record a session for replay and debugging |
-| `/replay` | Play back a recorded session step by step |
-| `/branch` | Fork the conversation to explore alternatives |
 | `/doctor` | Health check — Python, packages, API keys, tools, sandbox support |
 | `/threads` | Browse and resume previous conversations |
 | `/recommend` | AI-powered code review with persona-based analysis |
 | `/onboard` | Interactive codebase tour for getting up to speed |
-| `/health` | Codebase health score — complexity, coverage, quality |
-| `/resolve` | AI-assisted merge conflict resolution |
-| `/changelog` | Generate a changelog from git history |
-| `/infra` | Generate Docker, Kubernetes, or Terraform configs |
-| `/audit` | Audit dependencies for known vulnerabilities |
+| `/docs` | Open documentation and project guides |
+| `/changelog` | Open the project changelog |
 | `/mcp` | Show active MCP servers and available tools |
-| `/extensions` | Install and manage extensions |
-| `/keybindings` | Customize keyboard shortcuts |
-| `/remote` | Submit a task for cloud execution |
+| `/extensions` | Manage installed extensions |
+| `/plugin` | Unified plugin and extension install/list/info/enable/disable flow |
+| `/keybindings` | Show current keybindings or the config path |
+| `/remote` | Submit a task for remote execution, including SSH sandbox providers |
 | `/profile` | Switch configuration presets |
-| `/session` | Show session info, name the session |
+| `/session` | Show and persist label, tags, project, summary, and exports |
+| `/resume` | Resume the latest thread, a specific thread, or threads by tag/project |
 | `/clear` | Start a fresh thread |
 | `/quit` | Hang up your hat |
 
@@ -164,19 +158,30 @@ bog-agents threads delete abc123  # Clean up
 
 ### Persistent Memory
 
-The agent remembers things across sessions. Use `/remember` to persist insights, or let the
-agent learn naturally. Memory is stored per-agent in `~/.bog-agents/`.
+The agent remembers things across sessions. Use `/remember` to persist insights, and use
+`/session` to attach labels, tags, project names, summaries, and exports to a thread.
+Memory is stored per-agent in `~/.bog-agents/`.
 
 ### Custom Skills
 
-Extend the agent with your own slash commands. Skills are Python scripts with a
-`SKILL.md` manifest.
+Extend the agent with reusable skills and packaged extensions. Skills are instruction bundles
+with a `SKILL.md` manifest, and extensions can contribute both skills and slash commands.
 
 ```bash
 bog-agents skills list           # See installed skills
 bog-agents skills create         # Scaffold a new skill
 bog-agents skills info my-skill  # Show skill details
 bog-agents skills delete my-skill
+```
+
+In the interactive TUI:
+
+```text
+/plugin
+/plugin install <path-or-url>
+/plugin info <name>
+/plugin enable <name>
+/plugin disable <name>
 ```
 
 ### Named Agents
@@ -192,13 +197,25 @@ bog-agents reset --agent researcher  # Reset an agent's prompt
 
 ### Remote Sandboxes
 
-Run code in isolated environments when you don't want the agent touching your local files.
+Bog Agents supports both built-in runtime sandboxes and tracked remote tasks. Use the
+runtime sandbox flags when you want a single interactive or non-interactive session isolated
+from your local machine, and use `/remote` when you want queueing, status tracking, or an
+SSH-backed sandbox workflow.
 
 ```bash
 bog-agents --sandbox modal           # Modal serverless sandbox
 bog-agents --sandbox daytona         # Daytona cloud sandbox
 bog-agents --sandbox runloop         # Runloop sandbox
 bog-agents --sandbox-id existing-id  # Reuse an existing sandbox
+```
+
+Inside the TUI:
+
+```text
+/remote config
+/remote submit --label scout --branch-prefix fix "investigate the failing tests"
+/remote status <id>
+/remote stop <id>
 ```
 
 ### MCP (Model Context Protocol)

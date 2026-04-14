@@ -568,8 +568,8 @@ class TestCreateCliAgentInteractiveForwarding:
             patch("bog_agents_cli.agent.MemoryMiddleware"),
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
             patch("bog_agents_cli.agent.get_system_prompt") as mock_get_prompt,
         ):
@@ -620,8 +620,8 @@ class TestCreateCliAgentInteractiveForwarding:
             patch("bog_agents_cli.agent.MemoryMiddleware"),
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
             patch("bog_agents_cli.agent.get_system_prompt") as mock_get_prompt,
         ):
@@ -637,6 +637,59 @@ class TestCreateCliAgentInteractiveForwarding:
 
         # get_system_prompt should NOT be called when system_prompt is provided
         mock_get_prompt.assert_not_called()
+
+    def test_resolves_string_models_via_cli_create_model(self, tmp_path: Path) -> None:
+        """String model specs should use CLI provider resolution first."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+
+        mock_settings = Mock()
+        mock_settings.ensure_agent_dir.return_value = agent_dir
+        mock_settings.get_project_agent_md_path.return_value = []
+        mock_settings.get_user_agents_dir.return_value = tmp_path / "agents"
+        mock_settings.get_project_agents_dir.return_value = None
+        mock_settings.model_name = None
+        mock_settings.model_provider = None
+        mock_settings.model_context_limit = None
+        mock_settings.project_root = None
+
+        mock_agent = Mock()
+        mock_agent.with_config.return_value = mock_agent
+        fake_model = _make_fake_chat_model()
+        mock_model_result = Mock(model=fake_model)
+
+        with (
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
+            patch("bog_agents_cli.agent.get_system_prompt", return_value="prompt"),
+            patch(
+                "bog_agents.middleware.summarization.create_summarization_tool_middleware",
+                return_value=Mock(),
+            ),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=mock_model_result,
+            ) as mock_create_model,
+            patch(
+                "bog_agents._models.init_chat_model",
+                side_effect=AssertionError(
+                    "init_chat_model should not be used for CLI string models"
+                ),
+            ),
+        ):
+            create_cli_agent(
+                model="deepseek-coder:6.7b",
+                assistant_id="test",
+                enable_memory=False,
+                enable_skills=False,
+                enable_shell=False,
+                enable_git_tools=False,
+                enable_repo_map=False,
+                enable_checkpointing=False,
+                enable_cost_tracking=False,
+            )
+
+        mock_create_model.assert_called_once_with("deepseek-coder:6.7b")
 
 
 class TestDefaultAgentName:
@@ -724,6 +777,40 @@ class TestListAgents:
         joined = "\n".join(output)
         assert "(default)" not in joined
 
+    def test_reserved_cli_state_dirs_are_not_listed(self, tmp_path: Path) -> None:
+        """Global CLI state folders should not appear in `bog-agents list`."""
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        real_agent = agents_dir / "researcher"
+        real_agent.mkdir()
+        (real_agent / "AGENTS.md").touch()
+
+        for name in ("logs", "plugins", "skills"):
+            (agents_dir / name).mkdir()
+
+        mock_settings = Mock()
+        mock_settings.user_agents_dir = agents_dir
+
+        output: list[str] = []
+
+        def capture_print(*args: object, **kwargs: object) -> None:
+            del kwargs
+            output.append(" ".join(str(a) for a in args))
+
+        with (
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("bog_agents_cli.agent.console") as mock_console,
+        ):
+            mock_console.print = capture_print
+            list_agents()
+
+        joined = "\n".join(output)
+        assert "researcher" in joined
+        assert "logs" not in joined
+        assert "plugins" not in joined
+        assert "skills" not in joined
+
 
 class TestListAgentsJson:
     """Tests for list_agents JSON output."""
@@ -787,6 +874,35 @@ class TestListAgentsJson:
 
         result = json.loads(buf.getvalue())
         assert result["data"] == []
+
+    def test_json_output_excludes_reserved_cli_state_dirs(self, tmp_path: Path) -> None:
+        """JSON output should filter global CLI state directories."""
+        import json
+        from io import StringIO
+
+        agents_dir = tmp_path / "agents"
+        agents_dir.mkdir()
+
+        real_agent = agents_dir / "agent"
+        real_agent.mkdir()
+        (real_agent / "AGENTS.md").touch()
+
+        for name in ("logs", "plugins", "skills"):
+            (agents_dir / name).mkdir()
+
+        mock_settings = Mock()
+        mock_settings.user_agents_dir = agents_dir
+
+        buf = StringIO()
+        with (
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("sys.stdout", buf),
+        ):
+            list_agents(output_format="json")
+
+        result = json.loads(buf.getvalue())
+        names = {agent["name"] for agent in result["data"]}
+        assert names == {"agent"}
 
 
 class TestResetAgentJson:
@@ -876,8 +992,8 @@ class TestCreateCliAgentSkillsSources:
             patch("bog_agents_cli.agent.MemoryMiddleware"),
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
         ):
             create_cli_agent(
@@ -953,8 +1069,8 @@ class TestCreateCliAgentMemorySources:
                 return_value=mock_agent,
             ),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
         ):
             create_cli_agent(
@@ -1019,8 +1135,8 @@ class TestCreateCliAgentMemorySources:
                 return_value=mock_agent,
             ),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
         ):
             create_cli_agent(
@@ -1102,7 +1218,10 @@ class TestCreateCliAgentProjectContext:
             patch("bog_agents_cli.agent.MemoryMiddleware"),
             patch("bog_agents_cli.agent.list_subagents", return_value=[]) as mock_list,
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
-            patch("bog_agents._models.init_chat_model", return_value=fake_model),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
         ):
             create_cli_agent(
                 model="fake-model",
@@ -1179,7 +1298,10 @@ class TestCreateCliAgentProjectContext:
             patch("bog_agents_cli.agent.MemoryMiddleware", FakeMemoryMiddleware),
             patch("bog_agents_cli.agent.FilesystemBackend"),
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
-            patch("bog_agents._models.init_chat_model", return_value=fake_model),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
         ):
             create_cli_agent(
                 model="fake-model",
@@ -1239,7 +1361,10 @@ class TestCreateCliAgentProjectContext:
                 "bog_agents_cli.agent.LocalShellBackend", return_value=mock_backend
             ) as mock_shell,
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
-            patch("bog_agents._models.init_chat_model", return_value=fake_model),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
         ):
             create_cli_agent(
                 model="fake-model",
@@ -1290,7 +1415,10 @@ class TestCreateCliAgentProjectContext:
             patch("bog_agents_cli.agent.SkillsMiddleware"),
             patch("bog_agents_cli.agent.FilesystemBackend") as mock_filesystem,
             patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
-            patch("bog_agents._models.init_chat_model", return_value=fake_model),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
         ):
             create_cli_agent(
                 model="fake-model",
@@ -1352,8 +1480,8 @@ class TestMiddlewareStackConformance:
                 side_effect=capture_create_agent,
             ),
             patch(
-                "bog_agents._models.init_chat_model",
-                return_value=fake_model,
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
             ),
         ):
             create_cli_agent(

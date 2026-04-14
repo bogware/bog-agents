@@ -194,6 +194,9 @@ node_modules/
 # Ruff stuff:
 .ruff_cache/
 
+# Pytest temporary runtime directories (created by conftest.py test isolation)
+.pytest-tmp-runtime/
+
 # PyPI configuration file
 .pypirc
 
@@ -220,6 +223,7 @@ TEXTUAL_REFACTOR_PLAN.md
 libs/cli/TEXTUAL_PROGRESS.md
 
 /tmp/
+.tmp*/
 
 # macOS
 .DS_Store

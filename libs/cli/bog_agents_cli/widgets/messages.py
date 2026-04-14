@@ -151,8 +151,8 @@ class UserMessage(_TimestampClickMixin, Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: transparent;
-        border-left: wide #10b981;
+        background: #0d1723;
+        border-left: wide #34d399;
     }
     """
 
@@ -236,9 +236,9 @@ class QueuedUserMessage(Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: transparent;
-        border-left: wide #6b7280;
-        opacity: 0.6;
+        background: #0a121c;
+        border-left: wide #64748b;
+        opacity: 0.72;
     }
     """
 
@@ -288,6 +288,8 @@ class AssistantMessage(_TimestampClickMixin, Vertical):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
+        background: #08111b;
+        border-left: wide #1e293b;
     }
 
     AssistantMessage Markdown {
@@ -393,17 +395,19 @@ class ToolCallMessage(Vertical):
     ToolCallMessage {
         height: auto;
         padding: 0 1;
-        margin: 0 0 1 0;
-        background: transparent;
-        border-left: wide #3b3b3b;
+        margin: 1 0 0 0;
+        background: #09111a;
+        border-left: wide #223246;
     }
 
     ToolCallMessage .tool-header {
         height: auto;
+        color: #fbbf24;
+        text-style: bold;
     }
 
     ToolCallMessage .tool-args {
-        color: #6b7280;
+        color: #94a3b8;
         margin-left: 3;
     }
 
@@ -412,15 +416,15 @@ class ToolCallMessage(Vertical):
     }
 
     ToolCallMessage .tool-status.pending {
-        color: #f59e0b;
+        color: #fbbf24;
     }
 
     ToolCallMessage .tool-status.success {
-        color: #10b981;
+        color: #34d399;
     }
 
     ToolCallMessage .tool-status.error {
-        color: #ef4444;
+        color: #fb7185;
     }
 
     ToolCallMessage .tool-status.rejected {
@@ -441,11 +445,11 @@ class ToolCallMessage(Vertical):
 
     ToolCallMessage .tool-output-hint {
         margin-left: 0;
-        color: #6b7280;
+        color: #94a3b8;
     }
 
     ToolCallMessage:hover {
-        border-left: wide #525252;
+        border-left: wide #38bdf8;
     }
     """
 
@@ -763,9 +767,7 @@ class ToolCallMessage(Vertical):
             prefixed += "\n" + "\n".join(f"  {line}" for line in lines[1:])
         return prefixed
 
-    def _plain_output_for_display(
-        self, output: str, *, is_preview: bool
-    ) -> str:  # noqa: PLR6301  # Grouped as method for widget cohesion
+    def _plain_output_for_display(self, output: str, *, is_preview: bool) -> str:
         """Build a plain-text fallback for tool output rendering.
 
         Args:
@@ -925,20 +927,14 @@ class ToolCallMessage(Vertical):
                     name = path.name
                     # Color by file type
                     if path.suffix in {".py", ".pyx"}:
-                        lines.append(
-                            f"    [#3b82f6]{escape_markup(name)}[/#3b82f6]"
-                        )
+                        lines.append(f"    [#3b82f6]{escape_markup(name)}[/#3b82f6]")
                     elif path.suffix in {".md", ".txt", ".rst"}:
                         lines.append(f"    {escape_markup(name)}")
                     elif path.suffix in {".json", ".yaml", ".yml", ".toml"}:
-                        lines.append(
-                            f"    [#f59e0b]{escape_markup(name)}[/#f59e0b]"
-                        )
+                        lines.append(f"    [#f59e0b]{escape_markup(name)}[/#f59e0b]")
                     elif not path.suffix:
                         # Likely a directory or no extension
-                        lines.append(
-                            f"    [#10b981]{escape_markup(name)}/[/#10b981]"
-                        )
+                        lines.append(f"    [#10b981]{escape_markup(name)}/[/#10b981]")
                     else:
                         lines.append(f"    {escape_markup(name)}")
 
@@ -1443,7 +1439,7 @@ class SummarizationMessage(AppMessage):
         padding: 0 1;
         margin: 1 0;
         color: $primary;
-        background: $surface;
+        background: #082018;
         border-left: wide $primary;
         text-style: bold;
     }

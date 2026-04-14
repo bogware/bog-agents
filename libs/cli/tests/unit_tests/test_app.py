@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import os
 import signal
 import webbrowser
+from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, ClassVar
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
@@ -166,6 +169,99 @@ class TestAppBindings:
         bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
         bindings_by_key = {b.key: b for b in bindings}
         assert "ctrl+o" not in bindings_by_key
+
+    def test_copy_binding_exists(self) -> None:
+        """Copy should be available without overloading Ctrl+C."""
+        bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
+        assert any(
+            b.key == "ctrl+shift+c,ctrl+insert" and b.action == "copy_selection"
+            for b in bindings
+        )
+
+    def test_paste_binding_exists(self) -> None:
+        """Paste should be available even when the terminal paste path fails."""
+        bindings = [b for b in BogAgentsApp.BINDINGS if isinstance(b, Binding)]
+        assert any(
+            b.key == "ctrl+shift+v,shift+insert" and b.action == "paste_clipboard"
+            for b in bindings
+        )
+
+
+class TestClipboardActions:
+    """Tests for clipboard shortcuts and lighter mouse handling."""
+
+    async def test_action_paste_clipboard_routes_to_chat_input(self) -> None:
+        """Clipboard paste should route through the shared chat-input handler."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._chat_input is not None
+
+            with (
+                patch("bog_agents_cli.app.read_clipboard_text", return_value="hello"),
+                patch.object(
+                    app._chat_input,
+                    "handle_external_paste",
+                    return_value=True,
+                ) as mock_paste,
+            ):
+                app.action_paste_clipboard()
+
+            mock_paste.assert_called_once_with("hello")
+
+    async def test_action_paste_clipboard_warns_when_unavailable(self) -> None:
+        """Empty or unavailable clipboard should produce a small warning."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch("bog_agents_cli.app.read_clipboard_text", return_value=None),
+                patch.object(app, "notify") as mock_notify,
+            ):
+                app.action_paste_clipboard()
+
+            mock_notify.assert_called_once()
+
+    async def test_mouse_up_skips_copy_without_drag(self) -> None:
+        """Simple clicks should not trigger whole-app clipboard scans."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 0
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+                app.on_mouse_up(SimpleNamespace())
+
+            mock_copy.assert_not_called()
+
+    async def test_mouse_up_copies_after_drag_selection(self) -> None:
+        """Drag selections should still auto-copy on mouse release."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 3
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+                app.on_mouse_up(SimpleNamespace())
+
+            mock_copy.assert_called_once_with(app)
+
+    async def test_click_after_drag_does_not_refocus_input(self) -> None:
+        """Selection drags should not be followed by eager input refocus."""
+        app = BogAgentsApp()
+        app._mouse_drag_distance = 3
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._chat_input is not None
+
+            with patch.object(app._chat_input, "focus_input") as mock_focus:
+                app.on_click(SimpleNamespace(widget=None))
+
+            mock_focus.assert_not_called()
 
 
 class TestITerm2CursorGuide:
@@ -1259,8 +1355,7 @@ class TestCommandSurfaceEnhancements:
 
             app_msgs = app.query(AppMessage)
             assert any(
-                "Thread: thread-session-123" in str(w._content)
-                for w in app_msgs
+                "Thread: thread-session-123" in str(w._content) for w in app_msgs
             )
             assert any("Agent: agent" in str(w._content) for w in app_msgs)
 
@@ -1277,8 +1372,7 @@ class TestCommandSurfaceEnhancements:
             app_msgs = app.query(AppMessage)
             assert any("Auto-approve: off" in str(w._content) for w in app_msgs)
             assert any(
-                "Shell allow-list: disabled" in str(w._content)
-                for w in app_msgs
+                "Shell allow-list: disabled" in str(w._content) for w in app_msgs
             )
 
     async def test_keybindings_command_shows_formatted_bindings(self) -> None:
@@ -1325,8 +1419,7 @@ class TestCommandSurfaceEnhancements:
             assert any("Loaded skills: 3" in str(w._content) for w in app_msgs)
             assert any("Project skills: 1" in str(w._content) for w in app_msgs)
             assert any(
-                "Examples: alpha, beta, gamma" in str(w._content)
-                for w in app_msgs
+                "Examples: alpha, beta, gamma" in str(w._content) for w in app_msgs
             )
 
     async def test_help_query_surfaces_matching_commands(self) -> None:
@@ -1390,7 +1483,9 @@ class TestCommandSurfaceEnhancements:
                     "bog_agents_cli.review_command.generate_review_prompt",
                     return_value="review prompt",
                 ),
-                patch.object(app, "_send_prompt_to_agent", new=AsyncMock()) as mock_send,
+                patch.object(
+                    app, "_send_prompt_to_agent", new=AsyncMock()
+                ) as mock_send,
             ):
                 await app._handle_command("/review src/foo.py")
                 await pilot.pause()
@@ -1398,9 +1493,1119 @@ class TestCommandSurfaceEnhancements:
             mock_send.assert_awaited_once_with("review prompt")
             app_msgs = app.query(AppMessage)
             assert any(
-                "Starting structured code review" in str(w._content)
+                "Starting structured code review" in str(w._content) for w in app_msgs
+            )
+
+    async def test_profile_command_applies_runtime_controls(self) -> None:
+        """`/profile` should update the session runtime controls."""
+        from bog_agents_cli.profiles import Profile
+
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.profiles.load_profiles",
+                    return_value={
+                        "review": Profile(
+                            name="review",
+                            description="Review mode",
+                            model="openai:gpt-5.4-mini",
+                            effort_level="max",
+                            auto_approve=False,
+                            plan_mode=True,
+                            system_prompt_append="Review carefully.",
+                        )
+                    },
+                ),
+                patch.object(
+                    app,
+                    "_apply_runtime_model_override",
+                    new=AsyncMock(return_value="openai:gpt-5.4-mini"),
+                ),
+            ):
+                await app._handle_command("/profile review")
+                await pilot.pause()
+
+            assert app._active_profile_name == "review"
+            assert app._plan_mode_enabled is True
+            assert app._effort_level == "max"
+            assert app._active_profile_prompt == "Review carefully."
+            app_msgs = app.query(AppMessage)
+            assert any("Profile activated: review" in str(w._content) for w in app_msgs)
+
+    async def test_plan_command_toggles_runtime_plan_mode(self) -> None:
+        """`/plan toggle` should flip the runtime plan mode flag."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/plan toggle")
+            await pilot.pause()
+            assert app._plan_mode_enabled is True
+
+            await app._handle_command("/plan off")
+            await pilot.pause()
+            assert app._plan_mode_enabled is False
+
+    async def test_effort_command_sets_runtime_preset(self) -> None:
+        """`/effort` should persist the selected runtime effort preset."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/effort low")
+            await pilot.pause()
+
+            assert app._effort_level == "low"
+            app_msgs = app.query(AppMessage)
+            assert any("Effort set to low" in str(w._content) for w in app_msgs)
+
+    async def test_diff_command_renders_git_output(self) -> None:
+        """`/diff` should show the git diff output when available."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app,
+                "_run_git",
+                new=AsyncMock(return_value=(True, "diff --git a/app.py b/app.py")),
+            ):
+                await app._handle_command("/diff")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "diff --git a/app.py b/app.py" in str(w._content) for w in app_msgs
+            )
+
+    async def test_health_command_builds_prompt_and_sends(self) -> None:
+        """`/health` should build a prompt and forward it to the agent."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app, "_send_prompt_to_agent", new=AsyncMock()
+            ) as mock_send:
+                await app._handle_command("/health quick libs/cli")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once()
+            assert mock_send.await_args is not None
+            assert "Analyze the health of libs/cli" in mock_send.await_args.args[0]
+
+    async def test_test_command_generate_builds_prompt_and_sends(self) -> None:
+        """`/test generate` should construct a test-generation prompt."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app, "_send_prompt_to_agent", new=AsyncMock()
+            ) as mock_send:
+                await app._handle_command("/test generate src/app.py pytest")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once()
+            assert mock_send.await_args is not None
+            assert (
+                "Generate comprehensive unit tests for src/app.py"
+                in mock_send.await_args.args[0]
+            )
+
+    async def test_resolve_command_detects_conflicts_and_sends_prompt(self) -> None:
+        """`/resolve` should inspect git conflicts and send a resolution prompt."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_run_git",
+                    new=AsyncMock(return_value=(True, "foo.py\nbar.py\n")),
+                ),
+                patch.object(
+                    app, "_send_prompt_to_agent", new=AsyncMock()
+                ) as mock_send,
+            ):
+                await app._handle_command("/resolve")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once()
+            assert mock_send.await_args is not None
+            prompt = mock_send.await_args.args[0]
+            assert "foo.py" in prompt
+            assert "bar.py" in prompt
+
+    async def test_branch_command_create_uses_git_switch(self) -> None:
+        """`/branch create` should dispatch to `git switch -c`."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_get_repo_root",
+                    new=AsyncMock(return_value=app_module.Path("E:/Code/bog-agents")),
+                ),
+                patch("bog_agents_cli.app._get_git_branch", return_value="main"),
+                patch.object(
+                    app,
+                    "_run_git",
+                    new=AsyncMock(return_value=(True, "Switched to a new branch")),
+                ) as mock_git,
+            ):
+                await app._handle_command("/branch create feature/test")
+                await pilot.pause()
+
+            mock_git.assert_awaited_once()
+            assert mock_git.await_args is not None
+            assert mock_git.await_args.args[0] == ["switch", "-c", "feature/test"]
+
+    async def test_undo_command_restore_uses_git_restore(self) -> None:
+        """`/undo restore` should dispatch to `git restore`."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_get_repo_root",
+                    new=AsyncMock(return_value=app_module.Path("E:/Code/bog-agents")),
+                ),
+                patch("bog_agents_cli.app._get_git_branch", return_value="main"),
+                patch.object(
+                    app,
+                    "_run_git",
+                    new=AsyncMock(
+                        side_effect=[
+                            (True, ""),
+                            (True, " M other.py"),
+                        ]
+                    ),
+                ) as mock_git,
+            ):
+                await app._handle_command("/undo restore src/app.py")
+                await pilot.pause()
+
+            assert mock_git.await_count == 2
+            assert mock_git.await_args_list[0].args[0] == [
+                "restore",
+                "--source=HEAD",
+                "--staged",
+                "--worktree",
+                "--",
+                "src/app.py",
+            ]
+
+    async def test_preview_command_tracks_server_lifecycle(self) -> None:
+        """`/preview` should start, list, and stop tracked preview servers."""
+        app = BogAgentsApp()
+        process = MagicMock()
+        process.returncode = None
+        process.wait = AsyncMock(return_value=0)
+        process.terminate = MagicMock()
+        process.kill = MagicMock()
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.app.asyncio.create_subprocess_shell",
+                    new=AsyncMock(return_value=process),
+                ),
+                patch.object(webbrowser, "open"),
+            ):
+                await app._handle_command("/preview start npm run dev --port 3000")
+                await pilot.pause()
+                await app._handle_command("/preview")
+                await pilot.pause()
+                await app._handle_command("/preview stop all")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Started preview server" in str(w._content) for w in app_msgs)
+            assert any("Preview servers:" in str(w._content) for w in app_msgs)
+            assert any("Stopped preview server(s)" in str(w._content) for w in app_msgs)
+            process.terminate.assert_called_once()
+
+    async def test_record_and_replay_commands_round_trip(self) -> None:
+        """`/record` and `/replay run` should capture and reuse replay sessions."""
+        app = BogAgentsApp(thread_id="thread-123")
+        replay_session = SimpleNamespace(
+            session_id="replay-abc123",
+            name="bugfix-flow",
+            recorded_at=1_700_000_000.0,
+            description="Recorded from thread thread-123",
+            actions=[
+                SimpleNamespace(
+                    step=1,
+                    action_type="user_message",
+                    content="Investigate the bug",
+                    tool_name="",
+                )
+            ],
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.sessions.export_thread",
+                    new=AsyncMock(
+                        side_effect=[
+                            {"transcript": []},
+                            {
+                                "transcript": [
+                                    {"role": "human", "content": "Investigate the bug"},
+                                    {"role": "ai", "content": "I will inspect it."},
+                                ]
+                            },
+                        ]
+                    ),
+                ),
+                patch(
+                    "bog_agents_cli.replay.save_replay_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.json"
+                    ),
+                ),
+            ):
+                await app._handle_command("/record start bugfix-flow")
+                await pilot.pause()
+                await app._handle_command("/record stop")
+                await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.replay.list_replay_sessions",
+                    return_value=[replay_session],
+                ),
+                patch.object(
+                    app, "_send_prompt_to_agent", new=AsyncMock()
+                ) as mock_send,
+            ):
+                await app._handle_command("/replay run bugfix-flow")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once()
+            assert mock_send.await_args is not None
+            assert "# Replay: bugfix-flow" in mock_send.await_args.args[0]
+            app_msgs = app.query(AppMessage)
+            assert any("Saved replay session" in str(w._content) for w in app_msgs)
+
+    async def test_agent_command_spawn_uses_background_manager(self) -> None:
+        """`/agent spawn` should submit work to the background manager."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+                patch.object(
+                    app,
+                    "_submit_managed_local_task",
+                    new=AsyncMock(return_value="bg-001"),
+                ) as mock_submit,
+            ):
+                await app._handle_command("/agent spawn investigate auth flow")
+            await pilot.pause()
+
+            assert mock_submit.await_count == 1
+            assert mock_submit.await_args is not None
+            assert mock_submit.await_args.args[0] == "investigate auth flow"
+            assert mock_submit.await_args.kwargs["strategy"] == "local"
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Spawned 1 managed agent task(s)" in str(w._content) for w in app_msgs
+            )
+
+    async def test_agent_command_spawn_remote_batch_tracks_remote_tasks(self) -> None:
+        """`/agent spawn --remote --count` should create multiple tracked tasks."""
+        app = BogAgentsApp()
+        remote_tasks = [
+            MagicMock(task_id="run-101", prompt="inspect repo"),
+            MagicMock(task_id="run-102", prompt="inspect repo"),
+        ]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.submit_remote_task",
+                    new=AsyncMock(side_effect=remote_tasks),
+                ) as mock_submit,
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+            ):
+                await app._handle_command(
+                    "/agent spawn --remote --count 2 --label scout inspect repo"
+                )
+                await pilot.pause()
+
+            assert set(app._remote_tasks) == {"run-101", "run-102"}
+            assert mock_submit.await_count == 2
+            assert mock_submit.await_args_list[0].kwargs["label"] == "scout"
+            assert mock_submit.await_args_list[1].kwargs["label"] == "scout #2"
+
+    async def test_agent_command_spawn_worktree_creates_isolated_branch(
+        self, tmp_path: app_module.Path
+    ) -> None:
+        """`/agent spawn --worktree` should create a worktree-backed task."""
+        worktree_path = tmp_path / "review-branch"
+        repo_path = tmp_path / "repo"
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            worktree = MagicMock(path=worktree_path)
+            with (
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+                patch.object(
+                    app,
+                    "_get_repo_root",
+                    new=AsyncMock(return_value=repo_path),
+                ),
+                patch(
+                    "bog_agents.middleware.worktree.create_worktree",
+                    return_value=worktree,
+                ),
+                patch.object(
+                    app,
+                    "_submit_managed_local_task",
+                    new=AsyncMock(return_value="bg-002"),
+                ) as mock_submit,
+            ):
+                await app._handle_command(
+                    "/agent spawn --worktree --label review inspect repo"
+                )
+                await pilot.pause()
+
+            assert mock_submit.await_count == 1
+            assert mock_submit.await_args is not None
+            assert mock_submit.await_args.kwargs["strategy"] == "worktree"
+            assert mock_submit.await_args.kwargs["working_dir"] == str(worktree_path)
+            assert mock_submit.await_args.kwargs["worktree_branch"].startswith(
+                "agent/review-"
+            )
+
+    async def test_background_runner_uses_cli_agent_factory(self) -> None:
+        """Managed background work should use the CLI-configured agent factory."""
+        app = BogAgentsApp()
+        mock_graph = MagicMock()
+        mock_graph.ainvoke = AsyncMock(return_value={"result": "done"})
+        task = SimpleNamespace(
+            task_id="bg-123",
+            prompt="inspect repo",
+            model="openai:gpt-5.4",
+            working_dir="E:/repo",
+        )
+
+        with patch(
+            "bog_agents_cli.agent.create_cli_agent",
+            return_value=(mock_graph, MagicMock()),
+        ) as mock_create:
+            result = await app._build_background_runner()(task)
+
+        assert result == {"result": "done"}
+        assert mock_create.call_args is not None
+        assert mock_create.call_args.kwargs["assistant_id"] == app._assistant_id
+        assert mock_create.call_args.kwargs["cwd"] == "E:/repo"
+        mock_graph.ainvoke.assert_awaited_once()
+
+    async def test_background_command_uses_managed_local_runner(self) -> None:
+        """`/background` should reuse the managed local task path."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_submit_managed_local_task",
+                    new=AsyncMock(return_value="bg-201"),
+                ) as mock_submit,
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+            ):
+                await app._handle_command("/background inspect the repository")
+                await pilot.pause()
+
+            assert mock_submit.await_count == 1
+            assert mock_submit.await_args is not None
+            assert mock_submit.await_args.args[0] == "inspect the repository"
+            assert mock_submit.await_args.kwargs["strategy"] == "background"
+            assert mock_submit.await_args.kwargs["metadata"] == {
+                "command": "/background",
+                "effective_prompt": "inspect the repository",
+            }
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Background task submitted: bg-201" in str(w._content) for w in app_msgs
+            )
+
+    async def test_agent_spawn_inherits_active_team_context(
+        self, tmp_path: Path
+    ) -> None:
+        """`/agent spawn` should attach active team metadata and prompt context."""
+        from bog_agents_cli.team_orchestration import (
+            TeamMember,
+            TeamMessage,
+            TeamProfile,
+            TeamRegistry,
+            save_team_registry,
+        )
+
+        save_team_registry(
+            TeamRegistry(
+                active_team="Core",
+                teams=[
+                    TeamProfile(
+                        name="Core",
+                        summary="Stabilize release readiness",
+                        members=[TeamMember(name="Scout", role="reviewer")],
+                        messages=[
+                            TeamMessage(
+                                body="Prioritize install and runtime regressions",
+                                sender="lead",
+                            )
+                        ],
+                    )
+                ],
+            ),
+            tmp_path,
+        )
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_ensure_background_manager",
+                    new=AsyncMock(),
+                ),
+                patch.object(
+                    app,
+                    "_submit_managed_local_task",
+                    new=AsyncMock(return_value="bg-777"),
+                ) as mock_submit,
+            ):
+                await app._handle_command("/agent spawn inspect repo")
+                await pilot.pause()
+
+            metadata = mock_submit.await_args.kwargs["metadata"]
+            assert metadata["team_name"] == "Core"
+            assert (
+                "Shared summary: Stabilize release readiness" in metadata["team_brief"]
+            )
+            assert metadata["effective_prompt"].startswith("# Team coordination brief")
+            assert metadata["effective_prompt"].endswith(
+                "# Assigned task\ninspect repo"
+            )
+            app_msgs = app.query(AppMessage)
+            assert any("[Core]" in str(w._content) for w in app_msgs)
+
+    async def test_team_command_create_summary_and_status(self, tmp_path: Path) -> None:
+        """`/team` should persist created teams and mixed-case summary updates."""
+        from bog_agents_cli.team_orchestration import load_team_registry
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team create Core")
+            await app._handle_command("/team add-member Core scout reviewer")
+            await app._handle_command(
+                "/team summary Core set Release coordination lane"
+            )
+            await app._handle_command("/team status core")
+            await pilot.pause()
+
+        registry = load_team_registry(tmp_path)
+        assert registry.active_team == "Core"
+        assert len(registry.teams) == 1
+        assert registry.teams[0].summary == "Release coordination lane"
+        assert registry.teams[0].members[0].name == "scout"
+        assert registry.teams[0].members[0].role == "reviewer"
+        status_text = app._build_team_status("Core")
+        assert "Release coordination lane" in status_text
+        assert "scout (reviewer)" in status_text
+
+    async def test_team_command_message_to_task_queues_inbox(
+        self, tmp_path: Path
+    ) -> None:
+        """`/team message <task-id>` should queue inbox work and persist a team note."""
+        from bog_agents_cli.team_orchestration import load_team_registry
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        task = SimpleNamespace(task_id="bg-404", metadata={"team_name": "Core"})
+        app._bg_manager = MagicMock()
+        app._bg_manager.get_status.return_value = task
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team message bg-404 Please verify the fix")
+            await pilot.pause()
+
+        inbox = task.metadata["inbox"]
+        assert len(inbox) == 1
+        assert inbox[0]["body"] == "Please verify the fix"
+        registry = load_team_registry(tmp_path)
+        assert registry.teams[0].name == "Core"
+        assert registry.teams[0].messages[-1].body == "Please verify the fix"
+        assert app._task_inbox_count(task) == 1
+
+    async def test_team_command_sync_updates_shared_summary(
+        self, tmp_path: Path
+    ) -> None:
+        """`/team sync` should summarize existing team notes and worker results."""
+        from bog_agents_cli.team_orchestration import (
+            TeamMessage,
+            TeamProfile,
+            TeamRegistry,
+            load_team_registry,
+            save_team_registry,
+        )
+
+        save_team_registry(
+            TeamRegistry(
+                active_team="Core",
+                teams=[
+                    TeamProfile(
+                        name="Core",
+                        messages=[TeamMessage(body="Focus on install regressions")],
+                    )
+                ],
+            ),
+            tmp_path,
+        )
+
+        app = BogAgentsApp()
+        app._cwd = tmp_path
+        app._bg_manager = MagicMock()
+        app._bg_manager.all_tasks = [
+            SimpleNamespace(
+                metadata={"team_name": "Core"},
+                result="Resolved the provider fallback failure.",
+                output="",
+                status_line="[bg-201] completed",
+            )
+        ]
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._handle_command("/team sync Core")
+            await pilot.pause()
+
+        registry = load_team_registry(tmp_path)
+        assert "Focus on install regressions" in registry.teams[0].summary
+        assert "Resolved the provider fallback failure." in registry.teams[0].summary
+        status_text = app._build_team_status("Core")
+        assert "Resolved the provider fallback failure." in status_text
+
+    async def test_worktree_command_lists_current_worktrees(self) -> None:
+        """`/worktree` should render known git worktrees."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_get_repo_root",
+                    new=AsyncMock(return_value=app_module.Path("E:/repo")),
+                ),
+                patch(
+                    "bog_agents.middleware.worktree.list_worktrees",
+                    return_value=[
+                        MagicMock(branch="main", path="E:/repo", is_main=True),
+                        MagicMock(
+                            branch="feature/x",
+                            path="E:/tmp/feature-x",
+                            is_main=False,
+                        ),
+                    ],
+                ),
+            ):
+                await app._handle_command("/worktree")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("feature/x" in str(w._content) for w in app_msgs)
+
+    async def test_worktree_command_merges_branch_into_target(self) -> None:
+        """`/worktree merge` should checkout target and merge source branch."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch.object(
+                    app,
+                    "_get_repo_root",
+                    new=AsyncMock(return_value=app_module.Path("E:/repo")),
+                ),
+                patch.object(
+                    app,
+                    "_run_git",
+                    new=AsyncMock(side_effect=[(True, "Switched"), (True, "Merged")]),
+                ) as mock_run_git,
+            ):
+                await app._handle_command("/worktree merge feature/x main")
+                await pilot.pause()
+
+            assert mock_run_git.await_args_list == [
+                call(["checkout", "main"], cwd=app_module.Path("E:/repo")),
+                call(["merge", "feature/x"], cwd=app_module.Path("E:/repo")),
+            ]
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Merged feature/x into main." in str(w._content) for w in app_msgs
+            )
+
+    async def test_plugin_command_lists_plugins_and_extensions(self) -> None:
+        """`/plugin` should summarize both plugins and extensions."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.extensibility.format_extensibility_list",
+                return_value=(
+                    "Plugins\n  [enabled] formatter v1.0.0\n\n"
+                    "Extensions\nNo extensions installed."
+                ),
+            ):
+                await app._handle_command("/plugin")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("formatter v1.0.0" in str(w._content) for w in app_msgs)
+
+    async def test_plugin_info_shows_package_details(self) -> None:
+        """`/plugin info` should show unified package metadata."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.extensibility.find_extensibility_item",
+                return_value=MagicMock(
+                    name="formatter",
+                    kind="extension",
+                    version="1.2.0",
+                    description="Formatting helpers",
+                    author="Bog",
+                    homepage="https://example.com",
+                    enabled=True,
+                    install_path=app_module.Path("E:/plugins/formatter"),
+                    skills=("format",),
+                    commands=("/format",),
+                ),
+            ):
+                await app._handle_command("/plugin info formatter")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any("Type: extension" in str(w._content) for w in app_msgs)
+            assert any("Commands: /format" in str(w._content) for w in app_msgs)
+
+    async def test_resume_project_uses_metadata_matches(self) -> None:
+        """`/resume project` should switch to the newest matching thread."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.sessions.find_threads_with_metadata",
+                    new=AsyncMock(
+                        return_value=[
+                            {"thread_id": "project-thread", "project": "sdk"},
+                        ]
+                    ),
+                ),
+                patch.object(
+                    app, "_resume_thread", new_callable=AsyncMock
+                ) as mock_resume,
+            ):
+                await app._handle_command("/resume project sdk")
+                await pilot.pause()
+
+            mock_resume.assert_awaited_once_with("project-thread")
+
+    async def test_session_rename_persists_metadata(self) -> None:
+        """`/session rename` should persist the thread label."""
+        app = BogAgentsApp(thread_id="thread-session-123")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.sessions.set_thread_label",
+                new=AsyncMock(),
+            ) as mock_set_label:
+                await app._handle_command("/session rename Launch Prep")
+                await pilot.pause()
+
+            assert app._session_name == "Launch Prep"
+            mock_set_label.assert_awaited_once_with("thread-session-123", "Launch Prep")
+
+    async def test_session_export_writes_json(self, tmp_path: app_module.Path) -> None:
+        """`/session export` should write a JSON export file."""
+        app = BogAgentsApp(thread_id="thread-export-123")
+        export_path = tmp_path / "tmp-session-export.json"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.sessions.export_thread",
+                new=AsyncMock(
+                    return_value={"thread": {"thread_id": "thread-export-123"}}
+                ),
+            ):
+                await app._handle_command(f"/session export {export_path}")
+                await pilot.pause()
+
+        assert export_path.exists()
+        assert '"thread-export-123"' in export_path.read_text(encoding="utf-8")
+
+    async def test_rewind_lists_available_checkpoints(self) -> None:
+        """`/rewind` should render a numbered checkpoint browser."""
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={}))
+        app = BogAgentsApp(agent=agent, thread_id="thread-rewind-123")
+        checkpoints = [
+            {
+                "checkpoint_id": "checkpoint-001",
+                "updated_at": "2026-04-12T12:00:00+00:00",
+                "message_count": 6,
+                "initial_prompt": "Investigate why release validation failed",
+            }
+        ]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.sessions.list_thread_checkpoints",
+                new=AsyncMock(return_value=checkpoints),
+            ):
+                await app._handle_command("/rewind")
+                await pilot.pause()
+
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Checkpoint history for thread-rewind-123" in str(w._content)
                 for w in app_msgs
             )
+            assert any(
+                "Investigate why release validation failed" in str(w._content)
+                for w in app_msgs
+            )
+
+    async def test_rewind_to_checkpoint_forks_new_thread(self) -> None:
+        """`/rewind to` should seed a new thread from the selected checkpoint."""
+        agent = MagicMock()
+        agent.aget_state = AsyncMock(return_value=SimpleNamespace(values={}))
+        agent.aupdate_state = AsyncMock()
+        app = BogAgentsApp(agent=agent, thread_id="thread-rewind-123")
+        checkpoints = [
+            {
+                "checkpoint_id": "checkpoint-001",
+                "updated_at": "2026-04-12T12:00:00+00:00",
+                "message_count": 3,
+                "initial_prompt": "First prompt",
+            },
+            {
+                "checkpoint_id": "checkpoint-002",
+                "updated_at": "2026-04-12T12:05:00+00:00",
+                "message_count": 8,
+                "initial_prompt": "Second prompt",
+            },
+        ]
+        payload = {
+            "checkpoint_id": "checkpoint-002",
+            "thread_id": "thread-rewind-123",
+            "message_count": 8,
+            "initial_prompt": "Second prompt",
+            "messages": ["stub-message"],
+        }
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.sessions.list_thread_checkpoints",
+                    new=AsyncMock(return_value=checkpoints),
+                ),
+                patch(
+                    "bog_agents_cli.sessions.get_thread_checkpoint_payload",
+                    new=AsyncMock(return_value=payload),
+                ),
+                patch(
+                    "bog_agents_cli.sessions.get_thread_metadata",
+                    new=AsyncMock(
+                        return_value={
+                            "label": "Launch Prep",
+                            "project": "release",
+                            "tags": ["prod"],
+                        }
+                    ),
+                ),
+                patch(
+                    "bog_agents_cli.sessions.set_thread_label",
+                    new=AsyncMock(),
+                ) as mock_set_label,
+                patch(
+                    "bog_agents_cli.sessions.set_thread_project",
+                    new=AsyncMock(),
+                ) as mock_set_project,
+                patch(
+                    "bog_agents_cli.sessions.set_thread_tags",
+                    new=AsyncMock(),
+                ) as mock_set_tags,
+                patch.object(
+                    app, "_resume_thread", new_callable=AsyncMock
+                ) as mock_resume,
+            ):
+                await app._handle_command("/rewind to 2")
+                await pilot.pause()
+
+            assert agent.aupdate_state.await_count == 1
+            assert agent.aupdate_state.await_args is not None
+            new_thread_id = agent.aupdate_state.await_args.args[0]["configurable"][
+                "thread_id"
+            ]
+            assert new_thread_id != "thread-rewind-123"
+            mock_resume.assert_awaited_once_with(new_thread_id)
+            mock_set_label.assert_awaited_once_with(
+                new_thread_id, "Launch Prep (rewind)"
+            )
+            mock_set_project.assert_awaited_once_with(new_thread_id, "release")
+            mock_set_tags.assert_awaited_once()
+
+    async def test_unknown_extension_command_sends_prompt(self) -> None:
+        """Unknown slash commands should route through enabled extension commands."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.extensibility.find_extension_command",
+                    return_value=MagicMock(
+                        name="/scout",
+                        extension_name="review-pack",
+                        prompt_template="Scout this repo: {args}",
+                    ),
+                ),
+                patch(
+                    "bog_agents_cli.extensibility.render_extension_command_prompt",
+                    return_value="Scout this repo: services/api",
+                ),
+                patch.object(
+                    app, "_send_prompt_to_agent", new_callable=AsyncMock
+                ) as mock_send,
+            ):
+                await app._handle_command("/scout services/api")
+                await pilot.pause()
+
+            mock_send.assert_awaited_once_with("Scout this repo: services/api")
+
+    async def test_remote_command_submit_tracks_task(self) -> None:
+        """`/remote submit` should add the returned task to app state."""
+        remote_task = MagicMock(task_id="run-123", prompt="ship it")
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.submit_remote_task",
+                    new=AsyncMock(return_value=remote_task),
+                ),
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+                patch(
+                    "bog_agents_cli.remote.format_remote_tasks",
+                    return_value="[>>>] run-123: ship it",
+                ),
+            ):
+                await app._handle_command(
+                    "/remote submit --label scout --model gpt-5.4 ship it"
+                )
+                await pilot.pause()
+
+            assert app._remote_tasks["run-123"] is remote_task
+            app_msgs = app.query(AppMessage)
+            assert any("run-123" in str(w._content) for w in app_msgs)
+
+    async def test_remote_command_submit_passes_label_and_model(self) -> None:
+        """`/remote submit` should forward parsed label and model overrides."""
+        remote_task = MagicMock(task_id="run-123", prompt="ship it")
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.submit_remote_task",
+                    new=AsyncMock(return_value=remote_task),
+                ) as mock_submit,
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+                patch(
+                    "bog_agents_cli.remote.format_remote_tasks",
+                    return_value="[>>>] run-123: ship it",
+                ),
+            ):
+                await app._handle_command(
+                    "/remote submit --label scout --model gpt-5.4 ship it"
+                )
+                await pilot.pause()
+
+            assert mock_submit.await_count == 1
+            assert mock_submit.await_args is not None
+            assert mock_submit.await_args.kwargs["label"] == "scout"
+            assert mock_submit.await_args.kwargs["model"] == "gpt-5.4"
+
+    async def test_remote_command_cleanup_removes_finished_tasks(self) -> None:
+        """`/remote cleanup` should drop completed remote tasks from tracking."""
+        from bog_agents_cli.remote import RemoteStatus, RemoteTask
+
+        app = BogAgentsApp()
+        app._remote_tasks = {
+            "run-1": RemoteTask("run-1", "active", status=RemoteStatus.RUNNING),
+            "run-2": RemoteTask("run-2", "done", status=RemoteStatus.COMPLETED),
+            "run-3": RemoteTask("run-3", "failed", status=RemoteStatus.FAILED),
+        }
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+            ):
+                await app._handle_command("/remote cleanup")
+                await pilot.pause()
+
+            assert set(app._remote_tasks) == {"run-1"}
+            app_msgs = app.query(AppMessage)
+            assert any(
+                "Removed 2 completed remote task(s)." in str(w._content)
+                for w in app_msgs
+            )
+
+    async def test_remote_command_stop_cancels_task(self) -> None:
+        """`/remote stop` should invoke provider-level task cancellation."""
+        remote_task = MagicMock(task_id="run-123", prompt="ship it")
+        remote_task.status = "running"
+        app = BogAgentsApp()
+        app._remote_tasks = {"run-123": remote_task}
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.cancel_remote_task",
+                    new=AsyncMock(return_value=remote_task),
+                ) as mock_cancel,
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+                patch(
+                    "bog_agents_cli.remote.format_remote_tasks",
+                    return_value="[---] run-123: cancelled",
+                ),
+            ):
+                await app._handle_command("/remote stop run-123")
+                await pilot.pause()
+
+            assert mock_cancel.await_count == 1
+            app_msgs = app.query(AppMessage)
+            assert any("run-123" in str(w._content) for w in app_msgs)
+
+    async def test_remote_command_reattach_loads_persisted_task(self) -> None:
+        """`/remote reattach` should recover a task from persisted state."""
+        from bog_agents_cli.remote import RemoteTask
+
+        remote_task = RemoteTask(
+            "run-999",
+            "ship it",
+            metadata={"provider": "ssh", "status_file": "/srv/status.json"},
+        )
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with (
+                patch(
+                    "bog_agents_cli.remote.load_remote_config",
+                    return_value=MagicMock(),
+                ),
+                patch(
+                    "bog_agents_cli.remote.load_remote_tasks",
+                    return_value=[remote_task],
+                ),
+                patch(
+                    "bog_agents_cli.remote.check_remote_task",
+                    new=AsyncMock(return_value=remote_task),
+                ),
+                patch("bog_agents_cli.remote.save_remote_tasks"),
+                patch(
+                    "bog_agents_cli.remote.format_remote_tasks",
+                    return_value="[>>>] run-999: ship it",
+                ),
+            ):
+                await app._handle_command("/remote reattach run-999")
+                await pilot.pause()
+
+            assert app._remote_tasks["run-999"] is remote_task
+            app_msgs = app.query(AppMessage)
+            assert any("run-999" in str(w._content) for w in app_msgs)
 
     def test_handler_registry_covers_supported_commands(self) -> None:
         """Every supported command and alias should have a handler mapping."""
@@ -1453,6 +2658,25 @@ class TestRunAgentTaskMediaTracker:
 
             errors = app.query(ErrorMessage)
             assert any("Agent error: boom" in str(w._content) for w in errors)
+
+    async def test_run_agent_task_surfaces_tool_capability_help(self) -> None:
+        """Tool capability failures should not be mislabeled as auth errors."""
+        app = BogAgentsApp(agent=MagicMock())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch(
+                "bog_agents_cli.app.execute_task_textual",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("model does not support tools"),
+            ):
+                await app._run_agent_task("hello")
+                await pilot.pause()
+
+            errors = app.query(ErrorMessage)
+            rendered = "\n".join(str(widget._content) for widget in errors)
+            assert "This model does not support tool use in the CLI." in rendered
+            assert "authentication/credential error" not in rendered
 
 
 class TestAppFocusRestoresChatInput:
@@ -1615,11 +2839,13 @@ class TestShellCommandInterrupt:
                     "asyncio.create_subprocess_shell",
                     return_value=mock_proc,
                 ),
-                patch("os.killpg") as mock_killpg,
-                patch("os.getpgid", return_value=12345),
-                pytest.raises(asyncio.CancelledError),
+                patch("bog_agents_cli.app.sys") as mock_sys,
+                patch("os.killpg", create=True) as mock_killpg,
+                patch("os.getpgid", return_value=12345, create=True),
             ):
-                await app._run_shell_task("sleep 999")
+                mock_sys.platform = "linux"
+                with pytest.raises(asyncio.CancelledError):
+                    await app._run_shell_task("sleep 999")
 
             mock_killpg.assert_called()
 
@@ -1714,9 +2940,11 @@ class TestShellCommandInterrupt:
                     "asyncio.create_subprocess_shell",
                     return_value=mock_proc,
                 ),
-                patch("os.killpg"),
-                patch("os.getpgid", return_value=12345),
+                patch("bog_agents_cli.app.sys") as mock_sys,
+                patch("os.killpg", create=True),
+                patch("os.getpgid", return_value=12345, create=True),
             ):
+                mock_sys.platform = "linux"
                 await app._run_shell_task("sleep 999")
                 await pilot.pause()
 
@@ -1738,8 +2966,8 @@ class TestShellCommandInterrupt:
 
             with (
                 patch("bog_agents_cli.app.sys") as mock_sys,
-                patch("os.killpg") as mock_killpg,
-                patch("os.getpgid", return_value=42) as mock_getpgid,
+                patch("os.killpg", create=True) as mock_killpg,
+                patch("os.getpgid", return_value=42, create=True) as mock_getpgid,
             ):
                 mock_sys.platform = "linux"
                 await app._kill_shell_process()
@@ -1762,16 +2990,17 @@ class TestShellCommandInterrupt:
 
             with (
                 patch("bog_agents_cli.app.sys") as mock_sys,
-                patch("os.killpg") as mock_killpg,
-                patch("os.getpgid", return_value=42),
+                patch("os.killpg", create=True) as mock_killpg,
+                patch("os.getpgid", return_value=42, create=True),
             ):
                 mock_sys.platform = "linux"
                 await app._kill_shell_process()
 
             # First call: SIGTERM, second call: SIGKILL
+            kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
             assert mock_killpg.call_count == 2
             mock_killpg.assert_any_call(42, signal.SIGTERM)
-            mock_killpg.assert_any_call(42, signal.SIGKILL)
+            mock_killpg.assert_any_call(42, kill_signal)
 
     async def test_no_op_when_no_shell_running(self) -> None:
         """Ctrl+C with no shell command running should fall through to quit hint."""
@@ -1829,7 +3058,7 @@ class TestShellCommandInterrupt:
             mock_proc.pid = 42
             app._shell_process = mock_proc
 
-            with patch("os.killpg") as mock_killpg:
+            with patch("os.killpg", create=True) as mock_killpg:
                 await app._kill_shell_process()
 
             mock_killpg.assert_not_called()

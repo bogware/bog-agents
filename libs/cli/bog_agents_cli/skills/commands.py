@@ -92,6 +92,26 @@ def _validate_name(name: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _validate_agent_name(agent_name: str) -> tuple[bool, str]:
+    """Validate an agent name for skills subcommands.
+
+    Agent identifiers are broader than skill names because they map to
+    configured directories rather than Agent Skills spec entries.
+
+    Args:
+        agent_name: Agent identifier from CLI args.
+
+    Returns:
+        Tuple of `(is_valid, error_message)`.
+    """
+    if Settings._is_valid_agent_name(agent_name):
+        return True, ""
+    return (
+        False,
+        "agent names may only contain letters, numbers, hyphens, underscores, and spaces",
+    )
+
+
 def _validate_skill_path(skill_dir: Path, base_dir: Path) -> tuple[bool, str]:
     """Validate that the resolved skill directory is within the base directory.
 
@@ -163,6 +183,7 @@ def _list(
     # Deferred: skills.load imports the bog-agents SDK. This module is
     # imported at CLI startup for setup_skills_parser(), so a top-level
     # import here would penalize every command (e.g. `--help`).
+    from bog_agents_cli.extensibility import get_extension_skill_dirs
     from bog_agents_cli.skills.load import list_skills
 
     settings = Settings.from_environment()
@@ -170,6 +191,7 @@ def _list(
     project_skills_dir = settings.get_project_skills_dir()
     user_agent_skills_dir = settings.get_user_agent_skills_dir()
     project_agent_skills_dir = settings.get_project_agent_skills_dir()
+    extension_skill_dirs = get_extension_skill_dirs(settings.user_agents_dir)
 
     # If --project flag is used, only show project skills
     if project:
@@ -234,6 +256,7 @@ def _list(
         # Load skills from all directories (including built-in)
         skills = list_skills(
             built_in_skills_dir=settings.get_built_in_skills_dir(),
+            extension_skills_dirs=extension_skill_dirs,
             user_skills_dir=user_skills_dir,
             project_skills_dir=project_skills_dir,
             user_agent_skills_dir=user_agent_skills_dir,
@@ -257,7 +280,8 @@ def _list(
                 "  2. .bog-agents/skills/             project skills (alias)\n"
                 "  3. ~/.agents/skills/               user skills\n"
                 "  4. ~/.bog-agents/<agent>/skills/   user skills (alias)\n"
-                "  5. <package>/built_in_skills/      built-in skills[/dim]",
+                "  5. ~/.bog-agents/extensions/...    extension skills\n"
+                "  6. <package>/built_in_skills/      built-in skills[/dim]",
                 style=COLORS["dim"],
             )
             console.print(
@@ -270,6 +294,7 @@ def _list(
         console.print("\n[bold]Available Skills:[/bold]\n", style=COLORS["primary"])
 
     # Group skills by source
+    extension_skills = [s for s in skills if s["source"] == "extension"]
     user_skills = [s for s in skills if s["source"] == "user"]
     project_skills_list = [s for s in skills if s["source"] == "project"]
     built_in_skills_list = [s for s in skills if s["source"] == "built-in"]
@@ -304,9 +329,27 @@ def _list(
             console.print(f"    {skill['description']}", style=COLORS["dim"])
             console.print()
 
+    # Show extension skills
+    if extension_skills and not project:
+        if user_skills or project_skills_list:
+            console.print()
+        console.print(
+            "[bold yellow]Extension Skills:[/bold yellow]",
+            style=COLORS["primary"],
+        )
+        bullet = get_glyphs().bullet
+        for skill in extension_skills:
+            skill_path = Path(skill["path"])
+            name = skill["name"]
+            console.print(f"  {bullet} [bold]{name}[/bold]", style=COLORS["primary"])
+            console.print(f"    {skill_path.parent}/", style=COLORS["dim"])
+            console.print()
+            console.print(f"    {skill['description']}", style=COLORS["dim"])
+            console.print()
+
     # Show built-in skills
     if built_in_skills_list and not project:
-        if user_skills or project_skills_list:
+        if user_skills or project_skills_list or extension_skills:
             console.print()
         console.print(
             "[bold magenta]Built-in Skills:[/bold magenta]", style=COLORS["primary"]
@@ -518,6 +561,7 @@ def _info(
     # Deferred: skills.load imports the bog-agents SDK. This module is
     # imported at CLI startup for setup_skills_parser(), so a top-level
     # import here would penalize every command (e.g. `--help`).
+    from bog_agents_cli.extensibility import get_extension_skill_dirs
     from bog_agents_cli.skills.load import list_skills
 
     settings = Settings.from_environment()
@@ -525,6 +569,7 @@ def _info(
     project_skills_dir = settings.get_project_skills_dir()
     user_agent_skills_dir = settings.get_user_agent_skills_dir()
     project_agent_skills_dir = settings.get_project_agent_skills_dir()
+    extension_skill_dirs = get_extension_skill_dirs(settings.user_agents_dir)
 
     # Load skills based on --project flag
     if project:
@@ -540,6 +585,7 @@ def _info(
     else:
         skills = list_skills(
             built_in_skills_dir=settings.get_built_in_skills_dir(),
+            extension_skills_dirs=extension_skill_dirs,
             user_skills_dir=user_skills_dir,
             project_skills_dir=project_skills_dir,
             user_agent_skills_dir=user_agent_skills_dir,
@@ -570,6 +616,7 @@ def _info(
     source_labels = {
         "project": ("Project Skill", "green"),
         "user": ("User Skill", "cyan"),
+        "extension": ("Extension Skill", "yellow"),
         "built-in": ("Built-in Skill", "magenta"),
     }
     source_label, source_color = source_labels.get(skill["source"], ("Skill", "dim"))
@@ -582,6 +629,7 @@ def _info(
     if skill["source"] == "project" and not project:
         try:
             user_only = list_skills(
+                extension_skills_dirs=extension_skill_dirs,
                 user_skills_dir=user_skills_dir,
                 project_skills_dir=None,
                 user_agent_skills_dir=user_agent_skills_dir,
@@ -661,6 +709,7 @@ def _delete(
     # Deferred: skills.load imports the bog-agents SDK. This module is
     # imported at CLI startup for setup_skills_parser(), so a top-level
     # import here would penalize every command (e.g. `--help`).
+    from bog_agents_cli.extensibility import get_extension_skill_dirs
     from bog_agents_cli.skills.load import list_skills
 
     settings = Settings.from_environment()
@@ -668,6 +717,7 @@ def _delete(
     project_skills_dir = settings.get_project_skills_dir()
     user_agent_skills_dir = settings.get_user_agent_skills_dir()
     project_agent_skills_dir = settings.get_project_agent_skills_dir()
+    extension_skill_dirs = get_extension_skill_dirs(settings.user_agents_dir)
 
     # Load skills based on --project flag
     if project:
@@ -682,6 +732,7 @@ def _delete(
         )
     else:
         skills = list_skills(
+            extension_skills_dirs=extension_skill_dirs,
             user_skills_dir=user_skills_dir,
             project_skills_dir=project_skills_dir,
             user_agent_skills_dir=user_agent_skills_dir,
@@ -962,7 +1013,7 @@ def execute_skills_command(args: argparse.Namespace) -> None:
     """
     # validate agent argument
     if args.agent:
-        is_valid, error_msg = _validate_name(args.agent)
+        is_valid, error_msg = _validate_agent_name(args.agent)
         if not is_valid:
             console.print(
                 f"[bold red]Error:[/bold red] Invalid agent name: {error_msg}"

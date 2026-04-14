@@ -17,7 +17,10 @@ import subprocess  # noqa: S404
 import time
 from dataclasses import dataclass, field
 
-from bog_agents_cli.command_registry import get_command_palette_specs, search_slash_commands
+from bog_agents_cli.command_registry import (
+    get_command_palette_specs,
+    search_slash_commands,
+)
 
 logger = logging.getLogger(__name__)
 

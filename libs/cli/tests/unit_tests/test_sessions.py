@@ -1,9 +1,11 @@
 """Tests for session/thread management."""
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, cast
@@ -253,6 +255,149 @@ class TestThreadFunctions:
         with patch.object(sessions, "get_db_path", return_value=temp_db):
             result = asyncio.run(sessions.delete_thread("nonexistent"))
             assert result is False
+
+
+@pytest.mark.usefixtures("shared_metadata_db")
+class TestThreadMetadata:
+    """Tests for persisted thread labels, tags, projects, and exports."""
+
+    @pytest.fixture
+    def shared_metadata_db(self) -> Iterator[None]:
+        """Create a shared in-memory database with one checkpointed thread."""
+        db_uri = f"file:threadmeta_{uuid.uuid4().hex}?mode=memory&cache=shared"
+        conn = sqlite3.connect(db_uri, uri=True)
+        conn.execute(
+            """
+            CREATE TABLE checkpoints (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                type TEXT,
+                checkpoint BLOB,
+                metadata BLOB,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+            )
+            """
+        )
+        serde = JsonPlusSerializer()
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        checkpoint_blob = serde.dumps_typed(
+            {
+                "channel_values": {
+                    "messages": [
+                        HumanMessage(content="Ship the release"),
+                        AIMessage(content="I can help with that."),
+                    ]
+                }
+            }
+        )
+        conn.execute(
+            "INSERT INTO checkpoints "
+            "(thread_id, checkpoint_ns, checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?, '', ?, ?, ?, ?)",
+            (
+                "thread-meta-1",
+                "cp-thread-meta-1",
+                checkpoint_blob[0],
+                checkpoint_blob[1],
+                json.dumps(
+                    {
+                        "agent_name": "agent",
+                        "updated_at": "2025-01-01T12:00:00+00:00",
+                        "git_branch": "main",
+                        "cwd": "/repo",
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+
+        @contextlib.asynccontextmanager
+        async def _shared_connect():
+            import aiosqlite
+
+            sessions._patch_aiosqlite()
+            async with aiosqlite.connect(db_uri, uri=True, timeout=30.0) as db_conn:
+                yield db_conn
+
+        try:
+            with patch.object(sessions, "_connect", _shared_connect):
+                yield
+        finally:
+            conn.close()
+
+    def test_thread_metadata_round_trip(self) -> None:
+        """Thread metadata should persist and enrich list results."""
+        asyncio.run(sessions.set_thread_label("thread-meta-1", "Release Prep"))
+        saved_tags = asyncio.run(
+            sessions.set_thread_tags("thread-meta-1", ["release", "prod", "release"])
+        )
+        asyncio.run(sessions.set_thread_project("thread-meta-1", "launch"))
+        asyncio.run(
+            sessions.set_thread_summary(
+                "thread-meta-1", "Prepare and verify release flow."
+            )
+        )
+
+        assert saved_tags == ["release", "prod"]
+        metadata = asyncio.run(sessions.get_thread_metadata("thread-meta-1"))
+        threads = asyncio.run(sessions.list_threads())
+
+        assert metadata["label"] == "Release Prep"
+        assert metadata["project"] == "launch"
+        assert metadata["tags"] == ["release", "prod"]
+        assert metadata["summary"] == "Prepare and verify release flow."
+        assert threads[0]["label"] == "Release Prep"
+        assert threads[0]["project"] == "launch"
+        assert threads[0]["tags"] == ["release", "prod"]
+
+    def test_find_threads_with_metadata_filters(self) -> None:
+        """Metadata filters should find threads by project and tag."""
+        asyncio.run(sessions.set_thread_project("thread-meta-1", "launch"))
+        asyncio.run(sessions.set_thread_tags("thread-meta-1", ["release"]))
+        by_project = asyncio.run(sessions.find_threads_with_metadata(project="launch"))
+        by_tag = asyncio.run(sessions.find_threads_with_metadata(tag="release"))
+
+        assert [thread["thread_id"] for thread in by_project] == ["thread-meta-1"]
+        assert [thread["thread_id"] for thread in by_tag] == ["thread-meta-1"]
+
+    def test_list_thread_checkpoints_returns_checkpoint_summaries(self) -> None:
+        """Checkpoint listings should expose rewind-friendly summaries."""
+        checkpoints = asyncio.run(
+            sessions.list_thread_checkpoints("thread-meta-1", limit=5)
+        )
+
+        assert len(checkpoints) == 1
+        assert checkpoints[0]["checkpoint_id"] == "cp-thread-meta-1"
+        assert checkpoints[0]["message_count"] == 2
+        assert checkpoints[0]["initial_prompt"] == "Ship the release"
+        assert checkpoints[0]["git_branch"] == "main"
+
+    def test_get_thread_checkpoint_payload_returns_messages(self) -> None:
+        """Checkpoint payloads should include messages for rewind seeding."""
+        payload = asyncio.run(
+            sessions.get_thread_checkpoint_payload(
+                "thread-meta-1",
+                "cp-thread-meta-1",
+            )
+        )
+
+        assert payload is not None
+        assert payload["thread_id"] == "thread-meta-1"
+        assert payload["checkpoint_id"] == "cp-thread-meta-1"
+        assert payload["message_count"] == 2
+        assert len(payload["messages"]) == 2
+
+    def test_export_thread_includes_transcript(self) -> None:
+        """Thread export should include metadata and latest transcript."""
+        asyncio.run(sessions.set_thread_label("thread-meta-1", "Release Prep"))
+        exported = asyncio.run(sessions.export_thread("thread-meta-1"))
+
+        assert exported["thread"]["thread_id"] == "thread-meta-1"  # ty: ignore[not-subscriptable]
+        assert exported["thread"]["label"] == "Release Prep"  # ty: ignore[not-subscriptable]
+        assert exported["transcript"][0]["role"] == "human"  # ty: ignore[not-subscriptable]
+        assert "Ship the release" in exported["transcript"][0]["content"]  # ty: ignore[not-subscriptable]
 
 
 class TestGetCheckpointer:

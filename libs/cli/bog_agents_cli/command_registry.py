@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import get_close_matches
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Manage parallel agent threads (list/spawn/switch/stop)",
         "thread multi parallel",
         "agent",
+        available=True,
     ),
     SlashCommandSpec(
         "/api",
@@ -50,6 +52,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Audit dependencies for vulnerabilities",
         "security deps",
         "quality",
+        available=True,
     ),
     SlashCommandSpec(
         "/background",
@@ -60,9 +63,10 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/branch",
-        "Create or switch conversation branches",
-        "fork explore",
+        "Manage git branches for local workflows",
+        "git checkout switch create",
         "git",
+        available=True,
     ),
     SlashCommandSpec(
         "/changelog",
@@ -104,6 +108,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Show pending file changes as a diff",
         "changes git",
         "git",
+        available=True,
     ),
     SlashCommandSpec(
         "/docs",
@@ -124,12 +129,14 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Set effort level (low/medium/high/max)",
         "quality speed",
         "config",
+        available=True,
     ),
     SlashCommandSpec(
         "/extensions",
-        "Manage extensions (list/install/uninstall)",
-        "plugins",
+        "Manage extensions and extensibility packages",
+        "plugins marketplace",
         "config",
+        available=True,
     ),
     SlashCommandSpec(
         "/feedback",
@@ -143,6 +150,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Codebase health score and analysis",
         "quality complexity coverage",
         "analysis",
+        available=True,
     ),
     SlashCommandSpec(
         "/image",
@@ -162,6 +170,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Generate infrastructure code (Docker/K8s/Terraform)",
         "devops deploy",
         "analysis",
+        available=True,
     ),
     SlashCommandSpec(
         "/keybindings",
@@ -189,6 +198,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Plan technology migration",
         "upgrade convert",
         "analysis",
+        available=True,
     ),
     SlashCommandSpec(
         "/model",
@@ -222,12 +232,14 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Toggle read-only plan mode",
         "readonly architect",
         "config",
+        available=True,
     ),
     SlashCommandSpec(
         "/plugin",
-        "Manage plugins (list/install/uninstall/create)",
-        "marketplace skills",
+        "Manage plugins and extensions (list/info/install/enable/disable)",
+        "marketplace skills extensions",
         "config",
+        available=True,
     ),
     SlashCommandSpec(
         "/pr",
@@ -240,12 +252,14 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Start or stop local dev server preview",
         "serve browser",
         "web",
+        available=True,
     ),
     SlashCommandSpec(
         "/profile",
         "Switch configuration profile",
         "config preset",
         "config",
+        available=True,
     ),
     SlashCommandSpec(
         "/quit",
@@ -267,6 +281,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Start or stop recording session for replay",
         "capture",
         "general",
+        available=True,
     ),
     SlashCommandSpec(
         "/reload",
@@ -287,11 +302,19 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Submit a task for remote or cloud execution",
         "cloud",
         "web",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/rewind",
+        "Browse checkpoints and fork a thread from an earlier snapshot",
+        "checkpoint recover restore history",
+        "info",
+        available=True,
     ),
     SlashCommandSpec(
         "/resume",
-        "Resume a saved thread or browse thread history",
-        "continue switch history",
+        "Resume a saved thread by id, tag, project, or browse history",
+        "continue switch history recover",
         "info",
         available=True,
     ),
@@ -300,12 +323,14 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Replay agent actions for debugging",
         "debug trace",
         "general",
+        available=True,
     ),
     SlashCommandSpec(
         "/resolve",
         "AI-assisted merge conflict resolution",
         "conflict merge",
         "git",
+        available=True,
     ),
     SlashCommandSpec(
         "/review",
@@ -316,8 +341,8 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/session",
-        "Show session details or assign a local session name",
-        "name duration info",
+        "Show or update session label, tags, project, summary, and exports",
+        "name duration info metadata",
         "info",
         available=True,
     ),
@@ -343,15 +368,17 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/team",
-        "Team settings and roles management",
-        "enterprise org",
+        "Manage named teams, shared summaries, and worker coordination",
+        "enterprise org swarm coordination",
         "enterprise",
+        available=True,
     ),
     SlashCommandSpec(
         "/test",
         "Run tests with coverage and generate test skeletons",
         "coverage pytest",
         "quality",
+        available=True,
     ),
     SlashCommandSpec(
         "/threads",
@@ -377,9 +404,10 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/undo",
-        "Undo last file change (git checkpoint)",
+        "Inspect or restore tracked file changes with git",
         "revert rollback",
         "git",
+        available=True,
     ),
     SlashCommandSpec(
         "/version",
@@ -393,6 +421,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Manage git worktrees for isolated work",
         "isolate parallel",
         "git",
+        available=True,
     ),
 )
 
@@ -400,43 +429,78 @@ FEATURED_HELP_COMMANDS_LEFT: tuple[str, ...] = (
     "/help",
     "/commands",
     "/model",
+    "/profile",
+    "/plan",
+    "/effort",
     "/compact",
     "/resume",
     "/threads",
     "/session",
     "/permissions",
-    "/keybindings",
-    "/skills",
 )
 
 FEATURED_HELP_COMMANDS_RIGHT: tuple[str, ...] = (
+    "/diff",
+    "/worktree",
+    "/agent",
     "/mcp",
     "/trace",
     "/tokens",
     "/background",
-    "/dashboard",
+    "/plugin",
+    "/remote",
     "/review",
-    "/recommend",
-    "/reload",
-    "/clear",
     "/quit",
 )
 
-_SPEC_BY_NAME: dict[str, SlashCommandSpec] = {
-    spec.name: spec for spec in SLASH_COMMAND_SPECS
-}
-_SPEC_BY_ALIAS: dict[str, SlashCommandSpec] = {
-    alias: spec for spec in SLASH_COMMAND_SPECS for alias in spec.aliases
-}
+
+def _load_dynamic_extension_specs() -> tuple[SlashCommandSpec, ...]:
+    """Load slash-command specs contributed by enabled extensions."""
+    try:
+        from bog_agents_cli.extensibility import get_extension_commands
+
+        commands = get_extension_commands(Path.home() / ".bog-agents")
+    except Exception:
+        return ()
+
+    specs: list[SlashCommandSpec] = []
+    for command in commands:
+        specs.append(
+            SlashCommandSpec(
+                command.name,
+                command.description,
+                f"extension {command.extension_name} {command.hidden_keywords}".strip(),
+                "extension",
+                aliases=command.aliases,
+                available=True,
+            )
+        )
+    return tuple(specs)
 
 
-def _select_specs(
-    *, include_unavailable: bool = False
-) -> tuple[SlashCommandSpec, ...]:
+def _select_specs(*, include_unavailable: bool = False) -> tuple[SlashCommandSpec, ...]:
     """Return the subset of command specs to expose to users."""
+    combined: list[SlashCommandSpec] = list(SLASH_COMMAND_SPECS)
+    known = {spec.name for spec in combined}
+    known_aliases = {
+        alias for spec in combined for alias in spec.aliases if isinstance(alias, str)
+    }
+    for spec in _load_dynamic_extension_specs():
+        if spec.name in known or spec.name in known_aliases:
+            continue
+        combined.append(spec)
     if include_unavailable:
-        return SLASH_COMMAND_SPECS
-    return tuple(spec for spec in SLASH_COMMAND_SPECS if spec.available)
+        return tuple(combined)
+    return tuple(spec for spec in combined if spec.available)
+
+
+def _lookup_maps(
+    *, include_unavailable: bool = False
+) -> tuple[dict[str, SlashCommandSpec], dict[str, SlashCommandSpec]]:
+    specs = _select_specs(include_unavailable=include_unavailable)
+    by_name = {spec.name: spec for spec in specs}
+    by_alias = {alias: spec for spec in specs for alias in spec.aliases}
+    return by_name, by_alias
 
 
 def get_registered_command_names(
@@ -444,8 +508,7 @@ def get_registered_command_names(
 ) -> list[str]:
     """Return registered command names for the requested command surface."""
     names = [
-        spec.name
-        for spec in _select_specs(include_unavailable=include_unavailable)
+        spec.name for spec in _select_specs(include_unavailable=include_unavailable)
     ]
     if include_aliases:
         for spec in _select_specs(include_unavailable=include_unavailable):
@@ -475,10 +538,9 @@ def get_command_spec(
 ) -> SlashCommandSpec | None:
     """Look up one command spec by slash name or alias."""
     normalized = name.strip().lower()
-    spec = _SPEC_BY_NAME.get(normalized) or _SPEC_BY_ALIAS.get(normalized)
+    by_name, by_alias = _lookup_maps(include_unavailable=include_unavailable)
+    spec = by_name.get(normalized) or by_alias.get(normalized)
     if spec is None:
-        return None
-    if not include_unavailable and not spec.available:
         return None
     return spec
 
@@ -539,7 +601,7 @@ def search_slash_commands(
             normalized,
             list(close_lookup),
             n=limit,
-            cutoff=0.45,
+            cutoff=0.6,
         )
         deduped = {close_lookup[name].name: close_lookup[name] for name in close}
         matches = [(10, spec) for spec in deduped.values()]

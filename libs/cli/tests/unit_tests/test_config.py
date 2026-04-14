@@ -54,12 +54,21 @@ class TestProjectRootDetection:
         result = _find_project_root(subdir)
         assert result == project_root
 
-    def test_find_project_root_no_git(self, tmp_path: Path) -> None:
+    def test_find_project_root_no_git(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test that None is returned when no .git directory exists."""
         # Create directory without .git
         no_git_dir = tmp_path / "no-git"
         no_git_dir.mkdir()
 
+        # Block detection of the host repo's .git when walking up from tmp_path
+        original_exists = Path.exists
+        monkeypatch.setattr(
+            Path,
+            "exists",
+            lambda self: False if self.name == ".git" else original_exists(self),
+        )
         result = _find_project_root(no_git_dir)
         assert result is None
 
@@ -397,12 +406,21 @@ class TestAgentsAliasDirectories:
         expected = project_root / ".agents" / "skills"
         assert settings.get_project_agent_skills_dir() == expected
 
-    def test_get_project_agent_skills_dir_without_project(self, tmp_path: Path) -> None:
+    def test_get_project_agent_skills_dir_without_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Test get_project_agent_skills_dir returns None when not in a project."""
         # Create a directory without .git
         no_project = tmp_path / "no-project"
         no_project.mkdir()
 
+        # Block detection of the host repo's .git when walking up from tmp_path
+        original_exists = Path.exists
+        monkeypatch.setattr(
+            Path,
+            "exists",
+            lambda self: False if self.name == ".git" else original_exists(self),
+        )
         settings = Settings.from_environment(start_path=no_project)
         assert settings.get_project_agent_skills_dir() is None
 
@@ -1605,6 +1623,30 @@ class TestCreateModelEdgeCaseParsing:
         with pytest.raises(ModelConfigError, match="model name is required"):
             create_model("anthropic:")
 
+    @patch("langchain.chat_models.init_chat_model")
+    def test_colon_bearing_ollama_model_is_treated_as_bare_model(
+        self, mock_init_chat_model: Mock
+    ) -> None:
+        """Local model tags like `name:tag` should not be misread as provider specs."""
+        mock_model = Mock()
+        mock_model.profile = None
+        mock_init_chat_model.return_value = mock_model
+
+        with (
+            patch(
+                "bog_agents_cli.config.detect_provider",
+                side_effect=lambda name: (
+                    "ollama" if name == "deepseek-coder:6.7b" else None
+                ),
+            ),
+            patch.object(model_config, "DEFAULT_CONFIG_PATH", Path("E:/missing.toml")),
+        ):
+            result = create_model("deepseek-coder:6.7b")
+
+        assert result.model_name == "deepseek-coder:6.7b"
+        _, call_kwargs = mock_init_chat_model.call_args
+        assert call_kwargs["model_provider"] == "ollama"
+
     @patch("bog_agents_cli.config._get_default_model_spec")
     @patch("langchain.chat_models.init_chat_model")
     def test_empty_string_uses_default(
@@ -1628,11 +1670,16 @@ class TestDetectProvider:
         [
             ("gpt-4o", "openai"),
             ("gpt-5.2", "openai"),
+            ("gpt-5.4", "openai"),
+            ("gpt-5.3-codex", "openai"),
+            ("codex-mini-latest", "openai"),
             ("o1-preview", "openai"),
             ("o3-mini", "openai"),
             ("o4-mini", "openai"),
             ("claude-sonnet-4-5", "anthropic"),
             ("claude-opus-4-5", "anthropic"),
+            ("anthropic.claude-sonnet-4-20250514-v1:0", "bedrock_converse"),
+            ("us.anthropic.claude-sonnet-4-20250514-v1:0", "bedrock_converse"),
             ("gemini-3.1-pro-preview", "google_genai"),
             ("nemotron-3-nano-30b-a3b", "nvidia"),
             ("nvidia/nemotron-3-nano-30b-a3b", "nvidia"),
@@ -1641,6 +1688,7 @@ class TestDetectProvider:
             ("some-unknown-model", None),
         ],
     )
+    @patch("bog_agents_cli.provider_catalog.get_local_ollama_models", new=lambda: ())
     def test_detect_known_patterns(self, model_name: str, expected: str | None) -> None:
         """detect_provider returns the correct provider for known patterns."""
         # Ensure both Anthropic and Google credentials are "available" so the
@@ -1692,3 +1740,14 @@ class TestDetectProvider:
             assert detect_provider("GPT-4o") == "openai"
         finally:
             settings.anthropic_api_key = None
+
+    def test_detects_local_ollama_model_names(self) -> None:
+        """Installed Ollama model names should resolve to the Ollama provider."""
+        with patch(
+            "bog_agents_cli.config.is_known_ollama_model",
+            side_effect=lambda name: (
+                name in {"deepseek-coder-v2:16b", "qwen3-coder-next"}
+            ),
+        ):
+            assert detect_provider("deepseek-coder-v2:16b") == "ollama"
+            assert detect_provider("qwen3-coder-next") == "ollama"

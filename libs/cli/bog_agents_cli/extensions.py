@@ -125,33 +125,47 @@ def parse_manifest(manifest_path: Path) -> ExtensionManifest:
     )
 
 
-def get_extensions_dir(config_dir: Path) -> Path:
+def get_extensions_dir(config_dir: Path, *, create: bool = True) -> Path:
     """Get the extensions installation directory.
 
     Args:
         config_dir: Base config directory.
+        create: When `True`, create the directory if missing.
 
     Returns:
         Path to extensions directory.
     """
     ext_dir = config_dir / "extensions"
-    ext_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        ext_dir.mkdir(parents=True, exist_ok=True)
     return ext_dir
 
 
-def list_extensions(config_dir: Path) -> list[InstalledExtension]:
+def list_extensions(config_dir: Path | None) -> list[InstalledExtension]:
     """List all installed extensions.
 
     Args:
-        config_dir: Base config directory.
+        config_dir: Base config directory. Returns an empty list when ``None``.
 
     Returns:
         List of installed extensions.
     """
-    ext_dir = get_extensions_dir(config_dir)
+    if config_dir is None:
+        return []
+    ext_dir = get_extensions_dir(config_dir, create=False)
+    if not ext_dir.exists():
+        return []
     extensions = []
 
-    for ext_path in sorted(ext_dir.iterdir()):
+    try:
+        ext_paths = sorted(ext_dir.iterdir())
+    except OSError:
+        logger.warning(
+            "Could not read extensions directory: %s", ext_dir, exc_info=True
+        )
+        return []
+
+    for ext_path in ext_paths:
         if not ext_path.is_dir():
             continue
 

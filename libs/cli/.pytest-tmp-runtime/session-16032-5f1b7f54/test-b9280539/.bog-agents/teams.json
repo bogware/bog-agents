@@ -1,0 +1,18 @@
+{
+  "active_team": "Core",
+  "teams": [
+    {
+      "name": "Core",
+      "summary": "Focus on install regressions | Resolved the provider fallback failure.",
+      "members": [],
+      "messages": [
+        {
+          "body": "Focus on install regressions",
+          "sender": "supervisor",
+          "created_at": 1776042985.7622783
+        }
+      ],
+      "updated_at": 1776042985.8966954
+    }
+  ]
+}

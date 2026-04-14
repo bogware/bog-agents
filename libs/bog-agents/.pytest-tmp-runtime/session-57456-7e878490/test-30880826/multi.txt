@@ -1,0 +1,3 @@
+line1 pattern
+line2 pattern
+line3 other

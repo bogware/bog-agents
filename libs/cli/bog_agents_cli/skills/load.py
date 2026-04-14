@@ -32,7 +32,8 @@ class ExtendedSkillMetadata(SkillMetadata):
     """Extended skill metadata for CLI display, adds source tracking.
 
     Attributes:
-        source: Origin of the skill. One of `'built-in'`, `'user'`, or `'project'`.
+        source: Origin of the skill. One of `'built-in'`, `'extension'`,
+            `'user'`, or `'project'`.
     """
 
     source: str
@@ -45,6 +46,7 @@ __all__ = ["SkillMetadata", "list_skills"]
 def list_skills(
     *,
     built_in_skills_dir: Path | None = None,
+    extension_skills_dirs: list[Path] | None = None,
     user_skills_dir: Path | None = None,
     project_skills_dir: Path | None = None,
     user_agent_skills_dir: Path | None = None,
@@ -57,15 +59,17 @@ def list_skills(
 
     Precedence order (lowest to highest):
     0. `built_in_skills_dir` (`<package>/built_in_skills/`)
-    1. `user_skills_dir` (`~/.bog-agents/{agent}/skills/`)
-    2. `user_agent_skills_dir` (`~/.agents/skills/`)
-    3. `project_skills_dir` (`.bog-agents/skills/`)
-    4. `project_agent_skills_dir` (`.agents/skills/`)
+    1. `extension_skills_dirs` (installed extension-provided skills)
+    2. `user_skills_dir` (`~/.bog-agents/{agent}/skills/`)
+    3. `user_agent_skills_dir` (`~/.agents/skills/`)
+    4. `project_skills_dir` (`.bog-agents/skills/`)
+    5. `project_agent_skills_dir` (`.agents/skills/`)
 
     Skills from higher-precedence directories override those with the same name.
 
     Args:
         built_in_skills_dir: Path to built-in skills shipped with the package.
+        extension_skills_dirs: Directories contributed by enabled extensions.
         user_skills_dir: Path to `~/.bog-agents/{agent}/skills/`.
         project_skills_dir: Path to `.bog-agents/skills/`.
         user_agent_skills_dir: Path to `~/.agents/skills/` (alias).
@@ -109,7 +113,28 @@ def list_skills(
                 exc_info=True,
             )
 
-    # 1. User bog-agents skills (~/.bog-agents/{agent}/skills/)
+    # 1. Enabled extension skills
+    for extension_dir in extension_skills_dirs or []:
+        if not extension_dir.exists():
+            continue
+        try:
+            extension_backend = FilesystemBackend(root_dir=str(extension_dir))
+            extension_skills = list_skills_from_backend(
+                backend=extension_backend, source_path="."
+            )
+            for skill in extension_skills:
+                extended_skill = cast(
+                    "ExtendedSkillMetadata", {**skill, "source": "extension"}
+                )
+                all_skills[skill["name"]] = extended_skill
+        except OSError:
+            logger.warning(
+                "Could not load extension skills from %s",
+                extension_dir,
+                exc_info=True,
+            )
+
+    # 2. User bog-agents skills (~/.bog-agents/{agent}/skills/)
     if user_skills_dir and user_skills_dir.exists():
         try:
             user_backend = FilesystemBackend(root_dir=str(user_skills_dir))
@@ -129,7 +154,7 @@ def list_skills(
                 exc_info=True,
             )
 
-    # 2. User agent skills (~/.agents/skills/) - overrides user bog-agents
+    # 3. User agent skills (~/.agents/skills/) - overrides user bog-agents
     if user_agent_skills_dir and user_agent_skills_dir.exists():
         try:
             user_agent_backend = FilesystemBackend(root_dir=str(user_agent_skills_dir))
@@ -149,7 +174,7 @@ def list_skills(
                 exc_info=True,
             )
 
-    # 3. Project bog-agents skills (.bog-agents/skills/)
+    # 4. Project bog-agents skills (.bog-agents/skills/)
     if project_skills_dir and project_skills_dir.exists():
         try:
             project_backend = FilesystemBackend(root_dir=str(project_skills_dir))
@@ -169,7 +194,7 @@ def list_skills(
                 exc_info=True,
             )
 
-    # 4. Project agent skills (.agents/skills/) - highest priority
+    # 5. Project agent skills (.agents/skills/) - highest priority
     if project_agent_skills_dir and project_agent_skills_dir.exists():
         try:
             project_agent_backend = FilesystemBackend(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from unittest.mock import patch
 
 import bog_agents_cli._debug as _debug_mod
@@ -16,6 +17,8 @@ def _reset_shared_handler() -> None:
     if _debug_mod._shared_handler is not None:
         _debug_mod._shared_handler.close()
         _debug_mod._shared_handler = None
+    _debug_mod._shared_handler_unavailable = False
+    _debug_mod._active_log_path = None
 
 
 class TestConfigureDebugLogging:
@@ -88,6 +91,32 @@ class TestConfigureDebugLogging:
         captured = capsys.readouterr()
         assert "Warning" in captured.err
         _reset_shared_handler()
+
+    def test_default_path_falls_back_without_warning(self, tmp_path, capsys) -> None:
+        """Default logging should quietly fall back when home path is unavailable."""
+        _reset_shared_handler()
+        logger = logging.getLogger("test.debug.default_fallback")
+        fallback_log = tmp_path / "bog-agents" / "logs" / "bog_agents.log"
+
+        with (
+            patch.object(
+                _debug_mod, "_DEFAULT_LOG_FILE", Path("/dev/null/impossible.log")
+            ),
+            patch(
+                "bog_agents_cli._debug.tempfile.gettempdir", return_value=str(tmp_path)
+            ),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            configure_debug_logging(logger)
+
+        rotating = [h for h in logger.handlers if isinstance(h, RotatingFileHandler)]
+        assert len(rotating) == 1
+        assert rotating[0].baseFilename == str(fallback_log)
+        assert capsys.readouterr().err == ""
+
+        _reset_shared_handler()
+        for h in rotating:
+            logger.removeHandler(h)
 
     def test_idempotent(self, tmp_path) -> None:
         """Calling configure_debug_logging twice doesn't add duplicate handlers."""

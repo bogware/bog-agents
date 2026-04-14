@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -13,6 +14,7 @@ from bog_agents_cli.configurable_model import (
     CLIContext,
     ConfigurableModelMiddleware,
     _is_anthropic_model,
+    _is_ollama_model,
 )
 
 
@@ -43,6 +45,16 @@ def _make_request(
 def _make_response() -> ModelResponse[Any]:
     """Create a minimal model response for handler mocks."""
     return ModelResponse(result=[AIMessage(content="response")])
+
+
+def _system_text(request: ModelRequest) -> str:
+    """Extract a string representation of the system prompt for assertions."""
+    system_message = request.system_message
+    if system_message is None:
+        return ""
+    return (
+        f"{system_message.content!s} {getattr(system_message, 'content_blocks', '')!s}"
+    )
 
 
 _mw = ConfigurableModelMiddleware()
@@ -126,6 +138,93 @@ class TestNoOverride:
             request, lambda r: (captured.append(r), _make_response())[1]
         )
         assert captured[0] is request
+
+
+class TestRuntimeWorkflowControls:
+    """Runtime workflow controls beyond model selection."""
+
+    def test_effort_level_merges_reasoning_defaults(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(effort_level="max"),
+            model_settings={"top_p": 0.9},
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings["max_tokens"] == 16384
+        assert captured[0].model_settings["temperature"] == 1.0
+        assert captured[0].model_settings["top_p"] == 0.9
+
+    def test_model_params_override_effort_defaults(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(
+                effort_level="high",
+                model_params={"temperature": 0.2},
+            ),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings["max_tokens"] == 8192
+        assert captured[0].model_settings["temperature"] == 0.2
+
+    def test_plan_mode_appends_system_prompt_and_filters_tools(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(plan_mode=True),
+        )
+        request = request.override(
+            tools=[
+                cast("Any", SimpleNamespace(name="read_file")),
+                cast("Any", SimpleNamespace(name="write_file")),
+            ]
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert "Plan Mode Active" in _system_text(captured[0])
+        assert [tool.name for tool in captured[0].tools] == ["read_file"]
+
+    def test_profile_prompt_is_appended_to_system_message(self) -> None:
+        request = _make_request(
+            _make_model("claude-sonnet-4-6"),
+            context=CLIContext(system_prompt_append="Follow the review workflow."),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert "Follow the review workflow." in _system_text(captured[0])
+
+    def test_effort_level_normalizes_ollama_token_setting(self) -> None:
+        ollama_mod = pytest.importorskip("langchain_ollama")
+
+        request = _make_request(
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(effort_level="high"),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 8192  # ty: ignore[unresolved-attribute]
+        assert captured[0].model.temperature == 0.7  # ty: ignore[unresolved-attribute]
 
 
 class TestModelSwap:
@@ -410,3 +509,56 @@ class TestModelParams:
 
         await _mw.awrap_model_call(request, handler)
         assert captured[0].model_settings == {"temperature": 0.3}
+
+    def test_ollama_model_params_normalize_max_tokens(self) -> None:
+        ollama_mod = pytest.importorskip("langchain_ollama")
+
+        request = _make_request(
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(model_params={"max_tokens": 1024, "temperature": 0.2}),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 1024  # ty: ignore[unresolved-attribute]
+        assert captured[0].model.temperature == 0.2  # ty: ignore[unresolved-attribute]
+
+    def test_ollama_explicit_num_predict_wins_over_alias(self) -> None:
+        ollama_mod = pytest.importorskip("langchain_ollama")
+
+        request = _make_request(
+            ollama_mod.ChatOllama(model="deepseek-coder:6.7b"),
+            context=CLIContext(
+                effort_level="medium",
+                model_params={"num_predict": 2048},
+            ),
+        )
+        captured: list[ModelRequest] = []
+
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        assert captured[0].model_settings == {}
+        assert captured[0].model.num_predict == 2048  # ty: ignore[unresolved-attribute]
+
+
+class TestIsOllamaModel:
+    """Direct tests for the `_is_ollama_model` helper."""
+
+    def test_returns_true_for_ollama(self) -> None:
+        ollama_mod = pytest.importorskip("langchain_ollama")
+
+        model = ollama_mod.ChatOllama(model="deepseek-coder:6.7b")
+        assert _is_ollama_model(model) is True
+
+    def test_returns_false_for_non_ollama(self) -> None:
+        assert _is_ollama_model(_make_model("gpt-4o")) is False
+
+    def test_returns_false_when_import_missing(self) -> None:
+        with patch.dict("sys.modules", {"langchain_ollama": None}):
+            assert _is_ollama_model(_make_model("anything")) is False

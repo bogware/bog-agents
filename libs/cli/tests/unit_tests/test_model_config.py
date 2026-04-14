@@ -500,7 +500,8 @@ models = ["llama3"]
         assert any("invalid TOML syntax" in r.message for r in caplog.records)
 
     @pytest.mark.skipif(
-        os.getuid() == 0, reason="Root can read any file regardless of permissions"
+        hasattr(os, "getuid") and os.getuid() == 0,
+        reason="Root can read any file regardless of permissions",
     )
     def test_unreadable_file_returns_empty_config(self, tmp_path, caplog):
         """Unreadable config file returns empty config and logs a warning."""
@@ -939,6 +940,36 @@ class TestGetAvailableModels:
             "Could not import profiles" in record.message for record in caplog.records
         )
 
+    def test_merges_live_local_ollama_models(self) -> None:
+        """Live Ollama discovery should enrich the available-model catalog."""
+        fake_registry = {
+            "ollama": ("langchain_ollama", "ChatOllama", None),
+        }
+        with (
+            patch(
+                "bog_agents_cli.model_config._get_builtin_providers",
+                return_value=fake_registry,
+            ),
+            patch(
+                "bog_agents_cli.model_config._provider_package_is_installed",
+                return_value=True,
+            ),
+            patch(
+                "bog_agents_cli.model_config._load_provider_profiles",
+                return_value={},
+            ),
+            patch(
+                "bog_agents_cli.model_config.get_local_ollama_models",
+                return_value=("deepseek-coder-v2:16b", "qwen3-coder-next:latest"),
+            ),
+        ):
+            models = get_available_models()
+
+        assert models["ollama"] == [
+            "deepseek-coder-v2:16b",
+            "qwen3-coder-next:latest",
+        ]
+
 
 class TestGetAvailableModelsMergesConfig:
     """Tests for get_available_models() merging config-file providers."""
@@ -1037,6 +1068,142 @@ api_key_env = "SOME_KEY"
             models = get_available_models()
 
         assert "empty" not in models
+
+    def test_merges_curated_openai_models_when_profiles_lag(self) -> None:
+        """Curated OpenAI models are appended when upstream profiles lag."""
+        fake_profiles = {
+            "gpt-5.2": {
+                "tool_calling": True,
+                "text_inputs": True,
+                "text_outputs": True,
+            },
+        }
+
+        def mock_load(module_path: str) -> dict[str, Any]:
+            if module_path == "langchain_openai.data._profiles":
+                return fake_profiles
+            msg = "not installed"
+            raise ImportError(msg)
+
+        fake_registry = {
+            "openai": ("langchain_openai", "ChatOpenAI", object()),
+        }
+
+        with (
+            patch(
+                "bog_agents_cli.model_config._load_provider_profiles",
+                side_effect=mock_load,
+            ),
+            patch(
+                "bog_agents_cli.model_config._get_builtin_providers",
+                return_value=fake_registry,
+            ),
+            patch(
+                "bog_agents_cli.model_config.importlib.util.find_spec",
+                return_value=object(),
+            ),
+        ):
+            models = get_available_models()
+
+        assert "openai" in models
+        assert "gpt-5.2" in models["openai"]
+        assert "gpt-5.4" in models["openai"]
+        assert "gpt-5.4-mini" in models["openai"]
+
+    def test_missing_dotted_provider_package_is_skipped(self) -> None:
+        """Supplement detection ignores missing dotted provider modules."""
+        fake_registry = {
+            "azure_ai": (
+                "langchain_azure_ai.chat_models",
+                "AzureAIChatCompletionsModel",
+                object(),
+            ),
+        }
+
+        with patch(
+            "bog_agents_cli.model_config._get_builtin_providers",
+            return_value=fake_registry,
+        ):
+            models = get_available_models()
+
+        assert "azure_ai" not in models
+
+
+class TestGetModelProfilesSupplements:
+    """Tests for curated profile supplements."""
+
+    def test_includes_curated_openai_profile_when_missing_upstream(self) -> None:
+        """Curated OpenAI profile appears even if upstream lacks it."""
+        fake_profiles = {
+            "gpt-5.2": {
+                "tool_calling": True,
+                "max_input_tokens": 272000,
+            },
+        }
+
+        def mock_load(module_path: str) -> dict[str, Any]:
+            if module_path == "langchain_openai.data._profiles":
+                return fake_profiles
+            msg = "not installed"
+            raise ImportError(msg)
+
+        fake_registry = {
+            "openai": ("langchain_openai", "ChatOpenAI", object()),
+        }
+
+        with (
+            patch(
+                "bog_agents_cli.model_config._load_provider_profiles",
+                side_effect=mock_load,
+            ),
+            patch(
+                "bog_agents_cli.model_config._get_builtin_providers",
+                return_value=fake_registry,
+            ),
+            patch(
+                "bog_agents_cli.model_config.importlib.util.find_spec",
+                return_value=object(),
+            ),
+        ):
+            profiles = get_model_profiles()
+
+        entry = profiles["openai:gpt-5.4"]
+        assert entry["profile"]["tool_calling"] is True
+        assert entry["profile"]["max_input_tokens"] == 1_050_000
+        assert entry["profile"]["structured_output"] is True
+
+    def test_marks_codex_mini_latest_as_deprecated(self) -> None:
+        """Curated overrides can refresh metadata for existing profiles."""
+        fake_profiles = {
+            "codex-mini-latest": {
+                "tool_calling": True,
+                "max_input_tokens": 200000,
+            },
+        }
+
+        def mock_load(module_path: str) -> dict[str, Any]:
+            if module_path == "langchain_openai.data._profiles":
+                return fake_profiles
+            msg = "not installed"
+            raise ImportError(msg)
+
+        fake_registry = {
+            "openai": ("langchain_openai", "ChatOpenAI", object()),
+        }
+
+        with (
+            patch(
+                "bog_agents_cli.model_config._load_provider_profiles",
+                side_effect=mock_load,
+            ),
+            patch(
+                "bog_agents_cli.model_config._get_builtin_providers",
+                return_value=fake_registry,
+            ),
+        ):
+            profiles = get_model_profiles()
+
+        assert profiles["openai:codex-mini-latest"]["profile"]["status"] == "deprecated"
 
 
 class TestProfileModuleFromClassPath:
@@ -2223,6 +2390,31 @@ recent = "openai:gpt-5.2"
 
         assert result == "anthropic:claude-sonnet-4-6"
 
+    def test_openai_env_uses_recommended_default(self, tmp_path: Path) -> None:
+        """OpenAI auto-detection uses the curated recommended default."""
+        from bog_agents_cli.config import _get_default_model_spec, settings
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("")
+
+        with (
+            patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path),
+            patch.object(settings, "anthropic_api_key", None),
+            patch.object(settings, "openai_api_key", "test-key"),
+            patch(
+                "bog_agents_cli.config.get_available_models",
+                return_value={"openai": ["gpt-5.2", "gpt-5.4"]},
+            ),
+            patch.dict(
+                "os.environ",
+                {"OPENAI_API_KEY": "test-key"},
+                clear=False,
+            ),
+        ):
+            result = _get_default_model_spec()
+
+        assert result == "openai:gpt-5.4"
+
 
 class TestIsWarningSuppressed:
     """Tests for is_warning_suppressed() function."""
@@ -2425,8 +2617,12 @@ max_input_tokens = 4096
             get_model_profiles()
 
         assert model_config._profiles_cache is not None
-        clear_caches()
+        with patch(
+            "bog_agents_cli.model_config.clear_provider_catalog_caches"
+        ) as mock_clear_provider_catalog:
+            clear_caches()
         assert model_config._profiles_cache is None
+        mock_clear_provider_catalog.assert_called_once()
 
     def test_overridden_keys_subset_of_profile(self, tmp_path: Path) -> None:
         """overridden_keys is always a subset of profile keys."""

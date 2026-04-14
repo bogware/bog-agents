@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -29,10 +29,11 @@ from langchain.agents.middleware.human_in_the_loop import (
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 from pydantic import TypeAdapter, ValidationError
+from rich.text import Text
 
 from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.ask_user import AskUserRequest
-from bog_agents_cli.config import settings
+from bog_agents_cli.config import get_glyphs, settings
 from bog_agents_cli.configurable_model import CLIContext  # noqa: TC001
 from bog_agents_cli.file_ops import FileOpTracker
 from bog_agents_cli.hooks import dispatch_hook
@@ -52,6 +53,107 @@ configure_debug_logging(logger)
 
 _git_branch_cache: dict[str, str | None] = {}
 """Cache git-branch lookups by current working directory."""
+
+
+def _find_todos_payload(node: object) -> list[object] | None:
+    """Find a todo list payload within a streamed update object.
+
+    Args:
+        node: Arbitrary update payload node.
+
+    Returns:
+        Todo list payload if present, else `None`.
+    """
+    if isinstance(node, dict):
+        todos = node.get("todos")
+        if isinstance(todos, list):
+            return todos
+        for value in node.values():
+            nested = _find_todos_payload(value)
+            if nested is not None:
+                return nested
+    if isinstance(node, list):
+        for value in node:
+            nested = _find_todos_payload(value)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _render_todos_text(todos: list[object]) -> Text:
+    """Render streamed todo-state updates as Rich text.
+
+    Args:
+        todos: Todo items from streamed graph state.
+
+    Returns:
+        Styled text suitable for an `AppMessage`.
+    """
+    glyphs = get_glyphs()
+    completed = 0
+    active = 0
+    pending = 0
+    lines: list[Text] = []
+
+    for raw_item in todos:
+        if isinstance(raw_item, dict):
+            todo_item = cast("dict[str, object]", raw_item)
+            raw_content = todo_item.get("content")
+            raw_status = todo_item.get("status")
+            content = str(raw_content if raw_content is not None else todo_item).strip()
+            content = content or "(empty todo)"
+            status = (
+                str(raw_status if raw_status is not None else "pending").strip().lower()
+            )
+        else:
+            content = str(raw_item).strip() or "(empty todo)"
+            status = "pending"
+
+        if status == "completed":
+            completed += 1
+            prefix = Text(f"{glyphs.checkmark} done  ", style="green")
+            body = Text(content, style="dim")
+        elif status == "in_progress":
+            active += 1
+            prefix = Text(f"{glyphs.circle_filled} active ", style="yellow")
+            body = Text(content)
+        else:
+            pending += 1
+            prefix = Text(f"{glyphs.circle_empty} todo  ", style="dim")
+            body = Text(content)
+
+        line = Text("    ")
+        line.append_text(prefix)
+        line.append_text(body)
+        lines.append(line)
+
+    header = Text("Todo list", style="bold cyan")
+    stats = Text("  ")
+    parts: list[tuple[str, str | None]] = []
+    if active:
+        parts.append((f"{active} active", "yellow"))
+    if pending:
+        parts.append((f"{pending} pending", None))
+    if completed:
+        parts.append((f"{completed} done", "green"))
+    if not parts:
+        parts.append(("no items", "dim"))
+    for index, (label, style) in enumerate(parts):
+        if index:
+            stats.append(" | ", style="dim")
+        stats.append(label, style=style)
+
+    rendered = Text()
+    rendered.append_text(header)
+    rendered.append("\n")
+    rendered.append_text(stats)
+    if lines:
+        rendered.append("\n\n")
+        for index, line in enumerate(lines):
+            if index:
+                rendered.append("\n")
+            rendered.append_text(line)
+    return rendered
 
 
 @dataclass
@@ -589,6 +691,7 @@ async def execute_task_textual(
     # when multiple subagents stream in parallel
     pending_text_by_namespace: dict[tuple, str] = {}
     assistant_message_by_namespace: dict[tuple, Any] = {}
+    todo_message_by_namespace: dict[tuple, AppMessage] = {}
 
     # Clear media from tracker after creating the message
     if image_tracker:
@@ -676,14 +779,33 @@ async def execute_task_textual(
                                     except ValidationError:  # noqa: TRY203  # Re-raise preserves exception context in handler
                                         raise
 
-                    # Check for todo updates (not yet implemented in Textual UI)
-                    chunk_data = next(iter(data.values())) if data else None
-                    if (
-                        chunk_data
-                        and isinstance(chunk_data, dict)
-                        and "todos" in chunk_data
-                    ):
-                        pass  # Future: render todo list widget
+                    todo_items = _find_todos_payload(data)
+                    if todo_items is not None:
+                        pending_text = pending_text_by_namespace.get(ns_key, "")
+                        if pending_text:
+                            await _flush_assistant_text_ns(
+                                adapter,
+                                pending_text,
+                                ns_key,
+                                assistant_message_by_namespace,
+                            )
+                            pending_text_by_namespace[ns_key] = ""
+
+                        todo_text = _render_todos_text(todo_items)
+                        current_todo_message = todo_message_by_namespace.get(ns_key)
+                        if current_todo_message is None:
+                            current_todo_message = AppMessage(todo_text)
+                            await adapter._mount_message(current_todo_message)
+                            todo_message_by_namespace[ns_key] = current_todo_message
+                        else:
+                            current_todo_message._content = todo_text
+                            try:
+                                current_todo_message.update(todo_text)
+                            except Exception:
+                                logger.debug(
+                                    "Failed to refresh mounted todo widget",
+                                    exc_info=True,
+                                )
 
                 # Handle MESSAGES stream - for content and tool calls
                 elif current_stream_mode == "messages":

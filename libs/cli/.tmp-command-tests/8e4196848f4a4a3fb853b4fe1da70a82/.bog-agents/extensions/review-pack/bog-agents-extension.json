@@ -1,0 +1,1 @@
+{"name": "review-pack", "version": "1.0.0", "commands": [{"name": "/scout", "description": "Scout a codebase slice", "prompt": "Scout: {args}", "aliases": ["/survey"]}]}

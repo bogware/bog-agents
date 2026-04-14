@@ -23,6 +23,12 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli.provider_catalog import (
+    clear_provider_catalog_caches,
+    get_local_ollama_models,
+    get_profile_overrides as get_curated_profile_overrides,
+    get_supplemental_model_profiles,
+)
 
 logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
@@ -243,6 +249,7 @@ def clear_caches() -> None:
     _default_config_cache = None
     _profiles_cache = None
     _profiles_override_cache = None
+    clear_provider_catalog_caches()
     invalidate_thread_config_cache()
 
 
@@ -296,6 +303,18 @@ def _get_provider_profile_modules() -> list[tuple[str, str]]:
             result.append((provider_name, profile_module))
 
     return result
+
+
+def _provider_package_is_installed(provider: str) -> bool:
+    """Return whether the provider's LangChain package is importable."""
+    registry_entry = _get_builtin_providers().get(provider)
+    if registry_entry is None:
+        return False
+    package_name = registry_entry[0]
+    try:
+        return importlib.util.find_spec(package_name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 def _load_provider_profiles(module_path: str) -> dict[str, Any]:
@@ -478,6 +497,44 @@ def get_available_models() -> dict[str, list[str]]:
                 if model not in existing:
                     available[provider_name].append(model)
 
+    # Merge curated model profiles for newer vendor releases that may not be in
+    # the installed LangChain snapshot yet.
+    for provider in tuple(_get_builtin_providers()):
+        if not _provider_package_is_installed(provider):
+            continue
+
+        supplemental = get_supplemental_model_profiles(provider)
+        if not supplemental:
+            continue
+
+        provider_models = available.setdefault(provider, [])
+        existing = set(provider_models)
+        for model_name, profile in supplemental.items():
+            if model_name in existing:
+                continue
+            if not profile.get("tool_calling", False):
+                continue
+            if profile.get("text_inputs", True) is False:
+                continue
+            if profile.get("text_outputs", True) is False:
+                continue
+            provider_models.append(model_name)
+            existing.add(model_name)
+        provider_models.sort()
+
+    # Merge in live local Ollama models so the catalog reflects what the user
+    # can actually run on this machine, not just static profile snapshots.
+    if _provider_package_is_installed("ollama"):
+        local_ollama_models = get_local_ollama_models()
+        if local_ollama_models:
+            provider_models = available.setdefault("ollama", [])
+            existing = set(provider_models)
+            for model_name in local_ollama_models:
+                if model_name in existing:
+                    continue
+                provider_models.append(model_name)
+                existing.add(model_name)
+
     _available_models_cache = available
     return available
 
@@ -575,8 +632,15 @@ def get_model_profiles(
         for model_name, upstream_profile in profiles.items():
             spec = f"{provider}:{model_name}"
             seen_specs.add(spec)
+            curated_overrides = get_curated_profile_overrides(provider).get(
+                model_name, {}
+            )
             overrides = config.get_profile_overrides(provider, model_name=model_name)
-            result[spec] = _build_entry(upstream_profile, overrides, cli_override)
+            result[spec] = _build_entry(
+                {**upstream_profile, **curated_overrides},
+                overrides,
+                cli_override,
+            )
 
     # Add config-only models and class_path provider profiles.
     for provider_name, provider_config in config.providers.items():
@@ -621,6 +685,19 @@ def get_model_profiles(
                     provider_name, model_name=model_name
                 )
                 result[spec] = _build_entry({}, overrides, cli_override)
+
+    for provider in tuple(_get_builtin_providers()):
+        if not _provider_package_is_installed(provider):
+            continue
+        for model_name, base_profile in get_supplemental_model_profiles(
+            provider
+        ).items():
+            spec = f"{provider}:{model_name}"
+            if spec in seen_specs:
+                continue
+            seen_specs.add(spec)
+            overrides = config.get_profile_overrides(provider, model_name=model_name)
+            result[spec] = _build_entry(base_profile, overrides, cli_override)
 
     frozen = MappingProxyType(result)
     if cli_override is None:

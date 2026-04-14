@@ -303,7 +303,7 @@ wheels = [
 
 [[package]]
 name = "bog-agents"
-version = "0.6.3"
+version = "0.6.4"
 source = { editable = "../bog-agents" }
 dependencies = [
     { name = "langchain" },

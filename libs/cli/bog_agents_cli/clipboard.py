@@ -6,6 +6,9 @@ import base64
 import logging
 import os
 import pathlib
+import shutil
+import subprocess  # noqa: S404  # native clipboard helpers require subprocess
+import sys
 from typing import TYPE_CHECKING
 
 from bog_agents_cli.config import get_glyphs
@@ -18,6 +21,11 @@ if TYPE_CHECKING:
 _PREVIEW_MAX_LENGTH = 40
 
 
+def _subprocess_creationflags() -> int:
+    """Return platform-appropriate subprocess flags for clipboard helpers."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _copy_osc52(text: str) -> None:
     """Copy text using OSC 52 escape sequence (works over SSH/tmux)."""
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
@@ -28,6 +36,46 @@ def _copy_osc52(text: str) -> None:
     with pathlib.Path("/dev/tty").open("w", encoding="utf-8") as tty:
         tty.write(osc52_seq)
         tty.flush()
+
+
+def _copy_windows_clip(text: str) -> None:
+    """Copy text to the Windows clipboard using `clip.exe`."""
+    subprocess.run(
+        ["clip.exe"],
+        input=text,
+        text=True,
+        check=True,
+        creationflags=_subprocess_creationflags(),
+    )
+
+
+def _read_windows_clipboard() -> str:
+    """Read text from the Windows clipboard using PowerShell."""
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "Get-Clipboard -Raw",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        creationflags=_subprocess_creationflags(),
+    )
+    return result.stdout
+
+
+def _read_command_output(command: list[str]) -> str:
+    """Read clipboard text from a command-line helper."""
+    result = subprocess.run(  # noqa: S603  # commands are fixed clipboard helper invocations
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        creationflags=_subprocess_creationflags(),
+    )
+    return result.stdout
 
 
 def _shorten_preview(texts: list[str]) -> str:
@@ -43,7 +91,39 @@ def _shorten_preview(texts: list[str]) -> str:
     return dense_text
 
 
-def copy_selection_to_clipboard(app: App) -> None:
+def read_clipboard_text() -> str | None:
+    """Read text from the system clipboard when possible."""
+    try:
+        import pyperclip
+
+        text = pyperclip.paste()
+        return text if isinstance(text, str) and text else None
+    except (ImportError, RuntimeError, TypeError):
+        pass
+
+    try:
+        if sys.platform == "win32":
+            text = _read_windows_clipboard()
+            return text or None
+        if sys.platform == "darwin" and shutil.which("pbpaste"):
+            text = _read_command_output(["pbpaste"])
+            return text or None
+        if shutil.which("wl-paste"):
+            text = _read_command_output(["wl-paste", "-n"])
+            return text or None
+        if shutil.which("xclip"):
+            text = _read_command_output(["xclip", "-selection", "clipboard", "-o"])
+            return text or None
+        if shutil.which("xsel"):
+            text = _read_command_output(["xsel", "--clipboard", "--output"])
+            return text or None
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        logger.debug("Clipboard read failed: %s", e, exc_info=True)
+
+    return None
+
+
+def copy_selection_to_clipboard(app: App) -> bool:
     """Copy selected text from app widgets to clipboard.
 
     This queries all widgets for their text_selection and copies
@@ -79,7 +159,7 @@ def copy_selection_to_clipboard(app: App) -> None:
             selected_texts.append(selected_text)
 
     if not selected_texts:
-        return
+        return False
 
     combined_text = "\n".join(selected_texts)
 
@@ -96,8 +176,12 @@ def copy_selection_to_clipboard(app: App) -> None:
     except ImportError:
         pass
 
+    if sys.platform == "win32":
+        copy_methods.insert(0, _copy_windows_clip)
+
     # OSC 52 as fallback for remote/SSH sessions
-    copy_methods.append(_copy_osc52)
+    if os.name != "nt":
+        copy_methods.append(_copy_osc52)
 
     for copy_fn in copy_methods:
         try:
@@ -118,7 +202,7 @@ def copy_selection_to_clipboard(app: App) -> None:
             )
             continue
         else:
-            return
+            return True
 
     # If all methods fail, still notify but warn
     app.notify(
@@ -126,3 +210,4 @@ def copy_selection_to_clipboard(app: App) -> None:
         severity="warning",
         timeout=3,
     )
+    return False

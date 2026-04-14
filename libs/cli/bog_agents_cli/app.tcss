@@ -1,14 +1,25 @@
 /* Bog Agents CLI Textual Stylesheet */
 
-/* Override Textual default $primary (blue) with the Bog Agents brand green */
-$primary: #10b981;
-$primary-lighten-1: #34d399;
-$primary-lighten-2: #6ee7b7;
+/* Bog Agents visual system: deep slate surfaces, emerald accents, cyan highlights */
+$primary: #34d399;
+$primary-lighten-1: #6ee7b7;
+$primary-lighten-2: #a7f3d0;
+$secondary: #38bdf8;
+$background: #071019;
+$surface: #0d1723;
+$surface-lighten-1: #132233;
+$surface-darken-1: #09111a;
+$text: #e5eef6;
+$text-muted: #90a4b8;
+$success: #34d399;
+$warning: #fbbf24;
+$error: #fb7185;
 
 /* Define layers for z-ordering */
 Screen {
     layout: vertical;
     layers: base autocomplete;
+    background: $background;
 }
 
 /* Main content goes on base layer by default */
@@ -16,7 +27,7 @@ Screen {
 /* Chat area - main scrollable messages area */
 #chat {
     height: 1fr;
-    padding: 1 2;
+    padding: 1 3 0 3;
     background: $background;
     scrollbar-size-vertical: 1;
     overflow-y: scroll;
@@ -32,19 +43,22 @@ Screen {
 #welcome-banner {
     height: auto;
     margin-bottom: 1;
-    padding: 0 1;
+    padding: 0;
 }
 
 /* Messages area */
 #messages {
     height: auto;
+    padding-bottom: 1;
 }
 
 /* Bottom app container - holds ChatInput (now inside scroll) */
 #bottom-app-container {
     height: auto;
-    margin-top: 1;
-    padding: 0 1;
+    margin-top: 0;
+    padding: 1 2 1 2;
+    background: $background;
+    border-top: solid $surface-lighten-1;
 }
 
 /* Input area */
@@ -58,9 +72,9 @@ Screen {
 .approval-menu {
     height: auto;
     margin: 1 0;
-    padding: 0 1;
-    background: $surface;
-    border: solid $warning;
+    padding: 1 2;
+    background: $surface-darken-1;
+    border: round $warning;
 }
 
 .approval-menu .approval-title {
@@ -73,6 +87,7 @@ Screen {
     height: auto;
     margin: 0 0 1 0;
     padding: 0 1;
+    background: $surface;
 }
 
 .approval-menu .approval-info {
@@ -89,6 +104,7 @@ Screen {
 .approval-menu .approval-option-selected {
     background: $primary;
     text-style: bold;
+    color: #08131c;
 }
 
 .approval-menu .approval-help {
@@ -173,18 +189,19 @@ Screen {
 /* Options container with background */
 .approval-menu .approval-options-container {
     height: auto;
-    background: $surface-darken-1;
+    background: $surface;
     padding: 0 1;
-    margin-top: 0;
+    margin-top: 1;
+    border: round $surface-lighten-1;
 }
 
 /* Ask user widget */
 .ask-user-menu {
     height: auto;
     margin: 1 0;
-    padding: 0 1;
-    background: $surface;
-    border: solid $success;
+    padding: 1 2;
+    background: $surface-darken-1;
+    border: round $success;
 }
 
 .ask-user-menu .ask-user-title {
@@ -239,8 +256,9 @@ Screen {
     max-height: 12;
     width: 100%;
     margin-left: 4;
-    margin-top: 0;
+    margin-top: 1;
     padding: 0;
-    background: $background;
+    background: $surface-darken-1;
     color: $text;
+    border: round $secondary;
 }

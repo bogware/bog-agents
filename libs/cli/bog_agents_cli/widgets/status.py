@@ -80,13 +80,16 @@ class StatusBar(Horizontal):
     StatusBar {
         height: 1;
         dock: bottom;
-        background: $surface;
+        background: $surface-darken-1;
+        border-top: solid $surface-lighten-1;
         padding: 0 1;
     }
 
     StatusBar .status-mode {
         width: auto;
         padding: 0 1;
+        margin-right: 1;
+        text-style: bold;
     }
 
     StatusBar .status-mode.normal {
@@ -95,44 +98,46 @@ class StatusBar(Horizontal):
 
     StatusBar .status-mode.shell {
         background: __MODE_SHELL__;
-        color: white;
-        text-style: bold;
+        color: #08131c;
     }
 
     StatusBar .status-mode.command {
         background: __MODE_CMD__;
-        color: white;
+        color: #08131c;
     }
 
     StatusBar .status-auto-approve {
         width: auto;
         padding: 0 1;
+        margin-right: 1;
+        text-style: bold;
     }
 
     StatusBar .status-auto-approve.on {
-        background: #10b981;
-        color: black;
+        background: $primary;
+        color: #08131c;
     }
 
     StatusBar .status-auto-approve.off {
-        background: #f59e0b;
-        color: black;
+        background: $surface-lighten-1;
+        color: $text-muted;
     }
 
     StatusBar .status-message {
         width: auto;
         padding: 0 1;
-        color: $text-muted;
+        color: $text;
     }
 
     StatusBar .status-message.thinking {
-        color: $warning;
+        color: $secondary;
     }
 
     StatusBar .status-cwd {
         width: auto;
         text-align: right;
         color: $text-muted;
+        padding: 0 1;
     }
 
     StatusBar .status-branch {
@@ -151,7 +156,7 @@ class StatusBar(Horizontal):
     StatusBar .status-tokens {
         width: auto;
         padding: 0 1;
-        color: $text-muted;
+        color: $secondary;
     }
 
     StatusBar ModelLabel {
@@ -159,13 +164,14 @@ class StatusBar(Horizontal):
         padding: 0 2;
         color: $text-muted;
         text-align: right;
+        text-style: bold;
     }
     """.replace("__MODE_SHELL__", COLORS["mode_shell"]).replace(
         "__MODE_CMD__", COLORS["mode_command"]
     )
 
     mode: reactive[str] = reactive("normal", init=False)
-    status_message: reactive[str] = reactive("", init=False)
+    status_message: reactive[str] = reactive("Ready", init=False)
     auto_approve: reactive[bool] = reactive(default=False, init=False)
     cwd: reactive[str] = reactive("", init=False)
     branch: reactive[str] = reactive("", init=False)
@@ -191,7 +197,7 @@ class StatusBar(Horizontal):
         """
         yield Static("", classes="status-mode normal", id="mode-indicator")
         yield Static(
-            "manual | shift+tab to cycle",
+            "ASK",
             classes="status-auto-approve off",
             id="auto-approve-indicator",
         )
@@ -257,10 +263,10 @@ class StatusBar(Horizontal):
         indicator.remove_class("on", "off")
 
         if new_value:
-            indicator.update("auto | shift+tab to cycle")
+            indicator.update("AUTO")
             indicator.add_class("on")
         else:
-            indicator.update("manual | shift+tab to cycle")
+            indicator.update("ASK")
             indicator.add_class("off")
 
     def watch_cwd(self, new_value: str) -> None:
@@ -343,11 +349,11 @@ class StatusBar(Horizontal):
             return
 
         if new_value > 0:
-            # Format with K suffix for thousands
+            prefix = "ctx "
             if new_value >= 1000:  # Count formatting threshold
-                display.update(f"{new_value / 1000:.1f}K tokens")
+                display.update(f"{prefix}{new_value / 1000:.1f}K")
             else:
-                display.update(f"{new_value} tokens")
+                display.update(f"{prefix}{new_value}")
         else:
             display.update("")
 

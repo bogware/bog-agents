@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -29,6 +30,8 @@ _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
 
 # Module-level flag to avoid re-creating the shared handler for every caller.
 _shared_handler: RotatingFileHandler | None = None
+_shared_handler_unavailable = False
+_active_log_path: Path | None = None
 
 
 def _get_log_path() -> Path:
@@ -49,31 +52,49 @@ def _ensure_shared_handler() -> RotatingFileHandler | None:
     Returns:
         The shared handler, or ``None`` if the log file could not be opened.
     """
-    global _shared_handler  # noqa: PLW0603
+    global _active_log_path, _shared_handler, _shared_handler_unavailable  # noqa: PLW0603
     if _shared_handler is not None:
         return _shared_handler
-
-    log_path = _get_log_path()
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(
-            str(log_path),
-            maxBytes=_MAX_LOG_BYTES,
-            backupCount=_BACKUP_COUNT,
-            encoding="utf-8",
-        )
-    except OSError as exc:
-        print(  # noqa: T201
-            f"Warning: could not open log file {log_path}: {exc}",
-            file=sys.stderr,
-        )
+    if _shared_handler_unavailable:
         return None
 
-    is_debug = bool(os.environ.get("BOG_AGENTS_DEBUG"))
-    handler.setLevel(logging.DEBUG if is_debug else logging.WARNING)
-    handler.setFormatter(logging.Formatter(_LOG_FORMAT))
-    _shared_handler = handler
-    return handler
+    preferred_path = _get_log_path()
+    fallback_path = (
+        Path(tempfile.gettempdir()) / "bog-agents" / "logs" / "bog_agents.log"
+    )
+    log_paths = [preferred_path]
+    if not os.environ.get("BOG_AGENTS_DEBUG_FILE") and fallback_path != preferred_path:
+        log_paths.append(fallback_path)
+
+    last_error: OSError | None = None
+    for log_path in log_paths:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                str(log_path),
+                maxBytes=_MAX_LOG_BYTES,
+                backupCount=_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            last_error = exc
+            continue
+
+        is_debug = bool(os.environ.get("BOG_AGENTS_DEBUG"))
+        handler.setLevel(logging.DEBUG if is_debug else logging.WARNING)
+        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        _shared_handler = handler
+        _active_log_path = log_path
+        return handler
+
+    _shared_handler_unavailable = True
+    _active_log_path = None
+    if os.environ.get("BOG_AGENTS_DEBUG_FILE") and last_error is not None:
+        print(  # noqa: T201
+            f"Warning: could not open log file {preferred_path}: {last_error}",
+            file=sys.stderr,
+        )
+    return None
 
 
 def configure_debug_logging(target: logging.Logger) -> None:
@@ -111,4 +132,4 @@ def get_log_path() -> Path:
     Returns:
         The path to the current log file.
     """
-    return _get_log_path()
+    return _active_log_path or _get_log_path()

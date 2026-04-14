@@ -1,0 +1,23 @@
+{
+  "active_team": "Core",
+  "teams": [
+    {
+      "name": "Core",
+      "summary": "Release lane",
+      "members": [
+        {
+          "name": "Scout",
+          "role": "reviewer"
+        }
+      ],
+      "messages": [
+        {
+          "body": "Check install flow",
+          "sender": "lead",
+          "created_at": 1776022563.460133
+        }
+      ],
+      "updated_at": 1776022563.4601374
+    }
+  ]
+}

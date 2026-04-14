@@ -1,0 +1,17 @@
+[
+  {
+    "task_id": "run-123",
+    "prompt": "ship it",
+    "label": "scout",
+    "status": "running",
+    "model": "",
+    "working_dir": "",
+    "output": "",
+    "files_changed": [],
+    "error": "",
+    "metadata": {
+      "provider": "ssh",
+      "branch": "sandbox/review-run-123"
+    }
+  }
+]
