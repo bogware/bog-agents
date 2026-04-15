@@ -40,7 +40,7 @@ class ContextChunk:
     def __post_init__(self) -> None:
         """Compute hash if not provided."""
         if not self.chunk_hash:
-            self.chunk_hash = hashlib.md5(self.content.encode()).hexdigest()[:12]
+            self.chunk_hash = hashlib.sha256(self.content.encode()).hexdigest()[:12]
 
 
 @dataclass

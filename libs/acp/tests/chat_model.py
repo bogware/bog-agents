@@ -40,7 +40,7 @@ class GenericFakeChatModel(BaseChatModel):
         # Stream on whitespace (regex) - more flexible
         model = GenericFakeChatModel(
             messages=iter([AIMessage(content="Hello world")]),
-            stream_delimiter=r"(\s)"
+            stream_delimiter=r"(\\s)"
         )
         # Yields: "Hello", " ", "world"
     """
