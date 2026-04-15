@@ -6,7 +6,6 @@ database, etc.) and provide a uniform interface for file operations.
 """
 
 import abc
-import asyncio
 import inspect
 import logging
 from collections.abc import Callable
@@ -14,6 +13,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Literal, NotRequired, TypeAlias
 
+import anyio
 from langchain.tools import ToolRuntime
 from typing_extensions import TypedDict
 
@@ -484,12 +484,22 @@ class SandboxBackendProtocol(BackendProtocol):
         # implementation, not an asyncio.timeout() contract.
         timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecuteResponse:
-        """Async version of execute."""
+        """Async version of execute.
+
+        Uses `anyio.to_thread.run_sync` so this works correctly under both
+        asyncio and trio event loops, including the LangGraph remote server
+        (which runs under anyio).  Using `asyncio.to_thread` inside an anyio
+        context raises `BlockingError` on certain backends.
+        """
         # The middleware layer validates timeout support before calling, so
         # this guard only protects direct callers bypassing the middleware.
+        import functools
+
         if timeout is not None and execute_accepts_timeout(type(self)):
-            return await asyncio.to_thread(self.execute, command, timeout=timeout)
-        return await asyncio.to_thread(self.execute, command)
+            fn = functools.partial(self.execute, command, timeout=timeout)
+        else:
+            fn = functools.partial(self.execute, command)
+        return await anyio.to_thread.run_sync(fn, abandon_on_cancel=True)
 
 
 @lru_cache(maxsize=128)
