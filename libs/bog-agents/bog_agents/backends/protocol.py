@@ -196,7 +196,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def als_info(self, path: str) -> list["FileInfo"]:
         """Async version of ls_info."""
-        return await asyncio.to_thread(self.ls_info, path)
+        return await anyio.to_thread.run_sync(self.ls_info, path)
 
     def read(
         self,
@@ -233,7 +233,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         limit: int = 2000,
     ) -> str:
         """Async version of read."""
-        return await asyncio.to_thread(self.read, file_path, offset, limit)
+        return await anyio.to_thread.run_sync(self.read, file_path, offset, limit)
 
     def grep_raw(
         self,
@@ -283,7 +283,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         glob: str | None = None,
     ) -> list["GrepMatch"] | str:
         """Async version of grep_raw."""
-        return await asyncio.to_thread(self.grep_raw, pattern, path, glob)
+        return await anyio.to_thread.run_sync(self.grep_raw, pattern, path, glob)
 
     def glob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Find files matching a glob pattern.
@@ -306,7 +306,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Async version of glob_info."""
-        return await asyncio.to_thread(self.glob_info, pattern, path)
+        return await anyio.to_thread.run_sync(self.glob_info, pattern, path)
 
     def write(
         self,
@@ -331,7 +331,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         content: str,
     ) -> WriteResult:
         """Async version of write."""
-        return await asyncio.to_thread(self.write, file_path, content)
+        return await anyio.to_thread.run_sync(self.write, file_path, content)
 
     def edit(
         self,
@@ -364,7 +364,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         replace_all: bool = False,
     ) -> EditResult:
         """Async version of edit."""
-        return await asyncio.to_thread(self.edit, file_path, old_string, new_string, replace_all)
+        return await anyio.to_thread.run_sync(self.edit, file_path, old_string, new_string, replace_all)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload multiple files to the sandbox.
@@ -394,7 +394,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Async version of upload_files."""
-        return await asyncio.to_thread(self.upload_files, files)
+        return await anyio.to_thread.run_sync(self.upload_files, files)
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download multiple files from the sandbox.
@@ -414,7 +414,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Async version of download_files."""
-        return await asyncio.to_thread(self.download_files, paths)
+        return await anyio.to_thread.run_sync(self.download_files, paths)
 
 
 @dataclass

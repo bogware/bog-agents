@@ -1,0 +1,69 @@
+name: weekly-report
+description: "Generate a weekly engineering report — commits, metrics, blockers, and next week plan"
+variables:
+  - team_name
+steps:
+  - id: activity-summary
+    type: message
+    text: |
+      Summarise the engineering activity for the past week.
+
+      Run:
+      - git log --since='7 days ago' --oneline --all
+      - git shortlog --since='7 days ago' -sn
+
+      Summarise:
+      - What was shipped / merged
+      - Work in progress
+      - PRs opened and closed
+      - Key decisions made
+
+  - id: metrics
+    type: message
+    text: |
+      Pull together engineering metrics for the week.
+
+      Check:
+      - Test coverage trend (if measurable)
+      - Build success rate
+      - Any performance regressions in recent commits
+      - Open bugs by priority
+      - Technical debt items added or resolved
+
+  - id: blockers-risks
+    type: message
+    text: |
+      Identify current blockers and risks for the {{team_name}} team.
+
+      Look at:
+      - Issues with no activity in 5+ days
+      - PRs awaiting review for 3+ days
+      - TODO/FIXME comments added this week
+      - Any broken CI or failing tests
+
+      List each blocker with: what it is, who owns it, and what's needed to unblock.
+
+  - id: weekly-report
+    type: message
+    text: |
+      Compile everything above into a polished weekly engineering report for the {{team_name}} team.
+
+      Format:
+      ## Week of [date]
+
+      ### Shipped
+      [bullet list of completed work]
+
+      ### In Progress
+      [bullet list with owner and ETA]
+
+      ### Blockers
+      [bullet list with owner and ask]
+
+      ### Metrics Snapshot
+      [key numbers]
+
+      ### Next Week Plan
+      [top 3 priorities with owner]
+
+      Keep it scannable. This goes to leadership and stakeholders.

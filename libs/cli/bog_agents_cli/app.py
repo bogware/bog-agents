@@ -867,6 +867,13 @@ class BogAgentsApp(App):
         # Focus the input (autocomplete is now built into ChatInput)
         self._chat_input.focus_input()
 
+        # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
+        self.run_worker(
+            self._seed_defaults,
+            exclusive=True,
+            group="startup-seed-defaults",
+        )
+
         # Start pipeline scheduler (daemon thread — errors are non-fatal)
         self._init_pipeline_scheduler()
 
@@ -7488,6 +7495,15 @@ class BogAgentsApp(App):
                     f"({result.completed_steps} step{'s' if result.completed_steps != 1 else ''} run)."
                 )
             )
+
+    async def _seed_defaults(self) -> None:  # noqa: PLR6301
+        """Seed built-in default prompts and pipelines (runs once per version, additive)."""
+        try:
+            from bog_agents_cli.defaults_seeder import seed_if_needed
+
+            await asyncio.to_thread(seed_if_needed)
+        except Exception:
+            logger.debug("Default content seeding failed (non-fatal)", exc_info=True)
 
     def _init_pipeline_scheduler(self) -> None:
         """Initialize the pipeline scheduler with a callback that queues steps."""

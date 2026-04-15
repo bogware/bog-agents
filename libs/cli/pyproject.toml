@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     # Framework
-    "bog-agents>=0.6.4,<1.0.0",
+    "bog-agents==0.6.4",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
@@ -141,6 +141,9 @@ test = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["bog_agents_cli"]
+include = [
+    "bog_agents_cli/defaults/**/*",
+]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "bog_agents_cli/default_agent_prompt.md" = "bog_agents_cli/default_agent_prompt.md"

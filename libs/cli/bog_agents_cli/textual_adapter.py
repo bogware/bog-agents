@@ -699,12 +699,12 @@ async def execute_task_textual(
     # users know the displayed state reflects the end of that turn, not the
     # current one.  We then clear the adapter's dict so this turn can either
     # update the widget in-place (if write_todos fires again) or leave it as is.
-    for ns_key, prev_todo_msg in list(adapter._active_todo_messages.items()):
+    for _ns_key, prev_todo_msg in list(adapter._active_todo_messages.items()):
         try:
             existing = str(getattr(prev_todo_msg, "_content", ""))
             prev_todo_msg._content = existing
             prev_todo_msg.update(existing + "\n    [dim]─── previous turn ───[/dim]")
-        except Exception:  # noqa: BLE001  # Never crash on stale-widget cleanup
+        except Exception:  # noqa: S110  # Never crash on stale-widget cleanup
             pass
     adapter._active_todo_messages.clear()
 

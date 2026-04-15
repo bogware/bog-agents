@@ -1,0 +1,64 @@
+name: new-feature
+description: "End-to-end new feature pipeline — design, implement, test, and document"
+variables:
+  - feature_name
+  - feature_description
+steps:
+  - id: design
+    type: message
+    text: |
+      Design the implementation for this new feature.
+
+      Feature: {{feature_name}}
+      Description: {{feature_description}}
+
+      Produce:
+      1. Architecture decision — how does this fit the existing codebase?
+      2. Data model changes (if any)
+      3. API/interface design
+      4. Implementation plan (ordered steps)
+      5. Edge cases and error handling strategy
+      6. Testing approach
+
+  - id: requirements
+    type: prompt
+    name: user-stories
+    variables:
+      feature: "{{feature_name}}: {{feature_description}}"
+      personas: "primary users of this feature"
+      goal: "Deliver {{feature_name}} with quality and full test coverage"
+
+  - id: implement
+    type: message
+    text: |
+      Implement the feature based on the design and user stories above.
+
+      Feature: {{feature_name}}
+
+      Requirements:
+      - Follow existing code patterns and conventions
+      - Add type hints to all new functions
+      - Handle errors gracefully
+      - Don't break existing tests
+
+  - id: test
+    type: message
+    text: |
+      Write a comprehensive test suite for the {{feature_name}} implementation above.
+
+      Cover:
+      - Unit tests for new functions/methods
+      - Integration tests for the feature end-to-end
+      - Edge cases identified in the design step
+      - Regression tests for any areas touched
+
+  - id: document
+    type: message
+    text: |
+      Document the {{feature_name}} feature.
+
+      Produce:
+      1. Updated README section (if user-facing)
+      2. Docstrings for all new public APIs
+      3. Inline comments for non-obvious implementation choices
+      4. CHANGELOG entry in conventional commits format

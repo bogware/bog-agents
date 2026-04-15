@@ -1,0 +1,47 @@
+name: security-scan
+description: "Full security scan — dependencies, code audit, secrets check, and hardening report"
+steps:
+  - id: dependency-audit
+    type: message
+    text: |
+      Audit the project dependencies for security vulnerabilities.
+
+      Run available tools (pip-audit, npm audit, cargo audit, etc.) and check:
+      - Known CVEs in dependencies
+      - Outdated packages with security advisories
+      - Unnecessary dependencies that increase attack surface
+
+      List findings by severity.
+
+  - id: secrets-check
+    type: message
+    text: |
+      Scan the codebase for accidentally committed secrets, credentials, or sensitive data.
+
+      Check for:
+      - API keys, tokens, passwords in source files
+      - Hardcoded URLs pointing to internal infrastructure
+      - .env files or config files that shouldn't be committed
+      - Anything in git history that was "deleted" but is still in commits
+
+      Use: git log --all --full-history -- "**/.env*" and grep for common secret patterns.
+
+  - id: code-audit
+    type: prompt
+    name: security-audit
+    variables:
+      code: "Core application code — run a full security audit of this project's source"
+
+  - id: hardening-report
+    type: message
+    text: |
+      Based on the dependency audit, secrets check, and code audit above, produce a security hardening report.
+
+      Format:
+      ## Critical (fix before next release)
+      ## High (fix this sprint)
+      ## Medium (schedule within 30 days)
+      ## Low (track in backlog)
+      ## Hardening recommendations (proactive improvements)
+
+      Include specific files, line numbers, and remediation steps for each finding.
