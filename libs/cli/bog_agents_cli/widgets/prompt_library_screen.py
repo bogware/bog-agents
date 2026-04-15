@@ -367,7 +367,8 @@ class PromptLibraryScreen(ModalScreen["PromptResult | None"]):
         if query:
             matcher = Matcher(query)
             self._filtered = [
-                e for e in self._entries
+                e
+                for e in self._entries
                 if matcher.match(e.name) or matcher.match(e.description)
             ]
         else:
@@ -381,14 +382,17 @@ class PromptLibraryScreen(ModalScreen["PromptResult | None"]):
         self._row_widgets = []
 
         if not self._filtered:
-            container.mount(Static("No prompts found. Press Ctrl+N to create one.", id="lib-empty"))
+            container.mount(
+                Static("No prompts found. Press Ctrl+N to create one.", id="lib-empty")
+            )
             self._update_preview()
             return
 
         for i, entry in enumerate(self._filtered):
             row = Static(
                 f"[bold]{entry.name}[/bold]  [dim]{entry.description or ''}[/dim]",
-                classes="prompt-row" + (" --highlight" if i == self._selected_index else ""),
+                classes="prompt-row"
+                + (" --highlight" if i == self._selected_index else ""),
             )
             self._row_widgets.append(row)
             container.mount(row)
@@ -452,7 +456,9 @@ class PromptLibraryScreen(ModalScreen["PromptResult | None"]):
         else:
             self.dismiss(PromptResult(entry.body))
 
-    def _on_variables_collected(self, entry: PromptEntry) -> Callable[[dict[str, str] | None], None]:
+    def _on_variables_collected(
+        self, entry: PromptEntry
+    ) -> Callable[[dict[str, str] | None], None]:
         def handler(values: dict[str, str] | None) -> None:
             if values is None:
                 return  # User cancelled variable entry

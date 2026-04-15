@@ -224,7 +224,8 @@ class PipelineScreen(ModalScreen["PipelineRunRequest | None"]):
         if query:
             matcher = Matcher(query)
             self._filtered = [
-                p for p in self._pipelines
+                p
+                for p in self._pipelines
                 if matcher.match(p.name) or matcher.match(p.description)
             ]
         else:
@@ -324,7 +325,9 @@ class PipelineScreen(ModalScreen["PipelineRunRequest | None"]):
         else:
             self.dismiss(PipelineRunRequest(pipeline=pipeline, variable_values={}))
 
-    def _on_variables(self, pipeline: Pipeline) -> Callable[[dict[str, str] | None], None]:
+    def _on_variables(
+        self, pipeline: Pipeline
+    ) -> Callable[[dict[str, str] | None], None]:
         def handler(values: dict[str, str] | None) -> None:
             if values is None:
                 return

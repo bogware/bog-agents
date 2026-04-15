@@ -61,7 +61,9 @@ class PipelineStep:
     id: str
     type: str  # "prompt" | "message" | "slash"
     name: str = ""  # used when type == "prompt"
-    variables: dict[str, str] = field(default_factory=dict)  # used when type == "prompt"
+    variables: dict[str, str] = field(
+        default_factory=dict
+    )  # used when type == "prompt"
     text: str = ""  # used when type == "message"
     command: str = ""  # used when type == "slash"
     description: str = ""
@@ -111,8 +113,7 @@ class Pipeline:
                 msg = f"Prompt '{step.name}' not found in library"
                 raise ValueError(msg)
             resolved_vars = {
-                k: re.sub(_VAR_RE_STR, _sub, v)
-                for k, v in step.variables.items()
+                k: re.sub(_VAR_RE_STR, _sub, v) for k, v in step.variables.items()
             }
             return entry.render(resolved_vars)
         msg = f"Unknown step type: {step.type!r}"
@@ -360,7 +361,7 @@ class PipelineScheduler:
 
         scheduler = PipelineScheduler(run_callback)
         scheduler.start()
-        scheduler.reload()   # call whenever pipelines change
+        scheduler.reload()  # call whenever pipelines change
         scheduler.stop()
     """
 
@@ -436,7 +437,9 @@ class PipelineScheduler:
                     try:
                         self._run_callback(pipeline, {})
                     except Exception:
-                        logger.exception("Error running scheduled pipeline: %s", pipeline.name)
+                        logger.exception(
+                            "Error running scheduled pipeline: %s", pipeline.name
+                        )
             except Exception:
                 logger.exception("Scheduler error checking pipeline: %s", pipeline.name)
 
@@ -463,7 +466,9 @@ class PipelineScheduler:
             cron = croniter(pipeline.schedule, now - self._check_interval)
             next_time = cron.get_next(float)
         except Exception:
-            logger.warning("Invalid cron expression for '%s': %s", pipeline.name, pipeline.schedule)
+            logger.warning(
+                "Invalid cron expression for '%s': %s", pipeline.name, pipeline.schedule
+            )
             return False
 
         last = self._last_fired.get(pipeline.name, 0.0)

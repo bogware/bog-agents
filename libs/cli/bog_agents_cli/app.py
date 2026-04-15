@@ -7510,7 +7510,9 @@ class BogAgentsApp(App):
         from bog_agents_cli.pipeline import get_scheduler
         from bog_agents_cli.widgets.pipeline_screen import PipelineRunRequest
 
-        def scheduled_pipeline_callback(pipeline: Pipeline, variable_values: dict[str, str]) -> None:
+        def scheduled_pipeline_callback(
+            pipeline: Pipeline, variable_values: dict[str, str]
+        ) -> None:
             """Called by the scheduler when a pipeline is due — post to app event loop."""
             req = PipelineRunRequest(pipeline=pipeline, variable_values=variable_values)
             self.call_from_thread(self._run_pipeline_request, req)
