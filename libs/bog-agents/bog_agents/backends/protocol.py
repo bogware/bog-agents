@@ -196,7 +196,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def als_info(self, path: str) -> list["FileInfo"]:
         """Async version of ls_info."""
-        return await anyio.to_thread.run_sync(self.ls_info, path)
+        return await anyio.to_thread.run_sync(self.ls_info, path)  # ty: ignore[unresolved-attribute]
 
     def read(
         self,
@@ -233,7 +233,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         limit: int = 2000,
     ) -> str:
         """Async version of read."""
-        return await anyio.to_thread.run_sync(self.read, file_path, offset, limit)
+        return await anyio.to_thread.run_sync(self.read, file_path, offset, limit)  # ty: ignore[unresolved-attribute]
 
     def grep_raw(
         self,
@@ -283,7 +283,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         glob: str | None = None,
     ) -> list["GrepMatch"] | str:
         """Async version of grep_raw."""
-        return await anyio.to_thread.run_sync(self.grep_raw, pattern, path, glob)
+        return await anyio.to_thread.run_sync(self.grep_raw, pattern, path, glob)  # ty: ignore[unresolved-attribute]
 
     def glob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Find files matching a glob pattern.
@@ -306,7 +306,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Async version of glob_info."""
-        return await anyio.to_thread.run_sync(self.glob_info, pattern, path)
+        return await anyio.to_thread.run_sync(self.glob_info, pattern, path)  # ty: ignore[unresolved-attribute]
 
     def write(
         self,
@@ -331,7 +331,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         content: str,
     ) -> WriteResult:
         """Async version of write."""
-        return await anyio.to_thread.run_sync(self.write, file_path, content)
+        return await anyio.to_thread.run_sync(self.write, file_path, content)  # ty: ignore[unresolved-attribute]
 
     def edit(
         self,
@@ -364,7 +364,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         replace_all: bool = False,
     ) -> EditResult:
         """Async version of edit."""
-        return await anyio.to_thread.run_sync(self.edit, file_path, old_string, new_string, replace_all)
+        return await anyio.to_thread.run_sync(self.edit, file_path, old_string, new_string, replace_all)  # ty: ignore[unresolved-attribute]
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload multiple files to the sandbox.
@@ -394,7 +394,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Async version of upload_files."""
-        return await anyio.to_thread.run_sync(self.upload_files, files)
+        return await anyio.to_thread.run_sync(self.upload_files, files)  # ty: ignore[unresolved-attribute]
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download multiple files from the sandbox.
@@ -414,7 +414,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Async version of download_files."""
-        return await anyio.to_thread.run_sync(self.download_files, paths)
+        return await anyio.to_thread.run_sync(self.download_files, paths)  # ty: ignore[unresolved-attribute]
 
 
 @dataclass
@@ -499,7 +499,7 @@ class SandboxBackendProtocol(BackendProtocol):
             fn = functools.partial(self.execute, command, timeout=timeout)
         else:
             fn = functools.partial(self.execute, command)
-        return await anyio.to_thread.run_sync(fn, abandon_on_cancel=True)
+        return await anyio.to_thread.run_sync(fn, abandon_on_cancel=True)  # ty: ignore[unresolved-attribute]
 
 
 @lru_cache(maxsize=128)
