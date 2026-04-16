@@ -95,8 +95,10 @@ if TYPE_CHECKING:
 
     from bog_agents_cli.ask_user import AskUserWidgetResult, Question
     from bog_agents_cli.mcp_tools import MCPServerInfo
+    from bog_agents_cli.pipeline import Pipeline
     from bog_agents_cli.remote_client import RemoteAgent
     from bog_agents_cli.server import ServerProcess
+    from bog_agents_cli.widgets.pipeline_screen import PipelineRunRequest
 
 # iTerm2 Cursor Guide Workaround
 # ===============================
@@ -609,9 +611,11 @@ class BogAgentsApp(App):
         "/migrate": "_handle_migrate_command",
         "/model": "_handle_model_command",
         "/onboard": "_dispatch_onboard_command",
+        "/pipeline": "_handle_pipeline_command",
         "/plan": "_handle_plan_command",
         "/permissions": "_handle_permissions_command",
         "/plugin": "_handle_plugin_command",
+        "/prompt": "_handle_prompt_command",
         "/preview": "_handle_preview_command",
         "/profile": "_handle_profile_command",
         "/q": "_handle_quit_command",
@@ -863,6 +867,16 @@ class BogAgentsApp(App):
         # Focus the input (autocomplete is now built into ChatInput)
         self._chat_input.focus_input()
 
+        # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
+        self.run_worker(
+            self._seed_defaults,
+            exclusive=True,
+            group="startup-seed-defaults",
+        )
+
+        # Start pipeline scheduler (daemon thread — errors are non-fatal)
+        self._init_pipeline_scheduler()
+
         # Warn about missing optional tools (advisory only — never block startup)
         try:
             from bog_agents_cli.main import (
@@ -1106,20 +1120,45 @@ class BogAgentsApp(App):
     def _scroll_chat_to_bottom(self) -> None:
         """Scroll chat to bottom using sticky scroll pattern.
 
-        Only scrolls if user is already at/near the bottom.
-        This prevents dragging the user back if they've scrolled up to read.
-        """
-        chat = self.query_one("#chat", VerticalScroll)
+        Only scrolls if user is already at/near the bottom so we don't
+        interrupt reading when the user has deliberately scrolled up.
 
-        # Nothing to scroll if content fits in viewport
-        if chat.max_scroll_y <= 0:
+        The check is deferred via `call_after_refresh` when Textual hasn't
+        finished the layout pass yet (`max_scroll_y == 0` before layout),
+        which was the root cause of intermittent non-scrolling.
+        """
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+        except Exception:
             return
 
-        # Sticky scroll: only scroll to bottom if user is near the bottom
-        # "Near" means within 100 pixels of the bottom (about 6-7 lines)
-        distance_from_bottom = chat.max_scroll_y - chat.scroll_y
-        if distance_from_bottom < 100:  # Pixel distance threshold for sticky scroll
+        total = chat.max_scroll_y
+        if total <= 0:
+            # Layout pass hasn't run yet — defer one frame and retry once.
+            # This handles the common case where content was just mounted and
+            # the scroll container hasn't measured its new height.
+            self.call_after_refresh(self._scroll_chat_to_bottom_immediate)
+            return
+
+        # Sticky scroll: scroll only when user is within 15% of the bottom
+        # (or 200px, whichever is larger) — tolerant enough to handle partial
+        # tool-output expansion without snapping away mid-read.
+        threshold = max(200, int(total * 0.15))
+        if (total - chat.scroll_y) < threshold:
             chat.scroll_end(animate=False)
+
+    def _scroll_chat_to_bottom_immediate(self) -> None:
+        """Deferred scroll — called after the layout pass completes.
+
+        Scrolls unconditionally (no sticky check) because this is only invoked
+        when we already determined the user should scroll but the layout wasn't
+        ready during `_scroll_chat_to_bottom`.
+        """
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+            chat.scroll_end(animate=False)
+        except Exception:  # noqa: S110
+            pass
 
     def _check_hydration_needed(self) -> None:
         """Check if we need to hydrate messages from the store.
@@ -7383,6 +7422,107 @@ class BogAgentsApp(App):
         finally:
             self._mouse_down_position = None
             self._mouse_drag_distance = 0
+
+    # =========================================================================
+    # Prompt Library
+    # =========================================================================
+
+    async def _handle_prompt_command(self, _command: str) -> None:
+        """Open the prompt library picker modal."""
+        from bog_agents_cli.widgets.prompt_library_screen import (
+            PromptLibraryScreen,
+            PromptResult,
+        )
+
+        def handle_result(result: PromptResult | None) -> None:
+            if result is not None:
+                self.call_later(self._send_prompt_to_agent, result.text)
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(PromptLibraryScreen(), handle_result)
+
+    # =========================================================================
+    # Pipelines
+    # =========================================================================
+
+    async def _handle_pipeline_command(self, _command: str) -> None:
+        """Open the pipeline picker modal and execute the selected pipeline."""
+        from bog_agents_cli.widgets.pipeline_screen import (
+            PipelineScreen,
+        )
+
+        def handle_result(result: PipelineRunRequest | None) -> None:
+            if result is not None:
+                self.call_later(self._run_pipeline_request, result)
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(PipelineScreen(), handle_result)
+
+    async def _run_pipeline_request(self, request: PipelineRunRequest) -> None:
+        """Execute a pipeline request step by step."""
+        from bog_agents_cli.pipeline import execute_pipeline
+
+        pipeline = request.pipeline
+        variable_values = request.variable_values
+
+        await self._mount_message(
+            AppMessage(
+                f"Running pipeline [bold]{pipeline.name}[/bold] "
+                f"({len(pipeline.steps)} step{'s' if len(pipeline.steps) != 1 else ''})…"
+            )
+        )
+
+        async def on_step(step_index: int, step_id: str, rendered_text: str) -> None:
+            await self._mount_message(
+                AppMessage(f"Step [{step_index + 1}/{len(pipeline.steps)}]: {step_id}")
+            )
+            await self._send_prompt_to_agent(rendered_text)
+            # Wait for the agent to finish before moving to the next step
+            if self._agent_worker is not None:
+                await self._agent_worker.wait()
+
+        result = await execute_pipeline(pipeline, variable_values, on_step=on_step)
+
+        if result.errors:
+            for error in result.errors:
+                await self._mount_message(ErrorMessage(error))
+        else:
+            await self._mount_message(
+                AppMessage(
+                    f"Pipeline [bold]{pipeline.name}[/bold] completed "
+                    f"({result.completed_steps} step{'s' if result.completed_steps != 1 else ''} run)."
+                )
+            )
+
+    async def _seed_defaults(self) -> None:  # noqa: PLR6301
+        """Seed built-in default prompts and pipelines (runs once per version, additive)."""
+        try:
+            from bog_agents_cli.defaults_seeder import seed_if_needed
+
+            await asyncio.to_thread(seed_if_needed)
+        except Exception:
+            logger.debug("Default content seeding failed (non-fatal)", exc_info=True)
+
+    def _init_pipeline_scheduler(self) -> None:
+        """Initialize the pipeline scheduler with a callback that queues steps."""
+        from bog_agents_cli.pipeline import get_scheduler
+        from bog_agents_cli.widgets.pipeline_screen import PipelineRunRequest
+
+        def scheduled_pipeline_callback(
+            pipeline: Pipeline, variable_values: dict[str, str]
+        ) -> None:
+            """Called by the scheduler when a pipeline is due — post to app event loop."""
+            req = PipelineRunRequest(pipeline=pipeline, variable_values=variable_values)
+            self.call_from_thread(self._run_pipeline_request, req)
+
+        try:
+            scheduler = get_scheduler(scheduled_pipeline_callback)
+            scheduler.reload()
+            logger.info("Pipeline scheduler initialized")
+        except Exception:
+            logger.warning("Could not initialize pipeline scheduler", exc_info=True)
 
     # =========================================================================
     # Model Switching

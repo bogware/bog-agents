@@ -93,7 +93,7 @@ def _read_with_pypdf2(file_path: str, start_page: int, end_page: int) -> str:
     Returns:
         Extracted text.
     """
-    from PyPDF2 import PdfReader  # type: ignore[import-untyped]
+    from PyPDF2 import PdfReader
 
     reader = PdfReader(file_path)
     total_pages = len(reader.pages)
@@ -123,7 +123,7 @@ def _read_with_pdfplumber(file_path: str, start_page: int, end_page: int) -> str
     Returns:
         Extracted text.
     """
-    import pdfplumber  # type: ignore[import-untyped]
+    import pdfplumber
 
     with pdfplumber.open(file_path) as pdf:
         total_pages = len(pdf.pages)
@@ -153,7 +153,7 @@ def _read_with_pymupdf(file_path: str, start_page: int, end_page: int) -> str:
     Returns:
         Extracted text.
     """
-    import fitz  # type: ignore[import-untyped]
+    import fitz
 
     doc = fitz.open(file_path)
     total_pages = len(doc)

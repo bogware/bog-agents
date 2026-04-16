@@ -6,7 +6,6 @@ database, etc.) and provide a uniform interface for file operations.
 """
 
 import abc
-import asyncio
 import inspect
 import logging
 from collections.abc import Callable
@@ -14,6 +13,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Literal, NotRequired, TypeAlias
 
+import anyio
 from langchain.tools import ToolRuntime
 from typing_extensions import TypedDict
 
@@ -196,7 +196,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def als_info(self, path: str) -> list["FileInfo"]:
         """Async version of ls_info."""
-        return await asyncio.to_thread(self.ls_info, path)
+        return await anyio.to_thread.run_sync(self.ls_info, path)  # ty: ignore[unresolved-attribute]
 
     def read(
         self,
@@ -233,7 +233,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         limit: int = 2000,
     ) -> str:
         """Async version of read."""
-        return await asyncio.to_thread(self.read, file_path, offset, limit)
+        return await anyio.to_thread.run_sync(self.read, file_path, offset, limit)  # ty: ignore[unresolved-attribute]
 
     def grep_raw(
         self,
@@ -283,7 +283,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         glob: str | None = None,
     ) -> list["GrepMatch"] | str:
         """Async version of grep_raw."""
-        return await asyncio.to_thread(self.grep_raw, pattern, path, glob)
+        return await anyio.to_thread.run_sync(self.grep_raw, pattern, path, glob)  # ty: ignore[unresolved-attribute]
 
     def glob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Find files matching a glob pattern.
@@ -306,7 +306,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aglob_info(self, pattern: str, path: str = "/") -> list["FileInfo"]:
         """Async version of glob_info."""
-        return await asyncio.to_thread(self.glob_info, pattern, path)
+        return await anyio.to_thread.run_sync(self.glob_info, pattern, path)  # ty: ignore[unresolved-attribute]
 
     def write(
         self,
@@ -331,7 +331,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         content: str,
     ) -> WriteResult:
         """Async version of write."""
-        return await asyncio.to_thread(self.write, file_path, content)
+        return await anyio.to_thread.run_sync(self.write, file_path, content)  # ty: ignore[unresolved-attribute]
 
     def edit(
         self,
@@ -364,7 +364,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         replace_all: bool = False,
     ) -> EditResult:
         """Async version of edit."""
-        return await asyncio.to_thread(self.edit, file_path, old_string, new_string, replace_all)
+        return await anyio.to_thread.run_sync(self.edit, file_path, old_string, new_string, replace_all)  # ty: ignore[unresolved-attribute]
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload multiple files to the sandbox.
@@ -394,7 +394,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def aupload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Async version of upload_files."""
-        return await asyncio.to_thread(self.upload_files, files)
+        return await anyio.to_thread.run_sync(self.upload_files, files)  # ty: ignore[unresolved-attribute]
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download multiple files from the sandbox.
@@ -414,7 +414,7 @@ class BackendProtocol(abc.ABC):  # noqa: B024
 
     async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Async version of download_files."""
-        return await asyncio.to_thread(self.download_files, paths)
+        return await anyio.to_thread.run_sync(self.download_files, paths)  # ty: ignore[unresolved-attribute]
 
 
 @dataclass
@@ -484,12 +484,22 @@ class SandboxBackendProtocol(BackendProtocol):
         # implementation, not an asyncio.timeout() contract.
         timeout: int | None = None,  # noqa: ASYNC109
     ) -> ExecuteResponse:
-        """Async version of execute."""
+        """Async version of execute.
+
+        Uses `anyio.to_thread.run_sync` so this works correctly under both
+        asyncio and trio event loops, including the LangGraph remote server
+        (which runs under anyio).  Using `asyncio.to_thread` inside an anyio
+        context raises `BlockingError` on certain backends.
+        """
         # The middleware layer validates timeout support before calling, so
         # this guard only protects direct callers bypassing the middleware.
+        import functools
+
         if timeout is not None and execute_accepts_timeout(type(self)):
-            return await asyncio.to_thread(self.execute, command, timeout=timeout)
-        return await asyncio.to_thread(self.execute, command)
+            fn = functools.partial(self.execute, command, timeout=timeout)
+        else:
+            fn = functools.partial(self.execute, command)
+        return await anyio.to_thread.run_sync(fn, abandon_on_cancel=True)  # ty: ignore[unresolved-attribute]
 
 
 @lru_cache(maxsize=128)

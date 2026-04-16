@@ -22,6 +22,10 @@ on:
           - bog-agents-cli
         default: bog-agents
 
+concurrency:
+  group: release-${{ inputs.package }}
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: "3.11"
   UV_NO_SYNC: "true"

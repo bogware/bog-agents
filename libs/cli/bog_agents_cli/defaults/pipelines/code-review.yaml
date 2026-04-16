@@ -1,0 +1,22 @@
+name: code-review
+description: "Full code review pipeline — diff, security scan, test coverage check, and summary"
+variables:
+  - branch
+steps:
+  - id: show-diff
+    type: message
+    text: "Show me the full diff for branch {{branch}} against main. Run: git diff main...{{branch}} --stat and then git diff main...{{branch}}"
+
+  - id: security-check
+    type: prompt
+    name: security-audit
+    variables:
+      code: "{{step.show-diff.output}}"
+
+  - id: test-coverage
+    type: message
+    text: "Check the test coverage situation for the changes in this diff. Are there new functions or modules with no tests? List any coverage gaps."
+
+  - id: review-summary
+    type: prompt
+    name: review-senior-engineer

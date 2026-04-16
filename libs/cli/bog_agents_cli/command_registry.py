@@ -228,6 +228,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/pipeline",
+        "Run a saved pipeline (chained prompts, skills, slash commands)",
+        "workflow chain schedule cron automate steps yaml",
+        "general",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/plan",
         "Toggle read-only plan mode",
         "readonly architect",
@@ -239,6 +246,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Manage plugins and extensions (list/info/install/enable/disable)",
         "marketplace skills extensions",
         "config",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/prompt",
+        "Browse and run saved prompts with variable substitution",
+        "template library saved custom variable",
+        "general",
         available=True,
     ),
     SlashCommandSpec(

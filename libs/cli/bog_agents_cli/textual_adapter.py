@@ -525,6 +525,9 @@ class TextualUIAdapter:
         # State tracking
         self._current_tool_messages: dict[str, ToolCallMessage] = {}
         self._token_tracker: Any = None
+        # Persist todo widgets across turns so they are updated in-place rather
+        # than mounting duplicate widgets.  Keyed by namespace tuple.
+        self._active_todo_messages: dict[tuple, Any] = {}
 
     def set_token_tracker(self, tracker: Any) -> None:  # noqa: ANN401  # Dynamic tracker type from Textual
         """Set the token tracker for usage tracking."""
@@ -691,7 +694,23 @@ async def execute_task_textual(
     # when multiple subagents stream in parallel
     pending_text_by_namespace: dict[tuple, str] = {}
     assistant_message_by_namespace: dict[tuple, Any] = {}
-    todo_message_by_namespace: dict[tuple, AppMessage] = {}
+
+    # Finalize todos from the previous turn: add a dim "turn ended" footer so
+    # users know the displayed state reflects the end of that turn, not the
+    # current one.  We then clear the adapter's dict so this turn can either
+    # update the widget in-place (if write_todos fires again) or leave it as is.
+    for _ns_key, prev_todo_msg in list(adapter._active_todo_messages.items()):
+        try:
+            existing = str(getattr(prev_todo_msg, "_content", ""))
+            prev_todo_msg._content = existing
+            prev_todo_msg.update(existing + "\n    [dim]─── previous turn ───[/dim]")
+        except Exception:  # noqa: S110  # Never crash on stale-widget cleanup
+            pass
+    adapter._active_todo_messages.clear()
+
+    # Alias for readability — todos now live on the adapter so they survive
+    # across loop iterations and can be updated in-place.
+    todo_message_by_namespace = adapter._active_todo_messages
 
     # Clear media from tracker after creating the message
     if image_tracker:

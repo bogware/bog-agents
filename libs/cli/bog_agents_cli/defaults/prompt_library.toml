@@ -1,0 +1,767 @@
+# Default prompt library for bog-agents-cli.
+# Seeded additively to ~/.bog-agents/prompt_library.toml on first run.
+# User edits are never overwritten.
+
+# ============================================================
+# CODING
+# ============================================================
+
+[prompts.code-review]
+description = "Thorough code review with actionable feedback"
+body = """
+Review the following code thoroughly. Point out bugs, security issues, performance problems, and style concerns. For each issue provide a severity (critical / major / minor), a clear explanation, and a concrete fix.
+
+Code to review:
+{{code}}
+"""
+variables = ["code"]
+
+[prompts.explain-code]
+description = "Plain-English explanation of a code snippet"
+body = """
+Explain the following code in plain English. Start with a one-sentence summary of what it does, then walk through the logic step by step. Note any non-obvious tricks or gotchas.
+
+```
+{{code}}
+```
+"""
+variables = ["code"]
+
+[prompts.refactor]
+description = "Refactor code for clarity, performance, and maintainability"
+body = """
+Refactor the following {{language}} code. Goals:
+- Improve readability and naming
+- Reduce duplication
+- Apply idiomatic patterns for {{language}}
+- Preserve all existing behaviour (no feature changes)
+
+Show the refactored code and a brief summary of what changed and why.
+
+```{{language}}
+{{code}}
+```
+"""
+variables = ["language", "code"]
+
+[prompts.add-tests]
+description = "Generate a comprehensive test suite for code"
+body = """
+Write a comprehensive test suite for the following {{language}} code using {{test_framework}}.
+
+Cover:
+- Happy path
+- Edge cases and boundary conditions
+- Error/exception paths
+- Any documented contracts or invariants
+
+```{{language}}
+{{code}}
+```
+"""
+variables = ["language", "test_framework", "code"]
+
+[prompts.debug-help]
+description = "Systematic debug session for a failing piece of code"
+body = """
+Help me debug this issue.
+
+**Error / symptom:**
+{{error}}
+
+**Code:**
+```
+{{code}}
+```
+
+**What I've already tried:**
+{{tried}}
+
+Walk me through possible root causes ranked by likelihood, then suggest a concrete debugging plan.
+"""
+variables = ["error", "code", "tried"]
+
+[prompts.security-audit]
+description = "Security-focused code audit"
+body = """
+Perform a security audit of the following code. Check for OWASP Top 10 vulnerabilities, injection flaws, insecure dependencies, authentication/authorisation gaps, data exposure risks, and any other security concerns.
+
+For each finding: severity (Critical / High / Medium / Low), description, and recommended fix.
+
+```
+{{code}}
+```
+"""
+variables = ["code"]
+
+[prompts.document-code]
+description = "Generate docstrings and inline comments for code"
+body = """
+Add comprehensive documentation to the following {{language}} code:
+- Module/file-level docstring
+- Function/method docstrings (include parameters, return values, exceptions)
+- Inline comments for non-obvious logic
+
+Return only the fully-documented code.
+
+```{{language}}
+{{code}}
+```
+"""
+variables = ["language", "code"]
+
+[prompts.api-design]
+description = "Design a clean REST or GraphQL API for a feature"
+body = """
+Design a clean {{api_type}} API for the following feature:
+
+{{feature_description}}
+
+Include:
+- Endpoint definitions with HTTP methods, paths, request/response schemas
+- Authentication/authorisation approach
+- Error response formats
+- Pagination strategy (if applicable)
+- Versioning strategy
+
+Keep it practical — this should be ready to hand to a developer.
+"""
+variables = ["api_type", "feature_description"]
+
+[prompts.performance-optimize]
+description = "Find and fix performance bottlenecks in code"
+body = """
+Analyse the following {{language}} code for performance bottlenecks. Identify the top issues by impact, explain why they're slow, and provide optimised alternatives with expected improvement.
+
+```{{language}}
+{{code}}
+```
+
+Context: {{context}}
+"""
+variables = ["language", "code", "context"]
+
+# ============================================================
+# ENGINEERING REVIEWS
+# ============================================================
+
+[prompts.review-ceo]
+description = "Holistic release review from a CEO perspective"
+body = """
+Review this codebase / release with the eyes of a CEO doing a holistic deep dive. You are laser-focused on product quality, market fit, user experience, competitive positioning, and business risk.
+
+Evaluate:
+1. **Product readiness** — Is this ready to ship to real customers? What would embarrass the company?
+2. **User experience** — First-run experience, onboarding, error messages, overall polish.
+3. **Competitive positioning** — How does this stack up against alternatives? What's the moat?
+4. **Business risk** — Reliability, security, legal/compliance, support burden.
+5. **Growth levers** — What's missing that would dramatically increase adoption?
+6. **Executive summary** — Ship it, fix first, or back to the drawing board?
+
+Be direct. No sugarcoating. This is a board-level conversation.
+"""
+
+[prompts.review-cto]
+description = "Technical release review from a CTO / Principal Scientist perspective"
+body = """
+Review this codebase as a CTO and Principal Scientist evaluating technical quality, architecture soundness, and long-term maintainability.
+
+Evaluate:
+1. **Architecture** — Is the design sound? Will it scale? Hidden coupling or fragility?
+2. **Code quality** — Consistency, test coverage, observability, error handling.
+3. **Security posture** — Attack surface, dependency risk, secrets hygiene.
+4. **Operational readiness** — Logging, metrics, alerting, deployment story.
+5. **Technical debt** — What will bite us in 6 months? What shortcuts were taken?
+6. **Innovation & leverage** — Are we using the right tools and patterns for the domain?
+7. **Verdict** — What's the critical path to production-grade?
+
+Speak plainly. Flag showstoppers first.
+"""
+
+[prompts.review-bug-hunter]
+description = "Senior SRE bug hunt — find all issues and fix easy ones on the fly"
+body = """
+You are a Senior SRE and Principal Engineer on a bug hunt. Your mission: find EVERY issue in this codebase — bugs, crashes, race conditions, memory leaks, missing error handling, incorrect logic, flaky behaviour — and fix the easy ones on the fly.
+
+For each issue found:
+- **Severity**: P0 (outage) / P1 (data loss / major UX) / P2 (degraded) / P3 (cosmetic)
+- **Location**: file + line
+- **Root cause**: one sentence
+- **Fix**: code patch for easy wins; detailed recommendation for complex ones
+
+Start with a count of total issues found. Prioritise P0s. Don't stop until you've combed through everything.
+"""
+
+[prompts.review-architecture]
+description = "Senior AI Architect design review"
+body = """
+Review this system as a Senior AI Architect. Assess the overall design with a focus on AI/ML system concerns.
+
+Evaluate:
+1. **Agent / model design** — Prompt quality, context management, tool use patterns, output reliability.
+2. **Data flow** — How information moves through the system; where it could degrade or leak.
+3. **Observability** — Tracing, evals, cost tracking, latency monitoring.
+4. **Resilience** — Retry logic, fallbacks, graceful degradation under model failures.
+5. **Scalability** — Will this hold up at 10x traffic? 100x?
+6. **Safety & alignment** — Are guardrails in place? What could go sideways?
+7. **Recommendations** — Top 3 architectural changes that would most improve the system.
+"""
+
+[prompts.review-senior-engineer]
+description = "Senior Principal Engineer review focused on install, run, and use"
+body = """
+Review this project as a Senior Principal Engineer focused on the developer and end-user experience of actually installing, running, and using it.
+
+Walk through:
+1. **Install** — Clone to running in under 5 minutes? What breaks?
+2. **First run** — Confusing prompts, missing defaults, unhelpful error messages?
+3. **Core workflows** — Do the main features actually work end-to-end?
+4. **Documentation** — Does the README match reality? Are examples copy-pasteable?
+5. **Rough edges** — What's the most annoying thing about using this day-to-day?
+6. **Quick wins** — Top 5 fixes that would most improve the experience without a major rewrite.
+
+Be the grumpy engineer who actually uses the tool. No diplomatic hedging.
+"""
+
+[prompts.solidify-codebase]
+description = "Refine and harden the existing foundation without adding features"
+body = """
+Your mission: solidify this codebase. No new features. Purely refine and harden what's already here.
+
+Focus areas:
+1. **Error handling** — Every exception should be caught, logged, and fail gracefully.
+2. **Input validation** — Sanitise and validate at all system boundaries.
+3. **Test coverage** — Identify and fill critical gaps; no untested happy paths.
+4. **Observability** — Structured logging, meaningful error messages, debug context.
+5. **Consistency** — Naming, patterns, style — pick one way and apply it everywhere.
+6. **Dependency hygiene** — Unused imports, outdated packages, security advisories.
+7. **Documentation** — Docstrings on all public APIs; README matches current behaviour.
+
+Produce a prioritised list of changes, then implement the top tier.
+"""
+
+[prompts.killer-features]
+description = "Competitive analysis and high-impact feature recommendations"
+body = """
+Analyse this project and recommend killer features that would make it genuinely competitive and drive adoption.
+
+Research approach:
+1. **Competitive landscape** — Who are the top 5 competitors? What do they do best?
+2. **User pain points** — What do users complain about in this category? (Check GitHub issues, Reddit, HN)
+3. **Gaps** — What does every competitor lack that users are asking for?
+4. **Differentiation** — What unique angle could this project own?
+5. **Feature recommendations** — Top 5 features ranked by: user impact × implementation effort⁻¹
+6. **Quick wins** — What could ship in a sprint and generate buzz?
+
+Be specific. "Better UX" is not a feature. Show me the thing.
+"""
+
+[prompts.genesis-project]
+description = "Create the foundation for a brand-new project"
+body = """
+Create the foundation for a new {{language}} project called {{project_name}}.
+
+Project description: {{description}}
+
+Deliver:
+1. **Project structure** — Directory layout with brief explanation of each directory's purpose.
+2. **Core files** — pyproject.toml / package.json / Makefile / Dockerfile as appropriate.
+3. **Entry point** — Minimal working skeleton that runs without errors.
+4. **README** — Install, quickstart, and development guide.
+5. **CI skeleton** — GitHub Actions workflow for lint + test.
+6. **First commit message** — Conventional Commits format.
+
+Make it production-ready from day one. No cowboy scaffolding.
+"""
+variables = ["language", "project_name", "description"]
+
+# ============================================================
+# CREATIVE WRITING
+# ============================================================
+
+[prompts.short-story]
+description = "Write a short story from a premise"
+body = """
+Write a compelling short story (800–1200 words) based on the following premise:
+
+{{premise}}
+
+Genre: {{genre}}
+Tone: {{tone}}
+
+Include a strong opening hook, rising tension, and a memorable ending. Show, don't tell.
+"""
+variables = ["premise", "genre", "tone"]
+
+[prompts.comic-script]
+description = "Write a comic book script for a scene"
+body = """
+Write a comic book script for the following scene in standard panel-by-panel format.
+
+Scene: {{scene}}
+Characters: {{characters}}
+Tone: {{tone}}
+
+Include panel descriptions, dialogue, and caption boxes. Aim for {{page_count}} pages.
+"""
+variables = ["scene", "characters", "tone", "page_count"]
+
+[prompts.tv-episode]
+description = "Outline and write a TV episode treatment"
+body = """
+Write a TV episode treatment for the following show and premise.
+
+Show: {{show_title}}
+Genre: {{genre}}
+Episode premise: {{premise}}
+
+Deliver:
+- Cold open / teaser
+- Act-by-act breakdown (3 acts)
+- A-plot and B-plot
+- Character moments and arc progression
+- Ending / cliffhanger
+
+Keep it tight — this is a writer's room pitch, not a novel.
+"""
+variables = ["show_title", "genre", "premise"]
+
+[prompts.poem]
+description = "Write a poem in a specified style"
+body = """
+Write a poem about {{subject}}.
+
+Style: {{style}}
+Mood: {{mood}}
+Length: {{length}}
+
+Push for fresh imagery. No greeting-card clichés.
+"""
+variables = ["subject", "style", "mood", "length"]
+
+[prompts.song-lyrics]
+description = "Write song lyrics for a given genre and theme"
+body = """
+Write original song lyrics for a {{genre}} song about {{theme}}.
+
+Structure: {{structure}}
+Mood: {{mood}}
+
+Include verses, chorus, and a bridge. Prioritise imagery and singability over literal description.
+"""
+variables = ["genre", "theme", "structure", "mood"]
+
+[prompts.world-building]
+description = "Build out a fictional world from a seed concept"
+body = """
+Build out a fictional world from this seed concept: {{concept}}
+
+Develop:
+1. **Geography & climate** — Shape the world physically.
+2. **History** — Key events that explain how things got this way.
+3. **Factions & power** — Who controls what and why?
+4. **Culture & daily life** — What's it like to live here?
+5. **Magic / technology** — What are the rules of this world?
+6. **Conflicts** — What tension drives the stories set here?
+7. **Hooks** — 3 story seeds that naturally emerge from this world.
+"""
+variables = ["concept"]
+
+[prompts.screenplay-scene]
+description = "Write a screenplay scene in proper format"
+body = """
+Write a screenplay scene in standard format (INT./EXT., action lines, dialogue).
+
+Setting: {{setting}}
+Characters: {{characters}}
+Scene goal: {{goal}}
+Tone: {{tone}}
+
+Keep action lines lean. Let subtext do the heavy lifting in dialogue.
+"""
+variables = ["setting", "characters", "goal", "tone"]
+
+[prompts.character-profile]
+description = "Develop a deep character profile for fiction"
+body = """
+Create a deep character profile for {{character_name}} in {{story_context}}.
+
+Cover:
+- Background and formative experiences
+- Core beliefs and contradictions
+- Wants (surface) vs. needs (deep)
+- Voice and speech patterns
+- Relationships and dynamics
+- Fatal flaw and greatest strength
+- How they change across the story arc
+"""
+variables = ["character_name", "story_context"]
+
+# ============================================================
+# BUSINESS
+# ============================================================
+
+[prompts.business-proposal]
+description = "Write a professional business proposal"
+body = """
+Write a professional business proposal for the following opportunity:
+
+Client: {{client}}
+Opportunity: {{opportunity}}
+Our solution: {{solution}}
+Budget range: {{budget}}
+
+Structure: Executive Summary → Problem → Proposed Solution → Scope of Work → Timeline → Investment → Next Steps.
+
+Keep it concise, persuasive, and client-focused.
+"""
+variables = ["client", "opportunity", "solution", "budget"]
+
+[prompts.executive-summary]
+description = "Summarise a document or situation for an executive audience"
+body = """
+Write an executive summary of the following for a C-suite audience.
+
+Content to summarise:
+{{content}}
+
+The summary should be 200–300 words. Lead with the recommendation or key finding. Use plain language — no jargon. End with clear next steps.
+"""
+variables = ["content"]
+
+[prompts.email-professional]
+description = "Draft a professional email"
+body = """
+Draft a professional email with the following parameters:
+
+To: {{recipient}}
+Purpose: {{purpose}}
+Key points to convey: {{key_points}}
+Desired action: {{desired_action}}
+Tone: {{tone}}
+
+Keep it concise. Lead with the ask. One clear call-to-action.
+"""
+variables = ["recipient", "purpose", "key_points", "desired_action", "tone"]
+
+[prompts.cold-outreach]
+description = "Write a personalised cold outreach message"
+body = """
+Write a personalised cold outreach message for the following scenario.
+
+Prospect: {{prospect}}
+Their company/role: {{prospect_context}}
+My offering: {{offering}}
+Specific hook / reason for reaching out: {{hook}}
+Channel: {{channel}}
+
+Keep it under 100 words. Lead with value, not features. No pitching in the first message.
+"""
+variables = ["prospect", "prospect_context", "offering", "hook", "channel"]
+
+[prompts.pitch-deck]
+description = "Outline a startup pitch deck"
+body = """
+Create a pitch deck outline for {{company_name}}.
+
+Company description: {{description}}
+Stage: {{stage}}
+Ask: {{ask}}
+
+Provide slide-by-slide outline covering: Problem, Solution, Market Size, Product, Traction, Business Model, Team, Competition, Go-to-Market, Financials (high-level), Ask.
+
+For each slide: title, 3 key bullets, and one data point or visual suggestion.
+"""
+variables = ["company_name", "description", "stage", "ask"]
+
+[prompts.press-release]
+description = "Write a press release for an announcement"
+body = """
+Write a press release for the following announcement.
+
+Company: {{company}}
+Announcement: {{announcement}}
+Date: {{date}}
+Key quote from: {{spokesperson}}
+
+Standard AP style. Inverted pyramid. Include a boilerplate "About {{company}}" section.
+"""
+variables = ["company", "announcement", "date", "spokesperson"]
+
+[prompts.linkedin-post]
+description = "Write an engaging LinkedIn post"
+body = """
+Write an engaging LinkedIn post about the following topic.
+
+Topic: {{topic}}
+Angle / key insight: {{angle}}
+Call to action: {{cta}}
+
+Tone: conversational but professional. Hook in the first line. No hashtag spam — max 3 relevant tags.
+"""
+variables = ["topic", "angle", "cta"]
+
+# ============================================================
+# AGILE / PROJECT MANAGEMENT
+# ============================================================
+
+[prompts.user-stories]
+description = "Generate user stories with acceptance criteria"
+body = """
+Generate user stories for the following feature.
+
+Feature: {{feature}}
+Users / personas: {{personas}}
+Business goal: {{goal}}
+
+For each story use the format:
+As a [persona], I want [capability] so that [benefit].
+
+Acceptance Criteria (Given / When / Then).
+
+Include edge cases and negative paths. Flag any stories that are epics needing further breakdown.
+"""
+variables = ["feature", "personas", "goal"]
+
+[prompts.sprint-retrospective]
+description = "Facilitate a sprint retrospective"
+body = """
+Facilitate a sprint retrospective for the following sprint.
+
+Sprint goal: {{sprint_goal}}
+What happened: {{summary}}
+Team size: {{team_size}}
+
+Structure as:
+1. **What went well** — 3–5 observations
+2. **What didn't go well** — 3–5 observations
+3. **Root causes** — For top 2 problems, 5-Whys analysis
+4. **Action items** — Specific, owned, time-boxed improvements for next sprint
+
+Keep it constructive. No blame, only systems.
+"""
+variables = ["sprint_goal", "summary", "team_size"]
+
+[prompts.requirements-doc]
+description = "Write a product requirements document (PRD)"
+body = """
+Write a Product Requirements Document for the following feature.
+
+Feature: {{feature}}
+Product: {{product}}
+Stakeholders: {{stakeholders}}
+
+Sections:
+1. Overview & motivation
+2. Goals and non-goals
+3. User personas and use cases
+4. Functional requirements (numbered)
+5. Non-functional requirements (performance, security, scalability)
+6. Constraints and assumptions
+7. Success metrics
+8. Open questions
+"""
+variables = ["feature", "product", "stakeholders"]
+
+[prompts.risk-assessment]
+description = "Perform a project risk assessment"
+body = """
+Perform a risk assessment for the following project.
+
+Project: {{project}}
+Timeline: {{timeline}}
+Team: {{team}}
+Key dependencies: {{dependencies}}
+
+For each risk: probability (H/M/L), impact (H/M/L), risk score (P×I), mitigation strategy, and owner.
+
+Prioritise top 10 risks. Include a risk heat map in text form.
+"""
+variables = ["project", "timeline", "team", "dependencies"]
+
+[prompts.okr-creation]
+description = "Create OKRs for a team or company"
+body = """
+Create OKRs (Objectives and Key Results) for the following context.
+
+Team/Company: {{team}}
+Quarter: {{quarter}}
+Strategic priorities: {{priorities}}
+
+Format:
+**Objective** (inspirational, qualitative)
+  - KR1: [measurable outcome] — baseline: X, target: Y
+  - KR2: ...
+  - KR3: ...
+
+Create 3–5 objectives, each with 3 key results. Make KRs measurable, ambitious but achievable.
+"""
+variables = ["team", "quarter", "priorities"]
+
+# ============================================================
+# RESEARCH & ANALYSIS
+# ============================================================
+
+[prompts.market-analysis]
+description = "Conduct a market analysis for a product or idea"
+body = """
+Conduct a market analysis for the following.
+
+Product/idea: {{product}}
+Target geography: {{geography}}
+Target customer: {{customer}}
+
+Cover:
+1. Market size (TAM / SAM / SOM estimates)
+2. Key players and market share
+3. Market trends driving growth or decline
+4. Customer segments and buying behaviour
+5. Barriers to entry
+6. Distribution channels
+7. Conclusion: Is this worth pursuing?
+"""
+variables = ["product", "geography", "customer"]
+
+[prompts.compare-options]
+description = "Compare multiple options with a structured analysis"
+body = """
+Compare the following options for {{decision}}.
+
+Options: {{options}}
+Key criteria: {{criteria}}
+Context: {{context}}
+
+Deliver:
+1. A comparison matrix (options vs. criteria, rated 1–5)
+2. Pros and cons for each option
+3. Trade-off analysis
+4. Recommendation with rationale
+
+Be opinionated. Don't just list facts — make a call.
+"""
+variables = ["decision", "options", "criteria", "context"]
+
+[prompts.decision-framework]
+description = "Build a decision framework for a complex choice"
+body = """
+Help me build a decision framework for the following choice.
+
+Decision: {{decision}}
+Constraints: {{constraints}}
+Stakeholders: {{stakeholders}}
+Timeline: {{timeline}}
+
+Provide:
+1. Decision criteria (weighted)
+2. Information needed before deciding
+3. Reversibility assessment
+4. Option scoring matrix
+5. Recommended process for reaching consensus
+"""
+variables = ["decision", "constraints", "stakeholders", "timeline"]
+
+[prompts.research-summary]
+description = "Summarise research or a body of literature"
+body = """
+Summarise the following research/content on {{topic}}.
+
+Content:
+{{content}}
+
+Structure:
+1. **Key findings** — What do we now know?
+2. **Consensus** — What's well-established?
+3. **Controversy** — Where do experts disagree?
+4. **Gaps** — What remains unknown?
+5. **Implications** — So what? What should we do differently?
+
+Keep it tight. Lead with the most important insight.
+"""
+variables = ["topic", "content"]
+
+[prompts.swot-analysis]
+description = "Perform a SWOT analysis"
+body = """
+Perform a SWOT analysis for {{subject}}.
+
+Context: {{context}}
+
+For each quadrant provide 4–6 specific, evidence-based points (not generic platitudes).
+
+Then add:
+- **Strategic implications** — How do strengths address threats? How do opportunities offset weaknesses?
+- **Priority actions** — Top 3 moves based on the SWOT
+
+Subject: {{subject}}
+"""
+variables = ["subject", "context"]
+
+# ============================================================
+# PERSONAL PRODUCTIVITY
+# ============================================================
+
+[prompts.action-plan]
+description = "Create a concrete action plan for a goal"
+body = """
+Create a concrete action plan to achieve the following goal.
+
+Goal: {{goal}}
+Deadline: {{deadline}}
+Resources available: {{resources}}
+Known obstacles: {{obstacles}}
+
+Deliver:
+1. Milestones with dates
+2. Weekly action items
+3. Success metrics
+4. Risk mitigation for top 2 obstacles
+5. First action to take TODAY
+
+Make it specific and honest about what it will take.
+"""
+variables = ["goal", "deadline", "resources", "obstacles"]
+
+[prompts.learning-plan]
+description = "Design a learning plan for a new skill"
+body = """
+Design a learning plan for the following skill.
+
+Skill: {{skill}}
+Current level: {{current_level}}
+Target level: {{target_level}}
+Time available: {{time_available}} per week
+Deadline: {{deadline}}
+
+Include:
+1. Learning roadmap (phases with milestones)
+2. Recommended resources (books, courses, projects)
+3. Practice schedule
+4. Progress checkpoints
+5. How to know when you've reached the target level
+"""
+variables = ["skill", "current_level", "target_level", "time_available", "deadline"]
+
+[prompts.explain-simply]
+description = "Explain a complex topic to a non-expert"
+body = """
+Explain {{topic}} to someone with no background in {{field}}.
+
+Use an analogy from everyday life. Avoid jargon — if you must use a technical term, define it immediately. End with the one thing they should remember if they forget everything else.
+"""
+variables = ["topic", "field"]
+
+[prompts.deep-journal]
+description = "Guided journaling prompt for reflection and clarity"
+body = """
+Guide me through a deep reflection on: {{situation}}
+
+Ask me 5 powerful questions that will help me:
+1. See the situation more clearly
+2. Identify my assumptions
+3. Understand what I actually want
+4. Recognise what's in my control
+5. Choose a next step
+
+Then, based on my answers, help me synthesise the insight into one clear statement of intent.
+"""
+variables = ["situation"]

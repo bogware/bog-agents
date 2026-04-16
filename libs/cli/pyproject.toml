@@ -59,7 +59,8 @@ dependencies = [
     "python-dotenv>=1.0.0,<2.0.0",
     "requests>=2.0.0,<3.0.0",
     "pillow>=10.0.0,<13.0.0",
-    "pyyaml>=6.0.0",
+    "pyyaml>=6.0.0,<7.0.0",
+    "croniter>=3.0.0,<4.0.0",
     "aiosqlite>=0.19.0,<1.0.0",
     "tomli-w>=1.0.0,<2.0.0",
 
@@ -140,6 +141,9 @@ test = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["bog_agents_cli"]
+include = [
+    "bog_agents_cli/defaults/**/*",
+]
 
 [tool.hatch.build.targets.wheel.shared-data]
 "bog_agents_cli/default_agent_prompt.md" = "bog_agents_cli/default_agent_prompt.md"

@@ -1,0 +1,29 @@
+name: sprint-planning
+description: "Sprint planning prep — backlog summary, velocity check, and sprint goal draft"
+variables:
+  - sprint_number
+  - team_size
+steps:
+  - id: backlog-review
+    type: message
+    text: "Summarise the current state of the backlog. List open issues grouped by priority (P0/P1/P2). Note any that are blocked or have unclear requirements. Use: git log, open GitHub issues, or any TODO/FIXME comments in the codebase."
+
+  - id: velocity-check
+    type: message
+    text: "Based on recent commit history and completed work, what's a realistic capacity estimate for a {{team_size}}-person team for sprint {{sprint_number}}? Factor in any known holidays, reviews, or on-call rotations."
+
+  - id: sprint-goal
+    type: message
+    text: |
+      Given the backlog review and velocity estimate, draft:
+      1. A sprint goal (one sentence, outcome-focused)
+      2. A proposed sprint backlog (top 5–8 items with rough estimates)
+      3. Risks or dependencies that could derail the sprint
+
+  - id: user-stories
+    type: prompt
+    name: user-stories
+    variables:
+      feature: "Sprint {{sprint_number}} planned work"
+      personas: "developers, end users"
+      goal: "Deliver sprint goal on time with quality"
