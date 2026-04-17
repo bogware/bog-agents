@@ -76,7 +76,11 @@ class PromptEntry:
                 msg = f"Missing required variable '{{var}}' for prompt '{self.name}'"
                 raise KeyError(msg)
             result = result.replace(f"{{{{{var}}}}}", values[var])
-        return result
+        from bog_agents_cli.vars_store import (
+            resolve_vars,  # deferred to avoid circular import
+        )
+
+        return resolve_vars(result)
 
     def missing_variables(self, provided: dict[str, str]) -> list[str]:
         """Return variable names present in the body but not in *provided*.

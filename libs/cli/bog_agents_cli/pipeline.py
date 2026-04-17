@@ -97,14 +97,18 @@ class Pipeline:
         """
         import re
 
+        from bog_agents_cli.vars_store import (
+            resolve_vars,  # deferred to avoid circular import
+        )
+
         def _sub(m: re.Match) -> str:
             key = m.group(1)
             return values.get(key, m.group(0))
 
         if step.type == "message":
-            return re.sub(_VAR_RE_STR, _sub, step.text)
+            return resolve_vars(re.sub(_VAR_RE_STR, _sub, step.text))
         if step.type == "slash":
-            return re.sub(_VAR_RE_STR, _sub, step.command)
+            return resolve_vars(re.sub(_VAR_RE_STR, _sub, step.command))
         if step.type == "prompt":
             from bog_agents_cli.prompt_library import get_prompt
 
@@ -115,7 +119,9 @@ class Pipeline:
             resolved_vars = {
                 k: re.sub(_VAR_RE_STR, _sub, v) for k, v in step.variables.items()
             }
-            return entry.render(resolved_vars)
+            return entry.render(
+                resolved_vars
+            )  # render() calls resolve_vars() internally
         msg = f"Unknown step type: {step.type!r}"
         raise ValueError(msg)
 

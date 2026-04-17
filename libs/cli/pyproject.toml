@@ -66,6 +66,9 @@ dependencies = [
 
     # MCP
     "langchain-mcp-adapters>=0.2.0,<1.0.0",
+
+    # Secret store (optional OS keyring backend; falls back to 0600 TOML)
+    "keyring>=25.0.0,<27.0.0",
 ]
 
 [project.optional-dependencies]

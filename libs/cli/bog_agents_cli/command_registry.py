@@ -426,6 +426,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/vars",
+        "Manage secrets and variables (API keys, URLs, tokens)",
+        "secrets env config keys tokens credentials",
+        "config",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/version",
         "Show CLI and SDK versions",
         "build release",

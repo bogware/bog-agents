@@ -718,6 +718,7 @@ class BogAgentsApp(App):
         "/tokens": "_handle_tokens_command",
         "/trace": "_handle_trace_command",
         "/undo": "_handle_undo_command",
+        "/vars": "_handle_vars_command",
         "/version": "_handle_version_command",
         "/worktree": "_handle_worktree_command",
     }
@@ -7812,6 +7813,165 @@ class BogAgentsApp(App):
         prompt = get_prompt("onboard", default_prompt)
         await self._mount_message(AppMessage("Starting interactive codebase tour..."))
         await self._send_prompt_to_agent(prompt)
+
+    # =========================================================================
+    # /vars — secret / variable store
+    # =========================================================================
+
+    async def _handle_vars_command(self, command: str) -> None:
+        """Handle /vars — manage secrets and configuration variables.
+
+        Usage:
+          /vars                   — list all variable names
+          /vars list              — list all variable names
+          /vars set KEY VALUE     — store a variable (prompts if VALUE omitted)
+          /vars get KEY           — show the value of a variable (masked)
+          /vars delete KEY        — remove a variable
+          /vars show KEY          — show the raw value (unmasked; use carefully)
+
+        Variables are referenced in prompts and pipelines as ``{{vars.KEY}}``.
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.vars_store import (
+            delete_var,
+            get_var,
+            list_var_names,
+            set_var,
+            var_backend,
+        )
+
+        tail = command[len("/vars"):].strip()
+        parts = tail.split(maxsplit=2)
+        action = parts[0].lower() if parts else "list"
+
+        # ---- list ----
+        if action in ("list", ""):
+            names = list_var_names()
+            if not names:
+                await self._mount_message(
+                    AppMessage(
+                        "No variables stored yet.\n"
+                        "Use [bold]/vars set KEY VALUE[/bold] to add one.\n\n"
+                        "Example: [dim]/vars set JIRA_API_KEY mytoken123[/dim]"
+                    )
+                )
+                return
+
+            lines = ["[bold]Stored variables[/bold] (values hidden)\n"]
+            for name in names:
+                backend = var_backend(name)
+                icon = "🔒" if backend == "keyring" else "📄"
+                lines.append(f"  {icon} [cyan]{name}[/cyan]  [dim]({backend})[/dim]")
+            lines.append(
+                "\n[dim]Reference in prompts/pipelines as [bold]{{vars.NAME}}[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- set ----
+        elif action == "set":
+            if len(parts) < 2:  # noqa: PLR2004
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars set KEY VALUE[/bold]")
+                )
+                return
+            key = parts[1]
+            value = parts[2] if len(parts) > 2 else ""  # noqa: PLR2004
+            if not value:
+                await self._mount_message(
+                    AppMessage(
+                        f"Usage: [bold]/vars set {key} <value>[/bold]\n"
+                        "[dim]Tip: value is everything after the key name[/dim]"
+                    )
+                )
+                return
+            try:
+                backend = set_var(key, value)
+                icon = "🔒" if backend == "keyring" else "📄"
+                await self._mount_message(
+                    AppMessage(
+                        f"{icon} [green]Set[/green] [cyan]{key}[/cyan] "
+                        f"[dim]({backend})[/dim]"
+                    )
+                )
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+
+        # ---- get (masked) ----
+        elif action == "get":
+            if len(parts) < 2:  # noqa: PLR2004
+                await self._mount_message(AppMessage("Usage: [bold]/vars get KEY[/bold]"))
+                return
+            key = parts[1]
+            try:
+                value = get_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if value is None:
+                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+                return
+            masked = value[:2] + "*" * max(0, len(value) - 4) + value[-2:] if len(value) > 4 else "****"
+            backend = var_backend(key)
+            await self._mount_message(
+                AppMessage(
+                    f"[cyan]{key}[/cyan] = [yellow]{masked}[/yellow]  "
+                    f"[dim]({backend} — use /vars show {key} to reveal)[/dim]"
+                )
+            )
+
+        # ---- show (unmasked) ----
+        elif action == "show":
+            if len(parts) < 2:  # noqa: PLR2004
+                await self._mount_message(AppMessage("Usage: [bold]/vars show KEY[/bold]"))
+                return
+            key = parts[1]
+            try:
+                value = get_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if value is None:
+                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+                return
+            await self._mount_message(
+                AppMessage(f"[cyan]{key}[/cyan] = [yellow]{value}[/yellow]")
+            )
+
+        # ---- delete ----
+        elif action in ("delete", "del", "remove", "rm"):
+            if len(parts) < 2:  # noqa: PLR2004
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars delete KEY[/bold]")
+                )
+                return
+            key = parts[1]
+            try:
+                deleted = delete_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if deleted:
+                await self._mount_message(
+                    AppMessage(f"[green]Deleted[/green] [cyan]{key}[/cyan]")
+                )
+            else:
+                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/vars[/bold] — secret and variable store\n\n"
+                    "  [cyan]/vars list[/cyan]            — list all variable names\n"
+                    "  [cyan]/vars set KEY VALUE[/cyan]   — store a variable securely\n"
+                    "  [cyan]/vars get KEY[/cyan]         — show masked value\n"
+                    "  [cyan]/vars show KEY[/cyan]        — show raw value (unmasked)\n"
+                    "  [cyan]/vars delete KEY[/cyan]      — remove a variable\n\n"
+                    "[dim]Reference in prompts/pipelines: [bold]{{vars.KEY}}[/bold][/dim]"
+                )
+            )
 
     # =========================================================================
     # /image — multimodal image input
