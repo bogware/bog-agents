@@ -7,7 +7,9 @@ on the host machine with full system access.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import subprocess
 import uuid
 import warnings
@@ -19,9 +21,46 @@ from bog_agents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
 if TYPE_CHECKING:
     from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_EXECUTE_TIMEOUT = 120
 """Default timeout in seconds for shell command execution."""
+
+# Patterns that indicate destructive or exfiltration-risk commands.
+# These gate on human approval when HITL middleware is active; without HITL
+# they log a warning so the risk is surfaced in agent traces.
+_DANGEROUS_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/", re.IGNORECASE),  # rm -rf /...
+    re.compile(r"rm\s+-[a-zA-Z]*r", re.IGNORECASE),  # rm -r*
+    re.compile(r":()\{:\|:&\};:", re.IGNORECASE),  # fork bomb
+    re.compile(r"mkfs\b", re.IGNORECASE),  # filesystem format
+    re.compile(r"dd\s+.*\bof=/dev/", re.IGNORECASE),  # raw device write
+    re.compile(r">\s*/dev/(s?d[a-z]|nvme|xvd)", re.IGNORECASE),  # redirect to block dev
+    re.compile(r"curl\s+.*\|\s*(ba)?sh", re.IGNORECASE),  # pipe URL to shell
+    re.compile(r"wget\s+.*\|\s*(ba)?sh", re.IGNORECASE),  # wget pipe to shell
+    re.compile(r"curl\s+.*\|\s*python", re.IGNORECASE),  # pipe URL to python
+    re.compile(r"chmod\s+(-[a-zA-Z]+\s+)?777\s+/", re.IGNORECASE),  # world-write root
+    re.compile(r"chown\s+.*\s+/", re.IGNORECASE),  # chown root path
+    re.compile(r"nc\s+.*-e\s", re.IGNORECASE),  # netcat exec
+    re.compile(r"\beval\s+.*base64", re.IGNORECASE),  # eval base64 payload
+    re.compile(r"shutdown|reboot|halt|poweroff", re.IGNORECASE),  # system shutdown
+]
+
+
+def _check_dangerous(command: str) -> str | None:
+    """Return a human-readable warning if *command* matches a dangerous pattern.
+
+    Returns:
+        Warning string, or ``None`` if the command appears safe.
+    """
+    for pattern in _DANGEROUS_PATTERNS:
+        if pattern.search(command):
+            return (
+                f"Potentially dangerous command blocked by safety gate: {command!r} "
+                f"(matched pattern: {pattern.pattern!r}). "
+                "If this is intentional, set allow_dangerous=True on execute()."
+            )
+    return None
 
 
 class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
@@ -215,6 +254,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         command: str,
         *,
         timeout: int | None = None,
+        allow_dangerous: bool = False,
     ) -> ExecuteResponse:
         r"""Execute a shell command directly on the host system.
 
@@ -249,6 +289,9 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 Overrides the default timeout set at init.
 
                 If None, uses the default.
+            allow_dangerous: Bypass the built-in dangerous-command gate. Only set
+                this when the caller has already obtained explicit human approval
+                (e.g., HITL middleware confirmed the command). Defaults to False.
 
         Returns:
             ExecuteResponse containing:
@@ -289,6 +332,16 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 exit_code=1,
                 truncated=False,
             )
+
+        if not allow_dangerous:
+            warning = _check_dangerous(command)
+            if warning:
+                logger.warning("DANGEROUS COMMAND GATE: %s", warning)
+                return ExecuteResponse(
+                    output=f"Error: {warning}",
+                    exit_code=1,
+                    truncated=False,
+                )
 
         effective_timeout = timeout if timeout is not None else self._default_timeout
         if effective_timeout <= 0:

@@ -377,6 +377,83 @@ def _new_thread_id() -> str:
     return generate_thread_id()
 
 
+def _read_clipboard_image() -> bytes | None:
+    """Attempt to read raw image bytes from the system clipboard.
+
+    Supports:
+    - Linux (Wayland): wl-paste --type image/png
+    - Linux (X11): xclip -selection clipboard -t image/png -o
+    - macOS: pngpaste or osascript
+
+    Returns:
+        Raw PNG bytes if an image is on the clipboard, else None.
+    """
+    import shutil
+    import subprocess  # noqa: S404  # clipboard helpers require subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    try:
+        if sys.platform == "darwin":
+            if shutil.which("pngpaste"):
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    tmp = f.name
+                result = subprocess.run(  # noqa: S603
+                    ["pngpaste", tmp], capture_output=True, check=False
+                )
+                if result.returncode == 0:
+                    data = Path(tmp).read_bytes()
+                    Path(tmp).unlink(missing_ok=True)
+                    return data or None
+            return None
+
+        if shutil.which("wl-paste"):
+            result = subprocess.run(
+                ["wl-paste", "--type", "image/png"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+
+        if shutil.which("xclip"):
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+async def _get_current_git_branch() -> str | None:
+    """Return the current git branch name, or None if not in a git repo.
+
+    Returns:
+        Branch name string, or None.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            branch = stdout.decode().strip()
+            return branch if branch != "HEAD" else None
+    except (OSError, FileNotFoundError):
+        pass
+    return None
+
+
 class TextualSessionState:
     """Session state for the Textual app."""
 
@@ -603,6 +680,7 @@ class BogAgentsApp(App):
         "/feedback": "_handle_reference_url_command",
         "/health": "_handle_health_command",
         "/help": "_handle_help_command",
+        "/image": "_handle_image_command",
         "/init": "_dispatch_init_command",
         "/infra": "_handle_infra_command",
         "/keybindings": "_handle_keybindings_command",
@@ -615,6 +693,7 @@ class BogAgentsApp(App):
         "/plan": "_handle_plan_command",
         "/permissions": "_handle_permissions_command",
         "/plugin": "_handle_plugin_command",
+        "/pr": "_handle_pr_command",
         "/prompt": "_handle_prompt_command",
         "/preview": "_handle_preview_command",
         "/profile": "_handle_profile_command",
@@ -671,6 +750,7 @@ class BogAgentsApp(App):
         assistant_id: str | None = None,
         backend: CompositeBackend | None = None,
         auto_approve: bool = False,
+        auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
         initial_prompt: str | None = None,
@@ -689,6 +769,7 @@ class BogAgentsApp(App):
             assistant_id: Agent identifier for memory storage
             backend: Backend for file operations
             auto_approve: Whether to start with auto-approve enabled
+            auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
             initial_prompt: Optional prompt to auto-submit when session starts
@@ -713,6 +794,7 @@ class BogAgentsApp(App):
         self._assistant_id = assistant_id or "agent"
         self._backend = backend
         self._auto_approve = auto_approve
+        self._auto_commit = auto_commit
         self._cwd = str(cwd) if cwd else str(Path.cwd())
         # Avoid collision with App._thread_id
         self._lc_thread_id = thread_id
@@ -866,6 +948,19 @@ class BogAgentsApp(App):
 
         # Focus the input (autocomplete is now built into ChatInput)
         self._chat_input.focus_input()
+
+        # Fire session.start hook (non-blocking fire-and-forget)
+        from bog_agents_cli.hooks import dispatch_hook_fire_and_forget
+
+        dispatch_hook_fire_and_forget(
+            "session.start",
+            {
+                "thread_id": self._lc_thread_id or "",
+                "cwd": self._cwd,
+                "auto_approve": self._auto_approve,
+                "auto_commit": self._auto_commit,
+            },
+        )
 
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
@@ -6484,6 +6579,16 @@ class BogAgentsApp(App):
         if isinstance(turn_stats, SessionStats):
             self._session_stats.merge(turn_stats)
 
+        # Auto-commit after each successful agent turn
+        if self._auto_commit and turn_stats is not None:
+            from bog_agents_cli.auto_commit import run_auto_commit
+
+            sha = await run_auto_commit(cwd=Path(self._cwd))
+            if sha:
+                await self._mount_message(
+                    AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
+                )
+
     async def _process_next_from_queue(self) -> None:
         """Process the next message from the queue if any exist.
 
@@ -7708,6 +7813,250 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage("Starting interactive codebase tour..."))
         await self._send_prompt_to_agent(prompt)
 
+    # =========================================================================
+    # /image — multimodal image input
+    # =========================================================================
+
+    async def _handle_image_command(self, command: str) -> None:
+        """Handle /image — attach an image file or paste from clipboard.
+
+        Usage:
+          /image                     — paste image from clipboard
+          /image analyze <path>      — describe/analyze an image file
+          /image to-code <path>      — convert screenshot to code
+          /image paste               — explicit clipboard paste
+
+        Args:
+            command: Full slash command string (e.g. "/image analyze foo.png").
+        """
+        from bog_agents_cli.image_cli import (
+            detect_image_in_input,
+            format_image_info,
+            is_image_file,
+            parse_image_command,
+        )
+
+        tail = command[len("/image") :].strip()
+        parsed = (
+            parse_image_command(tail)
+            if tail
+            else {"action": "paste", "arg1": "", "arg2": ""}
+        )
+        action = parsed["action"]
+        arg1 = parsed.get("arg1", "")
+
+        # ------------------------------------------------------------------
+        # Clipboard paste (default when no args given)
+        # ------------------------------------------------------------------
+        if action in ("paste", "") or (not tail):
+            from bog_agents_cli.clipboard import read_clipboard_text
+
+            clip = read_clipboard_text()
+            if clip and detect_image_in_input(clip):
+                # Clipboard contains a path reference to an image
+                img_path = detect_image_in_input(clip)
+                await self._submit_image_file(
+                    img_path, "Analyze this image from clipboard"
+                )
+                return
+
+            # Try reading raw image bytes from clipboard (platform-specific)
+            img_bytes = _read_clipboard_image()
+            if img_bytes:
+                await self._submit_image_bytes(
+                    img_bytes, "image/png", "Describe and analyze this image"
+                )
+                return
+
+            self.notify(
+                "No image found in clipboard. Use `/image analyze <path>` to attach a file.",
+                severity="warning",
+                timeout=4,
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # File-based actions
+        # ------------------------------------------------------------------
+        path_str = arg1 or detect_image_in_input(tail) or ""
+        if not path_str:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/image analyze <path>[/bold] or [bold]/image to-code <path>[/bold]"
+                )
+            )
+            return
+
+        if not is_image_file(path_str):
+            self.notify(
+                f"Not a supported image: {path_str}", severity="warning", timeout=3
+            )
+            return
+
+        info = format_image_info(path_str)
+        extra = parsed.get("arg2", "")
+
+        if action == "to-code":
+            framework = extra or "appropriate framework"
+            user_prompt = f"Convert this screenshot to working {framework} code. Output only the code."
+        else:
+            user_prompt = (
+                f"Analyze this image and describe what you see in detail. "
+                f"{'Focus on: ' + extra if extra else ''}"
+            ).strip()
+
+        await self._submit_image_file(path_str, user_prompt, info_line=info)
+
+    async def _submit_image_file(
+        self,
+        path: str,
+        user_prompt: str,
+        info_line: str = "",
+    ) -> None:
+        """Load an image file and send it to the agent with a text prompt.
+
+        Args:
+            path: Filesystem path to the image.
+            user_prompt: Text instruction for the agent.
+            info_line: Optional human-readable info shown before sending.
+        """
+        import mimetypes
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.exists():  # noqa: ASYNC240  # sync stat is fast; no async Path available in this Textual context
+            self.notify(f"Image not found: {path}", severity="error", timeout=3)
+            return
+
+        mime_type, _ = mimetypes.guess_type(str(p))
+        mime_type = mime_type or "image/png"
+        img_bytes = await asyncio.to_thread(p.read_bytes)
+        await self._submit_image_bytes(
+            img_bytes, mime_type, user_prompt, info_line=info_line or str(p)
+        )
+
+    async def _submit_image_bytes(
+        self,
+        img_bytes: bytes,
+        mime_type: str,
+        user_prompt: str,
+        info_line: str = "image",
+    ) -> None:
+        """Encode image bytes as base64 and send a multimodal message to the agent.
+
+        Args:
+            img_bytes: Raw image bytes.
+            mime_type: MIME type string (e.g. 'image/png').
+            user_prompt: Accompanying text prompt.
+            info_line: Display label shown in the chat.
+        """
+        import base64  # deferred import keeps startup fast
+
+        b64 = base64.standard_b64encode(img_bytes).decode()
+
+        await self._mount_message(UserMessage(f"[Image: {info_line}] {user_prompt}"))
+
+        # Build Anthropic-compatible vision content block
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": b64,
+                },
+            },
+            {"type": "text", "text": user_prompt},
+        ]
+
+        # _send_prompt_to_agent accepts str; for multimodal we serialize as a
+        # structured marker the agent layer recognises when present.
+        import json
+
+        structured = json.dumps({"__multimodal__": True, "content": content})
+        await self._send_prompt_to_agent(structured)
+
+    # =========================================================================
+    # /pr — pull request management
+    # =========================================================================
+
+    async def _handle_pr_command(self, command: str) -> None:
+        """Handle /pr — create, list, or review pull requests.
+
+        Usage:
+          /pr              — list open PRs
+          /pr list         — list open PRs
+          /pr create [title] — create a PR from the current branch
+          /pr review <num>  — show review comments for PR #num
+          /pr describe      — auto-generate a PR description from git log
+          /pr conflicts     — show and help resolve merge conflicts
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.pr_cli import (
+            PRInfo,
+            generate_conflict_resolution_prompt,
+            generate_pr_prompt,
+            parse_pr_command,
+        )
+
+        tail = command[len("/pr") :].strip()
+        parsed = parse_pr_command(tail)
+        action = parsed["action"]
+        argument = parsed.get("argument", "")
+
+        if action in ("list", ""):
+            prompt = (
+                "List all open pull requests for the current repository. "
+                "Show the PR number, title, author, and status. "
+                "Use `gh pr list` or the GitHub API."
+            )
+            await self._mount_message(UserMessage("/pr list"))
+
+        elif action == "create":
+            title = argument or "auto-generated title"
+            # Get current branch name
+            branch = await _get_current_git_branch()
+            info = PRInfo(
+                number=0,
+                title=title,
+                head_branch=branch or "",
+            )
+            prompt = generate_pr_prompt(info)
+            await self._mount_message(UserMessage(f"/pr create {title}".strip()))
+
+        elif action == "review":
+            if not argument:
+                self.notify("Usage: /pr review <number>", severity="warning", timeout=3)
+                return
+            prompt = (
+                f"Show the review comments and status for pull request #{argument}. "
+                "Summarize the feedback and list any unresolved threads."
+            )
+            await self._mount_message(UserMessage(f"/pr review {argument}"))
+
+        elif action == "describe":
+            prompt = (
+                "Auto-generate a clear, concise pull request description based on "
+                "the current git log and staged diff. Use conventional commit style. "
+                "Output: title line, blank line, bullet-point summary of changes."
+            )
+            await self._mount_message(UserMessage("/pr describe"))
+
+        elif action in ("conflicts", "conflict"):
+            prompt = generate_conflict_resolution_prompt()
+            await self._mount_message(UserMessage("/pr conflicts"))
+
+        else:
+            prompt = (
+                f"Handle the following pull request action: {action} {argument}. "
+                "Use git and GitHub CLI (`gh`) commands as needed."
+            )
+            await self._mount_message(UserMessage(f"/pr {action} {argument}".strip()))
+
+        await self._send_prompt_to_agent(prompt)
+
     async def _show_mcp_viewer(self) -> None:
         """Show read-only MCP server/tool viewer as a modal screen."""
         from bog_agents_cli.widgets.mcp_viewer import MCPViewerScreen
@@ -8093,6 +8442,7 @@ async def run_textual_app(
     assistant_id: str | None = None,
     backend: CompositeBackend | None = None,
     auto_approve: bool = False,
+    auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
     initial_prompt: str | None = None,
@@ -8113,6 +8463,7 @@ async def run_textual_app(
         assistant_id: Agent identifier for memory storage.
         backend: Backend for file operations.
         auto_approve: Whether to start with auto-approve enabled.
+        auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
         initial_prompt: Optional prompt to auto-submit when session starts.
@@ -8134,6 +8485,7 @@ async def run_textual_app(
         assistant_id=assistant_id,
         backend=backend,
         auto_approve=auto_approve,
+        auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,
         initial_prompt=initial_prompt,

@@ -78,6 +78,11 @@ async def _connect() -> AsyncIterator[aiosqlite.Connection]:
     _patch_aiosqlite()
 
     async with _aiosqlite.connect(str(get_db_path()), timeout=30.0) as conn:
+        # WAL mode allows concurrent readers while a writer is active, preventing
+        # "database is locked" errors when multiple CLI instances share the same DB.
+        # busy_timeout gives writers up to 5 s to acquire the lock before failing.
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA busy_timeout=5000")
         yield conn
 
 

@@ -157,6 +157,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Analyze images or paste from clipboard",
         "screenshot multimodal",
         "multimodal",
+        available=True,
     ),
     SlashCommandSpec(
         "/init",
@@ -260,6 +261,7 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Pull request management (create/list/review)",
         "github merge",
         "git",
+        available=True,
     ),
     SlashCommandSpec(
         "/preview",

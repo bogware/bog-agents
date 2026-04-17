@@ -372,6 +372,13 @@ def get_system_prompt(
     if unreplaced:
         logger.warning("System prompt contains unreplaced placeholders: %s", unreplaced)
 
+    # Append project + global memory if present
+    from bog_agents_cli.project_memory import load_project_memory
+
+    memory_block = load_project_memory(cwd=cwd)
+    if memory_block:
+        result = result + memory_block
+
     return result
 
 
