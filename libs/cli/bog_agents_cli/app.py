@@ -678,6 +678,7 @@ class BogAgentsApp(App):
         "/effort": "_handle_effort_command",
         "/extensions": "_handle_plugin_command",
         "/feedback": "_handle_reference_url_command",
+        "/harbor": "_handle_harbor_command",
         "/health": "_handle_health_command",
         "/help": "_handle_help_command",
         "/image": "_handle_image_command",
@@ -2650,9 +2651,351 @@ class BogAgentsApp(App):
 
         await self._handle_user_message(final_prompt)
 
-    async def _handle_mcp_command(self, _command: str) -> None:
-        """Open the MCP viewer."""
-        await self._show_mcp_viewer()
+    async def _handle_mcp_command(self, command: str) -> None:  # noqa: PLR0912, PLR0915
+        """Handle /mcp — MCP server marketplace and management.
+
+        Usage:
+          /mcp                       — show active servers (viewer)
+          /mcp list                  — list configured servers in ~/.bog-agents/.mcp.json
+          /mcp catalog               — browse the full registry
+          /mcp search <query>        — search registry by keyword
+          /mcp install <id>          — install a server from the registry
+          /mcp add <name> <cmd> ...  — add a custom stdio server
+          /mcp remove <name>         — remove a server from user config
+          /mcp info <id>             — show registry entry details
+          /mcp trust                 — manage project stdio server trust
+          /mcp help                  — show this help
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.mcp_config_manager import (
+            add_server,
+            list_servers,
+            missing_required,
+            remove_server,
+            resolve_env_values,
+            server_exists,
+        )
+        from bog_agents_cli.mcp_registry import (
+            build_server_config,
+            get_entry,
+            list_categories,
+            list_entries,
+            search_entries,
+        )
+
+        # Parse subcommand and args
+        tail = command[len("/mcp"):].strip()
+        parts = tail.split(maxsplit=1)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        # ---- no subcommand → open viewer ----
+        if not subcommand or subcommand == "view":
+            await self._show_mcp_viewer()
+            return
+
+        await self._mount_message(UserMessage(command))
+
+        # ---- list ----
+        if subcommand == "list":
+            configured = list_servers()
+            if not configured:
+                await self._mount_message(
+                    AppMessage(
+                        "No MCP servers configured in [cyan]~/.bog-agents/.mcp.json[/cyan].\n\n"
+                        "Browse the catalog with [bold]/mcp catalog[/bold] or "
+                        "install a server with [bold]/mcp install <id>[/bold].\n"
+                        "[dim]Example: /mcp install jira[/dim]"
+                    )
+                )
+                return
+            lines = [f"[bold]Configured MCP servers[/bold] ({len(configured)} total)\n"]
+            for name, cfg in sorted(configured.items()):
+                transport = cfg.get("type", cfg.get("transport", "stdio"))
+                if transport == "stdio":
+                    cmd_display = f"[dim]{cfg.get('command', '?')} {' '.join(cfg.get('args', [])[:2])}...[/dim]"
+                else:
+                    cmd_display = f"[dim]{cfg.get('url', '?')}[/dim]"
+                lines.append(f"  [cyan]{name}[/cyan] [{transport}] {cmd_display}")
+            lines.append(
+                "\n[dim]Use [bold]/mcp remove <name>[/bold] to uninstall, "
+                "[bold]/mcp[/bold] to open the live viewer[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- catalog ----
+        elif subcommand == "catalog":
+            entries = list_entries()
+            categories = list_categories()
+            lines = [f"[bold]MCP Server Catalog[/bold] — {len(entries)} servers\n"]
+            for cat in categories:
+                cat_entries = [e for e in entries if e.category == cat]
+                lines.append(f"\n[bold yellow]{cat.upper()}[/bold yellow]")
+                for e in cat_entries:
+                    src_tag = f"[dim][{e.source}][/dim]" if e.source != "official" else ""
+                    lines.append(
+                        f"  [cyan]{e.id:<22}[/cyan] {e.display_name:<20} {src_tag}\n"
+                        f"    [dim]{e.description}[/dim]"
+                    )
+            lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
+                "Details with [bold]/mcp info <id>[/bold] · "
+                "Search with [bold]/mcp search <query>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- search ----
+        elif subcommand == "search":
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/mcp search <query>[/bold]\nExample: /mcp search jira")
+                )
+                return
+            results = search_entries(rest)
+            if not results:
+                await self._mount_message(
+                    AppMessage(
+                        f"No servers matching [cyan]{rest!r}[/cyan].\n"
+                        "Try [bold]/mcp catalog[/bold] to browse all servers."
+                    )
+                )
+                return
+            lines = [f"[bold]Search results for[/bold] [cyan]{rest!r}[/cyan]\n"]
+            for e in results:
+                src_tag = f" [dim][{e.source}][/dim]" if e.source != "official" else ""
+                lines.append(
+                    f"  [cyan]{e.id}[/cyan] — {e.display_name}{src_tag}\n"
+                    f"    [dim]{e.description}[/dim]"
+                )
+            lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
+                "Details with [bold]/mcp info <id>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- info ----
+        elif subcommand == "info":
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/mcp info <id>[/bold]\nExample: /mcp info jira")
+                )
+                return
+            entry = get_entry(rest)
+            if entry is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Server [cyan]{rest!r}[/cyan] not found in registry.\n"
+                        "Try [bold]/mcp search <query>[/bold] or [bold]/mcp catalog[/bold]."
+                    )
+                )
+                return
+            lines = [
+                f"[bold]{entry.display_name}[/bold] [dim](id: {entry.id})[/dim]",
+                f"  {entry.description}",
+                f"\n  [bold]Source:[/bold] {entry.source}  [bold]Category:[/bold] {entry.category}  [bold]Transport:[/bold] {entry.transport}",
+            ]
+            if entry.transport == "stdio":
+                arg_str = " ".join(entry.args)
+                lines.append(f"\n  [bold]Command:[/bold] [dim]{entry.command} {arg_str}[/dim]")
+            if entry.required_env:
+                lines.append(
+                    "\n  [bold]Required env vars:[/bold]\n"
+                    + "\n".join(
+                        f"    [cyan]{v}[/cyan]  [dim]{entry.vars_hints.get(v, '')}[/dim]"
+                        for v in entry.required_env
+                    )
+                )
+            if entry.optional_env:
+                lines.append(
+                    "\n  [bold]Optional env vars:[/bold]\n"
+                    + "\n".join(
+                        f"    [cyan]{v}[/cyan]  [dim]{entry.vars_hints.get(v, '')}[/dim]"
+                        for v in entry.optional_env
+                    )
+                )
+            if entry.install_notes:
+                lines.append(f"\n  [bold]Setup notes:[/bold]\n  {entry.install_notes}")
+            installed = server_exists(entry.id)
+            lines.append(
+                f"\n  [bold]Status:[/bold] {'[green]Installed[/green]' if installed else '[dim]Not installed[/dim]'}"
+            )
+            if not installed:
+                lines.append(f"\n  Install with: [bold]/mcp install {entry.id}[/bold]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- install ----
+        elif subcommand == "install":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp install <id>[/bold]\n"
+                        "Browse available servers with [bold]/mcp catalog[/bold]."
+                    )
+                )
+                return
+            server_id = rest.strip()
+            entry = get_entry(server_id)
+            if entry is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Server [cyan]{server_id!r}[/cyan] not found in registry.\n"
+                        "Try [bold]/mcp search <query>[/bold] to find servers."
+                    )
+                )
+                return
+            if server_exists(server_id):
+                await self._mount_message(
+                    AppMessage(
+                        f"[cyan]{server_id}[/cyan] is already configured.\n"
+                        f"Use [bold]/mcp remove {server_id}[/bold] first to reinstall."
+                    )
+                )
+                return
+
+            # Resolve env vars from vars store + os.environ
+            env_values = await asyncio.to_thread(
+                resolve_env_values, entry.required_env, entry.optional_env
+            )
+            missing = missing_required(entry.required_env, env_values)
+
+            lines = [f"[bold]Installing[/bold] [cyan]{entry.display_name}[/cyan]...\n"]
+
+            if missing:
+                lines.append(
+                    "[yellow]Missing required env vars[/yellow] "
+                    "(server will be added but may not start until these are set):\n"
+                )
+                for var in missing:
+                    hint = entry.vars_hints.get(var, "")
+                    lines.append(f"  [cyan]{var}[/cyan]  [dim]{hint}[/dim]")
+                lines.append(
+                    "\n[dim]Set them with [bold]/vars set VAR_NAME value[/bold] "
+                    "and they will be picked up automatically.[/dim]"
+                )
+
+            server_cfg = build_server_config(entry, env_values)
+            success = add_server(server_id, server_cfg)
+            if success:
+                lines.append(
+                    f"\n[green]✓ Added[/green] [cyan]{server_id}[/cyan] to "
+                    f"[dim]~/.bog-agents/.mcp.json[/dim]"
+                )
+                if entry.install_notes:
+                    lines.append(f"\n[bold]Setup notes:[/bold]\n{entry.install_notes}")
+                lines.append(
+                    "\n[dim]Restart bog-agents (or start a new session) for the server to connect.[/dim]"
+                )
+            else:
+                lines.append(f"\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/")
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- add (custom server) ----
+        elif subcommand == "add":
+            # /mcp add <name> <command> [arg1 arg2 ...]
+            add_parts = rest.split(maxsplit=1)
+            if len(add_parts) < 2:  # noqa: PLR2004
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp add <name> <command> [args...][/bold]\n\n"
+                        "Examples:\n"
+                        "  [dim]/mcp add my-server npx -y my-mcp-package[/dim]\n"
+                        "  [dim]/mcp add local-tools python -m my_tools.mcp_server[/dim]"
+                    )
+                )
+                return
+            name = add_parts[0]
+            cmd_and_args = add_parts[1].split()
+            cmd = cmd_and_args[0]
+            args = cmd_and_args[1:]
+            server_cfg = {"command": cmd, "args": args}
+            if server_exists(name):
+                await self._mount_message(
+                    AppMessage(
+                        f"[cyan]{name}[/cyan] already exists.\n"
+                        f"Use [bold]/mcp remove {name}[/bold] first."
+                    )
+                )
+                return
+            if add_server(name, server_cfg):
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Added[/green] [cyan]{name}[/cyan]  "
+                        f"[dim]{cmd} {' '.join(args)}[/dim]\n\n"
+                        "[dim]Restart bog-agents for the server to connect.[/dim]"
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"[red]✗ Failed to save config.[/red] Check file permissions.")
+                )
+
+        # ---- remove ----
+        elif subcommand in ("remove", "rm", "uninstall", "delete"):
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/mcp remove <name>[/bold]")
+                )
+                return
+            name = rest.strip()
+            if remove_server(name):
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Removed[/green] [cyan]{name}[/cyan] from "
+                        f"[dim]~/.bog-agents/.mcp.json[/dim]\n"
+                        "[dim]Restart bog-agents for the change to take effect.[/dim]"
+                    )
+                )
+            else:
+                self.notify(f"Server '{name}' not found in user config.", severity="warning", timeout=3)
+
+        # ---- trust ----
+        elif subcommand == "trust":
+            from bog_agents_cli.mcp_trust import (
+                compute_config_fingerprint,
+                trust_project_mcp,
+            )
+            from bog_agents_cli.mcp_tools import discover_mcp_configs
+
+            config_paths = await asyncio.to_thread(discover_mcp_configs)
+            if not config_paths:
+                await self._mount_message(
+                    AppMessage("No .mcp.json files found in this project.")
+                )
+                return
+            fingerprint = await asyncio.to_thread(compute_config_fingerprint, config_paths)
+            project_root = str(Path.cwd().resolve())
+            ok = await asyncio.to_thread(trust_project_mcp, project_root, fingerprint)
+            if ok:
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Trusted[/green] project MCP config for [cyan]{project_root}[/cyan]\n"
+                        "[dim]Project stdio servers will be loaded on the next session start.[/dim]"
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage("[red]✗ Failed to write trust record.[/red]")
+                )
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/mcp[/bold] — MCP server marketplace\n\n"
+                    "  [cyan]/mcp[/cyan]                      — open live server viewer\n"
+                    "  [cyan]/mcp list[/cyan]                 — list configured servers\n"
+                    "  [cyan]/mcp catalog[/cyan]              — browse full registry\n"
+                    "  [cyan]/mcp search <query>[/cyan]       — search registry\n"
+                    "  [cyan]/mcp info <id>[/cyan]            — show server details\n"
+                    "  [cyan]/mcp install <id>[/cyan]         — install from registry\n"
+                    "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
+                    "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
+                    "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
+                    "[dim]Popular: jira · github · slack · postgres · terraform · azure-devops[/dim]"
+                )
+            )
 
     async def _handle_model_command(self, command: str) -> None:
         """Switch models or manage the default model."""
@@ -2778,6 +3121,181 @@ class BogAgentsApp(App):
             default_prompt=generate_audit_prompt(),
             announcement="Auditing dependencies and project risk posture...",
         )
+
+    async def _handle_harbor_command(self, command: str) -> None:  # noqa: PLR0912
+        """Handle /harbor — Harbor benchmark evaluation interface.
+
+        Usage:
+          /harbor                  — show Harbor status and recent results
+          /harbor results [dir]    — list recent trajectory files
+          /harbor show [dir]       — detailed summary of the latest trajectory
+          /harbor tools [dir]      — show tool usage breakdown
+          /harbor help             — show this help
+
+        Args:
+            command: Full slash command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        tail = command[len("/harbor"):].strip()
+        parts = tail.split(maxsplit=1)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        # Default search dir
+        default_dir = Path.home() / ".bog-agents" / "harbor-results"
+
+        # ---- status / no subcommand ----
+        if not subcommand or subcommand == "status":
+            lines = ["[bold]Harbor Evaluation[/bold] — Terminal Bench 2.0\n"]
+
+            # Check harbor package availability
+            try:
+                import importlib.util
+                harbor_available = importlib.util.find_spec("harbor") is not None
+                bog_harbor_available = importlib.util.find_spec("bog_agents_harbor") is not None
+            except Exception:
+                harbor_available = False
+                bog_harbor_available = False
+
+            lines.append(
+                f"  harbor package:         {'[green]installed[/green]' if harbor_available else '[dim]not installed[/dim]'}"
+            )
+            lines.append(
+                f"  bog-agents-harbor:      {'[green]installed[/green]' if bog_harbor_available else '[dim]not installed[/dim]'}"
+            )
+
+            import os
+            langsmith_set = bool(os.environ.get("LANGSMITH_API_KEY"))
+            lines.append(
+                f"  LangSmith tracing:      {'[green]configured[/green]' if langsmith_set else '[dim]not configured[/dim]'}"
+            )
+
+            # Show recent trajectory count
+            try:
+                from bog_agents_harbor.reporter import find_trajectories
+                trajectories = find_trajectories(default_dir)
+                if trajectories:
+                    lines.append(f"\n  Recent results ({len(trajectories)} found in {default_dir}):")
+                    for t in trajectories[:5]:
+                        import time
+                        age = time.time() - t.stat().st_mtime
+                        age_str = f"{int(age // 3600)}h ago" if age > 3600 else f"{int(age // 60)}m ago"
+                        lines.append(f"    [dim]{t.parent.name}[/dim]  [{age_str}]")
+                    if len(trajectories) > 5:
+                        lines.append(f"    [dim]... and {len(trajectories) - 5} more[/dim]")
+                else:
+                    lines.append(f"\n  [dim]No results found in {default_dir}[/dim]")
+            except ImportError:
+                lines.append("\n  [dim]Install bog-agents-harbor to view results[/dim]")
+            except OSError:
+                pass
+
+            lines.append(
+                "\n[dim]Commands: [bold]/harbor results[/bold] · [bold]/harbor show[/bold] · [bold]/harbor tools[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- results ----
+        elif subcommand == "results":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import find_trajectories, load_trajectory
+            except ImportError:
+                await self._mount_message(
+                    AppMessage(
+                        "[yellow]bog-agents-harbor is not installed.[/yellow]\n"
+                        "Install it with: [bold]pip install bog-agents-harbor[/bold]"
+                    )
+                )
+                return
+
+            trajectories = await asyncio.to_thread(find_trajectories, search_dir)
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                )
+                return
+
+            lines = [f"[bold]Recent Harbor results[/bold] ({len(trajectories)} found)\n"]
+            for path in trajectories[:20]:
+                try:
+                    report = await asyncio.to_thread(load_trajectory, path)
+                    reward_str = (
+                        f"  reward={report.reward:.2f}" if report.reward is not None else ""
+                    )
+                    token_str = (
+                        f"  tokens={report.total_tokens:,}" if report.total_tokens else ""
+                    )
+                    lines.append(
+                        f"  [cyan]{path.parent.name}[/cyan]\n"
+                        f"    model={report.model_name}  steps={report.total_steps}"
+                        f"  tools={report.tool_call_count}{token_str}{reward_str}"
+                    )
+                except (ValueError, OSError):
+                    lines.append(f"  [dim]{path}  (unreadable)[/dim]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- show ----
+        elif subcommand == "show":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import find_trajectories, format_summary, load_trajectory
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+
+            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=1)
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                )
+                return
+
+            report = await asyncio.to_thread(load_trajectory, trajectories[0])
+            summary = await asyncio.to_thread(format_summary, report, verbose=True)
+            await self._mount_message(AppMessage(f"[dim]{summary}[/dim]"))
+
+        # ---- tools ----
+        elif subcommand == "tools":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import find_trajectories, format_tool_usage, load_trajectory
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+
+            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=1)
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                )
+                return
+
+            report = await asyncio.to_thread(load_trajectory, trajectories[0])
+            tool_str = await asyncio.to_thread(format_tool_usage, report)
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]Tool usage[/bold] — {report.session_id}\n\n{tool_str}"
+                )
+            )
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/harbor[/bold] — Harbor benchmark evaluation\n\n"
+                    "  [cyan]/harbor[/cyan]                  — status + recent results\n"
+                    "  [cyan]/harbor results [dir][/cyan]   — list recent trajectory files\n"
+                    "  [cyan]/harbor show [dir][/cyan]      — detailed latest trajectory\n"
+                    "  [cyan]/harbor tools [dir][/cyan]     — tool usage breakdown\n\n"
+                    "[dim]Trajectories are saved under ~/.bog-agents/harbor-results/ by default.[/dim]"
+                )
+            )
 
     async def _handle_health_command(self, command: str) -> None:
         """Handle `/health` as a codebase health analysis command."""

@@ -146,6 +146,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/harbor",
+        "Harbor benchmark evaluation — run tasks, view results, check evaluation status",
+        "benchmark eval terminal-bench evaluation trajectory langsmith",
+        "analysis",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/health",
         "Codebase health score and analysis",
         "quality complexity coverage",
@@ -189,9 +196,9 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/mcp",
-        "Show active MCP servers and tools",
-        "servers tools",
-        "info",
+        "MCP server marketplace — browse, install, and manage servers (jira, terraform, github…)",
+        "servers tools install registry catalog marketplace plugin integration",
+        "config",
         available=True,
     ),
     SlashCommandSpec(
