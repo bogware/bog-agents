@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import os
+import smtplib
 import time
+import urllib.error
 import urllib.request
+from email.mime.text import MIMEText
 from typing import Any
 
 from bog_agents_daemon.models import (
@@ -161,10 +167,12 @@ async def _dispatch_output(run: JobRun, output: OutputConfig) -> None:
         )
     elif target == OutputTarget.WEBHOOK:
         await _dispatch_webhook(run, output)
-    else:
-        logger.debug(
-            "Output target %s not yet implemented (phase 2 stub)", target.value
-        )
+    elif target == OutputTarget.EMAIL:
+        await _dispatch_email(run, output)
+    elif target == OutputTarget.SLACK:
+        await _dispatch_slack(run, output)
+    elif target == OutputTarget.GITHUB_COMMENT:
+        await _dispatch_github_comment(run, output)
 
 
 async def _dispatch_file(run: JobRun, output: OutputConfig) -> None:
@@ -224,6 +232,137 @@ async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
         await asyncio.to_thread(_urlopen_blocking, req)
     except urllib.error.URLError:
         logger.exception("Webhook dispatch failed for job %s", run.job_id)
+
+
+async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
+    """Send run output via SMTP email.
+
+    Uses STARTTLS for port 587, SSL for port 465, and plain SMTP otherwise.
+    Runs the blocking smtplib call in a thread to avoid blocking the event loop.
+
+    Args:
+        run: The completed job run.
+        output: The email output configuration.
+    """
+    to_addrs = output.to_addrs
+    if not to_addrs:
+        logger.warning("Email output for job %s has no to_addrs configured", run.job_id)
+        return
+
+    subject = output.subject_template.format(job_name=run.job_name) if output.subject_template else f"[bog-agents] {run.job_name} completed"
+    body = run.output or run.error or "(no output)"
+    from_addr = output.from_addr or output.smtp_username or "bog-agents@localhost"
+
+    def _send_blocking() -> None:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = ", ".join(to_addrs)
+
+        host = output.smtp_host or "localhost"
+        port = output.smtp_port
+
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as smtp:
+                if output.smtp_username and output.smtp_password:
+                    smtp.login(output.smtp_username, output.smtp_password)
+                smtp.sendmail(from_addr, to_addrs, msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as smtp:
+                if port != 25:
+                    smtp.starttls()
+                if output.smtp_username and output.smtp_password:
+                    smtp.login(output.smtp_username, output.smtp_password)
+                smtp.sendmail(from_addr, to_addrs, msg.as_string())
+
+    try:
+        await asyncio.to_thread(_send_blocking)
+        logger.debug("Email sent for job %s to %s", run.job_id, to_addrs)
+    except Exception:
+        logger.exception("Email dispatch failed for job %s", run.job_id)
+
+
+async def _dispatch_slack(run: JobRun, output: OutputConfig) -> None:
+    """POST run output to a Slack incoming webhook URL.
+
+    Args:
+        run: The completed job run.
+        output: The Slack output configuration.
+    """
+    url = output.slack_webhook_url
+    if not url:
+        logger.warning("Slack output for job %s has no slack_webhook_url configured", run.job_id)
+        return
+
+    truncated = run.output[:1900] if run.output else run.error[:1900] if run.error else "(no output)"
+    payload = json.dumps({"text": f"*{run.job_name}* completed ({run.status}):\n```{truncated}```"}).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        await asyncio.to_thread(_urlopen_blocking, req)
+        logger.debug("Slack notification sent for job %s", run.job_id)
+    except urllib.error.URLError:
+        logger.exception("Slack dispatch failed for job %s", run.job_id)
+
+
+async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
+    """Post run output as a GitHub issue/PR comment via the REST API.
+
+    Reads the token from output config first, then falls back to GITHUB_TOKEN
+    and GITHUB_API_KEY environment variables.
+
+    Args:
+        run: The completed job run.
+        output: The GitHub comment output configuration.
+    """
+    repo = output.github_repo
+    issue_number = output.github_issue_or_pr
+    token = output.github_token if hasattr(output, "github_token") and output.github_token else (
+        os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API_KEY") or ""
+    )
+
+    if not repo:
+        logger.warning("GitHub comment output for job %s has no github_repo configured", run.job_id)
+        return
+    if not issue_number:
+        logger.warning("GitHub comment output for job %s has no github_issue_or_pr configured", run.job_id)
+        return
+    if not token:
+        logger.warning("GitHub comment output for job %s has no token (set GITHUB_TOKEN env var)", run.job_id)
+        return
+
+    owner_repo = repo.split("/", 1)
+    if len(owner_repo) != 2:
+        logger.warning("GitHub comment output for job %s: github_repo must be 'owner/repo', got %r", run.job_id, repo)
+        return
+
+    url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+    body_text = run.output or run.error or "(no output)"
+    payload = json.dumps({"body": f"## bog-agents: {run.job_name}\n\n{body_text}"}).encode()
+
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method="POST",
+    )
+
+    try:
+        await asyncio.to_thread(_urlopen_blocking, req)
+        logger.debug("GitHub comment posted for job %s on %s#%d", run.job_id, repo, issue_number)
+    except urllib.error.URLError:
+        logger.exception("GitHub comment dispatch failed for job %s", run.job_id)
 
 
 def _urlopen_blocking(req: urllib.request.Request) -> None:

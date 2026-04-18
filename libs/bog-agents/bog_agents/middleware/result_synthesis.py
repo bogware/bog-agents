@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, ClassVar
 
 if TYPE_CHECKING:
-    from bog_agents.middleware.worktree import ParallelWorktreeMiddleware, WorktreeTask
+    from bog_agents.middleware.worktree import WorktreeTask
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -17,6 +17,8 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
+
+from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,8 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
         synthesis_template: Optional Jinja2-free template string for the
             synthesis prompt. If ``None``, the default template is used.
     """
+
+    requires: ClassVar[list[type[AgentMiddleware]]] = [ParallelWorktreeMiddleware]
 
     state_schema = ResultSynthesisState
 

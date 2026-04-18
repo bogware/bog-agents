@@ -92,6 +92,33 @@ def get_default_model() -> ChatAnthropic:
     )
 
 
+def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> None:
+    """Raise ValueError if any middleware's requirements appear later in the stack.
+
+    Iterates the middleware list in order, tracking which types have been seen.
+    If a middleware declares `requires = [SomeMiddleware]` and `SomeMiddleware`
+    has not yet appeared in the list, a `ValueError` is raised.
+
+    Args:
+        middleware_list: Ordered list of middleware instances to validate.
+
+    Raises:
+        ValueError: If a required middleware type appears after the middleware
+            that depends on it, or is missing entirely from the stack.
+    """
+    seen: set[type] = set()
+    for mw in middleware_list:
+        for req in getattr(type(mw), "requires", []):
+            if req not in seen:
+                provided = [type(m).__name__ for m in middleware_list]
+                msg = (
+                    f"{type(mw).__name__} requires {req.__name__} to appear earlier "
+                    f"in the middleware stack. Current order: {provided}"
+                )
+                raise ValueError(msg)
+        seen.add(type(mw))
+
+
 def create_agent(  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
@@ -110,6 +137,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     debug: bool = False,
     name: str | None = None,
     cache: BaseCache | None = None,
+    config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
     # Individual feature flags (kept for backwards compatibility).
     # When ``features`` is provided, these are ignored.
@@ -289,12 +317,33 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         debug: Whether to enable debug mode. Passed through to `create_agent`.
         name: The name of the agent. Passed through to `create_agent`.
         cache: The cache to use for the agent. Passed through to `create_agent`.
+        config: Primary path for feature configuration via `FeatureConfig`.
+
+            Pass a `FeatureConfig` instance to configure all feature flags in one
+            place instead of using 90+ individual kwargs. Individual kwargs take
+            precedence over `config` when both are provided.
+
+            Example::
+
+                from bog_agents import FeatureConfig, create_agent
+
+                agent = create_agent(
+                    config=FeatureConfig(enable_git_tools=True, enable_cost_tracking=True)
+                )
+        features: Alias for `config`, kept for backwards compatibility.
 
     Returns:
         A configured bog-agents agent.
     """
+    # Resolve config/features: `config` is the preferred name; `features` is kept
+    # for backward compat.  If both are given, `config` wins.
+    _feature_config = config if config is not None else features
+
     # If a FeatureConfig was provided, use its values for all feature flags.
     # This lets callers pass a single config object instead of 90+ kwargs.
+    if _feature_config is not None:
+        features = _feature_config  # normalise to single name for the block below
+
     if features is not None:
         f = features
         enable_git_tools = f.enable_git_tools
@@ -873,6 +922,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+
+    # Validate middleware dependency ordering before compiling the graph.
+    _validate_middleware_ordering(agents_middleware)
 
     # Combine system_prompt with BASE_AGENT_PROMPT
     if system_prompt is None:

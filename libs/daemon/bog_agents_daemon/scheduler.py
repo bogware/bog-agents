@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import logging
+import os
 import time
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from bog_agents_daemon.models import AmbientJob, TriggerType
+from bog_agents_daemon.models import AmbientJob, TriggerConfig, TriggerType
 
 logger = logging.getLogger(__name__)
 
@@ -167,35 +170,46 @@ class DaemonScheduler:
             if job.job_id in self._running_jobs:
                 logger.debug("Job %s already running, skipping", job.job_id)
                 continue
-            due = await self._check_job_triggers(job)
-            if due:
-                task = asyncio.create_task(self._run_job_safely(job))
+            trigger_type, trigger_context = await self._check_job_triggers(job)
+            if trigger_type is not None:
+                task = asyncio.create_task(self._run_job_safely(job, trigger_type=trigger_type, trigger_context=trigger_context))
                 self._bg_tasks.add(task)
                 task.add_done_callback(self._bg_tasks.discard)
 
-    async def _run_job_safely(self, job: AmbientJob) -> None:
+    async def _run_job_safely(
+        self,
+        job: AmbientJob,
+        *,
+        trigger_type: TriggerType = TriggerType.CRON,
+        trigger_context: dict[str, Any] | None = None,
+    ) -> None:
         """Execute a job, tracking running state to prevent concurrent runs.
 
         Args:
             job: The job to run.
+            trigger_type: How this execution was initiated.
+            trigger_context: Optional metadata from the trigger.
         """
         self._running_jobs.add(job.job_id)
         try:
-            await self._runner(job, trigger_type=TriggerType.CRON)
+            await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
         except Exception:
             logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
         finally:
             self._running_jobs.discard(job.job_id)
 
     @staticmethod
-    async def _check_job_triggers(job: AmbientJob) -> bool:
-        """Check whether any CRON or INTERVAL trigger is currently due.
+    async def _check_job_triggers(job: AmbientJob) -> tuple[TriggerType | None, dict[str, Any] | None]:
+        """Check whether any trigger is currently due.
+
+        Evaluates CRON, INTERVAL, and FILE_CHANGE triggers in order, returning
+        on the first one that fires.
 
         Args:
             job: The job whose triggers to evaluate.
 
         Returns:
-            True if at least one time-based trigger is due.
+            A tuple of (TriggerType, trigger_context) if due, or (None, None).
         """
         for trigger in job.triggers:
             if trigger.type == TriggerType.CRON and trigger.cron:
@@ -206,7 +220,7 @@ class DaemonScheduler:
                         job.name,
                         trigger.cron,
                     )
-                    return True
+                    return TriggerType.CRON, None
             elif trigger.type == TriggerType.INTERVAL and trigger.interval_seconds > 0 and _is_interval_due(trigger.interval_seconds, job.last_run_at):
                 logger.debug(
                     "Interval trigger due for job %s (%s): every %ds",
@@ -214,5 +228,63 @@ class DaemonScheduler:
                     job.name,
                     trigger.interval_seconds,
                 )
-                return True
-        return False
+                return TriggerType.INTERVAL, None
+            elif trigger.type == TriggerType.FILE_CHANGE:
+                changed_path = _check_file_trigger(trigger, job.last_run_at)
+                if changed_path is not None:
+                    logger.debug(
+                        "File-change trigger fired for job %s (%s): %s",
+                        job.job_id,
+                        job.name,
+                        changed_path,
+                    )
+                    return TriggerType.FILE_CHANGE, {
+                        "trigger_path": str(changed_path),
+                        "trigger_type": "file_change",
+                    }
+        return None, None
+
+
+def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | None:
+    """Check whether any watched file has been modified since the last run.
+
+    Iterates over all files under `trigger.watch_dir` (recursively) and
+    matches filenames against each pattern in `trigger.watch_patterns` using
+    `fnmatch`. Returns the first path whose mtime is newer than `last_run_at`.
+
+    If `last_run_at` is 0 (job has never run), every matched file is considered
+    changed so the trigger fires immediately on the first tick.
+
+    Args:
+        trigger: The FILE_CHANGE trigger configuration.
+        last_run_at: Unix timestamp of the last job run (0 = never run).
+
+    Returns:
+        The Path of the first modified file that matches the patterns, or None.
+    """
+    watch_dir = trigger.watch_dir
+    if not watch_dir:
+        return None
+
+    patterns = trigger.watch_patterns or ["*"]
+
+    try:
+        root = Path(watch_dir)
+        if not root.is_dir():
+            return None
+
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for filename in filenames:
+                if not any(fnmatch.fnmatch(filename, pat) for pat in patterns):
+                    continue
+                full_path = Path(dirpath) / filename
+                try:
+                    mtime = full_path.stat().st_mtime
+                except OSError:
+                    continue
+                if last_run_at == 0 or mtime > last_run_at:
+                    return full_path
+    except OSError:
+        logger.debug("File-change trigger: error walking %s", watch_dir)
+
+    return None

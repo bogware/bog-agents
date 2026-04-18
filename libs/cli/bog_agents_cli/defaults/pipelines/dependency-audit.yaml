@@ -1,0 +1,51 @@
+name: dependency-audit
+description: "Audit project dependencies for outdated packages, security advisories, and license issues"
+steps:
+  - id: scan
+    type: message
+    text: |
+      Scan this project's dependencies for issues.
+
+      1. Detect the package manager (pip/uv/poetry/npm/cargo/go.mod/etc.)
+      2. List all direct dependencies with current versions
+      3. Check for outdated packages:
+         - Python: `uv pip list --outdated` or `pip list --outdated`
+         - Node: `npm outdated`
+         - Rust: `cargo outdated`
+      4. Run security audit:
+         - Python: `uv pip audit` or `pip-audit`
+         - Node: `npm audit`
+         - Rust: `cargo audit`
+      5. List any packages with known CVEs
+
+  - id: licenses
+    type: message
+    text: |
+      Check dependency licenses for compatibility issues.
+
+      1. List all transitive dependencies and their licenses
+      2. Flag any non-permissive licenses (GPL, AGPL, LGPL) that might conflict with this project's license
+      3. Identify any dependencies with unclear or missing licenses
+
+  - id: report
+    type: message
+    text: |
+      Produce a dependency audit report.
+
+      Structure:
+      ## Dependency Audit Report
+
+      ### Critical (fix immediately)
+      - List packages with HIGH/CRITICAL CVEs
+
+      ### Outdated
+      - List packages more than 2 major versions behind
+
+      ### License Issues
+      - List packages with potentially incompatible licenses
+
+      ### Recommendations
+      - Prioritized list of upgrade actions
+      - Any packages to consider replacing
+
+      Format as markdown suitable for saving to AUDIT.md.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import stat
 import textwrap
 from pathlib import Path
 
@@ -122,6 +123,83 @@ def install_systemd(daemon_path: str) -> str:
 
         View logs with:
           journalctl --user -u bog-agents-daemon -f
+    """)
+
+
+def generate_git_hook(daemon_url: str = "http://localhost:7391", token: str = "") -> str:
+    """Generate a git post-receive hook script that notifies the daemon.
+
+    The generated script reads old-sha, new-sha, and refname from stdin (one
+    line per pushed ref) and POSTs each push event to the daemon's
+    `/webhooks/git-push` endpoint using curl.
+
+    Args:
+        daemon_url: Base URL of the running daemon (without trailing slash).
+        token: Optional authentication token sent as `X-Daemon-Token` header.
+
+    Returns:
+        A bash script string suitable for writing to `.git/hooks/post-receive`.
+    """
+    token_header = f'-H "X-Daemon-Token: {token}"' if token else ""
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        # bog-agents-daemon git post-receive hook
+        # Auto-generated — do not edit by hand.
+        set -euo pipefail
+
+        DAEMON_URL="{daemon_url}"
+
+        while read -r OLD_SHA NEW_SHA REFNAME; do
+            PAYLOAD=$(printf '{{"ref":"%s","new_sha":"%s","old_sha":"%s"}}' "$REFNAME" "$NEW_SHA" "$OLD_SHA")
+            curl -s -X POST \\
+                {token_header} \\
+                -H "Content-Type: application/json" \\
+                -d "$PAYLOAD" \\
+                "$DAEMON_URL/webhooks/git-push" || true
+        done
+    """)
+
+
+def install_git_hook(repo_path: str, daemon_url: str = "http://localhost:7391", token: str = "") -> str:
+    """Write the post-receive hook into a git repository and make it executable.
+
+    Writes the hook script to `{repo_path}/.git/hooks/post-receive` and sets
+    the executable bit.
+
+    Args:
+        repo_path: Absolute path to the git repository root.
+        daemon_url: Base URL of the running daemon.
+        token: Optional authentication token for the daemon.
+
+    Returns:
+        A multi-line instructions string.
+
+    Raises:
+        FileNotFoundError: If `{repo_path}/.git/hooks` does not exist.
+    """
+    hooks_dir = Path(repo_path) / ".git" / "hooks"
+    if not hooks_dir.is_dir():
+        msg = f"Git hooks directory not found: {hooks_dir}"
+        raise FileNotFoundError(msg)
+
+    hook_path = hooks_dir / "post-receive"
+    hook_content = generate_git_hook(daemon_url=daemon_url, token=token)
+    hook_path.write_text(hook_content, encoding="utf-8")
+
+    # Make executable (owner rwx, group rx, other rx)
+    current_mode = hook_path.stat().st_mode
+    hook_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    return textwrap.dedent(f"""\
+        Git post-receive hook installed at: {hook_path}
+
+        The hook will notify the daemon at {daemon_url} on every push.
+
+        To test it manually:
+          echo "old-sha new-sha refs/heads/main" | {hook_path}
+
+        To remove the hook:
+          rm {hook_path}
     """)
 
 

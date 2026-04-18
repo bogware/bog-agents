@@ -112,6 +112,7 @@ class OutputConfig:
     # github
     github_repo: str = ""
     github_issue_or_pr: int = 0
+    github_token: str = ""
     # webhook
     webhook_url: str = ""
     webhook_headers: dict[str, str] = field(default_factory=dict)

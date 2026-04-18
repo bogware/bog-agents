@@ -5327,15 +5327,48 @@ class BogAgentsApp(App):
         result = await asyncio.to_thread(search_index, query, cwd)
         await self._mount_message(AppMessage(result))
 
+    @staticmethod
+    def _next_cron_time(cron_expr: str) -> str:
+        """Return a human-readable string for when a cron expression fires next.
+
+        Uses `croniter` to find the next scheduled time from now and formats
+        it as a compact relative string like "~2h" or "~3d".
+
+        Args:
+            cron_expr: A 5-field cron expression (e.g. "0 9 * * 1-5").
+
+        Returns:
+            A relative time string like "~5m", "~2h", "~3d", or "invalid"
+            when the expression cannot be parsed.
+        """
+        try:
+            import datetime
+
+            from croniter import croniter
+
+            now = datetime.datetime.now(tz=datetime.UTC)
+            cron = croniter(cron_expr, now)
+            next_dt = cron.get_next(datetime.datetime)
+            delta_secs = (next_dt - now).total_seconds()
+            if delta_secs < 3600:
+                return f"~{int(delta_secs // 60)}m"
+            if delta_secs < 86400:
+                return f"~{int(delta_secs // 3600)}h"
+            return f"~{int(delta_secs // 86400)}d"
+        except Exception:
+            return "?"
+
     async def _handle_ambient_command(self, command: str) -> None:
         """Handle /ambient — manage the ambient agent daemon.
 
         Subcommands:
-            /ambient status    — Show daemon status and job list (default)
-            /ambient list      — List all configured jobs
-            /ambient jobs      — Alias for list
-            /ambient run <id>  — Trigger immediate run of job <id>
-            /ambient install   — Show service installation instructions
+            /ambient status         — Rich dashboard: daemon state, jobs, next run times
+            /ambient list           — List all configured jobs
+            /ambient jobs           — Alias for list
+            /ambient run <id>       — Trigger immediate run of job <id>
+            /ambient logs <id>      — Show output from the most recent run of job <id>
+            /ambient add <pipeline> — Register a saved pipeline as a daemon job
+            /ambient install        — Show service installation instructions
 
         Args:
             command: Full command string including the /ambient prefix.
@@ -5343,7 +5376,10 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
 
         from bog_agents_cli.daemon_client import (
+            add_daemon_job,
             format_daemon_status,
+            get_daemon_job_runs,
+            get_daemon_logs,
             get_daemon_status,
             is_daemon_running,
             list_daemon_jobs,
@@ -5366,9 +5402,127 @@ class BogAgentsApp(App):
                     "Or install as a service (see /ambient install)"
                 ))
                 return
+
+            # Read PID for the header
+            pid_file = Path.home() / ".bog-agents" / "daemon" / "daemon.pid"
+            try:
+                pid_str = pid_file.read_text().strip() if pid_file.exists() else "?"
+            except OSError:
+                pid_str = "?"
+
             status = await get_daemon_status()
             jobs = await list_daemon_jobs()
-            await self._mount_message(AppMessage(format_daemon_status(status, jobs)))
+
+            active_jobs = sum(1 for j in jobs if j.get("enabled", True))
+            disabled_jobs = len(jobs) - active_jobs
+
+            # Build header
+            version = (status or {}).get("version", "?")
+            lines: list[str] = [
+                f"[bold green]Daemon: running[/bold green]  PID [cyan]{pid_str}[/cyan]  version=[cyan]{version}[/cyan]",
+                f"[bold]Jobs:[/bold] {active_jobs} active, {disabled_jobs} disabled",
+                "",
+            ]
+
+            if jobs:
+                col_name = 20
+                col_trigger = 18
+                col_last = 14
+                col_next = 10
+                header = f"  {'Name':<{col_name}}  {'Trigger':<{col_trigger}}  {'Last':<{col_last}}  {'Next':<{col_next}}"
+                lines.append(f"[bold dim]{header}[/bold dim]")
+
+                for job in jobs:
+                    jname = (job.get("name") or "")[:col_name]
+                    enabled = job.get("enabled", True)
+                    last_status = job.get("last_status") or "pending"
+                    last_run_ts: float = job.get("last_run_at") or 0.0
+                    triggers = job.get("triggers") or []
+
+                    # Compute trigger display and next time
+                    cron_expr = ""
+                    trigger_strs: list[str] = []
+                    for t in triggers:
+                        ttype = t.get("type", "?")
+                        if ttype == "cron":
+                            cron_expr = t.get("cron", "")
+                            trigger_strs.append(f"cron: {cron_expr}" if cron_expr else "cron")
+                        elif ttype == "file":
+                            pattern = t.get("pattern", "*")
+                            trigger_strs.append(f"file: {pattern}")
+                        else:
+                            trigger_strs.append(ttype)
+                    trigger_display = (", ".join(trigger_strs) or "—")[:col_trigger]
+
+                    # Next scheduled time
+                    if cron_expr:
+                        next_str = self._next_cron_time(cron_expr)
+                    elif triggers:
+                        next_str = "on trigger"
+                    else:
+                        next_str = "—"
+
+                    # Last run
+                    if last_run_ts:
+                        import time as _time_mod
+
+                        ago_secs = _time_mod.time() - last_run_ts
+                        if ago_secs < 3600:
+                            ago_str = f"{int(ago_secs // 60)}m ago"
+                        elif ago_secs < 86400:
+                            ago_str = f"{int(ago_secs // 3600)}h ago"
+                        else:
+                            ago_str = f"{int(ago_secs // 86400)}d ago"
+                        status_icon = "[green]✅[/green]" if last_status == "completed" else "[red]❌[/red]"
+                        last_str = f"{status_icon} {ago_str}"
+                    else:
+                        last_str = "[dim]never[/dim]"
+
+                    enabled_prefix = "  " if enabled else "[dim]"
+                    enabled_suffix = "" if enabled else " (disabled)[/dim]"
+                    lines.append(
+                        f"{enabled_prefix}[cyan]{jname:<{col_name}}[/cyan]  "
+                        f"{trigger_display:<{col_trigger}}  {last_str:<{col_last}}  {next_str}{enabled_suffix}"
+                    )
+
+            # Recent runs section: collect last run from each job
+            lines.append("")
+            lines.append("[bold]Recent runs:[/bold]")
+            any_runs = False
+            for job in jobs[:5]:
+                job_id_raw = job.get("job_id") or ""
+                jname = job.get("name") or job_id_raw
+                if not job_id_raw:
+                    continue
+                runs = await get_daemon_job_runs(job_id_raw, limit=1)
+                for run in runs[:1]:
+                    any_runs = True
+                    run_id_short = (run.get("run_id") or "")[:6]
+                    run_status = run.get("status") or "?"
+                    started_ts: float = run.get("started_at") or 0.0
+                    output_preview = (run.get("output") or run.get("error") or "")[:60]
+                    if started_ts:
+                        import time as _time_mod2
+
+                        ago2 = _time_mod2.time() - started_ts
+                        ago_label = (
+                            f"{int(ago2 // 60)}m ago" if ago2 < 3600
+                            else f"{int(ago2 // 3600)}h ago" if ago2 < 86400
+                            else f"{int(ago2 // 86400)}d ago"
+                        )
+                    else:
+                        ago_label = "?"
+                    color = "green" if run_status == "completed" else "red" if run_status == "failed" else "cyan"
+                    lines.append(
+                        f"  [bold]{jname}[/bold]  #{run_id_short}  [{color}]{run_status}[/{color}]  {ago_label}"
+                        + (f'  [dim]"{output_preview}..."[/dim]' if output_preview else "")
+                    )
+            if not any_runs:
+                lines.append("  [dim]No recent runs.[/dim]")
+
+            lines.append("")
+            lines.append("[dim]Use /ambient run <id> to trigger a job | /ambient logs <id> for output[/dim]")
+            await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if action in {"list", "jobs"}:
@@ -5389,6 +5543,67 @@ class BogAgentsApp(App):
             await self._mount_message(AppMessage(f"[green]Triggered:[/green] {result}"))
             return
 
+        if action == "logs":
+            job_id = tokens[1] if len(tokens) > 1 else ""
+            if not job_id:
+                await self._mount_message(AppMessage("Usage: /ambient logs <job-id>"))
+                return
+            output = await get_daemon_logs(job_id)
+            if output:
+                await self._mount_message(AppMessage(
+                    f"[bold]Logs for {job_id}:[/bold]\n\n{output}"
+                ))
+            else:
+                await self._mount_message(AppMessage(
+                    f"[dim]No log output found for job {job_id}.[/dim]"
+                ))
+            return
+
+        if action == "add":
+            pipeline_name = tokens[1] if len(tokens) > 1 else ""
+            if not pipeline_name:
+                await self._mount_message(AppMessage("Usage: /ambient add <pipeline-name>"))
+                return
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            pipeline_path = pipelines_dir / f"{pipeline_name}.yaml"
+            if not pipeline_path.exists():
+                await self._mount_message(AppMessage(
+                    f"[red]Pipeline not found:[/red] {pipeline_path}\n"
+                    "Use [bold]/build pipeline[/bold] to create one first."
+                ))
+                return
+            # Parse schedule from YAML if present
+            schedule = ""
+            try:
+                import re as _re
+
+                yaml_text = pipeline_path.read_text(encoding="utf-8")
+                m = _re.search(r"^schedule:\s*(.+)$", yaml_text, _re.MULTILINE)
+                if m:
+                    schedule = m.group(1).strip()
+            except OSError:
+                pass
+            job_def: dict[str, Any] = {
+                "name": pipeline_name,
+                "description": f"Pipeline: {pipeline_name}",
+                "triggers": [{"type": "cron", "cron": schedule}] if schedule else [],
+                "pipeline": str(pipeline_path),
+            }
+            result = await add_daemon_job(job_def)
+            if result:
+                job_id_new = result.get("job_id") or result.get("id") or "?"
+                await self._mount_message(AppMessage(
+                    f"[green]Registered pipeline '{pipeline_name}' with daemon.[/green]\n"
+                    f"Job ID: [bold]{job_id_new}[/bold]"
+                    + (f"\nSchedule: {schedule}" if schedule else "")
+                ))
+            else:
+                await self._mount_message(AppMessage(
+                    "[red]Failed to register pipeline with daemon.[/red] "
+                    "Is the daemon running? (check /ambient status)"
+                ))
+            return
+
         if action in {"install", "service"}:
             await self._mount_message(AppMessage(
                 "[bold]Install bog-agents-daemon as a system service:[/bold]\n\n"
@@ -5403,7 +5618,8 @@ class BogAgentsApp(App):
             return
 
         await self._mount_message(AppMessage(
-            "Usage: /ambient status | /ambient list | /ambient run <id> | /ambient install"
+            "Usage: /ambient status | /ambient list | /ambient run <id> | "
+            "/ambient logs <id> | /ambient add <pipeline> | /ambient install"
         ))
 
     # =========================================================================
@@ -5592,6 +5808,30 @@ class BogAgentsApp(App):
                     path = await asyncio.to_thread(
                         save_pipeline, pending["name"], yaml_content, pipelines_dir=pipelines_dir
                     )
+                    schedule = pending.get("schedule", "")
+                    if schedule:
+                        from bog_agents_cli.daemon_client import (
+                            is_daemon_running as _is_daemon_running,
+                        )
+
+                        daemon_running = await asyncio.to_thread(_is_daemon_running)
+                    else:
+                        daemon_running = False
+                    if schedule and daemon_running:
+                        await self._mount_message(AppMessage(
+                            f"[green]Pipeline saved:[/green] {path}\n\n"
+                            f"It has a schedule: [bold]{schedule}[/bold]\n"
+                            f"The ambient daemon is running. Register it now? [bold](yes/no)[/bold]"
+                        ))
+                        self._build_pending = {
+                            "kind": "pipeline",
+                            "name": pending["name"],
+                            "description": pending["description"],
+                            "schedule": schedule,
+                            "awaiting_daemon_confirm": True,
+                            "pipeline_path": str(path),
+                        }
+                        return
                     await self._mount_message(AppMessage(
                         f"[green]Pipeline saved:[/green] {path}\n\nUse `/pipeline list` to verify."
                     ))
@@ -9247,6 +9487,42 @@ class BogAgentsApp(App):
         Args:
             message: The user's message
         """
+        # Intercept daemon registration confirmation for /build pipeline
+        if self._build_pending and self._build_pending.get("awaiting_daemon_confirm"):
+            await self._mount_message(UserMessage(message))
+            pending = self._build_pending
+            self._build_pending = None
+            if message.strip().lower().startswith("y"):
+                from bog_agents_cli.daemon_client import add_daemon_job
+
+                pipeline_name = pending["name"]
+                schedule = pending.get("schedule", "")
+                pipeline_path = pending.get("pipeline_path", "")
+                job_def: dict[str, Any] = {
+                    "name": pipeline_name,
+                    "description": pending.get("description", ""),
+                    "triggers": [{"type": "cron", "cron": schedule}] if schedule else [],
+                    "pipeline": pipeline_path,
+                }
+                result = await add_daemon_job(job_def)
+                if result:
+                    job_id = result.get("job_id") or result.get("id") or "?"
+                    await self._mount_message(AppMessage(
+                        f"[green]Registered with daemon.[/green] Job ID: [bold]{job_id}[/bold]\n"
+                        f"Use [bold]/ambient status[/bold] to monitor it."
+                    ))
+                else:
+                    await self._mount_message(AppMessage(
+                        "[yellow]Could not register with daemon.[/yellow] "
+                        "Try [bold]/ambient add " + pipeline_name + "[/bold] later."
+                    ))
+            else:
+                await self._mount_message(AppMessage(
+                    "Skipped daemon registration. "
+                    "Use [bold]/ambient add " + pending["name"] + "[/bold] to register later."
+                ))
+            return
+
         # Mount the user message (show original text in UI)
         await self._mount_message(UserMessage(message))
 
@@ -11447,6 +11723,15 @@ class BogAgentsApp(App):
                     model=settings.model_name or "",
                 )
 
+            # Count how many conversation messages exist so we can report
+            # whether there is history to preserve.
+            msg_count = len(self._message_store.get_all_messages())
+            history_note = (
+                f"Conversation history preserved ({msg_count} message{'s' if msg_count != 1 else ''})."
+                if msg_count > 0
+                else "No conversation history to carry over."
+            )
+
             if not await asyncio.to_thread(save_recent_model, display):
                 await self._mount_message(
                     ErrorMessage(
@@ -11455,7 +11740,9 @@ class BogAgentsApp(App):
                     )
                 )
             else:
-                await self._mount_message(AppMessage(f"Switched to {display}"))
+                await self._mount_message(AppMessage(
+                    f"Switched to [bold]{display}[/bold]. {history_note}"
+                ))
             logger.info("Model switched to %s (via configurable middleware)", display)
 
             # Scroll to bottom so the confirmation message is visible

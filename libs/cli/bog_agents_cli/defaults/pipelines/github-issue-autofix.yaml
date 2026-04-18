@@ -1,0 +1,73 @@
+name: github-issue-autofix
+description: "Fetch a GitHub issue, analyze it, implement a fix, and open a pull request"
+variables:
+  - issue_number
+  - repo
+steps:
+  - id: fetch
+    type: message
+    text: |
+      Fetch GitHub issue #{{issue_number}} from the repository {{repo}}.
+
+      Use the `gh issue view {{issue_number}} --repo {{repo}} --json title,body,labels,comments`
+      command to get the full issue details. Then:
+      1. Summarize the issue clearly
+      2. Identify the affected area of the codebase
+      3. Classify it: bug / enhancement / documentation / question
+
+  - id: investigate
+    type: message
+    text: |
+      Investigate the codebase to understand the root cause of issue #{{issue_number}}.
+
+      Based on the issue summary above:
+      1. Find the relevant source files
+      2. Reproduce the problem if possible (trace the code path)
+      3. Identify what needs to change
+      4. Check for related issues or prior attempts to fix this
+
+  - id: branch
+    type: message
+    text: |
+      Create a git branch for the fix.
+
+      Run: git checkout -b fix/issue-{{issue_number}}-<short-slug>
+
+      The short slug should be 2-4 words from the issue title, kebab-cased.
+
+  - id: implement
+    type: message
+    text: |
+      Implement the fix for issue #{{issue_number}}.
+
+      Requirements:
+      - Fix the root cause, not just the symptom
+      - Follow the existing code style and conventions
+      - Add type hints and docstrings to any new or modified functions
+      - Add or update tests to cover the fixed behavior
+      - Ensure existing tests still pass
+
+  - id: verify
+    type: message
+    text: |
+      Verify the fix for issue #{{issue_number}}.
+
+      1. Run the relevant tests: look for the test file that covers the changed code
+      2. If a test framework is detected, run it
+      3. Check for any regressions in related code
+      4. Confirm the original issue scenario is now resolved
+
+  - id: pr
+    type: message
+    text: |
+      Create a pull request for the fix.
+
+      Run:
+        git add -A
+        git commit -m "fix: resolve issue #{{issue_number}} <short description>"
+        git push -u origin HEAD
+        gh pr create --repo {{repo}} \
+          --title "fix: <issue title>" \
+          --body "Fixes #{{issue_number}}\n\n## Summary\n<what changed>\n\n## Test plan\n- [ ] Tests pass\n- [ ] Issue scenario verified"
+
+      Report the PR URL when done.
