@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from bog_agents_harbor.reporter import TrajectoryReport
@@ -291,9 +294,9 @@ def export_to_wandb(
             errors.append(f"session {report.session_id}: {exc}")
         finally:
             if run is not None:
-                try:  # noqa: SIM105
+                try:
                     run.finish()
-                except Exception:  # noqa: BLE001, S110
-                    pass
+                except Exception as _finish_exc:  # noqa: BLE001
+                    logger.debug("wandb run.finish() failed (cleanup only): %s", _finish_exc)
 
     return ExportResult(destination="wandb", exported_count=exported, errors=errors)

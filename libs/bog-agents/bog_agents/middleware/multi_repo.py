@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 _WORKSPACE_FILE = ".bog-agents/workspace.toml"
 
+__all__ = [
+    "MultiRepoMiddleware",
+    "RepoConfig",
+    "load_workspace",
+]
+
 
 # ---------------------------------------------------------------------------
 # Data classes

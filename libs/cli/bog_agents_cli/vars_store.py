@@ -176,14 +176,13 @@ def _load_toml() -> dict[str, Any]:
 
 
 def _save_toml(data: dict[str, Any]) -> None:
-    """Write *data* to the vars TOML file with mode 0600."""
+    """Write *data* to the vars TOML file with mode 0600 via atomic rename."""
     import tomli_w
 
+    from bog_agents_cli.io_utils import atomic_write_text
+
     _ensure_config_dir()
-    _VARS_PATH.write_text(
-        tomli_w.dumps(data),
-        encoding="utf-8",
-    )
+    atomic_write_text(_VARS_PATH, tomli_w.dumps(data))
     try:
         _VARS_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
     except OSError:
