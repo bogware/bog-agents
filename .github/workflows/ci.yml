@@ -41,12 +41,13 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
 
   test:
-    name: "Test (${{ matrix.package.name }}, py3.11)"
-    runs-on: [self-hosted, Linux]
+    name: "Test (${{ matrix.package.name }}, ${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         package:
           - { name: sdk, dir: libs/bog-agents }
           - { name: cli, dir: libs/cli }
@@ -60,27 +61,3 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
       - run: make test
         working-directory: ${{ matrix.package.dir }}
-
-  # TODO: Re-enable test matrix (SDK + CLI × Python 3.11/3.12/3.13) once
-  # self-hosted runners are fully provisioned.
-  # test:
-  #   name: "Test (${{ matrix.package.name }}, py${{ matrix.python }})"
-  #   runs-on: [self-hosted, Linux]
-  #   timeout-minutes: 20
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       package:
-  #         - { name: sdk, dir: libs/bog-agents }
-  #         - { name: cli, dir: libs/cli }
-  #       python: ["3.11", "3.12", "3.13"]
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - uses: "./.github/actions/uv_setup"
-  #       with:
-  #         python-version: ${{ matrix.python }}
-  #         working-directory: ${{ matrix.package.dir }}
-  #     - run: uv sync --group test --locked
-  #       working-directory: ${{ matrix.package.dir }}
-  #     - run: make test
-  #       working-directory: ${{ matrix.package.dir }}
