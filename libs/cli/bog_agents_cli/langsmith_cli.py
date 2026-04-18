@@ -9,7 +9,17 @@ from typing import Any
 
 
 def _get_api_key() -> str | None:
-    return os.environ.get("LANGCHAIN_API_KEY") or os.environ.get("LANGSMITH_API_KEY")
+    # Check env vars first (standard LangSmith convention).
+    key = os.environ.get("LANGCHAIN_API_KEY") or os.environ.get("LANGSMITH_API_KEY")
+    if key:
+        return key
+    # Fall back to vault (and inject into env for this session).
+    try:
+        from bog_agents_cli.api_keys import get_api_key
+
+        return get_api_key("LANGSMITH_API_KEY")
+    except Exception:
+        return None
 
 
 def _get_project() -> str:
@@ -59,6 +69,12 @@ def format_langsmith_status() -> str:
         else:
             key_display = "[red]NOT SET[/red]"
 
+        missing_key_hint = (
+            "  [dim]Tip: Set with /langsmith set-key <key> or /vars set LANGSMITH_API_KEY <key>[/dim]"
+            if not api_key
+            else ""
+        )
+
         tracing_display = "[green]enabled[/green]" if tracing_v2 else "[dim]disabled[/dim]"
 
         try:
@@ -76,6 +92,10 @@ def format_langsmith_status() -> str:
             "[bold]LangSmith[/bold] — Observability & Evaluation Platform",
             "",
             f"  API key:     {key_display}",
+        ]
+        if missing_key_hint:
+            lines.append(missing_key_hint)
+        lines += [
             f"  Project:     [cyan]{project}[/cyan]",
             f"  Endpoint:    {endpoint}",
             f"  Tracing v2:  {tracing_display}",

@@ -7095,6 +7095,7 @@ class BogAgentsApp(App):
 
         Subcommands:
             /langsmith                          — Status and config
+            /langsmith set-key <key>            — Save LangSmith API key to vault
             /langsmith config set-project <p>   — Set default project
             /langsmith projects                 — List all projects
             /langsmith runs [project]           — List recent runs (last 24h)
@@ -7143,6 +7144,31 @@ class BogAgentsApp(App):
                 return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=ls_timeout)
             except TimeoutError:
                 return f"[red]LangSmith request timed out after {ls_timeout:.0f}s[/red]"
+
+        if subcommand == "set-key":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith set-key <key>"))
+                return
+            try:
+                from bog_agents_cli.api_keys import save_api_key
+
+                save_api_key("LANGSMITH_API_KEY", rest)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Failed to save LangSmith API key:[/red] {exc}")
+                )
+                return
+            import os as _os
+
+            if not _os.environ.get("LANGCHAIN_TRACING_V2"):
+                _os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            await self._mount_message(
+                AppMessage(
+                    "[green]LangSmith API key saved to vault.[/green]\n"
+                    "Tracing is now enabled for this session."
+                )
+            )
+            return
 
         if not subcommand or subcommand in {"status", "config"}:
             if rest.lower() == "set-project" and rest2:
@@ -7248,6 +7274,7 @@ class BogAgentsApp(App):
             AppMessage(
                 "Usage:\n"
                 "  /langsmith                          — status and config\n"
+                "  /langsmith set-key <key>            — save API key to vault\n"
                 "  /langsmith config set-project <p>   — set default project\n"
                 "  /langsmith projects                 — list projects\n"
                 "  /langsmith runs [project]           — list recent runs\n"
