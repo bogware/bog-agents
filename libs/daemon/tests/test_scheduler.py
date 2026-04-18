@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from bog_agents_daemon.models import AmbientJob, TriggerConfig, TriggerType
 from bog_agents_daemon.scheduler import (

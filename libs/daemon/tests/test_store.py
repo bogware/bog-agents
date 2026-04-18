@@ -5,16 +5,12 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-import pytest
-
 from bog_agents_daemon.models import (
     AmbientJob,
     JobRun,
     JobStatus,
     OutputConfig,
     OutputTarget,
-    TriggerConfig,
-    TriggerType,
 )
 from bog_agents_daemon.store import (
     delete_job,

@@ -295,6 +295,11 @@ def parse_args() -> argparse.Namespace:
         add_output_args=add_json_output_arg,
     )
 
+    # Daemon management subcommand
+    from bog_agents_cli.cmd_daemon import setup_daemon_parser
+
+    setup_daemon_parser(subparsers)
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -1385,6 +1390,10 @@ def cli_main() -> None:
             from bog_agents_cli.skills import execute_skills_command
 
             execute_skills_command(args)
+        elif args.command == "daemon":
+            from bog_agents_cli.cmd_daemon import execute_daemon_command
+
+            execute_daemon_command(args)
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,

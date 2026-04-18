@@ -389,7 +389,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-client-protocol", specifier = ">=0.8.0" },
-    { name = "bog-agents" },
+    { name = "bog-agents", specifier = ">=0.7.0,<1.0.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
 ]
 

@@ -2,10 +2,11 @@
 
 **v0.7.0** — Production-ready AI agent framework built on LangGraph.
 
-Bog Agents gives you two things:
+Bog Agents gives you three things:
 
 - `bog-agents`: a Python SDK for building agentic workflows on LangGraph
 - `bog-agents-cli`: a terminal-first coding agent for day-to-day engineering work
+- `bog-agents-daemon`: an ambient agent daemon — run agents on schedules, file-change triggers, webhooks, and git pushes
 
 Out of the box: file tools, shell execution, thread history, model switching, vault-backed API key management, parallel worktree agents, MCP integration, background work, codebase indexing, interactive PR review, and a practical human-in-the-loop approval model.
 
@@ -24,6 +25,25 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT licensed.
 ---
 
 ## Quick Install
+
+### Daemon (ambient background agent service)
+
+```bash
+pip install bog-agents-daemon
+
+# Start the daemon (binds to localhost:7391)
+bog-agents-daemon
+
+# Or manage it from the CLI
+bog-agents daemon start
+bog-agents daemon status
+bog-agents daemon jobs
+
+# Install as a system service (auto-detects systemd/launchd)
+bog-agents daemon install
+```
+
+See the [daemon README](libs/daemon/README.md) for trigger types, output targets, REST API reference, and security notes.
 
 ### CLI (recommended)
 
@@ -260,12 +280,13 @@ Supported keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_A
 
 ```text
 libs/
-├── bog-agents/      # Core SDK — create_agent(), middleware, backends
-├── cli/             # Terminal UI — Textual TUI, slash commands, vault
-├── acp/             # Agent Context Protocol (Zed editor)
-├── harbor/          # Evaluation / benchmark framework
-├── vscode-extension/# VS Code extension
-└── partners/        # Sandbox integrations (Daytona, Modal, Runloop, QuickJS)
+├── bog-agents/      # Core SDK — create_agent(), middleware, backends       [v0.7.0, stable]
+├── cli/             # Terminal UI — Textual TUI, slash commands, vault       [v0.7.0, stable]
+├── daemon/          # Ambient agent daemon — REST API, scheduler, triggers   [v0.7.0, beta]
+├── acp/             # Agent Context Protocol (Zed editor integration)        [v0.0.4, alpha]
+├── harbor/          # Evaluation / benchmark framework                       [v0.0.1, alpha]
+├── vscode-extension/# VS Code extension                                      [v0.1.0, alpha]
+└── partners/        # Sandbox integrations (Daytona, Modal, Runloop, QuickJS)[v0.0.4, alpha]
 ```
 
 ---
@@ -322,7 +343,8 @@ make format
 
 # Package-level tests
 cd libs/bog-agents && uv run --group test pytest tests/unit_tests/ -q
-cd libs/cli       && uv run --group test pytest tests/unit_tests/ -q
+cd libs/cli        && uv run --group test pytest tests/unit_tests/ -q
+cd libs/daemon     && uv run --group test pytest tests/ -q
 ```
 
 Contributor guidance: `AGENTS.md` (agent-specific), `CONTRIBUTING.md` (human contributors).
@@ -332,6 +354,8 @@ Contributor guidance: `AGENTS.md` (agent-specific), `CONTRIBUTING.md` (human con
 ## Links
 
 - [CLI package README](libs/cli/README.md)
+- [Daemon README](libs/daemon/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Publishing](PUBLISHING.md)
+- [Security Policy](SECURITY.md)
 - [LangGraph docs](https://github.com/langchain-ai/langgraph)

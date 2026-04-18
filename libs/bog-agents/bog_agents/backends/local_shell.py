@@ -341,10 +341,11 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                         description,
                     )
                 else:
-                    raise PermissionError(
+                    msg = (
                         f"Dangerous command blocked: {description}. "
-                        f"Pass allow_dangerous=True to LocalShellBackend or execute() to bypass."
+                        "Pass allow_dangerous=True to LocalShellBackend or execute() to bypass."
                     )
+                    raise PermissionError(msg)
                 break
 
         effective_timeout = timeout if timeout is not None else self._default_timeout
