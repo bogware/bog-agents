@@ -102,7 +102,7 @@ Hidden keywords are space-separated terms that participate in fuzzy matching
 but are never displayed to the user.
 """
 
-MAX_SUGGESTIONS = 10
+MAX_SUGGESTIONS = 15
 """UI cap so the completion popup doesn't get unwieldy."""
 
 _MIN_SLASH_FUZZY_SCORE = 25
@@ -110,6 +110,72 @@ _MIN_SLASH_FUZZY_SCORE = 25
 
 _MIN_DESC_SEARCH_LEN = 2
 """Minimum query length to search command descriptions (avoids single-char noise)."""
+
+
+def fuzzy_score(query: str, candidate: str) -> int:
+    """Compute a fuzzy match score for query against candidate.
+
+    Returns 0 if no match, higher is better.
+
+    Algorithm:
+
+    - Exact prefix match: score 1000 + (100 - len difference)
+    - All chars of query appear in candidate in order: score = 500 + consecutive_bonus
+    - Each char found: +10; consecutive chars: +20 bonus per consecutive pair
+    - Case-insensitive matching
+
+    Args:
+        query: The search term typed by the user.
+        candidate: The command name or description to score against.
+
+    Returns:
+        Integer score; 0 means no match, higher is a better match.
+    """
+    if not query:
+        return 0
+
+    q = query.lower()
+    c = candidate.lower()
+
+    # Exact prefix match — highest tier
+    if c.startswith(q):
+        return 1000 + max(0, 100 - (len(c) - len(q)))
+
+    # Sequential character matching (fuzzy)
+    # Check that all chars of query appear in candidate in order
+    ci = 0
+    qi = 0
+    first_match = -1
+    while qi < len(q) and ci < len(c):
+        if q[qi] == c[ci]:
+            if first_match < 0:
+                first_match = ci
+            qi += 1
+        ci += 1
+
+    if qi < len(q):
+        # Not all query chars found in order — no match
+        return 0
+
+    # All chars matched — compute bonus
+    char_score = len(q) * 10
+
+    # Consecutive bonus: scan through candidate tracking consecutive matched positions
+    matched_positions: list[int] = []
+    ci = 0
+    for ch in q:
+        while ci < len(c) and c[ci] != ch:
+            ci += 1
+        if ci < len(c):
+            matched_positions.append(ci)
+            ci += 1
+
+    consecutive_bonus = 0
+    for i in range(1, len(matched_positions)):
+        if matched_positions[i] == matched_positions[i - 1] + 1:
+            consecutive_bonus += 20
+
+    return 500 + char_score + consecutive_bonus
 
 
 class SlashCommandController:
@@ -207,14 +273,24 @@ class SlashCommandController:
                 :MAX_SUGGESTIONS
             ]
         else:
-            # Score and filter commands using fuzzy matching
-            scored = [
-                (score, cmd, desc)
-                for cmd, desc, kw in self._commands
-                if (score := self._score_command(search, cmd, desc, kw)) > 0
-            ]
-            scored.sort(key=lambda x: -x[0])
-            suggestions = [(cmd, desc) for _, cmd, desc in scored[:MAX_SUGGESTIONS]]
+            # Score and filter commands using fuzzy matching.
+            # Use _score_command as primary scorer; fall back to fuzzy_score
+            # (scaled to keep it below the existing tier thresholds) for
+            # candidates that _score_command rates at 0.
+            all_scored: list[tuple[float, str, str]] = []
+            for cmd, desc, kw in self._commands:
+                primary = self._score_command(search, cmd, desc, kw)
+                if primary > 0:
+                    all_scored.append((primary, cmd, desc))
+                else:
+                    # fuzzy_score operates on the bare command name (without /)
+                    fs = fuzzy_score(search, cmd.lstrip("/"))
+                    if fs > 0:
+                        # Scale into the fuzzy tier (below 25, above 0)
+                        scaled = min(fs / 100.0, _MIN_SLASH_FUZZY_SCORE - 1)
+                        all_scored.append((scaled, cmd, desc))
+            all_scored.sort(key=lambda x: -x[0])
+            suggestions = [(cmd, desc) for _, cmd, desc in all_scored[:MAX_SUGGESTIONS]]
 
         if suggestions:
             self._suggestions = suggestions

@@ -731,6 +731,10 @@ class BogAgentsApp(App):
         "/workspace": "_handle_workspace_command",
         "/worktree": "_handle_worktree_command",
         "/worktrees": "_handle_worktrees_command",
+        "/benchmark": "_handle_benchmark_command",
+        "/checkpoint": "_handle_checkpoint_command",
+        "/explain": "_handle_explain_command",
+        "/index": "_handle_index_command",
     }
 
     class ServerReady(Message):
@@ -1052,6 +1056,7 @@ class BogAgentsApp(App):
         """Background worker: start server + MCP preload concurrently."""
         from bog_agents_cli.server_manager import start_server_and_get_agent
 
+        self._update_status("Initialising agent runtime…")
         coros: list[Any] = [start_server_and_get_agent(**self._server_kwargs)]  # type: ignore[arg-type]
 
         if self._mcp_preload_kwargs is not None:
@@ -1059,11 +1064,31 @@ class BogAgentsApp(App):
 
             coros.append(_preload_session_mcp_server_info(**self._mcp_preload_kwargs))
 
+        # Progressive loading: cycle status messages while waiting for server
+        progress_steps = [
+            "Compiling agent graph…",
+            "Loading tools and middleware…",
+            "Connecting to MCP servers…",
+            "Warming up model connection…",
+        ]
+        step_idx = 0
+
+        async def _progress_ticker() -> None:
+            nonlocal step_idx
+            await asyncio.sleep(1.5)
+            while True:
+                self._update_status(progress_steps[step_idx % len(progress_steps)])
+                step_idx += 1
+                await asyncio.sleep(2.0)
+
+        ticker = asyncio.create_task(_progress_ticker())
         try:
             results = await asyncio.gather(*coros, return_exceptions=True)
         except Exception as exc:  # defensive catch around gather
+            ticker.cancel()
             self.post_message(self.ServerStartFailed(error=exc))
             return
+        ticker.cancel()
 
         server_result = results[0]
         if isinstance(server_result, BaseException):
@@ -3693,11 +3718,31 @@ class BogAgentsApp(App):
         elif action == "audit":
             default_prompt = generate_audit_prompt()
             announcement = "Auditing dependencies and test-related risks..."
+        elif action == "run":
+            from bog_agents_cli.cmd_test import (
+                detect_test_framework,
+                find_test_file,
+                run_tests,
+            )
+
+            await self._mount_message(UserMessage(command))
+            cwd = Path(self._cwd)
+            framework = await asyncio.to_thread(detect_test_framework, cwd)
+            test_file: Path | None = None
+            if argument:
+                src = cwd / argument
+                if src.exists():
+                    test_file = await asyncio.to_thread(find_test_file, src, cwd)
+            result = await asyncio.to_thread(
+                run_tests, cwd=cwd, test_file=test_file, framework=framework or "pytest"
+            )
+            await self._mount_message(AppMessage(result))
+            return
         else:
             await self._mount_message(UserMessage(command))
             await self._mount_message(
                 AppMessage(
-                    "Usage: /test generate <file> [framework] | "
+                    "Usage: /test run [file] | /test generate <file> [framework] | "
                     "/test coverage [path] | /test gaps <file-or-path> | "
                     "/test benchmark [path] | /test audit"
                 )
@@ -5050,6 +5095,203 @@ class BogAgentsApp(App):
                 "/undo restore <path...> | /undo restore --all"
             )
         )
+
+    async def _handle_checkpoint_command(self, command: str) -> None:
+        """Handle `/checkpoint` — save, list, load, and delete named session checkpoints."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_checkpoint import (
+            delete_checkpoint,
+            format_checkpoint_help,
+            list_checkpoints,
+            load_checkpoint,
+            save_checkpoint,
+        )
+
+        raw_arg = command.strip()[len("/checkpoint") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(AppMessage(f"Could not parse /checkpoint arguments: {exc}"))
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_checkpoint_help()))
+            return
+
+        if action in {"list", "ls"}:
+            result = await asyncio.to_thread(list_checkpoints)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "save":
+            name = tokens[1] if len(tokens) > 1 else ""
+            description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
+            if not name:
+                await self._mount_message(AppMessage("Usage: /checkpoint save <name> [description]"))
+                return
+            thread_id = self._lc_thread_id or ""
+            result = await asyncio.to_thread(save_checkpoint, thread_id, name, description=description)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"load", "restore"}:
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage("Usage: /checkpoint load <name>"))
+                return
+            thread_id = await asyncio.to_thread(load_checkpoint, name)
+            if thread_id is None:
+                await self._mount_message(AppMessage(f"No checkpoint named {name!r}."))
+                return
+            prompt = (
+                f"Resume conversation from checkpoint '{name}' (thread {thread_id}). "
+                "Restore context and continue from where we left off."
+            )
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if action in {"delete", "rm"}:
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage("Usage: /checkpoint delete <name>"))
+                return
+            result = await asyncio.to_thread(delete_checkpoint, name)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(AppMessage(format_checkpoint_help()))
+
+    async def _handle_benchmark_command(self, command: str) -> None:
+        """Handle `/benchmark` — run evaluation suites and show recent results."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_benchmark import (
+            format_benchmark_help,
+            list_benchmark_suites,
+            run_benchmark,
+            show_recent_results,
+        )
+
+        raw_arg = command.strip()[len("/benchmark") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(AppMessage(f"Could not parse /benchmark arguments: {exc}"))
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+        cwd = Path(self._cwd)
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_benchmark_help()))
+            return
+
+        if action in {"list", "ls", "suites"}:
+            result = await asyncio.to_thread(list_benchmark_suites)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "run":
+            suite_name = tokens[1] if len(tokens) > 1 else None
+            try:
+                max_tasks = int(tokens[2]) if len(tokens) > 2 else 5
+            except ValueError:
+                max_tasks = 5
+            result = await asyncio.to_thread(run_benchmark, suite_name, cwd=cwd, max_tasks=max_tasks)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"results", "history", "recent"}:
+            limit = 5
+            if len(tokens) > 1:
+                try:
+                    limit = int(tokens[1])
+                except ValueError:
+                    pass
+            result = await asyncio.to_thread(show_recent_results, cwd=cwd, limit=limit)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(AppMessage(format_benchmark_help()))
+
+    async def _handle_explain_command(self, command: str) -> None:
+        """Handle `/explain` — deep dive into any symbol, file, or concept."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_explain import (
+            build_explain_prompt,
+            format_explain_help,
+            format_explain_not_found,
+            gather_explain_context,
+        )
+
+        raw_arg = command.strip()[len("/explain") :].strip()
+        if not raw_arg or raw_arg.lower() in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_explain_help()))
+            return
+
+        cwd = Path(self._cwd)
+        context = await asyncio.to_thread(gather_explain_context, raw_arg, cwd)
+        if not context.get("content") and not context.get("definition_snippet"):
+            await self._mount_message(AppMessage(format_explain_not_found(raw_arg)))
+            return
+
+        prompt = build_explain_prompt(raw_arg, context)
+        await self._send_prompt_to_agent(prompt)
+
+    async def _handle_index_command(self, command: str) -> None:
+        """Handle `/index` — build and search the codebase knowledge base."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_index import (
+            build_index,
+            format_index_help,
+            index_status,
+            search_index,
+        )
+
+        raw_arg = command.strip()[len("/index") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(AppMessage(f"Could not parse /index arguments: {exc}"))
+            return
+
+        action = tokens[0].lower() if tokens else "status"
+        cwd = Path(self._cwd)
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_index_help()))
+            return
+
+        if action in {"build", "rebuild", "update"}:
+            force = action == "rebuild" or "--force" in tokens
+            self._update_status("Building knowledge base index...")
+            result = await asyncio.to_thread(build_index, cwd, force=force)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"search", "find", "query"}:
+            query = " ".join(tokens[1:])
+            if not query:
+                await self._mount_message(AppMessage("Usage: /index search <query>"))
+                return
+            result = await asyncio.to_thread(search_index, query, cwd)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "status":
+            result = await asyncio.to_thread(index_status, cwd)
+            await self._mount_message(AppMessage(result))
+            return
+
+        # Treat bare /index <query> as search
+        query = raw_arg.strip()
+        result = await asyncio.to_thread(search_index, query, cwd)
+        await self._mount_message(AppMessage(result))
 
     async def _handle_agent_command(self, command: str) -> None:
         """Handle `/agent` as a first-class supervisor over managed workers."""
@@ -8073,30 +8315,26 @@ class BogAgentsApp(App):
             return
 
         if action == "sync":
-            team_name = tokens[1] if len(tokens) > 1 else registry.active_team
-            if not team_name:
-                await self._mount_message(
-                    AppMessage("Usage: /team sync <name> or set an active team first.")
-                )
-                return
-            team = find_team(registry, team_name)
-            if team is None:
-                await self._mount_message(
-                    AppMessage(f"Team '{team_name}' was not found.")
-                )
-                return
-            local_tasks, remote_tasks = self._team_task_snapshot(team.name)
-            task_summaries: list[str] = []
-            for task in [*local_tasks, *remote_tasks]:
-                result = getattr(task, "result", "") or getattr(task, "output", "")
-                if isinstance(result, str) and result.strip():
-                    task_summaries.append(result.strip())
-            summary = summarize_team_activity(team, task_summaries)
-            set_team_summary(registry, team.name, summary)
-            self._save_team_registry(registry)
-            await self._mount_message(
-                AppMessage(f"Synced shared summary for `{team.name}`.\n\n{summary}")
-            )
+            direction = tokens[1] if len(tokens) > 1 and tokens[1] in {"pull", "push", "both"} else "both"
+            cwd = Path(self._cwd)
+            from bog_agents_cli.cmd_memory_sync import sync_memory
+
+            result = await asyncio.to_thread(sync_memory, cwd, direction=direction)
+            await self._mount_message(AppMessage(result))
+            # Also update in-memory team summary
+            team_name = registry.active_team if hasattr(registry, "active_team") else None
+            if team_name:
+                team = find_team(registry, team_name)
+                if team is not None:
+                    local_tasks, remote_tasks = self._team_task_snapshot(team.name)
+                    task_summaries: list[str] = []
+                    for task in [*local_tasks, *remote_tasks]:
+                        task_result = getattr(task, "result", "") or getattr(task, "output", "")
+                        if isinstance(task_result, str) and task_result.strip():
+                            task_summaries.append(task_result.strip())
+                    summary = summarize_team_activity(team, task_summaries)
+                    set_team_summary(registry, team.name, summary)
+                    self._save_team_registry(registry)
             return
 
         if action == "show":
@@ -8790,6 +9028,14 @@ class BogAgentsApp(App):
         # Ensure token display is restored (in case of early cancellation)
         if self._token_tracker:
             self._token_tracker.show()
+
+        # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
+        try:
+            from bog_agents_cli.cli_sounds import play_completion_sound
+
+            play_completion_sound()
+        except Exception:  # noqa: S110
+            pass
 
         # Process next message from queue if any
         await self._process_next_from_queue()
@@ -10342,11 +10588,32 @@ class BogAgentsApp(App):
             if not argument:
                 self.notify("Usage: /pr review <number>", severity="warning", timeout=3)
                 return
-            prompt = (
-                f"Show the review comments and status for pull request #{argument}. "
-                "Summarize the feedback and list any unresolved threads."
-            )
             await self._mount_message(UserMessage(f"/pr review {argument}"))
+            from bog_agents_cli.cmd_pr_review import (
+                build_pr_review_prompt,
+                detect_pr_platform,
+                format_pr_review_not_found,
+                get_azure_pr_diff,
+                get_github_pr_diff,
+            )
+
+            cwd = Path(self._cwd)
+            platform = await asyncio.to_thread(detect_pr_platform, cwd)
+            focus_parts = argument.split()
+            pr_num = focus_parts[0]
+            focus = focus_parts[1] if len(focus_parts) > 1 else "all"
+            try:
+                if platform == "azure":
+                    pr_data = await asyncio.to_thread(get_azure_pr_diff, pr_num, cwd=cwd)
+                else:
+                    pr_data = await asyncio.to_thread(get_github_pr_diff, pr_num, cwd=cwd)
+            except RuntimeError as exc:
+                await self._mount_message(AppMessage(str(exc)))
+                return
+            if not pr_data.get("diff") and not pr_data.get("title"):
+                await self._mount_message(AppMessage(format_pr_review_not_found(platform)))
+                return
+            prompt = build_pr_review_prompt(pr_data, focus=focus)
 
         elif action == "describe":
             prompt = (

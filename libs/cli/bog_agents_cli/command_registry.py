@@ -516,6 +516,34 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "git",
         available=True,
     ),
+    SlashCommandSpec(
+        "/checkpoint",
+        "Save, load, and list named session checkpoints for easy resume",
+        "save restore resume snapshot session history",
+        "info",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/benchmark",
+        "Run evaluation suites and view recent benchmark results",
+        "eval score perf suite tasks trajectory",
+        "analysis",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/explain",
+        "Deep-dive explanation of any symbol, file, or concept in the codebase",
+        "docs understand symbol function class architecture why",
+        "general",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/index",
+        "Build and search a local knowledge-base index of the codebase",
+        "search knowledge base symbol tfidf find query",
+        "general",
+        available=True,
+    ),
 )
 
 FEATURED_HELP_COMMANDS_LEFT: tuple[str, ...] = (
