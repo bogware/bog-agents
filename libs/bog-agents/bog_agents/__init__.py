@@ -5,6 +5,7 @@ This keeps ``import bog_agents`` fast.
 """
 
 from bog_agents._version import __version__
+from bog_agents.builder import AgentBuilder, AgentConfig
 from bog_agents.feature_config import FeatureConfig
 from bog_agents.graph import create_agent
 
@@ -115,6 +116,8 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [  # noqa: PLE0604
+    "AgentBuilder",
+    "AgentConfig",
     "FeatureConfig",
     "__version__",
     "create_agent",
