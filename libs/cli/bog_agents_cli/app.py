@@ -2400,7 +2400,11 @@ class BogAgentsApp(App):
             return
         from bog_agents_cli.remote import check_remote_task, load_remote_config
 
-        config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+        try:
+            config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+        except OSError:
+            logger.debug("Could not load remote config", exc_info=True)
+            return
         refreshed = [
             await check_remote_task(config, task)
             for task in self._remote_tasks.values()
@@ -2412,7 +2416,11 @@ class BogAgentsApp(App):
         """Merge persisted remote tasks into the in-memory registry."""
         from bog_agents_cli.remote import load_remote_tasks
 
-        loaded = await asyncio.to_thread(load_remote_tasks, settings.user_agents_dir)
+        try:
+            loaded = await asyncio.to_thread(load_remote_tasks, settings.user_agents_dir)
+        except OSError:
+            logger.debug("Could not load persisted remote tasks", exc_info=True)
+            return 0
         added = 0
         for task in loaded:
             if task.task_id in self._remote_tasks:

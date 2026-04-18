@@ -608,8 +608,8 @@ def _info(
         write_json("skills info", dict(skill))
         return
 
-    # Read the full SKILL.md file
-    skill_path = Path(skill["path"])
+    # Read the full SKILL.md file — use real filesystem path, not virtual backend path
+    skill_path = Path(skill.get("fs_path") or skill["path"])
     skill_content = skill_path.read_text(encoding="utf-8")
 
     # Determine source label
