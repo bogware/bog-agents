@@ -376,7 +376,8 @@ class TestPluginSystemMiddleware:
         from bog_agents.middleware.plugin_system import PluginSystemMiddleware
 
         mw = PluginSystemMiddleware(plugins_dir=tmp_path / "plugins", skills_dir=tmp_path / "skills")
-        assert len(mw.tools) == 7
+        # 7 original + 3 Claude Code compat tools
+        assert len(mw.tools) == 10
 
     def test_parse_skill_md(self):
         from bog_agents.middleware.plugin_system import parse_skill_md

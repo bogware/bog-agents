@@ -251,8 +251,8 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/plugin",
-        "Manage plugins and extensions (list/info/install/enable/disable)",
-        "marketplace skills extensions",
+        "Manage plugins and extensions — includes Claude Code skill import and MCP sync",
+        "marketplace skills extensions claude-code mcp sync import compatible",
         "config",
         available=True,
     ),

@@ -136,10 +136,12 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
         plugins_dir: Path | None = None,
         skills_dir: Path | None = None,
         registry_url: str = "",
+        working_dir: Path | None = None,
     ) -> None:
         self._plugins_dir = plugins_dir or Path.home() / ".bog-agents" / "plugins"
         self._skills_dir = skills_dir or Path.home() / ".bog-agents" / "skills"
         self._registry_url = registry_url
+        self._working_dir = working_dir or Path.cwd()
         self._installed: dict[str, InstalledPlugin] = {}
         self._plugins_dir.mkdir(parents=True, exist_ok=True)
         self._skills_dir.mkdir(parents=True, exist_ok=True)
@@ -283,6 +285,62 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
                 return f"Skill '{skill_name}' not found."
             return f"Skill '{skill_name}' is ready for sharing at {skill_path}. Copy to a git repo to distribute."
 
+        def list_claude_skills(
+            runtime: ToolRuntime[None, PluginSystemState],
+        ) -> str:
+            """List Claude Code-compatible skills found in .claude/ directories."""
+            try:
+                from bog_agents_cli.claude_code_compat import detect_claude_skills  # type: ignore[import]
+
+                skills = detect_claude_skills(middleware._working_dir)
+                if not skills:
+                    return "No Claude Code skills found in .claude/ directories."
+                lines = ["Claude Code skills found:"]
+                for s in skills:
+                    lines.append(f"  {s.name} v{s.version} — {s.description}")
+                    lines.append(f"    {s.source_path}")
+                return "\n".join(lines)
+            except ImportError:
+                return "Claude Code compat module not available (CLI not installed)."
+
+        def import_claude_skills(
+            runtime: ToolRuntime[None, PluginSystemState],
+        ) -> str:
+            """Import all Claude Code skills from .claude/ into bog-agents skills directory."""
+            try:
+                from bog_agents_cli.claude_code_compat import detect_claude_skills, import_claude_skill  # type: ignore[import]
+
+                skills = detect_claude_skills(middleware._working_dir)
+                if not skills:
+                    return "No Claude Code skills found to import."
+                imported = []
+                for skill in skills:
+                    dest = import_claude_skill(skill, middleware._skills_dir)
+                    imported.append(f"  {skill.name} → {dest}")
+                return f"Imported {len(imported)} skill(s):\n" + "\n".join(imported)
+            except ImportError:
+                return "Claude Code compat module not available (CLI not installed)."
+
+        def sync_mcp_with_claude(
+            runtime: ToolRuntime[None, PluginSystemState],
+            direction: Annotated[str, "Sync direction: both, to-desktop, from-desktop"] = "both",
+        ) -> str:
+            """Sync MCP server configs between .mcp.json and Claude Desktop."""
+            try:
+                from bog_agents_cli.claude_code_compat import sync_mcp_configs  # type: ignore[import]
+
+                result = sync_mcp_configs(middleware._working_dir, direction=direction)
+                parts = []
+                if result.added_to_mcp_json:
+                    parts.append(f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}")
+                if result.added_from_desktop:
+                    parts.append(f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}")
+                if result.errors:
+                    parts.append(f"Errors: {'; '.join(result.errors)}")
+                return "\n".join(parts) if parts else "MCP configs already in sync."
+            except ImportError:
+                return "Claude Code compat module not available (CLI not installed)."
+
         return [
             StructuredTool.from_function(name="list_plugins", description="List installed plugins.", func=list_plugins),
             StructuredTool.from_function(name="install_plugin", description="Install a plugin.", func=install_plugin),
@@ -291,4 +349,7 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             StructuredTool.from_function(name="create_skill", description="Create a SKILL.md file.", func=create_skill),
             StructuredTool.from_function(name="list_skills", description="List available skills.", func=list_skills),
             StructuredTool.from_function(name="publish_skill", description="Publish a skill.", func=publish_skill),
+            StructuredTool.from_function(name="list_claude_skills", description="List Claude Code skills in .claude/ directories.", func=list_claude_skills),
+            StructuredTool.from_function(name="import_claude_skills", description="Import Claude Code skills into bog-agents.", func=import_claude_skills),
+            StructuredTool.from_function(name="sync_mcp_with_claude", description="Sync MCP server configs with Claude Desktop.", func=sync_mcp_with_claude),
         ]
