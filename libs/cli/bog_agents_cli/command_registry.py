@@ -531,6 +531,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/build",
+        "Interactive wizard — create skills, prompts, and pipelines step by step",
+        "wizard create new template scaffold variablize builder",
+        "general",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/explain",
         "Deep-dive explanation of any symbol, file, or concept in the codebase",
         "docs understand symbol function class architecture why",
@@ -542,6 +549,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         "Build and search a local knowledge-base index of the codebase",
         "search knowledge base symbol tfidf find query",
         "general",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/ambient",
+        "Manage the ambient agent daemon — autonomous scheduled and triggered agents",
+        "daemon service schedule cron background autonomous trigger webhook",
+        "agent",
         available=True,
     ),
 )

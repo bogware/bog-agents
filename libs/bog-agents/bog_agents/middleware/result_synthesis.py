@@ -261,14 +261,6 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
             """
             return "Middleware registered"
 
-        # Synchronous fallback — used only when no event loop is running.
-        def _sync_await(
-            task_ids: str,
-            timeout_seconds: int = 300,
-        ) -> str:
-            """Synchronous fallback for await_tasks_complete."""
-            return asyncio.run(await_tasks_complete(task_ids, timeout_seconds))
-
         return [
             StructuredTool.from_function(
                 name="gather_parallel_results",
@@ -293,7 +285,6 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
                     "Poll parallel worktree tasks every 2 s until all reach a "
                     "terminal status (completed/failed) or the timeout expires."
                 ),
-                func=_sync_await,
                 coroutine=_await_tasks_complete_sync_wrapper,
             ),
             StructuredTool.from_function(

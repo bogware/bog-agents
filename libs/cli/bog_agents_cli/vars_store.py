@@ -203,6 +203,17 @@ def _warn_fallback_once() -> None:
     )
 
 
+def is_using_toml_fallback() -> bool:
+    """Return True when the OS keyring is unavailable and secrets use plaintext TOML.
+
+    Used by the TUI to surface a one-time security advisory at startup.
+
+    Returns:
+        True when the TOML fallback is active, False when keyring is available.
+    """
+    return not _keyring_available()
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------

@@ -1,0 +1,19 @@
+[project]
+name = "bog-agents-daemon"
+version = "0.1.0"
+description = "Ambient agent daemon for bog-agents — run agents on schedules and triggers"
+requires-python = ">=3.11"
+dependencies = [
+    "bog-agents>=0.7.0,<1.0.0",
+    "bog-agents-cli>=0.7.0,<1.0.0",
+    "uvicorn>=0.30.0",
+    "fastapi>=0.115.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.scripts]
+bog-agents-daemon = "bog_agents_daemon.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

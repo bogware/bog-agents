@@ -732,9 +732,11 @@ class BogAgentsApp(App):
         "/worktree": "_handle_worktree_command",
         "/worktrees": "_handle_worktrees_command",
         "/benchmark": "_handle_benchmark_command",
+        "/build": "_handle_build_command",
         "/checkpoint": "_handle_checkpoint_command",
         "/explain": "_handle_explain_command",
         "/index": "_handle_index_command",
+        "/ambient": "_handle_ambient_command",
     }
 
     class ServerReady(Message):
@@ -817,6 +819,7 @@ class BogAgentsApp(App):
         self._mcp_server_info = mcp_server_info
         self._profile_override = profile_override
         self._server_proc = server_proc
+        self._build_pending: dict[str, Any] | None = None
         self._server_kwargs = server_kwargs
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
@@ -866,6 +869,7 @@ class BogAgentsApp(App):
         self._preview_servers: dict[str, PreviewServerRecord] = {}
         self._recording_state: RecordingSessionState | None = None
         self._remote_tasks: dict[str, Any] = {}
+        self._file_watchers: list = []
         # Lazily imported here to avoid pulling image dependencies into
         # argument parsing paths.
         from bog_agents_cli.input import MediaTracker
@@ -986,6 +990,20 @@ class BogAgentsApp(App):
 
         # Start pipeline scheduler (daemon thread — errors are non-fatal)
         self._init_pipeline_scheduler()
+
+        # Start file watchers for pipelines that have watch: blocks
+        self.run_worker(
+            self._init_file_watchers,
+            exclusive=True,
+            group="startup-file-watchers",
+        )
+
+        # Advisory: warn once when secrets are stored in plaintext TOML fallback
+        self.run_worker(
+            self._check_vault_security,
+            exclusive=True,
+            group="startup-vault-check",
+        )
 
         # Warn about missing optional tools (advisory only — never block startup)
         try:
@@ -1210,6 +1228,22 @@ class BogAgentsApp(App):
             )
         except Exception:
             logger.debug("Could not prewarm model caches", exc_info=True)
+
+    async def _check_vault_security(self) -> None:
+        """Show a one-time advisory when secrets fall back to plaintext TOML storage."""
+        try:
+            from bog_agents_cli.vars_store import is_using_toml_fallback
+
+            if await asyncio.to_thread(is_using_toml_fallback):
+                self.notify(
+                    "Vault: OS keyring unavailable — secrets stored in plaintext "
+                    "~/.bog-agents/vars.toml (mode 0600). "
+                    "Install 'keyring' + a backend for encrypted storage.",
+                    severity="warning",
+                    timeout=20,
+                )
+        except Exception:
+            logger.debug("Vault security check failed", exc_info=True)
 
     async def _check_for_updates(self) -> None:
         """Check PyPI for a newer bog-agents-cli version and notify the user."""
@@ -5293,6 +5327,285 @@ class BogAgentsApp(App):
         result = await asyncio.to_thread(search_index, query, cwd)
         await self._mount_message(AppMessage(result))
 
+    async def _handle_ambient_command(self, command: str) -> None:
+        """Handle /ambient — manage the ambient agent daemon.
+
+        Subcommands:
+            /ambient status    — Show daemon status and job list (default)
+            /ambient list      — List all configured jobs
+            /ambient jobs      — Alias for list
+            /ambient run <id>  — Trigger immediate run of job <id>
+            /ambient install   — Show service installation instructions
+
+        Args:
+            command: Full command string including the /ambient prefix.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.daemon_client import (
+            format_daemon_status,
+            get_daemon_status,
+            is_daemon_running,
+            list_daemon_jobs,
+            trigger_daemon_job,
+        )
+
+        raw_arg = command.strip()[len("/ambient"):].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+        action = tokens[0].lower() if tokens else "status"
+
+        if action in {"status", ""}:
+            running = await asyncio.to_thread(is_daemon_running)
+            if not running:
+                await self._mount_message(AppMessage(
+                    "[yellow]Daemon not running.[/yellow]\n\n"
+                    "Start with: [bold]bog-agents-daemon[/bold]\n"
+                    "Or install as a service (see /ambient install)"
+                ))
+                return
+            status = await get_daemon_status()
+            jobs = await list_daemon_jobs()
+            await self._mount_message(AppMessage(format_daemon_status(status, jobs)))
+            return
+
+        if action in {"list", "jobs"}:
+            running = await asyncio.to_thread(is_daemon_running)
+            if not running:
+                await self._mount_message(AppMessage("Daemon not running. Start with: bog-agents-daemon"))
+                return
+            jobs = await list_daemon_jobs()
+            await self._mount_message(AppMessage(format_daemon_status(None, jobs)))
+            return
+
+        if action == "run":
+            job_id = tokens[1] if len(tokens) > 1 else ""
+            if not job_id:
+                await self._mount_message(AppMessage("Usage: /ambient run <job-id>"))
+                return
+            result = await trigger_daemon_job(job_id)
+            await self._mount_message(AppMessage(f"[green]Triggered:[/green] {result}"))
+            return
+
+        if action in {"install", "service"}:
+            await self._mount_message(AppMessage(
+                "[bold]Install bog-agents-daemon as a system service:[/bold]\n\n"
+                "[yellow]macOS (launchd):[/yellow]\n"
+                "  bog-agents-daemon --install-launchd\n\n"
+                "[yellow]Linux (systemd):[/yellow]\n"
+                "  bog-agents-daemon --install-systemd\n\n"
+                "[yellow]Manual start:[/yellow]\n"
+                "  bog-agents-daemon &\n\n"
+                "The daemon runs on port 7391 and persists jobs in ~/.bog-agents/daemon/"
+            ))
+            return
+
+        await self._mount_message(AppMessage(
+            "Usage: /ambient status | /ambient list | /ambient run <id> | /ambient install"
+        ))
+
+    # =========================================================================
+    # /build — interactive skill / prompt / pipeline wizard
+    # =========================================================================
+
+    def _get_last_assistant_text(self) -> str:
+        """Return text content of the last assistant message in the store.
+
+        Returns:
+            Content string of the most recent assistant message, or empty
+            string when no assistant message exists.
+        """
+        from bog_agents_cli.widgets.message_store import MessageType
+
+        messages = self._message_store.get_all_messages()
+        for message in reversed(messages):
+            if message.type == MessageType.ASSISTANT and message.content:
+                return message.content
+        return ""
+
+    async def _handle_build_command(self, command: str) -> None:
+        """Handle /build — interactive wizard for creating skills, prompts, and pipelines."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_build import (
+            build_pipeline_yaml,
+            build_prompt_entry,
+            build_skill_template,
+            extract_variables,
+            format_build_help,
+            preview_skill,
+            save_pipeline,
+            save_prompt,
+            save_skill,
+        )
+
+        raw_arg = command.strip()[len("/build"):].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+
+        kind = tokens[0].lower() if tokens else ""
+
+        if not kind or kind in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_build_help()))
+            return
+
+        user_skills_dir = Path.home() / ".bog-agents" / "skills"
+        pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+        library_path = Path.home() / ".bog-agents" / "prompt_library.toml"
+
+        # ---- skill builder ----
+        if kind == "skill":
+            name = tokens[1] if len(tokens) > 1 else ""
+            description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
+            if not name:
+                await self._mount_message(AppMessage(
+                    "Usage: /build skill <name> [description]\n\n"
+                    "Then the agent will scaffold a skill template and ask for the body.\n\n"
+                    "Example: /build skill web-research Search the web and summarize results"
+                ))
+                return
+            if not description:
+                description = f"A skill named {name}"
+            # Build initial template and send to agent for body content
+            preview = preview_skill(name, description, "{{TOPIC}}", ["TOPIC"])
+            prompt = (
+                f"I'm building a skill named '{name}': {description}\n\n"
+                f"Here's the template preview:\n\n{preview}\n\n"
+                "Please write the body content for SKILL.md — the instructions the agent "
+                "should follow when this skill is invoked. Include any relevant steps, "
+                "constraints, and output format. Use {{VARIABLE_NAME}} for any parameters "
+                "the user should supply. Return ONLY the skill body text, nothing else."
+            )
+            self._build_pending = {"kind": "skill", "name": name, "description": description}
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- prompt builder ----
+        if kind == "prompt":
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage(
+                    "Usage: /build prompt <name>\n\nExample: /build prompt code-review"
+                ))
+                return
+            description = " ".join(tokens[2:]) if len(tokens) > 2 else f"A prompt named {name}"
+            prompt = (
+                f"I'm building a saved prompt named '{name}': {description}\n\n"
+                "Please write the prompt body. Use {{VARIABLE_NAME}} for parameters the "
+                "user will fill in at runtime (e.g. {{LANGUAGE}}, {{FILE_PATH}}).\n\n"
+                "Return ONLY the prompt body text, nothing else."
+            )
+            self._build_pending = {"kind": "prompt", "name": name, "description": description}
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- pipeline builder ----
+        if kind == "pipeline":
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage(
+                    "Usage: /build pipeline <name> [--schedule 'cron']\n\n"
+                    "Example: /build pipeline daily-standup --schedule '0 9 * * 1-5'"
+                ))
+                return
+            schedule = ""
+            for i, t in enumerate(tokens):
+                if t == "--schedule" and i + 1 < len(tokens):
+                    schedule = tokens[i + 1]
+                    break
+            description = (
+                " ".join(t for t in tokens[2:] if not t.startswith("--") and t != schedule)
+                or f"Pipeline: {name}"
+            )
+            prompt = (
+                f"I'm building an automation pipeline named '{name}': {description}\n"
+                + (f"Schedule: {schedule}\n" if schedule else "")
+                + "\nPlease design this pipeline. Describe each step in order as a JSON array like:\n"
+                '[\n  {"label": "Step 1", "type": "prompt", "content": "Do X"},\n'
+                '  {"label": "Step 2", "type": "skill", "content": "skill-name"},\n'
+                '  {"label": "Step 3", "type": "slash", "content": "/review"}\n]\n\n'
+                "Types: 'prompt' (send text to agent), 'skill' (invoke a skill by name), 'slash' (run a slash command).\n"
+                "Return ONLY the JSON array."
+            )
+            self._build_pending = {
+                "kind": "pipeline",
+                "name": name,
+                "description": description,
+                "schedule": schedule,
+            }
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- save last build ----
+        if kind == "save":
+            if not self._build_pending:
+                await self._mount_message(AppMessage(
+                    "No pending build. Run /build skill/prompt/pipeline first."
+                ))
+                return
+            pending = self._build_pending
+            last_content = self._get_last_assistant_text()
+            if not last_content:
+                await self._mount_message(AppMessage(
+                    "No agent response found to save. Generate content first."
+                ))
+                return
+            try:
+                if pending["kind"] == "skill":
+                    content = build_skill_template(
+                        pending["name"],
+                        pending["description"],
+                        last_content,
+                        variables=extract_variables(last_content),
+                    )
+                    path = await asyncio.to_thread(
+                        save_skill, pending["name"], content, user_skills_dir=user_skills_dir
+                    )
+                    await self._mount_message(AppMessage(
+                        f"[green]Skill saved:[/green] {path}\n\nUse `/skills list` to verify."
+                    ))
+                elif pending["kind"] == "prompt":
+                    entry = build_prompt_entry(
+                        pending["name"], pending["description"], last_content
+                    )
+                    await asyncio.to_thread(save_prompt, entry, library_path=library_path)
+                    await self._mount_message(AppMessage(
+                        f"[green]Prompt saved:[/green] {pending['name']}\n\nUse `/prompt list` to verify."
+                    ))
+                elif pending["kind"] == "pipeline":
+                    import json as _json
+
+                    try:
+                        steps = _json.loads(last_content)
+                    except Exception:
+                        steps = [{"label": "Step 1", "type": "prompt", "content": last_content}]
+                    yaml_content = build_pipeline_yaml(
+                        pending["name"],
+                        pending["description"],
+                        steps,
+                        schedule=pending.get("schedule", ""),
+                    )
+                    path = await asyncio.to_thread(
+                        save_pipeline, pending["name"], yaml_content, pipelines_dir=pipelines_dir
+                    )
+                    await self._mount_message(AppMessage(
+                        f"[green]Pipeline saved:[/green] {path}\n\nUse `/pipeline list` to verify."
+                    ))
+                self._build_pending = None
+            except FileExistsError as exc:
+                await self._mount_message(AppMessage(
+                    f"[red]Already exists:[/red] {exc}\nUse /build save --force to overwrite."
+                ))
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Save failed:[/red] {exc}"))
+            return
+
+        await self._mount_message(AppMessage(format_build_help()))
+
     async def _handle_agent_command(self, command: str) -> None:
         """Handle `/agent` as a first-class supervisor over managed workers."""
         await self._mount_message(UserMessage(command))
@@ -5311,8 +5624,13 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/agent") :].strip()
         lowered = raw_arg.lower()
 
-        if lowered in {"panel", "dashboard", "watch"}:
+        if lowered in {"panel", "dashboard"}:
             await self._show_agents_panel()
+            return
+
+        if lowered.startswith("watch ") or lowered == "watch":
+            watch_arg = raw_arg[len("watch"):].strip()
+            await self._handle_watch_subcommand(watch_arg)
             return
 
         if not raw_arg or lowered in {"list", "status"}:
@@ -10116,6 +10434,123 @@ class BogAgentsApp(App):
             logger.info("Pipeline scheduler initialized")
         except Exception:
             logger.warning("Could not initialize pipeline scheduler", exc_info=True)
+
+    async def _init_file_watchers(self) -> None:
+        """Start file watchers for pipelines with watch: blocks."""
+        try:
+            import yaml  # pyyaml — already a CLI dependency
+
+            from bog_agents_cli.file_watcher import (
+                BogFileWatcher,
+                FileWatchConfig,
+                FileWatchEvent,
+                watch_config_from_dict,
+            )
+
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            if not pipelines_dir.exists():
+                return
+
+            configs: list[FileWatchConfig] = []
+            for path in sorted(pipelines_dir.glob("*.y*ml")):
+                try:
+                    with path.open() as fh:
+                        data = yaml.safe_load(fh)
+                    if not isinstance(data, dict):
+                        continue
+                    watch_block = data.get("watch")
+                    if watch_block and isinstance(watch_block, dict):
+                        name = data.get("name") or path.stem
+                        cfg = watch_config_from_dict({**watch_block, "pipeline_name": str(name)})
+                        configs.append(cfg)
+                except Exception:
+                    logger.debug("Could not parse pipeline %s for watch config", path, exc_info=True)
+
+            if not configs:
+                return
+
+            def on_trigger(event: FileWatchEvent, config: FileWatchConfig) -> None:
+                # Post to Textual to run the pipeline
+                self.call_from_thread(
+                    lambda: asyncio.create_task(
+                        self._run_pipeline_by_name(config.pipeline_name, trigger_context={"file": event.path, "event": event.event_type})
+                    )
+                )
+
+            watcher = BogFileWatcher(
+                watch_dir=Path(self._cwd),
+                configs=configs,
+                on_trigger=on_trigger,
+            )
+            watcher.start()
+            self._file_watchers = [watcher]
+            logger.debug("File watchers started for %d pipeline(s)", len(configs))
+        except ImportError:
+            logger.debug("watchdog not available; file watchers disabled")
+        except Exception:
+            logger.debug("File watcher init failed", exc_info=True)
+
+    async def _run_pipeline_by_name(self, name: str, *, trigger_context: dict | None = None) -> None:
+        """Run a named pipeline, optionally with file-trigger context.
+
+        Args:
+            name: Pipeline name to look up and run.
+            trigger_context: Optional dict describing the triggering event.
+        """
+        try:
+            import yaml
+
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            pipeline_data: dict | None = None
+            for path in pipelines_dir.glob("*.y*ml"):
+                try:
+                    with path.open() as fh:
+                        data = yaml.safe_load(fh)
+                    if isinstance(data, dict) and (data.get("name") or path.stem) == name:
+                        pipeline_data = data
+                        break
+                except Exception:
+                    logger.debug("Could not parse pipeline %s during trigger lookup", path, exc_info=True)
+                    continue
+
+            if pipeline_data is None:
+                logger.warning("File watcher: pipeline %r not found", name)
+                return
+
+            ctx_msg = f" (triggered by: {trigger_context})" if trigger_context else ""
+            await self._mount_message(AppMessage(f"[yellow]File watcher:[/yellow] Running pipeline '{name}'{ctx_msg}"))
+
+            for step in pipeline_data.get("steps", []):
+                step_type = step.get("type", "prompt")
+                content = step.get("content", step.get("text", step.get("command", "")))
+                if step_type == "prompt":
+                    await self._send_prompt_to_agent(content)
+                    break
+                if step_type == "slash":
+                    await self._handle_command(content)
+                    break
+        except Exception:
+            logger.debug("Pipeline trigger failed", exc_info=True)
+
+    async def _handle_watch_subcommand(self, arg: str) -> None:  # noqa: ARG002
+        """Handle /agent watch — show or manage file watchers.
+
+        Args:
+            arg: Optional sub-argument (currently unused).
+        """
+        from bog_agents_cli.file_watcher import format_watcher_status
+
+        if not self._file_watchers:
+            await self._mount_message(AppMessage(
+                "No file watchers active.\n"
+                "Add a 'watch:' block to a pipeline YAML to enable file-change triggers.\n\n"
+                "Example pipeline YAML:\n"
+                "  watch:\n"
+                "    patterns: ['*.py', 'src/**/*.ts']\n"
+                "    debounce_seconds: 2.0"
+            ))
+            return
+        await self._mount_message(AppMessage(format_watcher_status(self._file_watchers)))
 
     # =========================================================================
     # Model Switching
