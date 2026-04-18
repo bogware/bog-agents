@@ -307,6 +307,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/repomap",
+        "Show or refresh the semantic repository map (classes, functions, imports)",
+        "index codebase symbols architecture structure repo-map",
+        "analysis",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/reload",
         "Reload config from environment variables and `.env`",
         "refresh",

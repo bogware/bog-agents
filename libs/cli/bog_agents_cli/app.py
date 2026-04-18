@@ -703,6 +703,7 @@ class BogAgentsApp(App):
         "/record": "_handle_record_command",
         "/recommend": "_dispatch_recommend_command",
         "/reload": "_handle_reload_command",
+        "/repomap": "_handle_repomap_command",
         "/remember": "_handle_remember_command",
         "/remote": "_handle_remote_command",
         "/replay": "_handle_replay_command",
@@ -3073,6 +3074,64 @@ class BogAgentsApp(App):
             report = "Configuration reloaded. No changes detected."
         report += "\nModel config caches cleared."
         await self._mount_message(AppMessage(report))
+
+    async def _handle_repomap_command(self, command: str) -> None:
+        """Show or refresh the semantic repository map."""
+        from bog_agents_cli.repo_map_display import get_repo_map_stats, get_repo_map_text
+
+        await self._mount_message(UserMessage(command))
+        raw = command.strip()[len("/repomap"):].strip().lower()
+
+        if raw in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(
+                "[bold]/repomap[/bold] — Semantic repository map\n\n"
+                "Indexes the project structure (classes, functions, types) and injects\n"
+                "a compact map into the agent's context.\n\n"
+                "Usage:\n"
+                "  [bold]/repomap[/bold]           Show the current map (build if needed)\n"
+                "  [bold]/repomap refresh[/bold]   Force a full rebuild (clear cache)\n"
+                "  [bold]/repomap status[/bold]    Show cache statistics\n"
+                "  [bold]/repomap help[/bold]      Show this help\n\n"
+                "The map is cached in [italic].bog-agents/repomap.json[/italic] and updated\n"
+                "incrementally — only changed files are re-parsed."
+            ))
+            return
+
+        if raw == "status":
+            stats = await asyncio.to_thread(get_repo_map_stats, self._cwd)
+            if not stats.get("cached"):
+                await self._mount_message(AppMessage(
+                    "No repo map cache found. Run [bold]/repomap[/bold] to build it."
+                ))
+            else:
+                import time as _time
+                built_ago = int(_time.time() - stats.get("built_at", 0))
+                age = f"{built_ago // 60}m" if built_ago < 3600 else f"{built_ago // 3600}h"
+                await self._mount_message(AppMessage(
+                    f"Repo map cached: [green]{stats['file_count']}[/green] symbols indexed, "
+                    f"built {age} ago\n"
+                    f"Cache: {stats['cache_path']}"
+                ))
+            return
+
+        force = raw == "refresh"
+        if force:
+            await self._mount_message(AppMessage("Rebuilding repository map from scratch..."))
+        else:
+            await self._mount_message(AppMessage("Building repository map..."))
+
+        map_text = await asyncio.to_thread(get_repo_map_text, self._cwd, refresh=force)
+
+        # Show a preview (first 60 lines) to avoid flooding the TUI
+        lines = map_text.splitlines()
+        preview_count = 60
+        if len(lines) > preview_count:
+            preview = "\n".join(lines[:preview_count])
+            preview += f"\n\n... ({len(lines) - preview_count} more lines — full map injected into agent context)"
+        else:
+            preview = map_text
+
+        await self._mount_message(AppMessage(f"[bold]Repository Map[/bold]\n\n{preview}"))
 
     async def _handle_doctor_command(self, command: str) -> None:
         """Run local health diagnostics from inside the TUI."""
