@@ -85,6 +85,8 @@ class OutputConfig:
         append: If True, append to file_path; otherwise overwrite.
         smtp_host: SMTP server hostname for email output.
         smtp_port: SMTP server port.
+        smtp_username: SMTP authentication username.
+        smtp_password: SMTP authentication password.
         from_addr: Sender email address.
         to_addrs: Recipient email addresses.
         subject_template: Email subject template with {job_name} substitution.
@@ -103,6 +105,8 @@ class OutputConfig:
     # email
     smtp_host: str = ""
     smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
     from_addr: str = ""
     to_addrs: list[str] = field(default_factory=list)
     subject_template: str = "Bog Agents: {job_name} completed"

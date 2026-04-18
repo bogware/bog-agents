@@ -1,9 +1,11 @@
 """FastAPI REST API for the bog-agents daemon."""
-# ruff: noqa: D417  -- `request` is a FastAPI DI param, not a user-facing arg
+
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,6 +66,8 @@ class OutputConfigModel(BaseModel):
     append: bool = True
     smtp_host: str = ""
     smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
     from_addr: str = ""
     to_addrs: list[str] = []
     subject_template: str = "Bog Agents: {job_name} completed"
@@ -71,6 +75,7 @@ class OutputConfigModel(BaseModel):
     slack_channel: str = ""
     github_repo: str = ""
     github_issue_or_pr: int = 0
+    github_token: str = ""
     webhook_url: str = ""
     webhook_headers: dict[str, str] = {}
 
@@ -169,6 +174,8 @@ def _output_config_from_model(m: OutputConfigModel) -> OutputConfig:
         append=m.append,
         smtp_host=m.smtp_host,
         smtp_port=m.smtp_port,
+        smtp_username=m.smtp_username,
+        smtp_password=m.smtp_password,
         from_addr=m.from_addr,
         to_addrs=m.to_addrs,
         subject_template=m.subject_template,
@@ -176,6 +183,7 @@ def _output_config_from_model(m: OutputConfigModel) -> OutputConfig:
         slack_channel=m.slack_channel,
         github_repo=m.github_repo,
         github_issue_or_pr=m.github_issue_or_pr,
+        github_token=m.github_token,
         webhook_url=m.webhook_url,
         webhook_headers=m.webhook_headers,
     )
@@ -225,7 +233,7 @@ def _run_to_response(run: JobRun) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:  # noqa: ARG001
+def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
@@ -445,12 +453,63 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:  # noqa: A
     # Webhooks
     # ------------------------------------------------------------------
 
+    @app.post("/webhooks/git-push")
+    async def receive_git_push(request: Request) -> dict[str, Any]:
+        """Handle a git post-receive push event from the installed git hook.
+
+        Triggers any enabled jobs that have a GIT_PUSH trigger whose
+        `git_branch_pattern` matches the pushed refname.  The hook sends JSON
+        with `ref`, `new_sha`, and `old_sha` fields.
+
+        Returns:
+            Dict with triggered job IDs and count.
+        """
+        import fnmatch as _fnmatch
+
+        _check_auth(request, token)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        ref = payload.get("ref", "")
+        # Normalise "refs/heads/main" → "main"
+        branch = ref.split("/")[-1] if ref else ""
+
+        jobs = load_jobs()
+        triggered: list[str] = []
+        for job in jobs:
+            if not job.enabled:
+                continue
+            for trigger in job.triggers:
+                if trigger.type != TriggerType.GIT_PUSH:
+                    continue
+                pattern = trigger.git_branch_pattern or "*"
+                if not _fnmatch.fnmatch(branch, pattern):
+                    continue
+                from bog_agents_daemon.runner import run_job
+                task = asyncio.create_task(
+                    run_job(
+                        job,
+                        trigger_type=TriggerType.GIT_PUSH,
+                        trigger_context={"ref": ref, "branch": branch, **payload},
+                    )
+                )
+                webhook_tasks.add(task)
+                task.add_done_callback(webhook_tasks.discard)
+                triggered.append(job.job_id)
+                break
+
+        return {"triggered": triggered, "count": len(triggered)}
+
     @app.post("/webhooks/{webhook_path:path}")
     async def receive_webhook(request: Request, webhook_path: str) -> dict[str, Any]:
         """Receive an inbound webhook and trigger any matching jobs.
 
         Matches jobs whose triggers include a WEBHOOK trigger with a
-        `webhook_path` ending in the provided path segment.
+        `webhook_path` ending in the provided path segment.  When the trigger
+        has a `webhook_secret`, the request body must carry a valid
+        `X-Hub-Signature-256` header (HMAC-SHA256 of the raw body).
 
         Args:
             webhook_path: The URL path suffix after /webhooks/.
@@ -459,8 +518,10 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:  # noqa: A
             Dict reporting how many jobs were triggered.
         """
         _check_auth(request, token)
+        raw_body = await request.body()
         try:
-            payload = await request.json()
+            import json as _json
+            payload = _json.loads(raw_body) if raw_body else {}
         except Exception:
             payload = {}
 
@@ -472,21 +533,37 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:  # noqa: A
             if not job.enabled:
                 continue
             for trigger in job.triggers:
-                if trigger.type == TriggerType.WEBHOOK:
-                    trigger_path = trigger.webhook_path.lstrip("/")
-                    if trigger_path == normalized:
-                        from bog_agents_daemon.runner import run_job
-                        task = asyncio.create_task(
-                            run_job(
-                                job,
-                                trigger_type=TriggerType.WEBHOOK,
-                                trigger_context={"path": webhook_path, "payload": payload},
-                            )
+                if trigger.type != TriggerType.WEBHOOK:
+                    continue
+                trigger_path = trigger.webhook_path.lstrip("/")
+                if trigger_path != normalized:
+                    continue
+                # HMAC secret validation — reject if secret configured but sig absent/wrong
+                if trigger.webhook_secret:
+                    sig_header = request.headers.get("X-Hub-Signature-256", "")
+                    expected = "sha256=" + hmac.new(
+                        trigger.webhook_secret.encode(),
+                        raw_body,
+                        hashlib.sha256,
+                    ).hexdigest()
+                    if not hmac.compare_digest(sig_header, expected):
+                        logger.warning(
+                            "Webhook signature mismatch for job %s trigger path %s",
+                            job.job_id, webhook_path,
                         )
-                        webhook_tasks.add(task)
-                        task.add_done_callback(webhook_tasks.discard)
-                        triggered.append(job.job_id)
-                        break
+                        break  # wrong secret — don't trigger this job
+                from bog_agents_daemon.runner import run_job
+                task = asyncio.create_task(
+                    run_job(
+                        job,
+                        trigger_type=TriggerType.WEBHOOK,
+                        trigger_context={"path": webhook_path, "payload": payload},
+                    )
+                )
+                webhook_tasks.add(task)
+                task.add_done_callback(webhook_tasks.discard)
+                triggered.append(job.job_id)
+                break
 
         return {"triggered": triggered, "count": len(triggered)}
 

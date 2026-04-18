@@ -133,6 +133,9 @@ def generate_git_hook(daemon_url: str = "http://localhost:7391", token: str = ""
     line per pushed ref) and POSTs each push event to the daemon's
     `/webhooks/git-push` endpoint using curl.
 
+    The token is assigned to a bash variable so that no special characters in
+    the token value can escape the surrounding shell syntax.
+
     Args:
         daemon_url: Base URL of the running daemon (without trailing slash).
         token: Optional authentication token sent as `X-Daemon-Token` header.
@@ -140,19 +143,30 @@ def generate_git_hook(daemon_url: str = "http://localhost:7391", token: str = ""
     Returns:
         A bash script string suitable for writing to `.git/hooks/post-receive`.
     """
-    token_header = f'-H "X-Daemon-Token: {token}"' if token else ""
+    import shlex
+
+    # Embed values as single-quoted bash assignments — immune to special chars.
+    daemon_url_assignment = f"DAEMON_URL={shlex.quote(daemon_url)}"
+    token_block = (
+        f"BOG_TOKEN={shlex.quote(token)}\n"
+        "TOKEN_HEADER=(-H \"X-Daemon-Token: $BOG_TOKEN\")"
+        if token else
+        'TOKEN_HEADER=()'
+    )
+    curl_auth = '"${TOKEN_HEADER[@]}"' if token else ""
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash
         # bog-agents-daemon git post-receive hook
         # Auto-generated — do not edit by hand.
         set -euo pipefail
 
-        DAEMON_URL="{daemon_url}"
+        {daemon_url_assignment}
+        {token_block}
 
         while read -r OLD_SHA NEW_SHA REFNAME; do
             PAYLOAD=$(printf '{{"ref":"%s","new_sha":"%s","old_sha":"%s"}}' "$REFNAME" "$NEW_SHA" "$OLD_SHA")
             curl -s -X POST \\
-                {token_header} \\
+                {curl_auth} \\
                 -H "Content-Type: application/json" \\
                 -d "$PAYLOAD" \\
                 "$DAEMON_URL/webhooks/git-push" || true

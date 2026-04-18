@@ -137,6 +137,9 @@ class DaemonScheduler:
         self._runner = runner
         self._running_jobs: set[str] = set()
         self._bg_tasks: set[asyncio.Task[None]] = set()
+        # Maps job_id -> unix timestamp when a file-change was first detected,
+        # used to implement per-trigger debounce_seconds.
+        self._file_change_pending: dict[str, float] = {}
 
     async def run_forever(self, *, tick_seconds: float = 30) -> None:
         """Run the scheduling loop indefinitely.
@@ -198,12 +201,16 @@ class DaemonScheduler:
         finally:
             self._running_jobs.discard(job.job_id)
 
-    @staticmethod
-    async def _check_job_triggers(job: AmbientJob) -> tuple[TriggerType | None, dict[str, Any] | None]:
+    async def _check_job_triggers(self, job: AmbientJob) -> tuple[TriggerType | None, dict[str, Any] | None]:
         """Check whether any trigger is currently due.
 
         Evaluates CRON, INTERVAL, and FILE_CHANGE triggers in order, returning
-        on the first one that fires.
+        on the first one that fires. FILE_CHANGE triggers respect the configured
+        `debounce_seconds`: the trigger only fires when the same change has been
+        continuously detected for at least that many seconds.
+
+        GIT_PUSH and WEBHOOK triggers are event-driven (fired by the API) and
+        are not polled here.
 
         Args:
             job: The job whose triggers to evaluate.
@@ -216,32 +223,48 @@ class DaemonScheduler:
                 if _is_cron_due(trigger.cron, job.last_run_at):
                     logger.debug(
                         "Cron trigger due for job %s (%s): %s",
-                        job.job_id,
-                        job.name,
-                        trigger.cron,
+                        job.job_id, job.name, trigger.cron,
                     )
                     return TriggerType.CRON, None
-            elif trigger.type == TriggerType.INTERVAL and trigger.interval_seconds > 0 and _is_interval_due(trigger.interval_seconds, job.last_run_at):
-                logger.debug(
-                    "Interval trigger due for job %s (%s): every %ds",
-                    job.job_id,
-                    job.name,
-                    trigger.interval_seconds,
-                )
-                return TriggerType.INTERVAL, None
+
+            elif trigger.type == TriggerType.INTERVAL and trigger.interval_seconds > 0:
+                if _is_interval_due(trigger.interval_seconds, job.last_run_at):
+                    logger.debug(
+                        "Interval trigger due for job %s (%s): every %ds",
+                        job.job_id, job.name, trigger.interval_seconds,
+                    )
+                    return TriggerType.INTERVAL, None
+
             elif trigger.type == TriggerType.FILE_CHANGE:
                 changed_path = _check_file_trigger(trigger, job.last_run_at)
                 if changed_path is not None:
+                    debounce = max(0.0, trigger.debounce_seconds)
+                    if debounce > 0:
+                        # Record first detection time; only fire after debounce window
+                        first_seen = self._file_change_pending.setdefault(
+                            job.job_id, time.time()
+                        )
+                        if time.time() - first_seen < debounce:
+                            logger.debug(
+                                "File-change debouncing job %s (%s): %s, %.1fs remaining",
+                                job.job_id, job.name, changed_path,
+                                debounce - (time.time() - first_seen),
+                            )
+                            continue
+                    # Debounce elapsed (or not configured) — clear pending and fire
+                    self._file_change_pending.pop(job.job_id, None)
                     logger.debug(
                         "File-change trigger fired for job %s (%s): %s",
-                        job.job_id,
-                        job.name,
-                        changed_path,
+                        job.job_id, job.name, changed_path,
                     )
                     return TriggerType.FILE_CHANGE, {
                         "trigger_path": str(changed_path),
                         "trigger_type": "file_change",
                     }
+                else:
+                    # No change detected — reset debounce state
+                    self._file_change_pending.pop(job.job_id, None)
+
         return None, None
 
 

@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from email.mime.text import MIMEText
+from pathlib import Path
 from typing import Any
 
 from bog_agents_daemon.models import (
@@ -111,10 +112,14 @@ def _build_prompt(job: AmbientJob) -> str:
     raise ValueError(msg)
 
 
+_AGENT_TIMEOUT_SECONDS = int(os.environ.get("BOG_DAEMON_AGENT_TIMEOUT", "1800"))  # 30 min default
+
+
 async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
-    Uses a lazy import to avoid circular imports at module load time.
+    Uses a lazy import to avoid circular imports at module load time.  Enforces
+    a per-job timeout (default 30 minutes, override with BOG_DAEMON_AGENT_TIMEOUT).
 
     Args:
         job: The job providing model and working_dir configuration.
@@ -122,6 +127,9 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
 
     Returns:
         The last AI message content from the agent.
+
+    Raises:
+        TimeoutError: If the agent does not complete within the allowed time.
     """
     from bog_agents import create_agent
 
@@ -133,16 +141,22 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
 
     agent = create_agent(**kwargs)
 
-    result_output = ""
-    async for chunk in agent.astream({"messages": [("human", prompt)]}):
-        for node_output in chunk.values():
-            messages = node_output.get("messages", [])
-            for msg in messages:
-                content = getattr(msg, "content", None)
-                if content and hasattr(msg, "type") and msg.type == "ai":
-                    result_output = content if isinstance(content, str) else str(content)
+    async def _stream() -> str:
+        result_output = ""
+        async for chunk in agent.astream({"messages": [("human", prompt)]}):
+            for node_output in chunk.values():
+                messages = node_output.get("messages", [])
+                for msg in messages:
+                    content = getattr(msg, "content", None)
+                    if content and hasattr(msg, "type") and msg.type == "ai":
+                        result_output = content if isinstance(content, str) else str(content)
+        return result_output
 
-    return result_output
+    try:
+        return await asyncio.wait_for(_stream(), timeout=_AGENT_TIMEOUT_SECONDS)
+    except TimeoutError:
+        msg = f"Agent timed out after {_AGENT_TIMEOUT_SECONDS}s for job {job.job_id} ({job.name})"
+        raise TimeoutError(msg) from None
 
 
 async def _dispatch_output(run: JobRun, output: OutputConfig) -> None:
@@ -178,6 +192,9 @@ async def _dispatch_output(run: JobRun, output: OutputConfig) -> None:
 async def _dispatch_file(run: JobRun, output: OutputConfig) -> None:
     """Write run output to a file.
 
+    Only writes to paths inside the user's home directory or /tmp to prevent
+    path traversal attacks where a crafted job config could overwrite system files.
+
     Args:
         run: The completed job run.
         output: The file output configuration.
@@ -189,8 +206,19 @@ async def _dispatch_file(run: JobRun, output: OutputConfig) -> None:
         logger.warning("File output for job %s has no file_path configured", run.job_id)
         return
 
+    # Resolve to absolute path and guard against traversal
+    resolved = Path(file_path).expanduser().resolve()
+    allowed_roots = (Path.home().resolve(), Path("/tmp").resolve())
+    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        logger.error(
+            "File output for job %s rejected: path %s is outside allowed directories",
+            run.job_id, resolved,
+        )
+        return
+
+    resolved.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if output.append else "w"
-    async with aiofiles.open(file_path, mode=mode, encoding="utf-8") as f:
+    async with aiofiles.open(resolved, mode=mode, encoding="utf-8") as f:
         header = f"--- {run.job_name} ({run.run_id}) at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(run.started_at))} ---\n"
         await f.write(header + run.output + "\n")
 
@@ -249,7 +277,11 @@ async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
         logger.warning("Email output for job %s has no to_addrs configured", run.job_id)
         return
 
-    subject = output.subject_template.format(job_name=run.job_name) if output.subject_template else f"[bog-agents] {run.job_name} completed"
+    try:
+        subject = output.subject_template.format(job_name=run.job_name) if output.subject_template else f"[bog-agents] {run.job_name} completed"
+    except KeyError:
+        # Unknown placeholder in template — fall back gracefully
+        subject = f"[bog-agents] {run.job_name} completed"
     body = run.output or run.error or "(no output)"
     from_addr = output.from_addr or output.smtp_username or "bog-agents@localhost"
 
@@ -323,9 +355,7 @@ async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
     """
     repo = output.github_repo
     issue_number = output.github_issue_or_pr
-    token = output.github_token if hasattr(output, "github_token") and output.github_token else (
-        os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API_KEY") or ""
-    )
+    token = output.github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API_KEY") or ""
 
     if not repo:
         logger.warning("GitHub comment output for job %s has no github_repo configured", run.job_id)

@@ -685,16 +685,24 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(MeetingPrepMiddleware())
 
-    if enable_enhanced_skills and enhanced_skills_sources:
-        from bog_agents.middleware.enhanced_skills import EnhancedSkillsMiddleware
-
-        agents_middleware.append(
-            EnhancedSkillsMiddleware(
-                backend=backend,
-                sources=enhanced_skills_sources,
-                cache_dir=enhanced_skills_cache_dir,
+    if enable_enhanced_skills:
+        if not enhanced_skills_sources:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "enable_enhanced_skills=True but enhanced_skills_sources is empty — "
+                "EnhancedSkillsMiddleware will not be activated. "
+                "Pass enhanced_skills_sources=['/path/to/skills'] to enable."
             )
-        )
+        else:
+            from bog_agents.middleware.enhanced_skills import EnhancedSkillsMiddleware
+
+            agents_middleware.append(
+                EnhancedSkillsMiddleware(
+                    backend=backend,
+                    sources=enhanced_skills_sources,
+                    cache_dir=enhanced_skills_cache_dir,
+                )
+            )
 
     if enable_saved_prompts and saved_prompts_sources:
         from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
@@ -899,6 +907,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 
         parallel_mw = next((m for m in agents_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
+        if parallel_mw is None:
+            # ResultSynthesisMiddleware requires ParallelWorktreeMiddleware.
+            # Auto-create one rather than crashing at validation time.
+            parallel_mw = ParallelWorktreeMiddleware(working_dir=_wd)
+            agents_middleware.append(parallel_mw)
         agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
 
     agents_middleware.extend(

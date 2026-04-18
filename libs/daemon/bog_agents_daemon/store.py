@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,10 @@ from bog_agents_daemon.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Serialisation lock: prevents concurrent reads/writes to jobs.json from the
+# scheduler tick and API request handlers running in the same process.
+_jobs_lock = threading.Lock()
 
 _DAEMON_DIR = Path.home() / ".bog-agents" / "daemon"
 _JOBS_FILE = _DAEMON_DIR / "jobs.json"
@@ -83,6 +88,8 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
             append=o.get("append", True),
             smtp_host=o.get("smtp_host", ""),
             smtp_port=o.get("smtp_port", 587),
+            smtp_username=o.get("smtp_username", ""),
+            smtp_password=o.get("smtp_password", ""),
             from_addr=o.get("from_addr", ""),
             to_addrs=o.get("to_addrs", []),
             subject_template=o.get("subject_template", "Bog Agents: {job_name} completed"),
@@ -90,6 +97,7 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
             slack_channel=o.get("slack_channel", ""),
             github_repo=o.get("github_repo", ""),
             github_issue_or_pr=o.get("github_issue_or_pr", 0),
+            github_token=o.get("github_token", ""),
             webhook_url=o.get("webhook_url", ""),
             webhook_headers=o.get("webhook_headers", {}),
         )
@@ -153,12 +161,8 @@ def _run_from_dict(d: dict[str, Any]) -> JobRun:
     )
 
 
-def load_jobs() -> list[AmbientJob]:
-    """Load all jobs from the persistent store.
-
-    Returns:
-        List of AmbientJob instances; empty list if the store is missing or corrupt.
-    """
+def _load_jobs_unlocked() -> list[AmbientJob]:
+    """Load jobs without acquiring the lock (caller must hold _jobs_lock)."""
     _ensure_dirs()
     if not _JOBS_FILE.exists():
         return []
@@ -174,17 +178,33 @@ def load_jobs() -> list[AmbientJob]:
         return []
 
 
+def _save_jobs_unlocked(jobs: list[AmbientJob]) -> None:
+    """Persist jobs without acquiring the lock (caller must hold _jobs_lock)."""
+    _ensure_dirs()
+    tmp_path = _JOBS_FILE.with_suffix(".json.tmp")
+    data = [_job_to_dict(j) for j in jobs]
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    Path(tmp_path).replace(_JOBS_FILE)
+
+
+def load_jobs() -> list[AmbientJob]:
+    """Load all jobs from the persistent store.
+
+    Returns:
+        List of AmbientJob instances; empty list if the store is missing or corrupt.
+    """
+    with _jobs_lock:
+        return _load_jobs_unlocked()
+
+
 def save_jobs(jobs: list[AmbientJob]) -> None:
     """Atomically persist all jobs to disk.
 
     Args:
         jobs: The complete list of jobs to write.
     """
-    _ensure_dirs()
-    tmp_path = _JOBS_FILE.with_suffix(".json.tmp")
-    data = [_job_to_dict(j) for j in jobs]
-    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    Path(tmp_path).replace(_JOBS_FILE)
+    with _jobs_lock:
+        _save_jobs_unlocked(jobs)
 
 
 def get_job(job_id: str) -> AmbientJob | None:
@@ -206,21 +226,27 @@ def get_job(job_id: str) -> AmbientJob | None:
 def upsert_job(job: AmbientJob) -> None:
     """Add a new job or replace an existing one with the same job_id.
 
+    The read-modify-write is performed under a single lock acquisition to
+    prevent races between concurrent API requests and the scheduler tick.
+
     Args:
         job: The job to insert or update.
     """
-    jobs = load_jobs()
-    for i, existing in enumerate(jobs):
-        if existing.job_id == job.job_id:
-            jobs[i] = job
-            save_jobs(jobs)
-            return
-    jobs.append(job)
-    save_jobs(jobs)
+    with _jobs_lock:
+        jobs = _load_jobs_unlocked()
+        for i, existing in enumerate(jobs):
+            if existing.job_id == job.job_id:
+                jobs[i] = job
+                _save_jobs_unlocked(jobs)
+                return
+        jobs.append(job)
+        _save_jobs_unlocked(jobs)
 
 
 def delete_job(job_id: str) -> bool:
     """Remove a job from the store by ID.
+
+    The read-modify-write is performed under a single lock acquisition.
 
     Args:
         job_id: The identifier of the job to delete.
@@ -228,13 +254,14 @@ def delete_job(job_id: str) -> bool:
     Returns:
         True if a job was deleted, False if it was not found.
     """
-    jobs = load_jobs()
-    original_count = len(jobs)
-    jobs = [j for j in jobs if j.job_id != job_id]
-    if len(jobs) == original_count:
-        return False
-    save_jobs(jobs)
-    return True
+    with _jobs_lock:
+        jobs = _load_jobs_unlocked()
+        original_count = len(jobs)
+        jobs = [j for j in jobs if j.job_id != job_id]
+        if len(jobs) == original_count:
+            return False
+        _save_jobs_unlocked(jobs)
+        return True
 
 
 def save_run(run: JobRun) -> None:

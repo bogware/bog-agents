@@ -2,13 +2,14 @@
 name = "bog-agents-daemon"
 version = "0.1.0"
 description = "Ambient agent daemon for bog-agents — run agents on schedules and triggers"
-requires-python = ">=3.11"
+license = { text = "MIT" }
+requires-python = ">=3.11,<4.0"
 dependencies = [
     "bog-agents>=0.7.0,<1.0.0",
     "bog-agents-cli>=0.7.0,<1.0.0",
-    "uvicorn>=0.30.0",
-    "fastapi>=0.115.0",
-    "aiofiles>=23.0.0",
+    "uvicorn>=0.30.0,<1.0.0",
+    "fastapi>=0.115.0,<1.0.0",
+    "aiofiles>=23.0.0,<25.0.0",
 ]
 
 [project.scripts]
@@ -17,3 +18,31 @@ bog-agents-daemon = "bog_agents_daemon.main:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+bog_agents = { path = "../bog-agents", editable = true }
+bog-agents-cli = { path = "../cli", editable = true }
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.2",
+    "pytest-asyncio>=0.24.0",
+    "pytest-timeout>=2.3.1",
+    "httpx>=0.27.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+timeout = 30
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "C4", "SIM", "PTH", "RUF"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S", "ARG"]
