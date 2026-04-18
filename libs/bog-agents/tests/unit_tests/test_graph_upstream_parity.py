@@ -67,6 +67,6 @@ def test_create_agent_inherits_interrupts_and_adds_async_subagents(monkeypatch) 
     assert researcher["interrupt_on"] == {"edit_file": True}
 
     assert result.config is not None
-    assert result.config["recursion_limit"] == 9999
+    assert result.config["recursion_limit"] == 200  # default max_turns=200
     assert result.config["metadata"]["versions"]["bog-agents"] == bog_graph.__version__
     assert result.config["metadata"]["lc_agent_name"] == "leader"

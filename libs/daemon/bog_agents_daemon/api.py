@@ -128,7 +128,7 @@ def _check_auth(request: Request, token: str) -> None:
         HTTPException: With status 401 if the token is missing or wrong.
     """
     provided = request.headers.get("X-Daemon-Token", "")
-    if provided != token:
+    if not provided or not hmac.compare_digest(provided, token):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -264,6 +264,15 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
         _check_auth(request, token)
         jobs = load_jobs()
         return {"status": "ok", "version": __version__, "job_count": len(jobs)}
+
+    @app.get("/ready")
+    async def ready() -> dict[str, str]:
+        """Kubernetes-style readiness probe — no auth required.
+
+        Returns:
+            Status dict indicating the service is ready.
+        """
+        return {"status": "ready"}
 
     # ------------------------------------------------------------------
     # Jobs collection

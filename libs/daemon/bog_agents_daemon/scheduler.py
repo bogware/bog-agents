@@ -109,6 +109,9 @@ def _is_interval_due(interval_seconds: int, last_run_at: float) -> bool:
     return elapsed >= interval_seconds
 
 
+_MAX_CONCURRENT_JOBS = int(os.environ.get("BOG_DAEMON_MAX_CONCURRENT_JOBS", "5"))
+
+
 class DaemonScheduler:
     """Cron and interval scheduler for AmbientJob triggers.
 
@@ -119,12 +122,15 @@ class DaemonScheduler:
         _store_loader: Callable that returns the current list of AmbientJob.
         _runner: Async callable that executes a single job.
         _running_jobs: Set of job_ids currently being executed to prevent overlap.
+        _semaphore: Limits total concurrent agent executions.
     """
 
     def __init__(
         self,
         store_loader: Callable[[], list[AmbientJob]],
         runner: Callable[..., Coroutine[Any, Any, Any]],
+        *,
+        max_concurrent: int = _MAX_CONCURRENT_JOBS,
     ) -> None:
         """Initialize the scheduler.
 
@@ -132,11 +138,13 @@ class DaemonScheduler:
             store_loader: Callable returning the current list of jobs from storage.
             runner: Async callable accepting an AmbientJob and keyword args,
                 returning a JobRun.
+            max_concurrent: Maximum number of jobs that may run simultaneously.
         """
         self._store_loader = store_loader
         self._runner = runner
         self._running_jobs: set[str] = set()
         self._bg_tasks: set[asyncio.Task[None]] = set()
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         # Maps job_id -> unix timestamp when a file-change was first detected,
         # used to implement per-trigger debounce_seconds.
         self._file_change_pending: dict[str, float] = {}
@@ -186,20 +194,21 @@ class DaemonScheduler:
         trigger_type: TriggerType = TriggerType.CRON,
         trigger_context: dict[str, Any] | None = None,
     ) -> None:
-        """Execute a job, tracking running state to prevent concurrent runs.
+        """Execute a job under the concurrency semaphore, preventing parallel runs.
 
         Args:
             job: The job to run.
             trigger_type: How this execution was initiated.
             trigger_context: Optional metadata from the trigger.
         """
-        self._running_jobs.add(job.job_id)
-        try:
-            await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
-        except Exception:
-            logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
-        finally:
-            self._running_jobs.discard(job.job_id)
+        async with self._semaphore:
+            self._running_jobs.add(job.job_id)
+            try:
+                await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
+            except Exception:
+                logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
+            finally:
+                self._running_jobs.discard(job.job_id)
 
     async def _check_job_triggers(self, job: AmbientJob) -> tuple[TriggerType | None, dict[str, Any] | None]:
         """Check whether any trigger is currently due.

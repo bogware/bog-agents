@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -264,8 +265,14 @@ def delete_job(job_id: str) -> bool:
         return True
 
 
+_MAX_RUNS_PER_JOB = int(os.environ.get("BOG_DAEMON_MAX_RUNS_PER_JOB", "100"))
+
+
 def save_run(run: JobRun) -> None:
-    """Persist a job run record to disk.
+    """Persist a job run record to disk, pruning old runs to cap disk usage.
+
+    Keeps at most `BOG_DAEMON_MAX_RUNS_PER_JOB` (default 100) run files per job.
+    Oldest runs by start time are deleted first.
 
     Args:
         run: The JobRun to save.
@@ -273,6 +280,22 @@ def save_run(run: JobRun) -> None:
     _ensure_dirs()
     run_file = _RUNS_DIR / f"{run.job_id}_{run.run_id}.json"
     run_file.write_text(json.dumps(_run_to_dict(run), indent=2), encoding="utf-8")
+    _prune_runs(run.job_id)
+
+
+def _prune_runs(job_id: str) -> None:
+    """Delete the oldest run files for a job when the count exceeds the cap.
+
+    Args:
+        job_id: The job whose run files to prune.
+    """
+    run_files = sorted(_RUNS_DIR.glob(f"{job_id}_*.json"), key=lambda p: p.stat().st_mtime)
+    excess = len(run_files) - _MAX_RUNS_PER_JOB
+    for i in range(max(0, excess)):
+        try:
+            run_files[i].unlink(missing_ok=True)
+        except Exception:
+            logger.debug("Could not prune run file %s", run_files[i])
 
 
 def list_runs(job_id: str | None = None, *, limit: int = 20) -> list[JobRun]:

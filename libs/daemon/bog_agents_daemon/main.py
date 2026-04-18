@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -70,6 +72,10 @@ def _clear_pid() -> None:
 async def _run_daemon(port: int, token: str) -> None:
     """Start the uvicorn server and scheduler concurrently.
 
+    Installs SIGTERM/SIGINT handlers so that the daemon drains in-flight tasks
+    before exiting. The TaskGroup propagates cancellation to both tasks when
+    either completes or raises.
+
     Args:
         port: TCP port to listen on.
         token: Auth token for API authentication.
@@ -80,9 +86,30 @@ async def _run_daemon(port: int, token: str) -> None:
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(config)
 
-    async with asyncio.TaskGroup() as tg:
-        tg.create_task(server.serve())
-        tg.create_task(scheduler.run_forever())
+    loop = asyncio.get_running_loop()
+
+    def _shutdown_signal(signum: int, _frame: object) -> None:
+        logger.info("Received signal %d, shutting down", signum)
+        server.should_exit = True
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _shutdown_signal, sig, None)
+        except (NotImplementedError, OSError):
+            # Windows / environments that don't support add_signal_handler
+            signal.signal(sig, _shutdown_signal)
+
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(server.serve())
+            tg.create_task(scheduler.run_forever())
+    finally:
+        # Wait up to 30 seconds for in-flight background tasks to finish
+        if scheduler._bg_tasks:
+            logger.info("Waiting for %d in-flight job(s) to complete…", len(scheduler._bg_tasks))
+            _done, pending = await asyncio.wait(scheduler._bg_tasks, timeout=30)
+            for task in pending:
+                task.cancel()
 
 
 def main() -> None:
@@ -105,6 +132,16 @@ def main() -> None:
     try:
         logger.info("bog-agents-daemon starting on port %d", args.port)
         asyncio.run(_run_daemon(args.port, token))
+    except OSError as exc:
+        # Port already in use or permission denied
+        if getattr(exc, "errno", None) in (98, 48, 13):  # EADDRINUSE / EACCES
+            logger.error(
+                "Failed to bind to port %d: %s. "
+                "Is another instance running? Use --port to choose a different port.",
+                args.port, exc.strerror,
+            )
+            sys.exit(1)
+        raise
     finally:
         _clear_pid()
 

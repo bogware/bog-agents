@@ -139,6 +139,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     cache: BaseCache | None = None,
     config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
+    max_turns: int = 200,
     # Individual feature flags (kept for backwards compatibility).
     # When ``features`` is provided, these are ignored.
     enable_git_tools: bool = False,
@@ -962,7 +963,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         cache=cache,
     ).with_config(
         {
-            "recursion_limit": 9999,
+            "recursion_limit": max(10, min(max_turns, 1000)),
             "metadata": {
                 "ls_integration": "bog-agents",
                 "versions": {"bog-agents": __version__},

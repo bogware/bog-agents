@@ -112,7 +112,22 @@ def _build_prompt(job: AmbientJob) -> str:
     raise ValueError(msg)
 
 
-_AGENT_TIMEOUT_SECONDS = int(os.environ.get("BOG_DAEMON_AGENT_TIMEOUT", "1800"))  # 30 min default
+def _load_agent_timeout() -> int:
+    """Read BOG_DAEMON_AGENT_TIMEOUT from the environment, defaulting to 1800 (30 min).
+
+    Returns:
+        Timeout in seconds; falls back to 1800 if the env var is absent or non-numeric.
+    """
+    raw = os.environ.get("BOG_DAEMON_AGENT_TIMEOUT", "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning("Invalid BOG_DAEMON_AGENT_TIMEOUT=%r; using default 1800s", raw)
+    return 1800
+
+
+_AGENT_TIMEOUT_SECONDS = _load_agent_timeout()
 
 
 async def _invoke_agent(job: AmbientJob, prompt: str) -> str:

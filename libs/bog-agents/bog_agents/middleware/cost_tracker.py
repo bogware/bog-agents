@@ -288,9 +288,11 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
         model_name: str = "",
         budget_usd: float | None = None,
         effort_level: str = "medium",
+        strict_budget: bool = True,
     ) -> None:
         self.tracker = CostTracker(model_name=model_name, budget_usd=budget_usd)
         self._effort_level = effort_level
+        self._strict_budget = strict_budget
         self.tools = self._build_tools()
 
     def _build_tools(self) -> list[BaseTool]:
@@ -347,7 +349,14 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
         """Track token usage from model calls."""
         # Check budget before calling
         if self.tracker.budget_exceeded:
-            logger.warning("Cost budget exceeded: $%.4f / $%.2f", self.tracker.estimated_cost_usd, self.tracker.budget_usd)
+            msg = (
+                f"Cost budget exceeded: ${self.tracker.estimated_cost_usd:.4f} spent "
+                f"of ${self.tracker.budget_usd:.2f} budget. "
+                f"Increase budget_usd or start a new session."
+            )
+            if self._strict_budget:
+                raise RuntimeError(msg)
+            logger.warning(msg)
 
         response = call_next(request)
 
@@ -372,7 +381,14 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
     ) -> ModelResponse:
         """Async version of wrap_model_call."""
         if self.tracker.budget_exceeded:
-            logger.warning("Cost budget exceeded: $%.4f / $%.2f", self.tracker.estimated_cost_usd, self.tracker.budget_usd)
+            msg = (
+                f"Cost budget exceeded: ${self.tracker.estimated_cost_usd:.4f} spent "
+                f"of ${self.tracker.budget_usd:.2f} budget. "
+                f"Increase budget_usd or start a new session."
+            )
+            if self._strict_budget:
+                raise RuntimeError(msg)
+            logger.warning(msg)
 
         response = await call_next(request)
 
