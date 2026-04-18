@@ -141,7 +141,10 @@ from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
 from bog_agents.middleware.test_generation import TestGenerationMiddleware
 from bog_agents.middleware.version_control import VersionControlMiddleware
 from bog_agents.middleware.voice_io import VoiceIOMiddleware
-from bog_agents.middleware.worktree import WorktreeMiddleware
+from bog_agents.middleware.worktree import ParallelWorktreeMiddleware, WorktreeMiddleware
+from bog_agents.middleware.hybrid_search import HybridSearchMiddleware
+from bog_agents.middleware.rules import RulesMiddleware
+from bog_agents.middleware.thinking import ThinkingMiddleware
 
 __all__ = [
     "AdaptiveContextMiddleware",
@@ -237,4 +240,9 @@ __all__ = [
     "create_summarization_tool_middleware",
     "detect_project",
     "is_tool_safe",
+    # New features
+    "HybridSearchMiddleware",
+    "ParallelWorktreeMiddleware",
+    "RulesMiddleware",
+    "ThinkingMiddleware",
 ]

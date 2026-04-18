@@ -2,16 +2,35 @@
 
 Feature #1: Git worktree isolation — each agent session gets its own worktree.
 Feature #2: Multi-agent orchestrator — spawn N agents in parallel worktrees.
+Feature #3: ParallelWorktreeMiddleware — async parallel execution + conflict detection.
+
+Usage::
+
+    from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
+
+    agent = create_agent(
+        model="claude-opus-4-7",
+        middleware=[ParallelWorktreeMiddleware(working_dir=Path("/my/project"))],
+    )
+
+The agent gains tools to spawn parallel sub-agents in isolated worktrees and
+merge results back with conflict detection.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 import tempfile
-from dataclasses import dataclass
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -263,5 +282,449 @@ class WorktreeMiddleware(AgentMiddleware[WorktreeState, ContextT, ResponseT]):
                 name="merge_worktree",
                 description="Merge changes from one worktree branch into another.",
                 func=merge_worktree,
+            ),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Merge conflict detection
+# ---------------------------------------------------------------------------
+
+
+def detect_merge_conflicts(repo_dir: Path, source_branch: str, target_branch: str = "HEAD") -> list[str]:
+    """Detect files that would conflict if source_branch were merged into target_branch.
+
+    Uses ``git merge-tree`` (git 2.38+) for a dry-run conflict check without
+    modifying the working tree.
+
+    Args:
+        repo_dir: Repository root directory.
+        source_branch: Branch to merge from.
+        target_branch: Branch to merge into (default: current HEAD).
+
+    Returns:
+        List of file paths that have merge conflicts, or empty list if clean.
+    """
+    # git merge-tree --write-tree <branch1> <branch2> exits non-zero if conflicts
+    result = _run_git(
+        repo_dir,
+        "merge-tree",
+        "--write-tree",
+        "--no-messages",
+        target_branch,
+        source_branch,
+        timeout=15,
+    )
+    if "CONFLICT" in result:
+        # Extract conflict file paths
+        conflicts = []
+        for line in result.splitlines():
+            if line.strip().startswith("CONFLICT"):
+                # e.g. "CONFLICT (content): Merge conflict in src/auth.py"
+                parts = line.split("in ", 1)
+                if len(parts) == 2:
+                    conflicts.append(parts[1].strip())
+        return conflicts
+    return []
+
+
+def merge_with_conflict_report(
+    repo_dir: Path,
+    source_branch: str,
+    target_branch: str,
+    *,
+    auto_resolve: bool = False,
+) -> dict[str, Any]:
+    """Merge source_branch into target_branch with full conflict reporting.
+
+    Args:
+        repo_dir: Repository root directory.
+        source_branch: Branch to merge from.
+        target_branch: Branch to merge into.
+        auto_resolve: If True, use ``--strategy-option=theirs`` to prefer source changes.
+
+    Returns:
+        Dict with keys: success (bool), conflicts (list[str]), message (str).
+    """
+    # Check out target branch first
+    checkout_result = _run_git(repo_dir, "checkout", target_branch)
+    if checkout_result.startswith("[exit code"):
+        return {
+            "success": False,
+            "conflicts": [],
+            "message": f"Cannot checkout {target_branch}: {checkout_result}",
+        }
+
+    # Pre-flight conflict detection
+    conflicts = detect_merge_conflicts(repo_dir, source_branch, target_branch)
+
+    if conflicts and not auto_resolve:
+        return {
+            "success": False,
+            "conflicts": conflicts,
+            "message": (
+                f"Merge would produce {len(conflicts)} conflict(s):\n"
+                + "\n".join(f"  • {c}" for c in conflicts)
+                + "\n\nResolve conflicts manually or re-run with auto_resolve=True"
+            ),
+        }
+
+    merge_args = ["merge", "--no-edit"]
+    if auto_resolve:
+        merge_args += ["-X", "theirs"]
+    merge_args.append(source_branch)
+
+    merge_result = _run_git(repo_dir, *merge_args)
+    success = not merge_result.startswith("[exit code")
+
+    return {
+        "success": success,
+        "conflicts": conflicts if not success else [],
+        "message": merge_result,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Parallel execution tracking
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class WorktreeTask:
+    """A tracked parallel agent task in an isolated worktree.
+
+    Attributes:
+        task_id: Unique identifier.
+        label: Human-readable description.
+        prompt: Task instructions for the agent.
+        branch: Git branch name for this task's worktree.
+        worktree: WorktreeInfo for this task.
+        status: 'pending' | 'running' | 'completed' | 'failed'.
+        result: Output text when completed.
+        started_at: Epoch timestamp when task started.
+        finished_at: Epoch timestamp when task finished.
+        error: Error message if failed.
+    """
+
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    label: str = ""
+    prompt: str = ""
+    branch: str = ""
+    worktree: WorktreeInfo | None = None
+    status: str = "pending"
+    result: str = ""
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    error: str = ""
+
+    @property
+    def duration_secs(self) -> float | None:
+        """Return elapsed time in seconds, or None if not started."""
+        if self.started_at == 0.0:
+            return None
+        end = self.finished_at or time.monotonic()
+        return end - self.started_at
+
+
+def format_worktree_status(tasks: list[WorktreeTask]) -> str:
+    """Format a list of parallel tasks for TUI display.
+
+    Args:
+        tasks: List of WorktreeTask objects.
+
+    Returns:
+        Human-readable status panel string.
+    """
+    if not tasks:
+        return "No parallel worktree tasks running."
+
+    lines = [f"Parallel Worktree Tasks ({len(tasks)}):"]
+    for task in tasks:
+        icon = {"pending": "○", "running": "◎", "completed": "✓", "failed": "✗"}.get(task.status, "?")
+        dur = task.duration_secs
+        dur_str = f" ({dur:.0f}s)" if dur is not None else ""
+        label = task.label or task.prompt[:50]
+        lines.append(f"  {icon} [{task.task_id}] {label}{dur_str}  [{task.status}]")
+        if task.branch:
+            lines.append(f"    branch: {task.branch}")
+        if task.error:
+            lines.append(f"    error: {task.error[:80]}")
+        if task.result and task.status == "completed":
+            preview = task.result[:100].replace("\n", " ")
+            lines.append(f"    result: {preview}...")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# ParallelWorktreeMiddleware
+# ---------------------------------------------------------------------------
+
+
+class ParallelWorktreeState(TypedDict):
+    """LangGraph state for parallel worktree middleware."""
+
+
+class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT, ResponseT]):
+    """Spawn parallel sub-agents in isolated git worktrees with merge management.
+
+    Each sub-agent task runs in its own git worktree (separate directory +
+    branch) so there are no file conflicts between agents. Results are merged
+    back using ``merge_with_conflict_report`` which surfaces conflicts clearly.
+
+    Compared to ``WorktreeMiddleware`` (which provides manual tools), this
+    middleware adds:
+
+    - Async parallel execution via ``asyncio.gather``
+    - Automatic worktree cleanup after merge
+    - Pre-merge conflict detection
+    - TUI-ready status tracking
+
+    Args:
+        working_dir: Repository root directory.
+        agent_factory: Callable that takes a prompt and working_dir and returns
+            a result string. If None, tasks are tracked but not auto-executed.
+        max_parallel: Maximum concurrent worktree tasks (default 4).
+        branch_prefix: Prefix for auto-generated branch names.
+        auto_cleanup: Remove worktrees when tasks complete.
+    """
+
+    state_schema = ParallelWorktreeState
+
+    def __init__(
+        self,
+        *,
+        working_dir: Path | None = None,
+        agent_factory: Callable[[str, Path], Any] | None = None,
+        max_parallel: int = 4,
+        branch_prefix: str = "bog-agent-",
+        auto_cleanup: bool = True,
+    ) -> None:
+        self._working_dir = working_dir or Path.cwd()
+        self._agent_factory = agent_factory
+        self._max_parallel = max_parallel
+        self._branch_prefix = branch_prefix
+        self._auto_cleanup = auto_cleanup
+        self._tasks: dict[str, WorktreeTask] = {}
+        self._semaphore: asyncio.Semaphore | None = None
+        self._tools = self._build_tools()
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        """Get or create the concurrency semaphore (event-loop-safe)."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_parallel)
+        return self._semaphore
+
+    def get_tasks(self) -> list[WorktreeTask]:
+        """Return all tracked tasks, sorted by start time."""
+        return sorted(self._tasks.values(), key=lambda t: t.started_at or 0.0)
+
+    def get_task(self, task_id: str) -> WorktreeTask | None:
+        """Return a task by ID."""
+        return self._tasks.get(task_id)
+
+    @property
+    def tools(self) -> list[BaseTool]:
+        """Expose parallel worktree tools."""
+        return self._tools
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _make_branch_name(self, label: str) -> str:
+        """Create a safe git branch name from a task label."""
+        safe = label.lower().replace(" ", "-").replace("/", "-")
+        safe = "".join(c for c in safe if c.isalnum() or c in "-_")[:40]
+        short_id = uuid.uuid4().hex[:6]
+        return f"{self._branch_prefix}{safe}-{short_id}"
+
+    async def _create_task(self, *, label: str, prompt: str, repo_root: Path | None = None) -> WorktreeTask:
+        """Create and register a new WorktreeTask without starting it.
+
+        Args:
+            label: Human-readable label for the task.
+            prompt: The prompt to run in the worktree.
+            repo_root: Optional override for the working directory.
+
+        Returns:
+            The created WorktreeTask.
+        """
+        task = WorktreeTask(
+            task_id=uuid.uuid4().hex[:12],
+            label=label,
+            prompt=prompt,
+            branch=self._make_branch_name(label),
+        )
+        if repo_root is not None:
+            self._working_dir = repo_root
+        self._tasks[task.task_id] = task
+        return task
+
+    async def _run_task_in_worktree(self, task: WorktreeTask) -> None:
+        """Execute a single task in its worktree.
+
+        Args:
+            task: The task to execute.
+        """
+        async with self._get_semaphore():
+            task.status = "running"
+            task.started_at = time.monotonic()
+
+            try:
+                # Create the worktree
+                wt = await asyncio.to_thread(
+                    create_worktree, self._working_dir, task.branch
+                )
+                task.worktree = wt
+
+                if self._agent_factory is not None:
+                    # Run the factory (sync) in a thread
+                    result = await asyncio.to_thread(
+                        self._agent_factory, task.prompt, wt.path
+                    )
+                    task.result = str(result)
+
+                task.status = "completed"
+            except Exception as exc:
+                task.status = "failed"
+                task.error = str(exc)
+                logger.warning("Worktree task %s failed: %s", task.task_id, exc)
+            finally:
+                task.finished_at = time.monotonic()
+
+                if self._auto_cleanup and task.worktree is not None:
+                    try:
+                        await asyncio.to_thread(
+                            remove_worktree, self._working_dir, task.worktree.path
+                        )
+                    except Exception as exc:
+                        logger.debug("Failed to clean up worktree: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Tools
+    # ------------------------------------------------------------------
+
+    def _build_tools(self) -> list[BaseTool]:
+        """Build parallel worktree tools exposed to the agent."""
+        mw = self
+
+        def spawn_parallel_tasks(
+            runtime: ToolRuntime[None, ParallelWorktreeState],
+            tasks: Annotated[
+                str,
+                "JSON array of task objects with 'label' and 'prompt' keys. "
+                'Example: [{"label": "auth", "prompt": "Refactor auth.py"}]',
+            ],
+        ) -> str:
+            """Spawn multiple agent tasks in parallel git worktrees.
+
+            Each task gets its own isolated branch and directory. Tasks run
+            concurrently up to the max_parallel limit.
+            """
+            import json as _json
+
+            try:
+                task_specs = _json.loads(tasks)
+            except _json.JSONDecodeError as exc:
+                return f"Invalid JSON: {exc}"
+
+            created_tasks: list[WorktreeTask] = []
+            for spec in task_specs:
+                label = str(spec.get("label", "task"))
+                prompt = str(spec.get("prompt", ""))
+                branch = mw._make_branch_name(label)
+                task = WorktreeTask(label=label, prompt=prompt, branch=branch)
+                mw._tasks[task.task_id] = task
+                created_tasks.append(task)
+
+            # Fire and forget — tasks run in the background
+            if created_tasks:
+                _bg = asyncio.ensure_future(
+                    asyncio.gather(
+                        *(mw._run_task_in_worktree(t) for t in created_tasks),
+                        return_exceptions=True,
+                    )
+                )
+                _ = _bg  # suppress "local variable assigned but never used"
+
+            ids = ", ".join(t.task_id for t in created_tasks)
+            return (
+                f"Spawned {len(created_tasks)} parallel task(s): {ids}\n"
+                "Use `worktree_status` to monitor progress."
+            )
+
+        def worktree_status(
+            runtime: ToolRuntime[None, ParallelWorktreeState],
+        ) -> str:
+            """Show the status of all parallel worktree tasks."""
+            return format_worktree_status(mw.get_tasks())
+
+        def merge_task_results(
+            runtime: ToolRuntime[None, ParallelWorktreeState],
+            task_ids: Annotated[
+                str,
+                "Comma-separated task IDs to merge, or 'all' for all completed tasks",
+            ],
+            target_branch: Annotated[str, "Branch to merge into"] = "HEAD",
+            auto_resolve: Annotated[bool, "Auto-resolve conflicts favouring the task branch"] = False,
+        ) -> str:
+            """Merge completed worktree tasks back into the target branch."""
+            if task_ids.strip().lower() == "all":
+                candidates = [t for t in mw._tasks.values() if t.status == "completed"]
+            else:
+                ids = [i.strip() for i in task_ids.split(",")]
+                candidates = [mw._tasks[i] for i in ids if i in mw._tasks]
+
+            if not candidates:
+                return "No completed tasks found to merge."
+
+            reports: list[str] = []
+            for task in candidates:
+                report = merge_with_conflict_report(
+                    mw._working_dir,
+                    task.branch,
+                    target_branch,
+                    auto_resolve=auto_resolve,
+                )
+                status = "✓ merged" if report["success"] else "✗ conflicts"
+                reports.append(f"{status} [{task.task_id}] {task.label}: {report['message'][:200]}")
+
+            return "\n".join(reports)
+
+        def cancel_task(
+            runtime: ToolRuntime[None, ParallelWorktreeState],
+            task_id: Annotated[str, "Task ID to cancel"],
+        ) -> str:
+            """Cancel a pending or running worktree task."""
+            task = mw._tasks.get(task_id)
+            if task is None:
+                return f"Task '{task_id}' not found."
+            if task.status == "completed":
+                return f"Task '{task_id}' already completed."
+            task.status = "failed"
+            task.error = "Cancelled by user"
+            task.finished_at = time.monotonic()
+            return f"Task '{task_id}' cancelled."
+
+        return [
+            StructuredTool.from_function(
+                name="spawn_parallel_tasks",
+                description="Spawn multiple agent tasks in parallel git worktrees.",
+                func=spawn_parallel_tasks,
+            ),
+            StructuredTool.from_function(
+                name="worktree_status",
+                description="Show status of all parallel worktree tasks.",
+                func=worktree_status,
+            ),
+            StructuredTool.from_function(
+                name="merge_task_results",
+                description="Merge completed worktree tasks into the target branch.",
+                func=merge_task_results,
+            ),
+            StructuredTool.from_function(
+                name="cancel_task",
+                description="Cancel a pending or running worktree task.",
+                func=cancel_task,
             ),
         ]

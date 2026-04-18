@@ -716,13 +716,17 @@ class BogAgentsApp(App):
         "/skills": "_handle_skills_command",
         "/test": "_handle_test_command",
         "/team": "_handle_team_command",
+        "/think": "_handle_think_command",
         "/threads": "_handle_threads_command",
         "/tokens": "_handle_tokens_command",
         "/trace": "_handle_trace_command",
+        "/rules": "_handle_rules_command",
+        "/search": "_handle_search_command",
         "/undo": "_handle_undo_command",
         "/vars": "_handle_vars_command",
         "/version": "_handle_version_command",
         "/worktree": "_handle_worktree_command",
+        "/worktrees": "_handle_worktrees_command",
     }
 
     class ServerReady(Message):
@@ -6079,6 +6083,433 @@ class BogAgentsApp(App):
                 "Usage: /worktree | /worktree create <branch> | "
                 "/worktree status <branch> | /worktree merge <source> [target] | "
                 "/worktree remove <branch>"
+            )
+        )
+
+    async def _handle_think_command(self, command: str) -> None:
+        """Handle `/think` extended thinking mode toggle.
+
+        Subcommands:
+            /think            — Show current status
+            /think on         — Enable thinking
+            /think off        — Disable thinking
+            /think toggle     — Toggle on/off
+            /think budget N   — Set budget_tokens to N (int, e.g. 8000)
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.thinking import ThinkingMiddleware
+
+        mw = next(
+            (m for m in getattr(self, "_middleware", []) if isinstance(m, ThinkingMiddleware)),
+            None,
+        )
+        if mw is None:
+            await self._mount_message(
+                AppMessage(
+                    "ThinkingMiddleware is not active in this session.\n"
+                    "Add `ThinkingMiddleware()` to your middleware stack to enable."
+                )
+            )
+            return
+
+        raw_arg = command.strip()[len("/think"):].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            state = "enabled" if mw.is_enabled else "disabled"
+            await self._mount_message(
+                AppMessage(
+                    f"Extended thinking: {state}\n"
+                    f"Budget tokens: {mw.budget_tokens:,}\n\n"
+                    "Usage: /think on | /think off | /think toggle | /think budget <N>"
+                )
+            )
+            return
+
+        if raw_arg == "on":
+            mw.set_thinking(True)
+            await self._mount_message(
+                AppMessage(f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens).")
+            )
+            return
+
+        if raw_arg == "off":
+            mw.set_thinking(False)
+            await self._mount_message(AppMessage("Extended thinking disabled."))
+            return
+
+        if raw_arg == "toggle":
+            enabled = mw.toggle()
+            state = "enabled" if enabled else "disabled"
+            await self._mount_message(AppMessage(f"Extended thinking {state}."))
+            return
+
+        if raw_arg.startswith("budget "):
+            budget_str = raw_arg[7:].strip()
+            try:
+                budget = int(budget_str)
+                if budget < 1024:
+                    await self._mount_message(AppMessage("Budget must be at least 1024 tokens."))
+                    return
+                mw.set_thinking(mw.is_enabled, budget_tokens=budget)
+                await self._mount_message(
+                    AppMessage(f"Thinking budget set to {budget:,} tokens.")
+                )
+            except ValueError:
+                await self._mount_message(
+                    AppMessage(f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>")
+                )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /think | /think on | /think off | /think toggle | /think budget <N>")
+        )
+
+    async def _handle_rules_command(self, command: str) -> None:
+        """Handle `/rules` project rules management.
+
+        Subcommands:
+            /rules              — List all rules
+            /rules list         — List all rules
+            /rules show <name>  — Show rule content
+            /rules test <file>  — Test which rules match a file
+            /rules add <name>   — Create a new rule file template
+            /rules edit <name>  — Show path to edit a rule
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.rules import (
+            apply_rules,
+            create_rule_file,
+            load_rules,
+        )
+
+        project_root = Path(self._cwd)
+        raw_arg = command.strip()[len("/rules"):].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "list":
+            rules = await asyncio.to_thread(load_rules, project_root)
+            if not rules:
+                await self._mount_message(
+                    AppMessage(
+                        "No rules found in .bog-agents/rules/\n\n"
+                        "Create one with: /rules add <name>"
+                    )
+                )
+                return
+            lines = [f"Project rules ({len(rules)} total):", ""]
+            for r in rules:
+                glob_str = ", ".join(r.glob) if r.glob else "(no glob)"
+                always_str = " [always]" if r.always else ""
+                agent_str = f" [agent:{r.agent}]" if r.agent else ""
+                lines.append(
+                    f"  {r.name} (priority {r.priority}){always_str}{agent_str} — {glob_str}"
+                )
+            lines.append("")
+            lines.append("Use /rules show <name> to view content.")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("show "):
+            name = raw_arg[5:].strip()
+            rules = await asyncio.to_thread(load_rules, project_root)
+            match = next((r for r in rules if r.name == name or r.name == name.removesuffix(".md")), None)
+            if match is None:
+                await self._mount_message(AppMessage(f"Rule '{name}' not found."))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"Rule: {match.name}\n"
+                    f"File: {match.path}\n"
+                    f"Priority: {match.priority} | Always: {match.always} | Agent: {match.agent or '(any)'}\n"
+                    f"Glob: {', '.join(match.glob) or '(none)'}\n\n"
+                    f"{match.content}"
+                )
+            )
+            return
+
+        if lowered.startswith("test "):
+            file_arg = raw_arg[5:].strip()
+            context_files = [file_arg] if file_arg else []
+            rules = await asyncio.to_thread(load_rules, project_root)
+            matching = [r for r in rules if r.matches(context_files, agent_type="")]
+            if not matching:
+                await self._mount_message(
+                    AppMessage(f"No rules match '{file_arg}'.")
+                )
+                return
+            lines = [f"Rules matching '{file_arg}':", ""]
+            for r in matching:
+                lines.append(f"  {r.name} (priority {r.priority})")
+            lines.append("")
+            preview = await asyncio.to_thread(apply_rules, rules, context_files, "")
+            if preview:
+                lines.append("Injected content preview (first 500 chars):")
+                lines.append(preview[:500])
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("add "):
+            name = raw_arg[4:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /rules add <rule-name>"))
+                return
+            rule_path = await asyncio.to_thread(
+                create_rule_file,
+                project_root,
+                name,
+                f"# {name}\n\nDescribe the rule here.",
+            )
+            await self._mount_message(
+                AppMessage(
+                    f"Created rule: {rule_path}\n\n"
+                    "Edit it to add frontmatter and content:\n"
+                    "---\n"
+                    "glob: ['**/*.py']\n"
+                    "priority: 50\n"
+                    "---\n"
+                    "Rule content here."
+                )
+            )
+            return
+
+        if lowered.startswith("edit "):
+            name = raw_arg[5:].strip()
+            rules = await asyncio.to_thread(load_rules, project_root)
+            match = next((r for r in rules if r.name == name or r.name == name.removesuffix(".md")), None)
+            if match is None:
+                await self._mount_message(AppMessage(f"Rule '{name}' not found. Use /rules add <name> to create it."))
+                return
+            await self._mount_message(
+                AppMessage(f"Edit rule at: {match.path}")
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /rules | /rules list | /rules show <name> | "
+                "/rules test <file> | /rules add <name> | /rules edit <name>"
+            )
+        )
+
+    async def _handle_search_command(self, command: str) -> None:
+        """Handle `/search` hybrid codebase search.
+
+        Subcommands:
+            /search <query>         — Hybrid search (ripgrep + fuzzy filename)
+            /search index           — Build/rebuild embedding index
+            /search index --force   — Force full rebuild of index
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.hybrid_search import (
+            HybridSearchMiddleware,
+            format_search_results,
+            hybrid_search,
+        )
+
+        raw_arg = command.strip()[len("/search"):].strip()
+        if not raw_arg:
+            await self._mount_message(
+                AppMessage("Usage: /search <query> | /search index [--force]")
+            )
+            return
+
+        lowered = raw_arg.lower()
+
+        if lowered in {"index", "index --force"}:
+            force = "--force" in lowered
+            mw = next(
+                (m for m in getattr(self, "_middleware", []) if isinstance(m, HybridSearchMiddleware)),
+                None,
+            )
+            if mw is None:
+                await self._mount_message(
+                    AppMessage(
+                        "HybridSearchMiddleware is not active.\n"
+                        "Add it to your middleware stack to use semantic indexing."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage("Building embedding index… this may take a minute."))
+            try:
+                result = await asyncio.to_thread(mw._rebuild_index, force=force)
+                await self._mount_message(AppMessage(f"Index built: {result}"))
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"Index build failed: {exc}"))
+            return
+
+        try:
+            results = await asyncio.to_thread(
+                hybrid_search,
+                raw_arg,
+                Path(self._cwd),
+                max_results=20,
+                use_semantic=False,
+            )
+        except Exception as exc:
+            await self._mount_message(AppMessage(f"Search error: {exc}"))
+            return
+
+        if not results:
+            await self._mount_message(AppMessage(f"No results for `{raw_arg}`."))
+            return
+
+        formatted = format_search_results(results)
+        await self._mount_message(
+            AppMessage(f"Search results for `{raw_arg}` ({len(results)} matches):\n\n{formatted}")
+        )
+
+    async def _handle_worktrees_command(self, command: str) -> None:
+        """Handle `/worktrees` parallel multi-agent worktree management.
+
+        Subcommands:
+            /worktrees              — Show status of all parallel tasks
+            /worktrees status       — Show status of all parallel tasks
+            /worktrees spawn <JSON> — Spawn parallel tasks (JSON array of {label, prompt})
+            /worktrees merge <id>   — Merge a completed task's branch
+            /worktrees cancel <id>  — Cancel a running task
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.worktree import (
+            ParallelWorktreeMiddleware,
+            format_worktree_status,
+        )
+
+        mw = next(
+            (m for m in getattr(self, "_middleware", []) if isinstance(m, ParallelWorktreeMiddleware)),
+            None,
+        )
+        if mw is None:
+            await self._mount_message(
+                AppMessage(
+                    "ParallelWorktreeMiddleware is not active in this session.\n"
+                    "Add `ParallelWorktreeMiddleware(agent_factory=...)` to your middleware stack."
+                )
+            )
+            return
+
+        raw_arg = command.strip()[len("/worktrees"):].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "status":
+            tasks = mw.get_tasks()
+            if not tasks:
+                await self._mount_message(
+                    AppMessage("No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks.")
+                )
+                return
+            await self._mount_message(AppMessage(format_worktree_status(tasks)))
+            return
+
+        if lowered.startswith("cancel "):
+            task_id = raw_arg[7:].strip()
+            task = mw.get_task(task_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
+                return
+            if task.status not in ("pending", "running"):
+                await self._mount_message(
+                    AppMessage(f"Task '{task_id}' is already {task.status}.")
+                )
+                return
+            task.status = "cancelled"
+            await self._mount_message(AppMessage(f"Task '{task_id}' cancelled."))
+            return
+
+        if lowered.startswith("merge "):
+            import json as _json
+
+            task_id = raw_arg[6:].strip()
+            task = mw.get_task(task_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
+                return
+            if task.status != "done":
+                await self._mount_message(
+                    AppMessage(f"Task '{task_id}' is {task.status}, not done. Cannot merge yet.")
+                )
+                return
+            from bog_agents.middleware.worktree import merge_with_conflict_report
+
+            repo_root = await self._get_repo_root()
+            if repo_root is None:
+                await self._mount_message(AppMessage("Not in a git repository."))
+                return
+            report = await asyncio.to_thread(
+                merge_with_conflict_report,
+                repo_root,
+                task.branch,
+                "main",
+                False,
+            )
+            conflicts = report.get("conflicts", [])
+            merged = report.get("merged", False)
+            status_str = "Merged successfully." if merged else f"Conflicts detected in: {', '.join(conflicts)}"
+            await self._mount_message(
+                AppMessage(f"Merge task '{task_id}' ({task.branch}):\n{status_str}")
+            )
+            return
+
+        if lowered.startswith("spawn "):
+            import json as _json
+
+            json_str = raw_arg[6:].strip()
+            try:
+                tasks_input = _json.loads(json_str)
+            except _json.JSONDecodeError as exc:
+                await self._mount_message(
+                    AppMessage(
+                        f"Invalid JSON: {exc}\n\n"
+                        'Usage: /worktrees spawn [{"label": "task1", "prompt": "do X"}, ...]'
+                    )
+                )
+                return
+            if not isinstance(tasks_input, list):
+                await self._mount_message(AppMessage("Input must be a JSON array of task objects."))
+                return
+
+            repo_root = await self._get_repo_root()
+            if repo_root is None:
+                await self._mount_message(AppMessage("Not in a git repository."))
+                return
+
+            task_ids = []
+            for item in tasks_input:
+                label = item.get("label", "task")
+                prompt = item.get("prompt", "")
+                task = await mw._create_task(label=label, prompt=prompt, repo_root=repo_root)
+                task_ids.append(task.task_id)
+                asyncio.create_task(mw._run_task_in_worktree(task))  # noqa: RUF006
+
+            await self._mount_message(
+                AppMessage(
+                    f"Spawned {len(task_ids)} parallel task(s).\n"
+                    f"Task IDs: {', '.join(task_ids)}\n\n"
+                    "Use /worktrees status to monitor progress."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /worktrees | /worktrees status | "
+                '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
+                "/worktrees merge <id> | /worktrees cancel <id>"
             )
         )
 

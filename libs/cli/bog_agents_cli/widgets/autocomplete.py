@@ -481,6 +481,7 @@ class FuzzyFileController:
     _MENTION_TYPES: ClassVar[list[tuple[str, str]]] = [
         ("@file:", "Inject file contents"),
         ("@folder:", "Inject directory listing"),
+        ("@search:", "Hybrid codebase search"),
         ("@symbol:", "Inject symbol from repo map"),
         ("@url:", "Fetch and inject webpage"),
         ("@memory:", "Inject a memory entry"),

@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 # Matches @type:value or bare @path (legacy)
 _MENTION_RE = re.compile(
     r"@(?:"
-    r"(file|folder|symbol|url|memory|skill):([^\s]+)"  # typed mention: @type:value
+    r"(file|folder|symbol|url|memory|skill|search):([^\s]+)"  # typed mention: @type:value
     r"|"
-    r"([^\s@:]+(?:/[^\s@:]+)*)"                       # bare path: @src/main.py
+    r"([^\s@:]+(?:/[^\s@:]+)*)"                               # bare path: @src/main.py
     r")",
     re.IGNORECASE,
 )
@@ -292,6 +292,20 @@ def _resolve_skill(value: str, cwd: Path) -> str:
     return f"[Skill '{value}' not found in ~/.bog-agents/skills/ or .bog-agents/skills/]"
 
 
+def _resolve_search(query: str, cwd: Path) -> str:
+    """Run hybrid codebase search and return formatted results."""
+    try:
+        from bog_agents.middleware.hybrid_search import (
+            format_search_results,
+            hybrid_search,
+        )
+
+        results = hybrid_search(query, cwd, max_results=10, use_semantic=False)
+        return f"Search results for `{query}`:\n\n{format_search_results(results)}"
+    except Exception as exc:
+        return f"[Search failed: {exc}]"
+
+
 def _lang_hint(path: Path) -> str:
     """Return a markdown language hint for a file."""
     ext_map = {
@@ -352,6 +366,8 @@ def resolve_mentions(
                     token.resolved = _resolve_memory(token.value, root)
                 case "skill":
                     token.resolved = _resolve_skill(token.value, root)
+                case "search":
+                    token.resolved = _resolve_search(token.value, root)
                 case _:
                     token.error = f"Unknown mention type: {token.kind}"
         except Exception as exc:
@@ -425,6 +441,7 @@ def get_mention_type_suggestions() -> list[tuple[str, str]]:
     return [
         ("@file:", "Inject file contents"),
         ("@folder:", "Inject directory listing"),
+        ("@search:", "Hybrid codebase search (exact + fuzzy)"),
         ("@symbol:", "Inject symbol definition from repo map"),
         ("@url:", "Fetch and inject webpage content"),
         ("@memory:", "Inject a memory entry"),
