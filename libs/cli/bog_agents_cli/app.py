@@ -5311,6 +5311,10 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/agent") :].strip()
         lowered = raw_arg.lower()
 
+        if lowered in {"panel", "dashboard", "watch"}:
+            await self._show_agents_panel()
+            return
+
         if not raw_arg or lowered in {"list", "status"}:
             await self._refresh_remote_tasks()
             current_thread = self._current_thread_id() or "(none)"
@@ -5330,7 +5334,21 @@ class BogAgentsApp(App):
                 ),
                 "Usage: /agent status <id> | /agent stop <id> | /agent cleanup",
                 "Usage: /agent switch <thread-id>",
+                "Usage: /agent panel  — live status table",
             ]
+            # Show parallel worktree tasks if any are tracked via middleware
+            try:
+                from bog_agents_cli.widgets.agents_panel import (
+                    format_agents_status_table,
+                )
+
+                wt_tasks = self._collect_worktree_tasks()
+                if wt_tasks:
+                    lines.append("")
+                    lines.append("Parallel worktree tasks:")
+                    lines.append(format_agents_status_table(wt_tasks))
+            except Exception:  # noqa: S110
+                pass
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
@@ -5615,9 +5633,80 @@ class BogAgentsApp(App):
                 "Usage: /agent | /agent spawn [--count N] [--team TEAM] "
                 "[--remote] [--worktree] <prompt> | "
                 "/agent status <id> | /agent stop <id> | /agent cleanup | "
-                "/agent switch <thread-id>"
+                "/agent switch <thread-id> | /agent panel"
             )
         )
+
+    async def _show_agents_panel(self) -> None:
+        """Show the parallel agents live status panel."""
+        from bog_agents_cli.widgets.agents_panel import format_agents_status_table
+
+        tasks = []
+        if hasattr(self, "_bg_manager"):
+            for task in self._bg_manager.get_all_tasks():
+                tasks.append({
+                    "task_id": getattr(task, "task_id", "?"),
+                    "label": getattr(task, "label", str(task)),
+                    "status": getattr(task, "status", "unknown"),
+                    "branch": getattr(task, "worktree_branch", "") or "",
+                    "started_at": getattr(task, "started_at", None),
+                    "finished_at": getattr(task, "completed_at", None),
+                    "result": getattr(task, "result", "") or "",
+                    "error": getattr(task, "error", "") or "",
+                })
+
+        wt_tasks = self._collect_worktree_tasks()
+        # Merge worktree middleware tasks (avoid duplicates by task_id)
+        seen_ids = {t["task_id"] for t in tasks}
+        for wt in wt_tasks:
+            if wt["task_id"] not in seen_ids:
+                tasks.append(wt)
+
+        if not tasks:
+            await self._mount_message(
+                AppMessage(
+                    "No parallel agent tasks found.\n"
+                    "Use /agent spawn [--worktree] <prompt> to start parallel agents."
+                )
+            )
+            return
+
+        table_text = format_agents_status_table(tasks)
+        await self._mount_message(AppMessage(table_text))
+
+    def _collect_worktree_tasks(self) -> list[dict[str, Any]]:
+        """Collect parallel worktree task status from any connected middleware.
+
+        Returns:
+            List of task dicts with keys compatible with
+            ``format_agents_status_table``.
+        """
+        tasks: list[dict[str, Any]] = []
+        try:
+            agent = self._agent
+            if agent is None:
+                return tasks
+            nodes = getattr(agent, "nodes", None)
+            node_iter = nodes.values() if isinstance(nodes, dict) else []
+            for node in node_iter:
+                mw = getattr(node, "middleware", None) or getattr(
+                    node, "_middleware", None
+                )
+                if mw and hasattr(mw, "get_tasks"):
+                    for task in mw.get_tasks():
+                        tasks.append({
+                            "task_id": task.task_id,
+                            "label": task.label,
+                            "status": task.status,
+                            "branch": task.branch,
+                            "started_at": task.started_at,
+                            "finished_at": task.finished_at,
+                            "result": task.result or "",
+                            "error": task.error or "",
+                        })
+        except Exception:  # noqa: S110
+            pass
+        return tasks
 
     async def _handle_permissions_command(self, command: str) -> None:
         """Handle `/permissions` by showing approval posture and shell policy.

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import subprocess
 import tempfile
 import time
@@ -374,12 +375,50 @@ def detect_merge_conflicts(repo_dir: Path, source_branch: str, target_branch: st
     return []
 
 
+def _is_trivial_conflict(repo_dir: Path, source_branch: str, target_branch: str) -> bool:
+    """Check whether all conflicting changes are whitespace/blank-line only.
+
+    Runs ``git diff -w`` between the two branches; if that diff reports zero
+    insertions *and* zero deletions for every conflicting file the conflict is
+    considered trivial (formatting-only).
+
+    Args:
+        repo_dir: Repository root directory.
+        source_branch: Branch to merge from.
+        target_branch: Branch to merge into.
+
+    Returns:
+        True if all conflicts are whitespace-only, False otherwise.
+    """
+    # Get changed file list
+    changed = _run_git(repo_dir, "diff", f"{target_branch}...{source_branch}", "--name-only")
+    if not changed or changed.startswith("[exit code"):
+        return False
+
+    # Run diff ignoring whitespace; if it produces no output the diff is whitespace-only
+    diff_w = _run_git(repo_dir, "diff", "-w", "--stat", f"{target_branch}...{source_branch}")
+    if diff_w.startswith("[exit code"):
+        return False
+
+    # A whitespace-only diff has "0 insertions(+), 0 deletions(-)" in summary
+    # or produces an empty stat block.  Look for the insertion/deletion line.
+    for line in diff_w.splitlines():
+        if "insertion" in line or "deletion" in line:
+            # e.g. " 1 file changed, 0 insertions(+), 0 deletions(-)"
+            nums = re.findall(r"(\d+)\s+insertion|(\d+)\s+deletion", line)
+            total = sum(int(n) for pair in nums for n in pair if n)
+            if total > 0:
+                return False
+    return True
+
+
 def merge_with_conflict_report(
     repo_dir: Path,
     source_branch: str,
     target_branch: str,
     *,
     auto_resolve: bool = False,
+    strategy: str = "manual",
 ) -> dict[str, Any]:
     """Merge source_branch into target_branch with full conflict reporting.
 
@@ -387,11 +426,23 @@ def merge_with_conflict_report(
         repo_dir: Repository root directory.
         source_branch: Branch to merge from.
         target_branch: Branch to merge into.
-        auto_resolve: If True, use ``--strategy-option=theirs`` to prefer source changes.
+        auto_resolve: If True, treat as ``strategy="prefer_source"`` (backward compat).
+        strategy: Conflict resolution strategy.
+
+            - ``"prefer_source"`` — use ``-X theirs``; source branch wins.
+            - ``"prefer_target"`` — use ``-X ours``; target branch wins.
+            - ``"sequential"`` — do not merge; return a sentinel dict with
+              ``retry_sequential=True`` so the caller can handle ordering.
+            - ``"manual"`` — surface conflicts for human resolution (default).
 
     Returns:
-        Dict with keys: success (bool), conflicts (list[str]), message (str).
+        Dict with keys: ``success`` (bool), ``conflicts`` (list[str]),
+        ``message`` (str), and optionally ``retry_sequential`` (bool).
     """
+    # Backward compatibility: auto_resolve=True == prefer_source
+    if auto_resolve:
+        strategy = "prefer_source"
+
     # Check out target branch first
     checkout_result = _run_git(repo_dir, "checkout", target_branch)
     if checkout_result.startswith("[exit code"):
@@ -404,20 +455,51 @@ def merge_with_conflict_report(
     # Pre-flight conflict detection
     conflicts = detect_merge_conflicts(repo_dir, source_branch, target_branch)
 
-    if conflicts and not auto_resolve:
-        return {
-            "success": False,
-            "conflicts": conflicts,
-            "message": (
-                f"Merge would produce {len(conflicts)} conflict(s):\n"
-                + "\n".join(f"  • {c}" for c in conflicts)
-                + "\n\nResolve conflicts manually or re-run with auto_resolve=True"
-            ),
-        }
+    if conflicts:
+        # Check for trivial (whitespace-only) conflicts and auto-resolve them
+        if _is_trivial_conflict(repo_dir, source_branch, target_branch):
+            logger.debug(
+                "Trivial whitespace-only conflicts detected for %s -> %s; resolving with -X theirs",
+                source_branch,
+                target_branch,
+            )
+            merge_args = ["merge", "--no-edit", "-X", "theirs", source_branch]
+            merge_result = _run_git(repo_dir, *merge_args)
+            success = not merge_result.startswith("[exit code")
+            return {
+                "success": success,
+                "conflicts": [] if success else conflicts,
+                "message": merge_result,
+            }
+
+        if strategy == "sequential":
+            return {
+                "success": False,
+                "retry_sequential": True,
+                "conflicts": conflicts,
+                "message": (
+                    f"Sequential strategy: {len(conflicts)} conflict(s) detected in "
+                    f"{source_branch} -> {target_branch}. "
+                    "Skipping merge; retry tasks sequentially to resolve ordering."
+                ),
+            }
+
+        if strategy == "manual":
+            return {
+                "success": False,
+                "conflicts": conflicts,
+                "message": (
+                    f"Merge would produce {len(conflicts)} conflict(s):\n"
+                    + "\n".join(f"  - {c}" for c in conflicts)
+                    + "\n\nResolve conflicts manually or re-run with a different strategy."
+                ),
+            }
 
     merge_args = ["merge", "--no-edit"]
-    if auto_resolve:
+    if strategy == "prefer_source":
         merge_args += ["-X", "theirs"]
+    elif strategy == "prefer_target":
+        merge_args += ["-X", "ours"]
     merge_args.append(source_branch)
 
     merge_result = _run_git(repo_dir, *merge_args)
@@ -428,6 +510,45 @@ def merge_with_conflict_report(
         "conflicts": conflicts if not success else [],
         "message": merge_result,
     }
+
+
+def smart_merge_parallel_tasks(
+    mw: ParallelWorktreeMiddleware,
+    repo_dir: Path,
+    target_branch: str,
+    *,
+    strategy: str = "prefer_source",
+) -> list[dict[str, Any]]:
+    """Merge all completed tasks from a ParallelWorktreeMiddleware one by one.
+
+    Args:
+        mw: The middleware instance whose completed tasks should be merged.
+        repo_dir: Repository root directory.
+        target_branch: Branch to merge each task into.
+        strategy: Conflict resolution strategy passed to `merge_with_conflict_report`.
+
+    Returns:
+        List of merge result dicts, one per completed task (in start-time order).
+    """
+    results: list[dict[str, Any]] = []
+    for task in mw.get_tasks():
+        if task.status != "completed":
+            continue
+        report = merge_with_conflict_report(
+            repo_dir,
+            task.branch,
+            target_branch,
+            strategy=strategy,
+        )
+        if not report["success"] and strategy == "sequential":
+            logger.warning(
+                "Sequential merge conflict for task %s (%s): %s",
+                task.task_id,
+                task.label,
+                report.get("message", ""),
+            )
+        results.append({"task_id": task.task_id, "label": task.label, **report})
+    return results
 
 
 # ---------------------------------------------------------------------------

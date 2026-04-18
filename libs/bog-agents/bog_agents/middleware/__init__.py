@@ -125,6 +125,7 @@ from bog_agents.middleware.reasoning_chain import ReasoningChainMiddleware
 from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
 from bog_agents.middleware.regulatory_impact import RegulatoryImpactMiddleware
 from bog_agents.middleware.repo_map import RepoMapMiddleware
+from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware, ResultSynthesisState
 from bog_agents.middleware.rules import RulesMiddleware
 from bog_agents.middleware.safe_tools import SafeToolsConfig, is_tool_safe
 from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
@@ -231,6 +232,8 @@ __all__ = [
     "RegulatoryImpactMiddleware",
     "RepoConfig",
     "RepoMapMiddleware",
+    "ResultSynthesisMiddleware",
+    "ResultSynthesisState",
     "RulesMiddleware",
     "SSOAuthMiddleware",
     "SafeToolsConfig",

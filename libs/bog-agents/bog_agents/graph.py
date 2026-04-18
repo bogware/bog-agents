@@ -127,6 +127,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     working_dir: str | None = None,
     # New parameters for features #51-75
     enable_worktree: bool = False,
+    enable_parallel_worktree: bool = False,
     enable_multi_agent: bool = False,
     max_agent_threads: int = 10,
     enable_smart_context: bool = False,
@@ -206,6 +207,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     enable_due_diligence: bool = False,
     enable_market_sentiment: bool = False,
     enable_competitive_intel: bool = False,
+    enable_result_synthesis: bool = False,
 ) -> CompiledStateGraph:
     """Create a bog-agents agent.
 
@@ -308,6 +310,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         auto_test = f.auto_test
         working_dir = f.working_dir
         enable_worktree = f.enable_worktree
+        enable_parallel_worktree = f.enable_parallel_worktree
         enable_multi_agent = f.enable_multi_agent
         max_agent_threads = f.max_agent_threads
         enable_smart_context = f.enable_smart_context
@@ -383,6 +386,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         enable_due_diligence = f.enable_due_diligence
         enable_market_sentiment = f.enable_market_sentiment
         enable_competitive_intel = f.enable_competitive_intel
+        enable_result_synthesis = f.enable_result_synthesis
 
     if model is None:
         _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
@@ -534,6 +538,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.worktree import WorktreeMiddleware
 
         agents_middleware.append(WorktreeMiddleware(working_dir=_wd))
+
+    if enable_parallel_worktree:
+        from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
+
+        agents_middleware.append(ParallelWorktreeMiddleware(working_dir=_wd))
 
     if enable_multi_agent:
         from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
@@ -835,6 +844,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.competitive_intel import CompetitiveIntelMiddleware
 
         agents_middleware.append(CompetitiveIntelMiddleware())
+
+    if enable_result_synthesis:
+        from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
+        from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
+
+        parallel_mw = next((m for m in agents_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
+        agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
 
     agents_middleware.extend(
         [

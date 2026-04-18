@@ -36,8 +36,8 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/agent",
-        "Manage parallel agent threads (list/spawn/switch/stop)",
-        "thread multi parallel",
+        "Manage parallel agent threads and worktrees (list/spawn/panel/switch/stop)",
+        "thread multi parallel worktree watch dashboard live status panel",
         "agent",
         available=True,
     ),
