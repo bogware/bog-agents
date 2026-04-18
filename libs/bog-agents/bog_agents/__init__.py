@@ -98,7 +98,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "VoiceIOMiddleware": ("bog_agents.middleware.voice_io", "VoiceIOMiddleware"),
     "WorktreeMiddleware": ("bog_agents.middleware.worktree", "WorktreeMiddleware"),
     # --- New features ---
+    "BackgroundJobsMiddleware": ("bog_agents.middleware.background_jobs", "BackgroundJobsMiddleware"),
     "HybridSearchMiddleware": ("bog_agents.middleware.hybrid_search", "HybridSearchMiddleware"),
+    "IntelligentCompactionMiddleware": ("bog_agents.middleware.intelligent_compaction", "IntelligentCompactionMiddleware"),
+    "MultiRepoMiddleware": ("bog_agents.middleware.multi_repo", "MultiRepoMiddleware"),
     "ParallelWorktreeMiddleware": ("bog_agents.middleware.worktree", "ParallelWorktreeMiddleware"),
     "RulesMiddleware": ("bog_agents.middleware.rules", "RulesMiddleware"),
     "ThinkingMiddleware": ("bog_agents.middleware.thinking", "ThinkingMiddleware"),

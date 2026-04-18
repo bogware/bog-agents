@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 # Matches @type:value or bare @path (legacy)
 _MENTION_RE = re.compile(
     r"@(?:"
-    r"(file|folder|symbol|url|memory|skill|search):([^\s]+)"  # typed mention: @type:value
+    r"(file|folder|symbol|url|memory|skill|search|repo):([^\s]+)"  # typed mention: @type:value
     r"|"
-    r"([^\s@:]+(?:/[^\s@:]+)*)"                               # bare path: @src/main.py
+    r"([^\s@:]+(?:/[^\s@:]+)*)"                                     # bare path: @src/main.py
     r")",
     re.IGNORECASE,
 )
@@ -292,6 +292,37 @@ def _resolve_skill(value: str, cwd: Path) -> str:
     return f"[Skill '{value}' not found in ~/.bog-agents/skills/ or .bog-agents/skills/]"
 
 
+def _resolve_repo(name: str, cwd: Path) -> str:
+    """Inject repo map and recent changes for a named repo from workspace.toml."""
+    try:
+        from bog_agents.middleware.multi_repo import (
+            get_recent_changes,
+            get_repo_map,
+            load_workspace,
+        )
+
+        repos = load_workspace(cwd)
+        repo = repos.get(name)
+        if repo is None:
+            available = ", ".join(repos.keys()) if repos else "(none configured)"
+            return (
+                f"[Repo '{name}' not found in .bog-agents/workspace.toml. "
+                f"Available: {available}]"
+            )
+        if not repo.exists:
+            return f"[Repo '{name}' path not found: {repo.path}]"
+        repo_map = get_repo_map(repo)
+        recent = get_recent_changes(repo)
+        desc = f" — {repo.description}" if repo.description else ""
+        return (
+            f"Repository: {name}{desc}\nPath: {repo.path}\n\n"
+            f"--- File Map ---\n{repo_map}\n\n"
+            f"--- Recent Changes ---\n{recent}"
+        )
+    except Exception as exc:
+        return f"[Repo lookup failed: {exc}]"
+
+
 def _resolve_search(query: str, cwd: Path) -> str:
     """Run hybrid codebase search and return formatted results."""
     try:
@@ -368,6 +399,8 @@ def resolve_mentions(
                     token.resolved = _resolve_skill(token.value, root)
                 case "search":
                     token.resolved = _resolve_search(token.value, root)
+                case "repo":
+                    token.resolved = _resolve_repo(token.value, root)
                 case _:
                     token.error = f"Unknown mention type: {token.kind}"
         except Exception as exc:
@@ -441,6 +474,7 @@ def get_mention_type_suggestions() -> list[tuple[str, str]]:
     return [
         ("@file:", "Inject file contents"),
         ("@folder:", "Inject directory listing"),
+        ("@repo:", "Inject context from a workspace repo (.bog-agents/workspace.toml)"),
         ("@search:", "Hybrid codebase search (exact + fuzzy)"),
         ("@symbol:", "Inject symbol definition from repo map"),
         ("@url:", "Fetch and inject webpage content"),

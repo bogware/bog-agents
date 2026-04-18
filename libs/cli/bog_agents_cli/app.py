@@ -669,6 +669,7 @@ class BogAgentsApp(App):
         "/clear": "_handle_clear_command",
         "/commands": "_handle_help_command",
         "/compact": "_handle_compact_command",
+        "/compress": "_handle_compress_command",
         "/context": "_handle_tokens_command",
         "/cost": "_handle_tokens_command",
         "/dashboard": "_dispatch_dashboard_command",
@@ -679,6 +680,7 @@ class BogAgentsApp(App):
         "/extensions": "_handle_plugin_command",
         "/feedback": "_handle_reference_url_command",
         "/harbor": "_handle_harbor_command",
+        "/jobs": "_handle_jobs_command",
         "/health": "_handle_health_command",
         "/help": "_handle_help_command",
         "/image": "_handle_image_command",
@@ -725,6 +727,7 @@ class BogAgentsApp(App):
         "/undo": "_handle_undo_command",
         "/vars": "_handle_vars_command",
         "/version": "_handle_version_command",
+        "/workspace": "_handle_workspace_command",
         "/worktree": "_handle_worktree_command",
         "/worktrees": "_handle_worktrees_command",
     }
@@ -3385,6 +3388,106 @@ class BogAgentsApp(App):
                 )
             )
 
+        # ---- compare ----
+        elif subcommand == "compare":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.compare import (
+                    compare_trajectories,
+                    format_comparison,
+                )
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    load_trajectory,
+                )
+            except ImportError:
+                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                return
+            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=2)
+            if len(trajectories) < 2:
+                await self._mount_message(
+                    AppMessage("Need at least 2 trajectory files to compare.\n"
+                               f"Found {len(trajectories)} under {search_dir}.")
+                )
+                return
+            report_a = await asyncio.to_thread(load_trajectory, trajectories[0])
+            report_b = await asyncio.to_thread(load_trajectory, trajectories[1])
+            comparison = await asyncio.to_thread(
+                compare_trajectories, report_a, report_b,
+                label_a=trajectories[0].parent.name, label_b=trajectories[1].parent.name,
+            )
+            result_str = await asyncio.to_thread(format_comparison, comparison)
+            await self._mount_message(AppMessage(result_str))
+
+        # ---- regression ----
+        elif subcommand == "regression":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.regression import (
+                    compute_baseline,
+                    detect_regression,
+                    format_regression_report,
+                )
+                from bog_agents_harbor.reporter import load_all_trajectories
+            except ImportError:
+                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                return
+            reports = await asyncio.to_thread(load_all_trajectories, search_dir)
+            if not reports:
+                await self._mount_message(AppMessage(f"No trajectories found under {search_dir}."))
+                return
+            midpoint = max(1, len(reports) // 2)
+            baseline_reports = reports[midpoint:]
+            current_reports = reports[:midpoint]
+            baseline_score = await asyncio.to_thread(compute_baseline, baseline_reports)
+            result = await asyncio.to_thread(detect_regression, current_reports, baseline_score)
+            report_str = await asyncio.to_thread(format_regression_report, result)
+            await self._mount_message(AppMessage(report_str))
+
+        # ---- export ----
+        elif subcommand == "export":
+            parts2 = rest.split(maxsplit=1)
+            export_format = parts2[0].lower() if parts2 else "csv"
+            output_arg = parts2[1].strip() if len(parts2) > 1 else ""
+            try:
+                from bog_agents_harbor.export import (
+                    export_to_csv,
+                    export_to_json,
+                    export_to_langsmith,
+                    export_to_wandb,
+                )
+                from bog_agents_harbor.reporter import load_all_trajectories
+            except ImportError:
+                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                return
+            reports = await asyncio.to_thread(load_all_trajectories, default_dir)
+            if not reports:
+                await self._mount_message(AppMessage(f"No trajectories found under {default_dir}."))
+                return
+            if export_format in {"csv", "json"}:
+                out_path = Path(output_arg) if output_arg else Path(f"harbor-export.{export_format}")
+                fn = export_to_csv if export_format == "csv" else export_to_json
+                result_exp = await asyncio.to_thread(fn, reports, out_path)
+                if result_exp.success:
+                    await self._mount_message(AppMessage(f"Exported {result_exp.exported_count} runs to {out_path}"))
+                else:
+                    await self._mount_message(AppMessage(f"Export errors: {', '.join(result_exp.errors)}"))
+            elif export_format == "langsmith":
+                result_exp = await asyncio.to_thread(export_to_langsmith, reports)
+                status = "success" if result_exp.success else f"errors: {', '.join(result_exp.errors)}"
+                await self._mount_message(AppMessage(f"LangSmith export: {result_exp.exported_count} runs — {status}"))
+            elif export_format == "wandb":
+                result_exp = await asyncio.to_thread(export_to_wandb, reports)
+                status = "success" if result_exp.success else f"errors: {', '.join(result_exp.errors)}"
+                await self._mount_message(AppMessage(f"W&B export: {result_exp.exported_count} runs — {status}"))
+            else:
+                await self._mount_message(AppMessage(
+                    "Usage: /harbor export csv [output.csv]\n"
+                    "       /harbor export json [output.json]\n"
+                    "       /harbor export langsmith\n"
+                    "       /harbor export wandb"
+                ))
+
         # ---- help / unknown ----
         else:
             await self._mount_message(
@@ -3393,7 +3496,10 @@ class BogAgentsApp(App):
                     "  [cyan]/harbor[/cyan]                  — status + recent results\n"
                     "  [cyan]/harbor results [dir][/cyan]   — list recent trajectory files\n"
                     "  [cyan]/harbor show [dir][/cyan]      — detailed latest trajectory\n"
-                    "  [cyan]/harbor tools [dir][/cyan]     — tool usage breakdown\n\n"
+                    "  [cyan]/harbor tools [dir][/cyan]     — tool usage breakdown\n"
+                    "  [cyan]/harbor compare [dir][/cyan]   — side-by-side: last 2 trajectories\n"
+                    "  [cyan]/harbor regression [dir][/cyan]— regression detection vs baseline\n"
+                    "  [cyan]/harbor export csv|json|langsmith|wandb[/cyan] — export results\n\n"
                     "[dim]Trajectories are saved under ~/.bog-agents/harbor-results/ by default.[/dim]"
                 )
             )
@@ -6510,6 +6616,343 @@ class BogAgentsApp(App):
                 "Usage: /worktrees | /worktrees status | "
                 '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
                 "/worktrees merge <id> | /worktrees cancel <id>"
+            )
+        )
+
+    async def _handle_compress_command(self, command: str) -> None:
+        """Handle `/compress` intelligent context compression.
+
+        Subcommands:
+            /compress              — Show context usage and compress if needed
+            /compress status       — Show token usage progress bar
+            /compress now          — Force-compress immediately
+            /compress auto on|off  — Enable/disable auto-compression
+            /compress threshold N  — Set auto-trigger threshold (0-100%)
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.intelligent_compaction import (
+            IntelligentCompactionMiddleware,
+        )
+
+        mw = next(
+            (m for m in getattr(self, "_middleware", []) if isinstance(m, IntelligentCompactionMiddleware)),
+            None,
+        )
+
+        raw_arg = command.strip()[len("/compress"):].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            if mw is not None:
+                info = mw.get_usage_info()
+                auto_str = "enabled" if info.auto_threshold_pct > 0 and mw.enabled else "disabled"
+                ratio_str = (
+                    f"  Last compression ratio: {info.last_compression_ratio:.1%}"
+                    if info.last_compression_ratio is not None
+                    else ""
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Context usage: {info.progress_bar}\n"
+                        f"  Estimated tokens: {info.estimated_tokens:,} / {info.context_window:,}\n"
+                        f"  Auto-compress: {auto_str} at {info.auto_threshold_pct * 100:.0f}%\n"
+                        f"  Compressions this session: {info.compaction_count}"
+                        + (f"\n{ratio_str}" if ratio_str else "")
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "IntelligentCompactionMiddleware is not active.\n\n"
+                        "Running /compact (basic compression) instead…"
+                    )
+                )
+                await self._handle_compact()
+            return
+
+        if raw_arg == "now":
+            if mw is not None:
+                try:
+                    state_values = await self._get_thread_state_values(self._lc_thread_id or "")
+                    messages = state_values.get("messages", []) if state_values else []
+                    if not messages:
+                        await self._mount_message(AppMessage("No messages to compress."))
+                        return
+                    _, event = await asyncio.to_thread(mw.compress_now, messages)
+                    await self._mount_message(
+                        AppMessage(
+                            f"Compressed: {event.tokens_before:,} → {event.tokens_after:,} tokens "
+                            f"({event.reduction_pct:.0f}% reduction, ratio {event.ratio:.2f})"
+                        )
+                    )
+                except Exception as exc:
+                    await self._mount_message(AppMessage(f"Compression failed: {exc}"))
+            else:
+                await self._mount_message(
+                    AppMessage("IntelligentCompactionMiddleware not active — running /compact instead.")
+                )
+                await self._handle_compact()
+            return
+
+        if raw_arg.startswith("auto "):
+            toggle = raw_arg[5:].strip()
+            if mw is None:
+                await self._mount_message(AppMessage("IntelligentCompactionMiddleware not active."))
+                return
+            if toggle == "on":
+                mw.set_enabled(True)
+                await self._mount_message(AppMessage("Auto-compression enabled."))
+            elif toggle == "off":
+                mw.set_enabled(False)
+                await self._mount_message(AppMessage("Auto-compression disabled."))
+            else:
+                await self._mount_message(AppMessage("Usage: /compress auto on|off"))
+            return
+
+        if raw_arg.startswith("threshold "):
+            if mw is None:
+                await self._mount_message(AppMessage("IntelligentCompactionMiddleware not active."))
+                return
+            pct_str = raw_arg[10:].strip().rstrip("%")
+            try:
+                pct = float(pct_str)
+                if not (10.0 <= pct <= 99.0):
+                    await self._mount_message(AppMessage("Threshold must be between 10 and 99."))
+                    return
+                mw._auto_threshold_pct = pct / 100.0
+                await self._mount_message(AppMessage(f"Auto-compression threshold set to {pct:.0f}%."))
+            except ValueError:
+                await self._mount_message(AppMessage(f"Invalid threshold: {pct_str!r}"))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /compress | /compress status | /compress now | "
+                "/compress auto on|off | /compress threshold <N>"
+            )
+        )
+
+    async def _handle_jobs_command(self, command: str) -> None:
+        """Handle `/jobs` autonomous background job management.
+
+        Subcommands:
+            /jobs                  — List all jobs
+            /jobs list             — List all jobs (including from disk)
+            /jobs status <id>      — Show job details
+            /jobs cancel <id>      — Cancel a running job
+            /jobs run <prompt>     — Submit a new background job
+            /jobs cleanup          — Remove completed/failed jobs
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.jobs_manager import PersistentJobsManager
+
+        raw_arg = command.strip()[len("/jobs"):].strip()
+        lowered = raw_arg.lower()
+
+        # Use PersistentJobsManager if available, else fall back to BackgroundAgentManager
+        bg_manager = getattr(self, "_bg_manager", None)
+        if bg_manager is None:
+            await self._ensure_background_manager()
+            bg_manager = self._bg_manager
+
+        if not raw_arg or lowered == "list":
+            if isinstance(bg_manager, PersistentJobsManager):
+                table = bg_manager.format_jobs_table()
+            else:
+                table = bg_manager.format_status_table()
+            await self._mount_message(AppMessage(table or "No jobs found."))
+            return
+
+        if lowered.startswith("status "):
+            job_id = raw_arg[7:].strip()
+            task = bg_manager.get_status(job_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Job '{job_id}' not found."))
+                return
+            dur = f"{task.duration_seconds:.0f}s" if task.duration_seconds is not None else "—"
+            branch = getattr(task, "worktree_branch", None) or "—"
+            lines = [
+                f"Job: {task.task_id}",
+                f"Status: {task.status}",
+                f"Label: {task.label or '(none)'}",
+                f"Branch: {branch}",
+                f"Duration: {dur}",
+                f"Prompt: {task.prompt[:200]}",
+            ]
+            if task.result:
+                lines.append(f"\nResult preview:\n{task.result[:400]}")
+            if task.error:
+                lines.append(f"\nError: {task.error}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("cancel "):
+            job_id = raw_arg[7:].strip()
+            cancelled = bg_manager.cancel(job_id)
+            if cancelled:
+                await self._mount_message(AppMessage(f"Job '{job_id}' cancel requested."))
+            else:
+                await self._mount_message(AppMessage(f"Job '{job_id}' not found or not running."))
+            return
+
+        if lowered.startswith("run "):
+            prompt = raw_arg[4:].strip()
+            if not prompt:
+                await self._mount_message(AppMessage("Usage: /jobs run <prompt>"))
+                return
+            try:
+                task_id = await bg_manager.submit(
+                    prompt,
+                    label=prompt[:30],
+                    strategy="worktree",
+                    working_dir=self._cwd,
+                    parent_thread_id=self._lc_thread_id,
+                )
+                branch = getattr(bg_manager.get_status(task_id), "worktree_branch", None) or "—"
+                await self._mount_message(
+                    AppMessage(
+                        f"Job submitted: {task_id}\n"
+                        f"Branch: {branch}\n"
+                        f"Use /jobs status {task_id} to monitor progress."
+                    )
+                )
+            except RuntimeError as exc:
+                await self._mount_message(AppMessage(f"Failed to submit job: {exc}"))
+            return
+
+        if lowered == "cleanup":
+            removed = bg_manager.cleanup_completed()
+            await self._mount_message(AppMessage(f"Cleaned up {removed} completed/failed jobs."))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /jobs | /jobs list | /jobs status <id> | "
+                "/jobs cancel <id> | /jobs run <prompt> | /jobs cleanup"
+            )
+        )
+
+    async def _handle_workspace_command(self, command: str) -> None:
+        """Handle `/workspace` multi-repository context management.
+
+        Subcommands:
+            /workspace               — Show configured repos
+            /workspace list          — List repos from workspace.toml
+            /workspace show <name>   — Show repo map for a named repo
+            /workspace search <query>— Search query across all repos
+            /workspace init          — Create .bog-agents/workspace.toml template
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.multi_repo import (
+            get_recent_changes,
+            get_repo_map,
+            load_workspace,
+            search_across_repos,
+        )
+
+        project_root = Path(self._cwd)
+        raw_arg = command.strip()[len("/workspace"):].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "list":
+            repos = await asyncio.to_thread(load_workspace, project_root)
+            if not repos:
+                workspace_file = project_root / ".bog-agents" / "workspace.toml"
+                await self._mount_message(
+                    AppMessage(
+                        f"No workspace config found at {workspace_file}\n\n"
+                        "Create one with: /workspace init"
+                    )
+                )
+                return
+            lines = [f"Workspace repos ({len(repos)} configured):", ""]
+            for name, repo in repos.items():
+                status = "exists" if repo.exists else "[dim]not found[/dim]"
+                lines.append(f"  {name}: {repo.path}  [{status}]")
+                if repo.description:
+                    lines.append(f"    {repo.description}")
+            lines.append("\nUse /workspace show <name> or /workspace search <query>")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("show "):
+            name = raw_arg[5:].strip()
+            repos = await asyncio.to_thread(load_workspace, project_root)
+            repo = repos.get(name)
+            if repo is None:
+                await self._mount_message(AppMessage(f"Repo '{name}' not found in workspace.toml."))
+                return
+            if not repo.exists:
+                await self._mount_message(AppMessage(f"Repo path does not exist: {repo.path}"))
+                return
+            repo_map = await asyncio.to_thread(get_repo_map, repo)
+            recent = await asyncio.to_thread(get_recent_changes, repo)
+            await self._mount_message(
+                AppMessage(
+                    f"Repo: {name} ({repo.path})\n\n"
+                    f"--- File Map ---\n{repo_map}\n\n"
+                    f"--- Recent Changes ---\n{recent}"
+                )
+            )
+            return
+
+        if lowered.startswith("search "):
+            query = raw_arg[7:].strip()
+            if not query:
+                await self._mount_message(AppMessage("Usage: /workspace search <query>"))
+                return
+            repos = await asyncio.to_thread(load_workspace, project_root)
+            if not repos:
+                await self._mount_message(AppMessage("No repos configured. Use /workspace init to set up."))
+                return
+            results = await asyncio.to_thread(search_across_repos, query, repos)
+            await self._mount_message(
+                AppMessage(f"Cross-repo search for `{query}`:\n\n{results or 'No results found.'}")
+            )
+            return
+
+        if lowered == "init":
+            workspace_dir = project_root / ".bog-agents"
+            workspace_file = workspace_dir / "workspace.toml"
+            if workspace_file.exists():
+                await self._mount_message(AppMessage(f"workspace.toml already exists at {workspace_file}"))
+                return
+            workspace_dir.mkdir(parents=True, exist_ok=True)
+            template = (
+                "# Bog Agents Workspace — multi-repository context\n"
+                "# Define repos to use with @repo:name mentions and /workspace commands\n\n"
+                "[repos]\n"
+                '# my-service = { path = "../my-service", description = "My microservice" }\n\n'
+                "[settings]\n"
+                "shared_embeddings = false\n"
+                "max_repos = 10\n"
+            )
+            workspace_file.write_text(template, encoding="utf-8")
+            await self._mount_message(
+                AppMessage(
+                    f"Created workspace config: {workspace_file}\n\n"
+                    "Edit it to add your repos:\n"
+                    "[repos]\n"
+                    'auth-service = { path = "../auth-service", description = "Auth API" }'
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /workspace | /workspace list | /workspace show <name> | "
+                "/workspace search <query> | /workspace init"
             )
         )
 

@@ -425,6 +425,27 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/compress",
+        "Intelligent context compression — auto-compact with ratio report and progress",
+        "compact context window tokens summarize reduce packing",
+        "config",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/jobs",
+        "Manage autonomous background jobs — list, attach, cancel, and monitor long-running tasks",
+        "background async detached autonomous worktree notification webhook",
+        "agent",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/workspace",
+        "Multi-repository context — define repos in .bog-agents/workspace.toml",
+        "multi-repo cross-repo microservices monorepo symbol resolution",
+        "enterprise",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/worktrees",
         "Manage parallel git worktrees — spawn agents in isolated branches",
         "parallel agents git worktree branch isolation conflict merge",
