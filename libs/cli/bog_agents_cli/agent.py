@@ -859,8 +859,8 @@ def create_cli_agent(
         interrupt_on = _add_interrupt_on()  # type: ignore[assignment]  # InterruptOnConfig is compatible at runtime
 
     # Set up composite backend with routing
-    # For local FilesystemBackend, route large tool results to /tmp to avoid polluting
-    # the working directory. For sandbox backends, no special routing is needed.
+    # For local FilesystemBackend, route large tool results to a temp directory to avoid
+    # polluting the working directory. For sandbox backends, no special routing is needed.
     if sandbox is None:
         # Local mode: Route large results to a unique temp directory
         large_results_backend = FilesystemBackend(

@@ -964,6 +964,7 @@ class BogAgentsApp(App):
             },
         )
 
+
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
             self._seed_defaults,

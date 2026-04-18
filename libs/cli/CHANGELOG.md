@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.6.5...bog-agents-cli==0.6.6) (2026-04-16)
+
+
+### Features
+
+* prompts/pipelines/bugfixes ([#38](https://github.com/bogware/bog-agents/issues/38)) ([1191992](https://github.com/bogware/bog-agents/commit/1191992cca613282ae792063269159d729a08194))
+
 ## [0.6.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.6.4...bog-agents-cli==0.6.5) (2026-04-14)
 
 

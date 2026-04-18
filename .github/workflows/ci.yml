@@ -22,7 +22,7 @@ env:
 jobs:
   lint:
     name: "Lint"
-    runs-on: [self-hosted, Linux]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       matrix:
@@ -41,21 +41,17 @@ jobs:
         working-directory: ${{ matrix.package.dir }}
 
   test:
-    name: "Test (${{ matrix.package.name }}, py${{ matrix.python }}, ${{ matrix.os[1] }})"
+    name: "Test (${{ matrix.package.name }}, py${{ matrix.python }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         package:
           - { name: sdk, dir: libs/bog-agents }
           - { name: cli, dir: libs/cli }
         python: ["3.11", "3.12", "3.13"]
-        os:
-          - [self-hosted, Linux]
-          - [self-hosted, Windows]
-        # macOS runners — uncomment once provisioned:
-        # - [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v6
       - uses: "./.github/actions/uv_setup"

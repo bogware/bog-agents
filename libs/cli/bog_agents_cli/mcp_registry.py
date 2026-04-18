@@ -13,11 +13,27 @@ Each entry declares:
 
 Official servers use ``npx -y @modelcontextprotocol/...`` (no local install).
 Community servers document their install method in ``install_notes``.
+
+Remote catalog support
+----------------------
+An optional remote catalog is fetched, disk-cached (24-hour TTL), and merged
+at runtime. Network failures fall back to cache; if no cache exists the remote
+contribution is silently skipped. Local entries always win over remote ones.
+Use `refresh_catalog()` to force a re-fetch.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -411,17 +427,19 @@ _REGISTRY: dict[str, RegistryEntry] = {
 def get_entry(server_id: str) -> RegistryEntry | None:
     """Return the registry entry for *server_id*, or None if not found.
 
+    Checks both the local registry and any remote catalog entries.
+
     Args:
         server_id: Kebab-case server identifier.
 
     Returns:
         Registry entry, or None.
     """
-    return _REGISTRY.get(server_id)
+    return get_merged_registry().get(server_id)
 
 
 def list_entries(*, category: str | None = None) -> list[RegistryEntry]:
-    """Return all registry entries, optionally filtered by category.
+    """Return all registry entries (local + remote), optionally filtered by category.
 
     Args:
         category: When provided, only entries with this category are returned.
@@ -429,7 +447,7 @@ def list_entries(*, category: str | None = None) -> list[RegistryEntry]:
     Returns:
         Sorted list of entries.
     """
-    entries = list(_REGISTRY.values())
+    entries = list(get_merged_registry().values())
     if category:
         entries = [e for e in entries if e.category == category]
     return sorted(entries, key=lambda e: e.id)
@@ -446,7 +464,7 @@ def search_entries(query: str) -> list[RegistryEntry]:
     """
     terms = query.lower().split()
     results: list[tuple[int, RegistryEntry]] = []
-    for entry in _REGISTRY.values():
+    for entry in get_merged_registry().values():
         haystack = " ".join(
             [entry.id, entry.display_name, entry.description, entry.category]
         ).lower()
@@ -471,7 +489,7 @@ def list_categories() -> list[str]:
     Returns:
         Sorted list of category strings.
     """
-    return sorted({e.category for e in _REGISTRY.values()})
+    return sorted({e.category for e in get_merged_registry().values()})
 
 
 def build_server_config(entry: RegistryEntry, env_values: dict[str, str]) -> dict:
@@ -515,3 +533,144 @@ def build_server_config(entry: RegistryEntry, env_values: dict[str, str]) -> dic
         cfg["env"] = env_section
 
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# Remote catalog (stdlib-only, 24-hour disk cache, offline-safe)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CATALOG_URL = (
+    "https://raw.githubusercontent.com/bogware/bog-agents/main/catalog/mcp-servers.json"
+)
+_CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+_CACHE_PATH = Path.home() / ".bog-agents" / ".mcp-catalog-cache.json"
+
+# Module-level in-process cache (avoids repeated disk reads within one session).
+_remote_cache: dict[str, Any] | None = None
+_remote_fetched_at: float = 0.0
+
+
+def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[str, Any]:
+    """Fetch the remote MCP server catalog with 24-hour disk-backed caching.
+
+    Uses only stdlib (``urllib.request``). On any failure the function returns
+    ``{}`` so callers always have the local registry as a safe fallback.
+
+    Args:
+        url: Override the default catalog URL.
+        timeout: Network request timeout in seconds.
+
+    Returns:
+        Parsed JSON dict from the catalog, or ``{}`` on failure.
+    """
+    global _remote_cache, _remote_fetched_at  # noqa: PLW0603
+
+    catalog_url = url or _DEFAULT_CATALOG_URL
+    now = time.monotonic()
+
+    if _remote_cache is not None and (now - _remote_fetched_at) < _CACHE_TTL_SECONDS:
+        return _remote_cache
+
+    if _CACHE_PATH.exists():
+        try:
+            cached = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+            cached_at = cached.get("_fetched_at", 0)
+            if (time.time() - cached_at) < _CACHE_TTL_SECONDS:
+                payload = cached.get("entries", {})
+                if isinstance(payload, dict):
+                    _remote_cache = payload
+                    _remote_fetched_at = now
+                    return payload
+        except (OSError, json.JSONDecodeError, ValueError):
+            logger.debug("MCP catalog disk cache invalid; re-fetching.", exc_info=True)
+
+    try:
+        req = urllib.request.Request(
+            catalog_url,
+            headers={"User-Agent": "bog-agents-cli/mcp-catalog"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY301
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
+        logger.debug("Could not fetch MCP remote catalog: %s", exc)
+        if _CACHE_PATH.exists():
+            try:
+                cached = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
+                payload = cached.get("entries", {})
+                if isinstance(payload, dict):
+                    _remote_cache = payload
+                    _remote_fetched_at = now
+                    return payload
+            except (OSError, json.JSONDecodeError):
+                pass
+        return {}
+
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_PATH.write_text(
+            json.dumps({"_fetched_at": time.time(), "entries": data}, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.debug("Could not write MCP catalog cache to %s.", _CACHE_PATH, exc_info=True)
+
+    _remote_cache = data
+    _remote_fetched_at = now
+    return data
+
+
+def refresh_catalog(*, force: bool = False) -> None:
+    """Invalidate the remote catalog cache and re-fetch.
+
+    Args:
+        force: When True, also delete the on-disk cache before re-fetching.
+    """
+    global _remote_cache, _remote_fetched_at  # noqa: PLW0603
+    _remote_cache = None
+    _remote_fetched_at = 0.0
+    if force and _CACHE_PATH.exists():
+        try:
+            _CACHE_PATH.unlink()
+        except OSError:
+            logger.debug("Could not delete MCP catalog cache at %s.", _CACHE_PATH, exc_info=True)
+    fetch_remote_catalog()
+
+
+def get_merged_registry() -> dict[str, RegistryEntry]:
+    """Return the local registry merged with any valid remote entries.
+
+    Local entries always win over remote ones. Remote entries missing required
+    fields (``id``, ``display_name``, ``command``) are skipped.
+
+    Returns:
+        Merged registry dict keyed by server ``id``.
+    """
+    merged: dict[str, RegistryEntry] = dict(_REGISTRY)
+
+    for key, raw in fetch_remote_catalog().items():
+        if not isinstance(raw, dict):
+            continue
+        entry_id = str(raw.get("id") or key)
+        if not entry_id or entry_id in merged:
+            continue
+        if not raw.get("display_name") or not raw.get("command"):
+            continue
+        merged[entry_id] = RegistryEntry(
+            id=entry_id,
+            display_name=str(raw["display_name"]),
+            description=str(raw.get("description", "")),
+            category=str(raw.get("category", "community")),
+            transport=str(raw.get("transport", "stdio")),
+            command=str(raw["command"]),
+            args=[str(a) for a in raw.get("args", [])],
+            url=str(raw.get("url", "")),
+            required_env=[str(v) for v in raw.get("required_env", [])],
+            optional_env=[str(v) for v in raw.get("optional_env", [])],
+            vars_hints={str(k): str(v) for k, v in raw.get("vars_hints", {}).items()},
+            install_notes=str(raw.get("install_notes", "")),
+            source="remote",
+        )
+
+    return merged
