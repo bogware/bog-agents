@@ -6968,7 +6968,11 @@ class BogAgentsApp(App):
         lowered = raw_arg.lower()
 
         if not raw_arg or lowered == "list":
-            repos = await asyncio.to_thread(load_workspace, project_root)
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                return
             if not repos:
                 workspace_file = project_root / ".bog-agents" / "workspace.toml"
                 await self._mount_message(
@@ -6990,7 +6994,11 @@ class BogAgentsApp(App):
 
         if lowered.startswith("show "):
             name = raw_arg[5:].strip()
-            repos = await asyncio.to_thread(load_workspace, project_root)
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                return
             repo = repos.get(name)
             if repo is None:
                 await self._mount_message(AppMessage(f"Repo '{name}' not found in workspace.toml."))
@@ -6998,8 +7006,12 @@ class BogAgentsApp(App):
             if not repo.exists:
                 await self._mount_message(AppMessage(f"Repo path does not exist: {repo.path}"))
                 return
-            repo_map = await asyncio.to_thread(get_repo_map, repo)
-            recent = await asyncio.to_thread(get_recent_changes, repo)
+            try:
+                repo_map = await asyncio.to_thread(get_repo_map, repo)
+                recent = await asyncio.to_thread(get_recent_changes, repo)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Error reading repo '{name}':[/red] {exc}"))
+                return
             await self._mount_message(
                 AppMessage(
                     f"Repo: {name} ({repo.path})\n\n"
@@ -7014,11 +7026,19 @@ class BogAgentsApp(App):
             if not query:
                 await self._mount_message(AppMessage("Usage: /workspace search <query>"))
                 return
-            repos = await asyncio.to_thread(load_workspace, project_root)
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                return
             if not repos:
                 await self._mount_message(AppMessage("No repos configured. Use /workspace init to set up."))
                 return
-            results = await asyncio.to_thread(search_across_repos, query, repos)
+            try:
+                results = await asyncio.to_thread(search_across_repos, query, repos)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Search error:[/red] {exc}"))
+                return
             await self._mount_message(
                 AppMessage(f"Cross-repo search for `{query}`:\n\n{results or 'No results found.'}")
             )
@@ -7030,7 +7050,6 @@ class BogAgentsApp(App):
             if workspace_file.exists():
                 await self._mount_message(AppMessage(f"workspace.toml already exists at {workspace_file}"))
                 return
-            workspace_dir.mkdir(parents=True, exist_ok=True)
             template = (
                 "# Bog Agents Workspace — multi-repository context\n"
                 "# Define repos to use with @repo:name mentions and /workspace commands\n\n"
@@ -7040,7 +7059,12 @@ class BogAgentsApp(App):
                 "shared_embeddings = false\n"
                 "max_repos = 10\n"
             )
-            workspace_file.write_text(template, encoding="utf-8")
+            try:
+                from bog_agents_cli.io_utils import atomic_write_text
+                atomic_write_text(workspace_file, template)
+            except OSError as exc:
+                await self._mount_message(AppMessage(f"[red]Failed to create workspace.toml:[/red] {exc}"))
+                return
             await self._mount_message(
                 AppMessage(
                     f"Created workspace config: {workspace_file}\n\n"
@@ -7102,25 +7126,45 @@ class BogAgentsApp(App):
         rest = parts[1].strip() if len(parts) > 1 else ""
         rest2 = parts[2].strip() if len(parts) > 2 else ""
 
+        # All LangSmith API calls run in a thread and are bounded to 30 s.
+        ls_timeout = 30.0
+
+        async def _ls(fn, *args):  # noqa: ANN001, ANN002
+            """Run a langsmith_cli helper with a timeout."""
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=ls_timeout)
+            except TimeoutError:
+                return f"[red]LangSmith request timed out after {ls_timeout:.0f}s[/red]"
+
         if not subcommand or subcommand in {"status", "config"}:
             if rest.lower() == "set-project" and rest2:
+                import re as _re
+                if not _re.match(r"^[\w\-\.]{1,100}$", rest2):
+                    await self._mount_message(
+                        AppMessage(
+                            f"[red]Invalid project name:[/red] {rest2!r}\n"
+                            "Only alphanumeric characters, dashes, underscores, and dots are allowed."
+                        )
+                    )
+                    return
                 import os as _os
                 _os.environ["LANGCHAIN_PROJECT"] = rest2
+                logger.info("LangSmith project changed to %r", rest2)
                 await self._mount_message(
                     AppMessage(f"LangSmith default project set to: [cyan]{rest2}[/cyan]")
                 )
                 return
-            result = await asyncio.to_thread(format_langsmith_status)
+            result = await _ls(format_langsmith_status)
             await self._mount_message(AppMessage(result))
             return
 
         if subcommand == "projects":
-            result = await asyncio.to_thread(format_langsmith_projects)
+            result = await _ls(format_langsmith_projects)
             await self._mount_message(AppMessage(result))
             return
 
         if subcommand == "runs":
-            result = await asyncio.to_thread(format_langsmith_runs, rest)
+            result = await _ls(format_langsmith_runs, rest)
             await self._mount_message(AppMessage(result))
             return
 
@@ -7128,7 +7172,7 @@ class BogAgentsApp(App):
             if not rest:
                 await self._mount_message(AppMessage("Usage: /langsmith run <run-id>"))
                 return
-            result = await asyncio.to_thread(format_langsmith_run, rest)
+            result = await _ls(format_langsmith_run, rest)
             await self._mount_message(AppMessage(result))
             return
 
@@ -7136,12 +7180,12 @@ class BogAgentsApp(App):
             if not rest:
                 await self._mount_message(AppMessage("Usage: /langsmith trace <run-id>"))
                 return
-            result = await asyncio.to_thread(format_langsmith_trace, rest)
+            result = await _ls(format_langsmith_trace, rest)
             await self._mount_message(AppMessage(result))
             return
 
         if subcommand == "datasets":
-            result = await asyncio.to_thread(format_langsmith_datasets)
+            result = await _ls(format_langsmith_datasets)
             await self._mount_message(AppMessage(result))
             return
 
@@ -7149,12 +7193,12 @@ class BogAgentsApp(App):
             if not rest:
                 await self._mount_message(AppMessage("Usage: /langsmith dataset <name>"))
                 return
-            result = await asyncio.to_thread(format_langsmith_dataset, rest)
+            result = await _ls(format_langsmith_dataset, rest)
             await self._mount_message(AppMessage(result))
             return
 
         if subcommand == "evals":
-            result = await asyncio.to_thread(format_langsmith_evals, rest)
+            result = await _ls(format_langsmith_evals, rest)
             await self._mount_message(AppMessage(result))
             return
 
@@ -7173,11 +7217,9 @@ class BogAgentsApp(App):
                     )
                     return
                 eval_a, _, eval_b = rest2.partition(" ")
-                result = await asyncio.to_thread(
-                    format_langsmith_eval_compare, eval_a.strip(), eval_b.strip()
-                )
+                result = await _ls(format_langsmith_eval_compare, eval_a.strip(), eval_b.strip())
             else:
-                result = await asyncio.to_thread(format_langsmith_eval, rest)
+                result = await _ls(format_langsmith_eval, rest)
             await self._mount_message(AppMessage(result))
             return
 
@@ -7185,12 +7227,12 @@ class BogAgentsApp(App):
             if not rest:
                 await self._mount_message(AppMessage("Usage: /langsmith feedback <run-id>"))
                 return
-            result = await asyncio.to_thread(format_langsmith_feedback, rest)
+            result = await _ls(format_langsmith_feedback, rest)
             await self._mount_message(AppMessage(result))
             return
 
         if subcommand == "otel":
-            result = await asyncio.to_thread(format_langsmith_otel_setup)
+            result = await _ls(format_langsmith_otel_setup)
             await self._mount_message(AppMessage(result))
             return
 

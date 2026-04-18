@@ -161,8 +161,12 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
                             manifest=manifest,
                             install_path=plugin_dir,
                         )
-                    except (json.JSONDecodeError, TypeError, OSError):
-                        pass
+                    except (json.JSONDecodeError, TypeError, OSError) as exc:
+                        logger.warning(
+                            "PluginSystem: failed to load manifest from %s: %s",
+                            manifest_path,
+                            exc,
+                        )
 
     def _build_tools(self) -> list[BaseTool]:
         """Build plugin management tools."""
@@ -186,7 +190,12 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             source: Annotated[str, "Plugin source: git URL, local path, or registry name"],
         ) -> str:
             """Install a plugin from a git URL, local path, or registry."""
-            plugin_dir = middleware._plugins_dir / source.split("/")[-1].replace(".git", "")
+            # Extract and sanitize plugin name from URL or path to prevent path traversal
+            raw_name = source.rstrip("/").split("/")[-1].replace(".git", "")
+            # Allow only safe characters: alphanumeric, dash, underscore, dot
+            import re as _re
+            safe_name = _re.sub(r"[^\w\-.]", "_", raw_name)[:64] or "plugin"
+            plugin_dir = middleware._plugins_dir / safe_name
 
             if source.startswith(("http://", "https://", "git@")):
                 # Git install
@@ -204,7 +213,7 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
                     return f"Error: {e}"
             elif Path(source).exists():
                 # Local install
-                shutil.copytree(source, plugin_dir, dirs_exist_ok=True)
+                shutil.copytree(source, plugin_dir, dirs_exist_ok=True, symlinks=False)
             else:
                 return f"Source not found: {source}"
 
@@ -252,7 +261,10 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             """Create a new SKILL.md file with a template."""
             skill_path = middleware._skills_dir / f"{name}.md"
             content = create_skill_template(name, description)
-            skill_path.write_text(content, encoding="utf-8")
+            try:
+                skill_path.write_text(content, encoding="utf-8")
+            except OSError as exc:
+                return f"Failed to create skill file: {exc}"
             return f"Created skill at {skill_path}\n\nTemplate:\n{content}"
 
         def list_skills(

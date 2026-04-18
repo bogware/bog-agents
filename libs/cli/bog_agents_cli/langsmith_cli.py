@@ -32,9 +32,10 @@ def _make_client() -> object:
     api_key = _get_api_key()
     if api_key:
         kwargs["api_key"] = api_key
-    endpoint = os.environ.get("LANGCHAIN_ENDPOINT") or os.environ.get("LANGSMITH_ENDPOINT")
-    if endpoint:
-        kwargs["api_url"] = endpoint
+    endpoint_url = _get_endpoint()
+    if endpoint_url != "https://api.smith.langchain.com":
+        # Only set explicitly if not the default; Client uses default URL automatically
+        kwargs["api_url"] = endpoint_url
     return Client(**kwargs)
 
 
@@ -66,8 +67,10 @@ def format_langsmith_status() -> str:
             conn_display = f"[green]OK[/green] ({len(projects)} projects visible)"
         except ImportError:
             conn_display = "[red]FAILED[/red] (langsmith not installed)"
-        except Exception as exc:
+        except (RuntimeError, ValueError, OSError, ConnectionError) as exc:
             conn_display = f"[red]FAILED[/red] ({exc})"
+        except Exception as exc:
+            conn_display = f"[red]FAILED[/red] ({type(exc).__name__}: {exc})"
 
         lines = [
             "[bold]LangSmith[/bold] — Observability & Evaluation Platform",
@@ -590,8 +593,8 @@ def format_langsmith_eval_compare(eval_a: str, eval_b: str) -> str:
             a_avg = a_stats.get("avg", a_stats.get("mean", None))
             b_avg = b_stats.get("avg", b_stats.get("mean", None))
 
-            a_str = f"{a_avg:.4f}" if a_avg is not None else "N/A"
-            b_str = f"{b_avg:.4f}" if b_avg is not None else "N/A"
+            a_str = f"{float(a_avg):.4f}" if isinstance(a_avg, (int, float)) else "  N/A"
+            b_str = f"{float(b_avg):.4f}" if isinstance(b_avg, (int, float)) else "  N/A"
 
             if a_avg is not None and b_avg is not None:
                 delta = b_avg - a_avg

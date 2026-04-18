@@ -14,8 +14,11 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from bog_agents_harbor.reporter import TrajectoryReport
@@ -81,10 +84,20 @@ def compute_baseline(reports: list[TrajectoryReport], *, benchmark_name: str = "
     Returns:
         Mean reward in [0.0, 1.0], or 0.0 when no rewards are available.
     """
-    scored = [r.reward for r in reports if r.reward is not None]
-    if not scored:
+    scores: list[float] = []
+    for r in reports:
+        if r.reward is None:
+            continue
+        if not 0.0 <= r.reward <= 1.0:
+            logger.warning(
+                "compute_baseline: reward %.4f for session %s is outside [0, 1]; including anyway",
+                r.reward,
+                getattr(r, "session_id", "?"),
+            )
+        scores.append(r.reward)
+    if not scores:
         return 0.0
-    return sum(scored) / len(scored)
+    return sum(scores) / len(scores)
 
 
 def detect_regression(

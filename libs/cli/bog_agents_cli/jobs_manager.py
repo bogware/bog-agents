@@ -177,8 +177,9 @@ class PersistentJobsManager(BackgroundAgentManager):
             task: The task to persist.
         """
         try:
+            from bog_agents_cli.io_utils import atomic_write_text
             data = _task_to_dict(task)
-            self._job_path(task.task_id).write_text(json.dumps(data, indent=2), encoding="utf-8")
+            atomic_write_text(self._job_path(task.task_id), json.dumps(data, indent=2))
         except Exception as exc:
             logger.warning("Failed to persist task %s: %s", task.task_id, exc)
 
@@ -194,7 +195,12 @@ class PersistentJobsManager(BackgroundAgentManager):
             BackgroundStatus.FAILED,
             BackgroundStatus.CANCELLED,
         }
-        for path in self._jobs_dir().glob("*.json"):
+        try:
+            job_paths = list(self._jobs_dir().glob("*.json"))
+        except OSError as exc:
+            logger.warning("Could not read jobs directory: %s", exc)
+            return
+        for path in job_paths:
             try:
                 data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
                 status_str = data.get("status", "")

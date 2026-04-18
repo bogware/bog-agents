@@ -47,6 +47,11 @@ def _get_project() -> str:
     return os.environ.get("LANGCHAIN_PROJECT") or os.environ.get("LANGSMITH_PROJECT") or "default"
 
 
+# Module-level client cache: keyed by (api_key, endpoint) tuple.
+# Avoids creating a new Client on every tool invocation.
+_CLIENT_CACHE: dict[tuple[str | None, str | None], Any] = {}
+
+
 def _make_client() -> Any:
     """Create a LangSmith client from environment variables.
 
@@ -61,14 +66,17 @@ def _make_client() -> Any:
     except ImportError as exc:
         msg = "langsmith is not installed. Run: pip install langsmith"
         raise ImportError(msg) from exc
-    kwargs: dict[str, Any] = {}
     api_key = _get_api_key()
-    if api_key:
-        kwargs["api_key"] = api_key
     endpoint = os.environ.get("LANGCHAIN_ENDPOINT") or os.environ.get("LANGSMITH_ENDPOINT")
-    if endpoint:
-        kwargs["api_url"] = endpoint
-    return Client(**kwargs)
+    cache_key = (api_key, endpoint)
+    if cache_key not in _CLIENT_CACHE:
+        kwargs: dict[str, Any] = {}
+        if api_key:
+            kwargs["api_key"] = api_key
+        if endpoint:
+            kwargs["api_url"] = endpoint
+        _CLIENT_CACHE[cache_key] = Client(**kwargs)
+    return _CLIENT_CACHE[cache_key]
 
 
 # ---------------------------------------------------------------------------

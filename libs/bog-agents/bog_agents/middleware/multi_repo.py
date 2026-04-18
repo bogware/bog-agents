@@ -301,7 +301,7 @@ def search_across_repos(query: str, repos: dict[str, RepoConfig], max_per_repo: 
 
         try:
             result = subprocess.run(
-                ["rg", "-l", query, str(repo.path)],
+                ["rg", "-F", "-l", query, str(repo.path)],
                 check=False,
                 capture_output=True,
                 text=True,

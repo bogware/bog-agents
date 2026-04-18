@@ -256,10 +256,17 @@ def import_claude_skill(skill: ClaudeSkill, skills_dir: Path) -> Path:
 
     Returns:
         Path to the imported file.
+
+    Raises:
+        OSError: If the skill file cannot be copied to the destination.
     """
     skills_dir.mkdir(parents=True, exist_ok=True)
     dest = skills_dir / f"{skill.name}.md"
-    shutil.copy2(skill.source_path, dest)
+    try:
+        shutil.copy2(skill.source_path, dest)
+    except OSError as exc:
+        msg = f"Failed to copy skill '{skill.name}' to {dest}: {exc}"
+        raise OSError(msg) from exc
     logger.info("Imported Claude skill '%s' to %s", skill.name, dest)
     return dest
 
@@ -286,11 +293,11 @@ def _write_mcp_json(path: Path, servers: dict[str, Any]) -> None:
     if path.is_file():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("_write_mcp_json: could not read existing %s (%s); overwriting", path.name, exc)
     existing["mcpServers"] = servers
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    from bog_agents_cli.io_utils import atomic_write_text
+    atomic_write_text(path, json.dumps(existing, indent=2))
 
 
 def get_project_mcp_servers(project_root: Path) -> dict[str, Any]:

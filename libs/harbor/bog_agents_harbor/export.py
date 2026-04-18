@@ -206,7 +206,7 @@ def export_to_langsmith(
         return ExportResult(
             destination="langsmith",
             exported_count=0,
-            errors=["langsmith package is not installed. Run: pip install langsmith"],
+            errors=["langsmith package not installed — run: pip install langsmith"],
         )
 
     try:
@@ -265,7 +265,7 @@ def export_to_wandb(
         return ExportResult(
             destination="wandb",
             exported_count=0,
-            errors=["wandb package is not installed. Run: pip install wandb"],
+            errors=["wandb package not installed — run: pip install wandb"],
         )
 
     if api_key is not None:
@@ -275,6 +275,7 @@ def export_to_wandb(
             return ExportResult(destination="wandb", exported_count=0, errors=[f"wandb login failed: {exc}"])
 
     for report in reports:
+        run = None
         try:
             run = wandb.init(project=project_name, reinit=True)
             run.log(
@@ -285,9 +286,14 @@ def export_to_wandb(
                     "tool_calls": report.tool_call_count,
                 }
             )
-            run.finish()
             exported += 1
         except Exception as exc:  # noqa: BLE001
             errors.append(f"session {report.session_id}: {exc}")
+        finally:
+            if run is not None:
+                try:  # noqa: SIM105
+                    run.finish()
+                except Exception:  # noqa: BLE001, S110
+                    pass
 
     return ExportResult(destination="wandb", exported_count=exported, errors=errors)

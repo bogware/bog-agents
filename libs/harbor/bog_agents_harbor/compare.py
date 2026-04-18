@@ -13,8 +13,11 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from bog_agents_harbor.reporter import TrajectoryReport
@@ -178,6 +181,7 @@ def format_comparison(comparison: TrajectoryComparison) -> str:
             mark_a = " >" if (higher_wins and num_a > num_b) or (not higher_wins and num_a < num_b) else "  "
             mark_b = " >" if (higher_wins and num_b > num_a) or (not higher_wins and num_b < num_a) else "  "
         except ValueError:
+            logger.debug("compare: could not parse reward value for row formatting; using blank markers")
             mark_a = mark_b = "  "
         return f"  {label:<18} {val_a:<{col}}{mark_a}  {val_b:<{col}}{mark_b}"
 

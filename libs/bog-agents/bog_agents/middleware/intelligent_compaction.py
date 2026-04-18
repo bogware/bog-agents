@@ -204,6 +204,9 @@ class IntelligentCompactionMiddleware(AgentMiddleware[IntelligentCompactionState
             ``compressed_messages`` is the new message list and ``event``
             records metadata about the operation.
         """
+        if not messages:
+            logger.debug("IntelligentCompaction.compress_now: called with empty message list; no-op")
+            return [], CompactionEvent(messages_before=0, tokens_before=0, tokens_after=0, ratio=1.0)
         tokens_before = self._estimate_tokens(messages)
 
         keep_count = max(6, len(messages) // 4)
@@ -211,7 +214,16 @@ class IntelligentCompactionMiddleware(AgentMiddleware[IntelligentCompactionState
         old_messages = messages[:-keep_count] if keep_count < len(messages) else []
         recent_messages = messages[-keep_count:] if keep_count < len(messages) else messages
 
-        packed_text = pack_messages(old_messages, max_packed_tokens=self._max_packed_tokens)
+        try:
+            packed_text = pack_messages(old_messages, max_packed_tokens=self._max_packed_tokens)
+        except Exception as exc:
+            logger.warning("IntelligentCompaction: pack_messages failed: %s; skipping compaction", exc)
+            return messages, CompactionEvent(
+                messages_before=len(messages),
+                tokens_before=tokens_before,
+                tokens_after=tokens_before,
+                ratio=1.0,
+            )
         packed_msg = SystemMessage(content=f"[Intelligent Compaction — packed context]\n{packed_text}")
         compressed = [packed_msg, *recent_messages]
 

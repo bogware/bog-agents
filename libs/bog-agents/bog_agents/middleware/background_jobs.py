@@ -162,7 +162,8 @@ def save_job(project_root: Path, job: JobRecord) -> None:
         job: The job record to save.
     """
     target = _jobs_dir(project_root) / f"{job.job_id}.json"
-    target.write_text(json.dumps(job.to_dict(), indent=2), encoding="utf-8")
+    from bog_agents.utils.io import atomic_write_text
+    atomic_write_text(target, json.dumps(job.to_dict(), indent=2))
 
 
 def load_job(project_root: Path, job_id: str) -> JobRecord | None:
@@ -200,7 +201,7 @@ def load_all_jobs(project_root: Path, *, limit: int = 50) -> list[JobRecord]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             records.append(JobRecord.from_dict(data))
-        except (KeyError, ValueError, json.JSONDecodeError):
+        except (OSError, KeyError, ValueError, json.JSONDecodeError):
             logger.debug("Skipping unreadable job file: %s", path)
     records.sort(key=lambda r: r.created_at, reverse=True)
     return records[:limit]
