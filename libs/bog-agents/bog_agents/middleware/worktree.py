@@ -38,10 +38,56 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain.tools import ToolRuntime
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+def _default_agent_factory(prompt: str, working_dir: Path) -> str:
+    """Default agent factory for ParallelWorktreeMiddleware.
+
+    Creates a minimal agent with filesystem, git tools, and summarization
+    middleware, invokes it with the given prompt, and returns the last AI
+    message content.
+
+    Args:
+        prompt: Task instructions for the agent.
+        working_dir: Working directory (worktree path) for the agent.
+
+    Returns:
+        The last AIMessage content as a string.
+
+    Raises:
+        Exception: Re-raises any exception from agent invocation so the caller
+            can record it as a failed task.
+    """
+    from bog_agents.graph import create_agent  # lazy import — safe at call time
+    from bog_agents.middleware.filesystem import FilesystemMiddleware
+    from bog_agents.middleware.git_tools import GitToolsMiddleware
+    from bog_agents.middleware.summarization import SummarizationMiddleware
+
+    middleware = [
+        FilesystemMiddleware(),
+        GitToolsMiddleware(working_dir=working_dir),
+        SummarizationMiddleware(),
+    ]
+
+    agent = create_agent(
+        model=None,
+        working_dir=str(working_dir),
+        middleware=middleware,
+    )
+    result = agent.invoke(
+        {"messages": [HumanMessage(content=prompt)]},
+        config={"recursion_limit": 50},
+    )
+    messages = result.get("messages", [])
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            return str(msg.content)
+    return ""
 
 
 @dataclass
@@ -494,7 +540,7 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         self,
         *,
         working_dir: Path | None = None,
-        agent_factory: Callable[[str, Path], Any] | None = None,
+        agent_factory: Callable[[str, Path], Any] | None = _default_agent_factory,
         max_parallel: int = 4,
         branch_prefix: str = "bog-agent-",
         auto_cleanup: bool = True,
