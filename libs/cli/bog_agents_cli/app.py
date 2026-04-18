@@ -681,6 +681,7 @@ class BogAgentsApp(App):
         "/feedback": "_handle_reference_url_command",
         "/harbor": "_handle_harbor_command",
         "/jobs": "_handle_jobs_command",
+        "/langsmith": "_handle_langsmith_command",
         "/health": "_handle_health_command",
         "/help": "_handle_help_command",
         "/image": "_handle_image_command",
@@ -7054,6 +7055,161 @@ class BogAgentsApp(App):
             AppMessage(
                 "Usage: /workspace | /workspace list | /workspace show <name> | "
                 "/workspace search <query> | /workspace init"
+            )
+        )
+
+    async def _handle_langsmith_command(self, command: str) -> None:
+        """Handle `/langsmith` — LangSmith observability integration.
+
+        Subcommands:
+            /langsmith                          — Status and config
+            /langsmith config set-project <p>   — Set default project
+            /langsmith projects                 — List all projects
+            /langsmith runs [project]           — List recent runs (last 24h)
+            /langsmith run <id>                 — Run details
+            /langsmith trace <id>               — Get shareable trace URL
+            /langsmith datasets                 — List all datasets
+            /langsmith dataset <name>           — Dataset details and examples
+            /langsmith evals [project]          — List evaluation experiments
+            /langsmith eval <name>              — Eval experiment results
+            /langsmith eval compare <a> <b>     — Compare two eval experiments
+            /langsmith feedback <run-id>        — Feedback logged on a run
+            /langsmith otel                     — OTEL tracing setup guide
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.langsmith_cli import (
+            format_langsmith_dataset,
+            format_langsmith_datasets,
+            format_langsmith_eval,
+            format_langsmith_eval_compare,
+            format_langsmith_evals,
+            format_langsmith_feedback,
+            format_langsmith_otel_setup,
+            format_langsmith_projects,
+            format_langsmith_run,
+            format_langsmith_runs,
+            format_langsmith_status,
+            format_langsmith_trace,
+        )
+
+        raw_arg = command.strip()[len("/langsmith") :].strip()
+        parts = raw_arg.split(maxsplit=2)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        rest2 = parts[2].strip() if len(parts) > 2 else ""
+
+        if not subcommand or subcommand in {"status", "config"}:
+            if rest.lower() == "set-project" and rest2:
+                import os as _os
+                _os.environ["LANGCHAIN_PROJECT"] = rest2
+                await self._mount_message(
+                    AppMessage(f"LangSmith default project set to: [cyan]{rest2}[/cyan]")
+                )
+                return
+            result = await asyncio.to_thread(format_langsmith_status)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "projects":
+            result = await asyncio.to_thread(format_langsmith_projects)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "runs":
+            result = await asyncio.to_thread(format_langsmith_runs, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "run":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith run <run-id>"))
+                return
+            result = await asyncio.to_thread(format_langsmith_run, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "trace":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith trace <run-id>"))
+                return
+            result = await asyncio.to_thread(format_langsmith_trace, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "datasets":
+            result = await asyncio.to_thread(format_langsmith_datasets)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "dataset":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith dataset <name>"))
+                return
+            result = await asyncio.to_thread(format_langsmith_dataset, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "evals":
+            result = await asyncio.to_thread(format_langsmith_evals, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "eval":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /langsmith eval <name> | /langsmith eval compare <a> <b>"
+                    )
+                )
+                return
+            if rest.lower() == "compare":
+                if not rest2 or " " not in rest2:
+                    await self._mount_message(
+                        AppMessage("Usage: /langsmith eval compare <eval-a> <eval-b>")
+                    )
+                    return
+                eval_a, _, eval_b = rest2.partition(" ")
+                result = await asyncio.to_thread(
+                    format_langsmith_eval_compare, eval_a.strip(), eval_b.strip()
+                )
+            else:
+                result = await asyncio.to_thread(format_langsmith_eval, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "feedback":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith feedback <run-id>"))
+                return
+            result = await asyncio.to_thread(format_langsmith_feedback, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "otel":
+            result = await asyncio.to_thread(format_langsmith_otel_setup)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /langsmith                          — status and config\n"
+                "  /langsmith config set-project <p>   — set default project\n"
+                "  /langsmith projects                 — list projects\n"
+                "  /langsmith runs [project]           — list recent runs\n"
+                "  /langsmith run <id>                 — run details\n"
+                "  /langsmith trace <id>               — get trace URL\n"
+                "  /langsmith datasets                 — list datasets\n"
+                "  /langsmith dataset <name>           — dataset details\n"
+                "  /langsmith evals [project]          — list eval experiments\n"
+                "  /langsmith eval <name>              — eval results\n"
+                "  /langsmith eval compare <a> <b>     — compare two evals\n"
+                "  /langsmith feedback <run-id>        — run feedback\n"
+                "  /langsmith otel                     — OTEL tracing setup"
             )
         )
 

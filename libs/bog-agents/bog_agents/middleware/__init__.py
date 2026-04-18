@@ -96,6 +96,7 @@ from bog_agents.middleware.image_input import ImageInputMiddleware
 from bog_agents.middleware.image_pdf_input import ImagePdfInputMiddleware
 from bog_agents.middleware.intelligent_compaction import CompactionEvent, IntelligentCompactionMiddleware, UsageInfo
 from bog_agents.middleware.knowledge_graph import KnowledgeGraphMiddleware
+from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
 from bog_agents.middleware.lifecycle_hooks import (
     HookEvent,
     LifecycleHooksMiddleware,
@@ -202,6 +203,7 @@ __all__ = [
     "IntelligentCompactionMiddleware",
     "JobRecord",
     "KnowledgeGraphMiddleware",
+    "LangSmithMiddleware",
     "LifecycleHooksMiddleware",
     "MarketSentimentMiddleware",
     "MeetingPrepMiddleware",

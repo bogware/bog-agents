@@ -439,6 +439,13 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/langsmith",
+        "LangSmith integration — browse traces, runs, evals, datasets, feedback, and OTEL setup",
+        "tracing observability langchain eval runs traces feedback otel opentelemetry langchain-hub",
+        "analysis",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/workspace",
         "Multi-repository context — define repos in .bog-agents/workspace.toml",
         "multi-repo cross-repo microservices monorepo symbol resolution",

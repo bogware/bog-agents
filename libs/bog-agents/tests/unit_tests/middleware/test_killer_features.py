@@ -433,6 +433,71 @@ class TestNotificationsMiddleware:
         assert task.percent == 50.0
 
 
+class TestLangSmithMiddleware:
+    """Tests for LangSmith integration middleware."""
+
+    def test_import(self):
+        from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
+
+        assert LangSmithMiddleware is not None
+
+    def test_init(self):
+        from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
+
+        mw = LangSmithMiddleware()
+        assert len(mw.tools) == 11
+
+    def test_tool_names(self):
+        from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
+
+        mw = LangSmithMiddleware()
+        names = {t.name for t in mw.tools}
+        assert "langsmith_list_runs" in names
+        assert "langsmith_read_run" in names
+        assert "langsmith_get_run_url" in names
+        assert "langsmith_list_projects" in names
+        assert "langsmith_list_datasets" in names
+        assert "langsmith_read_dataset" in names
+        assert "langsmith_list_evals" in names
+        assert "langsmith_read_eval" in names
+        assert "langsmith_compare_evals" in names
+        assert "langsmith_log_feedback" in names
+        assert "langsmith_status" in names
+
+    def test_helpers(self, monkeypatch):
+        from bog_agents.middleware.langsmith_integration import _get_api_key, _get_project
+
+        monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+        monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+        monkeypatch.delenv("LANGCHAIN_PROJECT", raising=False)
+        monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+        assert _get_api_key() is None
+        assert _get_project() == "default"
+
+    def test_otel_disabled_by_default(self):
+        from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
+
+        mw = LangSmithMiddleware(enable_otel=False)
+        assert mw._otel_enabled is False
+
+    def test_make_client_raises_import_error(self, monkeypatch):
+        """_make_client must raise ImportError with helpful message when no API key."""
+        import bog_agents.middleware.langsmith_integration as mod
+
+        original = mod._make_client
+
+        def _failing_client():
+            msg = "langsmith is not installed."
+            raise ImportError(msg)
+
+        monkeypatch.setattr(mod, "_make_client", _failing_client)
+        mw = mod.LangSmithMiddleware()
+        status_tool = next(t for t in mw.tools if t.name == "langsmith_status")
+        result = status_tool.invoke({})
+        assert isinstance(result, str)
+        mod._make_client = original
+
+
 class TestAllExports:
     """Test that all new middleware is properly exported."""
 
@@ -452,6 +517,7 @@ class TestAllExports:
         assert hasattr(bog_agents, "CodeIntelligenceMiddleware")
         assert hasattr(bog_agents, "PluginSystemMiddleware")
         assert hasattr(bog_agents, "NotificationsMiddleware")
+        assert hasattr(bog_agents, "LangSmithMiddleware")
 
     def test_middleware_init_exports(self):
         from bog_agents import middleware
@@ -469,3 +535,4 @@ class TestAllExports:
         assert hasattr(middleware, "CodeIntelligenceMiddleware")
         assert hasattr(middleware, "PluginSystemMiddleware")
         assert hasattr(middleware, "NotificationsMiddleware")
+        assert hasattr(middleware, "LangSmithMiddleware")
