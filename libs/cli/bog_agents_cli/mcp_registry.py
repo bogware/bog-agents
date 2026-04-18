@@ -589,7 +589,7 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
             catalog_url,
             headers={"User-Agent": "bog-agents-cli/mcp-catalog"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY301

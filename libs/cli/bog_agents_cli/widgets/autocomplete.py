@@ -13,7 +13,7 @@ import subprocess  # noqa: S404
 from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from bog_agents_cli.command_registry import get_slash_commands
 from bog_agents_cli.project_utils import find_project_root
@@ -477,12 +477,22 @@ class FuzzyFileController:
         """Force refresh of file cache."""
         self._file_cache = None
 
+    # Typed mention prefixes shown when user types bare @
+    _MENTION_TYPES: ClassVar[list[tuple[str, str]]] = [
+        ("@file:", "Inject file contents"),
+        ("@folder:", "Inject directory listing"),
+        ("@symbol:", "Inject symbol from repo map"),
+        ("@url:", "Fetch and inject webpage"),
+        ("@memory:", "Inject a memory entry"),
+        ("@skill:", "Inject a skill definition"),
+    ]
+
     @staticmethod
     def can_handle(text: str, cursor_index: int) -> bool:
         """Handle input that contains @ not followed by space.
 
         Returns:
-            True if cursor is after @ and within a file mention context.
+            True if cursor is after @ and within a mention context.
         """
         if cursor_index <= 0 or cursor_index > len(text):
             return False
@@ -514,9 +524,9 @@ class FuzzyFileController:
 
         before_cursor = text[:cursor_index]
         at_index = before_cursor.rfind("@")
-        search = before_cursor[at_index + 1 :]
+        search = before_cursor[at_index + 1:]
 
-        suggestions = self._get_fuzzy_suggestions(search)
+        suggestions = self._get_mention_suggestions(search)
 
         if suggestions:
             self._suggestions = suggestions
@@ -527,27 +537,87 @@ class FuzzyFileController:
         else:
             self.reset()
 
-    def _get_fuzzy_suggestions(self, search: str) -> list[tuple[str, str]]:
-        """Get fuzzy file suggestions.
+    def _get_mention_suggestions(self, search: str) -> list[tuple[str, str]]:
+        """Get suggestions for the fragment after @.
+
+        Handles three cases:
+        - bare ``@`` or ``@partial`` — show mention type prefixes
+        - ``@file:query`` — show fuzzy file matches
+        - ``@folder:query`` — show fuzzy folder matches
+
+        Returns:
+            List of (label, description) tuples.
+        """
+        # @file:<query> → fuzzy file completions
+        if search.startswith("file:"):
+            query = search[5:]
+            return self._get_file_suggestions(query, prefix="@file:")
+
+        # @folder:<query> → fuzzy folder completions
+        if search.startswith("folder:"):
+            query = search[7:]
+            return self._get_folder_suggestions(query)
+
+        # Bare @ or @<partial-type> — offer the type prefixes
+        # Only show if no colon yet (user hasn't chosen a type)
+        if ":" not in search:
+            matches = [
+                (label, desc)
+                for label, desc in self._MENTION_TYPES
+                if label[1:].startswith(search.lower())  # e.g. "fi" matches "file:"
+            ]
+            return matches or []
+
+        # Unknown prefix (e.g. @symbol:, @url:, @memory:, @skill:) — no completion
+        return []
+
+    def _get_file_suggestions(self, query: str, *, prefix: str = "@") -> list[tuple[str, str]]:
+        """Return fuzzy file suggestions.
 
         Returns:
             List of (label, type_hint) tuples for matching files.
         """
         files = self._get_files()
-        # Include dotfiles only if query starts with "."
-        include_dots = search.startswith(".")
+        include_dots = query.startswith(".")
         matches = _fuzzy_search(
-            search, files, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
+            query, files, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
         )
 
         suggestions: list[tuple[str, str]] = []
         for path in matches:
-            # Get file extension for type hint
             ext = Path(path).suffix.lower()
             type_hint = ext[1:] if ext else "file"
-            suggestions.append((f"@{path}", type_hint))
-
+            suggestions.append((f"{prefix}{path}", type_hint))
         return suggestions
+
+    def _get_folder_suggestions(self, query: str) -> list[tuple[str, str]]:
+        """Return folder suggestions relative to project root.
+
+        Returns:
+            List of (label, description) tuples for matching directories.
+        """
+        try:
+            dirs: list[str] = []
+            for p in sorted(self._project_root.rglob("*")):
+                if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(self._project_root).parts):
+                    rel = p.relative_to(self._project_root).as_posix()
+                    dirs.append(rel)
+                if len(dirs) >= 500:
+                    break
+
+            include_dots = query.startswith(".")
+            matches = _fuzzy_search(query, dirs, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots)
+            return [(f"@folder:{d}", "dir") for d in matches]
+        except OSError:
+            return []
+
+    def _get_fuzzy_suggestions(self, search: str) -> list[tuple[str, str]]:
+        """Legacy: get fuzzy file suggestions (bare @ path).
+
+        Returns:
+            List of (label, type_hint) tuples for matching files.
+        """
+        return self._get_file_suggestions(search)
 
     def on_key(
         self, event: events.Key, text: str, cursor_index: int

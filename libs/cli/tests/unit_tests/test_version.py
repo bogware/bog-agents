@@ -31,12 +31,15 @@ def test_version_matches_pyproject() -> None:
     )
 
 
-def test_sdk_dependency_is_exactly_pinned_to_workspace_version() -> None:
-    """Verify the CLI depends on the exact local SDK version.
+def test_sdk_dependency_is_compatible_with_workspace_version() -> None:
+    """Verify the CLI dependency range is compatible with the local SDK version.
 
-    This keeps release-time behavior aligned with the SDK shipped from this
-    monorepo instead of silently accepting an older or newer compatible range.
+    The CLI uses a compatible release range (>=X.Y.Z,<X+1) rather than an exact
+    pin to allow users to install patch/minor updates without rebuilding from source.
+    The range must still be compatible with the SDK version in this monorepo.
     """
+    import re
+
     project_root = Path(__file__).parent.parent.parent
     cli_pyproject_path = project_root / "pyproject.toml"
     sdk_pyproject_path = project_root.parent / "bog-agents" / "pyproject.toml"
@@ -49,9 +52,30 @@ def test_sdk_dependency_is_exactly_pinned_to_workspace_version() -> None:
     sdk_version = sdk_pyproject["project"]["version"]
     cli_dependencies = cli_pyproject["project"]["dependencies"]
 
-    assert f"bog-agents=={sdk_version}" in cli_dependencies, (
-        f"CLI must pin bog-agents=={sdk_version}, got dependencies: {cli_dependencies!r}"
+    # Find the bog-agents dependency (exact pin or compatible range)
+    bog_agents_dep = next(
+        (d for d in cli_dependencies if d.startswith("bog-agents")), None
     )
+    assert bog_agents_dep is not None, "bog-agents dependency not found in CLI pyproject.toml"
+
+    # Accept either exact pin (==) or compatible range (>=X.Y.Z,<X.Y+1.Z)
+    exact_match = f"bog-agents=={sdk_version}"
+    range_match = re.match(
+        r"bog-agents>=(\d+\.\d+\.\d+),<(\d+\.\d+\.\d+)", bog_agents_dep
+    )
+    assert bog_agents_dep == exact_match or range_match is not None, (
+        f"bog-agents must be pinned to =={sdk_version} or a compatible range like "
+        f">=X.Y.Z,<X.Y+1.0, got: {bog_agents_dep!r}"
+    )
+
+    if range_match:
+        # Verify the SDK version falls within the declared range
+        min_parts = tuple(int(x) for x in range_match.group(1).split("."))
+        max_parts = tuple(int(x) for x in range_match.group(2).split("."))
+        sdk_parts = tuple(int(x) for x in sdk_version.split(".")[:3])
+        assert min_parts <= sdk_parts < max_parts, (
+            f"SDK version {sdk_version} is outside the declared range {bog_agents_dep}"
+        )
 
 
 def test_cli_version_flag() -> None:

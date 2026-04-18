@@ -24,7 +24,7 @@ def get_repo_map_text(cwd: str | Path, *, refresh: bool = False) -> str:
         from bog_agents.middleware.repo_map import build_repo_map_cached
 
         return build_repo_map_cached(Path(cwd), force_rebuild=refresh)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return f"Error building repo map: {exc}"
 
 
@@ -41,7 +41,7 @@ def get_repo_map_stats(cwd: str | Path) -> dict[str, Any]:
         from bog_agents.middleware.repo_map import get_repo_map_stats as _stats
 
         return _stats(Path(cwd))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {"cached": False, "file_count": 0, "built_at": 0.0, "cache_path": ""}
 
 

@@ -398,8 +398,8 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
     ),
     SlashCommandSpec(
         "/team",
-        "Manage named teams, shared summaries, and worker coordination",
-        "enterprise org swarm coordination",
+        "Team shared config (members, context, prompts) and multi-agent coordination",
+        "enterprise org swarm coordination invite members shared context prompts config",
         "enterprise",
         available=True,
     ),

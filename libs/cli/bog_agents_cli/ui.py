@@ -118,6 +118,9 @@ def show_help() -> None:
     console.print(
         "  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)"
     )
+    console.print(
+        "  --auto-commit              Auto-commit git changes after each agent turn"
+    )
     console.print("  --doctor                   Diagnose your environment")
     console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")

@@ -965,7 +965,6 @@ class BogAgentsApp(App):
             },
         )
 
-
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
             self._seed_defaults,
@@ -2062,13 +2061,37 @@ class BogAgentsApp(App):
 
     def _build_cli_context(self) -> CLIContext:
         """Build per-turn runtime context for middleware-aware commands."""
+        parts: list[str] = []
+        if self._active_profile_prompt:
+            parts.append(self._active_profile_prompt)
+
+        # Inject team shared context if configured
+        team_ctx = self._get_team_shared_context()
+        if team_ctx:
+            parts.append(team_ctx)
+
         return CLIContext(
             model=self._model_override,
             model_params=self._model_params_override or {},
             effort_level=self._effort_level,
             plan_mode=self._plan_mode_enabled,
-            system_prompt_append=self._active_profile_prompt,
+            system_prompt_append="\n\n".join(parts) if parts else None,
         )
+
+    def _get_team_shared_context(self) -> str:
+        """Return team shared context text if a team config exists."""
+        try:
+            from bog_agents_cli.team_config import (
+                get_shared_context_text,
+                load_team_config,
+            )
+
+            cfg = load_team_config(Path(self._cwd))
+            if cfg is None:
+                return ""
+            return get_shared_context_text(cfg, Path(self._cwd))
+        except Exception:
+            return ""
 
     async def _ensure_background_manager(self) -> None:
         """Create the background task manager on first use."""
@@ -2653,7 +2676,7 @@ class BogAgentsApp(App):
 
         await self._handle_user_message(final_prompt)
 
-    async def _handle_mcp_command(self, command: str) -> None:  # noqa: PLR0912, PLR0915
+    async def _handle_mcp_command(self, command: str) -> None:
         """Handle /mcp — MCP server marketplace and management.
 
         Usage:
@@ -2890,14 +2913,14 @@ class BogAgentsApp(App):
                     "\n[dim]Restart bog-agents (or start a new session) for the server to connect.[/dim]"
                 )
             else:
-                lines.append(f"\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/")
+                lines.append("\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/")
             await self._mount_message(AppMessage("\n".join(lines)))
 
         # ---- add (custom server) ----
         elif subcommand == "add":
             # /mcp add <name> <command> [arg1 arg2 ...]
             add_parts = rest.split(maxsplit=1)
-            if len(add_parts) < 2:  # noqa: PLR2004
+            if len(add_parts) < 2:
                 await self._mount_message(
                     AppMessage(
                         "Usage: [bold]/mcp add <name> <command> [args...][/bold]\n\n"
@@ -2930,7 +2953,7 @@ class BogAgentsApp(App):
                 )
             else:
                 await self._mount_message(
-                    AppMessage(f"[red]✗ Failed to save config.[/red] Check file permissions.")
+                    AppMessage("[red]✗ Failed to save config.[/red] Check file permissions.")
                 )
 
         # ---- remove ----
@@ -2954,11 +2977,11 @@ class BogAgentsApp(App):
 
         # ---- trust ----
         elif subcommand == "trust":
+            from bog_agents_cli.mcp_tools import discover_mcp_configs
             from bog_agents_cli.mcp_trust import (
                 compute_config_fingerprint,
                 trust_project_mcp,
             )
-            from bog_agents_cli.mcp_tools import discover_mcp_configs
 
             config_paths = await asyncio.to_thread(discover_mcp_configs)
             if not config_paths:
@@ -3077,7 +3100,10 @@ class BogAgentsApp(App):
 
     async def _handle_repomap_command(self, command: str) -> None:
         """Show or refresh the semantic repository map."""
-        from bog_agents_cli.repo_map_display import get_repo_map_stats, get_repo_map_text
+        from bog_agents_cli.repo_map_display import (
+            get_repo_map_stats,
+            get_repo_map_text,
+        )
 
         await self._mount_message(UserMessage(command))
         raw = command.strip()[len("/repomap"):].strip().lower()
@@ -3182,7 +3208,7 @@ class BogAgentsApp(App):
             announcement="Auditing dependencies and project risk posture...",
         )
 
-    async def _handle_harbor_command(self, command: str) -> None:  # noqa: PLR0912
+    async def _handle_harbor_command(self, command: str) -> None:
         """Handle /harbor — Harbor benchmark evaluation interface.
 
         Usage:
@@ -3260,7 +3286,10 @@ class BogAgentsApp(App):
         elif subcommand == "results":
             search_dir = Path(rest) if rest else default_dir
             try:
-                from bog_agents_harbor.reporter import find_trajectories, load_trajectory
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    load_trajectory,
+                )
             except ImportError:
                 await self._mount_message(
                     AppMessage(
@@ -3300,7 +3329,11 @@ class BogAgentsApp(App):
         elif subcommand == "show":
             search_dir = Path(rest) if rest else default_dir
             try:
-                from bog_agents_harbor.reporter import find_trajectories, format_summary, load_trajectory
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    format_summary,
+                    load_trajectory,
+                )
             except ImportError:
                 await self._mount_message(
                     AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
@@ -3322,7 +3355,11 @@ class BogAgentsApp(App):
         elif subcommand == "tools":
             search_dir = Path(rest) if rest else default_dir
             try:
-                from bog_agents_harbor.reporter import find_trajectories, format_tool_usage, load_trajectory
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    format_tool_usage,
+                    load_trajectory,
+                )
             except ImportError:
                 await self._mount_message(
                     AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
@@ -6257,6 +6294,20 @@ class BogAgentsApp(App):
         """Handle `/team` coordination and shared-memory workflows."""
         await self._mount_message(UserMessage(command))
 
+        from bog_agents_cli.team_config import (
+            TeamSharedConfig,
+            add_member as team_add_member,
+            format_setup_guide,
+            format_team_status,
+            get_named_prompt,
+            get_shared_context_text,
+            init_team_directory,
+            load_team_config,
+            load_user_identity,
+            remove_member as team_remove_member,
+            save_team_config,
+            save_user_identity,
+        )
         from bog_agents_cli.team_orchestration import (
             add_team_member,
             append_team_message,
@@ -6278,8 +6329,292 @@ class BogAgentsApp(App):
             )
             return
 
+        project_root = Path(self._cwd)
+        action = tokens[0].lower() if tokens else "status"
+
+        # -----------------------------------------------------------------
+        # Developer team shared config subcommands
+        # -----------------------------------------------------------------
+
+        if action in {"setup", "guide", "help"}:
+            await self._mount_message(AppMessage(format_setup_guide()))
+            return
+
+        if action == "status" and len(tokens) <= 1:
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage(
+                        "No team config found in this project.\n\n"
+                        "Run `/team init <name>` to create one, or "
+                        "`/team setup` for the full setup guide."
+                    )
+                )
+            else:
+                identity = load_user_identity()
+                await self._mount_message(AppMessage(format_team_status(cfg, project_root, identity)))
+            return
+
+        if action == "init":
+            team_name = " ".join(tokens[1:]).strip() if len(tokens) > 1 else ""
+            if not team_name:
+                await self._mount_message(AppMessage("Usage: /team init <team-name>"))
+                return
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                cfg = TeamSharedConfig(name=team_name)
+                cfg.context.always_include = ["context/team-overview.md"]
+            else:
+                cfg.name = team_name
+            created_files = await asyncio.to_thread(init_team_directory, project_root, team_name)
+            await asyncio.to_thread(save_team_config, cfg, project_root)
+            file_list = "\n".join(f"  {f.relative_to(project_root)}" for f in created_files)
+            await self._mount_message(
+                AppMessage(
+                    f"Team '{team_name}' initialized.\n\n"
+                    f"Created:\n"
+                    f"  .bog-agents/team/config.json\n"
+                    f"{file_list}\n\n"
+                    "Next steps:\n"
+                    "  1. Run `/team whoami set <name> <email>` to set your identity\n"
+                    "  2. Run `/team invite <email> [role] [name]` to add team members\n"
+                    "  3. Edit .bog-agents/team/context/team-overview.md with your team's context\n"
+                    "  4. Run `git add .bog-agents/team/ && git commit -m 'chore: add team config'`\n\n"
+                    "Run `/team setup` for the full guide."
+                )
+            )
+            return
+
+        if action == "whoami":
+            identity = load_user_identity()
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub in {"show", "status"}:
+                if identity.name or identity.email:
+                    await self._mount_message(
+                        AppMessage(f"Identity: {identity.name} <{identity.email}> ({identity.role})")
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(
+                            "Identity not set.\n"
+                            "Run: /team whoami set <name> <email>"
+                        )
+                    )
+            elif sub == "set":
+                if len(tokens) < 4:
+                    await self._mount_message(
+                        AppMessage("Usage: /team whoami set <name> <email>")
+                    )
+                    return
+                identity.name = tokens[2]
+                identity.email = tokens[3]
+                await asyncio.to_thread(save_user_identity, identity)
+                await self._mount_message(
+                    AppMessage(f"Identity saved: {identity.name} <{identity.email}>")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team whoami | /team whoami set <name> <email>")
+                )
+            return
+
+        if action == "invite":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
+                return
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: /team invite <email> [role] [name]")
+                )
+                return
+            email = tokens[1]
+            role = tokens[2] if len(tokens) > 2 else "member"
+            name = " ".join(tokens[3:]) if len(tokens) > 3 else email.split("@")[0]
+            member = team_add_member(cfg, name, email, role)
+            await asyncio.to_thread(save_team_config, cfg, project_root)
+            await self._mount_message(
+                AppMessage(
+                    f"Invited: {member.name} <{member.email}> [{member.role}]\n\n"
+                    "Share this with them:\n"
+                    "  1. Clone/pull the repository\n"
+                    "  2. Run: bog invite --accept\n"
+                    "  Or they can run: /team whoami set <name> <email>"
+                )
+            )
+            return
+
+        if action == "members":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found."))
+                return
+            if not cfg.members:
+                await self._mount_message(
+                    AppMessage("No members. Run `/team invite <email>` to add the first member.")
+                )
+                return
+            lines = [f"Members of '{cfg.name}' ({len(cfg.members)}):"]
+            for m in cfg.members:
+                lines.append(f"  • {m.name} <{m.email}> [{m.role}]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action in {"remove-member", "kick"}:
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found."))
+                return
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /team remove-member <email-or-name>"))
+                return
+            removed = team_remove_member(cfg, tokens[1])
+            if removed:
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Removed '{tokens[1]}' from team."))
+            else:
+                await self._mount_message(AppMessage(f"Member '{tokens[1]}' not found."))
+            return
+
+        if action == "context":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                if not cfg.context.always_include:
+                    await self._mount_message(
+                        AppMessage("No shared context files configured.\nRun: /team context add <file>")
+                    )
+                else:
+                    lines = ["Shared context (auto-injected):"]
+                    for f in cfg.context.always_include:
+                        lines.append(f"  • {f}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub == "add":
+                if len(tokens) < 3:
+                    await self._mount_message(AppMessage("Usage: /team context add <file>"))
+                    return
+                rel = tokens[2]
+                if rel not in cfg.context.always_include:
+                    cfg.context.always_include.append(rel)
+                    await asyncio.to_thread(save_team_config, cfg, project_root)
+                    await self._mount_message(AppMessage(f"Added '{rel}' to shared context."))
+                else:
+                    await self._mount_message(AppMessage(f"'{rel}' is already in shared context."))
+            elif sub == "remove":
+                if len(tokens) < 3:
+                    await self._mount_message(AppMessage("Usage: /team context remove <file>"))
+                    return
+                rel = tokens[2]
+                if rel in cfg.context.always_include:
+                    cfg.context.always_include.remove(rel)
+                    await asyncio.to_thread(save_team_config, cfg, project_root)
+                    await self._mount_message(AppMessage(f"Removed '{rel}' from shared context."))
+                else:
+                    await self._mount_message(AppMessage(f"'{rel}' not in shared context."))
+            elif sub == "show":
+                text = await asyncio.to_thread(get_shared_context_text, cfg, project_root)
+                await self._mount_message(AppMessage(text or "No context content found."))
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team context [list|add <file>|remove <file>|show]")
+                )
+            return
+
+        if action == "prompt":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                prompts_dir = Path(self._cwd) / ".bog-agents" / "team" / "prompts"
+                file_prompts = [p.stem for p in prompts_dir.glob("*.md")] if prompts_dir.is_dir() else []
+                all_names = list(cfg.prompts) + [n for n in file_prompts if n not in cfg.prompts]
+                if not all_names:
+                    await self._mount_message(
+                        AppMessage("No shared prompts. Run: /team prompt add <name> <text>")
+                    )
+                else:
+                    lines = ["Shared prompts:"]
+                    for n in all_names:
+                        lines.append(f"  • {n}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub in {"show", "get"}:
+                if len(tokens) < 3:
+                    await self._mount_message(AppMessage("Usage: /team prompt show <name>"))
+                    return
+                text = get_named_prompt(cfg, tokens[2], project_root)
+                await self._mount_message(AppMessage(text or f"Prompt '{tokens[2]}' not found."))
+            elif sub == "add":
+                if len(tokens) < 4:
+                    await self._mount_message(AppMessage("Usage: /team prompt add <name> <text>"))
+                    return
+                name = tokens[2]
+                text = raw_arg.split(None, 3)[3].strip()
+                cfg.prompts[name] = text
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Saved prompt '{name}'."))
+            elif sub == "run":
+                if len(tokens) < 3:
+                    await self._mount_message(AppMessage("Usage: /team prompt run <name>"))
+                    return
+                text = get_named_prompt(cfg, tokens[2], project_root)
+                if not text:
+                    await self._mount_message(AppMessage(f"Prompt '{tokens[2]}' not found."))
+                    return
+                await self._handle_user_message(text)
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team prompt [list|show <name>|add <name> <text>|run <name>]")
+                )
+            return
+
+        if action == "var":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                if not cfg.vars:
+                    await self._mount_message(
+                        AppMessage("No shared vars. Run: /team var set <key> <value>")
+                    )
+                else:
+                    lines = ["Shared vars (non-secret):"]
+                    for k, v in cfg.vars.items():
+                        lines.append(f"  {k}={v}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub == "set":
+                if len(tokens) < 4:
+                    await self._mount_message(AppMessage("Usage: /team var set <key> <value>"))
+                    return
+                cfg.vars[tokens[2]] = " ".join(tokens[3:])
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Set {tokens[2]}={cfg.vars[tokens[2]]}"))
+            elif sub in {"unset", "remove", "delete"}:
+                if len(tokens) < 3:
+                    await self._mount_message(AppMessage("Usage: /team var unset <key>"))
+                    return
+                cfg.vars.pop(tokens[2], None)
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Removed var '{tokens[2]}'."))
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team var [list|set <key> <value>|unset <key>]")
+                )
+            return
+
+        # -----------------------------------------------------------------
+        # Multi-agent orchestration subcommands (existing behavior)
+        # -----------------------------------------------------------------
+
         registry = self._load_team_registry()
-        action = tokens[0].lower() if tokens else "list"
 
         if action in {"list", "show"} and len(tokens) <= 1:
             if not registry.teams:
@@ -6565,11 +6900,22 @@ class BogAgentsApp(App):
 
         await self._mount_message(
             AppMessage(
-                "Usage: /team | /team create <name> | /team use <name> | "
-                "/team status <name> | /team add-member <team> <member> [role] | "
-                "/team remove-member <team> <member> | /team assign <task-id> <team> | "
-                "/team message <team|task-id> <text> | /team summary <team> [set <text>] | "
-                "/team sync <team>"
+                # Developer team config commands
+                "Team shared config:\n"
+                "  /team status              — show team config & members\n"
+                "  /team init <name>         — create team config in this project\n"
+                "  /team setup               — show setup guide\n"
+                "  /team whoami [set <n> <e>]— view/set your identity\n"
+                "  /team invite <email> [role] [name] — add a team member\n"
+                "  /team members             — list team members\n"
+                "  /team context [list|add|remove|show] — manage shared context\n"
+                "  /team prompt [list|show|add|run] — manage shared prompts\n"
+                "  /team var [list|set|unset] — manage shared variables\n\n"
+                # Multi-agent orchestration commands
+                "Multi-agent orchestration:\n"
+                "  /team create <name> | /team use <name> | /team assign <task> <team>\n"
+                "  /team message <team|task-id> <text> | /team summary <team> [set <text>]\n"
+                "  /team add-member <team> <member> [role] | /team sync <team>"
             )
         )
 
@@ -7048,8 +7394,28 @@ class BogAgentsApp(App):
         Args:
             message: The user's message
         """
-        # Mount the user message
+        # Mount the user message (show original text in UI)
         await self._mount_message(UserMessage(message))
+
+        # Resolve @-mentions before passing to the agent
+        effective_message = message
+        try:
+            from bog_agents_cli.mentions import (
+                get_mention_summary,
+                has_mentions,
+                resolve_mentions,
+            )
+
+            if has_mentions(message):
+                resolution = await asyncio.to_thread(
+                    resolve_mentions, message, cwd=Path(self._cwd)
+                )
+                effective_message = resolution.augmented
+                summary = get_mention_summary(resolution)
+                if summary:
+                    await self._mount_message(AppMessage(summary))
+        except Exception:
+            logger.debug("Mention resolution failed", exc_info=True)
 
         # Scroll to bottom when user sends a new message
         try:
@@ -7069,7 +7435,7 @@ class BogAgentsApp(App):
             # Use run_worker to avoid blocking the main event loop
             # This allows the UI to remain responsive during agent execution
             self._agent_worker = self.run_worker(
-                self._run_agent_task(message),
+                self._run_agent_task(effective_message),
                 exclusive=False,
             )
         else:
@@ -8449,13 +8815,13 @@ class BogAgentsApp(App):
 
         # ---- set ----
         elif action == "set":
-            if len(parts) < 2:  # noqa: PLR2004
+            if len(parts) < 2:
                 await self._mount_message(
                     AppMessage("Usage: [bold]/vars set KEY VALUE[/bold]")
                 )
                 return
             key = parts[1]
-            value = parts[2] if len(parts) > 2 else ""  # noqa: PLR2004
+            value = parts[2] if len(parts) > 2 else ""
             if not value:
                 await self._mount_message(
                     AppMessage(
@@ -8478,7 +8844,7 @@ class BogAgentsApp(App):
 
         # ---- get (masked) ----
         elif action == "get":
-            if len(parts) < 2:  # noqa: PLR2004
+            if len(parts) < 2:
                 await self._mount_message(AppMessage("Usage: [bold]/vars get KEY[/bold]"))
                 return
             key = parts[1]
@@ -8501,7 +8867,7 @@ class BogAgentsApp(App):
 
         # ---- show (unmasked) ----
         elif action == "show":
-            if len(parts) < 2:  # noqa: PLR2004
+            if len(parts) < 2:
                 await self._mount_message(AppMessage("Usage: [bold]/vars show KEY[/bold]"))
                 return
             key = parts[1]
@@ -8519,7 +8885,7 @@ class BogAgentsApp(App):
 
         # ---- delete ----
         elif action in ("delete", "del", "remove", "rm"):
-            if len(parts) < 2:  # noqa: PLR2004
+            if len(parts) < 2:
                 await self._mount_message(
                     AppMessage("Usage: [bold]/vars delete KEY[/bold]")
                 )
