@@ -586,10 +586,14 @@ class TestCompletionPopupClickBubbling:
                 [("/help", "Show help"), ("/clear", "Clear chat")],
                 selected_index=0,
             )
+            # Two pauses: first lets InvokeLater reach the screen, second
+            # flushes the call_next callback so _rebuild_options fully mounts
+            # both options before we query.
+            await pilot.pause()
             await pilot.pause()
 
             # Click on the first option
-            options = popup.query(CompletionOption)
+            options = list(popup.query(CompletionOption))
             await pilot.click(options[0])
 
             assert 0 in app.option_clicked_indices
