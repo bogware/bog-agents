@@ -15,8 +15,22 @@ logger = logging.getLogger(__name__)
 
 # Extensions treated as source code files
 _SOURCE_EXTENSIONS = {
-    ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".go", ".rs",
-    ".java", ".kt", ".c", ".cpp", ".h", ".hpp", ".rb", ".swift",
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".rb",
+    ".swift",
 }
 
 # Number of context lines to read around a matched definition
@@ -99,7 +113,9 @@ def _find_definition(symbol: str, cwd: Path) -> tuple[Path, int] | None:
         cmd = ["grep", "-rn", "--include=*.*", "-m", "1", "-E", pattern, str(cwd)]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=15)  # noqa: S603
+        result = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, check=False, timeout=15
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
 
@@ -118,7 +134,9 @@ def _find_definition(symbol: str, cwd: Path) -> tuple[Path, int] | None:
     return None
 
 
-def _find_callers(symbol: str, cwd: Path, exclude_file: Path | None = None) -> list[str]:
+def _find_callers(
+    symbol: str, cwd: Path, exclude_file: Path | None = None
+) -> list[str]:
     """Find call sites that reference `symbol` in the working tree.
 
     Args:
@@ -138,7 +156,9 @@ def _find_callers(symbol: str, cwd: Path, exclude_file: Path | None = None) -> l
         cmd = ["grep", "-rn", "--include=*.*", symbol, str(cwd)]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=15)  # noqa: S603
+        result = subprocess.run(  # noqa: S603
+            cmd, capture_output=True, text=True, check=False, timeout=15
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
 
@@ -196,7 +216,11 @@ def gather_explain_context(target: str, cwd: Path) -> dict[str, str]:
             ctx["content"] = content
             ctx["location"] = str(file_path)
             # Collect import lines
-            import_lines = [ln for ln in content.splitlines() if ln.startswith(("import ", "from ", "require(", "use "))]
+            import_lines = [
+                ln
+                for ln in content.splitlines()
+                if ln.startswith(("import ", "from ", "require(", "use "))
+            ]
             ctx["imports"] = "\n".join(import_lines[:20])
         except OSError as exc:
             logger.debug("Could not read file %s: %s", file_path, exc)
@@ -219,7 +243,11 @@ def gather_explain_context(target: str, cwd: Path) -> dict[str, str]:
     # Extract import block from the top of the definition file
     try:
         all_lines = def_file.read_text(encoding="utf-8").splitlines()
-        import_lines = [ln for ln in all_lines[:50] if ln.startswith(("import ", "from ", "require(", "use "))]
+        import_lines = [
+            ln
+            for ln in all_lines[:50]
+            if ln.startswith(("import ", "from ", "require(", "use "))
+        ]
         ctx["imports"] = "\n".join(import_lines)
     except OSError:
         pass

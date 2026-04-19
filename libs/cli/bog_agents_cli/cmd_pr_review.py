@@ -149,14 +149,18 @@ def get_azure_pr_diff(pr_number: str | None = None, *, cwd: Path) -> dict[str, s
     # Attempt az CLI
     az_available = False
     try:
-        probe = subprocess.run(["az", "--version"], capture_output=True, text=True, check=False)
+        probe = subprocess.run(
+            ["az", "--version"], capture_output=True, text=True, check=False
+        )
         az_available = probe.returncode == 0
     except FileNotFoundError:
         pass
 
     if az_available:
         show_cmd = ["az", "repos", "pr", "show", *pr_id_args, "--output", "json"]
-        show_result = subprocess.run(show_cmd, capture_output=True, text=True, check=False, cwd=cwd)  # noqa: S603
+        show_result = subprocess.run(  # noqa: S603
+            show_cmd, capture_output=True, text=True, check=False, cwd=cwd
+        )
         if show_result.returncode == 0:
             try:
                 pr_meta = json.loads(show_result.stdout)
@@ -167,11 +171,15 @@ def get_azure_pr_diff(pr_number: str | None = None, *, cwd: Path) -> dict[str, s
             body = pr_meta.get("description", "") or ""
             author = pr_meta.get("createdBy", {}).get("uniqueName", "")
             url = pr_meta.get("url", "") or pr_meta.get("remoteUrl", "")
-            target_branch = pr_meta.get("targetRefName", "refs/heads/main").replace("refs/heads/", "")
+            target_branch = pr_meta.get("targetRefName", "refs/heads/main").replace(
+                "refs/heads/", ""
+            )
 
             # Try az repos pr diff
             diff_cmd = ["az", "repos", "pr", "diff", *pr_id_args, "--output", "json"]
-            diff_result = subprocess.run(diff_cmd, capture_output=True, text=True, check=False, cwd=cwd)  # noqa: S603
+            diff_result = subprocess.run(  # noqa: S603
+                diff_cmd, capture_output=True, text=True, check=False, cwd=cwd
+            )
             diff_text = ""
             files_changed = ""
             if diff_result.returncode == 0:

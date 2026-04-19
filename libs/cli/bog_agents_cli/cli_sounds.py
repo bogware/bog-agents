@@ -11,7 +11,12 @@ import platform
 import threading
 
 # Module-level toggle, overridden by BOG_AGENTS_SOUNDS env var at import time.
-_sound_enabled: bool = os.environ.get("BOG_AGENTS_SOUNDS", "1").strip().lower() not in {"0", "false", "no", "off"}
+_sound_enabled: bool = os.environ.get("BOG_AGENTS_SOUNDS", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 
 def is_sound_enabled() -> bool:
@@ -72,7 +77,9 @@ def _play_sound(sound_type: str) -> None:
             else "/System/Library/Sounds/Sosumi.aiff"
         )
         try:
-            subprocess.run(["afplay", sound_file], capture_output=True, timeout=3, check=False)  # noqa: S603
+            subprocess.run(  # noqa: S603
+                ["afplay", sound_file], capture_output=True, timeout=3, check=False
+            )
             return
         except Exception:  # noqa: S110
             pass

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import subprocess  # noqa: S404
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,9 @@ _DEFAULT_MEMORY_BRANCH = "team-memory"
 _AGENTS_MD = "AGENTS.md"
 
 
-def _run_git(args: list[str], *, cwd: Path, check: bool = False) -> subprocess.CompletedProcess:
+def _run_git(
+    args: list[str], *, cwd: Path, check: bool = False
+) -> subprocess.CompletedProcess:
     """Run a git command and return its CompletedProcess result.
 
     Args:
@@ -31,7 +33,9 @@ def _run_git(args: list[str], *, cwd: Path, check: bool = False) -> subprocess.C
     Returns:
         CompletedProcess with stdout/stderr captured as text.
     """
-    return subprocess.run(["git", *args], capture_output=True, text=True, cwd=cwd, check=check)  # noqa: S603
+    return subprocess.run(  # noqa: S603
+        ["git", *args], capture_output=True, text=True, cwd=cwd, check=check
+    )
 
 
 def get_memory_branch(cwd: Path) -> str:
@@ -135,9 +139,7 @@ def _pull_memory(cwd: Path, *, branch: str) -> str:
     # to avoid polluting HEAD with unrelated branch files.
     show_result = _run_git(["show", f"origin/{branch}:{_AGENTS_MD}"], cwd=cwd)
     if show_result.returncode != 0:
-        return (
-            f"[yellow]No {_AGENTS_MD} found on branch '[cyan]{branch}[/cyan]'.[/yellow] Nothing to pull."
-        )
+        return f"[yellow]No {_AGENTS_MD} found on branch '[cyan]{branch}[/cyan]'.[/yellow] Nothing to pull."
 
     remote_content = show_result.stdout
 
@@ -146,10 +148,14 @@ def _pull_memory(cwd: Path, *, branch: str) -> str:
     git_root = Path(root_result.stdout.strip()) if root_result.returncode == 0 else cwd
     agents_md_path = git_root / _AGENTS_MD
 
-    local_content = agents_md_path.read_text(encoding="utf-8") if agents_md_path.is_file() else ""
+    local_content = (
+        agents_md_path.read_text(encoding="utf-8") if agents_md_path.is_file() else ""
+    )
 
     if remote_content == local_content:
-        return f"[green]Memory is already up to date[/green] with [cyan]{branch}[/cyan]."
+        return (
+            f"[green]Memory is already up to date[/green] with [cyan]{branch}[/cyan]."
+        )
 
     # Check for conflict markers
     diff_result = subprocess.run(  # noqa: S603
@@ -203,7 +209,11 @@ def _push_memory(cwd: Path, *, branch: str) -> str:
 
     # Check if we are on the memory branch; if not, work on a worktree-free commit
     current_branch_result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
-    current_branch = current_branch_result.stdout.strip() if current_branch_result.returncode == 0 else ""
+    current_branch = (
+        current_branch_result.stdout.strip()
+        if current_branch_result.returncode == 0
+        else ""
+    )
 
     if current_branch == branch:
         # Already on the memory branch — just add, commit, push
@@ -212,7 +222,9 @@ def _push_memory(cwd: Path, *, branch: str) -> str:
             return f"[red]git add failed:[/red] {add_result.stderr.strip()}"
 
         # Check if there's anything to commit
-        status_result = _run_git(["status", "--porcelain", str(agents_md_path)], cwd=cwd)
+        status_result = _run_git(
+            ["status", "--porcelain", str(agents_md_path)], cwd=cwd
+        )
         if not status_result.stdout.strip():
             return f"[dim]{_AGENTS_MD} unchanged; nothing to push.[/dim]"
 
@@ -229,15 +241,23 @@ def _push_memory(cwd: Path, *, branch: str) -> str:
         blob_sha = blob_result.stdout.strip()
 
         # Check if the branch exists already
-        branch_exists_result = _run_git(["show-ref", "--verify", f"refs/heads/{branch}"], cwd=cwd)
+        branch_exists_result = _run_git(
+            ["show-ref", "--verify", f"refs/heads/{branch}"], cwd=cwd
+        )
         branch_exists = branch_exists_result.returncode == 0
 
         if branch_exists:
             # Read existing tree, update only AGENTS.md
             ls_tree_result = _run_git(["ls-tree", branch], cwd=cwd)
-            tree_lines = ls_tree_result.stdout.splitlines() if ls_tree_result.returncode == 0 else []
+            tree_lines = (
+                ls_tree_result.stdout.splitlines()
+                if ls_tree_result.returncode == 0
+                else []
+            )
             # Build new tree input
-            new_tree_lines = [line for line in tree_lines if not line.endswith(f"\t{_AGENTS_MD}")]
+            new_tree_lines = [
+                line for line in tree_lines if not line.endswith(f"\t{_AGENTS_MD}")
+            ]
             new_tree_lines.append(f"100644 blob {blob_sha}\t{_AGENTS_MD}")
             mktree_input = "\n".join(new_tree_lines) + "\n"
         else:
@@ -300,8 +320,12 @@ def show_memory_status(cwd: Path) -> str:
         lines.append("  " + "\u2500" * 82)
         for mf in memory_files:
             try:
-                mtime = datetime.fromtimestamp(mf.stat().st_mtime, tz=None).strftime("%Y-%m-%d %H:%M")  # noqa: DTZ006
-                line_count = len(mf.read_text(encoding="utf-8", errors="replace").splitlines())
+                mtime = datetime.fromtimestamp(mf.stat().st_mtime, tz=UTC).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+                line_count = len(
+                    mf.read_text(encoding="utf-8", errors="replace").splitlines()
+                )
             except OSError:
                 mtime = "unknown"
                 line_count = 0
@@ -313,7 +337,9 @@ def show_memory_status(cwd: Path) -> str:
                 display_path = str(mf)
             if len(display_path) > 50:
                 display_path = "\u2026" + display_path[-49:]
-            lines.append(f"  [cyan]{display_path:<50}[/cyan]  {mtime:<20}  {line_count:>6}")
+            lines.append(
+                f"  [cyan]{display_path:<50}[/cyan]  {mtime:<20}  {line_count:>6}"
+            )
     else:
         lines.append("  [dim]No AGENTS.md files found.[/dim]")
 
@@ -322,12 +348,18 @@ def show_memory_status(cwd: Path) -> str:
     # Check local branch
     local_check = _run_git(["show-ref", "--verify", f"refs/heads/{branch}"], cwd=cwd)
     local_exists = local_check.returncode == 0
-    lines.append(f"  Local  [cyan]{branch}[/cyan]:  {'[green]exists[/green]' if local_exists else '[dim]not found[/dim]'}")
+    lines.append(
+        f"  Local  [cyan]{branch}[/cyan]:  {'[green]exists[/green]' if local_exists else '[dim]not found[/dim]'}"
+    )
 
     # Check remote branch
-    remote_check = _run_git(["show-ref", "--verify", f"refs/remotes/origin/{branch}"], cwd=cwd)
+    remote_check = _run_git(
+        ["show-ref", "--verify", f"refs/remotes/origin/{branch}"], cwd=cwd
+    )
     remote_exists = remote_check.returncode == 0
-    lines.append(f"  Remote [cyan]origin/{branch}[/cyan]:  {'[green]exists[/green]' if remote_exists else '[dim]not found[/dim]'}")
+    lines.append(
+        f"  Remote [cyan]origin/{branch}[/cyan]:  {'[green]exists[/green]' if remote_exists else '[dim]not found[/dim]'}"
+    )
 
     return "\n".join(lines)
 

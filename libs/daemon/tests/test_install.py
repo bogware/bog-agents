@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import stat
+import sys
 from pathlib import Path
+
+import pytest
 
 from bog_agents_daemon.install import generate_git_hook, install_git_hook
 
@@ -55,6 +58,7 @@ class TestInstallGitHook:
         content = hook_path.read_text()
         assert "#!/usr/bin/env bash" in content
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod executable bits not supported on Windows")
     def test_hook_is_executable(self, tmp_path: Path):
         git_hooks = tmp_path / ".git" / "hooks"
         git_hooks.mkdir(parents=True)

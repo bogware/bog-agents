@@ -31,7 +31,7 @@ jobs:
           - { name: cli, dir: libs/cli }
           - { name: daemon, dir: libs/daemon }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.11"
@@ -52,17 +52,17 @@ jobs:
         # macos: no self-hosted macOS runner available
         # os: [Linux, Windows, macOS]
         package:
-          - { name: sdk, dir: libs/bog-agents }
-          - { name: cli, dir: libs/cli }
-          - { name: daemon, dir: libs/daemon }
+          - { name: sdk, dir: libs/bog-agents, test_args: "-n auto --disable-socket --allow-unix-socket tests/" }
+          - { name: cli, dir: libs/cli, test_args: "-n auto --disable-socket --allow-unix-socket" }
+          - { name: daemon, dir: libs/daemon, test_args: "tests/ -q --timeout=30" }
         python: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: ${{ matrix.python }}
           working-directory: ${{ matrix.package.dir }}
       - run: uv sync --group test --locked
         working-directory: ${{ matrix.package.dir }}
-      - run: make test
+      - run: uv run --group test pytest ${{ matrix.package.test_args }}
         working-directory: ${{ matrix.package.dir }}
