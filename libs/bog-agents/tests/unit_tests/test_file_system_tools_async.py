@@ -3,6 +3,9 @@
 This module contains async versions of the path validation error handling tests.
 """
 
+import sys
+
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -55,6 +58,7 @@ async def test_path_traversal_returns_error_message_async() -> None:
     assert error_message == "Error: Path traversal not allowed: ./question/.."
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="validate_path accepts Windows absolute paths on Windows; rejection is Linux-only behavior")
 async def test_windows_absolute_path_returns_error_message_async() -> None:
     """Verify that Windows absolute paths return error messages instead of crashing."""
     fake_model = GenericFakeChatModel(
