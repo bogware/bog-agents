@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="local_context uses bash scripts not available on Windows")
 
 from bog_agents_cli.local_context import (
     _TOOL_NAME_DISPLAY_LIMIT,

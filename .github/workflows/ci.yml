@@ -69,10 +69,10 @@ jobs:
         if: matrix.package.name != 'daemon' && runner.os == 'Linux'
         run: uv run --group test pytest -n auto --disable-socket --allow-unix-socket tests/unit_tests/
         working-directory: ${{ matrix.package.dir }}
-      # sdk/cli on Windows: no parallel (-n auto uses spawn which is fragile on Windows)
+      # sdk/cli on Windows: no parallel, no socket plugin (pytest-socket incompatible with Windows ProactorEventLoop)
       - name: Run tests
         if: matrix.package.name != 'daemon' && runner.os == 'Windows'
-        run: uv run --group test pytest tests/unit_tests/
+        run: uv run --group test pytest -p no:socket tests/unit_tests/
         working-directory: ${{ matrix.package.dir }}
       # daemon: same command on all OSes (no socket plugin needed)
       - name: Run tests
