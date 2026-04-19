@@ -78,7 +78,10 @@ class TestConfigureDebugLogging:
         for h in rotating:
             logger.removeHandler(h)
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="/dev/null is not a blocking device on Windows; mkdir C:\\dev\\null\\impossible may succeed under admin")
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="/dev/null is not a blocking device on Windows; mkdir C:\\dev\\null\\impossible may succeed under admin",
+    )
     def test_bad_path_prints_warning_no_crash(self, capsys) -> None:
         """Invalid log path should print warning to stderr, not crash."""
         _reset_shared_handler()
@@ -96,7 +99,10 @@ class TestConfigureDebugLogging:
         assert "Warning" in captured.err
         _reset_shared_handler()
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="/dev/null is not a blocking device on Windows; mkdir C:\\dev\\null may succeed under admin")
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="/dev/null is not a blocking device on Windows; mkdir C:\\dev\\null may succeed under admin",
+    )
     def test_default_path_falls_back_without_warning(self, tmp_path, capsys) -> None:
         """Default logging should quietly fall back when home path is unavailable."""
         _reset_shared_handler()
