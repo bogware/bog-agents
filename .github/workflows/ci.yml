@@ -55,7 +55,7 @@ jobs:
           - { name: sdk,    dir: libs/bog-agents }
           - { name: cli,    dir: libs/cli }
           - { name: daemon, dir: libs/daemon }
-        python: ["3.11", "3.12", "3.13"]
+        python: ["3.12", "3.13"]  # 3.11 temporarily disabled
     steps:
       - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"

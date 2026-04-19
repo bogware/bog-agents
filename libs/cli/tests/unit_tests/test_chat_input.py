@@ -24,7 +24,6 @@ from bog_agents_cli.widgets.chat_input import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
     from textual.pilot import Pilot
 
 

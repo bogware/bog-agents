@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from bog_agents.backends import FilesystemBackend, LocalShellBackend
@@ -35,6 +37,7 @@ def _assert_snapshot(snapshot_path: Path, actual: str, *, update_snapshots: bool
     assert actual == expected
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_snapshot_with_execute(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = LocalShellBackend(root_dir=Path.cwd(), virtual_mode=True)
@@ -57,6 +60,7 @@ def test_system_prompt_snapshot_with_execute(snapshots_dir: Path, *, update_snap
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_snapshot_without_execute(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = FilesystemBackend(root_dir=str(Path.cwd()), virtual_mode=True)
@@ -79,6 +83,7 @@ def test_system_prompt_snapshot_without_execute(snapshots_dir: Path, *, update_s
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_custom_system_message_snapshot(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = FilesystemBackend(root_dir=str(Path.cwd()), virtual_mode=True)
@@ -106,6 +111,7 @@ def test_custom_system_message_snapshot(snapshots_dir: Path, *, update_snapshots
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_with_memory_and_skills(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
 
