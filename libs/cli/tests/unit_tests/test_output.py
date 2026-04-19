@@ -39,11 +39,12 @@ class TestWriteJson:
 
     def test_path_serialization(self) -> None:
         """Path objects are serialized via default=str."""
+        p = Path("tmp/foo")
         buf = StringIO()
         with patch("sys.stdout", buf):
-            write_json("test", {"path": Path("/tmp/foo")})
+            write_json("test", {"path": p})
         result = json.loads(buf.getvalue())
-        assert result["data"]["path"] == "/tmp/foo"
+        assert result["data"]["path"] == str(p)
 
     def test_trailing_newline(self) -> None:
         """Output ends with a single newline."""

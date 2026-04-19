@@ -402,7 +402,8 @@ api_key_env = "FIREWORKS_API_KEY"
         assert settings.model_provider == "fireworks"
         # Should succeed, not show "Unknown provider"
         assert any(
-            "Switched to fireworks:llama-v3p1-70b" in m for m in captured_messages
+            "Switched to [bold]fireworks:llama-v3p1-70b[/bold]" in m
+            for m in captured_messages
         )
         assert not any("Unknown provider" in m for m in captured_messages)
 
@@ -474,7 +475,9 @@ models = ["llama3"]
         assert app._model_override == "ollama:llama3"
         assert settings.model_name == "llama3"
         assert settings.model_provider == "ollama"
-        assert any("Switched to ollama:llama3" in m for m in captured_messages)
+        assert any(
+            "Switched to [bold]ollama:llama3[/bold]" in m for m in captured_messages
+        )
 
 
 class TestModelSwitchBareModelName:
@@ -513,7 +516,9 @@ class TestModelSwitchBareModelName:
         assert app._model_override == "openai:gpt-4o"
         assert settings.model_name == "gpt-4o"
         assert settings.model_provider == "openai"
-        assert any("Switched to openai:gpt-4o" in m for m in captured_messages)
+        assert any(
+            "Switched to [bold]openai:gpt-4o[/bold]" in m for m in captured_messages
+        )
 
     async def test_bare_model_name_missing_credentials(self) -> None:
         """Bare model name shows credential error when provider creds are missing."""

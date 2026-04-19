@@ -1,5 +1,6 @@
 """StateBackend: Store files in LangGraph agent state (ephemeral)."""
 
+import threading
 from typing import TYPE_CHECKING
 
 from bog_agents.backends.protocol import (
@@ -40,6 +41,7 @@ class StateBackend(BackendProtocol):
     def __init__(self, runtime: "ToolRuntime") -> None:
         """Initialize StateBackend with runtime."""
         self.runtime = runtime
+        self._lock = threading.RLock()
 
     def ls_info(self, path: str) -> list[FileInfo]:
         """List files and directories in the specified directory (non-recursive).
@@ -51,7 +53,8 @@ class StateBackend(BackendProtocol):
             List of FileInfo-like dicts for files and directories directly in the directory.
             Directories have a trailing / in their path and is_dir=True.
         """
-        files = self.runtime.state.get("files", {})
+        with self._lock:
+            files = dict(self.runtime.state.get("files", {}))
         infos: list[FileInfo] = []
         subdirs: set[str] = set()
 
@@ -106,8 +109,9 @@ class StateBackend(BackendProtocol):
         Returns:
             Formatted file content with line numbers, or error message.
         """
-        files = self.runtime.state.get("files", {})
-        file_data = files.get(file_path)
+        with self._lock:
+            files = self.runtime.state.get("files", {})
+            file_data = files.get(file_path)
 
         if file_data is None:
             return f"Error: File '{file_path}' not found"
@@ -123,10 +127,12 @@ class StateBackend(BackendProtocol):
 
         Returns WriteResult with files_update to update LangGraph state.
         """
-        files = self.runtime.state.get("files", {})
-
-        if file_path in files:
-            return WriteResult(error=f"Cannot write to {file_path} because it already exists. Read and then make an edit, or write to a new path.")
+        with self._lock:
+            files = self.runtime.state.get("files", {})
+            if file_path in files:
+                return WriteResult(
+                    error=f"Cannot write to {file_path} because it already exists. Read and then make an edit, or write to a new path."
+                )
 
         new_file_data = create_file_data(content)
         return WriteResult(path=file_path, files_update={file_path: new_file_data})
@@ -142,8 +148,9 @@ class StateBackend(BackendProtocol):
 
         Returns EditResult with files_update and occurrences.
         """
-        files = self.runtime.state.get("files", {})
-        file_data = files.get(file_path)
+        with self._lock:
+            files = self.runtime.state.get("files", {})
+            file_data = files.get(file_path)
 
         if file_data is None:
             return EditResult(error=f"Error: File '{file_path}' not found")
@@ -165,12 +172,14 @@ class StateBackend(BackendProtocol):
         glob: str | None = None,
     ) -> list[GrepMatch] | str:
         """Search state files for a literal text pattern."""
-        files = self.runtime.state.get("files", {})
+        with self._lock:
+            files = dict(self.runtime.state.get("files", {}))
         return grep_matches_from_files(files, pattern, path if path is not None else "/", glob)
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         """Get FileInfo for files matching glob pattern."""
-        files = self.runtime.state.get("files", {})
+        with self._lock:
+            files = dict(self.runtime.state.get("files", {}))
         result = _glob_search_files(files, pattern, path)
         if result == "No files found":
             return []
@@ -213,7 +222,8 @@ class StateBackend(BackendProtocol):
         Returns:
             List of FileDownloadResponse objects, one per input path
         """
-        state_files = self.runtime.state.get("files", {})
+        with self._lock:
+            state_files = dict(self.runtime.state.get("files", {}))
         responses: list[FileDownloadResponse] = []
 
         for path in paths:

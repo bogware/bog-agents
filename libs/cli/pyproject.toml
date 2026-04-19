@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bog-agents-cli"
-version = "0.6.6"
+version = "0.7.0"
 description = "A coding agent in your terminal. 50+ commands, any LLM provider, persistent memory, git workflow, code review, plan mode, remote sandboxes, and CI/CD automation. One install, no code required."
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     # Framework
-    "bog-agents==0.6.5",
+    "bog-agents>=0.7.0,<1.0.0",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
@@ -66,6 +66,9 @@ dependencies = [
 
     # MCP
     "langchain-mcp-adapters>=0.2.0,<1.0.0",
+
+    # Secret store (optional OS keyring backend; falls back to 0600 TOML)
+    "keyring>=25.0.0,<27.0.0",
 ]
 
 [project.optional-dependencies]
@@ -172,6 +175,15 @@ possibly-missing-attribute = "ignore"
 # Many stale type: ignore comments from pre-ty migration; clean up incrementally
 unused-ignore-comment = "ignore"
 unused-type-ignore-comment = "ignore"
+# asyncio.to_thread ParamSpec inference limitation and test global state patterns
+too-many-positional-arguments = "ignore"
+not-subscriptable = "ignore"
+unsupported-operator = "ignore"
+# docker.py ExecuteResponse uses sandbox_id; langsmith client is dynamically typed
+unknown-argument = "ignore"
+no-matching-overload = "ignore"
+# langsmith client returned as object; winsound is Windows-only optional module
+unresolved-attribute = "ignore"
 
 [tool.ruff]
 exclude = [".pytest-tmp-runtime"]
@@ -242,7 +254,13 @@ ignore-var-parameters = true
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "ANN001",   # Missing type annotation for function argument — not needed in tests
+    "ANN002",   # Missing type annotation for *args — not needed in tests
+    "ANN003",   # Missing type annotation for **kwargs — not needed in tests
     "ANN201",   # Missing return type annotation — not needed in tests
+    "ARG002",   # Unused method argument — fixture params (e.g. tmp_path) may be unused in some tests
+    "F841",     # Local variable assigned but unused — common in test setup
+    "PT011",    # pytest.raises match= not required in tests — intent is clear from test name
+    "SIM117",   # Nested with statements — readability in complex test setups
     "D1",       # Missing docstrings — not needed in tests
     "DOC",      # Docstring conventions — not needed in tests
     "F401",     # Imported but unused — test fixtures may appear unused

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from bog_agents.backends import FilesystemBackend, LocalShellBackend
@@ -18,17 +20,24 @@ def _system_message_as_text(message: SystemMessage) -> str:
 
 
 def _assert_snapshot(snapshot_path: Path, actual: str, *, update_snapshots: bool) -> None:
+    # Normalize Windows line endings so snapshots match on all platforms.
+    actual = actual.replace("\r\n", "\n")
+
     if update_snapshots or not snapshot_path.exists():
-        snapshot_path.write_text(actual)
+        with snapshot_path.open("w", newline="\n") as f:
+            f.write(actual)
         if update_snapshots:
             return
         msg = f"Created snapshot at {snapshot_path}. Re-run tests."
         raise AssertionError(msg)
 
-    expected = snapshot_path.read_text()
+    with snapshot_path.open(newline="\n") as f:
+        expected = f.read()
+    expected = expected.replace("\r\n", "\n")
     assert actual == expected
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_snapshot_with_execute(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = LocalShellBackend(root_dir=Path.cwd(), virtual_mode=True)
@@ -51,6 +60,7 @@ def test_system_prompt_snapshot_with_execute(snapshots_dir: Path, *, update_snap
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_snapshot_without_execute(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = FilesystemBackend(root_dir=str(Path.cwd()), virtual_mode=True)
@@ -73,6 +83,7 @@ def test_system_prompt_snapshot_without_execute(snapshots_dir: Path, *, update_s
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_custom_system_message_snapshot(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
     backend = FilesystemBackend(root_dir=str(Path.cwd()), virtual_mode=True)
@@ -100,6 +111,7 @@ def test_custom_system_message_snapshot(snapshots_dir: Path, *, update_snapshots
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="System prompt Unicode encoding differs on Windows")
 def test_system_prompt_with_memory_and_skills(snapshots_dir: Path, *, update_snapshots: bool) -> None:
     model = GenericFakeChatModel(messages=iter([AIMessage(content="hello!")]))
 

@@ -377,6 +377,83 @@ def _new_thread_id() -> str:
     return generate_thread_id()
 
 
+def _read_clipboard_image() -> bytes | None:
+    """Attempt to read raw image bytes from the system clipboard.
+
+    Supports:
+    - Linux (Wayland): wl-paste --type image/png
+    - Linux (X11): xclip -selection clipboard -t image/png -o
+    - macOS: pngpaste or osascript
+
+    Returns:
+        Raw PNG bytes if an image is on the clipboard, else None.
+    """
+    import shutil
+    import subprocess  # noqa: S404  # clipboard helpers require subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    try:
+        if sys.platform == "darwin":
+            if shutil.which("pngpaste"):
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                    tmp = f.name
+                result = subprocess.run(  # noqa: S603
+                    ["pngpaste", tmp], capture_output=True, check=False
+                )
+                if result.returncode == 0:
+                    data = Path(tmp).read_bytes()
+                    Path(tmp).unlink(missing_ok=True)
+                    return data or None
+            return None
+
+        if shutil.which("wl-paste"):
+            result = subprocess.run(
+                ["wl-paste", "--type", "image/png"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+
+        if shutil.which("xclip"):
+            result = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                return result.stdout
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+async def _get_current_git_branch() -> str | None:
+    """Return the current git branch name, or None if not in a git repo.
+
+    Returns:
+        Branch name string, or None.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode == 0:
+            branch = stdout.decode().strip()
+            return branch if branch != "HEAD" else None
+    except (OSError, FileNotFoundError):
+        pass
+    return None
+
+
 class TextualSessionState:
     """Session state for the Textual app."""
 
@@ -592,6 +669,7 @@ class BogAgentsApp(App):
         "/clear": "_handle_clear_command",
         "/commands": "_handle_help_command",
         "/compact": "_handle_compact_command",
+        "/compress": "_handle_compress_command",
         "/context": "_handle_tokens_command",
         "/cost": "_handle_tokens_command",
         "/dashboard": "_dispatch_dashboard_command",
@@ -601,8 +679,12 @@ class BogAgentsApp(App):
         "/effort": "_handle_effort_command",
         "/extensions": "_handle_plugin_command",
         "/feedback": "_handle_reference_url_command",
+        "/harbor": "_handle_harbor_command",
+        "/jobs": "_handle_jobs_command",
+        "/langsmith": "_handle_langsmith_command",
         "/health": "_handle_health_command",
         "/help": "_handle_help_command",
+        "/image": "_handle_image_command",
         "/init": "_dispatch_init_command",
         "/infra": "_handle_infra_command",
         "/keybindings": "_handle_keybindings_command",
@@ -615,6 +697,7 @@ class BogAgentsApp(App):
         "/plan": "_handle_plan_command",
         "/permissions": "_handle_permissions_command",
         "/plugin": "_handle_plugin_command",
+        "/pr": "_handle_pr_command",
         "/prompt": "_handle_prompt_command",
         "/preview": "_handle_preview_command",
         "/profile": "_handle_profile_command",
@@ -623,6 +706,7 @@ class BogAgentsApp(App):
         "/record": "_handle_record_command",
         "/recommend": "_dispatch_recommend_command",
         "/reload": "_handle_reload_command",
+        "/repomap": "_handle_repomap_command",
         "/remember": "_handle_remember_command",
         "/remote": "_handle_remote_command",
         "/replay": "_handle_replay_command",
@@ -635,12 +719,24 @@ class BogAgentsApp(App):
         "/skills": "_handle_skills_command",
         "/test": "_handle_test_command",
         "/team": "_handle_team_command",
+        "/think": "_handle_think_command",
         "/threads": "_handle_threads_command",
         "/tokens": "_handle_tokens_command",
         "/trace": "_handle_trace_command",
+        "/rules": "_handle_rules_command",
+        "/search": "_handle_search_command",
         "/undo": "_handle_undo_command",
+        "/vars": "_handle_vars_command",
         "/version": "_handle_version_command",
+        "/workspace": "_handle_workspace_command",
         "/worktree": "_handle_worktree_command",
+        "/worktrees": "_handle_worktrees_command",
+        "/benchmark": "_handle_benchmark_command",
+        "/build": "_handle_build_command",
+        "/checkpoint": "_handle_checkpoint_command",
+        "/explain": "_handle_explain_command",
+        "/index": "_handle_index_command",
+        "/ambient": "_handle_ambient_command",
     }
 
     class ServerReady(Message):
@@ -671,6 +767,7 @@ class BogAgentsApp(App):
         assistant_id: str | None = None,
         backend: CompositeBackend | None = None,
         auto_approve: bool = False,
+        auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
         initial_prompt: str | None = None,
@@ -689,6 +786,7 @@ class BogAgentsApp(App):
             assistant_id: Agent identifier for memory storage
             backend: Backend for file operations
             auto_approve: Whether to start with auto-approve enabled
+            auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
             initial_prompt: Optional prompt to auto-submit when session starts
@@ -713,6 +811,7 @@ class BogAgentsApp(App):
         self._assistant_id = assistant_id or "agent"
         self._backend = backend
         self._auto_approve = auto_approve
+        self._auto_commit = auto_commit
         self._cwd = str(cwd) if cwd else str(Path.cwd())
         # Avoid collision with App._thread_id
         self._lc_thread_id = thread_id
@@ -720,6 +819,7 @@ class BogAgentsApp(App):
         self._mcp_server_info = mcp_server_info
         self._profile_override = profile_override
         self._server_proc = server_proc
+        self._build_pending: dict[str, Any] | None = None
         self._server_kwargs = server_kwargs
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
@@ -769,6 +869,7 @@ class BogAgentsApp(App):
         self._preview_servers: dict[str, PreviewServerRecord] = {}
         self._recording_state: RecordingSessionState | None = None
         self._remote_tasks: dict[str, Any] = {}
+        self._file_watchers: list = []
         # Lazily imported here to avoid pulling image dependencies into
         # argument parsing paths.
         from bog_agents_cli.input import MediaTracker
@@ -867,6 +968,19 @@ class BogAgentsApp(App):
         # Focus the input (autocomplete is now built into ChatInput)
         self._chat_input.focus_input()
 
+        # Fire session.start hook (non-blocking fire-and-forget)
+        from bog_agents_cli.hooks import dispatch_hook_fire_and_forget
+
+        dispatch_hook_fire_and_forget(
+            "session.start",
+            {
+                "thread_id": self._lc_thread_id or "",
+                "cwd": self._cwd,
+                "auto_approve": self._auto_approve,
+                "auto_commit": self._auto_commit,
+            },
+        )
+
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
             self._seed_defaults,
@@ -876,6 +990,20 @@ class BogAgentsApp(App):
 
         # Start pipeline scheduler (daemon thread — errors are non-fatal)
         self._init_pipeline_scheduler()
+
+        # Start file watchers for pipelines that have watch: blocks
+        self.run_worker(
+            self._init_file_watchers,
+            exclusive=True,
+            group="startup-file-watchers",
+        )
+
+        # Advisory: warn once when secrets are stored in plaintext TOML fallback
+        self.run_worker(
+            self._check_vault_security,
+            exclusive=True,
+            group="startup-vault-check",
+        )
 
         # Warn about missing optional tools (advisory only — never block startup)
         try:
@@ -946,6 +1074,7 @@ class BogAgentsApp(App):
         """Background worker: start server + MCP preload concurrently."""
         from bog_agents_cli.server_manager import start_server_and_get_agent
 
+        self._update_status("Initialising agent runtime…")
         coros: list[Any] = [start_server_and_get_agent(**self._server_kwargs)]  # type: ignore[arg-type]
 
         if self._mcp_preload_kwargs is not None:
@@ -953,11 +1082,31 @@ class BogAgentsApp(App):
 
             coros.append(_preload_session_mcp_server_info(**self._mcp_preload_kwargs))
 
+        # Progressive loading: cycle status messages while waiting for server
+        progress_steps = [
+            "Compiling agent graph…",
+            "Loading tools and middleware…",
+            "Connecting to MCP servers…",
+            "Warming up model connection…",
+        ]
+        step_idx = 0
+
+        async def _progress_ticker() -> None:
+            nonlocal step_idx
+            await asyncio.sleep(1.5)
+            while True:
+                self._update_status(progress_steps[step_idx % len(progress_steps)])
+                step_idx += 1
+                await asyncio.sleep(2.0)
+
+        ticker = asyncio.create_task(_progress_ticker())
         try:
             results = await asyncio.gather(*coros, return_exceptions=True)
         except Exception as exc:  # defensive catch around gather
+            ticker.cancel()
             self.post_message(self.ServerStartFailed(error=exc))
             return
+        ticker.cancel()
 
         server_result = results[0]
         if isinstance(server_result, BaseException):
@@ -1079,6 +1228,22 @@ class BogAgentsApp(App):
             )
         except Exception:
             logger.debug("Could not prewarm model caches", exc_info=True)
+
+    async def _check_vault_security(self) -> None:
+        """Show a one-time advisory when secrets fall back to plaintext TOML storage."""
+        try:
+            from bog_agents_cli.vars_store import is_using_toml_fallback
+
+            if await asyncio.to_thread(is_using_toml_fallback):
+                self.notify(
+                    "Vault: OS keyring unavailable — secrets stored in plaintext "
+                    "~/.bog-agents/vars.toml (mode 0600). "
+                    "Install 'keyring' + a backend for encrypted storage.",
+                    severity="warning",
+                    timeout=20,
+                )
+        except Exception:
+            logger.debug("Vault security check failed", exc_info=True)
 
     async def _check_for_updates(self) -> None:
         """Check PyPI for a newer bog-agents-cli version and notify the user."""
@@ -1963,13 +2128,37 @@ class BogAgentsApp(App):
 
     def _build_cli_context(self) -> CLIContext:
         """Build per-turn runtime context for middleware-aware commands."""
+        parts: list[str] = []
+        if self._active_profile_prompt:
+            parts.append(self._active_profile_prompt)
+
+        # Inject team shared context if configured
+        team_ctx = self._get_team_shared_context()
+        if team_ctx:
+            parts.append(team_ctx)
+
         return CLIContext(
             model=self._model_override,
             model_params=self._model_params_override or {},
             effort_level=self._effort_level,
             plan_mode=self._plan_mode_enabled,
-            system_prompt_append=self._active_profile_prompt,
+            system_prompt_append="\n\n".join(parts) if parts else None,
         )
+
+    def _get_team_shared_context(self) -> str:
+        """Return team shared context text if a team config exists."""
+        try:
+            from bog_agents_cli.team_config import (
+                get_shared_context_text,
+                load_team_config,
+            )
+
+            cfg = load_team_config(Path(self._cwd))
+            if cfg is None:
+                return ""
+            return get_shared_context_text(cfg, Path(self._cwd))
+        except Exception:
+            return ""
 
     async def _ensure_background_manager(self) -> None:
         """Create the background task manager on first use."""
@@ -2270,7 +2459,13 @@ class BogAgentsApp(App):
             return
         from bog_agents_cli.remote import check_remote_task, load_remote_config
 
-        config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+        try:
+            config = await asyncio.to_thread(
+                load_remote_config, settings.user_agents_dir
+            )
+        except OSError:
+            logger.debug("Could not load remote config", exc_info=True)
+            return
         refreshed = [
             await check_remote_task(config, task)
             for task in self._remote_tasks.values()
@@ -2282,7 +2477,13 @@ class BogAgentsApp(App):
         """Merge persisted remote tasks into the in-memory registry."""
         from bog_agents_cli.remote import load_remote_tasks
 
-        loaded = await asyncio.to_thread(load_remote_tasks, settings.user_agents_dir)
+        try:
+            loaded = await asyncio.to_thread(
+                load_remote_tasks, settings.user_agents_dir
+            )
+        except OSError:
+            logger.debug("Could not load persisted remote tasks", exc_info=True)
+            return 0
         added = 0
         for task in loaded:
             if task.task_id in self._remote_tasks:
@@ -2554,9 +2755,369 @@ class BogAgentsApp(App):
 
         await self._handle_user_message(final_prompt)
 
-    async def _handle_mcp_command(self, _command: str) -> None:
-        """Open the MCP viewer."""
-        await self._show_mcp_viewer()
+    async def _handle_mcp_command(self, command: str) -> None:
+        """Handle /mcp — MCP server marketplace and management.
+
+        Usage:
+          /mcp                       — show active servers (viewer)
+          /mcp list                  — list configured servers in ~/.bog-agents/.mcp.json
+          /mcp catalog               — browse the full registry
+          /mcp search <query>        — search registry by keyword
+          /mcp install <id>          — install a server from the registry
+          /mcp add <name> <cmd> ...  — add a custom stdio server
+          /mcp remove <name>         — remove a server from user config
+          /mcp info <id>             — show registry entry details
+          /mcp trust                 — manage project stdio server trust
+          /mcp help                  — show this help
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.mcp_config_manager import (
+            add_server,
+            list_servers,
+            missing_required,
+            remove_server,
+            resolve_env_values,
+            server_exists,
+        )
+        from bog_agents_cli.mcp_registry import (
+            build_server_config,
+            get_entry,
+            list_categories,
+            list_entries,
+            search_entries,
+        )
+
+        # Parse subcommand and args
+        tail = command[len("/mcp") :].strip()
+        parts = tail.split(maxsplit=1)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        # ---- no subcommand → open viewer ----
+        if not subcommand or subcommand == "view":
+            await self._show_mcp_viewer()
+            return
+
+        await self._mount_message(UserMessage(command))
+
+        # ---- list ----
+        if subcommand == "list":
+            configured = list_servers()
+            if not configured:
+                await self._mount_message(
+                    AppMessage(
+                        "No MCP servers configured in [cyan]~/.bog-agents/.mcp.json[/cyan].\n\n"
+                        "Browse the catalog with [bold]/mcp catalog[/bold] or "
+                        "install a server with [bold]/mcp install <id>[/bold].\n"
+                        "[dim]Example: /mcp install jira[/dim]"
+                    )
+                )
+                return
+            lines = [f"[bold]Configured MCP servers[/bold] ({len(configured)} total)\n"]
+            for name, cfg in sorted(configured.items()):
+                transport = cfg.get("type", cfg.get("transport", "stdio"))
+                if transport == "stdio":
+                    cmd_display = f"[dim]{cfg.get('command', '?')} {' '.join(cfg.get('args', [])[:2])}...[/dim]"
+                else:
+                    cmd_display = f"[dim]{cfg.get('url', '?')}[/dim]"
+                lines.append(f"  [cyan]{name}[/cyan] [{transport}] {cmd_display}")
+            lines.append(
+                "\n[dim]Use [bold]/mcp remove <name>[/bold] to uninstall, "
+                "[bold]/mcp[/bold] to open the live viewer[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- catalog ----
+        elif subcommand == "catalog":
+            entries = list_entries()
+            categories = list_categories()
+            lines = [f"[bold]MCP Server Catalog[/bold] — {len(entries)} servers\n"]
+            for cat in categories:
+                cat_entries = [e for e in entries if e.category == cat]
+                lines.append(f"\n[bold yellow]{cat.upper()}[/bold yellow]")
+                for e in cat_entries:
+                    src_tag = (
+                        f"[dim][{e.source}][/dim]" if e.source != "official" else ""
+                    )
+                    lines.append(
+                        f"  [cyan]{e.id:<22}[/cyan] {e.display_name:<20} {src_tag}\n"
+                        f"    [dim]{e.description}[/dim]"
+                    )
+            lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
+                "Details with [bold]/mcp info <id>[/bold] · "
+                "Search with [bold]/mcp search <query>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- search ----
+        elif subcommand == "search":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp search <query>[/bold]\nExample: /mcp search jira"
+                    )
+                )
+                return
+            results = search_entries(rest)
+            if not results:
+                await self._mount_message(
+                    AppMessage(
+                        f"No servers matching [cyan]{rest!r}[/cyan].\n"
+                        "Try [bold]/mcp catalog[/bold] to browse all servers."
+                    )
+                )
+                return
+            lines = [f"[bold]Search results for[/bold] [cyan]{rest!r}[/cyan]\n"]
+            for e in results:
+                src_tag = f" [dim][{e.source}][/dim]" if e.source != "official" else ""
+                lines.append(
+                    f"  [cyan]{e.id}[/cyan] — {e.display_name}{src_tag}\n"
+                    f"    [dim]{e.description}[/dim]"
+                )
+            lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
+                "Details with [bold]/mcp info <id>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- info ----
+        elif subcommand == "info":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp info <id>[/bold]\nExample: /mcp info jira"
+                    )
+                )
+                return
+            entry = get_entry(rest)
+            if entry is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Server [cyan]{rest!r}[/cyan] not found in registry.\n"
+                        "Try [bold]/mcp search <query>[/bold] or [bold]/mcp catalog[/bold]."
+                    )
+                )
+                return
+            lines = [
+                f"[bold]{entry.display_name}[/bold] [dim](id: {entry.id})[/dim]",
+                f"  {entry.description}",
+                f"\n  [bold]Source:[/bold] {entry.source}  [bold]Category:[/bold] {entry.category}  [bold]Transport:[/bold] {entry.transport}",
+            ]
+            if entry.transport == "stdio":
+                arg_str = " ".join(entry.args)
+                lines.append(
+                    f"\n  [bold]Command:[/bold] [dim]{entry.command} {arg_str}[/dim]"
+                )
+            if entry.required_env:
+                lines.append(
+                    "\n  [bold]Required env vars:[/bold]\n"
+                    + "\n".join(
+                        f"    [cyan]{v}[/cyan]  [dim]{entry.vars_hints.get(v, '')}[/dim]"
+                        for v in entry.required_env
+                    )
+                )
+            if entry.optional_env:
+                lines.append(
+                    "\n  [bold]Optional env vars:[/bold]\n"
+                    + "\n".join(
+                        f"    [cyan]{v}[/cyan]  [dim]{entry.vars_hints.get(v, '')}[/dim]"
+                        for v in entry.optional_env
+                    )
+                )
+            if entry.install_notes:
+                lines.append(f"\n  [bold]Setup notes:[/bold]\n  {entry.install_notes}")
+            installed = server_exists(entry.id)
+            lines.append(
+                f"\n  [bold]Status:[/bold] {'[green]Installed[/green]' if installed else '[dim]Not installed[/dim]'}"
+            )
+            if not installed:
+                lines.append(f"\n  Install with: [bold]/mcp install {entry.id}[/bold]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- install ----
+        elif subcommand == "install":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp install <id>[/bold]\n"
+                        "Browse available servers with [bold]/mcp catalog[/bold]."
+                    )
+                )
+                return
+            server_id = rest.strip()
+            entry = get_entry(server_id)
+            if entry is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Server [cyan]{server_id!r}[/cyan] not found in registry.\n"
+                        "Try [bold]/mcp search <query>[/bold] to find servers."
+                    )
+                )
+                return
+            if server_exists(server_id):
+                await self._mount_message(
+                    AppMessage(
+                        f"[cyan]{server_id}[/cyan] is already configured.\n"
+                        f"Use [bold]/mcp remove {server_id}[/bold] first to reinstall."
+                    )
+                )
+                return
+
+            # Resolve env vars from vars store + os.environ
+            env_values = await asyncio.to_thread(
+                resolve_env_values, entry.required_env, entry.optional_env
+            )
+            missing = missing_required(entry.required_env, env_values)
+
+            lines = [f"[bold]Installing[/bold] [cyan]{entry.display_name}[/cyan]...\n"]
+
+            if missing:
+                lines.append(
+                    "[yellow]Missing required env vars[/yellow] "
+                    "(server will be added but may not start until these are set):\n"
+                )
+                for var in missing:
+                    hint = entry.vars_hints.get(var, "")
+                    lines.append(f"  [cyan]{var}[/cyan]  [dim]{hint}[/dim]")
+                lines.append(
+                    "\n[dim]Set them with [bold]/vars set VAR_NAME value[/bold] "
+                    "and they will be picked up automatically.[/dim]"
+                )
+
+            server_cfg = build_server_config(entry, env_values)
+            success = add_server(server_id, server_cfg)
+            if success:
+                lines.append(
+                    f"\n[green]✓ Added[/green] [cyan]{server_id}[/cyan] to "
+                    f"[dim]~/.bog-agents/.mcp.json[/dim]"
+                )
+                if entry.install_notes:
+                    lines.append(f"\n[bold]Setup notes:[/bold]\n{entry.install_notes}")
+                lines.append(
+                    "\n[dim]Restart bog-agents (or start a new session) for the server to connect.[/dim]"
+                )
+            else:
+                lines.append(
+                    "\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/"
+                )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- add (custom server) ----
+        elif subcommand == "add":
+            # /mcp add <name> <command> [arg1 arg2 ...]
+            add_parts = rest.split(maxsplit=1)
+            if len(add_parts) < 2:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/mcp add <name> <command> [args...][/bold]\n\n"
+                        "Examples:\n"
+                        "  [dim]/mcp add my-server npx -y my-mcp-package[/dim]\n"
+                        "  [dim]/mcp add local-tools python -m my_tools.mcp_server[/dim]"
+                    )
+                )
+                return
+            name = add_parts[0]
+            cmd_and_args = add_parts[1].split()
+            cmd = cmd_and_args[0]
+            args = cmd_and_args[1:]
+            server_cfg = {"command": cmd, "args": args}
+            if server_exists(name):
+                await self._mount_message(
+                    AppMessage(
+                        f"[cyan]{name}[/cyan] already exists.\n"
+                        f"Use [bold]/mcp remove {name}[/bold] first."
+                    )
+                )
+                return
+            if add_server(name, server_cfg):
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Added[/green] [cyan]{name}[/cyan]  "
+                        f"[dim]{cmd} {' '.join(args)}[/dim]\n\n"
+                        "[dim]Restart bog-agents for the server to connect.[/dim]"
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "[red]✗ Failed to save config.[/red] Check file permissions."
+                    )
+                )
+
+        # ---- remove ----
+        elif subcommand in ("remove", "rm", "uninstall", "delete"):
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/mcp remove <name>[/bold]")
+                )
+                return
+            name = rest.strip()
+            if remove_server(name):
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Removed[/green] [cyan]{name}[/cyan] from "
+                        f"[dim]~/.bog-agents/.mcp.json[/dim]\n"
+                        "[dim]Restart bog-agents for the change to take effect.[/dim]"
+                    )
+                )
+            else:
+                self.notify(
+                    f"Server '{name}' not found in user config.",
+                    severity="warning",
+                    timeout=3,
+                )
+
+        # ---- trust ----
+        elif subcommand == "trust":
+            from bog_agents_cli.mcp_tools import discover_mcp_configs
+            from bog_agents_cli.mcp_trust import (
+                compute_config_fingerprint,
+                trust_project_mcp,
+            )
+
+            config_paths = await asyncio.to_thread(discover_mcp_configs)
+            if not config_paths:
+                await self._mount_message(
+                    AppMessage("No .mcp.json files found in this project.")
+                )
+                return
+            fingerprint = await asyncio.to_thread(
+                compute_config_fingerprint, config_paths
+            )
+            project_root = str(Path.cwd().resolve())
+            ok = await asyncio.to_thread(trust_project_mcp, project_root, fingerprint)
+            if ok:
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]✓ Trusted[/green] project MCP config for [cyan]{project_root}[/cyan]\n"
+                        "[dim]Project stdio servers will be loaded on the next session start.[/dim]"
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage("[red]✗ Failed to write trust record.[/red]")
+                )
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/mcp[/bold] — MCP server marketplace\n\n"
+                    "  [cyan]/mcp[/cyan]                      — open live server viewer\n"
+                    "  [cyan]/mcp list[/cyan]                 — list configured servers\n"
+                    "  [cyan]/mcp catalog[/cyan]              — browse full registry\n"
+                    "  [cyan]/mcp search <query>[/cyan]       — search registry\n"
+                    "  [cyan]/mcp info <id>[/cyan]            — show server details\n"
+                    "  [cyan]/mcp install <id>[/cyan]         — install from registry\n"
+                    "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
+                    "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
+                    "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
+                    "[dim]Popular: jira · github · slack · postgres · terraform · azure-devops[/dim]"
+                )
+            )
 
     async def _handle_model_command(self, command: str) -> None:
         """Switch models or manage the default model."""
@@ -2634,6 +3195,82 @@ class BogAgentsApp(App):
         report += "\nModel config caches cleared."
         await self._mount_message(AppMessage(report))
 
+    async def _handle_repomap_command(self, command: str) -> None:
+        """Show or refresh the semantic repository map."""
+        from bog_agents_cli.repo_map_display import (
+            get_repo_map_stats,
+            get_repo_map_text,
+        )
+
+        await self._mount_message(UserMessage(command))
+        raw = command.strip()[len("/repomap") :].strip().lower()
+
+        if raw in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/repomap[/bold] — Semantic repository map\n\n"
+                    "Indexes the project structure (classes, functions, types) and injects\n"
+                    "a compact map into the agent's context.\n\n"
+                    "Usage:\n"
+                    "  [bold]/repomap[/bold]           Show the current map (build if needed)\n"
+                    "  [bold]/repomap refresh[/bold]   Force a full rebuild (clear cache)\n"
+                    "  [bold]/repomap status[/bold]    Show cache statistics\n"
+                    "  [bold]/repomap help[/bold]      Show this help\n\n"
+                    "The map is cached in [italic].bog-agents/repomap.json[/italic] and updated\n"
+                    "incrementally — only changed files are re-parsed."
+                )
+            )
+            return
+
+        if raw == "status":
+            stats = await asyncio.to_thread(get_repo_map_stats, self._cwd)
+            if not stats.get("cached"):
+                await self._mount_message(
+                    AppMessage(
+                        "No repo map cache found. Run [bold]/repomap[/bold] to build it."
+                    )
+                )
+            else:
+                import time as _time
+
+                built_ago = int(_time.time() - stats.get("built_at", 0))
+                age = (
+                    f"{built_ago // 60}m"
+                    if built_ago < 3600
+                    else f"{built_ago // 3600}h"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Repo map cached: [green]{stats['file_count']}[/green] symbols indexed, "
+                        f"built {age} ago\n"
+                        f"Cache: {stats['cache_path']}"
+                    )
+                )
+            return
+
+        force = raw == "refresh"
+        if force:
+            await self._mount_message(
+                AppMessage("Rebuilding repository map from scratch...")
+            )
+        else:
+            await self._mount_message(AppMessage("Building repository map..."))
+
+        map_text = await asyncio.to_thread(get_repo_map_text, self._cwd, refresh=force)
+
+        # Show a preview (first 60 lines) to avoid flooding the TUI
+        lines = map_text.splitlines()
+        preview_count = 60
+        if len(lines) > preview_count:
+            preview = "\n".join(lines[:preview_count])
+            preview += f"\n\n... ({len(lines) - preview_count} more lines — full map injected into agent context)"
+        else:
+            preview = map_text
+
+        await self._mount_message(
+            AppMessage(f"[bold]Repository Map[/bold]\n\n{preview}")
+        )
+
     async def _handle_doctor_command(self, command: str) -> None:
         """Run local health diagnostics from inside the TUI."""
         from bog_agents_cli.doctor import run_doctor
@@ -2682,6 +3319,372 @@ class BogAgentsApp(App):
             default_prompt=generate_audit_prompt(),
             announcement="Auditing dependencies and project risk posture...",
         )
+
+    async def _handle_harbor_command(self, command: str) -> None:
+        """Handle /harbor — Harbor benchmark evaluation interface.
+
+        Usage:
+          /harbor                  — show Harbor status and recent results
+          /harbor results [dir]    — list recent trajectory files
+          /harbor show [dir]       — detailed summary of the latest trajectory
+          /harbor tools [dir]      — show tool usage breakdown
+          /harbor help             — show this help
+
+        Args:
+            command: Full slash command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        tail = command[len("/harbor") :].strip()
+        parts = tail.split(maxsplit=1)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+
+        # Default search dir
+        default_dir = Path.home() / ".bog-agents" / "harbor-results"
+
+        # ---- status / no subcommand ----
+        if not subcommand or subcommand == "status":
+            lines = ["[bold]Harbor Evaluation[/bold] — Terminal Bench 2.0\n"]
+
+            # Check harbor package availability
+            try:
+                import importlib.util
+
+                harbor_available = importlib.util.find_spec("harbor") is not None
+                bog_harbor_available = (
+                    importlib.util.find_spec("bog_agents_harbor") is not None
+                )
+            except Exception:
+                harbor_available = False
+                bog_harbor_available = False
+
+            lines.append(
+                f"  harbor package:         {'[green]installed[/green]' if harbor_available else '[dim]not installed[/dim]'}"
+            )
+            lines.append(
+                f"  bog-agents-harbor:      {'[green]installed[/green]' if bog_harbor_available else '[dim]not installed[/dim]'}"
+            )
+
+            import os
+
+            langsmith_set = bool(os.environ.get("LANGSMITH_API_KEY"))
+            lines.append(
+                f"  LangSmith tracing:      {'[green]configured[/green]' if langsmith_set else '[dim]not configured[/dim]'}"
+            )
+
+            # Show recent trajectory count
+            try:
+                from bog_agents_harbor.reporter import find_trajectories
+
+                trajectories = find_trajectories(default_dir)
+                if trajectories:
+                    lines.append(
+                        f"\n  Recent results ({len(trajectories)} found in {default_dir}):"
+                    )
+                    for t in trajectories[:5]:
+                        import time
+
+                        age = time.time() - t.stat().st_mtime
+                        age_str = (
+                            f"{int(age // 3600)}h ago"
+                            if age > 3600
+                            else f"{int(age // 60)}m ago"
+                        )
+                        lines.append(f"    [dim]{t.parent.name}[/dim]  [{age_str}]")
+                    if len(trajectories) > 5:
+                        lines.append(
+                            f"    [dim]... and {len(trajectories) - 5} more[/dim]"
+                        )
+                else:
+                    lines.append(f"\n  [dim]No results found in {default_dir}[/dim]")
+            except ImportError:
+                lines.append("\n  [dim]Install bog-agents-harbor to view results[/dim]")
+            except OSError:
+                pass
+
+            lines.append(
+                "\n[dim]Commands: [bold]/harbor results[/bold] · [bold]/harbor show[/bold] · [bold]/harbor tools[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- results ----
+        elif subcommand == "results":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    load_trajectory,
+                )
+            except ImportError:
+                await self._mount_message(
+                    AppMessage(
+                        "[yellow]bog-agents-harbor is not installed.[/yellow]\n"
+                        "Install it with: [bold]pip install bog-agents-harbor[/bold]"
+                    )
+                )
+                return
+
+            trajectories = await asyncio.to_thread(find_trajectories, search_dir)
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
+                )
+                return
+
+            lines = [
+                f"[bold]Recent Harbor results[/bold] ({len(trajectories)} found)\n"
+            ]
+            for path in trajectories[:20]:
+                try:
+                    report = await asyncio.to_thread(load_trajectory, path)
+                    reward_str = (
+                        f"  reward={report.reward:.2f}"
+                        if report.reward is not None
+                        else ""
+                    )
+                    token_str = (
+                        f"  tokens={report.total_tokens:,}"
+                        if report.total_tokens
+                        else ""
+                    )
+                    lines.append(
+                        f"  [cyan]{path.parent.name}[/cyan]\n"
+                        f"    model={report.model_name}  steps={report.total_steps}"
+                        f"  tools={report.tool_call_count}{token_str}{reward_str}"
+                    )
+                except (ValueError, OSError):
+                    lines.append(f"  [dim]{path}  (unreadable)[/dim]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- show ----
+        elif subcommand == "show":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    format_summary,
+                    load_trajectory,
+                )
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=1
+            )
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
+                )
+                return
+
+            report = await asyncio.to_thread(load_trajectory, trajectories[0])
+            summary = await asyncio.to_thread(format_summary, report, verbose=True)
+            await self._mount_message(AppMessage(f"[dim]{summary}[/dim]"))
+
+        # ---- tools ----
+        elif subcommand == "tools":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    format_tool_usage,
+                    load_trajectory,
+                )
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=1
+            )
+            if not trajectories:
+                await self._mount_message(
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
+                )
+                return
+
+            report = await asyncio.to_thread(load_trajectory, trajectories[0])
+            tool_str = await asyncio.to_thread(format_tool_usage, report)
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]Tool usage[/bold] — {report.session_id}\n\n{tool_str}"
+                )
+            )
+
+        # ---- compare ----
+        elif subcommand == "compare":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.compare import (
+                    compare_trajectories,
+                    format_comparison,
+                )
+                from bog_agents_harbor.reporter import (
+                    find_trajectories,
+                    load_trajectory,
+                )
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=2
+            )
+            if len(trajectories) < 2:
+                await self._mount_message(
+                    AppMessage(
+                        "Need at least 2 trajectory files to compare.\n"
+                        f"Found {len(trajectories)} under {search_dir}."
+                    )
+                )
+                return
+            report_a = await asyncio.to_thread(load_trajectory, trajectories[0])
+            report_b = await asyncio.to_thread(load_trajectory, trajectories[1])
+            comparison = await asyncio.to_thread(
+                compare_trajectories,
+                report_a,
+                report_b,
+                label_a=trajectories[0].parent.name,
+                label_b=trajectories[1].parent.name,
+            )
+            result_str = await asyncio.to_thread(format_comparison, comparison)
+            await self._mount_message(AppMessage(result_str))
+
+        # ---- regression ----
+        elif subcommand == "regression":
+            search_dir = Path(rest) if rest else default_dir
+            try:
+                from bog_agents_harbor.regression import (
+                    compute_baseline,
+                    detect_regression,
+                    format_regression_report,
+                )
+                from bog_agents_harbor.reporter import load_all_trajectories
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+            reports = await asyncio.to_thread(load_all_trajectories, search_dir)
+            if not reports:
+                await self._mount_message(
+                    AppMessage(f"No trajectories found under {search_dir}.")
+                )
+                return
+            midpoint = max(1, len(reports) // 2)
+            baseline_reports = reports[midpoint:]
+            current_reports = reports[:midpoint]
+            baseline_score = await asyncio.to_thread(compute_baseline, baseline_reports)
+            result = await asyncio.to_thread(
+                detect_regression, current_reports, baseline_score
+            )
+            report_str = await asyncio.to_thread(format_regression_report, result)
+            await self._mount_message(AppMessage(report_str))
+
+        # ---- export ----
+        elif subcommand == "export":
+            parts2 = rest.split(maxsplit=1)
+            export_format = parts2[0].lower() if parts2 else "csv"
+            output_arg = parts2[1].strip() if len(parts2) > 1 else ""
+            try:
+                from bog_agents_harbor.export import (
+                    export_to_csv,
+                    export_to_json,
+                    export_to_langsmith,
+                    export_to_wandb,
+                )
+                from bog_agents_harbor.reporter import load_all_trajectories
+            except ImportError:
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
+                return
+            reports = await asyncio.to_thread(load_all_trajectories, default_dir)
+            if not reports:
+                await self._mount_message(
+                    AppMessage(f"No trajectories found under {default_dir}.")
+                )
+                return
+            if export_format in {"csv", "json"}:
+                out_path = (
+                    Path(output_arg)
+                    if output_arg
+                    else Path(f"harbor-export.{export_format}")
+                )
+                fn = export_to_csv if export_format == "csv" else export_to_json
+                result_exp = await asyncio.to_thread(fn, reports, out_path)
+                if result_exp.success:
+                    await self._mount_message(
+                        AppMessage(
+                            f"Exported {result_exp.exported_count} runs to {out_path}"
+                        )
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(f"Export errors: {', '.join(result_exp.errors)}")
+                    )
+            elif export_format == "langsmith":
+                result_exp = await asyncio.to_thread(export_to_langsmith, reports)
+                status = (
+                    "success"
+                    if result_exp.success
+                    else f"errors: {', '.join(result_exp.errors)}"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"LangSmith export: {result_exp.exported_count} runs — {status}"
+                    )
+                )
+            elif export_format == "wandb":
+                result_exp = await asyncio.to_thread(export_to_wandb, reports)
+                status = (
+                    "success"
+                    if result_exp.success
+                    else f"errors: {', '.join(result_exp.errors)}"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"W&B export: {result_exp.exported_count} runs — {status}"
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /harbor export csv [output.csv]\n"
+                        "       /harbor export json [output.json]\n"
+                        "       /harbor export langsmith\n"
+                        "       /harbor export wandb"
+                    )
+                )
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/harbor[/bold] — Harbor benchmark evaluation\n\n"
+                    "  [cyan]/harbor[/cyan]                  — status + recent results\n"
+                    "  [cyan]/harbor results [dir][/cyan]   — list recent trajectory files\n"
+                    "  [cyan]/harbor show [dir][/cyan]      — detailed latest trajectory\n"
+                    "  [cyan]/harbor tools [dir][/cyan]     — tool usage breakdown\n"
+                    "  [cyan]/harbor compare [dir][/cyan]   — side-by-side: last 2 trajectories\n"
+                    "  [cyan]/harbor regression [dir][/cyan]— regression detection vs baseline\n"
+                    "  [cyan]/harbor export csv|json|langsmith|wandb[/cyan] — export results\n\n"
+                    "[dim]Trajectories are saved under ~/.bog-agents/harbor-results/ by default.[/dim]"
+                )
+            )
 
     async def _handle_health_command(self, command: str) -> None:
         """Handle `/health` as a codebase health analysis command."""
@@ -2863,11 +3866,31 @@ class BogAgentsApp(App):
         elif action == "audit":
             default_prompt = generate_audit_prompt()
             announcement = "Auditing dependencies and test-related risks..."
+        elif action == "run":
+            from bog_agents_cli.cmd_test import (
+                detect_test_framework,
+                find_test_file,
+                run_tests,
+            )
+
+            await self._mount_message(UserMessage(command))
+            cwd = Path(self._cwd)
+            framework = await asyncio.to_thread(detect_test_framework, cwd)
+            test_file: Path | None = None
+            if argument:
+                src = cwd / argument
+                if src.exists():
+                    test_file = await asyncio.to_thread(find_test_file, src, cwd)
+            result = await asyncio.to_thread(
+                run_tests, cwd=cwd, test_file=test_file, framework=framework or "pytest"
+            )
+            await self._mount_message(AppMessage(result))
+            return
         else:
             await self._mount_message(UserMessage(command))
             await self._mount_message(
                 AppMessage(
-                    "Usage: /test generate <file> [framework] | "
+                    "Usage: /test run [file] | /test generate <file> [framework] | "
                     "/test coverage [path] | /test gaps <file-or-path> | "
                     "/test benchmark [path] | /test audit"
                 )
@@ -4221,6 +5244,818 @@ class BogAgentsApp(App):
             )
         )
 
+    async def _handle_checkpoint_command(self, command: str) -> None:
+        """Handle `/checkpoint` — save, list, load, and delete named session checkpoints."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_checkpoint import (
+            delete_checkpoint,
+            format_checkpoint_help,
+            list_checkpoints,
+            load_checkpoint,
+            save_checkpoint,
+        )
+
+        raw_arg = command.strip()[len("/checkpoint") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /checkpoint arguments: {exc}")
+            )
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_checkpoint_help()))
+            return
+
+        if action in {"list", "ls"}:
+            result = await asyncio.to_thread(list_checkpoints)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "save":
+            name = tokens[1] if len(tokens) > 1 else ""
+            description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
+            if not name:
+                await self._mount_message(
+                    AppMessage("Usage: /checkpoint save <name> [description]")
+                )
+                return
+            thread_id = self._lc_thread_id or ""
+            result = await asyncio.to_thread(
+                save_checkpoint, thread_id, name, description=description
+            )
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"load", "restore"}:
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(AppMessage("Usage: /checkpoint load <name>"))
+                return
+            thread_id = await asyncio.to_thread(load_checkpoint, name)
+            if thread_id is None:
+                await self._mount_message(AppMessage(f"No checkpoint named {name!r}."))
+                return
+            prompt = (
+                f"Resume conversation from checkpoint '{name}' (thread {thread_id}). "
+                "Restore context and continue from where we left off."
+            )
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if action in {"delete", "rm"}:
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(
+                    AppMessage("Usage: /checkpoint delete <name>")
+                )
+                return
+            result = await asyncio.to_thread(delete_checkpoint, name)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(AppMessage(format_checkpoint_help()))
+
+    async def _handle_benchmark_command(self, command: str) -> None:
+        """Handle `/benchmark` — run evaluation suites and show recent results."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_benchmark import (
+            format_benchmark_help,
+            list_benchmark_suites,
+            run_benchmark,
+            show_recent_results,
+        )
+
+        raw_arg = command.strip()[len("/benchmark") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /benchmark arguments: {exc}")
+            )
+            return
+
+        action = tokens[0].lower() if tokens else "list"
+        cwd = Path(self._cwd)
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_benchmark_help()))
+            return
+
+        if action in {"list", "ls", "suites"}:
+            result = await asyncio.to_thread(list_benchmark_suites)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "run":
+            suite_name = tokens[1] if len(tokens) > 1 else None
+            try:
+                max_tasks = int(tokens[2]) if len(tokens) > 2 else 5
+            except ValueError:
+                max_tasks = 5
+            result = await asyncio.to_thread(
+                run_benchmark, suite_name, cwd=cwd, max_tasks=max_tasks
+            )
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"results", "history", "recent"}:
+            limit = 5
+            if len(tokens) > 1:
+                try:
+                    limit = int(tokens[1])
+                except ValueError:
+                    pass
+            result = await asyncio.to_thread(show_recent_results, cwd=cwd, limit=limit)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(AppMessage(format_benchmark_help()))
+
+    async def _handle_explain_command(self, command: str) -> None:
+        """Handle `/explain` — deep dive into any symbol, file, or concept."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_explain import (
+            build_explain_prompt,
+            format_explain_help,
+            format_explain_not_found,
+            gather_explain_context,
+        )
+
+        raw_arg = command.strip()[len("/explain") :].strip()
+        if not raw_arg or raw_arg.lower() in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_explain_help()))
+            return
+
+        cwd = Path(self._cwd)
+        context = await asyncio.to_thread(gather_explain_context, raw_arg, cwd)
+        if not context.get("content") and not context.get("definition_snippet"):
+            await self._mount_message(AppMessage(format_explain_not_found(raw_arg)))
+            return
+
+        prompt = build_explain_prompt(raw_arg, context)
+        await self._send_prompt_to_agent(prompt)
+
+    async def _handle_index_command(self, command: str) -> None:
+        """Handle `/index` — build and search the codebase knowledge base."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_index import (
+            build_index,
+            format_index_help,
+            index_status,
+            search_index,
+        )
+
+        raw_arg = command.strip()[len("/index") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /index arguments: {exc}")
+            )
+            return
+
+        action = tokens[0].lower() if tokens else "status"
+        cwd = Path(self._cwd)
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_index_help()))
+            return
+
+        if action in {"build", "rebuild", "update"}:
+            force = action == "rebuild" or "--force" in tokens
+            self._update_status("Building knowledge base index...")
+            result = await asyncio.to_thread(build_index, cwd, force=force)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action in {"search", "find", "query"}:
+            query = " ".join(tokens[1:])
+            if not query:
+                await self._mount_message(AppMessage("Usage: /index search <query>"))
+                return
+            result = await asyncio.to_thread(search_index, query, cwd)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if action == "status":
+            result = await asyncio.to_thread(index_status, cwd)
+            await self._mount_message(AppMessage(result))
+            return
+
+        # Treat bare /index <query> as search
+        query = raw_arg.strip()
+        result = await asyncio.to_thread(search_index, query, cwd)
+        await self._mount_message(AppMessage(result))
+
+    @staticmethod
+    def _next_cron_time(cron_expr: str) -> str:
+        """Return a human-readable string for when a cron expression fires next.
+
+        Uses `croniter` to find the next scheduled time from now and formats
+        it as a compact relative string like "~2h" or "~3d".
+
+        Args:
+            cron_expr: A 5-field cron expression (e.g. "0 9 * * 1-5").
+
+        Returns:
+            A relative time string like "~5m", "~2h", "~3d", or "invalid"
+            when the expression cannot be parsed.
+        """
+        try:
+            import datetime
+
+            from croniter import croniter
+
+            now = datetime.datetime.now(tz=datetime.UTC)
+            cron = croniter(cron_expr, now)
+            next_dt = cron.get_next(datetime.datetime)
+            delta_secs = (next_dt - now).total_seconds()
+            if delta_secs < 3600:
+                return f"~{int(delta_secs // 60)}m"
+            if delta_secs < 86400:
+                return f"~{int(delta_secs // 3600)}h"
+            return f"~{int(delta_secs // 86400)}d"
+        except Exception:
+            return "?"
+
+    async def _handle_ambient_command(self, command: str) -> None:
+        """Handle /ambient — manage the ambient agent daemon.
+
+        Subcommands:
+            /ambient status         — Rich dashboard: daemon state, jobs, next run times
+            /ambient list           — List all configured jobs
+            /ambient jobs           — Alias for list
+            /ambient run <id>       — Trigger immediate run of job <id>
+            /ambient logs <id>      — Show output from the most recent run of job <id>
+            /ambient add <pipeline> — Register a saved pipeline as a daemon job
+            /ambient install        — Show service installation instructions
+
+        Args:
+            command: Full command string including the /ambient prefix.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.daemon_client import (
+            add_daemon_job,
+            format_daemon_status,
+            get_daemon_job_runs,
+            get_daemon_logs,
+            get_daemon_status,
+            is_daemon_running,
+            list_daemon_jobs,
+            trigger_daemon_job,
+        )
+
+        raw_arg = command.strip()[len("/ambient") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+        action = tokens[0].lower() if tokens else "status"
+
+        if action in {"status", ""}:
+            running = await asyncio.to_thread(is_daemon_running)
+            if not running:
+                await self._mount_message(
+                    AppMessage(
+                        "[yellow]Daemon not running.[/yellow]\n\n"
+                        "Start with: [bold]bog-agents-daemon[/bold]\n"
+                        "Or install as a service (see /ambient install)"
+                    )
+                )
+                return
+
+            # Read PID for the header
+            pid_file = Path.home() / ".bog-agents" / "daemon" / "daemon.pid"
+            try:
+                pid_str = pid_file.read_text().strip() if pid_file.exists() else "?"
+            except OSError:
+                pid_str = "?"
+
+            status = await get_daemon_status()
+            jobs = await list_daemon_jobs()
+
+            active_jobs = sum(1 for j in jobs if j.get("enabled", True))
+            disabled_jobs = len(jobs) - active_jobs
+
+            # Build header
+            version = (status or {}).get("version", "?")
+            lines: list[str] = [
+                f"[bold green]Daemon: running[/bold green]  PID [cyan]{pid_str}[/cyan]  version=[cyan]{version}[/cyan]",
+                f"[bold]Jobs:[/bold] {active_jobs} active, {disabled_jobs} disabled",
+                "",
+            ]
+
+            if jobs:
+                col_name = 20
+                col_trigger = 18
+                col_last = 14
+                col_next = 10
+                header = f"  {'Name':<{col_name}}  {'Trigger':<{col_trigger}}  {'Last':<{col_last}}  {'Next':<{col_next}}"
+                lines.append(f"[bold dim]{header}[/bold dim]")
+
+                for job in jobs:
+                    jname = (job.get("name") or "")[:col_name]
+                    enabled = job.get("enabled", True)
+                    last_status = job.get("last_status") or "pending"
+                    last_run_ts: float = job.get("last_run_at") or 0.0
+                    triggers = job.get("triggers") or []
+
+                    # Compute trigger display and next time
+                    cron_expr = ""
+                    trigger_strs: list[str] = []
+                    for t in triggers:
+                        ttype = t.get("type", "?")
+                        if ttype == "cron":
+                            cron_expr = t.get("cron", "")
+                            trigger_strs.append(
+                                f"cron: {cron_expr}" if cron_expr else "cron"
+                            )
+                        elif ttype == "file":
+                            pattern = t.get("pattern", "*")
+                            trigger_strs.append(f"file: {pattern}")
+                        else:
+                            trigger_strs.append(ttype)
+                    trigger_display = (", ".join(trigger_strs) or "—")[:col_trigger]
+
+                    # Next scheduled time
+                    if cron_expr:
+                        next_str = self._next_cron_time(cron_expr)
+                    elif triggers:
+                        next_str = "on trigger"
+                    else:
+                        next_str = "—"
+
+                    # Last run
+                    if last_run_ts:
+                        import time as _time_mod
+
+                        ago_secs = _time_mod.time() - last_run_ts
+                        if ago_secs < 3600:
+                            ago_str = f"{int(ago_secs // 60)}m ago"
+                        elif ago_secs < 86400:
+                            ago_str = f"{int(ago_secs // 3600)}h ago"
+                        else:
+                            ago_str = f"{int(ago_secs // 86400)}d ago"
+                        status_icon = (
+                            "[green]✅[/green]"
+                            if last_status == "completed"
+                            else "[red]❌[/red]"
+                        )
+                        last_str = f"{status_icon} {ago_str}"
+                    else:
+                        last_str = "[dim]never[/dim]"
+
+                    enabled_prefix = "  " if enabled else "[dim]"
+                    enabled_suffix = "" if enabled else " (disabled)[/dim]"
+                    lines.append(
+                        f"{enabled_prefix}[cyan]{jname:<{col_name}}[/cyan]  "
+                        f"{trigger_display:<{col_trigger}}  {last_str:<{col_last}}  {next_str}{enabled_suffix}"
+                    )
+
+            # Recent runs section: collect last run from each job
+            lines.append("")
+            lines.append("[bold]Recent runs:[/bold]")
+            any_runs = False
+            for job in jobs[:5]:
+                job_id_raw = job.get("job_id") or ""
+                jname = job.get("name") or job_id_raw
+                if not job_id_raw:
+                    continue
+                runs = await get_daemon_job_runs(job_id_raw, limit=1)
+                for run in runs[:1]:
+                    any_runs = True
+                    run_id_short = (run.get("run_id") or "")[:6]
+                    run_status = run.get("status") or "?"
+                    started_ts: float = run.get("started_at") or 0.0
+                    output_preview = (run.get("output") or run.get("error") or "")[:60]
+                    if started_ts:
+                        import time as _time_mod2
+
+                        ago2 = _time_mod2.time() - started_ts
+                        ago_label = (
+                            f"{int(ago2 // 60)}m ago"
+                            if ago2 < 3600
+                            else f"{int(ago2 // 3600)}h ago"
+                            if ago2 < 86400
+                            else f"{int(ago2 // 86400)}d ago"
+                        )
+                    else:
+                        ago_label = "?"
+                    color = (
+                        "green"
+                        if run_status == "completed"
+                        else "red"
+                        if run_status == "failed"
+                        else "cyan"
+                    )
+                    lines.append(
+                        f"  [bold]{jname}[/bold]  #{run_id_short}  [{color}]{run_status}[/{color}]  {ago_label}"
+                        + (
+                            f'  [dim]"{output_preview}..."[/dim]'
+                            if output_preview
+                            else ""
+                        )
+                    )
+            if not any_runs:
+                lines.append("  [dim]No recent runs.[/dim]")
+
+            lines.append("")
+            lines.append(
+                "[dim]Use /ambient run <id> to trigger a job | /ambient logs <id> for output[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action in {"list", "jobs"}:
+            running = await asyncio.to_thread(is_daemon_running)
+            if not running:
+                await self._mount_message(
+                    AppMessage("Daemon not running. Start with: bog-agents-daemon")
+                )
+                return
+            jobs = await list_daemon_jobs()
+            await self._mount_message(AppMessage(format_daemon_status(None, jobs)))
+            return
+
+        if action == "run":
+            job_id = tokens[1] if len(tokens) > 1 else ""
+            if not job_id:
+                await self._mount_message(AppMessage("Usage: /ambient run <job-id>"))
+                return
+            result = await trigger_daemon_job(job_id)
+            await self._mount_message(AppMessage(f"[green]Triggered:[/green] {result}"))
+            return
+
+        if action == "logs":
+            job_id = tokens[1] if len(tokens) > 1 else ""
+            if not job_id:
+                await self._mount_message(AppMessage("Usage: /ambient logs <job-id>"))
+                return
+            output = await get_daemon_logs(job_id)
+            if output:
+                await self._mount_message(
+                    AppMessage(f"[bold]Logs for {job_id}:[/bold]\n\n{output}")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"[dim]No log output found for job {job_id}.[/dim]")
+                )
+            return
+
+        if action == "add":
+            pipeline_name = tokens[1] if len(tokens) > 1 else ""
+            if not pipeline_name:
+                await self._mount_message(
+                    AppMessage("Usage: /ambient add <pipeline-name>")
+                )
+                return
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            pipeline_path = pipelines_dir / f"{pipeline_name}.yaml"
+            if not pipeline_path.exists():
+                await self._mount_message(
+                    AppMessage(
+                        f"[red]Pipeline not found:[/red] {pipeline_path}\n"
+                        "Use [bold]/build pipeline[/bold] to create one first."
+                    )
+                )
+                return
+            # Parse schedule from YAML if present
+            schedule = ""
+            try:
+                import re as _re
+
+                yaml_text = pipeline_path.read_text(encoding="utf-8")
+                m = _re.search(r"^schedule:\s*(.+)$", yaml_text, _re.MULTILINE)
+                if m:
+                    schedule = m.group(1).strip()
+            except OSError:
+                pass
+            job_def: dict[str, Any] = {
+                "name": pipeline_name,
+                "description": f"Pipeline: {pipeline_name}",
+                "triggers": [{"type": "cron", "cron": schedule}] if schedule else [],
+                "pipeline": str(pipeline_path),
+            }
+            result = await add_daemon_job(job_def)
+            if result:
+                job_id_new = result.get("job_id") or result.get("id") or "?"
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]Registered pipeline '{pipeline_name}' with daemon.[/green]\n"
+                        f"Job ID: [bold]{job_id_new}[/bold]"
+                        + (f"\nSchedule: {schedule}" if schedule else "")
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "[red]Failed to register pipeline with daemon.[/red] "
+                        "Is the daemon running? (check /ambient status)"
+                    )
+                )
+            return
+
+        if action in {"install", "service"}:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Install bog-agents-daemon as a system service:[/bold]\n\n"
+                    "[yellow]macOS (launchd):[/yellow]\n"
+                    "  bog-agents-daemon --install-launchd\n\n"
+                    "[yellow]Linux (systemd):[/yellow]\n"
+                    "  bog-agents-daemon --install-systemd\n\n"
+                    "[yellow]Manual start:[/yellow]\n"
+                    "  bog-agents-daemon &\n\n"
+                    "The daemon runs on port 7391 and persists jobs in ~/.bog-agents/daemon/"
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /ambient status | /ambient list | /ambient run <id> | "
+                "/ambient logs <id> | /ambient add <pipeline> | /ambient install"
+            )
+        )
+
+    # =========================================================================
+    # /build — interactive skill / prompt / pipeline wizard
+    # =========================================================================
+
+    def _get_last_assistant_text(self) -> str:
+        """Return text content of the last assistant message in the store.
+
+        Returns:
+            Content string of the most recent assistant message, or empty
+            string when no assistant message exists.
+        """
+        from bog_agents_cli.widgets.message_store import MessageType
+
+        messages = self._message_store.get_all_messages()
+        for message in reversed(messages):
+            if message.type == MessageType.ASSISTANT and message.content:
+                return message.content
+        return ""
+
+    async def _handle_build_command(self, command: str) -> None:
+        """Handle /build — interactive wizard for creating skills, prompts, and pipelines."""
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.cmd_build import (
+            build_pipeline_yaml,
+            build_prompt_entry,
+            build_skill_template,
+            extract_variables,
+            format_build_help,
+            preview_skill,
+            save_pipeline,
+            save_prompt,
+            save_skill,
+        )
+
+        raw_arg = command.strip()[len("/build") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+
+        kind = tokens[0].lower() if tokens else ""
+
+        if not kind or kind in {"help", "--help", "-h"}:
+            await self._mount_message(AppMessage(format_build_help()))
+            return
+
+        user_skills_dir = Path.home() / ".bog-agents" / "skills"
+        pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+        library_path = Path.home() / ".bog-agents" / "prompt_library.toml"
+
+        # ---- skill builder ----
+        if kind == "skill":
+            name = tokens[1] if len(tokens) > 1 else ""
+            description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
+            if not name:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build skill <name> [description]\n\n"
+                        "Then the agent will scaffold a skill template and ask for the body.\n\n"
+                        "Example: /build skill web-research Search the web and summarize results"
+                    )
+                )
+                return
+            if not description:
+                description = f"A skill named {name}"
+            # Build initial template and send to agent for body content
+            preview = preview_skill(name, description, "{{TOPIC}}", ["TOPIC"])
+            prompt = (
+                f"I'm building a skill named '{name}': {description}\n\n"
+                f"Here's the template preview:\n\n{preview}\n\n"
+                "Please write the body content for SKILL.md — the instructions the agent "
+                "should follow when this skill is invoked. Include any relevant steps, "
+                "constraints, and output format. Use {{VARIABLE_NAME}} for any parameters "
+                "the user should supply. Return ONLY the skill body text, nothing else."
+            )
+            self._build_pending = {
+                "kind": "skill",
+                "name": name,
+                "description": description,
+            }
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- prompt builder ----
+        if kind == "prompt":
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build prompt <name>\n\nExample: /build prompt code-review"
+                    )
+                )
+                return
+            description = (
+                " ".join(tokens[2:]) if len(tokens) > 2 else f"A prompt named {name}"
+            )
+            prompt = (
+                f"I'm building a saved prompt named '{name}': {description}\n\n"
+                "Please write the prompt body. Use {{VARIABLE_NAME}} for parameters the "
+                "user will fill in at runtime (e.g. {{LANGUAGE}}, {{FILE_PATH}}).\n\n"
+                "Return ONLY the prompt body text, nothing else."
+            )
+            self._build_pending = {
+                "kind": "prompt",
+                "name": name,
+                "description": description,
+            }
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- pipeline builder ----
+        if kind == "pipeline":
+            name = tokens[1] if len(tokens) > 1 else ""
+            if not name:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build pipeline <name> [--schedule 'cron']\n\n"
+                        "Example: /build pipeline daily-standup --schedule '0 9 * * 1-5'"
+                    )
+                )
+                return
+            schedule = ""
+            for i, t in enumerate(tokens):
+                if t == "--schedule" and i + 1 < len(tokens):
+                    schedule = tokens[i + 1]
+                    break
+            description = (
+                " ".join(
+                    t for t in tokens[2:] if not t.startswith("--") and t != schedule
+                )
+                or f"Pipeline: {name}"
+            )
+            prompt = (
+                f"I'm building an automation pipeline named '{name}': {description}\n"
+                + (f"Schedule: {schedule}\n" if schedule else "")
+                + "\nPlease design this pipeline. Describe each step in order as a JSON array like:\n"
+                '[\n  {"label": "Step 1", "type": "prompt", "content": "Do X"},\n'
+                '  {"label": "Step 2", "type": "skill", "content": "skill-name"},\n'
+                '  {"label": "Step 3", "type": "slash", "content": "/review"}\n]\n\n'
+                "Types: 'prompt' (send text to agent), 'skill' (invoke a skill by name), 'slash' (run a slash command).\n"
+                "Return ONLY the JSON array."
+            )
+            self._build_pending = {
+                "kind": "pipeline",
+                "name": name,
+                "description": description,
+                "schedule": schedule,
+            }
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        # ---- save last build ----
+        if kind == "save":
+            if not self._build_pending:
+                await self._mount_message(
+                    AppMessage(
+                        "No pending build. Run /build skill/prompt/pipeline first."
+                    )
+                )
+                return
+            pending = self._build_pending
+            last_content = self._get_last_assistant_text()
+            if not last_content:
+                await self._mount_message(
+                    AppMessage(
+                        "No agent response found to save. Generate content first."
+                    )
+                )
+                return
+            try:
+                if pending["kind"] == "skill":
+                    content = build_skill_template(
+                        pending["name"],
+                        pending["description"],
+                        last_content,
+                        variables=extract_variables(last_content),
+                    )
+                    path = await asyncio.to_thread(
+                        save_skill,
+                        pending["name"],
+                        content,
+                        user_skills_dir=user_skills_dir,
+                    )
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Skill saved:[/green] {path}\n\nUse `/skills list` to verify."
+                        )
+                    )
+                elif pending["kind"] == "prompt":
+                    entry = build_prompt_entry(
+                        pending["name"], pending["description"], last_content
+                    )
+                    await asyncio.to_thread(
+                        save_prompt, entry, library_path=library_path
+                    )
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Prompt saved:[/green] {pending['name']}\n\nUse `/prompt list` to verify."
+                        )
+                    )
+                elif pending["kind"] == "pipeline":
+                    import json as _json
+
+                    try:
+                        steps = _json.loads(last_content)
+                    except Exception:
+                        steps = [
+                            {
+                                "label": "Step 1",
+                                "type": "prompt",
+                                "content": last_content,
+                            }
+                        ]
+                    yaml_content = build_pipeline_yaml(
+                        pending["name"],
+                        pending["description"],
+                        steps,
+                        schedule=pending.get("schedule", ""),
+                    )
+                    path = await asyncio.to_thread(
+                        save_pipeline,
+                        pending["name"],
+                        yaml_content,
+                        pipelines_dir=pipelines_dir,
+                    )
+                    schedule = pending.get("schedule", "")
+                    if schedule:
+                        from bog_agents_cli.daemon_client import (
+                            is_daemon_running as _is_daemon_running,
+                        )
+
+                        daemon_running = await asyncio.to_thread(_is_daemon_running)
+                    else:
+                        daemon_running = False
+                    if schedule and daemon_running:
+                        await self._mount_message(
+                            AppMessage(
+                                f"[green]Pipeline saved:[/green] {path}\n\n"
+                                f"It has a schedule: [bold]{schedule}[/bold]\n"
+                                f"The ambient daemon is running. Register it now? [bold](yes/no)[/bold]"
+                            )
+                        )
+                        self._build_pending = {
+                            "kind": "pipeline",
+                            "name": pending["name"],
+                            "description": pending["description"],
+                            "schedule": schedule,
+                            "awaiting_daemon_confirm": True,
+                            "pipeline_path": str(path),
+                        }
+                        return
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Pipeline saved:[/green] {path}\n\nUse `/pipeline list` to verify."
+                        )
+                    )
+                self._build_pending = None
+            except FileExistsError as exc:
+                await self._mount_message(
+                    AppMessage(
+                        f"[red]Already exists:[/red] {exc}\nUse /build save --force to overwrite."
+                    )
+                )
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Save failed:[/red] {exc}"))
+            return
+
+        await self._mount_message(AppMessage(format_build_help()))
+
     async def _handle_agent_command(self, command: str) -> None:
         """Handle `/agent` as a first-class supervisor over managed workers."""
         await self._mount_message(UserMessage(command))
@@ -4238,6 +6073,15 @@ class BogAgentsApp(App):
 
         raw_arg = command.strip()[len("/agent") :].strip()
         lowered = raw_arg.lower()
+
+        if lowered in {"panel", "dashboard"}:
+            await self._show_agents_panel()
+            return
+
+        if lowered.startswith("watch ") or lowered == "watch":
+            watch_arg = raw_arg[len("watch") :].strip()
+            await self._handle_watch_subcommand(watch_arg)
+            return
 
         if not raw_arg or lowered in {"list", "status"}:
             await self._refresh_remote_tasks()
@@ -4258,7 +6102,21 @@ class BogAgentsApp(App):
                 ),
                 "Usage: /agent status <id> | /agent stop <id> | /agent cleanup",
                 "Usage: /agent switch <thread-id>",
+                "Usage: /agent panel  — live status table",
             ]
+            # Show parallel worktree tasks if any are tracked via middleware
+            try:
+                from bog_agents_cli.widgets.agents_panel import (
+                    format_agents_status_table,
+                )
+
+                wt_tasks = self._collect_worktree_tasks()
+                if wt_tasks:
+                    lines.append("")
+                    lines.append("Parallel worktree tasks:")
+                    lines.append(format_agents_status_table(wt_tasks))
+            except Exception:  # noqa: S110
+                pass
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
@@ -4543,9 +6401,84 @@ class BogAgentsApp(App):
                 "Usage: /agent | /agent spawn [--count N] [--team TEAM] "
                 "[--remote] [--worktree] <prompt> | "
                 "/agent status <id> | /agent stop <id> | /agent cleanup | "
-                "/agent switch <thread-id>"
+                "/agent switch <thread-id> | /agent panel"
             )
         )
+
+    async def _show_agents_panel(self) -> None:
+        """Show the parallel agents live status panel."""
+        from bog_agents_cli.widgets.agents_panel import format_agents_status_table
+
+        tasks = []
+        if hasattr(self, "_bg_manager"):
+            for task in self._bg_manager.get_all_tasks():
+                tasks.append(
+                    {
+                        "task_id": getattr(task, "task_id", "?"),
+                        "label": getattr(task, "label", str(task)),
+                        "status": getattr(task, "status", "unknown"),
+                        "branch": getattr(task, "worktree_branch", "") or "",
+                        "started_at": getattr(task, "started_at", None),
+                        "finished_at": getattr(task, "completed_at", None),
+                        "result": getattr(task, "result", "") or "",
+                        "error": getattr(task, "error", "") or "",
+                    }
+                )
+
+        wt_tasks = self._collect_worktree_tasks()
+        # Merge worktree middleware tasks (avoid duplicates by task_id)
+        seen_ids = {t["task_id"] for t in tasks}
+        for wt in wt_tasks:
+            if wt["task_id"] not in seen_ids:
+                tasks.append(wt)
+
+        if not tasks:
+            await self._mount_message(
+                AppMessage(
+                    "No parallel agent tasks found.\n"
+                    "Use /agent spawn [--worktree] <prompt> to start parallel agents."
+                )
+            )
+            return
+
+        table_text = format_agents_status_table(tasks)
+        await self._mount_message(AppMessage(table_text))
+
+    def _collect_worktree_tasks(self) -> list[dict[str, Any]]:
+        """Collect parallel worktree task status from any connected middleware.
+
+        Returns:
+            List of task dicts with keys compatible with
+            ``format_agents_status_table``.
+        """
+        tasks: list[dict[str, Any]] = []
+        try:
+            agent = self._agent
+            if agent is None:
+                return tasks
+            nodes = getattr(agent, "nodes", None)
+            node_iter = nodes.values() if isinstance(nodes, dict) else []
+            for node in node_iter:
+                mw = getattr(node, "middleware", None) or getattr(
+                    node, "_middleware", None
+                )
+                if mw and hasattr(mw, "get_tasks"):
+                    for task in mw.get_tasks():
+                        tasks.append(
+                            {
+                                "task_id": task.task_id,
+                                "label": task.label,
+                                "status": task.status,
+                                "branch": task.branch,
+                                "started_at": task.started_at,
+                                "finished_at": task.finished_at,
+                                "result": task.result or "",
+                                "error": task.error or "",
+                            }
+                        )
+        except Exception:  # noqa: S110
+            pass
+        return tasks
 
     async def _handle_permissions_command(self, command: str) -> None:
         """Handle `/permissions` by showing approval posture and shell policy.
@@ -4809,11 +6742,124 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"'{name}' was not found."))
             return
 
+        if lowered in {"claude", "claude-status"}:
+            from bog_agents_cli.claude_code_compat import (
+                format_compat_status,
+                get_claude_compat_status,
+            )
+
+            status = await asyncio.to_thread(
+                get_claude_compat_status, Path(self._cwd), config_dir
+            )
+            await self._mount_message(AppMessage(format_compat_status(status)))
+            return
+
+        if lowered == "claude-import":
+            from bog_agents_cli.claude_code_compat import (
+                detect_claude_skills,
+                import_claude_skill,
+            )
+
+            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
+            if not skills:
+                await self._mount_message(
+                    AppMessage(
+                        "No Claude Code skills found in .claude/ directories.\n\n"
+                        "Skills are SKILL.md files in .claude/skills/ or ~/.claude/skills/."
+                    )
+                )
+                return
+            skills_dir = config_dir / "skills"
+            imported: list[str] = []
+            for skill in skills:
+                dest = await asyncio.to_thread(import_claude_skill, skill, skills_dir)
+                imported.append(f"  {skill.name} → {dest}")
+            await self._mount_message(
+                AppMessage(
+                    f"Imported {len(imported)} Claude skill(s) into bog-agents:\n"
+                    + "\n".join(imported)
+                )
+            )
+            return
+
+        if lowered == "claude-list":
+            from bog_agents_cli.claude_code_compat import detect_claude_skills
+
+            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
+            if not skills:
+                await self._mount_message(AppMessage("No Claude Code skills found."))
+                return
+            lines = [f"Claude Code skills ({len(skills)} found):", ""]
+            for skill in skills:
+                lines.append(f"  {skill.name} v{skill.version} — {skill.description}")
+                lines.append(f"    {skill.source_path}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered == "sync-mcp" or lowered.startswith("sync-mcp "):
+            from bog_agents_cli.claude_code_compat import (
+                format_compat_status,
+                sync_mcp_configs,
+            )
+
+            parts2 = raw_arg.split()
+            direction = parts2[1] if len(parts2) > 1 else "both"
+            if direction not in {"both", "to-desktop", "from-desktop"}:
+                await self._mount_message(
+                    AppMessage("Usage: /plugin sync-mcp [both|to-desktop|from-desktop]")
+                )
+                return
+            result = await asyncio.to_thread(
+                sync_mcp_configs, Path(self._cwd), direction=direction
+            )
+            lines = ["MCP sync complete.", ""]
+            if result.added_to_mcp_json:
+                lines.append(
+                    f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}"
+                )
+            if result.added_from_desktop:
+                lines.append(
+                    f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}"
+                )
+            if not result.added_to_mcp_json and not result.added_from_desktop:
+                lines.append("Nothing to sync — configs are already in sync.")
+            if result.errors:
+                lines.append(f"Errors: {'; '.join(result.errors)}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered == "export-mcp":
+            from bog_agents_cli.claude_code_compat import export_mcp_from_extensions
+
+            result = await asyncio.to_thread(
+                export_mcp_from_extensions, config_dir, Path(self._cwd)
+            )
+            if result.added_to_mcp_json:
+                await self._mount_message(
+                    AppMessage(
+                        f"Exported {len(result.added_to_mcp_json)} MCP server(s) to "
+                        f"{result.output_path}:\n  "
+                        + "\n  ".join(result.added_to_mcp_json)
+                    )
+                )
+            elif result.errors:
+                await self._mount_message(
+                    AppMessage(f"Export errors: {'; '.join(result.errors)}")
+                )
+            else:
+                await self._mount_message(AppMessage("No new MCP servers to export."))
+            return
+
         await self._mount_message(
             AppMessage(
                 "Usage: /plugin | /plugin info <name> | /plugin install <path-or-url> | "
-                "/plugin uninstall <name> | /plugin enable <name> | "
-                "/plugin disable <name>"
+                "/plugin uninstall <name> | /plugin enable <name> | /plugin disable <name>\n\n"
+                "Claude Code compatibility:\n"
+                "  /plugin claude            — show compatibility status\n"
+                "  /plugin claude-list       — list detected Claude skills\n"
+                "  /plugin claude-import     — import Claude skills into bog-agents\n"
+                "  /plugin sync-mcp          — sync MCP configs with Claude Desktop\n"
+                "  /plugin export-mcp        — export extension MCP servers to .mcp.json"
             )
         )
 
@@ -5371,6 +7417,1116 @@ class BogAgentsApp(App):
             )
         )
 
+    async def _handle_think_command(self, command: str) -> None:
+        """Handle `/think` extended thinking mode toggle.
+
+        Subcommands:
+            /think            — Show current status
+            /think on         — Enable thinking
+            /think off        — Disable thinking
+            /think toggle     — Toggle on/off
+            /think budget N   — Set budget_tokens to N (int, e.g. 8000)
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.thinking import ThinkingMiddleware
+
+        mw = next(
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, ThinkingMiddleware)
+            ),
+            None,
+        )
+        if mw is None:
+            await self._mount_message(
+                AppMessage(
+                    "ThinkingMiddleware is not active in this session.\n"
+                    "Add `ThinkingMiddleware()` to your middleware stack to enable."
+                )
+            )
+            return
+
+        raw_arg = command.strip()[len("/think") :].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            state = "enabled" if mw.is_enabled else "disabled"
+            await self._mount_message(
+                AppMessage(
+                    f"Extended thinking: {state}\n"
+                    f"Budget tokens: {mw.budget_tokens:,}\n\n"
+                    "Usage: /think on | /think off | /think toggle | /think budget <N>"
+                )
+            )
+            return
+
+        if raw_arg == "on":
+            mw.set_thinking(True)
+            await self._mount_message(
+                AppMessage(
+                    f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens)."
+                )
+            )
+            return
+
+        if raw_arg == "off":
+            mw.set_thinking(False)
+            await self._mount_message(AppMessage("Extended thinking disabled."))
+            return
+
+        if raw_arg == "toggle":
+            enabled = mw.toggle()
+            state = "enabled" if enabled else "disabled"
+            await self._mount_message(AppMessage(f"Extended thinking {state}."))
+            return
+
+        if raw_arg.startswith("budget "):
+            budget_str = raw_arg[7:].strip()
+            try:
+                budget = int(budget_str)
+                if budget < 1024:
+                    await self._mount_message(
+                        AppMessage("Budget must be at least 1024 tokens.")
+                    )
+                    return
+                mw.set_thinking(mw.is_enabled, budget_tokens=budget)
+                await self._mount_message(
+                    AppMessage(f"Thinking budget set to {budget:,} tokens.")
+                )
+            except ValueError:
+                await self._mount_message(
+                    AppMessage(
+                        f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>"
+                    )
+                )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /think | /think on | /think off | /think toggle | /think budget <N>"
+            )
+        )
+
+    async def _handle_rules_command(self, command: str) -> None:
+        """Handle `/rules` project rules management.
+
+        Subcommands:
+            /rules              — List all rules
+            /rules list         — List all rules
+            /rules show <name>  — Show rule content
+            /rules test <file>  — Test which rules match a file
+            /rules add <name>   — Create a new rule file template
+            /rules edit <name>  — Show path to edit a rule
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.rules import (
+            apply_rules,
+            create_rule_file,
+            load_rules,
+        )
+
+        project_root = Path(self._cwd)
+        raw_arg = command.strip()[len("/rules") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "list":
+            rules = await asyncio.to_thread(load_rules, project_root)
+            if not rules:
+                await self._mount_message(
+                    AppMessage(
+                        "No rules found in .bog-agents/rules/\n\n"
+                        "Create one with: /rules add <name>"
+                    )
+                )
+                return
+            lines = [f"Project rules ({len(rules)} total):", ""]
+            for r in rules:
+                glob_str = ", ".join(r.glob) if r.glob else "(no glob)"
+                always_str = " [always]" if r.always else ""
+                agent_str = f" [agent:{r.agent}]" if r.agent else ""
+                lines.append(
+                    f"  {r.name} (priority {r.priority}){always_str}{agent_str} — {glob_str}"
+                )
+            lines.append("")
+            lines.append("Use /rules show <name> to view content.")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("show "):
+            name = raw_arg[5:].strip()
+            rules = await asyncio.to_thread(load_rules, project_root)
+            match = next(
+                (
+                    r
+                    for r in rules
+                    if r.name == name or r.name == name.removesuffix(".md")
+                ),
+                None,
+            )
+            if match is None:
+                await self._mount_message(AppMessage(f"Rule '{name}' not found."))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"Rule: {match.name}\n"
+                    f"File: {match.path}\n"
+                    f"Priority: {match.priority} | Always: {match.always} | Agent: {match.agent or '(any)'}\n"
+                    f"Glob: {', '.join(match.glob) or '(none)'}\n\n"
+                    f"{match.content}"
+                )
+            )
+            return
+
+        if lowered.startswith("test "):
+            file_arg = raw_arg[5:].strip()
+            context_files = [file_arg] if file_arg else []
+            rules = await asyncio.to_thread(load_rules, project_root)
+            matching = [r for r in rules if r.matches(context_files, agent_type="")]
+            if not matching:
+                await self._mount_message(AppMessage(f"No rules match '{file_arg}'."))
+                return
+            lines = [f"Rules matching '{file_arg}':", ""]
+            for r in matching:
+                lines.append(f"  {r.name} (priority {r.priority})")
+            lines.append("")
+            preview = await asyncio.to_thread(apply_rules, rules, context_files, "")
+            if preview:
+                lines.append("Injected content preview (first 500 chars):")
+                lines.append(preview[:500])
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("add "):
+            name = raw_arg[4:].strip()
+            if not name:
+                await self._mount_message(AppMessage("Usage: /rules add <rule-name>"))
+                return
+            rule_path = await asyncio.to_thread(
+                create_rule_file,
+                project_root,
+                name,
+                f"# {name}\n\nDescribe the rule here.",
+            )
+            await self._mount_message(
+                AppMessage(
+                    f"Created rule: {rule_path}\n\n"
+                    "Edit it to add frontmatter and content:\n"
+                    "---\n"
+                    "glob: ['**/*.py']\n"
+                    "priority: 50\n"
+                    "---\n"
+                    "Rule content here."
+                )
+            )
+            return
+
+        if lowered.startswith("edit "):
+            name = raw_arg[5:].strip()
+            rules = await asyncio.to_thread(load_rules, project_root)
+            match = next(
+                (
+                    r
+                    for r in rules
+                    if r.name == name or r.name == name.removesuffix(".md")
+                ),
+                None,
+            )
+            if match is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Rule '{name}' not found. Use /rules add <name> to create it."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage(f"Edit rule at: {match.path}"))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /rules | /rules list | /rules show <name> | "
+                "/rules test <file> | /rules add <name> | /rules edit <name>"
+            )
+        )
+
+    async def _handle_search_command(self, command: str) -> None:
+        """Handle `/search` hybrid codebase search.
+
+        Subcommands:
+            /search <query>         — Hybrid search (ripgrep + fuzzy filename)
+            /search index           — Build/rebuild embedding index
+            /search index --force   — Force full rebuild of index
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.hybrid_search import (
+            HybridSearchMiddleware,
+            format_search_results,
+            hybrid_search,
+        )
+
+        raw_arg = command.strip()[len("/search") :].strip()
+        if not raw_arg:
+            await self._mount_message(
+                AppMessage("Usage: /search <query> | /search index [--force]")
+            )
+            return
+
+        lowered = raw_arg.lower()
+
+        if lowered in {"index", "index --force"}:
+            force = "--force" in lowered
+            mw = next(
+                (
+                    m
+                    for m in getattr(self, "_middleware", [])
+                    if isinstance(m, HybridSearchMiddleware)
+                ),
+                None,
+            )
+            if mw is None:
+                await self._mount_message(
+                    AppMessage(
+                        "HybridSearchMiddleware is not active.\n"
+                        "Add it to your middleware stack to use semantic indexing."
+                    )
+                )
+                return
+            await self._mount_message(
+                AppMessage("Building embedding index… this may take a minute.")
+            )
+            try:
+                result = await asyncio.to_thread(mw._rebuild_index, force=force)
+                await self._mount_message(AppMessage(f"Index built: {result}"))
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"Index build failed: {exc}"))
+            return
+
+        try:
+            results = await asyncio.to_thread(
+                hybrid_search,
+                raw_arg,
+                Path(self._cwd),
+                max_results=20,
+                use_semantic=False,
+            )
+        except Exception as exc:
+            await self._mount_message(AppMessage(f"Search error: {exc}"))
+            return
+
+        if not results:
+            await self._mount_message(AppMessage(f"No results for `{raw_arg}`."))
+            return
+
+        formatted = format_search_results(results)
+        await self._mount_message(
+            AppMessage(
+                f"Search results for `{raw_arg}` ({len(results)} matches):\n\n{formatted}"
+            )
+        )
+
+    async def _handle_worktrees_command(self, command: str) -> None:
+        """Handle `/worktrees` parallel multi-agent worktree management.
+
+        Subcommands:
+            /worktrees              — Show status of all parallel tasks
+            /worktrees status       — Show status of all parallel tasks
+            /worktrees spawn <JSON> — Spawn parallel tasks (JSON array of {label, prompt})
+            /worktrees merge <id>   — Merge a completed task's branch
+            /worktrees cancel <id>  — Cancel a running task
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.worktree import (
+            ParallelWorktreeMiddleware,
+            format_worktree_status,
+        )
+
+        mw = next(
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, ParallelWorktreeMiddleware)
+            ),
+            None,
+        )
+        if mw is None:
+            await self._mount_message(
+                AppMessage(
+                    "ParallelWorktreeMiddleware is not active in this session.\n"
+                    "Add `ParallelWorktreeMiddleware(agent_factory=...)` to your middleware stack."
+                )
+            )
+            return
+
+        raw_arg = command.strip()[len("/worktrees") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "status":
+            tasks = mw.get_tasks()
+            if not tasks:
+                await self._mount_message(
+                    AppMessage(
+                        "No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage(format_worktree_status(tasks)))
+            return
+
+        if lowered.startswith("cancel "):
+            task_id = raw_arg[7:].strip()
+            task = mw.get_task(task_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
+                return
+            if task.status not in ("pending", "running"):
+                await self._mount_message(
+                    AppMessage(f"Task '{task_id}' is already {task.status}.")
+                )
+                return
+            task.status = "cancelled"
+            await self._mount_message(AppMessage(f"Task '{task_id}' cancelled."))
+            return
+
+        if lowered.startswith("merge "):
+            import json as _json
+
+            task_id = raw_arg[6:].strip()
+            task = mw.get_task(task_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
+                return
+            if task.status != "done":
+                await self._mount_message(
+                    AppMessage(
+                        f"Task '{task_id}' is {task.status}, not done. Cannot merge yet."
+                    )
+                )
+                return
+            from bog_agents.middleware.worktree import merge_with_conflict_report
+
+            repo_root = await self._get_repo_root()
+            if repo_root is None:
+                await self._mount_message(AppMessage("Not in a git repository."))
+                return
+            report = await asyncio.to_thread(
+                merge_with_conflict_report,
+                repo_root,
+                task.branch,
+                "main",
+                False,
+            )
+            conflicts = report.get("conflicts", [])
+            merged = report.get("merged", False)
+            status_str = (
+                "Merged successfully."
+                if merged
+                else f"Conflicts detected in: {', '.join(conflicts)}"
+            )
+            await self._mount_message(
+                AppMessage(f"Merge task '{task_id}' ({task.branch}):\n{status_str}")
+            )
+            return
+
+        if lowered.startswith("spawn "):
+            import json as _json
+
+            json_str = raw_arg[6:].strip()
+            try:
+                tasks_input = _json.loads(json_str)
+            except _json.JSONDecodeError as exc:
+                await self._mount_message(
+                    AppMessage(
+                        f"Invalid JSON: {exc}\n\n"
+                        'Usage: /worktrees spawn [{"label": "task1", "prompt": "do X"}, ...]'
+                    )
+                )
+                return
+            if not isinstance(tasks_input, list):
+                await self._mount_message(
+                    AppMessage("Input must be a JSON array of task objects.")
+                )
+                return
+
+            repo_root = await self._get_repo_root()
+            if repo_root is None:
+                await self._mount_message(AppMessage("Not in a git repository."))
+                return
+
+            task_ids = []
+            for item in tasks_input:
+                label = item.get("label", "task")
+                prompt = item.get("prompt", "")
+                task = await mw._create_task(
+                    label=label, prompt=prompt, repo_root=repo_root
+                )
+                task_ids.append(task.task_id)
+                asyncio.create_task(mw._run_task_in_worktree(task))  # noqa: RUF006
+
+            await self._mount_message(
+                AppMessage(
+                    f"Spawned {len(task_ids)} parallel task(s).\n"
+                    f"Task IDs: {', '.join(task_ids)}\n\n"
+                    "Use /worktrees status to monitor progress."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /worktrees | /worktrees status | "
+                '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
+                "/worktrees merge <id> | /worktrees cancel <id>"
+            )
+        )
+
+    async def _handle_compress_command(self, command: str) -> None:
+        """Handle `/compress` intelligent context compression.
+
+        Subcommands:
+            /compress              — Show context usage and compress if needed
+            /compress status       — Show token usage progress bar
+            /compress now          — Force-compress immediately
+            /compress auto on|off  — Enable/disable auto-compression
+            /compress threshold N  — Set auto-trigger threshold (0-100%)
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.intelligent_compaction import (
+            IntelligentCompactionMiddleware,
+        )
+
+        mw = next(
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, IntelligentCompactionMiddleware)
+            ),
+            None,
+        )
+
+        raw_arg = command.strip()[len("/compress") :].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            if mw is not None:
+                info = mw.get_usage_info()
+                auto_str = (
+                    "enabled"
+                    if info.auto_threshold_pct > 0 and mw.enabled
+                    else "disabled"
+                )
+                ratio_str = (
+                    f"  Last compression ratio: {info.last_compression_ratio:.1%}"
+                    if info.last_compression_ratio is not None
+                    else ""
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Context usage: {info.progress_bar}\n"
+                        f"  Estimated tokens: {info.estimated_tokens:,} / {info.context_window:,}\n"
+                        f"  Auto-compress: {auto_str} at {info.auto_threshold_pct * 100:.0f}%\n"
+                        f"  Compressions this session: {info.compaction_count}"
+                        + (f"\n{ratio_str}" if ratio_str else "")
+                    )
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "IntelligentCompactionMiddleware is not active.\n\n"
+                        "Running /compact (basic compression) instead…"
+                    )
+                )
+                await self._handle_compact()
+            return
+
+        if raw_arg == "now":
+            if mw is not None:
+                try:
+                    state_values = await self._get_thread_state_values(
+                        self._lc_thread_id or ""
+                    )
+                    messages = state_values.get("messages", []) if state_values else []
+                    if not messages:
+                        await self._mount_message(
+                            AppMessage("No messages to compress.")
+                        )
+                        return
+                    _, event = await asyncio.to_thread(mw.compress_now, messages)
+                    await self._mount_message(
+                        AppMessage(
+                            f"Compressed: {event.tokens_before:,} → {event.tokens_after:,} tokens "
+                            f"({event.reduction_pct:.0f}% reduction, ratio {event.ratio:.2f})"
+                        )
+                    )
+                except Exception as exc:
+                    await self._mount_message(AppMessage(f"Compression failed: {exc}"))
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "IntelligentCompactionMiddleware not active — running /compact instead."
+                    )
+                )
+                await self._handle_compact()
+            return
+
+        if raw_arg.startswith("auto "):
+            toggle = raw_arg[5:].strip()
+            if mw is None:
+                await self._mount_message(
+                    AppMessage("IntelligentCompactionMiddleware not active.")
+                )
+                return
+            if toggle == "on":
+                mw.set_enabled(True)
+                await self._mount_message(AppMessage("Auto-compression enabled."))
+            elif toggle == "off":
+                mw.set_enabled(False)
+                await self._mount_message(AppMessage("Auto-compression disabled."))
+            else:
+                await self._mount_message(AppMessage("Usage: /compress auto on|off"))
+            return
+
+        if raw_arg.startswith("threshold "):
+            if mw is None:
+                await self._mount_message(
+                    AppMessage("IntelligentCompactionMiddleware not active.")
+                )
+                return
+            pct_str = raw_arg[10:].strip().rstrip("%")
+            try:
+                pct = float(pct_str)
+                if not (10.0 <= pct <= 99.0):
+                    await self._mount_message(
+                        AppMessage("Threshold must be between 10 and 99.")
+                    )
+                    return
+                mw._auto_threshold_pct = pct / 100.0
+                await self._mount_message(
+                    AppMessage(f"Auto-compression threshold set to {pct:.0f}%.")
+                )
+            except ValueError:
+                await self._mount_message(AppMessage(f"Invalid threshold: {pct_str!r}"))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /compress | /compress status | /compress now | "
+                "/compress auto on|off | /compress threshold <N>"
+            )
+        )
+
+    async def _handle_jobs_command(self, command: str) -> None:
+        """Handle `/jobs` autonomous background job management.
+
+        Subcommands:
+            /jobs                  — List all jobs
+            /jobs list             — List all jobs (including from disk)
+            /jobs status <id>      — Show job details
+            /jobs cancel <id>      — Cancel a running job
+            /jobs run <prompt>     — Submit a new background job
+            /jobs cleanup          — Remove completed/failed jobs
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.jobs_manager import PersistentJobsManager
+
+        raw_arg = command.strip()[len("/jobs") :].strip()
+        lowered = raw_arg.lower()
+
+        # Use PersistentJobsManager if available, else fall back to BackgroundAgentManager
+        bg_manager = getattr(self, "_bg_manager", None)
+        if bg_manager is None:
+            await self._ensure_background_manager()
+            bg_manager = self._bg_manager
+
+        if not raw_arg or lowered == "list":
+            if isinstance(bg_manager, PersistentJobsManager):
+                table = bg_manager.format_jobs_table()
+            else:
+                table = bg_manager.format_status_table()
+            await self._mount_message(AppMessage(table or "No jobs found."))
+            return
+
+        if lowered.startswith("status "):
+            job_id = raw_arg[7:].strip()
+            task = bg_manager.get_status(job_id)
+            if task is None:
+                await self._mount_message(AppMessage(f"Job '{job_id}' not found."))
+                return
+            dur = (
+                f"{task.duration_seconds:.0f}s"
+                if task.duration_seconds is not None
+                else "—"
+            )
+            branch = getattr(task, "worktree_branch", None) or "—"
+            lines = [
+                f"Job: {task.task_id}",
+                f"Status: {task.status}",
+                f"Label: {task.label or '(none)'}",
+                f"Branch: {branch}",
+                f"Duration: {dur}",
+                f"Prompt: {task.prompt[:200]}",
+            ]
+            if task.result:
+                lines.append(f"\nResult preview:\n{task.result[:400]}")
+            if task.error:
+                lines.append(f"\nError: {task.error}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("cancel "):
+            job_id = raw_arg[7:].strip()
+            cancelled = bg_manager.cancel(job_id)
+            if cancelled:
+                await self._mount_message(
+                    AppMessage(f"Job '{job_id}' cancel requested.")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"Job '{job_id}' not found or not running.")
+                )
+            return
+
+        if lowered.startswith("run "):
+            prompt = raw_arg[4:].strip()
+            if not prompt:
+                await self._mount_message(AppMessage("Usage: /jobs run <prompt>"))
+                return
+            try:
+                task_id = await bg_manager.submit(
+                    prompt,
+                    label=prompt[:30],
+                    strategy="worktree",
+                    working_dir=self._cwd,
+                    parent_thread_id=self._lc_thread_id,
+                )
+                branch = (
+                    getattr(bg_manager.get_status(task_id), "worktree_branch", None)
+                    or "—"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Job submitted: {task_id}\n"
+                        f"Branch: {branch}\n"
+                        f"Use /jobs status {task_id} to monitor progress."
+                    )
+                )
+            except RuntimeError as exc:
+                await self._mount_message(AppMessage(f"Failed to submit job: {exc}"))
+            return
+
+        if lowered == "cleanup":
+            removed = bg_manager.cleanup_completed()
+            await self._mount_message(
+                AppMessage(f"Cleaned up {removed} completed/failed jobs.")
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /jobs | /jobs list | /jobs status <id> | "
+                "/jobs cancel <id> | /jobs run <prompt> | /jobs cleanup"
+            )
+        )
+
+    async def _handle_workspace_command(self, command: str) -> None:
+        """Handle `/workspace` multi-repository context management.
+
+        Subcommands:
+            /workspace               — Show configured repos
+            /workspace list          — List repos from workspace.toml
+            /workspace show <name>   — Show repo map for a named repo
+            /workspace search <query>— Search query across all repos
+            /workspace init          — Create .bog-agents/workspace.toml template
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents.middleware.multi_repo import (
+            get_recent_changes,
+            get_repo_map,
+            load_workspace,
+            search_across_repos,
+        )
+
+        project_root = Path(self._cwd)
+        raw_arg = command.strip()[len("/workspace") :].strip()
+        lowered = raw_arg.lower()
+
+        if not raw_arg or lowered == "list":
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
+                return
+            if not repos:
+                workspace_file = project_root / ".bog-agents" / "workspace.toml"
+                await self._mount_message(
+                    AppMessage(
+                        f"No workspace config found at {workspace_file}\n\n"
+                        "Create one with: /workspace init"
+                    )
+                )
+                return
+            lines = [f"Workspace repos ({len(repos)} configured):", ""]
+            for name, repo in repos.items():
+                status = "exists" if repo.exists else "[dim]not found[/dim]"
+                lines.append(f"  {name}: {repo.path}  [{status}]")
+                if repo.description:
+                    lines.append(f"    {repo.description}")
+            lines.append("\nUse /workspace show <name> or /workspace search <query>")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if lowered.startswith("show "):
+            name = raw_arg[5:].strip()
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
+                return
+            repo = repos.get(name)
+            if repo is None:
+                await self._mount_message(
+                    AppMessage(f"Repo '{name}' not found in workspace.toml.")
+                )
+                return
+            if not repo.exists:
+                await self._mount_message(
+                    AppMessage(f"Repo path does not exist: {repo.path}")
+                )
+                return
+            try:
+                repo_map = await asyncio.to_thread(get_repo_map, repo)
+                recent = await asyncio.to_thread(get_recent_changes, repo)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Error reading repo '{name}':[/red] {exc}")
+                )
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"Repo: {name} ({repo.path})\n\n"
+                    f"--- File Map ---\n{repo_map}\n\n"
+                    f"--- Recent Changes ---\n{recent}"
+                )
+            )
+            return
+
+        if lowered.startswith("search "):
+            query = raw_arg[7:].strip()
+            if not query:
+                await self._mount_message(
+                    AppMessage("Usage: /workspace search <query>")
+                )
+                return
+            try:
+                repos = await asyncio.to_thread(load_workspace, project_root)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
+                return
+            if not repos:
+                await self._mount_message(
+                    AppMessage("No repos configured. Use /workspace init to set up.")
+                )
+                return
+            try:
+                results = await asyncio.to_thread(search_across_repos, query, repos)
+            except Exception as exc:
+                await self._mount_message(AppMessage(f"[red]Search error:[/red] {exc}"))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"Cross-repo search for `{query}`:\n\n{results or 'No results found.'}"
+                )
+            )
+            return
+
+        if lowered == "init":
+            workspace_dir = project_root / ".bog-agents"
+            workspace_file = workspace_dir / "workspace.toml"
+            if workspace_file.exists():
+                await self._mount_message(
+                    AppMessage(f"workspace.toml already exists at {workspace_file}")
+                )
+                return
+            template = (
+                "# Bog Agents Workspace — multi-repository context\n"
+                "# Define repos to use with @repo:name mentions and /workspace commands\n\n"
+                "[repos]\n"
+                '# my-service = { path = "../my-service", description = "My microservice" }\n\n'
+                "[settings]\n"
+                "shared_embeddings = false\n"
+                "max_repos = 10\n"
+            )
+            try:
+                from bog_agents_cli.io_utils import atomic_write_text
+
+                atomic_write_text(workspace_file, template)
+            except OSError as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Failed to create workspace.toml:[/red] {exc}")
+                )
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"Created workspace config: {workspace_file}\n\n"
+                    "Edit it to add your repos:\n"
+                    "[repos]\n"
+                    'auth-service = { path = "../auth-service", description = "Auth API" }'
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /workspace | /workspace list | /workspace show <name> | "
+                "/workspace search <query> | /workspace init"
+            )
+        )
+
+    async def _handle_langsmith_command(self, command: str) -> None:
+        """Handle `/langsmith` — LangSmith observability integration.
+
+        Subcommands:
+            /langsmith                          — Status and config
+            /langsmith set-key <key>            — Save LangSmith API key to vault
+            /langsmith config set-project <p>   — Set default project
+            /langsmith projects                 — List all projects
+            /langsmith runs [project]           — List recent runs (last 24h)
+            /langsmith run <id>                 — Run details
+            /langsmith trace <id>               — Get shareable trace URL
+            /langsmith datasets                 — List all datasets
+            /langsmith dataset <name>           — Dataset details and examples
+            /langsmith evals [project]          — List evaluation experiments
+            /langsmith eval <name>              — Eval experiment results
+            /langsmith eval compare <a> <b>     — Compare two eval experiments
+            /langsmith feedback <run-id>        — Feedback logged on a run
+            /langsmith otel                     — OTEL tracing setup guide
+
+        Args:
+            command: Full command string.
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.langsmith_cli import (
+            format_langsmith_dataset,
+            format_langsmith_datasets,
+            format_langsmith_eval,
+            format_langsmith_eval_compare,
+            format_langsmith_evals,
+            format_langsmith_feedback,
+            format_langsmith_otel_setup,
+            format_langsmith_projects,
+            format_langsmith_run,
+            format_langsmith_runs,
+            format_langsmith_status,
+            format_langsmith_trace,
+        )
+
+        raw_arg = command.strip()[len("/langsmith") :].strip()
+        parts = raw_arg.split(maxsplit=2)
+        subcommand = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        rest2 = parts[2].strip() if len(parts) > 2 else ""
+
+        # All LangSmith API calls run in a thread and are bounded to 30 s.
+        ls_timeout = 30.0
+
+        async def _ls(fn, *args):  # noqa: ANN001, ANN002
+            """Run a langsmith_cli helper with a timeout."""
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(fn, *args), timeout=ls_timeout
+                )
+            except TimeoutError:
+                return f"[red]LangSmith request timed out after {ls_timeout:.0f}s[/red]"
+
+        if subcommand == "set-key":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith set-key <key>"))
+                return
+            try:
+                from bog_agents_cli.api_keys import save_api_key
+
+                save_api_key("LANGSMITH_API_KEY", rest)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"[red]Failed to save LangSmith API key:[/red] {exc}")
+                )
+                return
+            import os as _os
+
+            if not _os.environ.get("LANGCHAIN_TRACING_V2"):
+                _os.environ["LANGCHAIN_TRACING_V2"] = "true"
+            await self._mount_message(
+                AppMessage(
+                    "[green]LangSmith API key saved to vault.[/green]\n"
+                    "Tracing is now enabled for this session."
+                )
+            )
+            return
+
+        if not subcommand or subcommand in {"status", "config"}:
+            if rest.lower() == "set-project" and rest2:
+                import re as _re
+
+                if not _re.match(r"^[\w\-\.]{1,100}$", rest2):
+                    await self._mount_message(
+                        AppMessage(
+                            f"[red]Invalid project name:[/red] {rest2!r}\n"
+                            "Only alphanumeric characters, dashes, underscores, and dots are allowed."
+                        )
+                    )
+                    return
+                import os as _os
+
+                _os.environ["LANGCHAIN_PROJECT"] = rest2
+                logger.info("LangSmith project changed to %r", rest2)
+                await self._mount_message(
+                    AppMessage(
+                        f"LangSmith default project set to: [cyan]{rest2}[/cyan]"
+                    )
+                )
+                return
+            result = await _ls(format_langsmith_status)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "projects":
+            result = await _ls(format_langsmith_projects)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "runs":
+            result = await _ls(format_langsmith_runs, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "run":
+            if not rest:
+                await self._mount_message(AppMessage("Usage: /langsmith run <run-id>"))
+                return
+            result = await _ls(format_langsmith_run, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "trace":
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith trace <run-id>")
+                )
+                return
+            result = await _ls(format_langsmith_trace, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "datasets":
+            result = await _ls(format_langsmith_datasets)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "dataset":
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith dataset <name>")
+                )
+                return
+            result = await _ls(format_langsmith_dataset, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "evals":
+            result = await _ls(format_langsmith_evals, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "eval":
+            if not rest:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /langsmith eval <name> | /langsmith eval compare <a> <b>"
+                    )
+                )
+                return
+            if rest.lower() == "compare":
+                if not rest2 or " " not in rest2:
+                    await self._mount_message(
+                        AppMessage("Usage: /langsmith eval compare <eval-a> <eval-b>")
+                    )
+                    return
+                eval_a, _, eval_b = rest2.partition(" ")
+                result = await _ls(
+                    format_langsmith_eval_compare, eval_a.strip(), eval_b.strip()
+                )
+            else:
+                result = await _ls(format_langsmith_eval, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "feedback":
+            if not rest:
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith feedback <run-id>")
+                )
+                return
+            result = await _ls(format_langsmith_feedback, rest)
+            await self._mount_message(AppMessage(result))
+            return
+
+        if subcommand == "otel":
+            result = await _ls(format_langsmith_otel_setup)
+            await self._mount_message(AppMessage(result))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /langsmith                          — status and config\n"
+                "  /langsmith set-key <key>            — save API key to vault\n"
+                "  /langsmith config set-project <p>   — set default project\n"
+                "  /langsmith projects                 — list projects\n"
+                "  /langsmith runs [project]           — list recent runs\n"
+                "  /langsmith run <id>                 — run details\n"
+                "  /langsmith trace <id>               — get trace URL\n"
+                "  /langsmith datasets                 — list datasets\n"
+                "  /langsmith dataset <name>           — dataset details\n"
+                "  /langsmith evals [project]          — list eval experiments\n"
+                "  /langsmith eval <name>              — eval results\n"
+                "  /langsmith eval compare <a> <b>     — compare two evals\n"
+                "  /langsmith feedback <run-id>        — run feedback\n"
+                "  /langsmith otel                     — OTEL tracing setup"
+            )
+        )
+
     async def _handle_command(self, command: str) -> None:
         """Handle a slash command.
 
@@ -5583,6 +8739,20 @@ class BogAgentsApp(App):
         """Handle `/team` coordination and shared-memory workflows."""
         await self._mount_message(UserMessage(command))
 
+        from bog_agents_cli.team_config import (
+            TeamSharedConfig,
+            add_member as team_add_member,
+            format_setup_guide,
+            format_team_status,
+            get_named_prompt,
+            get_shared_context_text,
+            init_team_directory,
+            load_team_config,
+            load_user_identity,
+            remove_member as team_remove_member,
+            save_team_config,
+            save_user_identity,
+        )
         from bog_agents_cli.team_orchestration import (
             add_team_member,
             append_team_message,
@@ -5604,8 +8774,359 @@ class BogAgentsApp(App):
             )
             return
 
+        project_root = Path(self._cwd)
+        action = tokens[0].lower() if tokens else "status"
+
+        # -----------------------------------------------------------------
+        # Developer team shared config subcommands
+        # -----------------------------------------------------------------
+
+        if action in {"setup", "guide", "help"}:
+            await self._mount_message(AppMessage(format_setup_guide()))
+            return
+
+        if action == "status" and len(tokens) <= 1:
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage(
+                        "No team config found in this project.\n\n"
+                        "Run `/team init <name>` to create one, or "
+                        "`/team setup` for the full setup guide."
+                    )
+                )
+            else:
+                identity = load_user_identity()
+                await self._mount_message(
+                    AppMessage(format_team_status(cfg, project_root, identity))
+                )
+            return
+
+        if action == "init":
+            team_name = " ".join(tokens[1:]).strip() if len(tokens) > 1 else ""
+            if not team_name:
+                await self._mount_message(AppMessage("Usage: /team init <team-name>"))
+                return
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                cfg = TeamSharedConfig(name=team_name)
+                cfg.context.always_include = ["context/team-overview.md"]
+            else:
+                cfg.name = team_name
+            created_files = await asyncio.to_thread(
+                init_team_directory, project_root, team_name
+            )
+            await asyncio.to_thread(save_team_config, cfg, project_root)
+            file_list = "\n".join(
+                f"  {f.relative_to(project_root)}" for f in created_files
+            )
+            await self._mount_message(
+                AppMessage(
+                    f"Team '{team_name}' initialized.\n\n"
+                    f"Created:\n"
+                    f"  .bog-agents/team/config.json\n"
+                    f"{file_list}\n\n"
+                    "Next steps:\n"
+                    "  1. Run `/team whoami set <name> <email>` to set your identity\n"
+                    "  2. Run `/team invite <email> [role] [name]` to add team members\n"
+                    "  3. Edit .bog-agents/team/context/team-overview.md with your team's context\n"
+                    "  4. Run `git add .bog-agents/team/ && git commit -m 'chore: add team config'`\n\n"
+                    "Run `/team setup` for the full guide."
+                )
+            )
+            return
+
+        if action == "whoami":
+            identity = load_user_identity()
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub in {"show", "status"}:
+                if identity.name or identity.email:
+                    await self._mount_message(
+                        AppMessage(
+                            f"Identity: {identity.name} <{identity.email}> ({identity.role})"
+                        )
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(
+                            "Identity not set.\nRun: /team whoami set <name> <email>"
+                        )
+                    )
+            elif sub == "set":
+                if len(tokens) < 4:
+                    await self._mount_message(
+                        AppMessage("Usage: /team whoami set <name> <email>")
+                    )
+                    return
+                identity.name = tokens[2]
+                identity.email = tokens[3]
+                await asyncio.to_thread(save_user_identity, identity)
+                await self._mount_message(
+                    AppMessage(f"Identity saved: {identity.name} <{identity.email}>")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team whoami | /team whoami set <name> <email>")
+                )
+            return
+
+        if action == "invite":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
+                return
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: /team invite <email> [role] [name]")
+                )
+                return
+            email = tokens[1]
+            role = tokens[2] if len(tokens) > 2 else "member"
+            name = " ".join(tokens[3:]) if len(tokens) > 3 else email.split("@")[0]
+            member = team_add_member(cfg, name, email, role)
+            await asyncio.to_thread(save_team_config, cfg, project_root)
+            await self._mount_message(
+                AppMessage(
+                    f"Invited: {member.name} <{member.email}> [{member.role}]\n\n"
+                    "Share this with them:\n"
+                    "  1. Clone/pull the repository\n"
+                    "  2. Run: bog invite --accept\n"
+                    "  Or they can run: /team whoami set <name> <email>"
+                )
+            )
+            return
+
+        if action == "members":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found."))
+                return
+            if not cfg.members:
+                await self._mount_message(
+                    AppMessage(
+                        "No members. Run `/team invite <email>` to add the first member."
+                    )
+                )
+                return
+            lines = [f"Members of '{cfg.name}' ({len(cfg.members)}):"]
+            for m in cfg.members:
+                lines.append(f"  • {m.name} <{m.email}> [{m.role}]")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action in {"remove-member", "kick"}:
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(AppMessage("No team config found."))
+                return
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: /team remove-member <email-or-name>")
+                )
+                return
+            removed = team_remove_member(cfg, tokens[1])
+            if removed:
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(
+                    AppMessage(f"Removed '{tokens[1]}' from team.")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"Member '{tokens[1]}' not found.")
+                )
+            return
+
+        if action == "context":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                if not cfg.context.always_include:
+                    await self._mount_message(
+                        AppMessage(
+                            "No shared context files configured.\nRun: /team context add <file>"
+                        )
+                    )
+                else:
+                    lines = ["Shared context (auto-injected):"]
+                    for f in cfg.context.always_include:
+                        lines.append(f"  • {f}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub == "add":
+                if len(tokens) < 3:
+                    await self._mount_message(
+                        AppMessage("Usage: /team context add <file>")
+                    )
+                    return
+                rel = tokens[2]
+                if rel not in cfg.context.always_include:
+                    cfg.context.always_include.append(rel)
+                    await asyncio.to_thread(save_team_config, cfg, project_root)
+                    await self._mount_message(
+                        AppMessage(f"Added '{rel}' to shared context.")
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(f"'{rel}' is already in shared context.")
+                    )
+            elif sub == "remove":
+                if len(tokens) < 3:
+                    await self._mount_message(
+                        AppMessage("Usage: /team context remove <file>")
+                    )
+                    return
+                rel = tokens[2]
+                if rel in cfg.context.always_include:
+                    cfg.context.always_include.remove(rel)
+                    await asyncio.to_thread(save_team_config, cfg, project_root)
+                    await self._mount_message(
+                        AppMessage(f"Removed '{rel}' from shared context.")
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(f"'{rel}' not in shared context.")
+                    )
+            elif sub == "show":
+                text = await asyncio.to_thread(
+                    get_shared_context_text, cfg, project_root
+                )
+                await self._mount_message(
+                    AppMessage(text or "No context content found.")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /team context [list|add <file>|remove <file>|show]"
+                    )
+                )
+            return
+
+        if action == "prompt":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                prompts_dir = Path(self._cwd) / ".bog-agents" / "team" / "prompts"
+                file_prompts = (
+                    [p.stem for p in prompts_dir.glob("*.md")]
+                    if prompts_dir.is_dir()
+                    else []
+                )
+                all_names = list(cfg.prompts) + [
+                    n for n in file_prompts if n not in cfg.prompts
+                ]
+                if not all_names:
+                    await self._mount_message(
+                        AppMessage(
+                            "No shared prompts. Run: /team prompt add <name> <text>"
+                        )
+                    )
+                else:
+                    lines = ["Shared prompts:"]
+                    for n in all_names:
+                        lines.append(f"  • {n}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub in {"show", "get"}:
+                if len(tokens) < 3:
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt show <name>")
+                    )
+                    return
+                text = get_named_prompt(cfg, tokens[2], project_root)
+                await self._mount_message(
+                    AppMessage(text or f"Prompt '{tokens[2]}' not found.")
+                )
+            elif sub == "add":
+                if len(tokens) < 4:
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt add <name> <text>")
+                    )
+                    return
+                name = tokens[2]
+                text = raw_arg.split(None, 3)[3].strip()
+                cfg.prompts[name] = text
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Saved prompt '{name}'."))
+            elif sub == "run":
+                if len(tokens) < 3:
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt run <name>")
+                    )
+                    return
+                text = get_named_prompt(cfg, tokens[2], project_root)
+                if not text:
+                    await self._mount_message(
+                        AppMessage(f"Prompt '{tokens[2]}' not found.")
+                    )
+                    return
+                await self._handle_user_message(text)
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /team prompt [list|show <name>|add <name> <text>|run <name>]"
+                    )
+                )
+            return
+
+        if action == "var":
+            cfg = load_team_config(project_root)
+            if cfg is None:
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
+                return
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                if not cfg.vars:
+                    await self._mount_message(
+                        AppMessage("No shared vars. Run: /team var set <key> <value>")
+                    )
+                else:
+                    lines = ["Shared vars (non-secret):"]
+                    for k, v in cfg.vars.items():
+                        lines.append(f"  {k}={v}")
+                    await self._mount_message(AppMessage("\n".join(lines)))
+            elif sub == "set":
+                if len(tokens) < 4:
+                    await self._mount_message(
+                        AppMessage("Usage: /team var set <key> <value>")
+                    )
+                    return
+                cfg.vars[tokens[2]] = " ".join(tokens[3:])
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(
+                    AppMessage(f"Set {tokens[2]}={cfg.vars[tokens[2]]}")
+                )
+            elif sub in {"unset", "remove", "delete"}:
+                if len(tokens) < 3:
+                    await self._mount_message(
+                        AppMessage("Usage: /team var unset <key>")
+                    )
+                    return
+                cfg.vars.pop(tokens[2], None)
+                await asyncio.to_thread(save_team_config, cfg, project_root)
+                await self._mount_message(AppMessage(f"Removed var '{tokens[2]}'."))
+            else:
+                await self._mount_message(
+                    AppMessage("Usage: /team var [list|set <key> <value>|unset <key>]")
+                )
+            return
+
+        # -----------------------------------------------------------------
+        # Multi-agent orchestration subcommands (existing behavior)
+        # -----------------------------------------------------------------
+
         registry = self._load_team_registry()
-        action = tokens[0].lower() if tokens else "list"
 
         if action in {"list", "show"} and len(tokens) <= 1:
             if not registry.teams:
@@ -5856,30 +9377,34 @@ class BogAgentsApp(App):
             return
 
         if action == "sync":
-            team_name = tokens[1] if len(tokens) > 1 else registry.active_team
-            if not team_name:
-                await self._mount_message(
-                    AppMessage("Usage: /team sync <name> or set an active team first.")
-                )
-                return
-            team = find_team(registry, team_name)
-            if team is None:
-                await self._mount_message(
-                    AppMessage(f"Team '{team_name}' was not found.")
-                )
-                return
-            local_tasks, remote_tasks = self._team_task_snapshot(team.name)
-            task_summaries: list[str] = []
-            for task in [*local_tasks, *remote_tasks]:
-                result = getattr(task, "result", "") or getattr(task, "output", "")
-                if isinstance(result, str) and result.strip():
-                    task_summaries.append(result.strip())
-            summary = summarize_team_activity(team, task_summaries)
-            set_team_summary(registry, team.name, summary)
-            self._save_team_registry(registry)
-            await self._mount_message(
-                AppMessage(f"Synced shared summary for `{team.name}`.\n\n{summary}")
+            direction = (
+                tokens[1]
+                if len(tokens) > 1 and tokens[1] in {"pull", "push", "both"}
+                else "both"
             )
+            cwd = Path(self._cwd)
+            from bog_agents_cli.cmd_memory_sync import sync_memory
+
+            result = await asyncio.to_thread(sync_memory, cwd, direction=direction)
+            await self._mount_message(AppMessage(result))
+            # Also update in-memory team summary
+            team_name = (
+                registry.active_team if hasattr(registry, "active_team") else None
+            )
+            if team_name:
+                team = find_team(registry, team_name)
+                if team is not None:
+                    local_tasks, remote_tasks = self._team_task_snapshot(team.name)
+                    task_summaries: list[str] = []
+                    for task in [*local_tasks, *remote_tasks]:
+                        task_result = getattr(task, "result", "") or getattr(
+                            task, "output", ""
+                        )
+                        if isinstance(task_result, str) and task_result.strip():
+                            task_summaries.append(task_result.strip())
+                    summary = summarize_team_activity(team, task_summaries)
+                    set_team_summary(registry, team.name, summary)
+                    self._save_team_registry(registry)
             return
 
         if action == "show":
@@ -5891,11 +9416,22 @@ class BogAgentsApp(App):
 
         await self._mount_message(
             AppMessage(
-                "Usage: /team | /team create <name> | /team use <name> | "
-                "/team status <name> | /team add-member <team> <member> [role] | "
-                "/team remove-member <team> <member> | /team assign <task-id> <team> | "
-                "/team message <team|task-id> <text> | /team summary <team> [set <text>] | "
-                "/team sync <team>"
+                # Developer team config commands
+                "Team shared config:\n"
+                "  /team status              — show team config & members\n"
+                "  /team init <name>         — create team config in this project\n"
+                "  /team setup               — show setup guide\n"
+                "  /team whoami [set <n> <e>]— view/set your identity\n"
+                "  /team invite <email> [role] [name] — add a team member\n"
+                "  /team members             — list team members\n"
+                "  /team context [list|add|remove|show] — manage shared context\n"
+                "  /team prompt [list|show|add|run] — manage shared prompts\n"
+                "  /team var [list|set|unset] — manage shared variables\n\n"
+                # Multi-agent orchestration commands
+                "Multi-agent orchestration:\n"
+                "  /team create <name> | /team use <name> | /team assign <task> <team>\n"
+                "  /team message <team|task-id> <text> | /team summary <team> [set <text>]\n"
+                "  /team add-member <team> <member> [role] | /team sync <team>"
             )
         )
 
@@ -6374,8 +9910,74 @@ class BogAgentsApp(App):
         Args:
             message: The user's message
         """
-        # Mount the user message
+        # Intercept daemon registration confirmation for /build pipeline
+        if self._build_pending and self._build_pending.get("awaiting_daemon_confirm"):
+            await self._mount_message(UserMessage(message))
+            pending = self._build_pending
+            self._build_pending = None
+            if message.strip().lower().startswith("y"):
+                from bog_agents_cli.daemon_client import add_daemon_job
+
+                pipeline_name = pending["name"]
+                schedule = pending.get("schedule", "")
+                pipeline_path = pending.get("pipeline_path", "")
+                job_def: dict[str, Any] = {
+                    "name": pipeline_name,
+                    "description": pending.get("description", ""),
+                    "triggers": [{"type": "cron", "cron": schedule}]
+                    if schedule
+                    else [],
+                    "pipeline": pipeline_path,
+                }
+                result = await add_daemon_job(job_def)
+                if result:
+                    job_id = result.get("job_id") or result.get("id") or "?"
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Registered with daemon.[/green] Job ID: [bold]{job_id}[/bold]\n"
+                            f"Use [bold]/ambient status[/bold] to monitor it."
+                        )
+                    )
+                else:
+                    await self._mount_message(
+                        AppMessage(
+                            "[yellow]Could not register with daemon.[/yellow] "
+                            "Try [bold]/ambient add " + pipeline_name + "[/bold] later."
+                        )
+                    )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        "Skipped daemon registration. "
+                        "Use [bold]/ambient add "
+                        + pending["name"]
+                        + "[/bold] to register later."
+                    )
+                )
+            return
+
+        # Mount the user message (show original text in UI)
         await self._mount_message(UserMessage(message))
+
+        # Resolve @-mentions before passing to the agent
+        effective_message = message
+        try:
+            from bog_agents_cli.mentions import (
+                get_mention_summary,
+                has_mentions,
+                resolve_mentions,
+            )
+
+            if has_mentions(message):
+                resolution = await asyncio.to_thread(
+                    resolve_mentions, message, cwd=Path(self._cwd)
+                )
+                effective_message = resolution.augmented
+                summary = get_mention_summary(resolution)
+                if summary:
+                    await self._mount_message(AppMessage(summary))
+        except Exception:
+            logger.debug("Mention resolution failed", exc_info=True)
 
         # Scroll to bottom when user sends a new message
         try:
@@ -6395,7 +9997,7 @@ class BogAgentsApp(App):
             # Use run_worker to avoid blocking the main event loop
             # This allows the UI to remain responsive during agent execution
             self._agent_worker = self.run_worker(
-                self._run_agent_task(message),
+                self._run_agent_task(effective_message),
                 exclusive=False,
             )
         else:
@@ -6484,6 +10086,16 @@ class BogAgentsApp(App):
         if isinstance(turn_stats, SessionStats):
             self._session_stats.merge(turn_stats)
 
+        # Auto-commit after each successful agent turn
+        if self._auto_commit and turn_stats is not None:
+            from bog_agents_cli.auto_commit import run_auto_commit
+
+            sha = await run_auto_commit(cwd=Path(self._cwd))
+            if sha:
+                await self._mount_message(
+                    AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
+                )
+
     async def _process_next_from_queue(self) -> None:
         """Process the next message from the queue if any exist.
 
@@ -6532,6 +10144,14 @@ class BogAgentsApp(App):
         # Ensure token display is restored (in case of early cancellation)
         if self._token_tracker:
             self._token_tracker.show()
+
+        # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
+        try:
+            from bog_agents_cli.cli_sounds import play_completion_sound
+
+            play_completion_sound()
+        except Exception:  # noqa: S110
+            pass
 
         # Process next message from queue if any
         await self._process_next_from_queue()
@@ -7524,6 +11144,152 @@ class BogAgentsApp(App):
         except Exception:
             logger.warning("Could not initialize pipeline scheduler", exc_info=True)
 
+    async def _init_file_watchers(self) -> None:
+        """Start file watchers for pipelines with watch: blocks."""
+        try:
+            import yaml  # pyyaml — already a CLI dependency
+
+            from bog_agents_cli.file_watcher import (
+                BogFileWatcher,
+                FileWatchConfig,
+                FileWatchEvent,
+                watch_config_from_dict,
+            )
+
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            if not pipelines_dir.exists():
+                return
+
+            configs: list[FileWatchConfig] = []
+            for path in sorted(pipelines_dir.glob("*.y*ml")):
+                try:
+                    with path.open() as fh:
+                        data = yaml.safe_load(fh)
+                    if not isinstance(data, dict):
+                        continue
+                    watch_block = data.get("watch")
+                    if watch_block and isinstance(watch_block, dict):
+                        name = data.get("name") or path.stem
+                        cfg = watch_config_from_dict(
+                            {**watch_block, "pipeline_name": str(name)}
+                        )
+                        configs.append(cfg)
+                except Exception:
+                    logger.debug(
+                        "Could not parse pipeline %s for watch config",
+                        path,
+                        exc_info=True,
+                    )
+
+            if not configs:
+                return
+
+            def on_trigger(event: FileWatchEvent, config: FileWatchConfig) -> None:
+                # Post to Textual to run the pipeline
+                self.call_from_thread(
+                    lambda: asyncio.create_task(
+                        self._run_pipeline_by_name(
+                            config.pipeline_name,
+                            trigger_context={
+                                "file": event.path,
+                                "event": event.event_type,
+                            },
+                        )
+                    )
+                )
+
+            watcher = BogFileWatcher(
+                watch_dir=Path(self._cwd),
+                configs=configs,
+                on_trigger=on_trigger,
+            )
+            watcher.start()
+            self._file_watchers = [watcher]
+            logger.debug("File watchers started for %d pipeline(s)", len(configs))
+        except ImportError:
+            logger.debug("watchdog not available; file watchers disabled")
+        except Exception:
+            logger.debug("File watcher init failed", exc_info=True)
+
+    async def _run_pipeline_by_name(
+        self, name: str, *, trigger_context: dict | None = None
+    ) -> None:
+        """Run a named pipeline, optionally with file-trigger context.
+
+        Args:
+            name: Pipeline name to look up and run.
+            trigger_context: Optional dict describing the triggering event.
+        """
+        try:
+            import yaml
+
+            pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
+            pipeline_data: dict | None = None
+            for path in pipelines_dir.glob("*.y*ml"):
+                try:
+                    with path.open() as fh:
+                        data = yaml.safe_load(fh)
+                    if (
+                        isinstance(data, dict)
+                        and (data.get("name") or path.stem) == name
+                    ):
+                        pipeline_data = data
+                        break
+                except Exception:
+                    logger.debug(
+                        "Could not parse pipeline %s during trigger lookup",
+                        path,
+                        exc_info=True,
+                    )
+                    continue
+
+            if pipeline_data is None:
+                logger.warning("File watcher: pipeline %r not found", name)
+                return
+
+            ctx_msg = f" (triggered by: {trigger_context})" if trigger_context else ""
+            await self._mount_message(
+                AppMessage(
+                    f"[yellow]File watcher:[/yellow] Running pipeline '{name}'{ctx_msg}"
+                )
+            )
+
+            for step in pipeline_data.get("steps", []):
+                step_type = step.get("type", "prompt")
+                content = step.get("content", step.get("text", step.get("command", "")))
+                if step_type == "prompt":
+                    await self._send_prompt_to_agent(content)
+                    break
+                if step_type == "slash":
+                    await self._handle_command(content)
+                    break
+        except Exception:
+            logger.debug("Pipeline trigger failed", exc_info=True)
+
+    async def _handle_watch_subcommand(self, arg: str) -> None:  # noqa: ARG002
+        """Handle /agent watch — show or manage file watchers.
+
+        Args:
+            arg: Optional sub-argument (currently unused).
+        """
+        from bog_agents_cli.file_watcher import format_watcher_status
+
+        if not self._file_watchers:
+            await self._mount_message(
+                AppMessage(
+                    "No file watchers active.\n"
+                    "Add a 'watch:' block to a pipeline YAML to enable file-change triggers.\n\n"
+                    "Example pipeline YAML:\n"
+                    "  watch:\n"
+                    "    patterns: ['*.py', 'src/**/*.ts']\n"
+                    "    debounce_seconds: 2.0"
+                )
+            )
+            return
+        await self._mount_message(
+            AppMessage(format_watcher_status(self._file_watchers))
+        )
+
     # =========================================================================
     # Model Switching
     # =========================================================================
@@ -7706,6 +11472,450 @@ class BogAgentsApp(App):
         default_prompt = generate_onboard_prompt()
         prompt = get_prompt("onboard", default_prompt)
         await self._mount_message(AppMessage("Starting interactive codebase tour..."))
+        await self._send_prompt_to_agent(prompt)
+
+    # =========================================================================
+    # /vars — secret / variable store
+    # =========================================================================
+
+    async def _handle_vars_command(self, command: str) -> None:
+        """Handle /vars — manage secrets and configuration variables.
+
+        Usage:
+          /vars                   — list all variable names
+          /vars list              — list all variable names
+          /vars set KEY VALUE     — store a variable (prompts if VALUE omitted)
+          /vars get KEY           — show the value of a variable (masked)
+          /vars delete KEY        — remove a variable
+          /vars show KEY          — show the raw value (unmasked; use carefully)
+
+        Variables are referenced in prompts and pipelines as ``{{vars.KEY}}``.
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.vars_store import (
+            delete_var,
+            get_var,
+            list_var_names,
+            set_var,
+            var_backend,
+        )
+
+        tail = command[len("/vars") :].strip()
+        parts = tail.split(maxsplit=2)
+        action = parts[0].lower() if parts else "list"
+
+        # ---- list ----
+        if action in ("list", ""):
+            names = list_var_names()
+            if not names:
+                await self._mount_message(
+                    AppMessage(
+                        "No variables stored yet.\n"
+                        "Use [bold]/vars set KEY VALUE[/bold] to add one.\n\n"
+                        "Example: [dim]/vars set JIRA_API_KEY mytoken123[/dim]"
+                    )
+                )
+                return
+
+            lines = ["[bold]Stored variables[/bold] (values hidden)\n"]
+            for name in names:
+                backend = var_backend(name)
+                icon = "🔒" if backend == "keyring" else "📄"
+                lines.append(f"  {icon} [cyan]{name}[/cyan]  [dim]({backend})[/dim]")
+            lines.append(
+                "\n[dim]Reference in prompts/pipelines as [bold]{{vars.NAME}}[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- set ----
+        elif action == "set":
+            if len(parts) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars set KEY VALUE[/bold]")
+                )
+                return
+            key = parts[1]
+            value = parts[2] if len(parts) > 2 else ""
+            if not value:
+                await self._mount_message(
+                    AppMessage(
+                        f"Usage: [bold]/vars set {key} <value>[/bold]\n"
+                        "[dim]Tip: value is everything after the key name[/dim]"
+                    )
+                )
+                return
+            try:
+                backend = set_var(key, value)
+                icon = "🔒" if backend == "keyring" else "📄"
+                await self._mount_message(
+                    AppMessage(
+                        f"{icon} [green]Set[/green] [cyan]{key}[/cyan] "
+                        f"[dim]({backend})[/dim]"
+                    )
+                )
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+
+        # ---- get (masked) ----
+        elif action == "get":
+            if len(parts) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars get KEY[/bold]")
+                )
+                return
+            key = parts[1]
+            try:
+                value = get_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if value is None:
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
+                return
+            masked = (
+                value[:2] + "*" * max(0, len(value) - 4) + value[-2:]
+                if len(value) > 4
+                else "****"
+            )
+            backend = var_backend(key)
+            await self._mount_message(
+                AppMessage(
+                    f"[cyan]{key}[/cyan] = [yellow]{masked}[/yellow]  "
+                    f"[dim]({backend} — use /vars show {key} to reveal)[/dim]"
+                )
+            )
+
+        # ---- show (unmasked) ----
+        elif action == "show":
+            if len(parts) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars show KEY[/bold]")
+                )
+                return
+            key = parts[1]
+            try:
+                value = get_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if value is None:
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
+                return
+            await self._mount_message(
+                AppMessage(f"[cyan]{key}[/cyan] = [yellow]{value}[/yellow]")
+            )
+
+        # ---- delete ----
+        elif action in ("delete", "del", "remove", "rm"):
+            if len(parts) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars delete KEY[/bold]")
+                )
+                return
+            key = parts[1]
+            try:
+                deleted = delete_var(key)
+            except ValueError as exc:
+                self.notify(str(exc), severity="error", timeout=4)
+                return
+            if deleted:
+                await self._mount_message(
+                    AppMessage(f"[green]Deleted[/green] [cyan]{key}[/cyan]")
+                )
+            else:
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
+
+        # ---- help / unknown ----
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/vars[/bold] — secret and variable store\n\n"
+                    "  [cyan]/vars list[/cyan]            — list all variable names\n"
+                    "  [cyan]/vars set KEY VALUE[/cyan]   — store a variable securely\n"
+                    "  [cyan]/vars get KEY[/cyan]         — show masked value\n"
+                    "  [cyan]/vars show KEY[/cyan]        — show raw value (unmasked)\n"
+                    "  [cyan]/vars delete KEY[/cyan]      — remove a variable\n\n"
+                    "[dim]Reference in prompts/pipelines: [bold]{{vars.KEY}}[/bold][/dim]"
+                )
+            )
+
+    # =========================================================================
+    # /image — multimodal image input
+    # =========================================================================
+
+    async def _handle_image_command(self, command: str) -> None:
+        """Handle /image — attach an image file or paste from clipboard.
+
+        Usage:
+          /image                     — paste image from clipboard
+          /image analyze <path>      — describe/analyze an image file
+          /image to-code <path>      — convert screenshot to code
+          /image paste               — explicit clipboard paste
+
+        Args:
+            command: Full slash command string (e.g. "/image analyze foo.png").
+        """
+        from bog_agents_cli.image_cli import (
+            detect_image_in_input,
+            format_image_info,
+            is_image_file,
+            parse_image_command,
+        )
+
+        tail = command[len("/image") :].strip()
+        parsed = (
+            parse_image_command(tail)
+            if tail
+            else {"action": "paste", "arg1": "", "arg2": ""}
+        )
+        action = parsed["action"]
+        arg1 = parsed.get("arg1", "")
+
+        # ------------------------------------------------------------------
+        # Clipboard paste (default when no args given)
+        # ------------------------------------------------------------------
+        if action in ("paste", "") or (not tail):
+            from bog_agents_cli.clipboard import read_clipboard_text
+
+            clip = read_clipboard_text()
+            if clip and detect_image_in_input(clip):
+                # Clipboard contains a path reference to an image
+                img_path = detect_image_in_input(clip)
+                await self._submit_image_file(
+                    img_path, "Analyze this image from clipboard"
+                )
+                return
+
+            # Try reading raw image bytes from clipboard (platform-specific)
+            img_bytes = _read_clipboard_image()
+            if img_bytes:
+                await self._submit_image_bytes(
+                    img_bytes, "image/png", "Describe and analyze this image"
+                )
+                return
+
+            self.notify(
+                "No image found in clipboard. Use `/image analyze <path>` to attach a file.",
+                severity="warning",
+                timeout=4,
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # File-based actions
+        # ------------------------------------------------------------------
+        path_str = arg1 or detect_image_in_input(tail) or ""
+        if not path_str:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/image analyze <path>[/bold] or [bold]/image to-code <path>[/bold]"
+                )
+            )
+            return
+
+        if not is_image_file(path_str):
+            self.notify(
+                f"Not a supported image: {path_str}", severity="warning", timeout=3
+            )
+            return
+
+        info = format_image_info(path_str)
+        extra = parsed.get("arg2", "")
+
+        if action == "to-code":
+            framework = extra or "appropriate framework"
+            user_prompt = f"Convert this screenshot to working {framework} code. Output only the code."
+        else:
+            user_prompt = (
+                f"Analyze this image and describe what you see in detail. "
+                f"{'Focus on: ' + extra if extra else ''}"
+            ).strip()
+
+        await self._submit_image_file(path_str, user_prompt, info_line=info)
+
+    async def _submit_image_file(
+        self,
+        path: str,
+        user_prompt: str,
+        info_line: str = "",
+    ) -> None:
+        """Load an image file and send it to the agent with a text prompt.
+
+        Args:
+            path: Filesystem path to the image.
+            user_prompt: Text instruction for the agent.
+            info_line: Optional human-readable info shown before sending.
+        """
+        import mimetypes
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.exists():  # noqa: ASYNC240  # sync stat is fast; no async Path available in this Textual context
+            self.notify(f"Image not found: {path}", severity="error", timeout=3)
+            return
+
+        mime_type, _ = mimetypes.guess_type(str(p))
+        mime_type = mime_type or "image/png"
+        img_bytes = await asyncio.to_thread(p.read_bytes)
+        await self._submit_image_bytes(
+            img_bytes, mime_type, user_prompt, info_line=info_line or str(p)
+        )
+
+    async def _submit_image_bytes(
+        self,
+        img_bytes: bytes,
+        mime_type: str,
+        user_prompt: str,
+        info_line: str = "image",
+    ) -> None:
+        """Encode image bytes as base64 and send a multimodal message to the agent.
+
+        Args:
+            img_bytes: Raw image bytes.
+            mime_type: MIME type string (e.g. 'image/png').
+            user_prompt: Accompanying text prompt.
+            info_line: Display label shown in the chat.
+        """
+        import base64  # deferred import keeps startup fast
+
+        b64 = base64.standard_b64encode(img_bytes).decode()
+
+        await self._mount_message(UserMessage(f"[Image: {info_line}] {user_prompt}"))
+
+        # Build Anthropic-compatible vision content block
+        content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": b64,
+                },
+            },
+            {"type": "text", "text": user_prompt},
+        ]
+
+        # _send_prompt_to_agent accepts str; for multimodal we serialize as a
+        # structured marker the agent layer recognises when present.
+        import json
+
+        structured = json.dumps({"__multimodal__": True, "content": content})
+        await self._send_prompt_to_agent(structured)
+
+    # =========================================================================
+    # /pr — pull request management
+    # =========================================================================
+
+    async def _handle_pr_command(self, command: str) -> None:
+        """Handle /pr — create, list, or review pull requests.
+
+        Usage:
+          /pr              — list open PRs
+          /pr list         — list open PRs
+          /pr create [title] — create a PR from the current branch
+          /pr review <num>  — show review comments for PR #num
+          /pr describe      — auto-generate a PR description from git log
+          /pr conflicts     — show and help resolve merge conflicts
+
+        Args:
+            command: Full slash command string.
+        """
+        from bog_agents_cli.pr_cli import (
+            PRInfo,
+            generate_conflict_resolution_prompt,
+            generate_pr_prompt,
+            parse_pr_command,
+        )
+
+        tail = command[len("/pr") :].strip()
+        parsed = parse_pr_command(tail)
+        action = parsed["action"]
+        argument = parsed.get("argument", "")
+
+        if action in ("list", ""):
+            prompt = (
+                "List all open pull requests for the current repository. "
+                "Show the PR number, title, author, and status. "
+                "Use `gh pr list` or the GitHub API."
+            )
+            await self._mount_message(UserMessage("/pr list"))
+
+        elif action == "create":
+            title = argument or "auto-generated title"
+            # Get current branch name
+            branch = await _get_current_git_branch()
+            info = PRInfo(
+                number=0,
+                title=title,
+                head_branch=branch or "",
+            )
+            prompt = generate_pr_prompt(info)
+            await self._mount_message(UserMessage(f"/pr create {title}".strip()))
+
+        elif action == "review":
+            if not argument:
+                self.notify("Usage: /pr review <number>", severity="warning", timeout=3)
+                return
+            await self._mount_message(UserMessage(f"/pr review {argument}"))
+            from bog_agents_cli.cmd_pr_review import (
+                build_pr_review_prompt,
+                detect_pr_platform,
+                format_pr_review_not_found,
+                get_azure_pr_diff,
+                get_github_pr_diff,
+            )
+
+            cwd = Path(self._cwd)
+            platform = await asyncio.to_thread(detect_pr_platform, cwd)
+            focus_parts = argument.split()
+            pr_num = focus_parts[0]
+            focus = focus_parts[1] if len(focus_parts) > 1 else "all"
+            try:
+                if platform == "azure":
+                    pr_data = await asyncio.to_thread(
+                        get_azure_pr_diff, pr_num, cwd=cwd
+                    )
+                else:
+                    pr_data = await asyncio.to_thread(
+                        get_github_pr_diff, pr_num, cwd=cwd
+                    )
+            except RuntimeError as exc:
+                await self._mount_message(AppMessage(str(exc)))
+                return
+            if not pr_data.get("diff") and not pr_data.get("title"):
+                await self._mount_message(
+                    AppMessage(format_pr_review_not_found(platform))
+                )
+                return
+            prompt = build_pr_review_prompt(pr_data, focus=focus)
+
+        elif action == "describe":
+            prompt = (
+                "Auto-generate a clear, concise pull request description based on "
+                "the current git log and staged diff. Use conventional commit style. "
+                "Output: title line, blank line, bullet-point summary of changes."
+            )
+            await self._mount_message(UserMessage("/pr describe"))
+
+        elif action in ("conflicts", "conflict"):
+            prompt = generate_conflict_resolution_prompt()
+            await self._mount_message(UserMessage("/pr conflicts"))
+
+        else:
+            prompt = (
+                f"Handle the following pull request action: {action} {argument}. "
+                "Use git and GitHub CLI (`gh`) commands as needed."
+            )
+            await self._mount_message(UserMessage(f"/pr {action} {argument}".strip()))
+
         await self._send_prompt_to_agent(prompt)
 
     async def _show_mcp_viewer(self) -> None:
@@ -7995,6 +12205,15 @@ class BogAgentsApp(App):
                     model=settings.model_name or "",
                 )
 
+            # Count how many conversation messages exist so we can report
+            # whether there is history to preserve.
+            msg_count = len(self._message_store.get_all_messages())
+            history_note = (
+                f"Conversation history preserved ({msg_count} message{'s' if msg_count != 1 else ''})."
+                if msg_count > 0
+                else "No conversation history to carry over."
+            )
+
             if not await asyncio.to_thread(save_recent_model, display):
                 await self._mount_message(
                     ErrorMessage(
@@ -8003,7 +12222,9 @@ class BogAgentsApp(App):
                     )
                 )
             else:
-                await self._mount_message(AppMessage(f"Switched to {display}"))
+                await self._mount_message(
+                    AppMessage(f"Switched to [bold]{display}[/bold]. {history_note}")
+                )
             logger.info("Model switched to %s (via configurable middleware)", display)
 
             # Scroll to bottom so the confirmation message is visible
@@ -8093,6 +12314,7 @@ async def run_textual_app(
     assistant_id: str | None = None,
     backend: CompositeBackend | None = None,
     auto_approve: bool = False,
+    auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
     initial_prompt: str | None = None,
@@ -8113,6 +12335,7 @@ async def run_textual_app(
         assistant_id: Agent identifier for memory storage.
         backend: Backend for file operations.
         auto_approve: Whether to start with auto-approve enabled.
+        auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
         initial_prompt: Optional prompt to auto-submit when session starts.
@@ -8134,6 +12357,7 @@ async def run_textual_app(
         assistant_id=assistant_id,
         backend=backend,
         auto_approve=auto_approve,
+        auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,
         initial_prompt=initial_prompt,

@@ -41,6 +41,7 @@ class FeatureConfig:
         auto_test: Automatically run tests after edits.
         enable_plan_mode: Enable plan-mode tool.
         enable_worktree: Enable git-worktree isolation.
+        enable_parallel_worktree: Enable parallel worktree execution with automatic sub-agents.
         enable_multi_agent: Enable multi-agent orchestration.
         max_agent_threads: Max concurrent agent threads (default 10).
         enable_smart_context: Enable smart context window management.
@@ -138,6 +139,7 @@ class FeatureConfig:
 
     # Advanced agent features
     enable_worktree: bool = False
+    enable_parallel_worktree: bool = False
     enable_multi_agent: bool = False
     max_agent_threads: int = 10
     enable_smart_context: bool = False
@@ -219,3 +221,4 @@ class FeatureConfig:
     enable_due_diligence: bool = False
     enable_market_sentiment: bool = False
     enable_competitive_intel: bool = False
+    enable_result_synthesis: bool = False

@@ -569,6 +569,16 @@ class Settings:
         Returns:
             Settings instance with detected configuration
         """
+        # Inject vault-stored API keys into os.environ for any keys not already set.
+        try:
+            from bog_agents_cli.api_keys import inject_vault_keys_into_env
+
+            injected = inject_vault_keys_into_env()
+            if injected:
+                logger.debug("Injected API keys from vault: %s", injected)
+        except Exception:
+            logger.debug("Could not inject vault API keys", exc_info=True)
+
         # Detect API keys (normalize empty strings to None)
         openai_key = os.environ.get("OPENAI_API_KEY") or None
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or None
@@ -638,6 +648,16 @@ class Settings:
             A list of human-readable change descriptions.
         """
         _load_dotenv(start_path=start_path, override=True)
+
+        # Inject vault-stored API keys into os.environ for any keys not already set.
+        try:
+            from bog_agents_cli.api_keys import inject_vault_keys_into_env
+
+            injected = inject_vault_keys_into_env()
+            if injected:
+                logger.debug("Injected API keys from vault: %s", injected)
+        except Exception:
+            logger.debug("Could not inject vault API keys", exc_info=True)
 
         api_key_fields = {
             "openai_api_key",

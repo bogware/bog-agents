@@ -1,0 +1,53 @@
+# README / Wiki Auto-Updater Pipeline
+# Triggered manually (/pipeline run readme-auto-updater) or on schedule
+# Scans the codebase and updates README.md + any wiki files
+
+name: readme-auto-updater
+description: Automatically update README.md and wiki documentation based on current codebase state
+schedule: ""  # Set to e.g. "0 9 * * 1" for Monday 9am
+watch:
+  patterns: ["*.py", "pyproject.toml", "*.md"]
+  debounce_seconds: 300.0
+  ignore_patterns: ["README.md", "**/test_*.py", "**/__pycache__/**"]
+
+steps:
+  - label: Scan codebase structure
+    type: prompt
+    content: |
+      Analyze the current repository structure and gather key facts needed to update documentation:
+      1. List all top-level modules/packages with one-line descriptions
+      2. Check pyproject.toml for current version, dependencies, and entry points
+      3. List all slash commands registered in command_registry.py (if present)
+      4. Check for any new middleware or major features added since last commit to README.md
+      5. Note any breaking changes in git log since the last README update
+      Output a structured JSON summary with keys: version, modules, commands, new_features, breaking_changes
+
+  - label: Update README.md
+    type: prompt
+    content: |
+      Using the codebase summary from the previous step, update README.md to reflect the current state.
+      Rules:
+      - Preserve the existing structure and tone
+      - Update version numbers, feature lists, and command tables
+      - Add any new features to the appropriate section
+      - Mark any removed/changed commands
+      - Keep the "Run Locally" and "Ollama" sections intact
+      - Do NOT remove the acknowledgements section
+      Write the complete updated README.md content, then use the write_file tool to save it.
+
+  - label: Update AGENTS.md if present
+    type: prompt
+    content: |
+      Check if AGENTS.md exists in the repository root. If it does, update it to reflect:
+      - Current middleware stack available via create_agent()
+      - Any new slash commands or CLI features
+      - Updated quick-start examples
+      If AGENTS.md doesn't exist, skip this step and say "AGENTS.md not found — skipping".
+
+  - label: Summarize changes
+    type: prompt
+    content: |
+      Provide a concise summary of what documentation was updated:
+      - Which files were modified
+      - Key changes made (version bumps, new features documented, removed items)
+      - Recommend whether to commit these changes with a suggested commit message

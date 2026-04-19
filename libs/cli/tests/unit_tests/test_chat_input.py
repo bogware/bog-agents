@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import TYPE_CHECKING
 
 import pytest
@@ -23,7 +24,6 @@ from bog_agents_cli.widgets.chat_input import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
     from textual.pilot import Pilot
 
 
@@ -123,7 +123,8 @@ class TestCompletionPopupIntegration:
                 [("/help", "Show help"), ("/clear", "Clear chat")],
                 selected_index=0,
             )
-            # Allow async rebuild to complete
+            # Allow async rebuild to complete (two pauses needed to flush call_after_refresh)
+            await pilot.pause()
             await pilot.pause()
 
             # Should have created 2 option widgets
@@ -586,10 +587,14 @@ class TestCompletionPopupClickBubbling:
                 [("/help", "Show help"), ("/clear", "Clear chat")],
                 selected_index=0,
             )
+            # Two pauses: first lets InvokeLater reach the screen, second
+            # flushes the call_next callback so _rebuild_options fully mounts
+            # both options before we query.
+            await pilot.pause()
             await pilot.pause()
 
             # Click on the first option
-            options = popup.query(CompletionOption)
+            options = list(popup.query(CompletionOption))
             await pilot.click(options[0])
 
             assert 0 in app.option_clicked_indices
@@ -1722,6 +1727,10 @@ class TestDroppedImagePaste:
             assert app.tracker.get_images() == []
             assert app.tracker.next_image_id == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX-only: lstrip('/') doesn't strip Windows drive paths",
+    )
     async def test_submit_recovers_if_command_mode_already_stripped_path(
         self, tmp_path
     ) -> None:

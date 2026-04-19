@@ -5,6 +5,7 @@ This keeps ``import bog_agents`` fast.
 """
 
 from bog_agents._version import __version__
+from bog_agents.builder import AgentBuilder, AgentConfig
 from bog_agents.feature_config import FeatureConfig
 from bog_agents.graph import create_agent
 
@@ -96,6 +97,15 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "VersionControlMiddleware": ("bog_agents.middleware.version_control", "VersionControlMiddleware"),
     "VoiceIOMiddleware": ("bog_agents.middleware.voice_io", "VoiceIOMiddleware"),
     "WorktreeMiddleware": ("bog_agents.middleware.worktree", "WorktreeMiddleware"),
+    # --- New features ---
+    "BackgroundJobsMiddleware": ("bog_agents.middleware.background_jobs", "BackgroundJobsMiddleware"),
+    "HybridSearchMiddleware": ("bog_agents.middleware.hybrid_search", "HybridSearchMiddleware"),
+    "IntelligentCompactionMiddleware": ("bog_agents.middleware.intelligent_compaction", "IntelligentCompactionMiddleware"),
+    "LangSmithMiddleware": ("bog_agents.middleware.langsmith_integration", "LangSmithMiddleware"),
+    "MultiRepoMiddleware": ("bog_agents.middleware.multi_repo", "MultiRepoMiddleware"),
+    "ParallelWorktreeMiddleware": ("bog_agents.middleware.worktree", "ParallelWorktreeMiddleware"),
+    "RulesMiddleware": ("bog_agents.middleware.rules", "RulesMiddleware"),
+    "ThinkingMiddleware": ("bog_agents.middleware.thinking", "ThinkingMiddleware"),
 }
 
 
@@ -115,6 +125,8 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [  # noqa: PLE0604
+    "AgentBuilder",
+    "AgentConfig",
     "FeatureConfig",
     "__version__",
     "create_agent",

@@ -345,6 +345,14 @@ class BackgroundAgentManager:
         lines.append(f"\n{running} running, {total} total")
         return "\n".join(lines)
 
+    def get_all_tasks(self) -> list[BackgroundTask]:
+        """Return all tracked tasks sorted by creation time.
+
+        Returns:
+            List of all ``BackgroundTask`` objects, oldest first.
+        """
+        return self.all_tasks
+
     def cleanup_completed(self) -> int:
         """Remove completed and failed tasks from tracking.
 

@@ -1,11 +1,14 @@
 """Unit tests for LocalShellBackend per-command timeout features."""
 
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 
 from bog_agents.backends.local_shell import DEFAULT_EXECUTE_TIMEOUT, LocalShellBackend
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix shell commands not available on Windows")
 
 
 class TestDefaultTimeoutConstant:

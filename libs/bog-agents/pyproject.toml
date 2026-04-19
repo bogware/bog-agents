@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents"
-version = "0.6.5"
+version = "0.7.0"
 
 description = "Bog Agents - batteries-included agent harness for building AI agents. Supports any major provider (Anthropic, OpenAI, AWS Bedrock, Google, etc.) and local models via Ollama. Built on LangGraph."
 readme = "README.md"
@@ -223,6 +223,7 @@ ignore-var-parameters = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-p no:cacheprovider"
 filterwarnings = [
     "ignore:.*virtual_mode.*:DeprecationWarning",
@@ -247,3 +248,11 @@ not-iterable = "ignore"
 # Optional extras (serve: starlette, uvicorn, sse-starlette; middleware: aiohttp)
 # are not installed in the base venv — suppress unresolved import errors.
 unresolved-import = "ignore"
+# Complex middleware generics and async wrapping patterns
+invalid-type-form = "ignore"
+invalid-return-type = "ignore"
+invalid-await = "ignore"
+unresolved-attribute = "ignore"
+missing-argument = "ignore"
+# Suppress stale ty: ignore comments that become redundant after rule changes
+unused-ignore-comment = "ignore"

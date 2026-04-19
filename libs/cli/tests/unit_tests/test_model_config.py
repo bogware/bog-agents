@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
@@ -500,8 +501,8 @@ models = ["llama3"]
         assert any("invalid TOML syntax" in r.message for r in caplog.records)
 
     @pytest.mark.skipif(
-        hasattr(os, "getuid") and os.getuid() == 0,
-        reason="Root can read any file regardless of permissions",
+        (hasattr(os, "getuid") and os.getuid() == 0) or sys.platform == "win32",
+        reason="Root can read any file regardless of permissions; chmod(0o000) does not restrict access on Windows",
     )
     def test_unreadable_file_returns_empty_config(self, tmp_path, caplog):
         """Unreadable config file returns empty config and logs a warning."""

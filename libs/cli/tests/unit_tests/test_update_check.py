@@ -92,7 +92,7 @@ class TestGetLatestVersion:
         assert result == "2.0.0"
         mock_get.assert_called_once()
 
-    def test_network_error(self, cache_file) -> None:  # noqa: ARG002  # fixture overrides CACHE_FILE
+    def test_network_error(self, cache_file) -> None:  # fixture overrides CACHE_FILE
         """Network failure returns None."""
         with patch("requests.get", side_effect=OSError("no network")):
             result = get_latest_version()

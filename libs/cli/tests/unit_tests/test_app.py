@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import signal
+import sys
 import webbrowser
 from pathlib import Path
 from types import SimpleNamespace
@@ -1136,6 +1137,7 @@ class TestMessageQueue:
             await app._process_next_from_queue()
             await pilot.pause()
             await pilot.pause()
+            await pilot.pause()  # Extra flush needed on Windows ProactorEventLoop
 
             # The shell command should have been processed and the normal
             # message should also have been picked up (mounted as UserMessage)
@@ -2822,6 +2824,10 @@ class TestShellCommandInterrupt:
             assert len(app._pending_messages) == 0
             assert app._quit_pending is False
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX process group management not available on Windows",
+    )
     async def test_process_killed_on_cancelled_error(self) -> None:
         """CancelledError in _run_shell_task should kill the process."""
         app = BogAgentsApp()
@@ -2923,6 +2929,10 @@ class TestShellCommandInterrupt:
             app_msgs = app.query(AppMessage)
             assert any("Command interrupted" in str(w._content) for w in app_msgs)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX process group management not available on Windows",
+    )
     async def test_timeout_kills_and_shows_error(self) -> None:
         """Timeout in _run_shell_task should kill process and show error."""
         app = BogAgentsApp()
@@ -2952,6 +2962,10 @@ class TestShellCommandInterrupt:
             error_msgs = app.query(ErrorMessage)
             assert any("timed out" in w._content for w in error_msgs)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX process group management not available on Windows",
+    )
     async def test_posix_killpg_called(self) -> None:
         """On POSIX, _kill_shell_process should use os.killpg with SIGTERM."""
         app = BogAgentsApp()
@@ -2975,6 +2989,10 @@ class TestShellCommandInterrupt:
             mock_getpgid.assert_called_once_with(42)
             mock_killpg.assert_called_once_with(42, signal.SIGTERM)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX process group management not available on Windows",
+    )
     async def test_sigkill_escalation(self) -> None:
         """SIGKILL should be sent when SIGTERM times out."""
         app = BogAgentsApp()
