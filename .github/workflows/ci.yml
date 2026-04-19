@@ -52,9 +52,9 @@ jobs:
         # macos: no self-hosted macOS runner available
         # os: [Linux, Windows, macOS]
         package:
-          - { name: sdk, dir: libs/bog-agents, test_args: "-n auto --disable-socket --allow-unix-socket tests/unit_tests/" }
-          - { name: cli, dir: libs/cli, test_args: "-n auto --disable-socket --allow-unix-socket tests/unit_tests/" }
-          - { name: daemon, dir: libs/daemon, test_args: "tests/ -q --timeout=30" }
+          - { name: sdk,    dir: libs/bog-agents }
+          - { name: cli,    dir: libs/cli }
+          - { name: daemon, dir: libs/daemon }
         python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -64,5 +64,18 @@ jobs:
           working-directory: ${{ matrix.package.dir }}
       - run: uv sync --group test --locked
         working-directory: ${{ matrix.package.dir }}
-      - run: uv run --group test pytest ${{ matrix.package.test_args }}
+      # sdk/cli on Linux: enforce socket isolation
+      - name: Run tests
+        if: matrix.package.name != 'daemon' && runner.os == 'Linux'
+        run: uv run --group test pytest -n auto --disable-socket --allow-unix-socket tests/unit_tests/
+        working-directory: ${{ matrix.package.dir }}
+      # sdk/cli on Windows: skip socket plugin (--allow-unix-socket unreliable on Windows)
+      - name: Run tests
+        if: matrix.package.name != 'daemon' && runner.os == 'Windows'
+        run: uv run --group test pytest -n auto tests/unit_tests/
+        working-directory: ${{ matrix.package.dir }}
+      # daemon: same command on all OSes (no socket plugin needed)
+      - name: Run tests
+        if: matrix.package.name == 'daemon'
+        run: uv run --group test pytest tests/ -q --timeout=30
         working-directory: ${{ matrix.package.dir }}
