@@ -163,6 +163,7 @@ def save_job(project_root: Path, job: JobRecord) -> None:
     """
     target = _jobs_dir(project_root) / f"{job.job_id}.json"
     from bog_agents.utils.io import atomic_write_text
+
     atomic_write_text(target, json.dumps(job.to_dict(), indent=2))
 
 

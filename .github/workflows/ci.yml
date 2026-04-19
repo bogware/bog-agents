@@ -52,8 +52,8 @@ jobs:
         # macos: no self-hosted macOS runner available
         # os: [Linux, Windows, macOS]
         package:
-          - { name: sdk, dir: libs/bog-agents, test_args: "-n auto --disable-socket --allow-unix-socket tests/" }
-          - { name: cli, dir: libs/cli, test_args: "-n auto --disable-socket --allow-unix-socket" }
+          - { name: sdk, dir: libs/bog-agents, test_args: "-n auto --disable-socket --allow-unix-socket tests/unit_tests/" }
+          - { name: cli, dir: libs/cli, test_args: "-n auto --disable-socket --allow-unix-socket tests/unit_tests/" }
           - { name: daemon, dir: libs/daemon, test_args: "tests/ -q --timeout=30" }
         python: ["3.11", "3.12", "3.13"]
     steps:

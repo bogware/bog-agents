@@ -739,16 +739,12 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
 
             try:
                 # Create the worktree
-                wt = await asyncio.to_thread(
-                    create_worktree, self._working_dir, task.branch
-                )
+                wt = await asyncio.to_thread(create_worktree, self._working_dir, task.branch)
                 task.worktree = wt
 
                 if self._agent_factory is not None:
                     # Run the factory (sync) in a thread
-                    result = await asyncio.to_thread(
-                        self._agent_factory, task.prompt, wt.path
-                    )
+                    result = await asyncio.to_thread(self._agent_factory, task.prompt, wt.path)
                     task.result = str(result)
 
                 task.status = "completed"
@@ -761,9 +757,7 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
 
                 if self._auto_cleanup and task.worktree is not None:
                     try:
-                        await asyncio.to_thread(
-                            remove_worktree, self._working_dir, task.worktree.path
-                        )
+                        await asyncio.to_thread(remove_worktree, self._working_dir, task.worktree.path)
                     except Exception as exc:
                         logger.debug("Failed to clean up worktree: %s", exc)
 
@@ -779,8 +773,7 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
             runtime: ToolRuntime[None, ParallelWorktreeState],
             tasks: Annotated[
                 str,
-                "JSON array of task objects with 'label' and 'prompt' keys. "
-                'Example: [{"label": "auth", "prompt": "Refactor auth.py"}]',
+                'JSON array of task objects with \'label\' and \'prompt\' keys. Example: [{"label": "auth", "prompt": "Refactor auth.py"}]',
             ],
         ) -> str:
             """Spawn multiple agent tasks in parallel git worktrees.
@@ -815,10 +808,7 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 _ = _bg  # suppress "local variable assigned but never used"
 
             ids = ", ".join(t.task_id for t in created_tasks)
-            return (
-                f"Spawned {len(created_tasks)} parallel task(s): {ids}\n"
-                "Use `worktree_status` to monitor progress."
-            )
+            return f"Spawned {len(created_tasks)} parallel task(s): {ids}\nUse `worktree_status` to monitor progress."
 
         def worktree_status(
             runtime: ToolRuntime[None, ParallelWorktreeState],

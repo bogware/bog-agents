@@ -31,9 +31,7 @@ class TestFeatureConfigParameter:
         agent = create_agent(model=MODEL, config=FeatureConfig(enable_git_tools=True))
         tool_names = set(agent.nodes["tools"].bound._tools_by_name.keys())
         # GitToolsMiddleware provides at least one git-related tool
-        assert any("git" in name for name in tool_names), (
-            f"Expected a git tool in {sorted(tool_names)}"
-        )
+        assert any("git" in name for name in tool_names), f"Expected a git tool in {sorted(tool_names)}"
 
     def test_config_enable_repo_map(self):
         """config=FeatureConfig(enable_repo_map=True) must compile without error."""
@@ -64,9 +62,7 @@ class TestFeatureConfigParameter:
             features=FeatureConfig(enable_git_tools=False),
         )
         tool_names = set(agent.nodes["tools"].bound._tools_by_name.keys())
-        assert any("git" in name for name in tool_names), (
-            "config should win over features — git tools should be present"
-        )
+        assert any("git" in name for name in tool_names), "config should win over features — git tools should be present"
 
     def test_config_is_keyword_only(self):
         """The `config` parameter must be keyword-only (cannot pass positionally)."""

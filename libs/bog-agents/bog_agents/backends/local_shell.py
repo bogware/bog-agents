@@ -341,10 +341,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                         description,
                     )
                 else:
-                    msg = (
-                        f"Dangerous command blocked: {description}. "
-                        "Pass allow_dangerous=True to LocalShellBackend or execute() to bypass."
-                    )
+                    msg = f"Dangerous command blocked: {description}. Pass allow_dangerous=True to LocalShellBackend or execute() to bypass."
                     raise PermissionError(msg)
                 break
 

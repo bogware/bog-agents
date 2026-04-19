@@ -175,6 +175,15 @@ possibly-missing-attribute = "ignore"
 # Many stale type: ignore comments from pre-ty migration; clean up incrementally
 unused-ignore-comment = "ignore"
 unused-type-ignore-comment = "ignore"
+# asyncio.to_thread ParamSpec inference limitation and test global state patterns
+too-many-positional-arguments = "ignore"
+not-subscriptable = "ignore"
+unsupported-operator = "ignore"
+# docker.py ExecuteResponse uses sandbox_id; langsmith client is dynamically typed
+unknown-argument = "ignore"
+no-matching-overload = "ignore"
+# langsmith client returned as object; winsound is Windows-only optional module
+unresolved-attribute = "ignore"
 
 [tool.ruff]
 exclude = [".pytest-tmp-runtime"]

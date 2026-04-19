@@ -194,6 +194,7 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             raw_name = source.rstrip("/").split("/")[-1].replace(".git", "")
             # Allow only safe characters: alphanumeric, dash, underscore, dot
             import re as _re
+
             safe_name = _re.sub(r"[^\w\-.]", "_", raw_name)[:64] or "plugin"
             plugin_dir = middleware._plugins_dir / safe_name
 
@@ -361,7 +362,13 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             StructuredTool.from_function(name="create_skill", description="Create a SKILL.md file.", func=create_skill),
             StructuredTool.from_function(name="list_skills", description="List available skills.", func=list_skills),
             StructuredTool.from_function(name="publish_skill", description="Publish a skill.", func=publish_skill),
-            StructuredTool.from_function(name="list_claude_skills", description="List Claude Code skills in .claude/ directories.", func=list_claude_skills),
-            StructuredTool.from_function(name="import_claude_skills", description="Import Claude Code skills into bog-agents.", func=import_claude_skills),
-            StructuredTool.from_function(name="sync_mcp_with_claude", description="Sync MCP server configs with Claude Desktop.", func=sync_mcp_with_claude),
+            StructuredTool.from_function(
+                name="list_claude_skills", description="List Claude Code skills in .claude/ directories.", func=list_claude_skills
+            ),
+            StructuredTool.from_function(
+                name="import_claude_skills", description="Import Claude Code skills into bog-agents.", func=import_claude_skills
+            ),
+            StructuredTool.from_function(
+                name="sync_mcp_with_claude", description="Sync MCP server configs with Claude Desktop.", func=sync_mcp_with_claude
+            ),
         ]

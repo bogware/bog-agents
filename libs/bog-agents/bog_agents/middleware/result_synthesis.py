@@ -107,7 +107,7 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
             dur = task.duration_secs
             dur_str = f"{dur:.1f}s" if dur is not None else "—"
             label = (task.label or task.task_id)[:29]
-            preview_raw = (task.result or task.error or "")
+            preview_raw = task.result or task.error or ""
             preview = preview_raw[:200].replace("\n", " ")
             rows.append(f"{task.task_id:<14} {label:<30} {task.status:<12} {dur_str:>10}  {preview}")
 
@@ -137,10 +137,7 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
             """
             tasks = mw._resolve_tasks(task_ids)
             if not tasks:
-                return (
-                    "No tasks found. Ensure ParallelWorktreeMiddleware is linked "
-                    "and tasks have been spawned."
-                )
+                return "No tasks found. Ensure ParallelWorktreeMiddleware is linked and tasks have been spawned."
             table = mw._format_results_table(tasks)
             # Append full result text for completed tasks
             full_results: list[str] = [table, ""]
@@ -170,16 +167,11 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
             completed = [t for t in tasks if t.result]
 
             if not completed:
-                return (
-                    "No completed tasks with results found for the requested IDs. "
-                    "Use `await_tasks_complete` first if tasks are still running."
-                )
+                return "No completed tasks with results found for the requested IDs. Use `await_tasks_complete` first if tasks are still running."
 
             if mw._synthesis_template is not None:
                 # Simple template: replace {goal} and {results}
-                results_block = "\n\n".join(
-                    f"## Task: {t.label or t.task_id}\n{t.result}" for t in completed
-                )
+                results_block = "\n\n".join(f"## Task: {t.label or t.task_id}\n{t.result}" for t in completed)
                 return mw._synthesis_template.replace("{goal}", goal).replace("{results}", results_block)
 
             # Default structured prompt
@@ -235,11 +227,7 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     timed_out = ", ".join(t.task_id for t in pending)
-                    return (
-                        f"Timeout after {timeout_seconds}s. "
-                        f"Still pending: {timed_out}\n"
-                        + mw._format_results_table(tasks)
-                    )
+                    return f"Timeout after {timeout_seconds}s. Still pending: {timed_out}\n" + mw._format_results_table(tasks)
 
                 await asyncio.sleep(2)
 
@@ -268,10 +256,7 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
         return [
             StructuredTool.from_function(
                 name="gather_parallel_results",
-                description=(
-                    "Gather and display results from parallel worktree tasks. "
-                    "Pass comma-separated task IDs or 'all' for all tasks."
-                ),
+                description=("Gather and display results from parallel worktree tasks. Pass comma-separated task IDs or 'all' for all tasks."),
                 func=gather_parallel_results,
             ),
             StructuredTool.from_function(
@@ -285,17 +270,13 @@ class ResultSynthesisMiddleware(AgentMiddleware[ResultSynthesisState, ContextT, 
             ),
             StructuredTool.from_function(
                 name="await_tasks_complete",
-                description=(
-                    "Poll parallel worktree tasks every 2 s until all reach a "
-                    "terminal status (completed/failed) or the timeout expires."
-                ),
+                description=("Poll parallel worktree tasks every 2 s until all reach a terminal status (completed/failed) or the timeout expires."),
                 coroutine=_await_tasks_complete_sync_wrapper,
             ),
             StructuredTool.from_function(
                 name="register_parallel_middleware",
                 description=(
-                    "Register a reference to a ParallelWorktreeMiddleware. "
-                    "Actual linking is done via __init__; this is a no-op placeholder."
+                    "Register a reference to a ParallelWorktreeMiddleware. Actual linking is done via __init__; this is a no-op placeholder."
                 ),
                 func=register_parallel_middleware,
             ),

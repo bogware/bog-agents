@@ -131,16 +131,47 @@ _EXT_MAP: dict[str, str] = {
     ".cts": ".ts",
 }
 
-_DEFAULT_EXTENSIONS = frozenset({
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java",
-    ".mjs", ".cjs", ".mts", ".cts", ".rb", ".php", ".swift", ".kt", ".cs",
-})
+_DEFAULT_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".rs",
+        ".go",
+        ".java",
+        ".mjs",
+        ".cjs",
+        ".mts",
+        ".cts",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".cs",
+    }
+)
 
-_SKIP_DIRS = frozenset({
-    "node_modules", "__pycache__", "venv", ".venv", "dist", "build",
-    "target", ".next", ".nuxt", "coverage", ".pytest_cache", ".mypy_cache",
-    ".ruff_cache", "vendor", "site-packages",
-})
+_SKIP_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "venv",
+        ".venv",
+        "dist",
+        "build",
+        "target",
+        ".next",
+        ".nuxt",
+        "coverage",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "vendor",
+        "site-packages",
+    }
+)
 
 _MAX_FILE_SIZE = 500_000  # 500KB
 _MAX_FILES = 5000
@@ -463,9 +494,7 @@ def _format_map(all_symbols: list[FileSymbols], files_indexed: int) -> str:
     if not all_symbols:
         return "No indexable source files found."
 
-    lines: list[str] = [
-        f"# Repository Map ({files_indexed} files indexed, {len(all_symbols)} with symbols)\n"
-    ]
+    lines: list[str] = [f"# Repository Map ({files_indexed} files indexed, {len(all_symbols)} with symbols)\n"]
     for sym in all_symbols:
         lines.append(sym.to_summary())
         lines.append("")

@@ -231,15 +231,9 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
 
         try:
             if provider == "anthropic":
-                return model.bind(
-                    thinking={"type": "enabled", "budget_tokens": budget}
-                )
+                return model.bind(thinking={"type": "enabled", "budget_tokens": budget})
             if provider == "google":
-                return model.bind(
-                    generation_config={
-                        "thinking_config": {"thinking_budget": budget, "include_thoughts": True}
-                    }
-                )
+                return model.bind(generation_config={"thinking_config": {"thinking_budget": budget, "include_thoughts": True}})
             if provider == "openai":
                 # o-series models use reasoning_effort
                 return model.bind(reasoning_effort="high")
@@ -289,9 +283,7 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         if _model_supports_native_thinking(model_name):
             # Attempt to bind native thinking params to the model in the request
             if hasattr(request, "model") and request.model is not None:
-                request = request.model_copy(
-                    update={"model": self._bind_thinking_params(request.model, model_name)}
-                )
+                request = request.model_copy(update={"model": self._bind_thinking_params(request.model, model_name)})
         else:
             # Fallback: chain-of-thought system prompt injection
             request = append_to_system_message(request, self._fallback_prompt)
@@ -319,9 +311,7 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
 
         if _model_supports_native_thinking(model_name):
             if hasattr(request, "model") and request.model is not None:
-                request = request.model_copy(
-                    update={"model": self._bind_thinking_params(request.model, model_name)}
-                )
+                request = request.model_copy(update={"model": self._bind_thinking_params(request.model, model_name)})
         else:
             request = append_to_system_message(request, self._fallback_prompt)
 

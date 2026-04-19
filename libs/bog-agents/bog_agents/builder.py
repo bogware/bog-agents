@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
 
 
-
 # ---------------------------------------------------------------------------
 # Configuration dataclasses — one per logical group
 # ---------------------------------------------------------------------------

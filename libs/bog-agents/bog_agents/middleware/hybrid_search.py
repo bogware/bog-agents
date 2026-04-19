@@ -71,22 +71,55 @@ logger = logging.getLogger(__name__)
 
 _CACHE_VERSION = 1
 _CACHE_FILE = ".bog-agents/embeddings.json"
-_DEFAULT_EMBED_MODEL = "nomic-embed-text"   # Ollama default
+_DEFAULT_EMBED_MODEL = "nomic-embed-text"  # Ollama default
 _MAX_RESULTS = 20
 _MAX_SNIPPET_CHARS = 300
-_CHUNK_SIZE = 40      # lines per embedding chunk
-_MAX_FILE_SIZE = 200_000   # bytes — skip large files
+_CHUNK_SIZE = 40  # lines per embedding chunk
+_MAX_FILE_SIZE = 200_000  # bytes — skip large files
 
-_SKIP_DIRS = frozenset({
-    "node_modules", "__pycache__", ".venv", "venv", ".git", "dist",
-    "build", "target", ".idea", ".vs", "coverage", ".mypy_cache",
-    ".ruff_cache", ".bog-agents",
-})
-_EMBED_EXTENSIONS = frozenset({
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".rs", ".go", ".java",
-    ".rb", ".php", ".swift", ".kt", ".cs", ".cpp", ".c",
-    ".md", ".txt", ".yaml", ".yml", ".toml", ".json",
-})
+_SKIP_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".git",
+        "dist",
+        "build",
+        "target",
+        ".idea",
+        ".vs",
+        "coverage",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".bog-agents",
+    }
+)
+_EMBED_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".rs",
+        ".go",
+        ".java",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".cs",
+        ".cpp",
+        ".c",
+        ".md",
+        ".txt",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".json",
+    }
+)
 
 _EXACT_WEIGHT = 2.0
 _SEMANTIC_WEIGHT = 1.0
@@ -143,16 +176,7 @@ class EmbeddingCache:
 
     Format::
 
-        {
-          "version": 1,
-          "built_at": 1234567890.0,
-          "entries": {
-            "src/auth.py": {
-              "mtime_hash": "...",
-              "chunks": [[0.12, -0.34, ...], ...]
-            }
-          }
-        }
+        {"version": 1, "built_at": 1234567890.0, "entries": {"src/auth.py": {"mtime_hash": "...", "chunks": [[0.12, -0.34, ...], ...]}}}
     """
 
     def __init__(self, root: Path) -> None:
@@ -409,10 +433,7 @@ def fuzzy_file_search(
         scored.append((_FUZZY_WEIGHT * score, path))
 
     scored.sort(reverse=True)
-    return [
-        SearchResult(path=p, line=None, snippet=f"File: {p}", score=s, match_type="fuzzy")
-        for s, p in scored[:max_results]
-    ]
+    return [SearchResult(path=p, line=None, snippet=f"File: {p}", score=s, match_type="fuzzy") for s, p in scored[:max_results]]
 
 
 # ---------------------------------------------------------------------------
@@ -458,11 +479,13 @@ def _get_embedding_model(model_name: str = _DEFAULT_EMBED_MODEL) -> Any | None:
     """
     try:
         from langchain_ollama import OllamaEmbeddings  # type: ignore[import]
+
         return OllamaEmbeddings(model=model_name)
     except ImportError:
         pass
     try:
         from langchain_openai import OpenAIEmbeddings  # type: ignore[import]
+
         return OpenAIEmbeddings()
     except ImportError:
         pass
@@ -486,9 +509,9 @@ def _chunk_file(path: Path, chunk_size: int = _CHUNK_SIZE) -> list[str]:
     if not lines:
         return []
     chunks = []
-    step = max(1, chunk_size // 2)   # 50% overlap
+    step = max(1, chunk_size // 2)  # 50% overlap
     for i in range(0, len(lines), step):
-        chunk = "\n".join(lines[i:i + chunk_size])
+        chunk = "\n".join(lines[i : i + chunk_size])
         if chunk.strip():
             chunks.append(chunk)
     return chunks
@@ -600,10 +623,7 @@ def semantic_search(
             scored.append((_SEMANTIC_WEIGHT * best_sim, rel_path))
 
     scored.sort(reverse=True)
-    return [
-        SearchResult(path=p, line=None, snippet=f"Semantic match: {p}", score=s, match_type="semantic")
-        for s, p in scored[:max_results]
-    ]
+    return [SearchResult(path=p, line=None, snippet=f"Semantic match: {p}", score=s, match_type="semantic") for s, p in scored[:max_results]]
 
 
 # ---------------------------------------------------------------------------
@@ -750,11 +770,7 @@ class HybridSearchMiddleware(AgentMiddleware[HybridSearchState, ContextT, Respon
         """
         model = self._embed_model or _get_embedding_model()
         if model is None:
-            return (
-                "No embedding model available.\n"
-                "Install Ollama and run: ollama pull nomic-embed-text\n"
-                "Or set OPENAI_API_KEY for OpenAI embeddings."
-            )
+            return "No embedding model available.\nInstall Ollama and run: ollama pull nomic-embed-text\nOr set OPENAI_API_KEY for OpenAI embeddings."
         import time as _time
 
         start = _time.monotonic()

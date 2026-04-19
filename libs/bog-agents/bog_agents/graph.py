@@ -111,10 +111,7 @@ def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> Non
         for req in getattr(type(mw), "requires", []):
             if req not in seen:
                 provided = [type(m).__name__ for m in middleware_list]
-                msg = (
-                    f"{type(mw).__name__} requires {req.__name__} to appear earlier "
-                    f"in the middleware stack. Current order: {provided}"
-                )
+                msg = f"{type(mw).__name__} requires {req.__name__} to appear earlier in the middleware stack. Current order: {provided}"
                 raise ValueError(msg)
         seen.add(type(mw))
 
@@ -689,6 +686,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if enable_enhanced_skills:
         if not enhanced_skills_sources:
             import logging as _logging
+
             _logging.getLogger(__name__).warning(
                 "enable_enhanced_skills=True but enhanced_skills_sources is empty — "
                 "EnhancedSkillsMiddleware will not be activated. "

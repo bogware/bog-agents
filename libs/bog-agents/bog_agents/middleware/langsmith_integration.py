@@ -142,6 +142,7 @@ class LangSmithMiddleware(AgentMiddleware[_State, ContextT, ResponseT]):
             provider = TracerProvider()
             provider.add_span_processor(BatchSpanProcessor(exporter, export_timeout_millis=batch_timeout_ms))
             from opentelemetry import trace as otel_trace
+
             otel_trace.set_tracer_provider(provider)
             self._otel_enabled = True
         except Exception:

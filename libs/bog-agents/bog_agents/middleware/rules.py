@@ -92,11 +92,7 @@ def _parse_yaml_value(raw: str) -> Any:
     # Inline list: ["a", "b"] or ['a', 'b'] or [a, b]
     if raw.startswith("[") and raw.endswith("]"):
         inner = raw[1:-1]
-        items = [
-            item.strip().strip("\"'")
-            for item in re.split(r",\s*", inner)
-            if item.strip()
-        ]
+        items = [item.strip().strip("\"'") for item in re.split(r",\s*", inner) if item.strip()]
         return items
     # Plain string (strip optional quotes)
     return raw.strip("\"'")
@@ -116,7 +112,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
 
     fm_text = match.group(1)
-    body = text[match.end():]
+    body = text[match.end() :]
 
     fm: dict[str, Any] = {}
     for key_match in _YAML_KEY_RE.finditer(fm_text):
@@ -182,11 +178,7 @@ class RuleSpec:
             # No glob = always inject (treat as implicit always)
             return True
 
-        return any(
-            fnmatch.fnmatch(cf, pattern)
-            for cf in context_files
-            for pattern in self.glob
-        )
+        return any(fnmatch.fnmatch(cf, pattern) for cf in context_files for pattern in self.glob)
 
 
 # ---------------------------------------------------------------------------
@@ -458,10 +450,7 @@ class RulesMiddleware(AgentMiddleware[RulesState, ContextT, ResponseT]):
             rule = matched[0]
             context = [file_path] if file_path else []
             would_match = rule.matches(context, agent_type=mw._agent_type)
-            return (
-                f"Rule '{name}' would {'✓ match' if would_match else '✗ not match'} "
-                f"for file '{file_path or '(no file)'}'."
-            )
+            return f"Rule '{name}' would {'✓ match' if would_match else '✗ not match'} for file '{file_path or '(no file)'}'."
 
         self._tools = [
             StructuredTool.from_function(
