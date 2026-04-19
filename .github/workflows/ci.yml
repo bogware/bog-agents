@@ -22,7 +22,7 @@ env:
 jobs:
   lint:
     name: "Lint"
-    runs-on: [self-hosted, linux]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 10
     strategy:
       matrix:
@@ -48,9 +48,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [linux, windows]
+        os: [Linux, Windows]
         # macos: no self-hosted macOS runner available
-        # os: [linux, windows, macos]
+        # os: [Linux, Windows, macOS]
         package:
           - { name: sdk, dir: libs/bog-agents }
           - { name: cli, dir: libs/cli }
