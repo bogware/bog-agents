@@ -31,6 +31,7 @@ def _assert_snapshot(snapshot_path: Path, actual: str, *, update_snapshots: bool
 
     with snapshot_path.open(newline="\n") as f:
         expected = f.read()
+    expected = expected.replace("\r\n", "\n")
     assert actual == expected
 
 

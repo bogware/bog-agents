@@ -531,7 +531,9 @@ def _split_paste_line(line: str) -> list[str]:
     inner = line.strip()
     if inner.startswith("<") and inner.endswith(">"):
         inner_stripped = inner[1:-1].strip()
-        if _WINDOWS_DRIVE_PATH_PATTERN.match(inner_stripped) or inner_stripped.startswith("\\\\"):
+        if _WINDOWS_DRIVE_PATH_PATTERN.match(
+            inner_stripped
+        ) or inner_stripped.startswith("\\\\"):
             return [inner]
     if _WINDOWS_DRIVE_PATH_PATTERN.match(inner) or inner.startswith("\\\\"):
         return [inner]
@@ -631,7 +633,11 @@ def _extract_unquoted_leading_path_with_spaces(text: str) -> tuple[Path, int] | 
     """
     if not text or ("\n" in text or "\r" in text):
         return None
-    if not text.startswith(("/", "~/")) and not _WINDOWS_DRIVE_PATH_PATTERN.match(text) and not text.startswith("\\\\"):
+    if (
+        not text.startswith(("/", "~/"))
+        and not _WINDOWS_DRIVE_PATH_PATTERN.match(text)
+        and not text.startswith("\\\\")
+    ):
         return None
     if " " not in text and "\u00a0" not in text and "\u202f" not in text:
         return None

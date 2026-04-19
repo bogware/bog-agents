@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -466,7 +467,7 @@ class TestSlashCommands:
         """Enabled extension commands should flow into the central registry."""
         from bog_agents_cli.command_registry import get_command_spec, get_slash_commands
 
-        tmp_path = Path("E:/Code/bog-agents/libs/cli/.tmp-command-tests") / uuid4().hex
+        tmp_path = Path(tempfile.mkdtemp()) / uuid4().hex
         ext_dir = tmp_path / ".bog-agents" / "extensions" / "review-pack"
         ext_dir.mkdir(parents=True)
         (ext_dir / "bog-agents-extension.json").write_text(

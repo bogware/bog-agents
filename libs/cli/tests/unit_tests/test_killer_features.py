@@ -416,7 +416,9 @@ class TestSessionManager:
 
         stats = SessionStats(name="test", tokens_in=1000, tokens_out=500, cost_usd=0.01)
         assert stats.name == "test"
-        assert stats.elapsed_seconds >= 0  # >= 0 to handle low-resolution Windows timers
+        assert (
+            stats.elapsed_seconds >= 0
+        )  # >= 0 to handle low-resolution Windows timers
 
     def test_format_session_stats(self):
         from bog_agents_cli.session_manager import SessionStats, format_session_stats
