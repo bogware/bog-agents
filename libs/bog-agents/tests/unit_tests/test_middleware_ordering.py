@@ -10,7 +10,6 @@ Verifies that:
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -124,13 +123,13 @@ class TestResultSynthesisRequires:
         """ResultSynthesisMiddleware must require ParallelWorktreeMiddleware."""
         assert ParallelWorktreeMiddleware in ResultSynthesisMiddleware.requires
 
-    def test_valid_order_passes(self, tmp_path: Path):
+    def test_valid_order_passes(self, tmp_path):
         """ParallelWorktreeMiddleware before ResultSynthesisMiddleware must pass."""
         pwm = ParallelWorktreeMiddleware(working_dir=tmp_path)
         rsm = ResultSynthesisMiddleware()
         _validate_middleware_ordering([pwm, rsm])
 
-    def test_invalid_order_raises(self, tmp_path: Path):
+    def test_invalid_order_raises(self, tmp_path):
         """ResultSynthesisMiddleware before ParallelWorktreeMiddleware must raise."""
         pwm = ParallelWorktreeMiddleware(working_dir=tmp_path)
         rsm = ResultSynthesisMiddleware()
@@ -159,7 +158,7 @@ class TestCreateAgentValidation:
         with pytest.raises(ValueError, match="ResultSynthesisMiddleware requires ParallelWorktreeMiddleware"):
             create_agent(model=MODEL, middleware=[rsm])
 
-    def test_create_agent_passes_with_correct_middleware_order(self, tmp_path: Path):
+    def test_create_agent_passes_with_correct_middleware_order(self, tmp_path):
         """create_agent() must succeed when middleware dependencies are satisfied."""
         pwm = ParallelWorktreeMiddleware(working_dir=tmp_path)
         rsm = ResultSynthesisMiddleware(parallel_middleware=pwm)
