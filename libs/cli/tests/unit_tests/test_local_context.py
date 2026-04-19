@@ -12,8 +12,6 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="local_context uses bash scripts not available on Windows")
-
 from bog_agents_cli.local_context import (
     _TOOL_NAME_DISPLAY_LIMIT,
     DETECT_CONTEXT_SCRIPT,
@@ -33,6 +31,8 @@ from bog_agents_cli.local_context import (
     build_detect_script,
 )
 from bog_agents_cli.mcp_tools import MCPServerInfo, MCPToolInfo
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="local_context uses bash scripts not available on Windows")
 
 
 def _make_backend(output: str = "", exit_code: int = 0) -> Mock:
