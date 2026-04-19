@@ -390,7 +390,7 @@ class TestThreadSelectorTabSort:
         """The sort switch should highlight the active header column."""
         with _patch_list_threads(), _patch_columns():
             app = ThreadSelectorTestApp()
-            async with app.run_test() as pilot:
+            async with app.run_test(size=(100, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
                 await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
