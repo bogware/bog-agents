@@ -32,7 +32,10 @@ from bog_agents_cli.local_context import (
 )
 from bog_agents_cli.mcp_tools import MCPServerInfo, MCPToolInfo
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="local_context uses bash scripts not available on Windows")
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="local_context uses bash scripts not available on Windows",
+)
 
 
 def _make_backend(output: str = "", exit_code: int = 0) -> Mock:
