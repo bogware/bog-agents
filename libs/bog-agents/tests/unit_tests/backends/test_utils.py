@@ -1,5 +1,6 @@
 """Tests for backends/utils.py utility functions."""
 
+import sys
 from typing import Any
 
 import pytest
@@ -7,6 +8,10 @@ import pytest
 from bog_agents.backends.utils import _glob_search_files, validate_path
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="validate_path has intentionally different Windows semantics (accepts native paths, no leading-slash injection)",
+)
 class TestValidatePath:
     """Tests for validate_path - the canonical path validation function."""
 
