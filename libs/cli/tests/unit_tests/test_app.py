@@ -1137,6 +1137,7 @@ class TestMessageQueue:
             await app._process_next_from_queue()
             await pilot.pause()
             await pilot.pause()
+            await pilot.pause()  # Extra flush needed on Windows ProactorEventLoop
 
             # The shell command should have been processed and the normal
             # message should also have been picked up (mounted as UserMessage)

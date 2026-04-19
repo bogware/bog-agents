@@ -1727,7 +1727,10 @@ class TestDroppedImagePaste:
             assert app.tracker.get_images() == []
             assert app.tracker.next_image_id == 1
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only: lstrip('/') doesn't strip Windows drive paths")
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX-only: lstrip('/') doesn't strip Windows drive paths",
+    )
     async def test_submit_recovers_if_command_mode_already_stripped_path(
         self, tmp_path
     ) -> None:

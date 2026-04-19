@@ -394,6 +394,7 @@ class TestThreadSelectorTabSort:
                 app.show_selector()
                 await pilot.pause()
                 await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
+                await pilot.pause()  # Third pause for header widget mount on Windows
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
