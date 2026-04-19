@@ -123,7 +123,8 @@ class TestCompletionPopupIntegration:
                 [("/help", "Show help"), ("/clear", "Clear chat")],
                 selected_index=0,
             )
-            # Allow async rebuild to complete
+            # Allow async rebuild to complete (two pauses needed to flush call_after_refresh)
+            await pilot.pause()
             await pilot.pause()
 
             # Should have created 2 option widgets
