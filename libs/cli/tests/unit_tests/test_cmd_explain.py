@@ -24,7 +24,9 @@ from bog_agents_cli.cmd_explain import (
 
 class TestGrepTool:
     def test_returns_rg_when_available(self):
-        with patch("bog_agents_cli.cmd_explain.shutil.which", return_value="/usr/bin/rg"):
+        with patch(
+            "bog_agents_cli.cmd_explain.shutil.which", return_value="/usr/bin/rg"
+        ):
             assert _grep_tool() == "rg"
 
     def test_returns_grep_when_rg_unavailable(self):
@@ -35,6 +37,7 @@ class TestGrepTool:
 # ---------------------------------------------------------------------------
 # _looks_like_file
 # ---------------------------------------------------------------------------
+
 
 class TestLooksLikeFile:
     def test_path_with_slash_is_file(self):
@@ -65,6 +68,7 @@ class TestLooksLikeFile:
 # ---------------------------------------------------------------------------
 # _read_lines
 # ---------------------------------------------------------------------------
+
 
 class TestReadLines:
     def test_reads_slice(self, tmp_path):
@@ -102,6 +106,7 @@ class TestReadLines:
 # gather_explain_context - file mode
 # ---------------------------------------------------------------------------
 
+
 class TestGatherExplainContextFile:
     def test_file_target_reads_content(self, tmp_path):
         py_file = tmp_path / "module.py"
@@ -138,6 +143,7 @@ class TestGatherExplainContextFile:
 # gather_explain_context - symbol mode
 # ---------------------------------------------------------------------------
 
+
 class TestGatherExplainContextSymbol:
     def test_unknown_when_not_found(self, tmp_path):
         with patch("bog_agents_cli.cmd_explain._find_definition", return_value=None):
@@ -148,7 +154,9 @@ class TestGatherExplainContextSymbol:
     def test_symbol_type_when_found(self, tmp_path):
         py_file = tmp_path / "module.py"
         py_file.write_text("\n" * 25 + "def my_func():\n    pass\n")
-        with patch("bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 26)):
+        with patch(
+            "bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 26)
+        ):
             with patch("bog_agents_cli.cmd_explain._find_callers", return_value=[]):
                 result = gather_explain_context("my_func", tmp_path)
         assert result["type"] == "symbol"
@@ -156,7 +164,9 @@ class TestGatherExplainContextSymbol:
     def test_location_includes_file_and_line(self, tmp_path):
         py_file = tmp_path / "module.py"
         py_file.write_text("def my_func():\n    pass\n")
-        with patch("bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 1)):
+        with patch(
+            "bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 1)
+        ):
             with patch("bog_agents_cli.cmd_explain._find_callers", return_value=[]):
                 result = gather_explain_context("my_func", tmp_path)
         assert str(py_file) in result["location"]
@@ -166,8 +176,12 @@ class TestGatherExplainContextSymbol:
         py_file = tmp_path / "module.py"
         py_file.write_text("def my_func():\n    pass\n")
         callers = ["other.py:10: my_func()"]
-        with patch("bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 1)):
-            with patch("bog_agents_cli.cmd_explain._find_callers", return_value=callers):
+        with patch(
+            "bog_agents_cli.cmd_explain._find_definition", return_value=(py_file, 1)
+        ):
+            with patch(
+                "bog_agents_cli.cmd_explain._find_callers", return_value=callers
+            ):
                 result = gather_explain_context("my_func", tmp_path)
         assert "other.py:10" in result["callers"]
 
@@ -176,41 +190,84 @@ class TestGatherExplainContextSymbol:
 # build_explain_prompt
 # ---------------------------------------------------------------------------
 
+
 class TestBuildExplainPrompt:
     def test_includes_target_name(self):
-        ctx = {"type": "symbol", "content": "", "location": "", "imports": "", "callers": ""}
+        ctx = {
+            "type": "symbol",
+            "content": "",
+            "location": "",
+            "imports": "",
+            "callers": "",
+        }
         result = build_explain_prompt("my_function", ctx)
         assert "my_function" in result
 
     def test_includes_content_when_present(self):
-        ctx = {"type": "symbol", "content": "def my_func(): pass", "location": "foo.py:1", "imports": "", "callers": ""}
+        ctx = {
+            "type": "symbol",
+            "content": "def my_func(): pass",
+            "location": "foo.py:1",
+            "imports": "",
+            "callers": "",
+        }
         result = build_explain_prompt("my_func", ctx)
         assert "def my_func(): pass" in result
 
     def test_includes_location_when_present(self):
-        ctx = {"type": "symbol", "content": "", "location": "foo.py:42", "imports": "", "callers": ""}
+        ctx = {
+            "type": "symbol",
+            "content": "",
+            "location": "foo.py:42",
+            "imports": "",
+            "callers": "",
+        }
         result = build_explain_prompt("sym", ctx)
         assert "foo.py:42" in result
 
     def test_includes_imports_when_present(self):
-        ctx = {"type": "file", "content": "", "location": "", "imports": "import os\nimport sys", "callers": ""}
+        ctx = {
+            "type": "file",
+            "content": "",
+            "location": "",
+            "imports": "import os\nimport sys",
+            "callers": "",
+        }
         result = build_explain_prompt("module.py", ctx)
         assert "import os" in result
 
     def test_includes_callers_when_present(self):
-        ctx = {"type": "symbol", "content": "", "location": "", "imports": "", "callers": "other.py:5: foo()"}
+        ctx = {
+            "type": "symbol",
+            "content": "",
+            "location": "",
+            "imports": "",
+            "callers": "other.py:5: foo()",
+        }
         result = build_explain_prompt("foo", ctx)
         assert "other.py:5" in result
 
     def test_omits_empty_sections(self):
-        ctx = {"type": "symbol", "content": "", "location": "", "imports": "", "callers": ""}
+        ctx = {
+            "type": "symbol",
+            "content": "",
+            "location": "",
+            "imports": "",
+            "callers": "",
+        }
         result = build_explain_prompt("sym", ctx)
         assert "Relevant source code:" not in result
         assert "Imports" not in result
         assert "Call sites" not in result
 
     def test_has_numbered_instructions(self):
-        ctx = {"type": "symbol", "content": "", "location": "", "imports": "", "callers": ""}
+        ctx = {
+            "type": "symbol",
+            "content": "",
+            "location": "",
+            "imports": "",
+            "callers": "",
+        }
         result = build_explain_prompt("sym", ctx)
         assert "1." in result
         assert "5." in result
@@ -219,6 +276,7 @@ class TestBuildExplainPrompt:
 # ---------------------------------------------------------------------------
 # format_explain_not_found
 # ---------------------------------------------------------------------------
+
 
 class TestFormatExplainNotFound:
     def test_includes_target(self):
@@ -236,6 +294,7 @@ class TestFormatExplainNotFound:
 # ---------------------------------------------------------------------------
 # format_explain_help
 # ---------------------------------------------------------------------------
+
 
 class TestFormatExplainHelp:
     def test_returns_string(self):

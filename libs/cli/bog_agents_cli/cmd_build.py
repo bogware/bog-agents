@@ -65,11 +65,13 @@ def build_skill_template(
     ]
 
     if variables:
-        lines.extend([
-            "",
-            "## Variables",
-            "",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Variables",
+                "",
+            ]
+        )
         for var in variables:
             lines.append(f"- {{{{{var}}}}}: description")
 
@@ -139,13 +141,19 @@ def build_pipeline_yaml(
         step_type = step.get("type", "prompt")
         content = step.get("content", "")
         # Indent content lines for block scalar
-        indented = "\n".join(f"        {line}" for line in content.splitlines()) if content else "        "
-        lines.extend([
-            f"  - label: {label}",
-            f"    type: {step_type}",
-            "    content: |",
-            indented,
-        ])
+        indented = (
+            "\n".join(f"        {line}" for line in content.splitlines())
+            if content
+            else "        "
+        )
+        lines.extend(
+            [
+                f"  - label: {label}",
+                f"    type: {step_type}",
+                "    content: |",
+                indented,
+            ]
+        )
 
     return "\n".join(lines) + "\n"
 
@@ -289,9 +297,11 @@ def preview_skill(
         body,
     ]
     if variables:
-        lines.extend([
-            "",
-            f"Variables: {', '.join(variables)}",
-        ])
+        lines.extend(
+            [
+                "",
+                f"Variables: {', '.join(variables)}",
+            ]
+        )
     lines.append("─" * 40)
     return "\n".join(lines)

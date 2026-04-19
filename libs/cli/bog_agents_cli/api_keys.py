@@ -27,7 +27,10 @@ WELL_KNOWN_API_KEYS: dict[str, tuple[str, str]] = {
     "XAI_API_KEY": ("xAI API key", "https://console.x.ai"),
     "OPENROUTER_API_KEY": ("OpenRouter API key", "https://openrouter.ai"),
     "TAVILY_API_KEY": ("Tavily search API key", "https://tavily.com"),
-    "LANGCHAIN_API_KEY": ("LangChain/LangSmith API key (alias)", "https://smith.langchain.com"),
+    "LANGCHAIN_API_KEY": (
+        "LangChain/LangSmith API key (alias)",
+        "https://smith.langchain.com",
+    ),
     "DAYTONA_API_KEY": ("Daytona API key", "https://daytona.io"),
 }
 

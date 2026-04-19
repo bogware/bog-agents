@@ -54,7 +54,9 @@ def get_daemon_token() -> str | None:
         return None
 
 
-def _make_request(method: str, path: str, *, json_body: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _make_request(
+    method: str, path: str, *, json_body: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
     """Perform a blocking HTTP request to the daemon API.
 
     This function is intended to be called via `asyncio.to_thread` from async
@@ -321,7 +323,9 @@ def format_daemon_status(
     if status is not None:
         version = status.get("version", "?")
         job_count = status.get("job_count", len(jobs))
-        lines.append(f"[bold green]Daemon running[/bold green]  version=[cyan]{version}[/cyan]  jobs=[cyan]{job_count}[/cyan]")
+        lines.append(
+            f"[bold green]Daemon running[/bold green]  version=[cyan]{version}[/cyan]  jobs=[cyan]{job_count}[/cyan]"
+        )
     else:
         lines.append("[bold yellow]Daemon status unavailable[/bold yellow]")
 
@@ -330,7 +334,9 @@ def format_daemon_status(
     if not jobs:
         lines.append("[dim]No ambient jobs configured.[/dim]")
         lines.append("")
-        lines.append("Create a job via the API or by editing [bold]~/.bog-agents/daemon/jobs.json[/bold].")
+        lines.append(
+            "Create a job via the API or by editing [bold]~/.bog-agents/daemon/jobs.json[/bold]."
+        )
         return "\n".join(lines)
 
     # Header row

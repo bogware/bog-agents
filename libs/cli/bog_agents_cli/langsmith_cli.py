@@ -23,11 +23,19 @@ def _get_api_key() -> str | None:
 
 
 def _get_project() -> str:
-    return os.environ.get("LANGCHAIN_PROJECT") or os.environ.get("LANGSMITH_PROJECT") or "default"
+    return (
+        os.environ.get("LANGCHAIN_PROJECT")
+        or os.environ.get("LANGSMITH_PROJECT")
+        or "default"
+    )
 
 
 def _get_endpoint() -> str:
-    return os.environ.get("LANGCHAIN_ENDPOINT") or os.environ.get("LANGSMITH_ENDPOINT") or "https://api.smith.langchain.com"
+    return (
+        os.environ.get("LANGCHAIN_ENDPOINT")
+        or os.environ.get("LANGSMITH_ENDPOINT")
+        or "https://api.smith.langchain.com"
+    )
 
 
 def _make_client() -> object:
@@ -35,9 +43,7 @@ def _make_client() -> object:
         from langsmith import Client
     except ImportError as exc:
         msg = "langsmith is not installed.\nInstall it with: pip install langsmith"
-        raise ImportError(
-            msg
-        ) from exc
+        raise ImportError(msg) from exc
     kwargs: dict[str, Any] = {}
     api_key = _get_api_key()
     if api_key:
@@ -75,7 +81,9 @@ def format_langsmith_status() -> str:
             else ""
         )
 
-        tracing_display = "[green]enabled[/green]" if tracing_v2 else "[dim]disabled[/dim]"
+        tracing_display = (
+            "[green]enabled[/green]" if tracing_v2 else "[dim]disabled[/dim]"
+        )
 
         try:
             client = _make_client()
@@ -188,7 +196,10 @@ def format_langsmith_runs(
                 "  [dim]No runs found.[/dim]"
             )
 
-        lines = [f"[bold]Recent runs[/bold] in '[cyan]{proj}[/cyan]' ({len(runs)} found)", ""]
+        lines = [
+            f"[bold]Recent runs[/bold] in '[cyan]{proj}[/cyan]' ({len(runs)} found)",
+            "",
+        ]
         for run in runs:
             run_id = str(getattr(run, "id", ""))
             short_id = run_id[:8] if len(run_id) >= 8 else run_id
@@ -219,7 +230,9 @@ def format_langsmith_runs(
             tok_str = f"  {total_tokens:,}tok" if total_tokens is not None else ""
             err_str = "  [red]ERR[/red]" if error else ""
 
-            lines.append(f"  {short_id}  {status_str}  {time_str}  {name}{tok_str}{err_str}")
+            lines.append(
+                f"  {short_id}  {status_str}  {time_str}  {name}{tok_str}{err_str}"
+            )
 
         return "\n".join(lines)
     except ImportError as exc:
@@ -397,7 +410,9 @@ def format_langsmith_datasets(limit: int = 20) -> str:
             description = getattr(ds, "description", "") or ""
             example_count = getattr(ds, "example_count", None)
 
-            count_str = f"  {example_count} examples" if example_count is not None else ""
+            count_str = (
+                f"  {example_count} examples" if example_count is not None else ""
+            )
             desc_str = f"  — {description}" if description else ""
 
             lines.append(f"  {short_id}  [cyan]{name}[/cyan]{count_str}{desc_str}")
@@ -607,14 +622,22 @@ def format_langsmith_eval_compare(eval_a: str, eval_b: str) -> str:
         ]
 
         for metric in all_metrics:
-            a_stats = stats_a.get(metric, {}) if isinstance(stats_a.get(metric), dict) else {}
-            b_stats = stats_b.get(metric, {}) if isinstance(stats_b.get(metric), dict) else {}
+            a_stats = (
+                stats_a.get(metric, {}) if isinstance(stats_a.get(metric), dict) else {}
+            )
+            b_stats = (
+                stats_b.get(metric, {}) if isinstance(stats_b.get(metric), dict) else {}
+            )
 
             a_avg = a_stats.get("avg", a_stats.get("mean", None))
             b_avg = b_stats.get("avg", b_stats.get("mean", None))
 
-            a_str = f"{float(a_avg):.4f}" if isinstance(a_avg, (int, float)) else "  N/A"
-            b_str = f"{float(b_avg):.4f}" if isinstance(b_avg, (int, float)) else "  N/A"
+            a_str = (
+                f"{float(a_avg):.4f}" if isinstance(a_avg, (int, float)) else "  N/A"
+            )
+            b_str = (
+                f"{float(b_avg):.4f}" if isinstance(b_avg, (int, float)) else "  N/A"
+            )
 
             if a_avg is not None and b_avg is not None:
                 delta = b_avg - a_avg
@@ -661,7 +684,10 @@ def format_langsmith_feedback(run_id: str) -> str:
                 "  [dim]No feedback found.[/dim]"
             )
 
-        lines = [f"[bold]Feedback for run {short_id}[/bold] ({len(feedback_items)} items)", ""]
+        lines = [
+            f"[bold]Feedback for run {short_id}[/bold] ({len(feedback_items)} items)",
+            "",
+        ]
         for fb in feedback_items:
             key = getattr(fb, "key", "") or ""
             score = getattr(fb, "score", None)

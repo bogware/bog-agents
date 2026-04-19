@@ -303,7 +303,9 @@ def run_tests(
     skipped = counts.get("skipped", 0)
     total_bad = failed + errors
 
-    status_tag = "[green]PASSED[/green]" if (result.returncode == 0) else "[red]FAILED[/red]"
+    status_tag = (
+        "[green]PASSED[/green]" if (result.returncode == 0) else "[red]FAILED[/red]"
+    )
 
     lines: list[str] = [
         f"{status_tag}  [{framework}]  {elapsed:.2f}s",

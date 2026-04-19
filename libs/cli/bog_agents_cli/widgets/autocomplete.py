@@ -602,7 +602,7 @@ class FuzzyFileController:
 
         before_cursor = text[:cursor_index]
         at_index = before_cursor.rfind("@")
-        search = before_cursor[at_index + 1:]
+        search = before_cursor[at_index + 1 :]
 
         suggestions = self._get_mention_suggestions(search)
 
@@ -649,7 +649,9 @@ class FuzzyFileController:
         # Unknown prefix (e.g. @symbol:, @url:, @memory:, @skill:) — no completion
         return []
 
-    def _get_file_suggestions(self, query: str, *, prefix: str = "@") -> list[tuple[str, str]]:
+    def _get_file_suggestions(
+        self, query: str, *, prefix: str = "@"
+    ) -> list[tuple[str, str]]:
         """Return fuzzy file suggestions.
 
         Returns:
@@ -677,14 +679,19 @@ class FuzzyFileController:
         try:
             dirs: list[str] = []
             for p in sorted(self._project_root.rglob("*")):
-                if p.is_dir() and not any(part.startswith(".") for part in p.relative_to(self._project_root).parts):
+                if p.is_dir() and not any(
+                    part.startswith(".")
+                    for part in p.relative_to(self._project_root).parts
+                ):
                     rel = p.relative_to(self._project_root).as_posix()
                     dirs.append(rel)
                 if len(dirs) >= 500:
                     break
 
             include_dots = query.startswith(".")
-            matches = _fuzzy_search(query, dirs, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots)
+            matches = _fuzzy_search(
+                query, dirs, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
+            )
             return [(f"@folder:{d}", "dir") for d in matches]
         except OSError:
             return []

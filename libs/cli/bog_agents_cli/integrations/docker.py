@@ -217,15 +217,24 @@ class DockerProvider(SandboxProvider):
         host_dir = str(Path(self._cwd).resolve())
 
         cmd = [
-            "docker", "run", "-d",
-            "--name", name,
-            "--memory", self._memory,
-            "--cpus", self._cpus,
-            "-v", f"{host_dir}:{_CONTAINER_WORKDIR}",
-            "-w", _CONTAINER_WORKDIR,
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--memory",
+            self._memory,
+            "--cpus",
+            self._cpus,
+            "-v",
+            f"{host_dir}:{_CONTAINER_WORKDIR}",
+            "-w",
+            _CONTAINER_WORKDIR,
             "--rm",
             self._image,
-            "tail", "-f", "/dev/null",  # keep alive
+            "tail",
+            "-f",
+            "/dev/null",  # keep alive
         ]
 
         try:
@@ -244,7 +253,9 @@ class DockerProvider(SandboxProvider):
         backend = DockerBackend(container_id, image=self._image)
 
         # Bootstrap: install pip if missing (slim images often omit it)
-        backend.execute("which pip3 || (apt-get update -qq && apt-get install -y -qq python3-pip)")
+        backend.execute(
+            "which pip3 || (apt-get update -qq && apt-get install -y -qq python3-pip)"
+        )
 
         return backend
 
@@ -264,7 +275,10 @@ class DockerProvider(SandboxProvider):
         try:
             result = subprocess.run(
                 ["docker", "inspect", "--format", "{{.State.Running}}", sandbox_id],
-                capture_output=True, text=True, timeout=10, check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
             )
         except Exception as exc:
             msg = f"Cannot inspect Docker container {sandbox_id}"

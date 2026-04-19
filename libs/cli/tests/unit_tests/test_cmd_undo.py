@@ -29,6 +29,7 @@ def _reset_state():
 # record_edit
 # ---------------------------------------------------------------------------
 
+
 class TestRecordEdit:
     def setup_method(self):
         _reset_state()
@@ -64,6 +65,7 @@ class TestRecordEdit:
 # ---------------------------------------------------------------------------
 # undo_last_edit
 # ---------------------------------------------------------------------------
+
 
 class TestUndoLastEdit:
     def setup_method(self):
@@ -121,6 +123,7 @@ class TestUndoLastEdit:
 # get_last_edit_summary
 # ---------------------------------------------------------------------------
 
+
 class TestGetLastEditSummary:
     def setup_method(self):
         _reset_state()
@@ -154,6 +157,7 @@ class TestGetLastEditSummary:
 # undo_via_git
 # ---------------------------------------------------------------------------
 
+
 class TestUndoViaGit:
     def test_success_returns_reverted_message(self, tmp_path):
         mock_result = MagicMock(returncode=0, stderr="")
@@ -169,7 +173,9 @@ class TestUndoViaGit:
         assert "pathspec not in index" in result
 
     def test_git_not_found_returns_error(self):
-        with patch("bog_agents_cli.cmd_undo.subprocess.run", side_effect=FileNotFoundError):
+        with patch(
+            "bog_agents_cli.cmd_undo.subprocess.run", side_effect=FileNotFoundError
+        ):
             result = undo_via_git("src/file.py")
         assert "not found" in result.lower()
 
@@ -187,7 +193,9 @@ class TestUndoViaGit:
 
     def test_passes_file_to_git_checkout(self):
         mock_result = MagicMock(returncode=0, stderr="")
-        with patch("bog_agents_cli.cmd_undo.subprocess.run", return_value=mock_result) as mock_run:
+        with patch(
+            "bog_agents_cli.cmd_undo.subprocess.run", return_value=mock_result
+        ) as mock_run:
             undo_via_git("specific/file.py")
         cmd = mock_run.call_args[0][0]
         assert "specific/file.py" in cmd

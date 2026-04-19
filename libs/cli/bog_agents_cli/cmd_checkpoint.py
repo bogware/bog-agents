@@ -60,7 +60,9 @@ def list_checkpoints() -> str:
         short_tid = thread_id[:12] + "\u2026" if len(thread_id) > 12 else thread_id
         created_at = meta.get("created_at", "")
         description = meta.get("description", "")
-        lines.append(f"  [cyan]{name:<24}[/cyan]  {short_tid:<14}  {created_at:<20}  [dim]{description}[/dim]")
+        lines.append(
+            f"  [cyan]{name:<24}[/cyan]  {short_tid:<14}  {created_at:<20}  [dim]{description}[/dim]"
+        )
 
     return "\n".join(lines)
 

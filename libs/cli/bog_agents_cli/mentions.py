@@ -44,25 +44,25 @@ _MENTION_RE = re.compile(
     r"@(?:"
     r"(file|folder|symbol|url|memory|skill|search|repo):([^\s]+)"  # typed mention: @type:value
     r"|"
-    r"([^\s@:]+(?:/[^\s@:]+)*)"                                     # bare path: @src/main.py
+    r"([^\s@:]+(?:/[^\s@:]+)*)"  # bare path: @src/main.py
     r")",
     re.IGNORECASE,
 )
 
-_MAX_FILE_BYTES = 100_000    # 100KB per file
-_MAX_URL_BYTES = 50_000      # 50KB per URL
-_URL_TIMEOUT = 8             # seconds
+_MAX_FILE_BYTES = 100_000  # 100KB per file
+_MAX_URL_BYTES = 50_000  # 50KB per URL
+_URL_TIMEOUT = 8  # seconds
 
 
 @dataclass
 class MentionToken:
     """A parsed @-mention token."""
 
-    kind: str          # "file" | "folder" | "symbol" | "url" | "memory" | "skill"
-    value: str         # the argument after the colon (or bare path)
-    raw: str           # original text in the message (for replacement)
+    kind: str  # "file" | "folder" | "symbol" | "url" | "memory" | "skill"
+    value: str  # the argument after the colon (or bare path)
+    raw: str  # original text in the message (for replacement)
     resolved: str = ""  # resolved content (filled by resolve())
-    error: str = ""    # error message if resolution failed
+    error: str = ""  # error message if resolution failed
 
 
 @dataclass
@@ -70,7 +70,7 @@ class MentionResolution:
     """Result of resolving all @-mentions in a message."""
 
     original: str
-    augmented: str                      # message with injected context prepended
+    augmented: str  # message with injected context prepended
     tokens: list[MentionToken] = field(default_factory=list)
     context_blocks: list[str] = field(default_factory=list)  # injected text blocks
 
@@ -88,7 +88,9 @@ def parse_mentions(text: str) -> list[MentionToken]:
     for m in _MENTION_RE.finditer(text):
         if m.group(1) and m.group(2):
             # Typed mention: @type:value
-            tokens.append(MentionToken(kind=m.group(1).lower(), value=m.group(2), raw=m.group(0)))
+            tokens.append(
+                MentionToken(kind=m.group(1).lower(), value=m.group(2), raw=m.group(0))
+            )
         elif m.group(3):
             # Bare path: @src/something → treat as @file:
             tokens.append(MentionToken(kind="file", value=m.group(3), raw=m.group(0)))
@@ -262,7 +264,9 @@ def _resolve_memory(value: str, cwd: Path) -> str:
                     section_lines.append(line)
 
             if section_lines:
-                return f"Memory `{value}` (from {mem_file.name}):\n\n" + "\n".join(section_lines)
+                return f"Memory `{value}` (from {mem_file.name}):\n\n" + "\n".join(
+                    section_lines
+                )
 
         except OSError:
             continue
@@ -289,7 +293,9 @@ def _resolve_skill(value: str, cwd: Path) -> str:
                 except OSError:
                     continue
 
-    return f"[Skill '{value}' not found in ~/.bog-agents/skills/ or .bog-agents/skills/]"
+    return (
+        f"[Skill '{value}' not found in ~/.bog-agents/skills/ or .bog-agents/skills/]"
+    )
 
 
 def _resolve_repo(name: str, cwd: Path) -> str:
@@ -340,13 +346,32 @@ def _resolve_search(query: str, cwd: Path) -> str:
 def _lang_hint(path: Path) -> str:
     """Return a markdown language hint for a file."""
     ext_map = {
-        ".py": "python", ".js": "javascript", ".ts": "typescript",
-        ".tsx": "tsx", ".jsx": "jsx", ".rs": "rust", ".go": "go",
-        ".java": "java", ".rb": "ruby", ".php": "php", ".swift": "swift",
-        ".kt": "kotlin", ".cs": "csharp", ".cpp": "cpp", ".c": "c",
-        ".h": "c", ".sh": "bash", ".yaml": "yaml", ".yml": "yaml",
-        ".json": "json", ".toml": "toml", ".md": "markdown",
-        ".html": "html", ".css": "css", ".sql": "sql", ".tf": "hcl",
+        ".py": "python",
+        ".js": "javascript",
+        ".ts": "typescript",
+        ".tsx": "tsx",
+        ".jsx": "jsx",
+        ".rs": "rust",
+        ".go": "go",
+        ".java": "java",
+        ".rb": "ruby",
+        ".php": "php",
+        ".swift": "swift",
+        ".kt": "kotlin",
+        ".cs": "csharp",
+        ".cpp": "cpp",
+        ".c": "c",
+        ".h": "c",
+        ".sh": "bash",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".json": "json",
+        ".toml": "toml",
+        ".md": "markdown",
+        ".html": "html",
+        ".css": "css",
+        ".sql": "sql",
+        ".tf": "hcl",
     }
     return ext_map.get(path.suffix.lower(), "")
 

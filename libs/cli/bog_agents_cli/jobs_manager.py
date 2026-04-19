@@ -65,7 +65,9 @@ def _post_webhook(url: str, payload: dict[str, Any]) -> None:
         import urllib.request
 
         data = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(
+            url, data=data, headers={"Content-Type": "application/json"}
+        )
         urllib.request.urlopen(req, timeout=5)
     except Exception as exc:
         logger.warning("Webhook POST to %s failed: %s", url, exc)
@@ -178,6 +180,7 @@ class PersistentJobsManager(BackgroundAgentManager):
         """
         try:
             from bog_agents_cli.io_utils import atomic_write_text
+
             data = _task_to_dict(task)
             atomic_write_text(self._job_path(task.task_id), json.dumps(data, indent=2))
         except Exception as exc:
@@ -208,7 +211,9 @@ class PersistentJobsManager(BackgroundAgentManager):
                 try:
                     status = BackgroundStatus(status_str)
                 except ValueError:
-                    logger.debug("Unknown status '%s' in %s — skipping", status_str, path)
+                    logger.debug(
+                        "Unknown status '%s' in %s — skipping", status_str, path
+                    )
                     continue
                 if status not in terminal_statuses:
                     continue
@@ -261,7 +266,9 @@ class PersistentJobsManager(BackgroundAgentManager):
         if self._enable_worktrees and not worktree_branch:
             worktree_branch = f"bog-job-{uuid.uuid4().hex[:8]}"
 
-        task_id = await super().submit(prompt, worktree_branch=worktree_branch, **kwargs)
+        task_id = await super().submit(
+            prompt, worktree_branch=worktree_branch, **kwargs
+        )
 
         task = self._tasks.get(task_id)
         if task is not None:
@@ -389,9 +396,17 @@ class PersistentJobsManager(BackgroundAgentManager):
             task_id = str(row["task_id"])[:w_id]
             status = str(row["status"])[:w_status]
             label = str(row["label"])
-            label = label[:w_label] if len(label) <= w_label else label[:w_label - 3] + "..."
+            label = (
+                label[:w_label]
+                if len(label) <= w_label
+                else label[: w_label - 3] + "..."
+            )
             branch = str(row["branch"])
-            branch = branch[:w_branch] if len(branch) <= w_branch else branch[:w_branch - 3] + "..."
+            branch = (
+                branch[:w_branch]
+                if len(branch) <= w_branch
+                else branch[: w_branch - 3] + "..."
+            )
             dur = row["duration"]
             dur_str = f"{dur:.0f}s" if dur is not None else "-"
             lines.append(

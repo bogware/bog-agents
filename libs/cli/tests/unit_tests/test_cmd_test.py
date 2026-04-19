@@ -91,6 +91,7 @@ class TestDetectTestFramework:
 # find_test_file
 # ---------------------------------------------------------------------------
 
+
 class TestFindTestFile:
     def test_finds_test_prefix_convention(self, tmp_path):
         src = tmp_path / "module.py"
@@ -153,6 +154,7 @@ class TestFindTestFile:
 # _parse_pytest_output
 # ---------------------------------------------------------------------------
 
+
 class TestParsePytestOutput:
     def test_parses_all_passed(self):
         output = "3 passed in 0.45s"
@@ -183,6 +185,7 @@ class TestParsePytestOutput:
 # _parse_jest_output
 # ---------------------------------------------------------------------------
 
+
 class TestParseJestOutput:
     def test_parses_passed(self):
         output = "Tests: 5 passed, 5 total"
@@ -209,6 +212,7 @@ class TestParseJestOutput:
 # _parse_go_output
 # ---------------------------------------------------------------------------
 
+
 class TestParseGoOutput:
     def test_detects_pass_line(self):
         output = "ok  \tgithub.com/org/proj\t0.123s"
@@ -230,6 +234,7 @@ class TestParseGoOutput:
 # run_tests
 # ---------------------------------------------------------------------------
 
+
 class TestRunTests:
     def _mock_completed(self, returncode=0, stdout="3 passed in 0.45s", stderr=""):
         return MagicMock(returncode=returncode, stdout=stdout, stderr=stderr)
@@ -240,34 +245,58 @@ class TestRunTests:
         assert "No test framework detected" in result
 
     def test_runs_pytest_command(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", return_value=self._mock_completed()) as mock_run:
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                return_value=self._mock_completed(),
+            ) as mock_run:
                 run_tests(cwd=tmp_path)
         cmd = mock_run.call_args[0][0]
         assert "pytest" in cmd
 
     def test_runs_jest_command(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="jest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", return_value=self._mock_completed()) as mock_run:
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="jest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                return_value=self._mock_completed(),
+            ) as mock_run:
                 run_tests(cwd=tmp_path)
         cmd = mock_run.call_args[0][0]
         assert "jest" in cmd
 
     def test_shows_passed_count(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", return_value=self._mock_completed(stdout="5 passed in 1s")):
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                return_value=self._mock_completed(stdout="5 passed in 1s"),
+            ):
                 result = run_tests(cwd=tmp_path)
         assert "5 passed" in result
 
     def test_handles_timeout(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", side_effect=subprocess.TimeoutExpired("pytest", 60)):
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                side_effect=subprocess.TimeoutExpired("pytest", 60),
+            ):
                 result = run_tests(cwd=tmp_path, timeout=60)
         assert "timed out" in result.lower()
 
     def test_handles_command_not_found(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", side_effect=FileNotFoundError):
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run", side_effect=FileNotFoundError
+            ):
                 result = run_tests(cwd=tmp_path)
         assert "not found" in result.lower()
 
@@ -276,17 +305,26 @@ class TestRunTests:
         assert "Unknown framework" in result
 
     def test_passes_test_file_arg(self, tmp_path):
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run", return_value=self._mock_completed()) as mock_run:
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                return_value=self._mock_completed(),
+            ) as mock_run:
                 run_tests(cwd=tmp_path, test_file="tests/test_foo.py")
         cmd = mock_run.call_args[0][0]
         assert "tests/test_foo.py" in cmd
 
     def test_shows_failed_output_when_failures(self, tmp_path):
         output = "1 failed\nFAILED test_foo.py::test_bar - AssertionError"
-        with patch("bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"):
-            with patch("bog_agents_cli.cmd_test.subprocess.run",
-                       return_value=self._mock_completed(returncode=1, stdout=output)):
+        with patch(
+            "bog_agents_cli.cmd_test.detect_test_framework", return_value="pytest"
+        ):
+            with patch(
+                "bog_agents_cli.cmd_test.subprocess.run",
+                return_value=self._mock_completed(returncode=1, stdout=output),
+            ):
                 result = run_tests(cwd=tmp_path)
         assert "FAILED" in result or "failed" in result
 
@@ -294,6 +332,7 @@ class TestRunTests:
 # ---------------------------------------------------------------------------
 # format_test_help
 # ---------------------------------------------------------------------------
+
 
 class TestFormatTestHelp:
     def test_returns_string(self):

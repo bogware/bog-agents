@@ -31,6 +31,7 @@ def _patch_checkpoint_path(tmp_path: Path):
 # list_checkpoints
 # ---------------------------------------------------------------------------
 
+
 class TestListCheckpoints:
     def test_empty_when_no_file(self, tmp_path):
         with _patch_checkpoint_path(tmp_path):
@@ -39,13 +40,17 @@ class TestListCheckpoints:
 
     def test_shows_checkpoint_names(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
-        checkpoint_file.write_text(json.dumps({
-            "my-checkpoint": {
-                "thread_id": "abc123",
-                "created_at": "2024-01-01 12:00 UTC",
-                "description": "test desc",
-            }
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "my-checkpoint": {
+                        "thread_id": "abc123",
+                        "created_at": "2024-01-01 12:00 UTC",
+                        "description": "test desc",
+                    }
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             result = list_checkpoints()
         assert "my-checkpoint" in result
@@ -53,10 +58,22 @@ class TestListCheckpoints:
 
     def test_shows_multiple_checkpoints(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
-        checkpoint_file.write_text(json.dumps({
-            "cp-1": {"thread_id": "t1", "created_at": "2024-01-01", "description": ""},
-            "cp-2": {"thread_id": "t2", "created_at": "2024-01-02", "description": ""},
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "cp-1": {
+                        "thread_id": "t1",
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                    "cp-2": {
+                        "thread_id": "t2",
+                        "created_at": "2024-01-02",
+                        "description": "",
+                    },
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             result = list_checkpoints()
         assert "cp-1" in result
@@ -65,9 +82,17 @@ class TestListCheckpoints:
     def test_truncates_long_thread_id(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
         long_tid = "a" * 50
-        checkpoint_file.write_text(json.dumps({
-            "cp": {"thread_id": long_tid, "created_at": "2024-01-01", "description": ""},
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "cp": {
+                        "thread_id": long_tid,
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             result = list_checkpoints()
         # Thread ID is truncated with ellipsis after 12 chars
@@ -84,6 +109,7 @@ class TestListCheckpoints:
 # ---------------------------------------------------------------------------
 # save_checkpoint
 # ---------------------------------------------------------------------------
+
 
 class TestSaveCheckpoint:
     def test_saves_new_checkpoint(self, tmp_path):
@@ -133,12 +159,21 @@ class TestSaveCheckpoint:
 # load_checkpoint
 # ---------------------------------------------------------------------------
 
+
 class TestLoadCheckpoint:
     def test_returns_thread_id_for_existing(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
-        checkpoint_file.write_text(json.dumps({
-            "my-cp": {"thread_id": "thread-abc", "created_at": "2024-01-01", "description": ""},
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "my-cp": {
+                        "thread_id": "thread-abc",
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             result = load_checkpoint("my-cp")
         assert result == "thread-abc"
@@ -165,12 +200,21 @@ class TestLoadCheckpoint:
 # delete_checkpoint
 # ---------------------------------------------------------------------------
 
+
 class TestDeleteCheckpoint:
     def test_deletes_existing_checkpoint(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
-        checkpoint_file.write_text(json.dumps({
-            "my-cp": {"thread_id": "t", "created_at": "2024-01-01", "description": ""},
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "my-cp": {
+                        "thread_id": "t",
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             result = delete_checkpoint("my-cp")
         assert "deleted" in result.lower()
@@ -184,10 +228,22 @@ class TestDeleteCheckpoint:
 
     def test_other_checkpoints_preserved(self, tmp_path):
         checkpoint_file = tmp_path / "checkpoints.json"
-        checkpoint_file.write_text(json.dumps({
-            "cp-1": {"thread_id": "t1", "created_at": "2024-01-01", "description": ""},
-            "cp-2": {"thread_id": "t2", "created_at": "2024-01-01", "description": ""},
-        }))
+        checkpoint_file.write_text(
+            json.dumps(
+                {
+                    "cp-1": {
+                        "thread_id": "t1",
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                    "cp-2": {
+                        "thread_id": "t2",
+                        "created_at": "2024-01-01",
+                        "description": "",
+                    },
+                }
+            )
+        )
         with patch("bog_agents_cli.cmd_checkpoint._CHECKPOINTS_PATH", checkpoint_file):
             delete_checkpoint("cp-1")
         data = json.loads(checkpoint_file.read_text())
@@ -198,6 +254,7 @@ class TestDeleteCheckpoint:
 # ---------------------------------------------------------------------------
 # format_checkpoint_help
 # ---------------------------------------------------------------------------
+
 
 class TestFormatCheckpointHelp:
     def test_returns_string(self):

@@ -56,7 +56,9 @@ def test_sdk_dependency_is_compatible_with_workspace_version() -> None:
     bog_agents_dep = next(
         (d for d in cli_dependencies if d.startswith("bog-agents")), None
     )
-    assert bog_agents_dep is not None, "bog-agents dependency not found in CLI pyproject.toml"
+    assert bog_agents_dep is not None, (
+        "bog-agents dependency not found in CLI pyproject.toml"
+    )
 
     # Accept either exact pin (==) or compatible range (>=X.Y.Z,<X.Y+1.Z)
     exact_match = f"bog-agents=={sdk_version}"

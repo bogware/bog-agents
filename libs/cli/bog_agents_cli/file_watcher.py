@@ -309,7 +309,9 @@ def format_watcher_status(watchers: list[BogFileWatcher]) -> str:
     rows.append("-" * 80)
 
     for watcher in watchers:
-        status = "[green]running[/green]" if watcher.is_running() else "[red]stopped[/red]"
+        status = (
+            "[green]running[/green]" if watcher.is_running() else "[red]stopped[/red]"
+        )
         watch_dir = str(watcher._watch_dir)
         for config in watcher._configs:
             patterns_str = ", ".join(config.patterns) if config.patterns else "(none)"
@@ -324,7 +326,9 @@ def format_watcher_status(watchers: list[BogFileWatcher]) -> str:
                         last_fired_ts = ts
 
             if last_fired_ts is not None:
-                last_fired_str = time.strftime("%H:%M:%S", time.localtime(last_fired_ts))
+                last_fired_str = time.strftime(
+                    "%H:%M:%S", time.localtime(last_fired_ts)
+                )
             else:
                 last_fired_str = "(never)"
 

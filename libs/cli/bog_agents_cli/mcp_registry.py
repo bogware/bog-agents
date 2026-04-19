@@ -593,7 +593,13 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY003,TRY004,TRY301,EM102
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
         logger.debug("Could not fetch MCP remote catalog: %s", exc)
         if _CACHE_PATH.exists():
             try:
@@ -614,7 +620,9 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
             encoding="utf-8",
         )
     except OSError:
-        logger.debug("Could not write MCP catalog cache to %s.", _CACHE_PATH, exc_info=True)
+        logger.debug(
+            "Could not write MCP catalog cache to %s.", _CACHE_PATH, exc_info=True
+        )
 
     _remote_cache = data
     _remote_fetched_at = now
@@ -634,7 +642,9 @@ def refresh_catalog(*, force: bool = False) -> None:
         try:
             _CACHE_PATH.unlink()
         except OSError:
-            logger.debug("Could not delete MCP catalog cache at %s.", _CACHE_PATH, exc_info=True)
+            logger.debug(
+                "Could not delete MCP catalog cache at %s.", _CACHE_PATH, exc_info=True
+            )
     fetch_remote_catalog()
 
 

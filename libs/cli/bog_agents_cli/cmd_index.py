@@ -101,7 +101,13 @@ def _extract_symbols(file_path: Path) -> list[str]:
     # Try rg first (fast)
     try:
         result = subprocess.run(  # noqa: S603
-            ["rg", "--no-filename", "--only-matching", r"(?:def |class |function |const |let |var )\K\w+", str(file_path)],
+            [
+                "rg",
+                "--no-filename",
+                "--only-matching",
+                r"(?:def |class |function |const |let |var )\K\w+",
+                str(file_path),
+            ],
             capture_output=True,
             text=True,
             timeout=5,
@@ -115,7 +121,12 @@ def _extract_symbols(file_path: Path) -> list[str]:
     # Try grep fallback
     try:
         result = subprocess.run(  # noqa: S603
-            ["grep", "-oE", r"(def |class |function |const |let |var )[A-Za-z_][A-Za-z0-9_]*", str(file_path)],
+            [
+                "grep",
+                "-oE",
+                r"(def |class |function |const |let |var )[A-Za-z_][A-Za-z0-9_]*",
+                str(file_path),
+            ],
             capture_output=True,
             text=True,
             timeout=5,
@@ -151,11 +162,31 @@ def _is_binary_or_generated(rel_path: str) -> bool:
         True if the file appears to be binary or auto-generated.
     """
     skip_exts = {
-        ".pyc", ".pyo", ".so", ".o", ".a", ".dylib", ".dll", ".exe",
-        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".pdf",
-        ".zip", ".tar", ".gz", ".bz2", ".xz", ".whl", ".egg",
+        ".pyc",
+        ".pyo",
+        ".so",
+        ".o",
+        ".a",
+        ".dylib",
+        ".dll",
+        ".exe",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".ico",
+        ".pdf",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".xz",
+        ".whl",
+        ".egg",
         ".lock",  # lockfiles can be huge and are rarely searched
-        ".min.js", ".min.css",
+        ".min.js",
+        ".min.css",
         ".map",
     }
     # Check full extension combinations (e.g. .min.js)
@@ -343,9 +374,7 @@ def search_index(query: str, cwd: Path, *, limit: int = 10) -> str:
 
     index = _load_index(cwd)
     if index is None:
-        return (
-            "[yellow]No index found.[/yellow] Run [bold]/index build[/bold] first."
-        )
+        return "[yellow]No index found.[/yellow] Run [bold]/index build[/bold] first."
 
     files = index.get("files", {})
     scored: list[tuple[float, str, str]] = []  # (score, rel_path, context)
@@ -403,7 +432,9 @@ def index_status(cwd: Path) -> str:
     file_count = len(index.get("files", {}))
     try:
         size_bytes = idx_path.stat().st_size
-        size_str = f"{size_bytes / 1024:.1f} KB" if size_bytes >= 1024 else f"{size_bytes} B"
+        size_str = (
+            f"{size_bytes / 1024:.1f} KB" if size_bytes >= 1024 else f"{size_bytes} B"
+        )
     except OSError:
         size_str = "unknown"
 

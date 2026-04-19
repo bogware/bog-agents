@@ -128,7 +128,9 @@ async def run_auto_commit(
         # Pre-commit hooks run (no --no-verify). On hook failure, surface the error.
         code, out = await _git_async("commit", "-m", full_msg, cwd=repo_dir)
         if code != 0:
-            logger.warning("auto-commit: git commit failed (hooks may have blocked it): %s", out)
+            logger.warning(
+                "auto-commit: git commit failed (hooks may have blocked it): %s", out
+            )
             return None
 
         code, sha_out = await _git_async("rev-parse", "--short", "HEAD", cwd=repo_dir)

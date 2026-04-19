@@ -64,7 +64,11 @@ def list_benchmark_suites() -> str:
     Returns:
         Rich markup string with a table of suites, or a hint when none exist.
     """
-    user_yamls = sorted(_BENCHMARKS_DIR.glob("*.yaml")) + sorted(_BENCHMARKS_DIR.glob("*.yml")) if _BENCHMARKS_DIR.is_dir() else []
+    user_yamls = (
+        sorted(_BENCHMARKS_DIR.glob("*.yaml")) + sorted(_BENCHMARKS_DIR.glob("*.yml"))
+        if _BENCHMARKS_DIR.is_dir()
+        else []
+    )
     builtin_yamls = _harbor_built_in_suites()
     all_yamls = user_yamls + [p for p in builtin_yamls if p not in user_yamls]
 
@@ -95,12 +99,16 @@ def list_benchmark_suites() -> str:
         tasks = data.get("tasks") or []
         task_count = len(tasks)
         source_tag = "[dim](built-in)[/dim]" if yaml_path not in user_yamls else ""
-        lines.append(f"  [cyan]{name:<28}[/cyan]  {task_count:>5}  [dim]{description}[/dim] {source_tag}")
+        lines.append(
+            f"  [cyan]{name:<28}[/cyan]  {task_count:>5}  [dim]{description}[/dim] {source_tag}"
+        )
 
     return "\n".join(lines)
 
 
-def run_benchmark(suite_name: str | None = None, *, cwd: Path, max_tasks: int = 5) -> str:
+def run_benchmark(
+    suite_name: str | None = None, *, cwd: Path, max_tasks: int = 5
+) -> str:
     """Run a benchmark suite and return Rich-formatted results.
 
     If suite_name is None, shows available suites instead of running.
@@ -129,7 +137,9 @@ def run_benchmark(suite_name: str | None = None, *, cwd: Path, max_tasks: int = 
     yaml_path: Path | None = None
     candidates: list[Path] = []
     if _BENCHMARKS_DIR.is_dir():
-        candidates += list(_BENCHMARKS_DIR.glob(f"{suite_name}.yaml")) + list(_BENCHMARKS_DIR.glob(f"{suite_name}.yml"))
+        candidates += list(_BENCHMARKS_DIR.glob(f"{suite_name}.yaml")) + list(
+            _BENCHMARKS_DIR.glob(f"{suite_name}.yml")
+        )
     candidates += [p for p in _harbor_built_in_suites() if p.stem == suite_name]
 
     if candidates:
@@ -144,7 +154,9 @@ def run_benchmark(suite_name: str | None = None, *, cwd: Path, max_tasks: int = 
     suite_data = _load_yaml(yaml_path)
     tasks: list[dict] = suite_data.get("tasks", [])
     if not tasks:
-        return f"[yellow]Suite '[cyan]{suite_name}[/cyan]' has no tasks defined.[/yellow]"
+        return (
+            f"[yellow]Suite '[cyan]{suite_name}[/cyan]' has no tasks defined.[/yellow]"
+        )
 
     tasks = tasks[:max_tasks]
 
@@ -168,7 +180,12 @@ def run_benchmark(suite_name: str | None = None, *, cwd: Path, max_tasks: int = 
         expected_keywords: list[str] = task.get("expected_keywords", [])
         max_tokens: int = task.get("max_tokens", 500)
 
-        task_result = run_task(prompt=prompt, expected_keywords=expected_keywords, max_tokens=max_tokens, cwd=cwd)
+        task_result = run_task(
+            prompt=prompt,
+            expected_keywords=expected_keywords,
+            max_tokens=max_tokens,
+            cwd=cwd,
+        )
         tokens: int = task_result.get("tokens", 0)
         score: float = task_result.get("score", 0.0)
         status: str = task_result.get("status", "ok")
@@ -261,7 +278,9 @@ def show_recent_results(*, cwd: Path, limit: int = 5) -> str:  # noqa: ARG001
             "Run a benchmark first: [cyan]/benchmark run <suite>[/cyan]"
         )
 
-    header = f"  {'Date':<20}  {'Session':<16}  {'Steps':>5}  {'Score':>7}  {'Tokens':>9}"
+    header = (
+        f"  {'Date':<20}  {'Session':<16}  {'Steps':>5}  {'Score':>7}  {'Tokens':>9}"
+    )
     sep = "  " + "\u2500" * 66
     lines: list[str] = [
         "[bold]Recent Benchmark Results[/bold]",
@@ -279,9 +298,17 @@ def show_recent_results(*, cwd: Path, limit: int = 5) -> str:  # noqa: ARG001
 
         mtime = path.stat().st_mtime
         date_str = datetime.fromtimestamp(mtime, tz=None).strftime("%Y-%m-%d %H:%M")  # noqa: DTZ006
-        short_session = report.session_id[:14] + "\u2026" if len(report.session_id) > 14 else report.session_id
-        score_str = f"{report.reward * 100:.1f}%" if report.reward is not None else "  n/a"
-        tokens_str = f"{report.total_tokens:,}" if report.total_tokens is not None else "  n/a"
+        short_session = (
+            report.session_id[:14] + "\u2026"
+            if len(report.session_id) > 14
+            else report.session_id
+        )
+        score_str = (
+            f"{report.reward * 100:.1f}%" if report.reward is not None else "  n/a"
+        )
+        tokens_str = (
+            f"{report.total_tokens:,}" if report.total_tokens is not None else "  n/a"
+        )
 
         lines.append(
             f"  {date_str:<20}  [cyan]{short_session:<16}[/cyan]  {report.total_steps:>5}  {score_str:>7}  {tokens_str:>9}"

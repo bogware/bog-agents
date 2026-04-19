@@ -2460,7 +2460,9 @@ class BogAgentsApp(App):
         from bog_agents_cli.remote import check_remote_task, load_remote_config
 
         try:
-            config = await asyncio.to_thread(load_remote_config, settings.user_agents_dir)
+            config = await asyncio.to_thread(
+                load_remote_config, settings.user_agents_dir
+            )
         except OSError:
             logger.debug("Could not load remote config", exc_info=True)
             return
@@ -2476,7 +2478,9 @@ class BogAgentsApp(App):
         from bog_agents_cli.remote import load_remote_tasks
 
         try:
-            loaded = await asyncio.to_thread(load_remote_tasks, settings.user_agents_dir)
+            loaded = await asyncio.to_thread(
+                load_remote_tasks, settings.user_agents_dir
+            )
         except OSError:
             logger.debug("Could not load persisted remote tasks", exc_info=True)
             return 0
@@ -2786,7 +2790,7 @@ class BogAgentsApp(App):
         )
 
         # Parse subcommand and args
-        tail = command[len("/mcp"):].strip()
+        tail = command[len("/mcp") :].strip()
         parts = tail.split(maxsplit=1)
         subcommand = parts[0].lower() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
@@ -2834,7 +2838,9 @@ class BogAgentsApp(App):
                 cat_entries = [e for e in entries if e.category == cat]
                 lines.append(f"\n[bold yellow]{cat.upper()}[/bold yellow]")
                 for e in cat_entries:
-                    src_tag = f"[dim][{e.source}][/dim]" if e.source != "official" else ""
+                    src_tag = (
+                        f"[dim][{e.source}][/dim]" if e.source != "official" else ""
+                    )
                     lines.append(
                         f"  [cyan]{e.id:<22}[/cyan] {e.display_name:<20} {src_tag}\n"
                         f"    [dim]{e.description}[/dim]"
@@ -2850,7 +2856,9 @@ class BogAgentsApp(App):
         elif subcommand == "search":
             if not rest:
                 await self._mount_message(
-                    AppMessage("Usage: [bold]/mcp search <query>[/bold]\nExample: /mcp search jira")
+                    AppMessage(
+                        "Usage: [bold]/mcp search <query>[/bold]\nExample: /mcp search jira"
+                    )
                 )
                 return
             results = search_entries(rest)
@@ -2879,7 +2887,9 @@ class BogAgentsApp(App):
         elif subcommand == "info":
             if not rest:
                 await self._mount_message(
-                    AppMessage("Usage: [bold]/mcp info <id>[/bold]\nExample: /mcp info jira")
+                    AppMessage(
+                        "Usage: [bold]/mcp info <id>[/bold]\nExample: /mcp info jira"
+                    )
                 )
                 return
             entry = get_entry(rest)
@@ -2898,7 +2908,9 @@ class BogAgentsApp(App):
             ]
             if entry.transport == "stdio":
                 arg_str = " ".join(entry.args)
-                lines.append(f"\n  [bold]Command:[/bold] [dim]{entry.command} {arg_str}[/dim]")
+                lines.append(
+                    f"\n  [bold]Command:[/bold] [dim]{entry.command} {arg_str}[/dim]"
+                )
             if entry.required_env:
                 lines.append(
                     "\n  [bold]Required env vars:[/bold]\n"
@@ -2988,7 +3000,9 @@ class BogAgentsApp(App):
                     "\n[dim]Restart bog-agents (or start a new session) for the server to connect.[/dim]"
                 )
             else:
-                lines.append("\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/")
+                lines.append(
+                    "\n[red]✗ Failed to write config[/red] — check file permissions on ~/.bog-agents/"
+                )
             await self._mount_message(AppMessage("\n".join(lines)))
 
         # ---- add (custom server) ----
@@ -3028,7 +3042,9 @@ class BogAgentsApp(App):
                 )
             else:
                 await self._mount_message(
-                    AppMessage("[red]✗ Failed to save config.[/red] Check file permissions.")
+                    AppMessage(
+                        "[red]✗ Failed to save config.[/red] Check file permissions."
+                    )
                 )
 
         # ---- remove ----
@@ -3048,7 +3064,11 @@ class BogAgentsApp(App):
                     )
                 )
             else:
-                self.notify(f"Server '{name}' not found in user config.", severity="warning", timeout=3)
+                self.notify(
+                    f"Server '{name}' not found in user config.",
+                    severity="warning",
+                    timeout=3,
+                )
 
         # ---- trust ----
         elif subcommand == "trust":
@@ -3064,7 +3084,9 @@ class BogAgentsApp(App):
                     AppMessage("No .mcp.json files found in this project.")
                 )
                 return
-            fingerprint = await asyncio.to_thread(compute_config_fingerprint, config_paths)
+            fingerprint = await asyncio.to_thread(
+                compute_config_fingerprint, config_paths
+            )
             project_root = str(Path.cwd().resolve())
             ok = await asyncio.to_thread(trust_project_mcp, project_root, fingerprint)
             if ok:
@@ -3181,43 +3203,56 @@ class BogAgentsApp(App):
         )
 
         await self._mount_message(UserMessage(command))
-        raw = command.strip()[len("/repomap"):].strip().lower()
+        raw = command.strip()[len("/repomap") :].strip().lower()
 
         if raw in {"help", "--help", "-h"}:
-            await self._mount_message(AppMessage(
-                "[bold]/repomap[/bold] — Semantic repository map\n\n"
-                "Indexes the project structure (classes, functions, types) and injects\n"
-                "a compact map into the agent's context.\n\n"
-                "Usage:\n"
-                "  [bold]/repomap[/bold]           Show the current map (build if needed)\n"
-                "  [bold]/repomap refresh[/bold]   Force a full rebuild (clear cache)\n"
-                "  [bold]/repomap status[/bold]    Show cache statistics\n"
-                "  [bold]/repomap help[/bold]      Show this help\n\n"
-                "The map is cached in [italic].bog-agents/repomap.json[/italic] and updated\n"
-                "incrementally — only changed files are re-parsed."
-            ))
+            await self._mount_message(
+                AppMessage(
+                    "[bold]/repomap[/bold] — Semantic repository map\n\n"
+                    "Indexes the project structure (classes, functions, types) and injects\n"
+                    "a compact map into the agent's context.\n\n"
+                    "Usage:\n"
+                    "  [bold]/repomap[/bold]           Show the current map (build if needed)\n"
+                    "  [bold]/repomap refresh[/bold]   Force a full rebuild (clear cache)\n"
+                    "  [bold]/repomap status[/bold]    Show cache statistics\n"
+                    "  [bold]/repomap help[/bold]      Show this help\n\n"
+                    "The map is cached in [italic].bog-agents/repomap.json[/italic] and updated\n"
+                    "incrementally — only changed files are re-parsed."
+                )
+            )
             return
 
         if raw == "status":
             stats = await asyncio.to_thread(get_repo_map_stats, self._cwd)
             if not stats.get("cached"):
-                await self._mount_message(AppMessage(
-                    "No repo map cache found. Run [bold]/repomap[/bold] to build it."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "No repo map cache found. Run [bold]/repomap[/bold] to build it."
+                    )
+                )
             else:
                 import time as _time
+
                 built_ago = int(_time.time() - stats.get("built_at", 0))
-                age = f"{built_ago // 60}m" if built_ago < 3600 else f"{built_ago // 3600}h"
-                await self._mount_message(AppMessage(
-                    f"Repo map cached: [green]{stats['file_count']}[/green] symbols indexed, "
-                    f"built {age} ago\n"
-                    f"Cache: {stats['cache_path']}"
-                ))
+                age = (
+                    f"{built_ago // 60}m"
+                    if built_ago < 3600
+                    else f"{built_ago // 3600}h"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Repo map cached: [green]{stats['file_count']}[/green] symbols indexed, "
+                        f"built {age} ago\n"
+                        f"Cache: {stats['cache_path']}"
+                    )
+                )
             return
 
         force = raw == "refresh"
         if force:
-            await self._mount_message(AppMessage("Rebuilding repository map from scratch..."))
+            await self._mount_message(
+                AppMessage("Rebuilding repository map from scratch...")
+            )
         else:
             await self._mount_message(AppMessage("Building repository map..."))
 
@@ -3232,7 +3267,9 @@ class BogAgentsApp(App):
         else:
             preview = map_text
 
-        await self._mount_message(AppMessage(f"[bold]Repository Map[/bold]\n\n{preview}"))
+        await self._mount_message(
+            AppMessage(f"[bold]Repository Map[/bold]\n\n{preview}")
+        )
 
     async def _handle_doctor_command(self, command: str) -> None:
         """Run local health diagnostics from inside the TUI."""
@@ -3298,7 +3335,7 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
-        tail = command[len("/harbor"):].strip()
+        tail = command[len("/harbor") :].strip()
         parts = tail.split(maxsplit=1)
         subcommand = parts[0].lower() if parts else ""
         rest = parts[1].strip() if len(parts) > 1 else ""
@@ -3313,8 +3350,11 @@ class BogAgentsApp(App):
             # Check harbor package availability
             try:
                 import importlib.util
+
                 harbor_available = importlib.util.find_spec("harbor") is not None
-                bog_harbor_available = importlib.util.find_spec("bog_agents_harbor") is not None
+                bog_harbor_available = (
+                    importlib.util.find_spec("bog_agents_harbor") is not None
+                )
             except Exception:
                 harbor_available = False
                 bog_harbor_available = False
@@ -3327,6 +3367,7 @@ class BogAgentsApp(App):
             )
 
             import os
+
             langsmith_set = bool(os.environ.get("LANGSMITH_API_KEY"))
             lines.append(
                 f"  LangSmith tracing:      {'[green]configured[/green]' if langsmith_set else '[dim]not configured[/dim]'}"
@@ -3335,16 +3376,26 @@ class BogAgentsApp(App):
             # Show recent trajectory count
             try:
                 from bog_agents_harbor.reporter import find_trajectories
+
                 trajectories = find_trajectories(default_dir)
                 if trajectories:
-                    lines.append(f"\n  Recent results ({len(trajectories)} found in {default_dir}):")
+                    lines.append(
+                        f"\n  Recent results ({len(trajectories)} found in {default_dir}):"
+                    )
                     for t in trajectories[:5]:
                         import time
+
                         age = time.time() - t.stat().st_mtime
-                        age_str = f"{int(age // 3600)}h ago" if age > 3600 else f"{int(age // 60)}m ago"
+                        age_str = (
+                            f"{int(age // 3600)}h ago"
+                            if age > 3600
+                            else f"{int(age // 60)}m ago"
+                        )
                         lines.append(f"    [dim]{t.parent.name}[/dim]  [{age_str}]")
                     if len(trajectories) > 5:
-                        lines.append(f"    [dim]... and {len(trajectories) - 5} more[/dim]")
+                        lines.append(
+                            f"    [dim]... and {len(trajectories) - 5} more[/dim]"
+                        )
                 else:
                     lines.append(f"\n  [dim]No results found in {default_dir}[/dim]")
             except ImportError:
@@ -3377,19 +3428,27 @@ class BogAgentsApp(App):
             trajectories = await asyncio.to_thread(find_trajectories, search_dir)
             if not trajectories:
                 await self._mount_message(
-                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
                 )
                 return
 
-            lines = [f"[bold]Recent Harbor results[/bold] ({len(trajectories)} found)\n"]
+            lines = [
+                f"[bold]Recent Harbor results[/bold] ({len(trajectories)} found)\n"
+            ]
             for path in trajectories[:20]:
                 try:
                     report = await asyncio.to_thread(load_trajectory, path)
                     reward_str = (
-                        f"  reward={report.reward:.2f}" if report.reward is not None else ""
+                        f"  reward={report.reward:.2f}"
+                        if report.reward is not None
+                        else ""
                     )
                     token_str = (
-                        f"  tokens={report.total_tokens:,}" if report.total_tokens else ""
+                        f"  tokens={report.total_tokens:,}"
+                        if report.total_tokens
+                        else ""
                     )
                     lines.append(
                         f"  [cyan]{path.parent.name}[/cyan]\n"
@@ -3415,10 +3474,14 @@ class BogAgentsApp(App):
                 )
                 return
 
-            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=1)
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=1
+            )
             if not trajectories:
                 await self._mount_message(
-                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
                 )
                 return
 
@@ -3441,10 +3504,14 @@ class BogAgentsApp(App):
                 )
                 return
 
-            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=1)
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=1
+            )
             if not trajectories:
                 await self._mount_message(
-                    AppMessage(f"No trajectory files found under [cyan]{search_dir}[/cyan].")
+                    AppMessage(
+                        f"No trajectory files found under [cyan]{search_dir}[/cyan]."
+                    )
                 )
                 return
 
@@ -3469,20 +3536,29 @@ class BogAgentsApp(App):
                     load_trajectory,
                 )
             except ImportError:
-                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
                 return
-            trajectories = await asyncio.to_thread(find_trajectories, search_dir, limit=2)
+            trajectories = await asyncio.to_thread(
+                find_trajectories, search_dir, limit=2
+            )
             if len(trajectories) < 2:
                 await self._mount_message(
-                    AppMessage("Need at least 2 trajectory files to compare.\n"
-                               f"Found {len(trajectories)} under {search_dir}.")
+                    AppMessage(
+                        "Need at least 2 trajectory files to compare.\n"
+                        f"Found {len(trajectories)} under {search_dir}."
+                    )
                 )
                 return
             report_a = await asyncio.to_thread(load_trajectory, trajectories[0])
             report_b = await asyncio.to_thread(load_trajectory, trajectories[1])
             comparison = await asyncio.to_thread(
-                compare_trajectories, report_a, report_b,
-                label_a=trajectories[0].parent.name, label_b=trajectories[1].parent.name,
+                compare_trajectories,
+                report_a,
+                report_b,
+                label_a=trajectories[0].parent.name,
+                label_b=trajectories[1].parent.name,
             )
             result_str = await asyncio.to_thread(format_comparison, comparison)
             await self._mount_message(AppMessage(result_str))
@@ -3498,17 +3574,23 @@ class BogAgentsApp(App):
                 )
                 from bog_agents_harbor.reporter import load_all_trajectories
             except ImportError:
-                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
                 return
             reports = await asyncio.to_thread(load_all_trajectories, search_dir)
             if not reports:
-                await self._mount_message(AppMessage(f"No trajectories found under {search_dir}."))
+                await self._mount_message(
+                    AppMessage(f"No trajectories found under {search_dir}.")
+                )
                 return
             midpoint = max(1, len(reports) // 2)
             baseline_reports = reports[midpoint:]
             current_reports = reports[:midpoint]
             baseline_score = await asyncio.to_thread(compute_baseline, baseline_reports)
-            result = await asyncio.to_thread(detect_regression, current_reports, baseline_score)
+            result = await asyncio.to_thread(
+                detect_regression, current_reports, baseline_score
+            )
             report_str = await asyncio.to_thread(format_regression_report, result)
             await self._mount_message(AppMessage(report_str))
 
@@ -3526,35 +3608,67 @@ class BogAgentsApp(App):
                 )
                 from bog_agents_harbor.reporter import load_all_trajectories
             except ImportError:
-                await self._mount_message(AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]"))
+                await self._mount_message(
+                    AppMessage("[yellow]bog-agents-harbor is not installed.[/yellow]")
+                )
                 return
             reports = await asyncio.to_thread(load_all_trajectories, default_dir)
             if not reports:
-                await self._mount_message(AppMessage(f"No trajectories found under {default_dir}."))
+                await self._mount_message(
+                    AppMessage(f"No trajectories found under {default_dir}.")
+                )
                 return
             if export_format in {"csv", "json"}:
-                out_path = Path(output_arg) if output_arg else Path(f"harbor-export.{export_format}")
+                out_path = (
+                    Path(output_arg)
+                    if output_arg
+                    else Path(f"harbor-export.{export_format}")
+                )
                 fn = export_to_csv if export_format == "csv" else export_to_json
                 result_exp = await asyncio.to_thread(fn, reports, out_path)
                 if result_exp.success:
-                    await self._mount_message(AppMessage(f"Exported {result_exp.exported_count} runs to {out_path}"))
+                    await self._mount_message(
+                        AppMessage(
+                            f"Exported {result_exp.exported_count} runs to {out_path}"
+                        )
+                    )
                 else:
-                    await self._mount_message(AppMessage(f"Export errors: {', '.join(result_exp.errors)}"))
+                    await self._mount_message(
+                        AppMessage(f"Export errors: {', '.join(result_exp.errors)}")
+                    )
             elif export_format == "langsmith":
                 result_exp = await asyncio.to_thread(export_to_langsmith, reports)
-                status = "success" if result_exp.success else f"errors: {', '.join(result_exp.errors)}"
-                await self._mount_message(AppMessage(f"LangSmith export: {result_exp.exported_count} runs — {status}"))
+                status = (
+                    "success"
+                    if result_exp.success
+                    else f"errors: {', '.join(result_exp.errors)}"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"LangSmith export: {result_exp.exported_count} runs — {status}"
+                    )
+                )
             elif export_format == "wandb":
                 result_exp = await asyncio.to_thread(export_to_wandb, reports)
-                status = "success" if result_exp.success else f"errors: {', '.join(result_exp.errors)}"
-                await self._mount_message(AppMessage(f"W&B export: {result_exp.exported_count} runs — {status}"))
+                status = (
+                    "success"
+                    if result_exp.success
+                    else f"errors: {', '.join(result_exp.errors)}"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"W&B export: {result_exp.exported_count} runs — {status}"
+                    )
+                )
             else:
-                await self._mount_message(AppMessage(
-                    "Usage: /harbor export csv [output.csv]\n"
-                    "       /harbor export json [output.json]\n"
-                    "       /harbor export langsmith\n"
-                    "       /harbor export wandb"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /harbor export csv [output.csv]\n"
+                        "       /harbor export json [output.json]\n"
+                        "       /harbor export langsmith\n"
+                        "       /harbor export wandb"
+                    )
+                )
 
         # ---- help / unknown ----
         else:
@@ -5146,7 +5260,9 @@ class BogAgentsApp(App):
         try:
             tokens = shlex.split(raw_arg)
         except ValueError as exc:
-            await self._mount_message(AppMessage(f"Could not parse /checkpoint arguments: {exc}"))
+            await self._mount_message(
+                AppMessage(f"Could not parse /checkpoint arguments: {exc}")
+            )
             return
 
         action = tokens[0].lower() if tokens else "list"
@@ -5164,10 +5280,14 @@ class BogAgentsApp(App):
             name = tokens[1] if len(tokens) > 1 else ""
             description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
             if not name:
-                await self._mount_message(AppMessage("Usage: /checkpoint save <name> [description]"))
+                await self._mount_message(
+                    AppMessage("Usage: /checkpoint save <name> [description]")
+                )
                 return
             thread_id = self._lc_thread_id or ""
-            result = await asyncio.to_thread(save_checkpoint, thread_id, name, description=description)
+            result = await asyncio.to_thread(
+                save_checkpoint, thread_id, name, description=description
+            )
             await self._mount_message(AppMessage(result))
             return
 
@@ -5190,7 +5310,9 @@ class BogAgentsApp(App):
         if action in {"delete", "rm"}:
             name = tokens[1] if len(tokens) > 1 else ""
             if not name:
-                await self._mount_message(AppMessage("Usage: /checkpoint delete <name>"))
+                await self._mount_message(
+                    AppMessage("Usage: /checkpoint delete <name>")
+                )
                 return
             result = await asyncio.to_thread(delete_checkpoint, name)
             await self._mount_message(AppMessage(result))
@@ -5213,7 +5335,9 @@ class BogAgentsApp(App):
         try:
             tokens = shlex.split(raw_arg)
         except ValueError as exc:
-            await self._mount_message(AppMessage(f"Could not parse /benchmark arguments: {exc}"))
+            await self._mount_message(
+                AppMessage(f"Could not parse /benchmark arguments: {exc}")
+            )
             return
 
         action = tokens[0].lower() if tokens else "list"
@@ -5234,7 +5358,9 @@ class BogAgentsApp(App):
                 max_tasks = int(tokens[2]) if len(tokens) > 2 else 5
             except ValueError:
                 max_tasks = 5
-            result = await asyncio.to_thread(run_benchmark, suite_name, cwd=cwd, max_tasks=max_tasks)
+            result = await asyncio.to_thread(
+                run_benchmark, suite_name, cwd=cwd, max_tasks=max_tasks
+            )
             await self._mount_message(AppMessage(result))
             return
 
@@ -5291,7 +5417,9 @@ class BogAgentsApp(App):
         try:
             tokens = shlex.split(raw_arg)
         except ValueError as exc:
-            await self._mount_message(AppMessage(f"Could not parse /index arguments: {exc}"))
+            await self._mount_message(
+                AppMessage(f"Could not parse /index arguments: {exc}")
+            )
             return
 
         action = tokens[0].lower() if tokens else "status"
@@ -5386,7 +5514,7 @@ class BogAgentsApp(App):
             trigger_daemon_job,
         )
 
-        raw_arg = command.strip()[len("/ambient"):].strip()
+        raw_arg = command.strip()[len("/ambient") :].strip()
         try:
             tokens = shlex.split(raw_arg)
         except ValueError:
@@ -5396,11 +5524,13 @@ class BogAgentsApp(App):
         if action in {"status", ""}:
             running = await asyncio.to_thread(is_daemon_running)
             if not running:
-                await self._mount_message(AppMessage(
-                    "[yellow]Daemon not running.[/yellow]\n\n"
-                    "Start with: [bold]bog-agents-daemon[/bold]\n"
-                    "Or install as a service (see /ambient install)"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "[yellow]Daemon not running.[/yellow]\n\n"
+                        "Start with: [bold]bog-agents-daemon[/bold]\n"
+                        "Or install as a service (see /ambient install)"
+                    )
+                )
                 return
 
             # Read PID for the header
@@ -5446,7 +5576,9 @@ class BogAgentsApp(App):
                         ttype = t.get("type", "?")
                         if ttype == "cron":
                             cron_expr = t.get("cron", "")
-                            trigger_strs.append(f"cron: {cron_expr}" if cron_expr else "cron")
+                            trigger_strs.append(
+                                f"cron: {cron_expr}" if cron_expr else "cron"
+                            )
                         elif ttype == "file":
                             pattern = t.get("pattern", "*")
                             trigger_strs.append(f"file: {pattern}")
@@ -5473,7 +5605,11 @@ class BogAgentsApp(App):
                             ago_str = f"{int(ago_secs // 3600)}h ago"
                         else:
                             ago_str = f"{int(ago_secs // 86400)}d ago"
-                        status_icon = "[green]✅[/green]" if last_status == "completed" else "[red]❌[/red]"
+                        status_icon = (
+                            "[green]✅[/green]"
+                            if last_status == "completed"
+                            else "[red]❌[/red]"
+                        )
                         last_str = f"{status_icon} {ago_str}"
                     else:
                         last_str = "[dim]never[/dim]"
@@ -5506,29 +5642,45 @@ class BogAgentsApp(App):
 
                         ago2 = _time_mod2.time() - started_ts
                         ago_label = (
-                            f"{int(ago2 // 60)}m ago" if ago2 < 3600
-                            else f"{int(ago2 // 3600)}h ago" if ago2 < 86400
+                            f"{int(ago2 // 60)}m ago"
+                            if ago2 < 3600
+                            else f"{int(ago2 // 3600)}h ago"
+                            if ago2 < 86400
                             else f"{int(ago2 // 86400)}d ago"
                         )
                     else:
                         ago_label = "?"
-                    color = "green" if run_status == "completed" else "red" if run_status == "failed" else "cyan"
+                    color = (
+                        "green"
+                        if run_status == "completed"
+                        else "red"
+                        if run_status == "failed"
+                        else "cyan"
+                    )
                     lines.append(
                         f"  [bold]{jname}[/bold]  #{run_id_short}  [{color}]{run_status}[/{color}]  {ago_label}"
-                        + (f'  [dim]"{output_preview}..."[/dim]' if output_preview else "")
+                        + (
+                            f'  [dim]"{output_preview}..."[/dim]'
+                            if output_preview
+                            else ""
+                        )
                     )
             if not any_runs:
                 lines.append("  [dim]No recent runs.[/dim]")
 
             lines.append("")
-            lines.append("[dim]Use /ambient run <id> to trigger a job | /ambient logs <id> for output[/dim]")
+            lines.append(
+                "[dim]Use /ambient run <id> to trigger a job | /ambient logs <id> for output[/dim]"
+            )
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if action in {"list", "jobs"}:
             running = await asyncio.to_thread(is_daemon_running)
             if not running:
-                await self._mount_message(AppMessage("Daemon not running. Start with: bog-agents-daemon"))
+                await self._mount_message(
+                    AppMessage("Daemon not running. Start with: bog-agents-daemon")
+                )
                 return
             jobs = await list_daemon_jobs()
             await self._mount_message(AppMessage(format_daemon_status(None, jobs)))
@@ -5550,27 +5702,31 @@ class BogAgentsApp(App):
                 return
             output = await get_daemon_logs(job_id)
             if output:
-                await self._mount_message(AppMessage(
-                    f"[bold]Logs for {job_id}:[/bold]\n\n{output}"
-                ))
+                await self._mount_message(
+                    AppMessage(f"[bold]Logs for {job_id}:[/bold]\n\n{output}")
+                )
             else:
-                await self._mount_message(AppMessage(
-                    f"[dim]No log output found for job {job_id}.[/dim]"
-                ))
+                await self._mount_message(
+                    AppMessage(f"[dim]No log output found for job {job_id}.[/dim]")
+                )
             return
 
         if action == "add":
             pipeline_name = tokens[1] if len(tokens) > 1 else ""
             if not pipeline_name:
-                await self._mount_message(AppMessage("Usage: /ambient add <pipeline-name>"))
+                await self._mount_message(
+                    AppMessage("Usage: /ambient add <pipeline-name>")
+                )
                 return
             pipelines_dir = Path.home() / ".bog-agents" / "pipelines"
             pipeline_path = pipelines_dir / f"{pipeline_name}.yaml"
             if not pipeline_path.exists():
-                await self._mount_message(AppMessage(
-                    f"[red]Pipeline not found:[/red] {pipeline_path}\n"
-                    "Use [bold]/build pipeline[/bold] to create one first."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        f"[red]Pipeline not found:[/red] {pipeline_path}\n"
+                        "Use [bold]/build pipeline[/bold] to create one first."
+                    )
+                )
                 return
             # Parse schedule from YAML if present
             schedule = ""
@@ -5592,35 +5748,43 @@ class BogAgentsApp(App):
             result = await add_daemon_job(job_def)
             if result:
                 job_id_new = result.get("job_id") or result.get("id") or "?"
-                await self._mount_message(AppMessage(
-                    f"[green]Registered pipeline '{pipeline_name}' with daemon.[/green]\n"
-                    f"Job ID: [bold]{job_id_new}[/bold]"
-                    + (f"\nSchedule: {schedule}" if schedule else "")
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        f"[green]Registered pipeline '{pipeline_name}' with daemon.[/green]\n"
+                        f"Job ID: [bold]{job_id_new}[/bold]"
+                        + (f"\nSchedule: {schedule}" if schedule else "")
+                    )
+                )
             else:
-                await self._mount_message(AppMessage(
-                    "[red]Failed to register pipeline with daemon.[/red] "
-                    "Is the daemon running? (check /ambient status)"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "[red]Failed to register pipeline with daemon.[/red] "
+                        "Is the daemon running? (check /ambient status)"
+                    )
+                )
             return
 
         if action in {"install", "service"}:
-            await self._mount_message(AppMessage(
-                "[bold]Install bog-agents-daemon as a system service:[/bold]\n\n"
-                "[yellow]macOS (launchd):[/yellow]\n"
-                "  bog-agents-daemon --install-launchd\n\n"
-                "[yellow]Linux (systemd):[/yellow]\n"
-                "  bog-agents-daemon --install-systemd\n\n"
-                "[yellow]Manual start:[/yellow]\n"
-                "  bog-agents-daemon &\n\n"
-                "The daemon runs on port 7391 and persists jobs in ~/.bog-agents/daemon/"
-            ))
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Install bog-agents-daemon as a system service:[/bold]\n\n"
+                    "[yellow]macOS (launchd):[/yellow]\n"
+                    "  bog-agents-daemon --install-launchd\n\n"
+                    "[yellow]Linux (systemd):[/yellow]\n"
+                    "  bog-agents-daemon --install-systemd\n\n"
+                    "[yellow]Manual start:[/yellow]\n"
+                    "  bog-agents-daemon &\n\n"
+                    "The daemon runs on port 7391 and persists jobs in ~/.bog-agents/daemon/"
+                )
+            )
             return
 
-        await self._mount_message(AppMessage(
-            "Usage: /ambient status | /ambient list | /ambient run <id> | "
-            "/ambient logs <id> | /ambient add <pipeline> | /ambient install"
-        ))
+        await self._mount_message(
+            AppMessage(
+                "Usage: /ambient status | /ambient list | /ambient run <id> | "
+                "/ambient logs <id> | /ambient add <pipeline> | /ambient install"
+            )
+        )
 
     # =========================================================================
     # /build — interactive skill / prompt / pipeline wizard
@@ -5657,7 +5821,7 @@ class BogAgentsApp(App):
             save_skill,
         )
 
-        raw_arg = command.strip()[len("/build"):].strip()
+        raw_arg = command.strip()[len("/build") :].strip()
         try:
             tokens = shlex.split(raw_arg)
         except ValueError:
@@ -5678,11 +5842,13 @@ class BogAgentsApp(App):
             name = tokens[1] if len(tokens) > 1 else ""
             description = " ".join(tokens[2:]) if len(tokens) > 2 else ""
             if not name:
-                await self._mount_message(AppMessage(
-                    "Usage: /build skill <name> [description]\n\n"
-                    "Then the agent will scaffold a skill template and ask for the body.\n\n"
-                    "Example: /build skill web-research Search the web and summarize results"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build skill <name> [description]\n\n"
+                        "Then the agent will scaffold a skill template and ask for the body.\n\n"
+                        "Example: /build skill web-research Search the web and summarize results"
+                    )
+                )
                 return
             if not description:
                 description = f"A skill named {name}"
@@ -5696,7 +5862,11 @@ class BogAgentsApp(App):
                 "constraints, and output format. Use {{VARIABLE_NAME}} for any parameters "
                 "the user should supply. Return ONLY the skill body text, nothing else."
             )
-            self._build_pending = {"kind": "skill", "name": name, "description": description}
+            self._build_pending = {
+                "kind": "skill",
+                "name": name,
+                "description": description,
+            }
             await self._send_prompt_to_agent(prompt)
             return
 
@@ -5704,18 +5874,26 @@ class BogAgentsApp(App):
         if kind == "prompt":
             name = tokens[1] if len(tokens) > 1 else ""
             if not name:
-                await self._mount_message(AppMessage(
-                    "Usage: /build prompt <name>\n\nExample: /build prompt code-review"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build prompt <name>\n\nExample: /build prompt code-review"
+                    )
+                )
                 return
-            description = " ".join(tokens[2:]) if len(tokens) > 2 else f"A prompt named {name}"
+            description = (
+                " ".join(tokens[2:]) if len(tokens) > 2 else f"A prompt named {name}"
+            )
             prompt = (
                 f"I'm building a saved prompt named '{name}': {description}\n\n"
                 "Please write the prompt body. Use {{VARIABLE_NAME}} for parameters the "
                 "user will fill in at runtime (e.g. {{LANGUAGE}}, {{FILE_PATH}}).\n\n"
                 "Return ONLY the prompt body text, nothing else."
             )
-            self._build_pending = {"kind": "prompt", "name": name, "description": description}
+            self._build_pending = {
+                "kind": "prompt",
+                "name": name,
+                "description": description,
+            }
             await self._send_prompt_to_agent(prompt)
             return
 
@@ -5723,10 +5901,12 @@ class BogAgentsApp(App):
         if kind == "pipeline":
             name = tokens[1] if len(tokens) > 1 else ""
             if not name:
-                await self._mount_message(AppMessage(
-                    "Usage: /build pipeline <name> [--schedule 'cron']\n\n"
-                    "Example: /build pipeline daily-standup --schedule '0 9 * * 1-5'"
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /build pipeline <name> [--schedule 'cron']\n\n"
+                        "Example: /build pipeline daily-standup --schedule '0 9 * * 1-5'"
+                    )
+                )
                 return
             schedule = ""
             for i, t in enumerate(tokens):
@@ -5734,7 +5914,9 @@ class BogAgentsApp(App):
                     schedule = tokens[i + 1]
                     break
             description = (
-                " ".join(t for t in tokens[2:] if not t.startswith("--") and t != schedule)
+                " ".join(
+                    t for t in tokens[2:] if not t.startswith("--") and t != schedule
+                )
                 or f"Pipeline: {name}"
             )
             prompt = (
@@ -5759,16 +5941,20 @@ class BogAgentsApp(App):
         # ---- save last build ----
         if kind == "save":
             if not self._build_pending:
-                await self._mount_message(AppMessage(
-                    "No pending build. Run /build skill/prompt/pipeline first."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "No pending build. Run /build skill/prompt/pipeline first."
+                    )
+                )
                 return
             pending = self._build_pending
             last_content = self._get_last_assistant_text()
             if not last_content:
-                await self._mount_message(AppMessage(
-                    "No agent response found to save. Generate content first."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "No agent response found to save. Generate content first."
+                    )
+                )
                 return
             try:
                 if pending["kind"] == "skill":
@@ -5779,26 +5965,41 @@ class BogAgentsApp(App):
                         variables=extract_variables(last_content),
                     )
                     path = await asyncio.to_thread(
-                        save_skill, pending["name"], content, user_skills_dir=user_skills_dir
+                        save_skill,
+                        pending["name"],
+                        content,
+                        user_skills_dir=user_skills_dir,
                     )
-                    await self._mount_message(AppMessage(
-                        f"[green]Skill saved:[/green] {path}\n\nUse `/skills list` to verify."
-                    ))
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Skill saved:[/green] {path}\n\nUse `/skills list` to verify."
+                        )
+                    )
                 elif pending["kind"] == "prompt":
                     entry = build_prompt_entry(
                         pending["name"], pending["description"], last_content
                     )
-                    await asyncio.to_thread(save_prompt, entry, library_path=library_path)
-                    await self._mount_message(AppMessage(
-                        f"[green]Prompt saved:[/green] {pending['name']}\n\nUse `/prompt list` to verify."
-                    ))
+                    await asyncio.to_thread(
+                        save_prompt, entry, library_path=library_path
+                    )
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Prompt saved:[/green] {pending['name']}\n\nUse `/prompt list` to verify."
+                        )
+                    )
                 elif pending["kind"] == "pipeline":
                     import json as _json
 
                     try:
                         steps = _json.loads(last_content)
                     except Exception:
-                        steps = [{"label": "Step 1", "type": "prompt", "content": last_content}]
+                        steps = [
+                            {
+                                "label": "Step 1",
+                                "type": "prompt",
+                                "content": last_content,
+                            }
+                        ]
                     yaml_content = build_pipeline_yaml(
                         pending["name"],
                         pending["description"],
@@ -5806,7 +6007,10 @@ class BogAgentsApp(App):
                         schedule=pending.get("schedule", ""),
                     )
                     path = await asyncio.to_thread(
-                        save_pipeline, pending["name"], yaml_content, pipelines_dir=pipelines_dir
+                        save_pipeline,
+                        pending["name"],
+                        yaml_content,
+                        pipelines_dir=pipelines_dir,
                     )
                     schedule = pending.get("schedule", "")
                     if schedule:
@@ -5818,11 +6022,13 @@ class BogAgentsApp(App):
                     else:
                         daemon_running = False
                     if schedule and daemon_running:
-                        await self._mount_message(AppMessage(
-                            f"[green]Pipeline saved:[/green] {path}\n\n"
-                            f"It has a schedule: [bold]{schedule}[/bold]\n"
-                            f"The ambient daemon is running. Register it now? [bold](yes/no)[/bold]"
-                        ))
+                        await self._mount_message(
+                            AppMessage(
+                                f"[green]Pipeline saved:[/green] {path}\n\n"
+                                f"It has a schedule: [bold]{schedule}[/bold]\n"
+                                f"The ambient daemon is running. Register it now? [bold](yes/no)[/bold]"
+                            )
+                        )
                         self._build_pending = {
                             "kind": "pipeline",
                             "name": pending["name"],
@@ -5832,14 +6038,18 @@ class BogAgentsApp(App):
                             "pipeline_path": str(path),
                         }
                         return
-                    await self._mount_message(AppMessage(
-                        f"[green]Pipeline saved:[/green] {path}\n\nUse `/pipeline list` to verify."
-                    ))
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Pipeline saved:[/green] {path}\n\nUse `/pipeline list` to verify."
+                        )
+                    )
                 self._build_pending = None
             except FileExistsError as exc:
-                await self._mount_message(AppMessage(
-                    f"[red]Already exists:[/red] {exc}\nUse /build save --force to overwrite."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        f"[red]Already exists:[/red] {exc}\nUse /build save --force to overwrite."
+                    )
+                )
             except Exception as exc:
                 await self._mount_message(AppMessage(f"[red]Save failed:[/red] {exc}"))
             return
@@ -5869,7 +6079,7 @@ class BogAgentsApp(App):
             return
 
         if lowered.startswith("watch ") or lowered == "watch":
-            watch_arg = raw_arg[len("watch"):].strip()
+            watch_arg = raw_arg[len("watch") :].strip()
             await self._handle_watch_subcommand(watch_arg)
             return
 
@@ -6202,16 +6412,18 @@ class BogAgentsApp(App):
         tasks = []
         if hasattr(self, "_bg_manager"):
             for task in self._bg_manager.get_all_tasks():
-                tasks.append({
-                    "task_id": getattr(task, "task_id", "?"),
-                    "label": getattr(task, "label", str(task)),
-                    "status": getattr(task, "status", "unknown"),
-                    "branch": getattr(task, "worktree_branch", "") or "",
-                    "started_at": getattr(task, "started_at", None),
-                    "finished_at": getattr(task, "completed_at", None),
-                    "result": getattr(task, "result", "") or "",
-                    "error": getattr(task, "error", "") or "",
-                })
+                tasks.append(
+                    {
+                        "task_id": getattr(task, "task_id", "?"),
+                        "label": getattr(task, "label", str(task)),
+                        "status": getattr(task, "status", "unknown"),
+                        "branch": getattr(task, "worktree_branch", "") or "",
+                        "started_at": getattr(task, "started_at", None),
+                        "finished_at": getattr(task, "completed_at", None),
+                        "result": getattr(task, "result", "") or "",
+                        "error": getattr(task, "error", "") or "",
+                    }
+                )
 
         wt_tasks = self._collect_worktree_tasks()
         # Merge worktree middleware tasks (avoid duplicates by task_id)
@@ -6252,16 +6464,18 @@ class BogAgentsApp(App):
                 )
                 if mw and hasattr(mw, "get_tasks"):
                     for task in mw.get_tasks():
-                        tasks.append({
-                            "task_id": task.task_id,
-                            "label": task.label,
-                            "status": task.status,
-                            "branch": task.branch,
-                            "started_at": task.started_at,
-                            "finished_at": task.finished_at,
-                            "result": task.result or "",
-                            "error": task.error or "",
-                        })
+                        tasks.append(
+                            {
+                                "task_id": task.task_id,
+                                "label": task.label,
+                                "status": task.status,
+                                "branch": task.branch,
+                                "started_at": task.started_at,
+                                "finished_at": task.finished_at,
+                                "result": task.result or "",
+                                "error": task.error or "",
+                            }
+                        )
         except Exception:  # noqa: S110
             pass
         return tasks
@@ -6533,6 +6747,7 @@ class BogAgentsApp(App):
                 format_compat_status,
                 get_claude_compat_status,
             )
+
             status = await asyncio.to_thread(
                 get_claude_compat_status, Path(self._cwd), config_dir
             )
@@ -6544,6 +6759,7 @@ class BogAgentsApp(App):
                 detect_claude_skills,
                 import_claude_skill,
             )
+
             skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
             if not skills:
                 await self._mount_message(
@@ -6568,6 +6784,7 @@ class BogAgentsApp(App):
 
         if lowered == "claude-list":
             from bog_agents_cli.claude_code_compat import detect_claude_skills
+
             skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
             if not skills:
                 await self._mount_message(AppMessage("No Claude Code skills found."))
@@ -6584,6 +6801,7 @@ class BogAgentsApp(App):
                 format_compat_status,
                 sync_mcp_configs,
             )
+
             parts2 = raw_arg.split()
             direction = parts2[1] if len(parts2) > 1 else "both"
             if direction not in {"both", "to-desktop", "from-desktop"}:
@@ -6596,9 +6814,13 @@ class BogAgentsApp(App):
             )
             lines = ["MCP sync complete.", ""]
             if result.added_to_mcp_json:
-                lines.append(f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}")
+                lines.append(
+                    f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}"
+                )
             if result.added_from_desktop:
-                lines.append(f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}")
+                lines.append(
+                    f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}"
+                )
             if not result.added_to_mcp_json and not result.added_from_desktop:
                 lines.append("Nothing to sync — configs are already in sync.")
             if result.errors:
@@ -6608,6 +6830,7 @@ class BogAgentsApp(App):
 
         if lowered == "export-mcp":
             from bog_agents_cli.claude_code_compat import export_mcp_from_extensions
+
             result = await asyncio.to_thread(
                 export_mcp_from_extensions, config_dir, Path(self._cwd)
             )
@@ -6615,11 +6838,14 @@ class BogAgentsApp(App):
                 await self._mount_message(
                     AppMessage(
                         f"Exported {len(result.added_to_mcp_json)} MCP server(s) to "
-                        f"{result.output_path}:\n  " + "\n  ".join(result.added_to_mcp_json)
+                        f"{result.output_path}:\n  "
+                        + "\n  ".join(result.added_to_mcp_json)
                     )
                 )
             elif result.errors:
-                await self._mount_message(AppMessage(f"Export errors: {'; '.join(result.errors)}"))
+                await self._mount_message(
+                    AppMessage(f"Export errors: {'; '.join(result.errors)}")
+                )
             else:
                 await self._mount_message(AppMessage("No new MCP servers to export."))
             return
@@ -7209,7 +7435,11 @@ class BogAgentsApp(App):
         from bog_agents.middleware.thinking import ThinkingMiddleware
 
         mw = next(
-            (m for m in getattr(self, "_middleware", []) if isinstance(m, ThinkingMiddleware)),
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, ThinkingMiddleware)
+            ),
             None,
         )
         if mw is None:
@@ -7221,7 +7451,7 @@ class BogAgentsApp(App):
             )
             return
 
-        raw_arg = command.strip()[len("/think"):].strip().lower()
+        raw_arg = command.strip()[len("/think") :].strip().lower()
 
         if not raw_arg or raw_arg == "status":
             state = "enabled" if mw.is_enabled else "disabled"
@@ -7237,7 +7467,9 @@ class BogAgentsApp(App):
         if raw_arg == "on":
             mw.set_thinking(True)
             await self._mount_message(
-                AppMessage(f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens).")
+                AppMessage(
+                    f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens)."
+                )
             )
             return
 
@@ -7257,7 +7489,9 @@ class BogAgentsApp(App):
             try:
                 budget = int(budget_str)
                 if budget < 1024:
-                    await self._mount_message(AppMessage("Budget must be at least 1024 tokens."))
+                    await self._mount_message(
+                        AppMessage("Budget must be at least 1024 tokens.")
+                    )
                     return
                 mw.set_thinking(mw.is_enabled, budget_tokens=budget)
                 await self._mount_message(
@@ -7265,12 +7499,16 @@ class BogAgentsApp(App):
                 )
             except ValueError:
                 await self._mount_message(
-                    AppMessage(f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>")
+                    AppMessage(
+                        f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>"
+                    )
                 )
             return
 
         await self._mount_message(
-            AppMessage("Usage: /think | /think on | /think off | /think toggle | /think budget <N>")
+            AppMessage(
+                "Usage: /think | /think on | /think off | /think toggle | /think budget <N>"
+            )
         )
 
     async def _handle_rules_command(self, command: str) -> None:
@@ -7296,7 +7534,7 @@ class BogAgentsApp(App):
         )
 
         project_root = Path(self._cwd)
-        raw_arg = command.strip()[len("/rules"):].strip()
+        raw_arg = command.strip()[len("/rules") :].strip()
         lowered = raw_arg.lower()
 
         if not raw_arg or lowered == "list":
@@ -7325,7 +7563,14 @@ class BogAgentsApp(App):
         if lowered.startswith("show "):
             name = raw_arg[5:].strip()
             rules = await asyncio.to_thread(load_rules, project_root)
-            match = next((r for r in rules if r.name == name or r.name == name.removesuffix(".md")), None)
+            match = next(
+                (
+                    r
+                    for r in rules
+                    if r.name == name or r.name == name.removesuffix(".md")
+                ),
+                None,
+            )
             if match is None:
                 await self._mount_message(AppMessage(f"Rule '{name}' not found."))
                 return
@@ -7346,9 +7591,7 @@ class BogAgentsApp(App):
             rules = await asyncio.to_thread(load_rules, project_root)
             matching = [r for r in rules if r.matches(context_files, agent_type="")]
             if not matching:
-                await self._mount_message(
-                    AppMessage(f"No rules match '{file_arg}'.")
-                )
+                await self._mount_message(AppMessage(f"No rules match '{file_arg}'."))
                 return
             lines = [f"Rules matching '{file_arg}':", ""]
             for r in matching:
@@ -7388,13 +7631,22 @@ class BogAgentsApp(App):
         if lowered.startswith("edit "):
             name = raw_arg[5:].strip()
             rules = await asyncio.to_thread(load_rules, project_root)
-            match = next((r for r in rules if r.name == name or r.name == name.removesuffix(".md")), None)
-            if match is None:
-                await self._mount_message(AppMessage(f"Rule '{name}' not found. Use /rules add <name> to create it."))
-                return
-            await self._mount_message(
-                AppMessage(f"Edit rule at: {match.path}")
+            match = next(
+                (
+                    r
+                    for r in rules
+                    if r.name == name or r.name == name.removesuffix(".md")
+                ),
+                None,
             )
+            if match is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Rule '{name}' not found. Use /rules add <name> to create it."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage(f"Edit rule at: {match.path}"))
             return
 
         await self._mount_message(
@@ -7423,7 +7675,7 @@ class BogAgentsApp(App):
             hybrid_search,
         )
 
-        raw_arg = command.strip()[len("/search"):].strip()
+        raw_arg = command.strip()[len("/search") :].strip()
         if not raw_arg:
             await self._mount_message(
                 AppMessage("Usage: /search <query> | /search index [--force]")
@@ -7435,7 +7687,11 @@ class BogAgentsApp(App):
         if lowered in {"index", "index --force"}:
             force = "--force" in lowered
             mw = next(
-                (m for m in getattr(self, "_middleware", []) if isinstance(m, HybridSearchMiddleware)),
+                (
+                    m
+                    for m in getattr(self, "_middleware", [])
+                    if isinstance(m, HybridSearchMiddleware)
+                ),
                 None,
             )
             if mw is None:
@@ -7446,7 +7702,9 @@ class BogAgentsApp(App):
                     )
                 )
                 return
-            await self._mount_message(AppMessage("Building embedding index… this may take a minute."))
+            await self._mount_message(
+                AppMessage("Building embedding index… this may take a minute.")
+            )
             try:
                 result = await asyncio.to_thread(mw._rebuild_index, force=force)
                 await self._mount_message(AppMessage(f"Index built: {result}"))
@@ -7472,7 +7730,9 @@ class BogAgentsApp(App):
 
         formatted = format_search_results(results)
         await self._mount_message(
-            AppMessage(f"Search results for `{raw_arg}` ({len(results)} matches):\n\n{formatted}")
+            AppMessage(
+                f"Search results for `{raw_arg}` ({len(results)} matches):\n\n{formatted}"
+            )
         )
 
     async def _handle_worktrees_command(self, command: str) -> None:
@@ -7496,7 +7756,11 @@ class BogAgentsApp(App):
         )
 
         mw = next(
-            (m for m in getattr(self, "_middleware", []) if isinstance(m, ParallelWorktreeMiddleware)),
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, ParallelWorktreeMiddleware)
+            ),
             None,
         )
         if mw is None:
@@ -7508,14 +7772,16 @@ class BogAgentsApp(App):
             )
             return
 
-        raw_arg = command.strip()[len("/worktrees"):].strip()
+        raw_arg = command.strip()[len("/worktrees") :].strip()
         lowered = raw_arg.lower()
 
         if not raw_arg or lowered == "status":
             tasks = mw.get_tasks()
             if not tasks:
                 await self._mount_message(
-                    AppMessage("No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks.")
+                    AppMessage(
+                        "No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks."
+                    )
                 )
                 return
             await self._mount_message(AppMessage(format_worktree_status(tasks)))
@@ -7546,7 +7812,9 @@ class BogAgentsApp(App):
                 return
             if task.status != "done":
                 await self._mount_message(
-                    AppMessage(f"Task '{task_id}' is {task.status}, not done. Cannot merge yet.")
+                    AppMessage(
+                        f"Task '{task_id}' is {task.status}, not done. Cannot merge yet."
+                    )
                 )
                 return
             from bog_agents.middleware.worktree import merge_with_conflict_report
@@ -7564,7 +7832,11 @@ class BogAgentsApp(App):
             )
             conflicts = report.get("conflicts", [])
             merged = report.get("merged", False)
-            status_str = "Merged successfully." if merged else f"Conflicts detected in: {', '.join(conflicts)}"
+            status_str = (
+                "Merged successfully."
+                if merged
+                else f"Conflicts detected in: {', '.join(conflicts)}"
+            )
             await self._mount_message(
                 AppMessage(f"Merge task '{task_id}' ({task.branch}):\n{status_str}")
             )
@@ -7585,7 +7857,9 @@ class BogAgentsApp(App):
                 )
                 return
             if not isinstance(tasks_input, list):
-                await self._mount_message(AppMessage("Input must be a JSON array of task objects."))
+                await self._mount_message(
+                    AppMessage("Input must be a JSON array of task objects.")
+                )
                 return
 
             repo_root = await self._get_repo_root()
@@ -7597,7 +7871,9 @@ class BogAgentsApp(App):
             for item in tasks_input:
                 label = item.get("label", "task")
                 prompt = item.get("prompt", "")
-                task = await mw._create_task(label=label, prompt=prompt, repo_root=repo_root)
+                task = await mw._create_task(
+                    label=label, prompt=prompt, repo_root=repo_root
+                )
                 task_ids.append(task.task_id)
                 asyncio.create_task(mw._run_task_in_worktree(task))  # noqa: RUF006
 
@@ -7638,16 +7914,24 @@ class BogAgentsApp(App):
         )
 
         mw = next(
-            (m for m in getattr(self, "_middleware", []) if isinstance(m, IntelligentCompactionMiddleware)),
+            (
+                m
+                for m in getattr(self, "_middleware", [])
+                if isinstance(m, IntelligentCompactionMiddleware)
+            ),
             None,
         )
 
-        raw_arg = command.strip()[len("/compress"):].strip().lower()
+        raw_arg = command.strip()[len("/compress") :].strip().lower()
 
         if not raw_arg or raw_arg == "status":
             if mw is not None:
                 info = mw.get_usage_info()
-                auto_str = "enabled" if info.auto_threshold_pct > 0 and mw.enabled else "disabled"
+                auto_str = (
+                    "enabled"
+                    if info.auto_threshold_pct > 0 and mw.enabled
+                    else "disabled"
+                )
                 ratio_str = (
                     f"  Last compression ratio: {info.last_compression_ratio:.1%}"
                     if info.last_compression_ratio is not None
@@ -7675,10 +7959,14 @@ class BogAgentsApp(App):
         if raw_arg == "now":
             if mw is not None:
                 try:
-                    state_values = await self._get_thread_state_values(self._lc_thread_id or "")
+                    state_values = await self._get_thread_state_values(
+                        self._lc_thread_id or ""
+                    )
                     messages = state_values.get("messages", []) if state_values else []
                     if not messages:
-                        await self._mount_message(AppMessage("No messages to compress."))
+                        await self._mount_message(
+                            AppMessage("No messages to compress.")
+                        )
                         return
                     _, event = await asyncio.to_thread(mw.compress_now, messages)
                     await self._mount_message(
@@ -7691,7 +7979,9 @@ class BogAgentsApp(App):
                     await self._mount_message(AppMessage(f"Compression failed: {exc}"))
             else:
                 await self._mount_message(
-                    AppMessage("IntelligentCompactionMiddleware not active — running /compact instead.")
+                    AppMessage(
+                        "IntelligentCompactionMiddleware not active — running /compact instead."
+                    )
                 )
                 await self._handle_compact()
             return
@@ -7699,7 +7989,9 @@ class BogAgentsApp(App):
         if raw_arg.startswith("auto "):
             toggle = raw_arg[5:].strip()
             if mw is None:
-                await self._mount_message(AppMessage("IntelligentCompactionMiddleware not active."))
+                await self._mount_message(
+                    AppMessage("IntelligentCompactionMiddleware not active.")
+                )
                 return
             if toggle == "on":
                 mw.set_enabled(True)
@@ -7713,16 +8005,22 @@ class BogAgentsApp(App):
 
         if raw_arg.startswith("threshold "):
             if mw is None:
-                await self._mount_message(AppMessage("IntelligentCompactionMiddleware not active."))
+                await self._mount_message(
+                    AppMessage("IntelligentCompactionMiddleware not active.")
+                )
                 return
             pct_str = raw_arg[10:].strip().rstrip("%")
             try:
                 pct = float(pct_str)
                 if not (10.0 <= pct <= 99.0):
-                    await self._mount_message(AppMessage("Threshold must be between 10 and 99."))
+                    await self._mount_message(
+                        AppMessage("Threshold must be between 10 and 99.")
+                    )
                     return
                 mw._auto_threshold_pct = pct / 100.0
-                await self._mount_message(AppMessage(f"Auto-compression threshold set to {pct:.0f}%."))
+                await self._mount_message(
+                    AppMessage(f"Auto-compression threshold set to {pct:.0f}%.")
+                )
             except ValueError:
                 await self._mount_message(AppMessage(f"Invalid threshold: {pct_str!r}"))
             return
@@ -7752,7 +8050,7 @@ class BogAgentsApp(App):
 
         from bog_agents_cli.jobs_manager import PersistentJobsManager
 
-        raw_arg = command.strip()[len("/jobs"):].strip()
+        raw_arg = command.strip()[len("/jobs") :].strip()
         lowered = raw_arg.lower()
 
         # Use PersistentJobsManager if available, else fall back to BackgroundAgentManager
@@ -7775,7 +8073,11 @@ class BogAgentsApp(App):
             if task is None:
                 await self._mount_message(AppMessage(f"Job '{job_id}' not found."))
                 return
-            dur = f"{task.duration_seconds:.0f}s" if task.duration_seconds is not None else "—"
+            dur = (
+                f"{task.duration_seconds:.0f}s"
+                if task.duration_seconds is not None
+                else "—"
+            )
             branch = getattr(task, "worktree_branch", None) or "—"
             lines = [
                 f"Job: {task.task_id}",
@@ -7796,9 +8098,13 @@ class BogAgentsApp(App):
             job_id = raw_arg[7:].strip()
             cancelled = bg_manager.cancel(job_id)
             if cancelled:
-                await self._mount_message(AppMessage(f"Job '{job_id}' cancel requested."))
+                await self._mount_message(
+                    AppMessage(f"Job '{job_id}' cancel requested.")
+                )
             else:
-                await self._mount_message(AppMessage(f"Job '{job_id}' not found or not running."))
+                await self._mount_message(
+                    AppMessage(f"Job '{job_id}' not found or not running.")
+                )
             return
 
         if lowered.startswith("run "):
@@ -7814,7 +8120,10 @@ class BogAgentsApp(App):
                     working_dir=self._cwd,
                     parent_thread_id=self._lc_thread_id,
                 )
-                branch = getattr(bg_manager.get_status(task_id), "worktree_branch", None) or "—"
+                branch = (
+                    getattr(bg_manager.get_status(task_id), "worktree_branch", None)
+                    or "—"
+                )
                 await self._mount_message(
                     AppMessage(
                         f"Job submitted: {task_id}\n"
@@ -7828,7 +8137,9 @@ class BogAgentsApp(App):
 
         if lowered == "cleanup":
             removed = bg_manager.cleanup_completed()
-            await self._mount_message(AppMessage(f"Cleaned up {removed} completed/failed jobs."))
+            await self._mount_message(
+                AppMessage(f"Cleaned up {removed} completed/failed jobs.")
+            )
             return
 
         await self._mount_message(
@@ -7861,14 +8172,16 @@ class BogAgentsApp(App):
         )
 
         project_root = Path(self._cwd)
-        raw_arg = command.strip()[len("/workspace"):].strip()
+        raw_arg = command.strip()[len("/workspace") :].strip()
         lowered = raw_arg.lower()
 
         if not raw_arg or lowered == "list":
             try:
                 repos = await asyncio.to_thread(load_workspace, project_root)
             except Exception as exc:
-                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
                 return
             if not repos:
                 workspace_file = project_root / ".bog-agents" / "workspace.toml"
@@ -7894,20 +8207,28 @@ class BogAgentsApp(App):
             try:
                 repos = await asyncio.to_thread(load_workspace, project_root)
             except Exception as exc:
-                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
                 return
             repo = repos.get(name)
             if repo is None:
-                await self._mount_message(AppMessage(f"Repo '{name}' not found in workspace.toml."))
+                await self._mount_message(
+                    AppMessage(f"Repo '{name}' not found in workspace.toml.")
+                )
                 return
             if not repo.exists:
-                await self._mount_message(AppMessage(f"Repo path does not exist: {repo.path}"))
+                await self._mount_message(
+                    AppMessage(f"Repo path does not exist: {repo.path}")
+                )
                 return
             try:
                 repo_map = await asyncio.to_thread(get_repo_map, repo)
                 recent = await asyncio.to_thread(get_recent_changes, repo)
             except Exception as exc:
-                await self._mount_message(AppMessage(f"[red]Error reading repo '{name}':[/red] {exc}"))
+                await self._mount_message(
+                    AppMessage(f"[red]Error reading repo '{name}':[/red] {exc}")
+                )
                 return
             await self._mount_message(
                 AppMessage(
@@ -7921,15 +8242,21 @@ class BogAgentsApp(App):
         if lowered.startswith("search "):
             query = raw_arg[7:].strip()
             if not query:
-                await self._mount_message(AppMessage("Usage: /workspace search <query>"))
+                await self._mount_message(
+                    AppMessage("Usage: /workspace search <query>")
+                )
                 return
             try:
                 repos = await asyncio.to_thread(load_workspace, project_root)
             except Exception as exc:
-                await self._mount_message(AppMessage(f"[red]Error loading workspace:[/red] {exc}"))
+                await self._mount_message(
+                    AppMessage(f"[red]Error loading workspace:[/red] {exc}")
+                )
                 return
             if not repos:
-                await self._mount_message(AppMessage("No repos configured. Use /workspace init to set up."))
+                await self._mount_message(
+                    AppMessage("No repos configured. Use /workspace init to set up.")
+                )
                 return
             try:
                 results = await asyncio.to_thread(search_across_repos, query, repos)
@@ -7937,7 +8264,9 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"[red]Search error:[/red] {exc}"))
                 return
             await self._mount_message(
-                AppMessage(f"Cross-repo search for `{query}`:\n\n{results or 'No results found.'}")
+                AppMessage(
+                    f"Cross-repo search for `{query}`:\n\n{results or 'No results found.'}"
+                )
             )
             return
 
@@ -7945,7 +8274,9 @@ class BogAgentsApp(App):
             workspace_dir = project_root / ".bog-agents"
             workspace_file = workspace_dir / "workspace.toml"
             if workspace_file.exists():
-                await self._mount_message(AppMessage(f"workspace.toml already exists at {workspace_file}"))
+                await self._mount_message(
+                    AppMessage(f"workspace.toml already exists at {workspace_file}")
+                )
                 return
             template = (
                 "# Bog Agents Workspace — multi-repository context\n"
@@ -7958,9 +8289,12 @@ class BogAgentsApp(App):
             )
             try:
                 from bog_agents_cli.io_utils import atomic_write_text
+
                 atomic_write_text(workspace_file, template)
             except OSError as exc:
-                await self._mount_message(AppMessage(f"[red]Failed to create workspace.toml:[/red] {exc}"))
+                await self._mount_message(
+                    AppMessage(f"[red]Failed to create workspace.toml:[/red] {exc}")
+                )
                 return
             await self._mount_message(
                 AppMessage(
@@ -8030,7 +8364,9 @@ class BogAgentsApp(App):
         async def _ls(fn, *args):  # noqa: ANN001, ANN002
             """Run a langsmith_cli helper with a timeout."""
             try:
-                return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=ls_timeout)
+                return await asyncio.wait_for(
+                    asyncio.to_thread(fn, *args), timeout=ls_timeout
+                )
             except TimeoutError:
                 return f"[red]LangSmith request timed out after {ls_timeout:.0f}s[/red]"
 
@@ -8062,6 +8398,7 @@ class BogAgentsApp(App):
         if not subcommand or subcommand in {"status", "config"}:
             if rest.lower() == "set-project" and rest2:
                 import re as _re
+
                 if not _re.match(r"^[\w\-\.]{1,100}$", rest2):
                     await self._mount_message(
                         AppMessage(
@@ -8071,10 +8408,13 @@ class BogAgentsApp(App):
                     )
                     return
                 import os as _os
+
                 _os.environ["LANGCHAIN_PROJECT"] = rest2
                 logger.info("LangSmith project changed to %r", rest2)
                 await self._mount_message(
-                    AppMessage(f"LangSmith default project set to: [cyan]{rest2}[/cyan]")
+                    AppMessage(
+                        f"LangSmith default project set to: [cyan]{rest2}[/cyan]"
+                    )
                 )
                 return
             result = await _ls(format_langsmith_status)
@@ -8101,7 +8441,9 @@ class BogAgentsApp(App):
 
         if subcommand == "trace":
             if not rest:
-                await self._mount_message(AppMessage("Usage: /langsmith trace <run-id>"))
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith trace <run-id>")
+                )
                 return
             result = await _ls(format_langsmith_trace, rest)
             await self._mount_message(AppMessage(result))
@@ -8114,7 +8456,9 @@ class BogAgentsApp(App):
 
         if subcommand == "dataset":
             if not rest:
-                await self._mount_message(AppMessage("Usage: /langsmith dataset <name>"))
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith dataset <name>")
+                )
                 return
             result = await _ls(format_langsmith_dataset, rest)
             await self._mount_message(AppMessage(result))
@@ -8140,7 +8484,9 @@ class BogAgentsApp(App):
                     )
                     return
                 eval_a, _, eval_b = rest2.partition(" ")
-                result = await _ls(format_langsmith_eval_compare, eval_a.strip(), eval_b.strip())
+                result = await _ls(
+                    format_langsmith_eval_compare, eval_a.strip(), eval_b.strip()
+                )
             else:
                 result = await _ls(format_langsmith_eval, rest)
             await self._mount_message(AppMessage(result))
@@ -8148,7 +8494,9 @@ class BogAgentsApp(App):
 
         if subcommand == "feedback":
             if not rest:
-                await self._mount_message(AppMessage("Usage: /langsmith feedback <run-id>"))
+                await self._mount_message(
+                    AppMessage("Usage: /langsmith feedback <run-id>")
+                )
                 return
             result = await _ls(format_langsmith_feedback, rest)
             await self._mount_message(AppMessage(result))
@@ -8449,7 +8797,9 @@ class BogAgentsApp(App):
                 )
             else:
                 identity = load_user_identity()
-                await self._mount_message(AppMessage(format_team_status(cfg, project_root, identity)))
+                await self._mount_message(
+                    AppMessage(format_team_status(cfg, project_root, identity))
+                )
             return
 
         if action == "init":
@@ -8463,9 +8813,13 @@ class BogAgentsApp(App):
                 cfg.context.always_include = ["context/team-overview.md"]
             else:
                 cfg.name = team_name
-            created_files = await asyncio.to_thread(init_team_directory, project_root, team_name)
+            created_files = await asyncio.to_thread(
+                init_team_directory, project_root, team_name
+            )
             await asyncio.to_thread(save_team_config, cfg, project_root)
-            file_list = "\n".join(f"  {f.relative_to(project_root)}" for f in created_files)
+            file_list = "\n".join(
+                f"  {f.relative_to(project_root)}" for f in created_files
+            )
             await self._mount_message(
                 AppMessage(
                     f"Team '{team_name}' initialized.\n\n"
@@ -8488,13 +8842,14 @@ class BogAgentsApp(App):
             if sub in {"show", "status"}:
                 if identity.name or identity.email:
                     await self._mount_message(
-                        AppMessage(f"Identity: {identity.name} <{identity.email}> ({identity.role})")
+                        AppMessage(
+                            f"Identity: {identity.name} <{identity.email}> ({identity.role})"
+                        )
                     )
                 else:
                     await self._mount_message(
                         AppMessage(
-                            "Identity not set.\n"
-                            "Run: /team whoami set <name> <email>"
+                            "Identity not set.\nRun: /team whoami set <name> <email>"
                         )
                     )
             elif sub == "set":
@@ -8550,7 +8905,9 @@ class BogAgentsApp(App):
                 return
             if not cfg.members:
                 await self._mount_message(
-                    AppMessage("No members. Run `/team invite <email>` to add the first member.")
+                    AppMessage(
+                        "No members. Run `/team invite <email>` to add the first member."
+                    )
                 )
                 return
             lines = [f"Members of '{cfg.name}' ({len(cfg.members)}):"]
@@ -8565,26 +8922,36 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage("No team config found."))
                 return
             if len(tokens) < 2:
-                await self._mount_message(AppMessage("Usage: /team remove-member <email-or-name>"))
+                await self._mount_message(
+                    AppMessage("Usage: /team remove-member <email-or-name>")
+                )
                 return
             removed = team_remove_member(cfg, tokens[1])
             if removed:
                 await asyncio.to_thread(save_team_config, cfg, project_root)
-                await self._mount_message(AppMessage(f"Removed '{tokens[1]}' from team."))
+                await self._mount_message(
+                    AppMessage(f"Removed '{tokens[1]}' from team.")
+                )
             else:
-                await self._mount_message(AppMessage(f"Member '{tokens[1]}' not found."))
+                await self._mount_message(
+                    AppMessage(f"Member '{tokens[1]}' not found.")
+                )
             return
 
         if action == "context":
             cfg = load_team_config(project_root)
             if cfg is None:
-                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
                 return
             sub = tokens[1].lower() if len(tokens) > 1 else "list"
             if sub == "list":
                 if not cfg.context.always_include:
                     await self._mount_message(
-                        AppMessage("No shared context files configured.\nRun: /team context add <file>")
+                        AppMessage(
+                            "No shared context files configured.\nRun: /team context add <file>"
+                        )
                     )
                 else:
                     lines = ["Shared context (auto-injected):"]
@@ -8593,48 +8960,76 @@ class BogAgentsApp(App):
                     await self._mount_message(AppMessage("\n".join(lines)))
             elif sub == "add":
                 if len(tokens) < 3:
-                    await self._mount_message(AppMessage("Usage: /team context add <file>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team context add <file>")
+                    )
                     return
                 rel = tokens[2]
                 if rel not in cfg.context.always_include:
                     cfg.context.always_include.append(rel)
                     await asyncio.to_thread(save_team_config, cfg, project_root)
-                    await self._mount_message(AppMessage(f"Added '{rel}' to shared context."))
+                    await self._mount_message(
+                        AppMessage(f"Added '{rel}' to shared context.")
+                    )
                 else:
-                    await self._mount_message(AppMessage(f"'{rel}' is already in shared context."))
+                    await self._mount_message(
+                        AppMessage(f"'{rel}' is already in shared context.")
+                    )
             elif sub == "remove":
                 if len(tokens) < 3:
-                    await self._mount_message(AppMessage("Usage: /team context remove <file>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team context remove <file>")
+                    )
                     return
                 rel = tokens[2]
                 if rel in cfg.context.always_include:
                     cfg.context.always_include.remove(rel)
                     await asyncio.to_thread(save_team_config, cfg, project_root)
-                    await self._mount_message(AppMessage(f"Removed '{rel}' from shared context."))
+                    await self._mount_message(
+                        AppMessage(f"Removed '{rel}' from shared context.")
+                    )
                 else:
-                    await self._mount_message(AppMessage(f"'{rel}' not in shared context."))
+                    await self._mount_message(
+                        AppMessage(f"'{rel}' not in shared context.")
+                    )
             elif sub == "show":
-                text = await asyncio.to_thread(get_shared_context_text, cfg, project_root)
-                await self._mount_message(AppMessage(text or "No context content found."))
+                text = await asyncio.to_thread(
+                    get_shared_context_text, cfg, project_root
+                )
+                await self._mount_message(
+                    AppMessage(text or "No context content found.")
+                )
             else:
                 await self._mount_message(
-                    AppMessage("Usage: /team context [list|add <file>|remove <file>|show]")
+                    AppMessage(
+                        "Usage: /team context [list|add <file>|remove <file>|show]"
+                    )
                 )
             return
 
         if action == "prompt":
             cfg = load_team_config(project_root)
             if cfg is None:
-                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
                 return
             sub = tokens[1].lower() if len(tokens) > 1 else "list"
             if sub == "list":
                 prompts_dir = Path(self._cwd) / ".bog-agents" / "team" / "prompts"
-                file_prompts = [p.stem for p in prompts_dir.glob("*.md")] if prompts_dir.is_dir() else []
-                all_names = list(cfg.prompts) + [n for n in file_prompts if n not in cfg.prompts]
+                file_prompts = (
+                    [p.stem for p in prompts_dir.glob("*.md")]
+                    if prompts_dir.is_dir()
+                    else []
+                )
+                all_names = list(cfg.prompts) + [
+                    n for n in file_prompts if n not in cfg.prompts
+                ]
                 if not all_names:
                     await self._mount_message(
-                        AppMessage("No shared prompts. Run: /team prompt add <name> <text>")
+                        AppMessage(
+                            "No shared prompts. Run: /team prompt add <name> <text>"
+                        )
                     )
                 else:
                     lines = ["Shared prompts:"]
@@ -8643,13 +9038,19 @@ class BogAgentsApp(App):
                     await self._mount_message(AppMessage("\n".join(lines)))
             elif sub in {"show", "get"}:
                 if len(tokens) < 3:
-                    await self._mount_message(AppMessage("Usage: /team prompt show <name>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt show <name>")
+                    )
                     return
                 text = get_named_prompt(cfg, tokens[2], project_root)
-                await self._mount_message(AppMessage(text or f"Prompt '{tokens[2]}' not found."))
+                await self._mount_message(
+                    AppMessage(text or f"Prompt '{tokens[2]}' not found.")
+                )
             elif sub == "add":
                 if len(tokens) < 4:
-                    await self._mount_message(AppMessage("Usage: /team prompt add <name> <text>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt add <name> <text>")
+                    )
                     return
                 name = tokens[2]
                 text = raw_arg.split(None, 3)[3].strip()
@@ -8658,23 +9059,31 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"Saved prompt '{name}'."))
             elif sub == "run":
                 if len(tokens) < 3:
-                    await self._mount_message(AppMessage("Usage: /team prompt run <name>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team prompt run <name>")
+                    )
                     return
                 text = get_named_prompt(cfg, tokens[2], project_root)
                 if not text:
-                    await self._mount_message(AppMessage(f"Prompt '{tokens[2]}' not found."))
+                    await self._mount_message(
+                        AppMessage(f"Prompt '{tokens[2]}' not found.")
+                    )
                     return
                 await self._handle_user_message(text)
             else:
                 await self._mount_message(
-                    AppMessage("Usage: /team prompt [list|show <name>|add <name> <text>|run <name>]")
+                    AppMessage(
+                        "Usage: /team prompt [list|show <name>|add <name> <text>|run <name>]"
+                    )
                 )
             return
 
         if action == "var":
             cfg = load_team_config(project_root)
             if cfg is None:
-                await self._mount_message(AppMessage("No team config found. Run `/team init <name>` first."))
+                await self._mount_message(
+                    AppMessage("No team config found. Run `/team init <name>` first.")
+                )
                 return
             sub = tokens[1].lower() if len(tokens) > 1 else "list"
             if sub == "list":
@@ -8689,14 +9098,20 @@ class BogAgentsApp(App):
                     await self._mount_message(AppMessage("\n".join(lines)))
             elif sub == "set":
                 if len(tokens) < 4:
-                    await self._mount_message(AppMessage("Usage: /team var set <key> <value>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team var set <key> <value>")
+                    )
                     return
                 cfg.vars[tokens[2]] = " ".join(tokens[3:])
                 await asyncio.to_thread(save_team_config, cfg, project_root)
-                await self._mount_message(AppMessage(f"Set {tokens[2]}={cfg.vars[tokens[2]]}"))
+                await self._mount_message(
+                    AppMessage(f"Set {tokens[2]}={cfg.vars[tokens[2]]}")
+                )
             elif sub in {"unset", "remove", "delete"}:
                 if len(tokens) < 3:
-                    await self._mount_message(AppMessage("Usage: /team var unset <key>"))
+                    await self._mount_message(
+                        AppMessage("Usage: /team var unset <key>")
+                    )
                     return
                 cfg.vars.pop(tokens[2], None)
                 await asyncio.to_thread(save_team_config, cfg, project_root)
@@ -8962,21 +9377,29 @@ class BogAgentsApp(App):
             return
 
         if action == "sync":
-            direction = tokens[1] if len(tokens) > 1 and tokens[1] in {"pull", "push", "both"} else "both"
+            direction = (
+                tokens[1]
+                if len(tokens) > 1 and tokens[1] in {"pull", "push", "both"}
+                else "both"
+            )
             cwd = Path(self._cwd)
             from bog_agents_cli.cmd_memory_sync import sync_memory
 
             result = await asyncio.to_thread(sync_memory, cwd, direction=direction)
             await self._mount_message(AppMessage(result))
             # Also update in-memory team summary
-            team_name = registry.active_team if hasattr(registry, "active_team") else None
+            team_name = (
+                registry.active_team if hasattr(registry, "active_team") else None
+            )
             if team_name:
                 team = find_team(registry, team_name)
                 if team is not None:
                     local_tasks, remote_tasks = self._team_task_snapshot(team.name)
                     task_summaries: list[str] = []
                     for task in [*local_tasks, *remote_tasks]:
-                        task_result = getattr(task, "result", "") or getattr(task, "output", "")
+                        task_result = getattr(task, "result", "") or getattr(
+                            task, "output", ""
+                        )
                         if isinstance(task_result, str) and task_result.strip():
                             task_summaries.append(task_result.strip())
                     summary = summarize_team_activity(team, task_summaries)
@@ -9501,26 +9924,36 @@ class BogAgentsApp(App):
                 job_def: dict[str, Any] = {
                     "name": pipeline_name,
                     "description": pending.get("description", ""),
-                    "triggers": [{"type": "cron", "cron": schedule}] if schedule else [],
+                    "triggers": [{"type": "cron", "cron": schedule}]
+                    if schedule
+                    else [],
                     "pipeline": pipeline_path,
                 }
                 result = await add_daemon_job(job_def)
                 if result:
                     job_id = result.get("job_id") or result.get("id") or "?"
-                    await self._mount_message(AppMessage(
-                        f"[green]Registered with daemon.[/green] Job ID: [bold]{job_id}[/bold]\n"
-                        f"Use [bold]/ambient status[/bold] to monitor it."
-                    ))
+                    await self._mount_message(
+                        AppMessage(
+                            f"[green]Registered with daemon.[/green] Job ID: [bold]{job_id}[/bold]\n"
+                            f"Use [bold]/ambient status[/bold] to monitor it."
+                        )
+                    )
                 else:
-                    await self._mount_message(AppMessage(
-                        "[yellow]Could not register with daemon.[/yellow] "
-                        "Try [bold]/ambient add " + pipeline_name + "[/bold] later."
-                    ))
+                    await self._mount_message(
+                        AppMessage(
+                            "[yellow]Could not register with daemon.[/yellow] "
+                            "Try [bold]/ambient add " + pipeline_name + "[/bold] later."
+                        )
+                    )
             else:
-                await self._mount_message(AppMessage(
-                    "Skipped daemon registration. "
-                    "Use [bold]/ambient add " + pending["name"] + "[/bold] to register later."
-                ))
+                await self._mount_message(
+                    AppMessage(
+                        "Skipped daemon registration. "
+                        "Use [bold]/ambient add "
+                        + pending["name"]
+                        + "[/bold] to register later."
+                    )
+                )
             return
 
         # Mount the user message (show original text in UI)
@@ -10737,10 +11170,16 @@ class BogAgentsApp(App):
                     watch_block = data.get("watch")
                     if watch_block and isinstance(watch_block, dict):
                         name = data.get("name") or path.stem
-                        cfg = watch_config_from_dict({**watch_block, "pipeline_name": str(name)})
+                        cfg = watch_config_from_dict(
+                            {**watch_block, "pipeline_name": str(name)}
+                        )
                         configs.append(cfg)
                 except Exception:
-                    logger.debug("Could not parse pipeline %s for watch config", path, exc_info=True)
+                    logger.debug(
+                        "Could not parse pipeline %s for watch config",
+                        path,
+                        exc_info=True,
+                    )
 
             if not configs:
                 return
@@ -10749,7 +11188,13 @@ class BogAgentsApp(App):
                 # Post to Textual to run the pipeline
                 self.call_from_thread(
                     lambda: asyncio.create_task(
-                        self._run_pipeline_by_name(config.pipeline_name, trigger_context={"file": event.path, "event": event.event_type})
+                        self._run_pipeline_by_name(
+                            config.pipeline_name,
+                            trigger_context={
+                                "file": event.path,
+                                "event": event.event_type,
+                            },
+                        )
                     )
                 )
 
@@ -10766,7 +11211,9 @@ class BogAgentsApp(App):
         except Exception:
             logger.debug("File watcher init failed", exc_info=True)
 
-    async def _run_pipeline_by_name(self, name: str, *, trigger_context: dict | None = None) -> None:
+    async def _run_pipeline_by_name(
+        self, name: str, *, trigger_context: dict | None = None
+    ) -> None:
         """Run a named pipeline, optionally with file-trigger context.
 
         Args:
@@ -10782,11 +11229,18 @@ class BogAgentsApp(App):
                 try:
                     with path.open() as fh:
                         data = yaml.safe_load(fh)
-                    if isinstance(data, dict) and (data.get("name") or path.stem) == name:
+                    if (
+                        isinstance(data, dict)
+                        and (data.get("name") or path.stem) == name
+                    ):
                         pipeline_data = data
                         break
                 except Exception:
-                    logger.debug("Could not parse pipeline %s during trigger lookup", path, exc_info=True)
+                    logger.debug(
+                        "Could not parse pipeline %s during trigger lookup",
+                        path,
+                        exc_info=True,
+                    )
                     continue
 
             if pipeline_data is None:
@@ -10794,7 +11248,11 @@ class BogAgentsApp(App):
                 return
 
             ctx_msg = f" (triggered by: {trigger_context})" if trigger_context else ""
-            await self._mount_message(AppMessage(f"[yellow]File watcher:[/yellow] Running pipeline '{name}'{ctx_msg}"))
+            await self._mount_message(
+                AppMessage(
+                    f"[yellow]File watcher:[/yellow] Running pipeline '{name}'{ctx_msg}"
+                )
+            )
 
             for step in pipeline_data.get("steps", []):
                 step_type = step.get("type", "prompt")
@@ -10817,16 +11275,20 @@ class BogAgentsApp(App):
         from bog_agents_cli.file_watcher import format_watcher_status
 
         if not self._file_watchers:
-            await self._mount_message(AppMessage(
-                "No file watchers active.\n"
-                "Add a 'watch:' block to a pipeline YAML to enable file-change triggers.\n\n"
-                "Example pipeline YAML:\n"
-                "  watch:\n"
-                "    patterns: ['*.py', 'src/**/*.ts']\n"
-                "    debounce_seconds: 2.0"
-            ))
+            await self._mount_message(
+                AppMessage(
+                    "No file watchers active.\n"
+                    "Add a 'watch:' block to a pipeline YAML to enable file-change triggers.\n\n"
+                    "Example pipeline YAML:\n"
+                    "  watch:\n"
+                    "    patterns: ['*.py', 'src/**/*.ts']\n"
+                    "    debounce_seconds: 2.0"
+                )
+            )
             return
-        await self._mount_message(AppMessage(format_watcher_status(self._file_watchers)))
+        await self._mount_message(
+            AppMessage(format_watcher_status(self._file_watchers))
+        )
 
     # =========================================================================
     # Model Switching
@@ -11040,7 +11502,7 @@ class BogAgentsApp(App):
             var_backend,
         )
 
-        tail = command[len("/vars"):].strip()
+        tail = command[len("/vars") :].strip()
         parts = tail.split(maxsplit=2)
         action = parts[0].lower() if parts else "list"
 
@@ -11099,7 +11561,9 @@ class BogAgentsApp(App):
         # ---- get (masked) ----
         elif action == "get":
             if len(parts) < 2:
-                await self._mount_message(AppMessage("Usage: [bold]/vars get KEY[/bold]"))
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars get KEY[/bold]")
+                )
                 return
             key = parts[1]
             try:
@@ -11108,9 +11572,15 @@ class BogAgentsApp(App):
                 self.notify(str(exc), severity="error", timeout=4)
                 return
             if value is None:
-                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
                 return
-            masked = value[:2] + "*" * max(0, len(value) - 4) + value[-2:] if len(value) > 4 else "****"
+            masked = (
+                value[:2] + "*" * max(0, len(value) - 4) + value[-2:]
+                if len(value) > 4
+                else "****"
+            )
             backend = var_backend(key)
             await self._mount_message(
                 AppMessage(
@@ -11122,7 +11592,9 @@ class BogAgentsApp(App):
         # ---- show (unmasked) ----
         elif action == "show":
             if len(parts) < 2:
-                await self._mount_message(AppMessage("Usage: [bold]/vars show KEY[/bold]"))
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/vars show KEY[/bold]")
+                )
                 return
             key = parts[1]
             try:
@@ -11131,7 +11603,9 @@ class BogAgentsApp(App):
                 self.notify(str(exc), severity="error", timeout=4)
                 return
             if value is None:
-                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
                 return
             await self._mount_message(
                 AppMessage(f"[cyan]{key}[/cyan] = [yellow]{value}[/yellow]")
@@ -11155,7 +11629,9 @@ class BogAgentsApp(App):
                     AppMessage(f"[green]Deleted[/green] [cyan]{key}[/cyan]")
                 )
             else:
-                self.notify(f"Variable '{key}' not found.", severity="warning", timeout=3)
+                self.notify(
+                    f"Variable '{key}' not found.", severity="warning", timeout=3
+                )
 
         # ---- help / unknown ----
         else:
@@ -11404,14 +11880,20 @@ class BogAgentsApp(App):
             focus = focus_parts[1] if len(focus_parts) > 1 else "all"
             try:
                 if platform == "azure":
-                    pr_data = await asyncio.to_thread(get_azure_pr_diff, pr_num, cwd=cwd)
+                    pr_data = await asyncio.to_thread(
+                        get_azure_pr_diff, pr_num, cwd=cwd
+                    )
                 else:
-                    pr_data = await asyncio.to_thread(get_github_pr_diff, pr_num, cwd=cwd)
+                    pr_data = await asyncio.to_thread(
+                        get_github_pr_diff, pr_num, cwd=cwd
+                    )
             except RuntimeError as exc:
                 await self._mount_message(AppMessage(str(exc)))
                 return
             if not pr_data.get("diff") and not pr_data.get("title"):
-                await self._mount_message(AppMessage(format_pr_review_not_found(platform)))
+                await self._mount_message(
+                    AppMessage(format_pr_review_not_found(platform))
+                )
                 return
             prompt = build_pr_review_prompt(pr_data, focus=focus)
 
@@ -11740,9 +12222,9 @@ class BogAgentsApp(App):
                     )
                 )
             else:
-                await self._mount_message(AppMessage(
-                    f"Switched to [bold]{display}[/bold]. {history_note}"
-                ))
+                await self._mount_message(
+                    AppMessage(f"Switched to [bold]{display}[/bold]. {history_note}")
+                )
             logger.info("Model switched to %s (via configurable middleware)", display)
 
             # Scroll to bottom so the confirmation message is visible

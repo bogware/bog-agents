@@ -61,13 +61,17 @@ class TestExtractVariables:
 
 class TestBuildSkillTemplate:
     def test_basic_template(self):
-        result = build_skill_template("my-skill", "Does something", "body text", variables=[])
+        result = build_skill_template(
+            "my-skill", "Does something", "body text", variables=[]
+        )
         assert "# my-skill" in result
         assert "Does something" in result
         assert "body text" in result
 
     def test_includes_variables_section(self):
-        result = build_skill_template("my-skill", "desc", "body", variables=["FOO", "BAR"])
+        result = build_skill_template(
+            "my-skill", "desc", "body", variables=["FOO", "BAR"]
+        )
         assert "## Variables" in result
         assert "{{FOO}}" in result
         assert "{{BAR}}" in result

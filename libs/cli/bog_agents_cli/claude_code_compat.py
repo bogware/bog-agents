@@ -63,15 +63,25 @@ def _claude_desktop_config_path() -> Path | None:
     """Return the Claude Desktop MCP config path for the current platform."""
     system = platform.system()
     if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "Claude"
+            / "claude_desktop_config.json"
+        )
     if system == "Linux":
         xdg = Path(
-            __import__("os").environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+            __import__("os").environ.get(
+                "XDG_CONFIG_HOME", str(Path.home() / ".config")
+            )
         )
         return xdg / "Claude" / "claude_desktop_config.json"
     if system == "Windows":
         appdata = Path(__import__("os").environ.get("APPDATA", ""))
-        return appdata / "Claude" / "claude_desktop_config.json" if appdata.name else None
+        return (
+            appdata / "Claude" / "claude_desktop_config.json" if appdata.name else None
+        )
     return None
 
 
@@ -153,7 +163,9 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         value = value.strip()
         # Crude list parsing: [a, b, c]
         if value.startswith("[") and value.endswith("]"):
-            items = [v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()]
+            items = [
+                v.strip().strip("'\"") for v in value[1:-1].split(",") if v.strip()
+            ]
             fm[key] = items
         else:
             # Remove surrounding quotes
@@ -294,9 +306,14 @@ def _write_mcp_json(path: Path, servers: dict[str, Any]) -> None:
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("_write_mcp_json: could not read existing %s (%s); overwriting", path.name, exc)
+            logger.warning(
+                "_write_mcp_json: could not read existing %s (%s); overwriting",
+                path.name,
+                exc,
+            )
     existing["mcpServers"] = servers
     from bog_agents_cli.io_utils import atomic_write_text
+
     atomic_write_text(path, json.dumps(existing, indent=2))
 
 
@@ -378,7 +395,9 @@ def sync_mcp_configs(
     if direction in {"both", "to-desktop"}:
         desktop_path = _claude_desktop_config_path()
         if desktop_path is None:
-            result.errors.append("Claude Desktop config path unknown for this platform.")
+            result.errors.append(
+                "Claude Desktop config path unknown for this platform."
+            )
         else:
             to_add_desktop: dict[str, Any] = {}
             for name, cfg in project_servers.items():
@@ -468,7 +487,9 @@ def _EXTENSION_MANIFEST_PATHS(config_dir: Path):  # noqa: N802
 # ---------------------------------------------------------------------------
 
 
-def get_claude_compat_status(project_root: Path, config_dir: Path) -> ClaudeCompatStatus:
+def get_claude_compat_status(
+    project_root: Path, config_dir: Path
+) -> ClaudeCompatStatus:
     """Build a comprehensive Claude Code compatibility report.
 
     Args:
@@ -523,6 +544,7 @@ def format_compat_status(status: ClaudeCompatStatus) -> str:
     Returns:
         Multi-line string.
     """
+
     def yn(flag: bool) -> str:
         return "yes" if flag else "no"
 
@@ -541,7 +563,9 @@ def format_compat_status(status: ClaudeCompatStatus) -> str:
     if status.claude_skills_found:
         lines.append("Skills detected:")
         for skill in status.claude_skills_found[:10]:
-            lines.append(f"  {skill.name} — {skill.description} ({skill.source_path.parent.name})")
+            lines.append(
+                f"  {skill.name} — {skill.description} ({skill.source_path.parent.name})"
+            )
         if len(status.claude_skills_found) > 10:
             lines.append(f"  ... and {len(status.claude_skills_found) - 10} more")
         lines.append("")
@@ -555,14 +579,20 @@ def format_compat_status(status: ClaudeCompatStatus) -> str:
     if status.mcp_servers_in_desktop:
         lines.append("Claude Desktop MCP servers:")
         for name in status.mcp_servers_in_desktop:
-            overlap = " (also in project)" if name in status.mcp_servers_in_project else ""
+            overlap = (
+                " (also in project)" if name in status.mcp_servers_in_project else ""
+            )
             lines.append(f"  {name}{overlap}")
         lines.append("")
 
     lines.append("Commands:")
     lines.append("  /plugin claude           — this status view")
     lines.append("  /plugin claude-import    — import Claude skills into bog-agents")
-    lines.append("  /plugin sync-mcp         — sync MCP configs between project and Claude Desktop")
-    lines.append("  /plugin export-mcp       — export extension MCP servers to .mcp.json")
+    lines.append(
+        "  /plugin sync-mcp         — sync MCP configs between project and Claude Desktop"
+    )
+    lines.append(
+        "  /plugin export-mcp       — export extension MCP servers to .mcp.json"
+    )
 
     return "\n".join(lines)

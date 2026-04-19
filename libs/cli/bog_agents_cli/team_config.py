@@ -49,7 +49,7 @@ class TeamMemberRecord:
 
     name: str
     email: str
-    role: str = "member"       # owner | admin | member | readonly
+    role: str = "member"  # owner | admin | member | readonly
     joined_at: float = field(default_factory=time.time)
 
     def __post_init__(self) -> None:
@@ -63,8 +63,8 @@ class TeamSettings:
     """Project-wide default settings for all team members."""
 
     shared_context_auto_inject: bool = True  # inject team context automatically
-    require_approval: bool = False            # always run in plan mode
-    model: str = ""                           # override default model for team
+    require_approval: bool = False  # always run in plan mode
+    model: str = ""  # override default model for team
 
 
 @dataclass
@@ -84,8 +84,8 @@ class TeamSharedConfig:
     members: list[TeamMemberRecord] = field(default_factory=list)
     settings: TeamSettings = field(default_factory=TeamSettings)
     context: TeamContextConfig = field(default_factory=TeamContextConfig)
-    prompts: dict[str, str] = field(default_factory=dict)   # name → text
-    vars: dict[str, str] = field(default_factory=dict)       # key → default value
+    prompts: dict[str, str] = field(default_factory=dict)  # name → text
+    vars: dict[str, str] = field(default_factory=dict)  # key → default value
     mcp_servers: dict[str, dict] = field(default_factory=dict)  # name → server def
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -151,7 +151,9 @@ def load_team_config(project_root: Path) -> TeamSharedConfig | None:
         description=str(payload.get("description", "")),
         members=members,
         settings=TeamSettings(
-            shared_context_auto_inject=bool(settings_data.get("shared_context_auto_inject", True)),
+            shared_context_auto_inject=bool(
+                settings_data.get("shared_context_auto_inject", True)
+            ),
             require_approval=bool(settings_data.get("require_approval", False)),
             model=str(settings_data.get("model", "")),
         ),
@@ -233,7 +235,10 @@ def save_user_identity(identity: UserIdentity) -> None:
     path = get_user_identity_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"name": identity.name, "email": identity.email, "role": identity.role}, indent=2),
+        json.dumps(
+            {"name": identity.name, "email": identity.email, "role": identity.role},
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -280,7 +285,9 @@ def get_shared_context_text(config: TeamSharedConfig, project_root: Path) -> str
     return "\n\n---\n\n".join(parts)
 
 
-def get_named_prompt(config: TeamSharedConfig, name: str, project_root: Path) -> str | None:
+def get_named_prompt(
+    config: TeamSharedConfig, name: str, project_root: Path
+) -> str | None:
     """Return a named shared prompt by looking in config and prompt files.
 
     Args:
@@ -313,7 +320,9 @@ def get_named_prompt(config: TeamSharedConfig, name: str, project_root: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def add_member(config: TeamSharedConfig, name: str, email: str, role: str = "member") -> TeamMemberRecord:
+def add_member(
+    config: TeamSharedConfig, name: str, email: str, role: str = "member"
+) -> TeamMemberRecord:
     """Add or update a team member.
 
     Args:
@@ -353,8 +362,7 @@ def remove_member(config: TeamSharedConfig, email_or_name: str) -> bool:
     key = email_or_name.strip().lower()
     before = len(config.members)
     config.members = [
-        m for m in config.members
-        if m.email.lower() != key and m.name.lower() != key
+        m for m in config.members if m.email.lower() != key and m.name.lower() != key
     ]
     return len(config.members) < before
 
@@ -466,7 +474,9 @@ def format_setup_guide() -> str:
     return _SETUP_GUIDE
 
 
-def format_team_status(config: TeamSharedConfig, project_root: Path, identity: UserIdentity) -> str:
+def format_team_status(
+    config: TeamSharedConfig, project_root: Path, identity: UserIdentity
+) -> str:
     """Return a formatted status summary of the team config.
 
     Args:
@@ -490,7 +500,10 @@ def format_team_status(config: TeamSharedConfig, project_root: Path, identity: U
 
     # Current user
     if identity.email:
-        me = next((m for m in config.members if m.email.lower() == identity.email.lower()), None)
+        me = next(
+            (m for m in config.members if m.email.lower() == identity.email.lower()),
+            None,
+        )
         if me:
             lines.append(f"You: {me.name} <{me.email}> ({me.role})")
         else:
@@ -510,7 +523,9 @@ def format_team_status(config: TeamSharedConfig, project_root: Path, identity: U
 
     # Settings
     lines.append("Settings:")
-    lines.append(f"  shared_context_auto_inject: {config.settings.shared_context_auto_inject}")
+    lines.append(
+        f"  shared_context_auto_inject: {config.settings.shared_context_auto_inject}"
+    )
     lines.append(f"  require_approval: {config.settings.require_approval}")
     if config.settings.model:
         lines.append(f"  model: {config.settings.model}")
@@ -522,7 +537,11 @@ def format_team_status(config: TeamSharedConfig, project_root: Path, identity: U
         lines.append(f"Auto-inject context ({len(context_files)} files):")
         for f in context_files:
             full = team_dir / f
-            exists = "✓" if full.exists() or (team_dir / "context" / f).exists() else "✗ missing"
+            exists = (
+                "✓"
+                if full.exists() or (team_dir / "context" / f).exists()
+                else "✗ missing"
+            )
             lines.append(f"  [{exists}] {f}")
     else:
         lines.append("Context: none — run /team context add <file> to share context")
@@ -530,7 +549,11 @@ def format_team_status(config: TeamSharedConfig, project_root: Path, identity: U
 
     # Prompts
     prompt_count = len(config.prompts)
-    prompt_files = list((team_dir / "prompts").glob("*.md")) if (team_dir / "prompts").is_dir() else []
+    prompt_files = (
+        list((team_dir / "prompts").glob("*.md"))
+        if (team_dir / "prompts").is_dir()
+        else []
+    )
     total_prompts = prompt_count + len(prompt_files)
     if total_prompts:
         lines.append(f"Shared prompts: {total_prompts}")

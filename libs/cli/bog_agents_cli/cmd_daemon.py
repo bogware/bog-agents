@@ -219,7 +219,9 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         print("bog-agents-daemon not found on PATH. Install it first.")  # noqa: T201
         sys.exit(1)
 
-    resolved_platform = platform or ("launchd" if sys.platform == "darwin" else "systemd")
+    resolved_platform = platform or (
+        "launchd" if sys.platform == "darwin" else "systemd"
+    )
 
     if resolved_platform == "launchd":
         instructions = install_launchd(exe)
@@ -300,12 +302,14 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         triggers.append({"type": "interval", "interval_seconds": int(args.interval)})
     if args.watch_dir:
         patterns: list[str] = args.watch_pattern or ["*"]
-        triggers.append({
-            "type": "file_change",
-            "watch_dir": args.watch_dir,
-            "watch_patterns": patterns,
-            "debounce_seconds": float(args.debounce),
-        })
+        triggers.append(
+            {
+                "type": "file_change",
+                "watch_dir": args.watch_dir,
+                "watch_patterns": patterns,
+                "debounce_seconds": float(args.debounce),
+            }
+        )
     if args.webhook_path:
         triggers.append({"type": "webhook", "webhook_path": args.webhook_path})
     if args.git_branch:
@@ -506,7 +510,13 @@ def cmd_jobs_history(job_id: str | None = None, port: int = _DEFAULT_PORT) -> No
     print("-" * 80)  # noqa: T201
     for r in runs:
         started = r.get("started_at", 0)
-        ts = datetime.datetime.fromtimestamp(started, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M") if started else "?"
+        ts = (
+            datetime.datetime.fromtimestamp(started, tz=datetime.UTC).strftime(
+                "%Y-%m-%d %H:%M"
+            )
+            if started
+            else "?"
+        )
         print(  # noqa: T201
             f"{r.get('run_id', '?'):<14}  "
             f"{str(r.get('job_name', '?'))[:20]:<20}  "
@@ -540,7 +550,9 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
 
     # start
     start_p = daemon_sub.add_parser("start", help="Start the daemon in the background")
-    start_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port (default 7391)")
+    start_p.add_argument(
+        "--port", type=int, default=_DEFAULT_PORT, help="API port (default 7391)"
+    )
     start_p.add_argument("--log-level", default="INFO", help="Log level (default INFO)")
 
     # stop
@@ -566,33 +578,110 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     # jobs create
     create_p = jobs_sub.add_parser("create", help="Create a new ambient job")
     create_p.add_argument("--name", required=True, help="Job name")
-    create_p.add_argument("--prompt", default="", help="Prompt to run (or use --pipeline / --skill)")
-    create_p.add_argument("--description", default="", help="Optional human-readable description")
-    create_p.add_argument("--model", default="", metavar="MODEL", help="Model override (e.g. anthropic:claude-sonnet-4-6)")
-    create_p.add_argument("--working-dir", dest="working_dir", default="", metavar="DIR", help="Working directory for the agent")
-    create_p.add_argument("--pipeline", default="", metavar="NAME", help="Run a saved pipeline instead of a raw prompt")
-    create_p.add_argument("--skill", default="", metavar="NAME", help="Run a skill instead of a raw prompt")
-    # trigger flags
-    create_p.add_argument("--cron", default="", metavar="EXPR", help="Cron schedule, e.g. '0 9 * * 1-5'")
-    create_p.add_argument("--interval", default=0, type=int, metavar="SECONDS", help="Run every N seconds")
-    create_p.add_argument("--watch-dir", dest="watch_dir", default="", metavar="DIR", help="Directory to watch for file changes")
     create_p.add_argument(
-        "--watch-pattern", dest="watch_pattern", action="append", metavar="GLOB",
+        "--prompt", default="", help="Prompt to run (or use --pipeline / --skill)"
+    )
+    create_p.add_argument(
+        "--description", default="", help="Optional human-readable description"
+    )
+    create_p.add_argument(
+        "--model",
+        default="",
+        metavar="MODEL",
+        help="Model override (e.g. anthropic:claude-sonnet-4-6)",
+    )
+    create_p.add_argument(
+        "--working-dir",
+        dest="working_dir",
+        default="",
+        metavar="DIR",
+        help="Working directory for the agent",
+    )
+    create_p.add_argument(
+        "--pipeline",
+        default="",
+        metavar="NAME",
+        help="Run a saved pipeline instead of a raw prompt",
+    )
+    create_p.add_argument(
+        "--skill",
+        default="",
+        metavar="NAME",
+        help="Run a skill instead of a raw prompt",
+    )
+    # trigger flags
+    create_p.add_argument(
+        "--cron", default="", metavar="EXPR", help="Cron schedule, e.g. '0 9 * * 1-5'"
+    )
+    create_p.add_argument(
+        "--interval", default=0, type=int, metavar="SECONDS", help="Run every N seconds"
+    )
+    create_p.add_argument(
+        "--watch-dir",
+        dest="watch_dir",
+        default="",
+        metavar="DIR",
+        help="Directory to watch for file changes",
+    )
+    create_p.add_argument(
+        "--watch-pattern",
+        dest="watch_pattern",
+        action="append",
+        metavar="GLOB",
         help="Glob pattern for file-change trigger (repeatable, default '*')",
     )
-    create_p.add_argument("--debounce", default=5.0, type=float, metavar="SECONDS", help="File-change debounce delay (default 5s)")
-    create_p.add_argument("--webhook-path", dest="webhook_path", default="", metavar="PATH", help="Webhook path suffix, e.g. /hooks/ci")
-    create_p.add_argument("--git-branch", dest="git_branch", default="", metavar="PATTERN", help="Git branch glob for git-push trigger, e.g. main")
+    create_p.add_argument(
+        "--debounce",
+        default=5.0,
+        type=float,
+        metavar="SECONDS",
+        help="File-change debounce delay (default 5s)",
+    )
+    create_p.add_argument(
+        "--webhook-path",
+        dest="webhook_path",
+        default="",
+        metavar="PATH",
+        help="Webhook path suffix, e.g. /hooks/ci",
+    )
+    create_p.add_argument(
+        "--git-branch",
+        dest="git_branch",
+        default="",
+        metavar="PATTERN",
+        help="Git branch glob for git-push trigger, e.g. main",
+    )
     # output flags
     create_p.add_argument(
-        "--output", default="log",
+        "--output",
+        default="log",
         choices=["log", "stdout", "file", "slack", "webhook"],
         help="Output target (default: log)",
     )
-    create_p.add_argument("--output-file", dest="output_file", default="", metavar="PATH", help="File path when --output=file")
-    create_p.add_argument("--output-slack", dest="output_slack", default="", metavar="URL", help="Slack webhook URL when --output=slack")
-    create_p.add_argument("--output-webhook", dest="output_webhook", default="", metavar="URL", help="Webhook URL when --output=webhook")
-    create_p.add_argument("--disabled", action="store_true", help="Create the job in a disabled state")
+    create_p.add_argument(
+        "--output-file",
+        dest="output_file",
+        default="",
+        metavar="PATH",
+        help="File path when --output=file",
+    )
+    create_p.add_argument(
+        "--output-slack",
+        dest="output_slack",
+        default="",
+        metavar="URL",
+        help="Slack webhook URL when --output=slack",
+    )
+    create_p.add_argument(
+        "--output-webhook",
+        dest="output_webhook",
+        default="",
+        metavar="URL",
+        help="Webhook URL when --output=webhook",
+    )
+    create_p.add_argument(
+        "--disabled", action="store_true", help="Create the job in a disabled state"
+    )
     create_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # jobs show <id>
@@ -621,8 +710,12 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     disable_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # jobs history [id]
-    history_p = jobs_sub.add_parser("history", help="Show run history for a job or all jobs")
-    history_p.add_argument("job_id", nargs="?", default=None, help="Job ID (omit to show all recent runs)")
+    history_p = jobs_sub.add_parser(
+        "history", help="Show run history for a job or all jobs"
+    )
+    history_p.add_argument(
+        "job_id", nargs="?", default=None, help="Job ID (omit to show all recent runs)"
+    )
     history_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # install
@@ -643,7 +736,9 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         help="Install a git post-receive hook that triggers daemon jobs on push",
     )
     hook_p.add_argument("--repo", required=True, help="Path to the git repository")
-    hook_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="Daemon API port")
+    hook_p.add_argument(
+        "--port", type=int, default=_DEFAULT_PORT, help="Daemon API port"
+    )
 
 
 def execute_daemon_command(args: Any) -> None:  # noqa: ANN401

@@ -70,7 +70,9 @@ def undo_last_edit() -> str:
 
         atomic_write_text(p, original)
     except OSError as exc:
-        return f"[red]Undo failed:[/red] could not restore [cyan]{file_path}[/cyan]: {exc}"
+        return (
+            f"[red]Undo failed:[/red] could not restore [cyan]{file_path}[/cyan]: {exc}"
+        )
 
     return f"[green]Undo:[/green] restored [cyan]{file_path}[/cyan] to its previous content."
 

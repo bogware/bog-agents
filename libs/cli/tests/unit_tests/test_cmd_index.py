@@ -41,6 +41,7 @@ class TestProjectHash:
 # _is_binary_or_generated
 # ---------------------------------------------------------------------------
 
+
 class TestIsBinaryOrGenerated:
     def test_pyc_is_binary(self):
         assert _is_binary_or_generated("module.pyc") is True
@@ -70,6 +71,7 @@ class TestIsBinaryOrGenerated:
 # ---------------------------------------------------------------------------
 # _tfidf_score
 # ---------------------------------------------------------------------------
+
 
 class TestTfIdfScore:
     def test_exact_symbol_match_high_score(self):
@@ -109,17 +111,23 @@ class TestTfIdfScore:
 # build_index
 # ---------------------------------------------------------------------------
 
+
 class TestBuildIndex:
     def _make_fake_index(self, tmp_path: Path) -> Path:
         """Write a minimal index file and return its path."""
         from bog_agents_cli.cmd_index import _index_path
+
         idx = _index_path(tmp_path)
         idx.parent.mkdir(parents=True, exist_ok=True)
-        idx.write_text(json.dumps({
-            "created_at": "2024-01-01T00:00:00+00:00",
-            "root": str(tmp_path),
-            "files": {"a.py": {"symbols": ["foo"], "summary": "x", "size": 10}},
-        }))
+        idx.write_text(
+            json.dumps(
+                {
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "root": str(tmp_path),
+                    "files": {"a.py": {"symbols": ["foo"], "summary": "x", "size": 10}},
+                }
+            )
+        )
         return idx
 
     def test_returns_message_if_index_exists(self, tmp_path):
@@ -141,20 +149,27 @@ class TestBuildIndex:
     def test_build_indexes_py_file(self, tmp_path):
         py_file = tmp_path / "hello.py"
         py_file.write_text("def hello():\n    pass\n")
-        with patch("bog_agents_cli.cmd_index._list_tracked_files", return_value=["hello.py"]):
-            with patch("bog_agents_cli.cmd_index._extract_symbols", return_value=["hello"]):
+        with patch(
+            "bog_agents_cli.cmd_index._list_tracked_files", return_value=["hello.py"]
+        ):
+            with patch(
+                "bog_agents_cli.cmd_index._extract_symbols", return_value=["hello"]
+            ):
                 result = build_index(tmp_path)
         assert "1 files indexed" in result
 
     def test_skips_binary_files(self, tmp_path):
         binary = tmp_path / "lib.pyc"
         binary.write_bytes(b"\x00\x01\x02")
-        with patch("bog_agents_cli.cmd_index._list_tracked_files", return_value=["lib.pyc"]):
+        with patch(
+            "bog_agents_cli.cmd_index._list_tracked_files", return_value=["lib.pyc"]
+        ):
             result = build_index(tmp_path)
         assert "0 files indexed" in result
 
     def test_writes_index_file(self, tmp_path):
         from bog_agents_cli.cmd_index import _index_path
+
         with patch("bog_agents_cli.cmd_index._list_tracked_files", return_value=[]):
             build_index(tmp_path)
         assert _index_path(tmp_path).exists()
@@ -164,16 +179,22 @@ class TestBuildIndex:
 # search_index
 # ---------------------------------------------------------------------------
 
+
 class TestSearchIndex:
     def _write_index(self, tmp_path: Path, files: dict) -> None:
         from bog_agents_cli.cmd_index import _index_path
+
         idx = _index_path(tmp_path)
         idx.parent.mkdir(parents=True, exist_ok=True)
-        idx.write_text(json.dumps({
-            "created_at": datetime.now(UTC).isoformat(),
-            "root": str(tmp_path),
-            "files": files,
-        }))
+        idx.write_text(
+            json.dumps(
+                {
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "root": str(tmp_path),
+                    "files": files,
+                }
+            )
+        )
 
     def test_empty_query_returns_hint(self, tmp_path):
         result = search_index("", tmp_path)
@@ -184,16 +205,30 @@ class TestSearchIndex:
         assert "No index found" in result
 
     def test_finds_matching_symbol(self, tmp_path):
-        self._write_index(tmp_path, {
-            "src/agent.py": {"symbols": ["create_agent"], "summary": "agent module", "size": 100},
-        })
+        self._write_index(
+            tmp_path,
+            {
+                "src/agent.py": {
+                    "symbols": ["create_agent"],
+                    "summary": "agent module",
+                    "size": 100,
+                },
+            },
+        )
         result = search_index("create_agent", tmp_path)
         assert "src/agent.py" in result
 
     def test_no_results_message(self, tmp_path):
-        self._write_index(tmp_path, {
-            "src/agent.py": {"symbols": ["OtherClass"], "summary": "unrelated", "size": 100},
-        })
+        self._write_index(
+            tmp_path,
+            {
+                "src/agent.py": {
+                    "symbols": ["OtherClass"],
+                    "summary": "unrelated",
+                    "size": 100,
+                },
+            },
+        )
         result = search_index("xyz_nonexistent", tmp_path)
         assert "No results" in result
 
@@ -209,9 +244,12 @@ class TestSearchIndex:
         assert len(result_lines) <= 3
 
     def test_returns_formatted_table(self, tmp_path):
-        self._write_index(tmp_path, {
-            "src/foo.py": {"symbols": ["bar"], "summary": "bar module", "size": 50},
-        })
+        self._write_index(
+            tmp_path,
+            {
+                "src/foo.py": {"symbols": ["bar"], "summary": "bar module", "size": 50},
+            },
+        )
         result = search_index("bar", tmp_path)
         assert "File" in result
         assert "Score" in result
@@ -221,6 +259,7 @@ class TestSearchIndex:
 # index_status
 # ---------------------------------------------------------------------------
 
+
 class TestIndexStatus:
     def test_no_index_returns_hint(self, tmp_path):
         result = index_status(tmp_path)
@@ -228,24 +267,32 @@ class TestIndexStatus:
 
     def test_shows_file_count(self, tmp_path):
         from bog_agents_cli.cmd_index import _index_path
+
         idx = _index_path(tmp_path)
         idx.parent.mkdir(parents=True, exist_ok=True)
-        idx.write_text(json.dumps({
-            "created_at": "2024-01-01T00:00:00+00:00",
-            "root": str(tmp_path),
-            "files": {
-                "a.py": {"symbols": [], "summary": "", "size": 10},
-                "b.py": {"symbols": [], "summary": "", "size": 20},
-            },
-        }))
+        idx.write_text(
+            json.dumps(
+                {
+                    "created_at": "2024-01-01T00:00:00+00:00",
+                    "root": str(tmp_path),
+                    "files": {
+                        "a.py": {"symbols": [], "summary": "", "size": 10},
+                        "b.py": {"symbols": [], "summary": "", "size": 20},
+                    },
+                }
+            )
+        )
         result = index_status(tmp_path)
         assert "2" in result
 
     def test_shows_location(self, tmp_path):
         from bog_agents_cli.cmd_index import _index_path
+
         idx = _index_path(tmp_path)
         idx.parent.mkdir(parents=True, exist_ok=True)
-        idx.write_text(json.dumps({"created_at": "2024-01-01", "root": str(tmp_path), "files": {}}))
+        idx.write_text(
+            json.dumps({"created_at": "2024-01-01", "root": str(tmp_path), "files": {}})
+        )
         result = index_status(tmp_path)
         assert "Location" in result
 
@@ -253,6 +300,7 @@ class TestIndexStatus:
 # ---------------------------------------------------------------------------
 # format_index_help
 # ---------------------------------------------------------------------------
+
 
 class TestFormatIndexHelp:
     def test_returns_string(self):
