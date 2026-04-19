@@ -1,4 +1,3 @@
-import os
 import subprocess
 from pathlib import Path
 
@@ -30,7 +29,7 @@ def test_filesystem_backend_normal_mode(tmp_path: Path):
     paths = {i["path"] for i in infos}
     assert str(f1) in paths  # File in root should be listed
     assert str(f2) not in paths  # File in subdirectory should NOT be listed
-    assert (str(root / "dir") + os.sep) in paths  # Directory should be listed
+    assert (str(root / "dir") + "/") in paths  # Directory should be listed
 
     # read, edit, write
     txt = be.read(str(f1))
@@ -174,13 +173,13 @@ def test_filesystem_backend_ls_normal_mode_nested(tmp_path: Path):
     root_paths = [fi["path"] for fi in root_listing]
 
     assert str(root / "file1.txt") in root_paths
-    assert str(root / "subdir") + os.sep in root_paths
+    assert str(root / "subdir") + "/" in root_paths
     assert str(root / "subdir" / "file2.txt") not in root_paths
 
     subdir_listing = be.ls_info(str(root / "subdir"))
     subdir_paths = [fi["path"] for fi in subdir_listing]
     assert str(root / "subdir" / "file2.txt") in subdir_paths
-    assert str(root / "subdir" / "nested") + os.sep in subdir_paths
+    assert str(root / "subdir" / "nested") + "/" in subdir_paths
     assert str(root / "subdir" / "nested" / "file3.txt") not in subdir_paths
 
 
