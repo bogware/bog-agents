@@ -23,7 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "bog-agents>=0.7.0,<1.0.0",
-    "bog-agents-cli>=0.7.0,<1.0.0",
     "uvicorn>=0.30.0,<1.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "aiofiles>=23.0.0,<25.0.0",
@@ -47,7 +46,6 @@ packages = ["bog_agents_daemon"]
 
 [tool.uv.sources]
 bog_agents = { path = "../bog-agents", editable = true }
-bog-agents-cli = { path = "../cli", editable = true }
 
 [dependency-groups]
 test = [
