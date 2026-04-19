@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -60,8 +61,56 @@ def _api_get(path: str, *, port: int = _DEFAULT_PORT) -> Any:  # noqa: ANN401
         return json.loads(resp.read())
 
 
+def _api_post(path: str, payload: dict[str, Any], *, port: int = _DEFAULT_PORT) -> Any:  # noqa: ANN401
+    token = _read_token()
+    url = f"{_daemon_url(port)}{path}"
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"X-Daemon-Token": token or "", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def _api_delete(path: str, *, port: int = _DEFAULT_PORT) -> int:
+    token = _read_token()
+    url = f"{_daemon_url(port)}{path}"
+    req = urllib.request.Request(
+        url,
+        headers={"X-Daemon-Token": token or ""},
+        method="DELETE",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return resp.status
+
+
+def _unreachable(port: int) -> None:
+    print(f"Cannot reach daemon at {_daemon_url(port)}.")  # noqa: T201
+    print("Start it with: bog-agents daemon start")  # noqa: T201
+    sys.exit(1)
+
+
+def _trigger_summary(t: dict[str, Any]) -> str:
+    """Return a short human-readable description of a trigger dict."""
+    tt = t.get("type", "")
+    if tt == "cron":
+        return t.get("cron", "")
+    if tt == "interval":
+        return f"every {t.get('interval_seconds')}s"
+    if tt == "file_change":
+        return f"{t.get('watch_dir')} {t.get('watch_patterns', [])}"
+    if tt == "webhook":
+        return t.get("webhook_path", "")
+    if tt == "git_push":
+        return f"branch: {t.get('git_branch_pattern', '*')}"
+    return ""
+
+
 # ---------------------------------------------------------------------------
-# Public command handlers
+# Public command handlers — service lifecycle
 # ---------------------------------------------------------------------------
 
 
@@ -150,35 +199,6 @@ def cmd_daemon_status(port: int = _DEFAULT_PORT) -> None:
         print(f"  API       : {_daemon_url(port)} (unreachable)")  # noqa: T201
 
 
-def cmd_daemon_jobs(port: int = _DEFAULT_PORT) -> None:
-    """List all configured ambient jobs.
-
-    Args:
-        port: Port the daemon is listening on.
-    """
-    try:
-        jobs: list[dict[str, Any]] = _api_get("/jobs", port=port)
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"Cannot reach daemon at {_daemon_url(port)}: {exc}")  # noqa: T201
-        print("Start it with: bog-agents daemon start")  # noqa: T201
-        sys.exit(1)
-
-    if not jobs:
-        print("No jobs configured. Create one via the daemon REST API.")  # noqa: T201
-        return
-
-    print(f"{'ID':<36}  {'Name':<24}  {'Status':<12}  {'Runs':>5}  Enabled")  # noqa: T201
-    print("-" * 90)  # noqa: T201
-    for j in jobs:
-        print(  # noqa: T201
-            f"{j.get('job_id', '?'):<36}  "
-            f"{j.get('name', '?')[:24]:<24}  "
-            f"{j.get('last_status', '?'):<12}  "
-            f"{j.get('run_count', 0):>5}  "
-            f"{'yes' if j.get('enabled') else 'no'}"
-        )
-
-
 def cmd_daemon_install(*, platform: str | None = None) -> None:
     """Install the daemon as a systemd (Linux) or launchd (macOS) service.
 
@@ -231,6 +251,276 @@ def cmd_daemon_install_git_hook(repo: str, port: int = _DEFAULT_PORT) -> None:
         sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# Public command handlers — job management
+# ---------------------------------------------------------------------------
+
+
+def cmd_jobs_list(port: int = _DEFAULT_PORT) -> None:
+    """List all configured ambient jobs.
+
+    Args:
+        port: Port the daemon is listening on.
+    """
+    try:
+        jobs: list[dict[str, Any]] = _api_get("/jobs", port=port)
+    except (urllib.error.URLError, OSError) as exc:
+        print(f"Cannot reach daemon at {_daemon_url(port)}: {exc}")  # noqa: T201
+        print("Start it with: bog-agents daemon start")  # noqa: T201
+        sys.exit(1)
+
+    if not jobs:
+        print("No jobs configured. Use 'bog-agents daemon jobs create' to add one.")  # noqa: T201
+        return
+
+    print(f"{'ID':<14}  {'Name':<24}  {'Status':<12}  {'Runs':>5}  Enabled")  # noqa: T201
+    print("-" * 70)  # noqa: T201
+    for j in jobs:
+        print(  # noqa: T201
+            f"{j.get('job_id', '?'):<14}  "
+            f"{str(j.get('name', '?'))[:24]:<24}  "
+            f"{j.get('last_status', '?'):<12}  "
+            f"{j.get('run_count', 0):>5}  "
+            f"{'yes' if j.get('enabled') else 'no'}"
+        )
+
+
+def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
+    """Create a new ambient job.
+
+    Args:
+        args: Parsed argparse namespace with job creation fields.
+    """
+    port: int = args.port
+
+    triggers: list[dict[str, Any]] = []
+    if args.cron:
+        triggers.append({"type": "cron", "cron": args.cron})
+    if args.interval:
+        triggers.append({"type": "interval", "interval_seconds": int(args.interval)})
+    if args.watch_dir:
+        patterns: list[str] = args.watch_pattern or ["*"]
+        triggers.append({
+            "type": "file_change",
+            "watch_dir": args.watch_dir,
+            "watch_patterns": patterns,
+            "debounce_seconds": float(args.debounce),
+        })
+    if args.webhook_path:
+        triggers.append({"type": "webhook", "webhook_path": args.webhook_path})
+    if args.git_branch:
+        triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
+
+    output_target: str = args.output
+    out: dict[str, Any] = {"target": output_target}
+    if output_target == "file":
+        out["file_path"] = args.output_file
+        out["append"] = True
+    elif output_target == "slack":
+        out["slack_webhook_url"] = args.output_slack
+    elif output_target == "webhook":
+        out["webhook_url"] = args.output_webhook
+
+    payload: dict[str, Any] = {
+        "name": args.name,
+        "prompt": args.prompt,
+        "description": args.description,
+        "model": args.model,
+        "working_dir": args.working_dir,
+        "pipeline_name": args.pipeline,
+        "skill_name": args.skill,
+        "triggers": triggers,
+        "outputs": [out],
+        "enabled": not args.disabled,
+    }
+
+    try:
+        job = _api_post("/jobs", payload, port=port)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        print(f"Error {exc.code}: {body}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+    print(f"Created job {job['job_id']}  {job['name']}")  # noqa: T201
+    for t in job.get("triggers", []):
+        print(f"  trigger : {t.get('type'):<12}  {_trigger_summary(t)}")  # noqa: T201
+    print(f"  enabled : {'yes' if job.get('enabled') else 'no'}")  # noqa: T201
+
+
+def cmd_jobs_show(job_id: str, port: int = _DEFAULT_PORT) -> None:
+    """Show detailed information about a job.
+
+    Args:
+        job_id: The job identifier.
+        port: Port the daemon is listening on.
+    """
+    try:
+        job = _api_get(f"/jobs/{job_id}", port=port)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+    print(f"ID          : {job['job_id']}")  # noqa: T201
+    print(f"Name        : {job['name']}")  # noqa: T201
+    if job.get("description"):
+        print(f"Description : {job['description']}")  # noqa: T201
+    print(f"Enabled     : {'yes' if job.get('enabled') else 'no'}")  # noqa: T201
+    print(f"Status      : {job.get('last_status', '?')}")  # noqa: T201
+    print(f"Runs        : {job.get('run_count', 0)}")  # noqa: T201
+    if job.get("prompt"):
+        print(f"Prompt      : {job['prompt']}")  # noqa: T201
+    if job.get("model"):
+        print(f"Model       : {job['model']}")  # noqa: T201
+    if job.get("pipeline_name"):
+        print(f"Pipeline    : {job['pipeline_name']}")  # noqa: T201
+    if job.get("skill_name"):
+        print(f"Skill       : {job['skill_name']}")  # noqa: T201
+    if job.get("triggers"):
+        print("Triggers    :")  # noqa: T201
+        for t in job["triggers"]:
+            print(f"  {t.get('type', '?'):<14}  {_trigger_summary(t)}")  # noqa: T201
+    if job.get("outputs"):
+        print("Outputs     :")  # noqa: T201
+        for o in job["outputs"]:
+            print(f"  {o.get('target', '?')}")  # noqa: T201
+
+
+def cmd_jobs_delete(job_id: str, port: int = _DEFAULT_PORT) -> None:
+    """Delete a job.
+
+    Args:
+        job_id: The job identifier.
+        port: Port the daemon is listening on.
+    """
+    try:
+        _api_delete(f"/jobs/{job_id}", port=port)
+        print(f"Deleted job {job_id}.")  # noqa: T201
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+
+def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
+    """Trigger an immediate manual run of a job and wait for the result.
+
+    Args:
+        job_id: The job identifier.
+        port: Port the daemon is listening on.
+    """
+    try:
+        run = _api_post(f"/jobs/{job_id}/run", {}, port=port)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+    print(f"Run {run.get('run_id')}  status={run.get('status')}")  # noqa: T201
+    if run.get("output"):
+        print(run["output"])  # noqa: T201
+    if run.get("error"):
+        print(f"Error: {run['error']}")  # noqa: T201
+
+
+def cmd_jobs_enable(job_id: str, port: int = _DEFAULT_PORT) -> None:
+    """Enable a disabled job.
+
+    Args:
+        job_id: The job identifier.
+        port: Port the daemon is listening on.
+    """
+    try:
+        job = _api_post(f"/jobs/{job_id}/enable", {}, port=port)
+        print(f"Job {job['job_id']} ({job['name']}) enabled.")  # noqa: T201
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+
+def cmd_jobs_disable(job_id: str, port: int = _DEFAULT_PORT) -> None:
+    """Disable a job without deleting it.
+
+    Args:
+        job_id: The job identifier.
+        port: Port the daemon is listening on.
+    """
+    try:
+        job = _api_post(f"/jobs/{job_id}/disable", {}, port=port)
+        print(f"Job {job['job_id']} ({job['name']}) disabled.")  # noqa: T201
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+
+def cmd_jobs_history(job_id: str | None = None, port: int = _DEFAULT_PORT) -> None:
+    """Show run history for a specific job or all jobs.
+
+    Args:
+        job_id: The job identifier, or None to show all recent runs.
+        port: Port the daemon is listening on.
+    """
+    try:
+        if job_id:
+            runs: list[dict[str, Any]] = _api_get(f"/jobs/{job_id}/runs", port=port)
+        else:
+            runs = _api_get("/runs", port=port)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+
+    if not runs:
+        print("No run history found.")  # noqa: T201
+        return
+
+    print(f"{'Run ID':<14}  {'Job':<20}  {'Status':<12}  {'Trigger':<12}  Started")  # noqa: T201
+    print("-" * 80)  # noqa: T201
+    for r in runs:
+        started = r.get("started_at", 0)
+        ts = datetime.datetime.fromtimestamp(started, tz=datetime.UTC).strftime("%Y-%m-%d %H:%M") if started else "?"
+        print(  # noqa: T201
+            f"{r.get('run_id', '?'):<14}  "
+            f"{str(r.get('job_name', '?'))[:20]:<20}  "
+            f"{r.get('status', '?'):<12}  "
+            f"{r.get('trigger_type', '?'):<12}  "
+            f"{ts}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Parser setup
+# ---------------------------------------------------------------------------
+
+
 def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     """Register the 'daemon' subcommand and its sub-subcommands.
 
@@ -243,7 +533,7 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         add_help=True,
         description=(
             "Control the ambient agent daemon — start/stop the service, "
-            "check status, list jobs, and install as a system service."
+            "check status, manage jobs, and install as a system service."
         ),
     )
     daemon_sub = daemon_parser.add_subparsers(dest="daemon_command")
@@ -260,9 +550,80 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     status_p = daemon_sub.add_parser("status", help="Show daemon status and job count")
     status_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
-    # jobs
-    jobs_p = daemon_sub.add_parser("jobs", help="List configured ambient jobs")
-    jobs_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    # jobs — subcommand group
+    jobs_parser = daemon_sub.add_parser(
+        "jobs",
+        help="Manage ambient jobs (create, list, show, delete, run, enable, disable, history)",
+        description="Manage ambient agent jobs. Run 'bog-agents daemon jobs <command> --help' for details.",
+    )
+    jobs_parser.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    jobs_sub = jobs_parser.add_subparsers(dest="jobs_command")
+
+    # jobs list
+    jobs_list_p = jobs_sub.add_parser("list", help="List all configured jobs")
+    jobs_list_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs create
+    create_p = jobs_sub.add_parser("create", help="Create a new ambient job")
+    create_p.add_argument("--name", required=True, help="Job name")
+    create_p.add_argument("--prompt", default="", help="Prompt to run (or use --pipeline / --skill)")
+    create_p.add_argument("--description", default="", help="Optional human-readable description")
+    create_p.add_argument("--model", default="", metavar="MODEL", help="Model override (e.g. anthropic:claude-sonnet-4-6)")
+    create_p.add_argument("--working-dir", dest="working_dir", default="", metavar="DIR", help="Working directory for the agent")
+    create_p.add_argument("--pipeline", default="", metavar="NAME", help="Run a saved pipeline instead of a raw prompt")
+    create_p.add_argument("--skill", default="", metavar="NAME", help="Run a skill instead of a raw prompt")
+    # trigger flags
+    create_p.add_argument("--cron", default="", metavar="EXPR", help="Cron schedule, e.g. '0 9 * * 1-5'")
+    create_p.add_argument("--interval", default=0, type=int, metavar="SECONDS", help="Run every N seconds")
+    create_p.add_argument("--watch-dir", dest="watch_dir", default="", metavar="DIR", help="Directory to watch for file changes")
+    create_p.add_argument(
+        "--watch-pattern", dest="watch_pattern", action="append", metavar="GLOB",
+        help="Glob pattern for file-change trigger (repeatable, default '*')",
+    )
+    create_p.add_argument("--debounce", default=5.0, type=float, metavar="SECONDS", help="File-change debounce delay (default 5s)")
+    create_p.add_argument("--webhook-path", dest="webhook_path", default="", metavar="PATH", help="Webhook path suffix, e.g. /hooks/ci")
+    create_p.add_argument("--git-branch", dest="git_branch", default="", metavar="PATTERN", help="Git branch glob for git-push trigger, e.g. main")
+    # output flags
+    create_p.add_argument(
+        "--output", default="log",
+        choices=["log", "stdout", "file", "slack", "webhook"],
+        help="Output target (default: log)",
+    )
+    create_p.add_argument("--output-file", dest="output_file", default="", metavar="PATH", help="File path when --output=file")
+    create_p.add_argument("--output-slack", dest="output_slack", default="", metavar="URL", help="Slack webhook URL when --output=slack")
+    create_p.add_argument("--output-webhook", dest="output_webhook", default="", metavar="URL", help="Webhook URL when --output=webhook")
+    create_p.add_argument("--disabled", action="store_true", help="Create the job in a disabled state")
+    create_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs show <id>
+    show_p = jobs_sub.add_parser("show", help="Show details for a job")
+    show_p.add_argument("job_id", help="Job ID")
+    show_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs delete <id>
+    delete_p = jobs_sub.add_parser("delete", help="Delete a job")
+    delete_p.add_argument("job_id", help="Job ID")
+    delete_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs run <id>
+    run_p = jobs_sub.add_parser("run", help="Trigger an immediate manual run of a job")
+    run_p.add_argument("job_id", help="Job ID")
+    run_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs enable <id>
+    enable_p = jobs_sub.add_parser("enable", help="Enable a disabled job")
+    enable_p.add_argument("job_id", help="Job ID")
+    enable_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs disable <id>
+    disable_p = jobs_sub.add_parser("disable", help="Disable a job without deleting it")
+    disable_p.add_argument("job_id", help="Job ID")
+    disable_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs history [id]
+    history_p = jobs_sub.add_parser("history", help="Show run history for a job or all jobs")
+    history_p.add_argument("job_id", nargs="?", default=None, help="Job ID (omit to show all recent runs)")
+    history_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # install
     install_p = daemon_sub.add_parser(
@@ -303,23 +664,66 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
     elif cmd == "status":
         cmd_daemon_status(port=args.port)
     elif cmd == "jobs":
-        cmd_daemon_jobs(port=args.port)
+        _execute_jobs_command(args)
     elif cmd == "install":
         cmd_daemon_install(platform=getattr(args, "platform", None))
     elif cmd == "install-git-hook":
         cmd_daemon_install_git_hook(repo=args.repo, port=args.port)
     else:
-        # No sub-subcommand: show daemon help
-
         print(  # noqa: T201
             "bog-agents daemon — ambient agent daemon management\n\n"
             "Commands:\n"
             "  start              Start the daemon in the background\n"
             "  stop               Stop the running daemon\n"
             "  status             Show daemon health and job count\n"
-            "  jobs               List configured ambient jobs\n"
+            "  jobs               Manage ambient jobs\n"
             "  install            Register as a system service (systemd/launchd)\n"
             "  install-git-hook   Install git post-receive hook for git-push triggers\n\n"
             "Run 'bog-agents daemon <command> --help' for details."
+        )
+        raise SystemExit(0)
+
+
+def _execute_jobs_command(args: Any) -> None:  # noqa: ANN401
+    """Dispatch a 'daemon jobs' subcommand to the appropriate handler.
+
+    Args:
+        args: Parsed argparse namespace with jobs_command attribute.
+
+    Raises:
+        SystemExit: When no subcommand is given (exits 0 after printing help).
+    """
+    jobs_cmd = getattr(args, "jobs_command", None)
+    port: int = getattr(args, "port", _DEFAULT_PORT)
+
+    if jobs_cmd is None or jobs_cmd == "list":
+        cmd_jobs_list(port=port)
+    elif jobs_cmd == "create":
+        cmd_jobs_create(args)
+    elif jobs_cmd == "show":
+        cmd_jobs_show(args.job_id, port=port)
+    elif jobs_cmd == "delete":
+        cmd_jobs_delete(args.job_id, port=port)
+    elif jobs_cmd == "run":
+        cmd_jobs_run(args.job_id, port=port)
+    elif jobs_cmd == "enable":
+        cmd_jobs_enable(args.job_id, port=port)
+    elif jobs_cmd == "disable":
+        cmd_jobs_disable(args.job_id, port=port)
+    elif jobs_cmd == "history":
+        cmd_jobs_history(job_id=getattr(args, "job_id", None), port=port)
+    else:
+        print(  # noqa: T201
+            "bog-agents daemon jobs — ambient job management\n\n"
+            "Commands:\n"
+            "  list               List all configured jobs\n"
+            "  create             Create a new job\n"
+            "  show <id>          Show job details\n"
+            "  delete <id>        Delete a job\n"
+            "  run <id>           Trigger an immediate manual run\n"
+            "  enable <id>        Enable a disabled job\n"
+            "  disable <id>       Disable a job without deleting it\n"
+            "  history [id]       Show run history (omit id for all jobs)\n\n"
+            "Run 'bog-agents daemon jobs <command> --help' for details."
         )
         raise SystemExit(0)
