@@ -524,6 +524,17 @@ def _split_paste_line(line: str) -> list[str]:
     Returns:
         Parsed shell-like tokens, or an empty list when parsing fails.
     """
+    # Windows drive-letter paths (C:\...) and UNC paths (\\...) must not be
+    # passed through shlex with posix=True because backslashes are escape
+    # characters in POSIX mode, which corrupts the path. Return the raw line
+    # or the inner content of angle-bracket wrappers directly.
+    inner = line.strip()
+    if inner.startswith("<") and inner.endswith(">"):
+        inner_stripped = inner[1:-1].strip()
+        if _WINDOWS_DRIVE_PATH_PATTERN.match(inner_stripped) or inner_stripped.startswith("\\\\"):
+            return [inner]
+    if _WINDOWS_DRIVE_PATH_PATTERN.match(inner) or inner.startswith("\\\\"):
+        return [inner]
     try:
         return shlex.split(line, posix=True)
     except ValueError:
@@ -606,11 +617,10 @@ def _leading_token_end(text: str) -> int | None:
 
 
 def _extract_unquoted_leading_path_with_spaces(text: str) -> tuple[Path, int] | None:
-    """Extract a leading unquoted path that may contain spaces.
+    r"""Extract a leading unquoted path that may contain spaces.
 
-    This fallback is intentionally POSIX-oriented (`/` and `~/`) because the
-    slash-command conflict it addresses is specific to inputs that begin with
-    `/`.
+    Handles POSIX absolute paths (`/`, `~/`) and Windows drive-letter paths
+    (`C:\\`, `D:/`, etc.).
 
     Args:
         text: Input text beginning with a potential path.
@@ -621,7 +631,7 @@ def _extract_unquoted_leading_path_with_spaces(text: str) -> tuple[Path, int] | 
     """
     if not text or ("\n" in text or "\r" in text):
         return None
-    if not text.startswith(("/", "~/")):
+    if not text.startswith(("/", "~/")) and not _WINDOWS_DRIVE_PATH_PATTERN.match(text) and not text.startswith("\\\\"):
         return None
     if " " not in text and "\u00a0" not in text and "\u202f" not in text:
         return None

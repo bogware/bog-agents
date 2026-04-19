@@ -18,6 +18,9 @@ def _system_message_as_text(message: SystemMessage) -> str:
 
 
 def _assert_snapshot(snapshot_path: Path, actual: str, *, update_snapshots: bool) -> None:
+    # Normalize Windows line endings so snapshots match on all platforms.
+    actual = actual.replace("\r\n", "\n")
+
     if update_snapshots or not snapshot_path.exists():
         with snapshot_path.open("w", newline="\n") as f:
             f.write(actual)

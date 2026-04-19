@@ -183,6 +183,7 @@ class TestThreadSelectorEscapeKey:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 await pilot.press("escape")
                 await pilot.pause()
@@ -197,6 +198,7 @@ class TestThreadSelectorEscapeKey:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 await pilot.press("escape")
                 await pilot.pause()
@@ -216,6 +218,7 @@ class TestThreadSelectorKeyboardNavigation:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -233,6 +236,7 @@ class TestThreadSelectorKeyboardNavigation:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -251,6 +255,7 @@ class TestThreadSelectorKeyboardNavigation:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 await pilot.press("enter")
                 await pilot.pause()
@@ -269,6 +274,7 @@ class TestThreadSelectorCurrentThread:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -283,6 +289,7 @@ class TestThreadSelectorCurrentThread:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -295,6 +302,7 @@ class TestThreadSelectorCurrentThread:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -311,6 +319,7 @@ class TestThreadSelectorEmptyState:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -335,6 +344,7 @@ class TestThreadSelectorEmptyState:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -361,6 +371,7 @@ class TestThreadSelectorNavigateAndSelect:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 await pilot.press("down")
                 await pilot.pause()
@@ -382,6 +393,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -416,6 +428,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test(size=(100, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -436,6 +449,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -487,6 +501,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -510,6 +525,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -548,6 +564,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -572,6 +589,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -599,6 +617,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -628,6 +647,7 @@ class TestThreadSelectorTabSort:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -659,6 +679,7 @@ class TestThreadSelectorDownWrap:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -686,6 +707,7 @@ class TestThreadSelectorPageNavigation:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -703,6 +725,7 @@ class TestThreadSelectorPageNavigation:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -723,6 +746,7 @@ class TestThreadSelectorClickHandling:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -821,6 +845,7 @@ class TestThreadSelectorBuildTitle:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -972,6 +997,7 @@ class TestThreadSelectorColumnHeader:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -984,6 +1010,7 @@ class TestThreadSelectorColumnHeader:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1003,6 +1030,7 @@ class TestThreadSelectorColumnHeader:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1063,6 +1091,7 @@ class TestThreadSelectorPromptOverflow:
             async with app.run_test(size=(80, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1098,6 +1127,7 @@ class TestThreadSelectorBranchOverflow:
             async with app.run_test(size=(80, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1135,6 +1165,7 @@ class TestThreadSelectorAutoWidthColumns:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1184,6 +1215,7 @@ class TestThreadSelectorErrorHandling:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1614,6 +1646,7 @@ class TestThreadSelectorSearch:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1652,6 +1685,7 @@ class TestThreadSelectorSearch:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 for char in "fix":
                     await pilot.press(char)
@@ -1698,6 +1732,7 @@ class TestThreadSelectorSearch:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1726,6 +1761,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1744,6 +1780,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1761,6 +1798,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1793,6 +1831,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1837,6 +1876,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1869,6 +1909,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1906,6 +1947,7 @@ class TestThreadSelectorDelete:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -1949,6 +1991,7 @@ class TestThreadSelectorColumnConfig:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -2012,6 +2055,7 @@ class TestThreadSelectorColumnConfig:
             async with app.run_test() as pilot:
                 app.show_selector()
                 await pilot.pause()
+                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
