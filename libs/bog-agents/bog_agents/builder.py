@@ -24,20 +24,11 @@ additive layer that calls it with accumulated keyword arguments.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from langchain_core.caches import BaseCache
-    from langchain_core.language_models import BaseChatModel
-    from langchain_core.stores import BaseStore
-    from langchain_core.tools import BaseTool
-    from langgraph.checkpoint.base import BaseCheckpointSaver as Checkpointer
     from langgraph.graph.state import CompiledStateGraph
 
-    from bog_agents.backends.protocol import BackendProtocol
-    from bog_agents.feature_config import FeatureConfig
-    from bog_agents.graph import BackendFactory, InterruptOnConfig, ResponseFormat, SubAgent
-    from bog_agents.middleware.base import AgentMiddleware
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +189,7 @@ class AgentBuilder:
     # Core settings
     # ------------------------------------------------------------------
 
-    def with_model(self, model: str) -> "AgentBuilder":
+    def with_model(self, model: str) -> AgentBuilder:
         """Set the LLM model.
 
         Args:
@@ -207,7 +198,7 @@ class AgentBuilder:
         self._config.model = model
         return self
 
-    def with_system_prompt(self, prompt: str) -> "AgentBuilder":
+    def with_system_prompt(self, prompt: str) -> AgentBuilder:
         """Set the system prompt.
 
         Args:
@@ -216,7 +207,7 @@ class AgentBuilder:
         self._config.system_prompt = prompt
         return self
 
-    def with_name(self, name: str) -> "AgentBuilder":
+    def with_name(self, name: str) -> AgentBuilder:
         """Set the agent name (appears in LangSmith traces).
 
         Args:
@@ -225,7 +216,7 @@ class AgentBuilder:
         self._config.name = name
         return self
 
-    def with_debug(self, enabled: bool = True) -> "AgentBuilder":
+    def with_debug(self, enabled: bool = True) -> AgentBuilder:
         """Enable debug logging from the agent graph.
 
         Args:
@@ -249,7 +240,7 @@ class AgentBuilder:
         test_framework: str = "pytest",
         worktree: bool = False,
         working_dir: str | None = None,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Enable git and code-quality tooling.
 
         Args:
@@ -284,7 +275,7 @@ class AgentBuilder:
         *,
         sources: list[str] | None = None,
         knowledge_graph: bool = False,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Configure agent memory.
 
         Args:
@@ -307,7 +298,7 @@ class AgentBuilder:
         effort_level: str = "medium",
         architect_model: str | None = None,
         reviewer_model: str | None = None,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Enable plan mode — agent proposes a plan before executing.
 
         Args:
@@ -323,7 +314,7 @@ class AgentBuilder:
         )
         return self
 
-    def with_effort(self, level: str) -> "AgentBuilder":
+    def with_effort(self, level: str) -> AgentBuilder:
         """Set the effort level without enabling plan mode.
 
         Args:
@@ -338,10 +329,10 @@ class AgentBuilder:
 
     def with_sandbox(
         self,
-        backend: Any = None,
+        backend: Any = None,  # noqa: ANN401
         *,
         allow_dangerous: bool = False,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Configure the execution sandbox backend.
 
         Args:
@@ -365,7 +356,7 @@ class AgentBuilder:
         *,
         max_cost_usd: float | None = None,
         budget_usd: float | None = None,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Enable token cost tracking with optional hard limits.
 
         Args:
@@ -390,7 +381,7 @@ class AgentBuilder:
         session_id: str = "",
         advisor_id: str = "",
         checkpointing: bool = False,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Enable audit trail logging.
 
         Args:
@@ -406,17 +397,17 @@ class AgentBuilder:
         )
         return self
 
-    def with_checkpointing(self) -> "AgentBuilder":
+    def with_checkpointing(self) -> AgentBuilder:
         """Enable LangGraph session checkpointing."""
         self._config.observability.checkpointing = True
         return self
 
-    def with_citations(self) -> "AgentBuilder":
+    def with_citations(self) -> AgentBuilder:
         """Enable citation tracking in agent responses."""
         self._config.observability.citations = True
         return self
 
-    def with_reasoning_chain(self) -> "AgentBuilder":
+    def with_reasoning_chain(self) -> AgentBuilder:
         """Enable visible reasoning chain in agent responses."""
         self._config.observability.reasoning_chain = True
         return self
@@ -425,17 +416,17 @@ class AgentBuilder:
     # Safety
     # ------------------------------------------------------------------
 
-    def with_human_in_the_loop(self) -> "AgentBuilder":
+    def with_human_in_the_loop(self) -> AgentBuilder:
         """Enable human approval gates before sensitive tool calls."""
         self._config.safety.approval_gates = True
         return self
 
-    def with_rbac(self) -> "AgentBuilder":
+    def with_rbac(self) -> AgentBuilder:
         """Enable role-based access control middleware."""
         self._config.safety.rbac = True
         return self
 
-    def with_dlp(self, *, mode: str = "redact") -> "AgentBuilder":
+    def with_dlp(self, *, mode: str = "redact") -> AgentBuilder:
         """Enable data-loss prevention scanning.
 
         Args:
@@ -454,7 +445,7 @@ class AgentBuilder:
         *,
         max_threads: int = 10,
         agent_teams: bool = False,
-    ) -> "AgentBuilder":
+    ) -> AgentBuilder:
         """Enable multi-agent / parallel agent orchestration.
 
         Args:
@@ -472,7 +463,7 @@ class AgentBuilder:
     # Tools, middleware, skills
     # ------------------------------------------------------------------
 
-    def with_tools(self, *tools: Any) -> "AgentBuilder":
+    def with_tools(self, *tools: Any) -> AgentBuilder:
         """Add extra tools to the agent.
 
         Args:
@@ -481,7 +472,7 @@ class AgentBuilder:
         self._config.tools.extend(tools)
         return self
 
-    def with_middleware(self, *middleware: Any) -> "AgentBuilder":
+    def with_middleware(self, *middleware: Any) -> AgentBuilder:
         """Add middleware to the agent middleware stack.
 
         Args:
@@ -490,7 +481,7 @@ class AgentBuilder:
         self._config.middleware.extend(middleware)
         return self
 
-    def with_skills(self, *skills: str) -> "AgentBuilder":
+    def with_skills(self, *skills: str) -> AgentBuilder:
         """Add named skills to the agent.
 
         Args:
@@ -499,7 +490,7 @@ class AgentBuilder:
         self._config.skills.extend(skills)
         return self
 
-    def with_mcp(self, *servers: str) -> "AgentBuilder":
+    def with_mcp(self, *servers: str) -> AgentBuilder:
         """Enable MCP servers by registry ID.
 
         Args:
@@ -508,7 +499,7 @@ class AgentBuilder:
         self._config.mcp_servers.extend(servers)
         return self
 
-    def with_subagents(self, *subagents: Any) -> "AgentBuilder":
+    def with_subagents(self, *subagents: Any) -> AgentBuilder:
         """Add sub-agents available to the main agent.
 
         Args:
@@ -521,7 +512,7 @@ class AgentBuilder:
     # Escape hatch
     # ------------------------------------------------------------------
 
-    def with_kwargs(self, **kwargs: Any) -> "AgentBuilder":
+    def with_kwargs(self, **kwargs: Any) -> AgentBuilder:
         """Pass arbitrary keyword arguments directly to ``create_agent()``.
 
         Use this for parameters not yet exposed through named builder methods.
@@ -541,7 +532,7 @@ class AgentBuilder:
         """Return the accumulated configuration (for inspection or testing)."""
         return self._config
 
-    def build(self) -> "CompiledStateGraph":
+    def build(self) -> CompiledStateGraph:
         """Compile and return the agent state graph.
 
         Translates the builder configuration into ``create_agent()`` keyword
@@ -670,5 +661,5 @@ class AgentBuilder:
 
         return create_agent(**kwargs)
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # noqa: D105
         return f"AgentBuilder(model={self._config.model!r})"

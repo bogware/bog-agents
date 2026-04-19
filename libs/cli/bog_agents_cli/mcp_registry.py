@@ -562,7 +562,7 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
 
     Returns:
         Parsed JSON dict from the catalog, or ``{}`` on failure.
-    """
+    """  # noqa: DOC501
     global _remote_cache, _remote_fetched_at  # noqa: PLW0603
 
     catalog_url = url or _DEFAULT_CATALOG_URL
@@ -592,7 +592,7 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
-            raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY301
+            raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY003,TRY004,TRY301,EM102
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError) as exc:
         logger.debug("Could not fetch MCP remote catalog: %s", exc)
         if _CACHE_PATH.exists():

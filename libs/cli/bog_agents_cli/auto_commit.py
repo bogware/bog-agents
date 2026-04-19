@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
+import subprocess  # noqa: S404
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -164,11 +164,11 @@ def auto_commit(
     Raises:
         subprocess.CalledProcessError: If ``git add`` or ``git commit`` exits
             with a non-zero status (including pre-commit hook failures).
-    """
+    """  # noqa: DOC502
     work_dir = Path(cwd) if cwd is not None else Path.cwd()
 
     if paths:
-        add_cmd: list[str] = ["git", "add", "--"] + list(paths)
+        add_cmd: list[str] = ["git", "add", "--", *list(paths)]
     else:
         logger.warning(
             "auto_commit called without an explicit paths list — falling back to "
@@ -181,8 +181,12 @@ def auto_commit(
 
 
 def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run a subprocess command, raising CalledProcessError on non-zero exit."""
-    result = subprocess.run(
+    """Run a subprocess command, raising CalledProcessError on non-zero exit.
+
+    Raises:
+        subprocess.CalledProcessError: If the command exits with non-zero status.
+    """
+    result = subprocess.run(  # noqa: S603
         cmd,
         cwd=str(cwd),
         capture_output=True,

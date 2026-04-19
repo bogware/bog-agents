@@ -28,7 +28,6 @@ Usage standalone (e.g. from a CLI command)::
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
@@ -156,7 +155,7 @@ _CACHE_VERSION = 2
 class FileSymbols:
     """Extracted symbols from a single file."""
 
-    __slots__ = ("path", "classes", "functions", "imports", "other", "size", "mtime_hash")
+    __slots__ = ("classes", "functions", "imports", "mtime_hash", "other", "path", "size")
 
     def __init__(self, path: str) -> None:
         self.path = path
@@ -195,7 +194,7 @@ class FileSymbols:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FileSymbols":
+    def from_dict(cls, data: dict[str, Any]) -> FileSymbols:
         """Deserialize from a cached dict."""
         sym = cls(data["path"])
         sym.classes = data.get("classes", [])
@@ -295,10 +294,10 @@ class RepoMapCache:
         entry = self._entries.get(rel_path)
         return entry is not None and entry.mtime_hash == mtime_hash
 
-    def set(self, sym: FileSymbols) -> None:
+    def set(self, sym: FileSymbols) -> None:  # noqa: D102
         self._entries[sym.path] = sym
 
-    def get(self, rel_path: str) -> FileSymbols | None:
+    def get(self, rel_path: str) -> FileSymbols | None:  # noqa: D102
         return self._entries.get(rel_path)
 
     def remove_stale(self, current_paths: set[str]) -> None:
@@ -307,7 +306,7 @@ class RepoMapCache:
         for p in stale:
             del self._entries[p]
 
-    def all_symbols(self) -> list[FileSymbols]:
+    def all_symbols(self) -> list[FileSymbols]:  # noqa: D102
         return list(self._entries.values())
 
 
@@ -539,7 +538,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
         self._tools = self._build_tools()
 
     @property
-    def tools(self) -> list[BaseTool]:
+    def tools(self) -> list[BaseTool]:  # noqa: D102
         return self._tools
 
     def _get_repo_map(self, *, force: bool = False) -> str:
@@ -599,7 +598,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
             )
         ]
 
-    def wrap_model_call(
+    def wrap_model_call(  # noqa: D102
         self,
         request: ModelRequest,
         call_next: Callable[[ModelRequest], ModelResponse],
@@ -608,7 +607,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
         request = append_to_system_message(request, f"\n\n## Repository Map\n\n{repo_map}")
         return call_next(request)
 
-    async def awrap_model_call(
+    async def awrap_model_call(  # noqa: D102
         self,
         request: ModelRequest,
         call_next: Callable[[ModelRequest], Awaitable[ModelResponse]],

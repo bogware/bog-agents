@@ -285,7 +285,7 @@ class TestNoMcpArg:
         """--no-mcp + --mcp-config should exit with code 2."""
         from bog_agents_cli.main import cli_main
 
-        with (  # noqa: SIM117  # separate to satisfy PT012
+        with (  # separate to satisfy PT012
             patch.object(
                 sys,
                 "argv",
