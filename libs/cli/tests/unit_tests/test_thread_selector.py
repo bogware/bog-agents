@@ -393,8 +393,13 @@ class TestThreadSelectorTabSort:
             async with app.run_test(size=(100, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
-                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
-                await pilot.pause()  # Third pause for header widget mount on Windows
+                await pilot.pause()
+                # _load_threads worker runs _build_list which schedules _rebuild_header
+                # as a second worker; two rounds of wait_for_complete drain both.
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                await app.workers.wait_for_complete()
+                await pilot.pause()
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
@@ -411,6 +416,12 @@ class TestThreadSelectorTabSort:
                 assert "Sort by Updated" in str(sort_switch.label)
 
                 sort_switch.toggle()
+                await pilot.pause()
+                # Sort toggle also triggers _schedule_list_rebuild → _build_list →
+                # _schedule_header_rebuild; drain both worker rounds again.
+                await app.workers.wait_for_complete()
+                await pilot.pause()
+                await app.workers.wait_for_complete()
                 await pilot.pause()
                 assert screen._sort_by_updated is False
                 assert screen._columns == original_columns
