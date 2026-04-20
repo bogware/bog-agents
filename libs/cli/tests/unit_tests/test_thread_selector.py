@@ -2005,6 +2005,7 @@ class TestThreadSelectorColumnConfig:
                 )
                 prompt_switch.value = False
                 await pilot.pause()
+                await pilot.pause()  # Extra flush for Windows ProactorEventLoop event handler
 
                 assert screen._columns["initial_prompt"] is False
                 mock_save.assert_called()
