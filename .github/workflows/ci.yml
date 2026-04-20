@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: "3.11"
           working-directory: ${{ matrix.package.dir }}
-      - run: uv sync --group test --locked
+      - run: uv sync --group test
         working-directory: ${{ matrix.package.dir }}
       - run: make lint
         working-directory: ${{ matrix.package.dir }}
@@ -62,7 +62,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           working-directory: ${{ matrix.package.dir }}
-      - run: uv sync --group test --locked
+      - run: uv sync --group test
         working-directory: ${{ matrix.package.dir }}
       # sdk/cli on Linux: enforce socket isolation
       - name: Run tests
