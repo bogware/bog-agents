@@ -23,6 +23,7 @@ jobs:
     outputs:
       sdk-release: ${{ steps.check-sdk.outputs.is-release }}
       cli-release: ${{ steps.check-cli.outputs.is-release }}
+      daemon-release: ${{ steps.check-daemon.outputs.is-release }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
       - uses: googleapis/release-please-action@v4
@@ -54,6 +55,15 @@ jobs:
             echo "is-release=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check daemon release
+        id: check-daemon
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q "^libs/daemon/CHANGELOG.md$"; then
+            echo "is-release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is-release=false" >> $GITHUB_OUTPUT
+          fi
+
   # Update lockfiles when release-please creates a PR
   update-lockfiles:
     needs: release-please
@@ -69,7 +79,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Update lockfiles
         run: |
-          for dir in libs/bog-agents libs/cli; do
+          for dir in libs/bog-agents libs/cli libs/daemon; do
             uv lock --directory "$dir" --python 3.12
           done
       - name: Commit
@@ -99,6 +109,17 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       package: bog-agents-cli
+    secrets: inherit
+    permissions:
+      contents: write
+      id-token: write
+
+  release-daemon:
+    needs: release-please
+    if: needs.release-please.outputs.daemon-release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      package: bog-agents-daemon
     secrets: inherit
     permissions:
       contents: write

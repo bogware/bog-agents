@@ -20,6 +20,7 @@ on:
         options:
           - bog-agents
           - bog-agents-cli
+          - bog-agents-daemon
         default: bog-agents
 
 concurrency:
@@ -46,8 +47,9 @@ jobs:
           PACKAGE="${{ inputs.package }}"
           echo "package=$PACKAGE" >> $GITHUB_OUTPUT
           case "$PACKAGE" in
-            bog-agents)     echo "working-dir=libs/bog-agents" >> $GITHUB_OUTPUT ;;
-            bog-agents-cli) echo "working-dir=libs/cli" >> $GITHUB_OUTPUT ;;
+            bog-agents)        echo "working-dir=libs/bog-agents" >> $GITHUB_OUTPUT ;;
+            bog-agents-cli)    echo "working-dir=libs/cli" >> $GITHUB_OUTPUT ;;
+            bog-agents-daemon) echo "working-dir=libs/daemon" >> $GITHUB_OUTPUT ;;
             *) echo "Unknown package: $PACKAGE" && exit 1 ;;
           esac
 
