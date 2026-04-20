@@ -2005,7 +2005,8 @@ class TestThreadSelectorColumnConfig:
                 )
                 prompt_switch.value = False
                 await pilot.pause()
-                # Extra flush for Windows ProactorEventLoop event handler
+                # Wait for the run_worker(asyncio.to_thread(save_thread_columns)) to complete
+                await app.workers.wait_for_complete()
                 await pilot.pause()
 
                 assert screen._columns["initial_prompt"] is False
