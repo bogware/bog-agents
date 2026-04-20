@@ -69,6 +69,19 @@ def _patch_list_threads(threads: list[ThreadInfo] | None = None) -> Any:  # noqa
     )
 
 
+async def _wait_for_widget(pilot: Any, query_fn: Any) -> Any:  # noqa: ANN401
+    """Poll up to 5 s until query_fn() returns without raising NoMatches."""
+    import time
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            return query_fn()
+        except NoMatches:
+            await pilot.pause()
+    return query_fn()
+
+
 def _patch_columns(columns: dict[str, bool] | None = None) -> Any:  # noqa: ANN401
     """Patch thread config loaders for tests."""
     import contextlib
@@ -393,17 +406,22 @@ class TestThreadSelectorTabSort:
             async with app.run_test(size=(100, 24)) as pilot:
                 app.show_selector()
                 await pilot.pause()
-                await pilot.pause()  # Two pauses needed for Windows ProactorEventLoop
-                await pilot.pause()  # Third pause for header widget mount on Windows
+                await pilot.pause()
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
                 assert screen._sort_by_updated is True
                 original_columns = dict(screen._columns)
                 header = screen.query_one("#thread-header", Horizontal)
-                updated_cell = header.query_one(".thread-cell-updated_at", Static)
-                created_cell = header.query_one(".thread-cell-created_at", Static)
                 sort_switch = screen.query_one("#thread-sort-toggle", Checkbox)
+
+                # _rebuild_header removes then re-mounts cells; poll until present.
+                updated_cell = await _wait_for_widget(
+                    pilot, lambda: header.query_one(".thread-cell-updated_at", Static)
+                )
+                created_cell = await _wait_for_widget(
+                    pilot, lambda: header.query_one(".thread-cell-created_at", Static)
+                )
                 assert str(updated_cell._Static__content) == "Updated"
                 assert updated_cell.has_class("thread-cell-sorted")
                 assert not created_cell.has_class("thread-cell-sorted")
@@ -414,8 +432,14 @@ class TestThreadSelectorTabSort:
                 await pilot.pause()
                 assert screen._sort_by_updated is False
                 assert screen._columns == original_columns
-                created_cell = header.query_one(".thread-cell-created_at", Static)
-                updated_cell = header.query_one(".thread-cell-updated_at", Static)
+
+                # Sort toggle triggers another _rebuild_header; poll again.
+                created_cell = await _wait_for_widget(
+                    pilot, lambda: header.query_one(".thread-cell-created_at", Static)
+                )
+                updated_cell = await _wait_for_widget(
+                    pilot, lambda: header.query_one(".thread-cell-updated_at", Static)
+                )
                 assert str(created_cell._Static__content) == "Created"
                 assert created_cell.has_class("thread-cell-sorted")
                 assert not updated_cell.has_class("thread-cell-sorted")
