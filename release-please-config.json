@@ -93,6 +93,17 @@
       "last-release-sha": "5483f3b0000000000000000000000000000000000"
     }
   },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "bog-agents-monorepo",
+      "components": [
+        "bog-agents",
+        "bog-agents-cli",
+        "bog-agents-daemon"
+      ]
+    }
+  ],
   "tag-separator": "==",
   "include-component-in-tag": true,
   "include-v-in-tag": false
