@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.1...bog-agents-cli==0.7.2) (2026-04-25)
+
+
+### Bug Fixes
+
+* 0.7.2 patch — memory/skills regression, ollama UX, partner resilience, Windows hardening ([#46](https://github.com/bogware/bog-agents/issues/46)) ([650975e](https://github.com/bogware/bog-agents/commit/650975e951997146a6299b8bcacb87e7c88389e5))
+
 ## [0.7.1](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.0...bog-agents-cli==0.7.1) (2026-04-20)
 
 
