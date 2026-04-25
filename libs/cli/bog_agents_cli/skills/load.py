@@ -104,10 +104,13 @@ def list_skills(
     # 0. Built-in skills (<package>/built_in_skills/) - lowest priority
     if built_in_skills_dir and built_in_skills_dir.exists():
         try:
-            # virtual_mode=False: downstream callers consume real absolute paths
-            # from list_skills_from_backend (e.g. for Path.read_text). Explicit to
-            # survive SDK default flips.
-            built_in_backend = FilesystemBackend(root_dir=str(built_in_skills_dir), virtual_mode=False)
+            # virtual_mode=True: paths returned by the backend are virtual
+            # (anchored at root_dir). Downstream callers use the `fs_path` field
+            # populated below via `_virtual_to_fs_path` for real-path access.
+            # Explicit to survive SDK default flips.
+            built_in_backend = FilesystemBackend(
+                root_dir=str(built_in_skills_dir), virtual_mode=True
+            )
             built_in_skills = list_skills_from_backend(
                 backend=built_in_backend, source_path="."
             )
@@ -143,7 +146,9 @@ def list_skills(
         if not extension_dir.exists():
             continue
         try:
-            extension_backend = FilesystemBackend(root_dir=str(extension_dir), virtual_mode=False)
+            extension_backend = FilesystemBackend(
+                root_dir=str(extension_dir), virtual_mode=True
+            )
             extension_skills = list_skills_from_backend(
                 backend=extension_backend, source_path="."
             )
@@ -167,7 +172,9 @@ def list_skills(
     # 2. User bog-agents skills (~/.bog-agents/{agent}/skills/)
     if user_skills_dir and user_skills_dir.exists():
         try:
-            user_backend = FilesystemBackend(root_dir=str(user_skills_dir), virtual_mode=False)
+            user_backend = FilesystemBackend(
+                root_dir=str(user_skills_dir), virtual_mode=True
+            )
             user_skills = list_skills_from_backend(
                 backend=user_backend, source_path="."
             )
@@ -192,7 +199,9 @@ def list_skills(
     # 3. User agent skills (~/.agents/skills/) - overrides user bog-agents
     if user_agent_skills_dir and user_agent_skills_dir.exists():
         try:
-            user_agent_backend = FilesystemBackend(root_dir=str(user_agent_skills_dir), virtual_mode=False)
+            user_agent_backend = FilesystemBackend(
+                root_dir=str(user_agent_skills_dir), virtual_mode=True
+            )
             user_agent_skills = list_skills_from_backend(
                 backend=user_agent_backend, source_path="."
             )
@@ -219,7 +228,9 @@ def list_skills(
     # 4. Project bog-agents skills (.bog-agents/skills/)
     if project_skills_dir and project_skills_dir.exists():
         try:
-            project_backend = FilesystemBackend(root_dir=str(project_skills_dir), virtual_mode=False)
+            project_backend = FilesystemBackend(
+                root_dir=str(project_skills_dir), virtual_mode=True
+            )
             project_skills = list_skills_from_backend(
                 backend=project_backend, source_path="."
             )
@@ -248,7 +259,7 @@ def list_skills(
         try:
             project_agent_backend = FilesystemBackend(
                 root_dir=str(project_agent_skills_dir),
-                virtual_mode=False,
+                virtual_mode=True,
             )
             project_agent_skills = list_skills_from_backend(
                 backend=project_agent_backend, source_path="."
