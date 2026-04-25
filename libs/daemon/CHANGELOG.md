@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.7.2...bog-agents-daemon==0.7.3) (2026-04-25)
+
+
+### Features
+
+* 0.7.0 - daemon/mcp/plugins/hardening ([#40](https://github.com/bogware/bog-agents/issues/40)) ([2427dfb](https://github.com/bogware/bog-agents/commit/2427dfbda3bffc17ea34f6e38de8d2634a57f86f))
+
 ## [0.7.1](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.7.0...bog-agents-daemon==0.7.1) (2026-04-20)
 
 
