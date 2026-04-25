@@ -1,55 +1,149 @@
-﻿# Bog Agents
+# Bog Agents
 
-Bog Agents is an open-source agent framework for software work.
+**v0.7.0** — Production-ready AI agent framework built on LangGraph.
 
-It gives you two things:
+Bog Agents gives you three things:
 
-- `bog-agents`: a Python SDK for building agentic workflows on top of LangGraph
+- `bog-agents`: a Python SDK for building agentic workflows on LangGraph
 - `bog-agents-cli`: a terminal-first coding agent for day-to-day engineering work
+- `bog-agents-daemon`: an ambient agent daemon — run agents on schedules, file-change triggers, webhooks, and git pushes
 
-The project is designed for teams that want real agents, not a pile of prompt glue. Out of the box you get file tools, shell execution, thread history, model switching, memory, skills, MCP integration, background work, and a practical human-in-the-loop approval model.
+Out of the box: file tools, shell execution, thread history, model switching, vault-backed API key management, parallel worktree agents, MCP integration, background work, codebase indexing, interactive PR review, and a practical human-in-the-loop approval model.
 
-Built on [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview). MIT licensed.
+Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT licensed.
+
+---
 
 ## Why Bog Agents
 
-- Production-minded SDK: start with a compiled LangGraph graph and extend it with middleware instead of rebuilding the basics for every project.
-- Serious CLI: use one tool for interactive coding, non-interactive automation, diagnostics, thread resume, and review workflows.
-- Model flexibility: works with LangChain-compatible tool-calling models, including Anthropic, OpenAI, Ollama, Bedrock, Google, and more.
-- Monorepo architecture: SDK, CLI, protocol support, evaluation tooling, and partner integrations live together and evolve together.
+- **Production-minded SDK** — start with a compiled LangGraph graph; extend with composable middleware instead of rebuilding primitives for every project
+- **Parallel agent architecture** — spawn multiple sub-agents in isolated git worktrees, detect merge conflicts pre-flight, synthesize results automatically
+- **Serious CLI** — interactive Textual TUI, non-interactive automation, `/checkpoint` resume, `/explain` deep-dives, `/pr review` for GitHub and Azure DevOps
+- **Vault-first secrets** — API keys stored in an encrypted vault (`/vars set`), injected into the environment at startup so every provider, MCP server, and LangSmith tracing connection just works
+- **Model flexibility** — any LangChain-compatible tool-calling model: Anthropic, OpenAI, Ollama, Bedrock, Google, Mistral, Groq, xAI, and more
 
-## Install
+---
 
-### SDK
+## Quick Install
+
+### Daemon (ambient background agent service)
 
 ```bash
-pip install bog-agents
+pip install bog-agents-daemon
+
+# Start the daemon (binds to localhost:7391)
+bog-agents-daemon
+
+# Or manage it from the CLI
+bog-agents daemon start
+bog-agents daemon status
+bog-agents daemon jobs
+
+# Install as a system service (auto-detects systemd/launchd)
+bog-agents daemon install
 ```
 
-### CLI
+See the [daemon README](libs/daemon/README.md) for trigger types, output targets, REST API reference, and security notes.
+
+### CLI (recommended)
 
 ```bash
-pip install bog-agents-cli
-
-# Provider extras
+# Anthropic (Claude)
 pip install 'bog-agents-cli[anthropic]'
-pip install 'bog-agents-cli[ollama]'
+
+# OpenAI
+pip install 'bog-agents-cli[openai]'
+
+# All providers
 pip install 'bog-agents-cli[all-providers]'
 ```
 
-With `uv`:
+With `uv` (faster):
 
 ```bash
 uv tool install 'bog-agents-cli[anthropic]'
 ```
 
-The CLI includes OpenAI support by default. Other providers are enabled through extras.
+### SDK only
+
+```bash
+pip install bog-agents
+```
+
+---
+
+## Run Locally
+
+### Standard (Anthropic / OpenAI)
+
+```bash
+# Set your API key
+export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY
+
+# Start the interactive TUI
+bog-agents
+
+# Or store the key in the vault so you never set it again
+bog-agents
+# then inside: /vars set ANTHROPIC_API_KEY sk-ant-...
+```
+
+### With Ollama (local models, no API key needed)
+
+```bash
+# 1. Install Ollama — https://ollama.ai
+brew install ollama          # macOS
+# or: curl -fsSL https://ollama.ai/install.sh | sh
+
+# 2. Pull a model
+ollama pull llama3.2          # 3B, fast
+ollama pull qwen2.5-coder     # excellent for coding tasks
+ollama pull mistral-nemo      # good balance
+
+# 3. Run Bog Agents with that model
+pip install 'bog-agents-cli[ollama]'
+bog-agents -M ollama:llama3.2
+
+# Or set it as the permanent default
+bog-agents
+# then inside: /model set ollama:llama3.2
+```
+
+Ollama runs entirely locally — no API keys, no usage costs, no data leaves your machine.
+
+---
+
+## Run From Source
+
+Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/)
+
+```bash
+git clone https://github.com/bogware/bog-agents.git
+cd bog-agents
+
+# Install CLI dependencies
+cd libs/cli
+uv sync
+
+# Run the CLI
+uv run bog-agents
+
+# With a specific model
+uv run bog-agents -M anthropic:claude-sonnet-4-6
+uv run bog-agents -M ollama:llama3.2
+
+# Verify environment
+uv run bog-agents --doctor
+```
+
+---
 
 ## SDK Quick Start
 
 ```python
 from bog_agents import create_agent
 
+# Basic agent
 agent = create_agent(
     model="anthropic:claude-sonnet-4-6",
     enable_git_tools=True,
@@ -57,241 +151,211 @@ agent = create_agent(
 )
 
 result = agent.invoke(
-    {
-        "messages": [
-            {
-                "role": "user",
-                "content": "Inspect this repository and summarize the testing strategy.",
-            }
-        ]
-    },
+    {"messages": [{"role": "user", "content": "Summarize the testing strategy."}]},
     config={"configurable": {"thread_id": "demo-thread"}},
+)
+
+# Parallel worktree agent (spawn sub-agents in isolated git branches)
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-6",
+    enable_parallel_worktree=True,   # ParallelWorktreeMiddleware with default factory
+    enable_result_synthesis=True,    # auto-synthesize results when tasks complete
+)
+# Agent can now use spawn_parallel_tasks, await_tasks_complete, synthesize_parallel_results tools
+```
+
+`create_agent()` returns a compiled LangGraph graph — streaming, checkpointers, Studio, and remote execution all work without wrapping.
+
+---
+
+## CLI Reference
+
+### Interactive session
+
+```bash
+bog-agents                          # start TUI
+bog-agents -M claude-sonnet-4-6    # pick model
+bog-agents -M ollama:llama3.2      # local model
+bog-agents -r                       # resume last thread
+bog-agents -r <thread-id>           # resume specific thread
+```
+
+### Non-interactive / automation
+
+```bash
+bog-agents -n "Summarize repo status"
+bog-agents -p "Explain this module" < path/to/file.py
+bog-agents -n "List TODOs" --json
+bog-agents -n "Run tests and explain failures" --shell-allow-list recommended
+bog-agents -n "Fix failing tests and commit" --shell-allow-list all
+```
+
+### Slash commands (inside TUI)
+
+| Command | What it does |
+|---------|--------------|
+| `/help` | Search commands by keyword |
+| `/model` | Switch model or set default |
+| `/checkpoint save <name>` | Save a named session checkpoint |
+| `/checkpoint load <name>` | Restore a checkpoint |
+| `/explain <symbol or file>` | Deep-dive explanation with call sites |
+| `/index build` | Build TF-IDF codebase knowledge index |
+| `/index search <query>` | Search the index |
+| `/pr review <number>` | Fetch and review a GitHub/Azure DevOps PR diff |
+| `/test run [file]` | Auto-detect framework and run tests |
+| `/benchmark run [suite]` | Run evaluation suites |
+| `/agent panel` | Live parallel agent status dashboard |
+| `/agent spawn --worktree <prompt>` | Spawn a sub-agent in an isolated git worktree |
+| `/team sync` | Git-based shared memory sync (pull/push/both) |
+| `/undo restore <path>` | Git-backed safe file restore |
+| `/vars set KEY value` | Store API key in encrypted vault |
+| `/langsmith set-key <key>` | Enable LangSmith tracing |
+| `/mcp` | Browse and manage MCP servers |
+| `/skills` | Show loaded skills and search paths |
+| `/plan` | Toggle read-only plan mode |
+| `/review` | Structured code review |
+| `/resume` | Resume a previous thread |
+| `/compact` | Summarize context to reduce token usage |
+| `/doctor` | Environment diagnostics |
+
+Type `/` in the TUI to search all commands with fuzzy matching.
+
+---
+
+## Parallel Agent Architecture
+
+Bog Agents has first-class support for spawning multiple sub-agents that work in parallel and merging their results.
+
+```python
+# Enable parallel worktrees + result synthesis in one line
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-6",
+    enable_parallel_worktree=True,
+    enable_result_synthesis=True,
 )
 ```
 
-`create_agent()` returns a compiled LangGraph graph. That means you can use streaming, checkpointers, Studio, remote execution, and the rest of the LangGraph ecosystem without wrapping Bog Agents in another orchestration layer.
+The agent gains these tools automatically:
 
-## CLI Quick Start
+| Tool | What it does |
+|------|-------------|
+| `spawn_parallel_tasks` | Launch N tasks in isolated git worktrees concurrently |
+| `worktree_status` | Check status of all running tasks |
+| `merge_task_results` | Merge completed branches with conflict detection |
+| `await_tasks_complete` | Wait for tasks to finish (async, with timeout) |
+| `synthesize_parallel_results` | Build a structured synthesis prompt for the agent |
+| `gather_parallel_results` | Collect + format all task outputs |
 
-Start an interactive session:
+**Smart merge strategies** — when merging parallel branches back, choose from:
+- `prefer_source` — source branch wins on conflicts (`-X theirs`)
+- `prefer_target` — main branch wins (`-X ours`)
+- `sequential` — detect conflicts and retry tasks one-by-one
+- `manual` — surface conflicts for human review (default)
 
-```bash
-bog-agents
-```
+Trivial whitespace-only conflicts are auto-resolved regardless of strategy.
 
-Pick a model explicitly:
+---
 
-```bash
-bog-agents -M claude-sonnet-4-6
-bog-agents -M gpt-4o
-bog-agents -M ollama:llama3
-```
+## Vault / API Key Management
 
-Verify your environment:
-
-```bash
-bog-agents --doctor
-```
-
-Resume a previous session:
-
-```bash
-bog-agents -r
-bog-agents -r <thread-id>
-```
-
-## CLI In Depth
-
-### Interactive workflow
-
-`bog-agents-cli` is built around a Textual terminal UI. It is optimized for long-running coding sessions where the agent needs to inspect files, use tools, ask for approval when appropriate, and keep enough state to be useful across turns.
-
-Inside the app, type `/` to browse commands or use `/commands` and `/help <keyword>` to search the command surface.
-
-Representative interactive commands:
-
-| Command | Purpose |
-| --- | --- |
-| `/commands` | Browse available slash commands with descriptions |
-| `/model` | Switch models or manage the default model |
-| `/resume` | Resume the most recent thread or a specific thread |
-| `/session` | Show session details or assign a local label |
-| `/permissions` | Inspect approval and shell policy |
-| `/keybindings` | Show active keybindings or the config path |
-| `/skills` | Show loaded skills and search paths |
-| `/review` | Send a structured review request to the agent |
-| `/recommend` | Run configurable recommendation and review flows |
-| `/background` | Submit and monitor background agent tasks |
-| `/dashboard` | Show a multi-agent status snapshot |
-| `/doctor` | Run local environment diagnostics |
-| `/logs` | Show the log path and recent warnings or errors |
-| `/trace` | Open the current thread in LangSmith |
-| `/mcp` | Inspect active MCP servers and tools |
-| `/compact` | Reduce context pressure by summarizing history |
-| `/clear` | Start a fresh thread |
-| `/init` | Generate an `AGENTS.md` for the current repository |
-| `/onboard` | Start an interactive codebase tour |
-
-### Threading, memory, and continuity
-
-The CLI is designed for iterative work rather than one-shot prompts.
-
-- Conversations are stored as threads and can be resumed later.
-- `/resume`, `/threads`, and `-r` make it practical to jump back into unfinished work.
-- `/remember` can capture project knowledge into durable memory and skills.
-- Session metadata such as the active thread, model, and current context are visible from the interface instead of being hidden state.
-
-### Safety model
-
-Bog Agents treats tool execution as a policy problem, not a prompt problem.
-
-- Tool and shell approvals are explicit when the current policy requires them.
-- `Shift+Tab` toggles auto-approve for the active session.
-- `/permissions` shows the current posture so users can see what is allowed before they run a task.
-- Non-interactive shell access is opt-in via `--shell-allow-list`.
-
-### Non-interactive mode
-
-The CLI also works well in scripts, CI jobs, and local automation.
+Store API keys once; every session uses them automatically.
 
 ```bash
-# One-shot task
-bog-agents -n "Summarize the current repository status"
+# In the TUI
+/vars set ANTHROPIC_API_KEY sk-ant-...
+/vars set OPENAI_API_KEY sk-...
+/vars set LANGSMITH_API_KEY lsv2_...
 
-# Pipe-friendly output
-bog-agents -p "Explain this module" < path/to/file.py
-
-# Machine-readable output
-bog-agents -n "List TODO comments" --json
-
-# Allow a curated shell command set
-bog-agents -n "Run the tests and explain failures" --shell-allow-list recommended
-
-# Allow specific commands only
-bog-agents -n "Search logs for errors" --shell-allow-list cat,grep,find
-
-# Full shell access in a trusted environment
-bog-agents -n "Fix the failing tests and commit the result" --shell-allow-list all
+# Or use provider-specific helpers
+/langsmith set-key lsv2_...
 ```
 
-Exit codes are intended to be automation-friendly:
+Keys stored in the vault are injected into `os.environ` at startup. Downstream libraries (LangChain, LangSmith, Daytona, etc.) pick them up transparently. Environment variables set in the shell always take precedence over vault values.
 
-- `0`: success
-- `1`: failure
-- `130`: interrupted
+Supported keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `COHERE_API_KEY`, `NVIDIA_API_KEY`, `FIREWORKS_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, `TAVILY_API_KEY`, `LANGSMITH_API_KEY`, `DAYTONA_API_KEY`.
 
-### Models and providers
+---
 
-Use the `provider:model` form when you want to be explicit.
+## Monorepo Structure
 
-| Provider | Example |
-| --- | --- |
+```text
+libs/
+├── bog-agents/      # Core SDK — create_agent(), middleware, backends       [v0.7.0, stable]
+├── cli/             # Terminal UI — Textual TUI, slash commands, vault       [v0.7.0, stable]
+├── daemon/          # Ambient agent daemon — REST API, scheduler, triggers   [v0.7.0, beta]
+├── acp/             # Agent Context Protocol (Zed editor integration)        [v0.0.4, alpha]
+├── harbor/          # Evaluation / benchmark framework                       [v0.0.1, alpha]
+├── vscode-extension/# VS Code extension                                      [v0.1.0, alpha]
+└── partners/        # Sandbox integrations (Daytona, Modal, Runloop, QuickJS)[v0.0.4, alpha]
+```
+
+---
+
+## Models and Providers
+
+| Provider | Example model string |
+|----------|---------------------|
 | Anthropic | `anthropic:claude-sonnet-4-6` |
+| Anthropic Opus | `anthropic:claude-opus-4-7` |
 | OpenAI | `openai:gpt-4o` |
-| Ollama | `ollama:llama3` |
+| Ollama (local) | `ollama:llama3.2`, `ollama:qwen2.5-coder` |
 | Google | `google_genai:gemini-2.5-pro` |
+| Groq | `groq:llama-3.3-70b-versatile` |
+| Mistral | `mistral:mistral-large-latest` |
 | Bedrock | `bedrock_converse:anthropic.claude-sonnet-4-6` |
-| OpenRouter | `openrouter:meta-llama/llama-3` |
-| Perplexity | `perplexity:sonar-pro` |
 | xAI | `xai:grok-2` |
+| OpenRouter | `openrouter:meta-llama/llama-3` |
 
-The CLI can also infer a provider from your configuration and available credentials. Use `--doctor` or `/doctor` when setup does not behave as expected.
+Use `--doctor` or `/doctor` when provider setup does not behave as expected.
 
-### Remote execution, MCP, and server modes
+---
 
-Bog Agents is not limited to a single local terminal process.
+## Remote Execution and MCP
 
 ```bash
-# Reuse or create a sandbox-backed session
+# Sandbox-backed sessions
 bog-agents --sandbox modal
 bog-agents --sandbox daytona
 bog-agents --sandbox runloop
 
 # MCP configuration
 bog-agents --mcp-config ./mcp.json
-bog-agents --no-mcp
 bog-agents --trust-project-mcp
 
-# Serve over HTTP
+# HTTP server mode
 bog-agents --serve
 bog-agents --serve --serve-host 0.0.0.0 --serve-port 9000
 
-# Run as an ACP server
+# ACP server (Zed editor integration)
 bog-agents --acp
 ```
 
-## Run From Source
-
-Requirements:
-
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/)
-
-```bash
-git clone https://github.com/bogware/bog-agents.git
-cd bog-agents
-
-# Bootstrap the main development packages
-./scripts/repo.ps1 init
-
-# Run the CLI from source
-cd libs/cli
-uv run bog-agents
-```
-
-The repository is a Python monorepo. The main package areas are:
-
-```text
-libs/
-|- bog-agents        # core SDK
-|- cli               # interactive and automation CLI
-|- acp               # Agent Context Protocol support
-|- harbor            # evaluation and benchmarking
-|- partners/         # sandbox and integration packages
-```
-
-## Upgrade Workflow
-
-Use the repository script to validate or refresh lockfiles across the managed packages:
-
-```bash
-# Check the primary development packages
-./scripts/repo.ps1 lock-check
-
-# Check every managed package under libs/
-./scripts/repo.ps1 lock-check -AllPackages
-
-# Regenerate lockfiles
-./scripts/repo.ps1 lock -AllPackages
-```
+---
 
 ## Development
 
-Common top-level tasks:
-
 ```bash
+# Lint all packages
 make lint
+
+# Format all packages
 make format
+
+# Package-level tests
+cd libs/bog-agents && uv run --group test pytest tests/unit_tests/ -q
+cd libs/cli        && uv run --group test pytest tests/unit_tests/ -q
+cd libs/daemon     && uv run --group test pytest tests/ -q
 ```
 
-Package-level work usually happens inside the package directory with `uv`:
+Contributor guidance: `AGENTS.md` (agent-specific), `CONTRIBUTING.md` (human contributors).
 
-```bash
-cd libs/bog-agents
-uv run --group test pytest tests/unit_tests/test_specific.py
+---
 
-cd ../cli
-uv run --group test pytest tests/unit_tests/test_specific.py
-```
-
-The repo guidance for contributors and coding agents lives in `AGENTS.md`, and the broader contribution process lives in `CONTRIBUTING.md`.
-
-## Documentation
+## Links
 
 - [CLI package README](libs/cli/README.md)
+- [Daemon README](libs/daemon/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [Publishing](PUBLISHING.md)
-
-## Acknowledgements
-
-Bog Agents began by studying the strengths of general-purpose coding agents and then pushing toward a more open, composable, terminal-native implementation.
+- [Security Policy](SECURITY.md)
+- [LangGraph docs](https://github.com/langchain-ai/langgraph)

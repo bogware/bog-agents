@@ -7,7 +7,9 @@ on the host machine with full system access.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 import subprocess
 import uuid
 import warnings
@@ -19,9 +21,34 @@ from bog_agents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
 if TYPE_CHECKING:
     from pathlib import Path
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_EXECUTE_TIMEOUT = 120
 """Default timeout in seconds for shell command execution."""
+
+# Patterns for commands that can cause catastrophic, irreversible damage.
+# Each entry is a (pattern, description) tuple. Blocked by default; pass
+# allow_dangerous=True to LocalShellBackend to downgrade to a warning.
+_DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/", re.IGNORECASE), "rm targeting root path"),
+    (re.compile(r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-Z]*r", re.IGNORECASE), "recursive force remove (rm -rf)"),
+    (re.compile(r"rm\s+--no-preserve-root", re.IGNORECASE), "rm with --no-preserve-root"),
+    (re.compile(r"rm\s+-[a-zA-Z]*r", re.IGNORECASE), "recursive remove (rm -r)"),
+    (re.compile(r":\(\)\s*\{\s*:|:\s*&\s*\};\s*:|:\(\)\{:\|:&\};:", re.IGNORECASE), "fork bomb"),
+    (re.compile(r"mkfs\b", re.IGNORECASE), "filesystem format (mkfs)"),
+    (re.compile(r"dd\s+.*\bof=/dev/", re.IGNORECASE), "raw device write (dd)"),
+    (re.compile(r">\s*/dev/(s?d[a-z]|nvme|xvd)", re.IGNORECASE), "redirect to block device"),
+    (re.compile(r"shred\s+", re.IGNORECASE), "shred (irreversible file destruction)"),
+    (re.compile(r"wipefs\s+", re.IGNORECASE), "wipefs (wipe filesystem signatures)"),
+    (re.compile(r"curl\s+.*\|\s*(ba)?sh", re.IGNORECASE), "pipe URL to shell (curl|sh)"),
+    (re.compile(r"wget\s+.*\|\s*(ba)?sh", re.IGNORECASE), "pipe URL to shell (wget|sh)"),
+    (re.compile(r"curl\s+.*\|\s*python", re.IGNORECASE), "pipe URL to python"),
+    (re.compile(r"chmod\s+(-[a-zA-Z]+\s+)?777\s+/", re.IGNORECASE), "world-writable root path"),
+    (re.compile(r"chown\s+.*\s+/", re.IGNORECASE), "chown on root path"),
+    (re.compile(r"nc\s+.*-e\s", re.IGNORECASE), "netcat exec shell"),
+    (re.compile(r"\beval\s+.*base64", re.IGNORECASE), "eval base64 payload"),
+    (re.compile(r"\bshutdown\b|\breboot\b|\bhalt\b|\bpoweroff\b", re.IGNORECASE), "system shutdown/reboot"),
+]
 
 
 class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
@@ -110,6 +137,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         max_output_bytes: int = 100_000,
         env: dict[str, str] | None = None,
         inherit_env: bool = False,
+        allow_dangerous: bool = False,
     ) -> None:
         """Initialize local shell backend with filesystem access.
 
@@ -118,17 +146,17 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
 
                 - If not provided, defaults to the current working directory.
                 - Shell commands execute with this as their working directory.
-                - When `virtual_mode=False` (default): Paths are used as-is. Agents can
-                    access any file using absolute paths or `..` sequences.
-                - When `virtual_mode=True`: Acts as a virtual root for filesystem operations.
-                    Useful with `CompositeBackend` to support routing file operations across
-                    different backend implementations. **Note:** This does NOT restrict shell
-                    commands.
+                - When `virtual_mode=False`: Paths are used as-is. Agents can access any
+                    file using absolute paths or `..` sequences.
+                - When `virtual_mode=True` (default): Acts as a virtual root for filesystem
+                    operations. Useful with `CompositeBackend` to support routing file
+                    operations across different backend implementations. **Note:** This does
+                    NOT restrict shell commands.
 
             virtual_mode: Enable virtual path mode for filesystem operations.
 
-                When `True`, treats `root_dir` as a virtual root filesystem. All paths
-                are interpreted relative to `root_dir` (e.g., `/file.txt` maps to
+                When `True` (default), treats `root_dir` as a virtual root filesystem. All
+                paths are interpreted relative to `root_dir` (e.g., `/file.txt` maps to
                 `{root_dir}/file.txt`). Path traversal (`..`, `~`) is blocked.
 
                 **Primary use case:** Working with `CompositeBackend`, which routes
@@ -158,12 +186,20 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 When False (default), only variables in `env` dict are available.
                 When True, inherits all `os.environ` variables and applies `env` overrides.
 
+            allow_dangerous: When `False` (default), commands matching known destructive
+                patterns (e.g., `rm -rf /`, fork bombs, raw block device writes) raise a
+                `PermissionError` before execution. When `True`, those commands are
+                allowed but a WARNING is logged. Never set this to `True` in production
+                environments.
+
         Raises:
             ValueError: If timeout is not positive.
         """
         if timeout <= 0:
             msg = f"timeout must be positive, got {timeout}"
             raise ValueError(msg)
+
+        self._allow_dangerous = allow_dangerous
 
         if virtual_mode is None:
             warnings.warn(
@@ -215,6 +251,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         command: str,
         *,
         timeout: int | None = None,
+        allow_dangerous: bool = False,
     ) -> ExecuteResponse:
         r"""Execute a shell command directly on the host system.
 
@@ -249,6 +286,9 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 Overrides the default timeout set at init.
 
                 If None, uses the default.
+            allow_dangerous: Bypass the built-in dangerous-command gate. Only set
+                this when the caller has already obtained explicit human approval
+                (e.g., HITL middleware confirmed the command). Defaults to False.
 
         Returns:
             ExecuteResponse containing:
@@ -289,6 +329,21 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 exit_code=1,
                 truncated=False,
             )
+
+        # Check for dangerous patterns before executing.
+        _allow = allow_dangerous or self._allow_dangerous
+        for pattern, description in _DANGEROUS_PATTERNS:
+            if pattern.search(command):
+                if _allow:
+                    logger.warning(
+                        "Dangerous command allowed (allow_dangerous=True): %s — matched: %s",
+                        command,
+                        description,
+                    )
+                else:
+                    msg = f"Dangerous command blocked: {description}. Pass allow_dangerous=True to LocalShellBackend or execute() to bypass."
+                    raise PermissionError(msg)
+                break
 
         effective_timeout = timeout if timeout is not None else self._default_timeout
         if effective_timeout <= 0:

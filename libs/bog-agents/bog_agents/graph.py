@@ -92,6 +92,30 @@ def get_default_model() -> ChatAnthropic:
     )
 
 
+def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> None:
+    """Raise ValueError if any middleware's requirements appear later in the stack.
+
+    Iterates the middleware list in order, tracking which types have been seen.
+    If a middleware declares `requires = [SomeMiddleware]` and `SomeMiddleware`
+    has not yet appeared in the list, a `ValueError` is raised.
+
+    Args:
+        middleware_list: Ordered list of middleware instances to validate.
+
+    Raises:
+        ValueError: If a required middleware type appears after the middleware
+            that depends on it, or is missing entirely from the stack.
+    """
+    seen: set[type] = set()
+    for mw in middleware_list:
+        for req in getattr(type(mw), "requires", []):
+            if req not in seen:
+                provided = [type(m).__name__ for m in middleware_list]
+                msg = f"{type(mw).__name__} requires {req.__name__} to appear earlier in the middleware stack. Current order: {provided}"
+                raise ValueError(msg)
+        seen.add(type(mw))
+
+
 def create_agent(  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
@@ -110,7 +134,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     debug: bool = False,
     name: str | None = None,
     cache: BaseCache | None = None,
+    config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
+    max_turns: int = 200,
     # Individual feature flags (kept for backwards compatibility).
     # When ``features`` is provided, these are ignored.
     enable_git_tools: bool = False,
@@ -127,6 +153,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     working_dir: str | None = None,
     # New parameters for features #51-75
     enable_worktree: bool = False,
+    enable_parallel_worktree: bool = False,
     enable_multi_agent: bool = False,
     max_agent_threads: int = 10,
     enable_smart_context: bool = False,
@@ -206,6 +233,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     enable_due_diligence: bool = False,
     enable_market_sentiment: bool = False,
     enable_competitive_intel: bool = False,
+    enable_result_synthesis: bool = False,
 ) -> CompiledStateGraph:
     """Create a bog-agents agent.
 
@@ -287,12 +315,33 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         debug: Whether to enable debug mode. Passed through to `create_agent`.
         name: The name of the agent. Passed through to `create_agent`.
         cache: The cache to use for the agent. Passed through to `create_agent`.
+        config: Primary path for feature configuration via `FeatureConfig`.
+
+            Pass a `FeatureConfig` instance to configure all feature flags in one
+            place instead of using 90+ individual kwargs. Individual kwargs take
+            precedence over `config` when both are provided.
+
+            Example::
+
+                from bog_agents import FeatureConfig, create_agent
+
+                agent = create_agent(
+                    config=FeatureConfig(enable_git_tools=True, enable_cost_tracking=True)
+                )
+        features: Alias for `config`, kept for backwards compatibility.
 
     Returns:
         A configured bog-agents agent.
     """
+    # Resolve config/features: `config` is the preferred name; `features` is kept
+    # for backward compat.  If both are given, `config` wins.
+    _feature_config = config if config is not None else features
+
     # If a FeatureConfig was provided, use its values for all feature flags.
     # This lets callers pass a single config object instead of 90+ kwargs.
+    if _feature_config is not None:
+        features = _feature_config  # normalise to single name for the block below
+
     if features is not None:
         f = features
         enable_git_tools = f.enable_git_tools
@@ -308,6 +357,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         auto_test = f.auto_test
         working_dir = f.working_dir
         enable_worktree = f.enable_worktree
+        enable_parallel_worktree = f.enable_parallel_worktree
         enable_multi_agent = f.enable_multi_agent
         max_agent_threads = f.max_agent_threads
         enable_smart_context = f.enable_smart_context
@@ -383,6 +433,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         enable_due_diligence = f.enable_due_diligence
         enable_market_sentiment = f.enable_market_sentiment
         enable_competitive_intel = f.enable_competitive_intel
+        enable_result_synthesis = f.enable_result_synthesis
 
     if model is None:
         _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
@@ -535,6 +586,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(WorktreeMiddleware(working_dir=_wd))
 
+    if enable_parallel_worktree:
+        from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
+
+        agents_middleware.append(ParallelWorktreeMiddleware(working_dir=_wd))
+
     if enable_multi_agent:
         from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
 
@@ -627,16 +683,25 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(MeetingPrepMiddleware())
 
-    if enable_enhanced_skills and enhanced_skills_sources:
-        from bog_agents.middleware.enhanced_skills import EnhancedSkillsMiddleware
+    if enable_enhanced_skills:
+        if not enhanced_skills_sources:
+            import logging as _logging
 
-        agents_middleware.append(
-            EnhancedSkillsMiddleware(
-                backend=backend,
-                sources=enhanced_skills_sources,
-                cache_dir=enhanced_skills_cache_dir,
+            _logging.getLogger(__name__).warning(
+                "enable_enhanced_skills=True but enhanced_skills_sources is empty — "
+                "EnhancedSkillsMiddleware will not be activated. "
+                "Pass enhanced_skills_sources=['/path/to/skills'] to enable."
             )
-        )
+        else:
+            from bog_agents.middleware.enhanced_skills import EnhancedSkillsMiddleware
+
+            agents_middleware.append(
+                EnhancedSkillsMiddleware(
+                    backend=backend,
+                    sources=enhanced_skills_sources,
+                    cache_dir=enhanced_skills_cache_dir,
+                )
+            )
 
     if enable_saved_prompts and saved_prompts_sources:
         from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
@@ -836,6 +901,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(CompetitiveIntelMiddleware())
 
+    if enable_result_synthesis:
+        from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
+        from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
+
+        parallel_mw = next((m for m in agents_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
+        if parallel_mw is None:
+            # ResultSynthesisMiddleware requires ParallelWorktreeMiddleware.
+            # Auto-create one rather than crashing at validation time.
+            parallel_mw = ParallelWorktreeMiddleware(working_dir=_wd)
+            agents_middleware.append(parallel_mw)
+        agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
+
     agents_middleware.extend(
         [
             FilesystemMiddleware(backend=backend),
@@ -857,6 +934,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+
+    # Validate middleware dependency ordering before compiling the graph.
+    _validate_middleware_ordering(agents_middleware)
 
     # Combine system_prompt with BASE_AGENT_PROMPT
     if system_prompt is None:
@@ -881,7 +961,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         cache=cache,
     ).with_config(
         {
-            "recursion_limit": 9999,
+            "recursion_limit": max(10, min(max_turns, 1000)),
             "metadata": {
                 "ls_integration": "bog-agents",
                 "versions": {"bog-agents": __version__},

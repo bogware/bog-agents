@@ -1,0 +1,71 @@
+name: onboarding-guide
+description: "Generate a comprehensive onboarding guide for new contributors by analyzing the codebase"
+steps:
+  - id: structure
+    type: message
+    text: |
+      Analyze the repository structure to understand how this project is organized.
+
+      1. Map the top-level directories and their purposes
+      2. Identify the main entry points (CLI, API, library)
+      3. Find the core data models and key abstractions
+      4. Identify the test structure and how to run tests
+      5. Note the build/package system and development workflow
+
+  - id: architecture
+    type: message
+    text: |
+      Document the architecture of this codebase.
+
+      1. Describe the high-level design (layers, modules, services)
+      2. Explain the key design patterns in use (middleware, plugins, etc.)
+      3. Identify the data flow from user input to output
+      4. Note any non-obvious conventions or gotchas
+      5. List the most important files a new contributor should read first
+
+  - id: dev_setup
+    type: message
+    text: |
+      Document the development environment setup.
+
+      1. Prerequisites (language version, tools required)
+      2. Installation steps (exact commands)
+      3. How to run the project locally
+      4. How to run tests
+      5. How to lint/format code
+      6. Any environment variables required
+
+  - id: write_guide
+    type: message
+    text: |
+      Write a comprehensive ONBOARDING.md for new contributors.
+
+      Include:
+      ## Welcome
+      Brief intro to what this project does and why it exists.
+
+      ## Quick Start (5 minutes)
+      The fastest path to running something.
+
+      ## Project Structure
+      Directory map with descriptions.
+
+      ## Architecture Overview
+      How the pieces fit together (with ASCII diagram if helpful).
+
+      ## Development Setup
+      Step-by-step environment setup.
+
+      ## Making Your First Change
+      A concrete walk-through: find a small bug or add a small feature.
+
+      ## Testing
+      How to run tests, write new tests, understand coverage.
+
+      ## Code Conventions
+      Style, naming, commit messages, PR process.
+
+      ## Key Concepts
+      3-5 concepts that unlock understanding of the whole codebase.
+
+      Save to ONBOARDING.md in the repository root.

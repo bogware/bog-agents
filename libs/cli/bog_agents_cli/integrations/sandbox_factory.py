@@ -59,6 +59,7 @@ def _run_sandbox_setup(backend: SandboxBackendProtocol, setup_script_path: str) 
 
 _PROVIDER_TO_WORKING_DIR = {
     "daytona": "/home/daytona",
+    "docker": "/workspace",
     "langsmith": tempfile.gettempdir(),
     "modal": "/workspace",
     "runloop": "/home/user",
@@ -77,7 +78,7 @@ def create_sandbox(
     This is the unified interface for sandbox creation using the provider abstraction.
 
     Args:
-        provider: Sandbox provider ("daytona", "langsmith", "modal", "runloop")
+        provider: Sandbox provider ("daytona", "docker", "langsmith", "modal", "runloop")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
 
@@ -140,7 +141,7 @@ def get_default_working_dir(provider: str) -> str:
     """Get the default working directory for a given sandbox provider.
 
     Args:
-        provider: Sandbox provider name ("daytona", "langsmith", "modal", "runloop")
+        provider: Sandbox provider name ("daytona", "docker", "langsmith", "modal", "runloop")
 
     Returns:
         Default working directory path as string
@@ -170,6 +171,10 @@ def _get_provider(provider_name: str) -> SandboxProvider:
         from bog_agents_cli.integrations.daytona import DaytonaProvider
 
         return DaytonaProvider()
+    if provider_name == "docker":
+        from bog_agents_cli.integrations.docker import get_docker_provider
+
+        return get_docker_provider()
     if provider_name == "langsmith":
         from bog_agents_cli.integrations.langsmith import LangSmithProvider
 
@@ -183,7 +188,7 @@ def _get_provider(provider_name: str) -> SandboxProvider:
 
         return RunloopProvider()
     msg = (
-        f"Unknown sandbox provider: {provider_name}. "
+        f"Unknown sandbox provider: {provider_name!r}. "
         f"Available providers: {', '.join(_get_available_sandbox_types())}"
     )
     raise ValueError(msg)

@@ -10,7 +10,7 @@
 TEST_FILE ?= tests/
 
 test: ## Run unit tests with coverage
-	uv run python -m pytest --disable-socket --allow-unix-socket $(TEST_FILE) --timeout 10 --cov=bog_agents_acp --cov-report=term-missing --cov-report=xml
+	uv run --group test python -m pytest --disable-socket --allow-unix-socket $(TEST_FILE) --timeout 10 --cov=bog_agents_acp --cov-report=term-missing --cov-report=xml
 
 test_watch: ## Run tests in watch mode
 	uv run ptw . -- $(TEST_FILE)

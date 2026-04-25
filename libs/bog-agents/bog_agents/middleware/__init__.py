@@ -60,6 +60,7 @@ from bog_agents.middleware.async_subagents import (
 from bog_agents.middleware.audit_trail import AuditTrailMiddleware
 from bog_agents.middleware.auto_quality import AutoQualityMiddleware, detect_project
 from bog_agents.middleware.automations import AutomationsMiddleware
+from bog_agents.middleware.background_jobs import BackgroundJobsMiddleware, JobRecord, load_all_jobs, load_job, make_job_id, save_job
 from bog_agents.middleware.browser_agent import BrowserAgentMiddleware
 from bog_agents.middleware.browser_agent_fa import BrowserAgentFAMiddleware
 from bog_agents.middleware.checkpointing import CheckpointingMiddleware
@@ -90,9 +91,12 @@ from bog_agents.middleware.git_tools import GitToolsMiddleware
 from bog_agents.middleware.hallucination_detection import HallucinationDetectionMiddleware
 from bog_agents.middleware.hot_reload_skills import HotReloadSkillsMiddleware
 from bog_agents.middleware.http_hooks import HttpHooksMiddleware
+from bog_agents.middleware.hybrid_search import HybridSearchMiddleware
 from bog_agents.middleware.image_input import ImageInputMiddleware
 from bog_agents.middleware.image_pdf_input import ImagePdfInputMiddleware
+from bog_agents.middleware.intelligent_compaction import CompactionEvent, IntelligentCompactionMiddleware, UsageInfo
 from bog_agents.middleware.knowledge_graph import KnowledgeGraphMiddleware
+from bog_agents.middleware.langsmith_integration import LangSmithMiddleware
 from bog_agents.middleware.lifecycle_hooks import (
     HookEvent,
     LifecycleHooksMiddleware,
@@ -105,6 +109,7 @@ from bog_agents.middleware.model_cascade import ModelCascadeMiddleware
 from bog_agents.middleware.model_portfolio import ModelPortfolioMiddleware
 from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
 from bog_agents.middleware.multi_model import MultiModelMiddleware
+from bog_agents.middleware.multi_repo import MultiRepoMiddleware, RepoConfig, load_workspace
 from bog_agents.middleware.nl_query import NLQueryMiddleware
 from bog_agents.middleware.notifications import NotificationsMiddleware
 from bog_agents.middleware.offline_mode import OfflineModeMiddleware
@@ -120,6 +125,8 @@ from bog_agents.middleware.reasoning_chain import ReasoningChainMiddleware
 from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
 from bog_agents.middleware.regulatory_impact import RegulatoryImpactMiddleware
 from bog_agents.middleware.repo_map import RepoMapMiddleware
+from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware, ResultSynthesisState
+from bog_agents.middleware.rules import RulesMiddleware
 from bog_agents.middleware.safe_tools import SafeToolsConfig, is_tool_safe
 from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
 from bog_agents.middleware.scenario_engine import ScenarioEngineMiddleware
@@ -139,9 +146,10 @@ from bog_agents.middleware.summarization import (
 )
 from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
 from bog_agents.middleware.test_generation import TestGenerationMiddleware
+from bog_agents.middleware.thinking import ThinkingMiddleware
 from bog_agents.middleware.version_control import VersionControlMiddleware
 from bog_agents.middleware.voice_io import VoiceIOMiddleware
-from bog_agents.middleware.worktree import WorktreeMiddleware
+from bog_agents.middleware.worktree import ParallelWorktreeMiddleware, WorktreeMiddleware
 
 __all__ = [
     "AdaptiveContextMiddleware",
@@ -155,6 +163,8 @@ __all__ = [
     "AuditTrailMiddleware",
     "AutoQualityMiddleware",
     "AutomationsMiddleware",
+    # New features
+    "BackgroundJobsMiddleware",
     "BrowserAgentFAMiddleware",
     "BrowserAgentMiddleware",
     "CheckpointingMiddleware",
@@ -165,6 +175,7 @@ __all__ = [
     "CodeIntelligenceMiddleware",
     "CodeReviewMiddleware",
     "CollaborativeSessionsMiddleware",
+    "CompactionEvent",
     "CompetitiveIntelMiddleware",
     "CompiledSubAgent",
     "ComputerUseMiddleware",
@@ -187,9 +198,13 @@ __all__ = [
     "HookEvent",
     "HotReloadSkillsMiddleware",
     "HttpHooksMiddleware",
+    "HybridSearchMiddleware",
     "ImageInputMiddleware",
     "ImagePdfInputMiddleware",
+    "IntelligentCompactionMiddleware",
+    "JobRecord",
     "KnowledgeGraphMiddleware",
+    "LangSmithMiddleware",
     "LifecycleHooksMiddleware",
     "MarketSentimentMiddleware",
     "MeetingPrepMiddleware",
@@ -199,12 +214,14 @@ __all__ = [
     "ModelPortfolioMiddleware",
     "MultiAgentOrchestratorMiddleware",
     "MultiModelMiddleware",
+    "MultiRepoMiddleware",
     "NLQueryMiddleware",
     "NotificationsMiddleware",
     "OfflineModeMiddleware",
     "OpenSearchRAGMiddleware",
     "PRManagementMiddleware",
     "ParallelAgentsMiddleware",
+    "ParallelWorktreeMiddleware",
     "PeerComparisonMiddleware",
     "PlanModeMiddleware",
     "PluginSystemMiddleware",
@@ -213,7 +230,11 @@ __all__ = [
     "ReasoningChainMiddleware",
     "RegulatoryAlertsMiddleware",
     "RegulatoryImpactMiddleware",
+    "RepoConfig",
     "RepoMapMiddleware",
+    "ResultSynthesisMiddleware",
+    "ResultSynthesisState",
+    "RulesMiddleware",
     "SSOAuthMiddleware",
     "SafeToolsConfig",
     "SavedPromptsMiddleware",
@@ -231,10 +252,17 @@ __all__ = [
     "SummarizationToolMiddleware",
     "TaxOptimizationMiddleware",
     "TestGenerationMiddleware",
+    "ThinkingMiddleware",
+    "UsageInfo",
     "VersionControlMiddleware",
     "VoiceIOMiddleware",
     "WorktreeMiddleware",
     "create_summarization_tool_middleware",
     "detect_project",
     "is_tool_safe",
+    "load_all_jobs",
+    "load_job",
+    "load_workspace",
+    "make_job_id",
+    "save_job",
 ]

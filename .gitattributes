@@ -1,0 +1,9 @@
+# Force LF line endings for all text files to prevent CRLF issues on Windows
+* text=auto eol=lf
+*.py eol=lf
+*.md eol=lf
+*.toml eol=lf
+*.yaml eol=lf
+*.yml eol=lf
+*.json eol=lf
+*.txt eol=lf

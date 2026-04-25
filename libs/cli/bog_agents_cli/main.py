@@ -295,6 +295,11 @@ def parse_args() -> argparse.Namespace:
         add_output_args=add_json_output_arg,
     )
 
+    # Daemon management subcommand
+    from bog_agents_cli.cmd_daemon import setup_daemon_parser
+
+    setup_daemon_parser(subparsers)
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -571,6 +576,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--auto-commit",
+        action="store_true",
+        help=(
+            "Automatically create a git commit after each agent turn. "
+            "Commits follow Conventional Commits format and are tagged with '(bog-agent)'. "
+            "Only commits when there are staged or unstaged changes."
+        ),
+    )
+
+    parser.add_argument(
         "--doctor",
         action="store_true",
         help="Run diagnostics to check environment, dependencies, and configuration",
@@ -595,6 +610,7 @@ async def run_textual_cli_async(
     assistant_id: str,
     *,
     auto_approve: bool = False,
+    auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
     sandbox_setup: str | None = None,
@@ -615,6 +631,7 @@ async def run_textual_cli_async(
     Args:
         assistant_id: Agent identifier for memory storage
         auto_approve: Whether to auto-approve tool usage
+        auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
         sandbox_id: Optional existing sandbox ID to reuse.
@@ -694,6 +711,7 @@ async def run_textual_cli_async(
             assistant_id=assistant_id,
             backend=None,
             auto_approve=auto_approve,
+            auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
             initial_prompt=initial_prompt,
@@ -1384,6 +1402,10 @@ def cli_main() -> None:
             from bog_agents_cli.skills import execute_skills_command
 
             execute_skills_command(args)
+        elif args.command == "daemon":
+            from bog_agents_cli.cmd_daemon import execute_daemon_command
+
+            execute_daemon_command(args)
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,
@@ -1540,6 +1562,7 @@ def cli_main() -> None:
                     run_textual_cli_async(
                         assistant_id=args.agent,
                         auto_approve=args.auto_approve,
+                        auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,
                         sandbox_setup=getattr(args, "sandbox_setup", None),

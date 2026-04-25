@@ -267,7 +267,8 @@ def test_parse_pasted_file_paths_with_file_url(tmp_path: Path) -> None:
     img = tmp_path / "space name.png"
     img.write_bytes(b"img")
 
-    result = parse_pasted_file_paths(f"file://{str(img).replace(' ', '%20')}")
+    # Use Path.as_uri() for a cross-platform file URI (handles Windows drive letters)
+    result = parse_pasted_file_paths(img.as_uri())
 
     assert result == [img.resolve()]
 

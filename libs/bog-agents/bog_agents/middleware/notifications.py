@@ -115,7 +115,7 @@ def copy_to_clipboard(text: str) -> bool:
         True if copied successfully.
     """
     try:
-        import pyperclip  # type: ignore[import-untyped]
+        import pyperclip
 
         pyperclip.copy(text)
         return True

@@ -25,7 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "agent-client-protocol>=0.8.0",
-    "bog-agents",
+    "bog-agents>=0.7.0,<1.0.0",
     "python-dotenv>=1.2.1",
 ]
 

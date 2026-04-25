@@ -304,7 +304,7 @@ def _list(
         console.print("[bold cyan]User Skills:[/bold cyan]", style=COLORS["primary"])
         bullet = get_glyphs().bullet
         for skill in user_skills:
-            skill_path = Path(skill["path"])
+            skill_path = Path(skill.get("fs_path") or skill["path"])
             name = skill["name"]
             console.print(f"  {bullet} [bold]{name}[/bold]", style=COLORS["primary"])
             console.print(f"    {skill_path.parent}/", style=COLORS["dim"])
@@ -321,7 +321,25 @@ def _list(
         )
         bullet = get_glyphs().bullet
         for skill in project_skills_list:
-            skill_path = Path(skill["path"])
+            skill_path = Path(skill.get("fs_path") or skill["path"])
+            name = skill["name"]
+            console.print(f"  {bullet} [bold]{name}[/bold]", style=COLORS["primary"])
+            console.print(f"    {skill_path.parent}/", style=COLORS["dim"])
+            console.print()
+            console.print(f"    {skill['description']}", style=COLORS["dim"])
+            console.print()
+
+    # Show extension skills
+    if extension_skills and not project:
+        if user_skills or project_skills_list:
+            console.print()
+        console.print(
+            "[bold yellow]Extension Skills:[/bold yellow]",
+            style=COLORS["primary"],
+        )
+        bullet = get_glyphs().bullet
+        for skill in extension_skills:
+            skill_path = Path(skill.get("fs_path") or skill["path"])
             name = skill["name"]
             console.print(f"  {bullet} [bold]{name}[/bold]", style=COLORS["primary"])
             console.print(f"    {skill_path.parent}/", style=COLORS["dim"])
@@ -608,8 +626,8 @@ def _info(
         write_json("skills info", dict(skill))
         return
 
-    # Read the full SKILL.md file
-    skill_path = Path(skill["path"])
+    # Read the full SKILL.md file — use real filesystem path, not virtual backend path
+    skill_path = Path(skill.get("fs_path") or skill["path"])
     skill_content = skill_path.read_text(encoding="utf-8")
 
     # Determine source label
@@ -750,7 +768,7 @@ def _delete(
             console.print(f"  - {s['name']} {source_tag}", style=COLORS["dim"])
         return
 
-    skill_path = Path(skill["path"])
+    skill_path = Path(skill.get("fs_path") or skill["path"])
     skill_dir = skill_path.parent
 
     # Validate the path is safe to delete

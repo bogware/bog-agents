@@ -1,0 +1,53 @@
+name: blog-post
+description: "Research, outline, draft, and polish a technical blog post end to end"
+variables:
+  - topic
+  - audience
+  - tone
+steps:
+  - id: research
+    type: message
+    text: |
+      Research the following blog post topic thoroughly:
+      Topic: {{topic}}
+      Target audience: {{audience}}
+
+      Find: key concepts to explain, common misconceptions, interesting angles, and 3 compelling hooks.
+
+  - id: outline
+    type: message
+    text: |
+      Based on the research above, create a detailed outline for the blog post.
+
+      Topic: {{topic}}
+      Audience: {{audience}}
+      Tone: {{tone}}
+
+      Include: headline options (3 variants), introduction hook, H2 sections with key points per section, conclusion with call to action. Aim for ~1500-2000 words.
+
+  - id: draft
+    type: message
+    text: |
+      Write the full blog post draft based on the outline above.
+
+      Tone: {{tone}}
+      Audience: {{audience}}
+
+      Guidelines:
+      - Lead with the strongest hook
+      - Use concrete examples and code snippets where relevant
+      - Short paragraphs (3–4 sentences max)
+      - Active voice throughout
+      - End with a clear takeaway and call to action
+
+  - id: polish
+    type: message
+    text: |
+      Polish the draft above. Check for:
+      - Clarity and flow — cut anything that doesn't earn its place
+      - Technical accuracy — flag any claims that need verification
+      - SEO: suggest 3–5 keywords to include naturally
+      - Meta description (155 chars)
+      - Final headline recommendation
+
+      Return the polished post ready to publish.

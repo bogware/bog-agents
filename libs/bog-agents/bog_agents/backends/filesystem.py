@@ -70,11 +70,11 @@ class FilesystemBackend(BackendProtocol):
 
         !!! note
 
-            `virtual_mode=True` is primarily for virtual path semantics (for example with
-            `CompositeBackend`). It can also provide path-based guardrails by blocking
-            traversal (`..`, `~`) and absolute paths outside `root_dir`, but it does not
-            provide sandboxing or process isolation. The default (`virtual_mode=False`)
-            provides no security even with `root_dir` set.
+            `virtual_mode=True` (the default) is primarily for virtual path semantics (for
+            example with `CompositeBackend`). It also provides path-based guardrails by
+            blocking traversal (`..`, `~`) and absolute paths outside `root_dir`, but it
+            does not provide sandboxing or process isolation. `virtual_mode=False` provides
+            no security even with `root_dir` set and is deprecated.
     """
 
     def __init__(
@@ -99,12 +99,12 @@ class FilesystemBackend(BackendProtocol):
                 used with `CompositeBackend`, which strips route prefixes and forwards
                 normalized paths to the routed backend.
 
-                When `True`, all paths are treated as virtual paths anchored to
+                When `True` (default), all paths are treated as virtual paths anchored to
                 `root_dir`. Path traversal (`..`, `~`) is blocked and all resolved paths
                 are verified to remain within `root_dir`.
 
-                When `False` (default), absolute paths are used as-is and relative paths
-                are resolved under `root_dir`. This provides no security against an agent
+                When `False`, absolute paths are used as-is and relative paths are
+                resolved under `root_dir`. This provides no security against an agent
                 choosing paths outside `root_dir`.
 
                 - Absolute paths (e.g., `/etc/passwd`) bypass `root_dir` entirely
@@ -118,17 +118,16 @@ class FilesystemBackend(BackendProtocol):
         """
         self.cwd = Path(root_dir).resolve() if root_dir else Path.cwd()
         if virtual_mode is None:
+            virtual_mode = True
+        elif virtual_mode is False:
             warnings.warn(
-                "FilesystemBackend virtual_mode default will change in bog-agents 0.5.0; "
-                "please specify virtual_mode explicitly. "
-                "Note: virtual_mode is for virtual path semantics (e.g., CompositeBackend routing) and optional path-based guardrails; "
-                "it does not provide sandboxing or process isolation. "
-                "Security note: leaving virtual_mode=False allows absolute paths and '..' to bypass root_dir. "
-                "Consult the API reference for details.",
+                "FilesystemBackend virtual_mode=False is deprecated and will be removed in a future "
+                "release. The default is now virtual_mode=True (secure by default). "
+                "Passing virtual_mode=False disables path-based guardrails: absolute paths and '..' "
+                "can bypass root_dir. See the API reference for details.",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            virtual_mode = False
         self.virtual_mode = virtual_mode
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
 

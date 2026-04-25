@@ -1,0 +1,84 @@
+name: jira-ticket-autofix
+description: "Fetch a Jira ticket, analyze it, implement a fix or feature, and update the ticket"
+variables:
+  - ticket_key
+  - jira_url
+steps:
+  - id: fetch
+    type: message
+    text: |
+      Fetch Jira ticket {{ticket_key}} from {{jira_url}}.
+
+      Use the Jira REST API or the `jira` CLI if available:
+        curl -u $JIRA_USER:$JIRA_API_KEY \
+          "{{jira_url}}/rest/api/3/issue/{{ticket_key}}" | jq .
+
+      Extract:
+      1. Summary (title)
+      2. Description
+      3. Issue type (Bug / Story / Task / Epic)
+      4. Priority
+      5. Acceptance criteria (if present)
+      6. Labels and components
+
+  - id: plan
+    type: message
+    text: |
+      Create an implementation plan for {{ticket_key}}.
+
+      Based on the ticket details:
+      1. Identify the affected code areas
+      2. Break the work into concrete implementation steps
+      3. Estimate complexity (S/M/L)
+      4. Flag any blockers or unknowns
+      5. List the files most likely to change
+
+  - id: branch
+    type: message
+    text: |
+      Create a git branch for this ticket.
+
+      Run: git checkout -b feature/{{ticket_key}}-<short-description>
+
+      The short description should be 2-4 words from the ticket summary, kebab-cased.
+
+  - id: implement
+    type: message
+    text: |
+      Implement the changes for {{ticket_key}}.
+
+      Follow the plan above. Requirements:
+      - Follow existing code conventions
+      - Add type hints and docstrings
+      - Write tests covering the new behavior
+      - Ensure existing tests pass
+
+  - id: verify
+    type: message
+    text: |
+      Verify the implementation for {{ticket_key}}.
+
+      1. Run any detected test framework
+      2. Verify acceptance criteria from the ticket are met
+      3. Check for regressions
+      4. Review code quality (type hints, error handling, edge cases)
+
+  - id: commit_and_update
+    type: message
+    text: |
+      Commit changes and update the Jira ticket.
+
+      1. Commit:
+         git add -A
+         git commit -m "feat({{ticket_key}}): <summary>"
+         git push -u origin HEAD
+
+      2. Add a comment to the Jira ticket:
+         curl -X POST -u $JIRA_USER:$JIRA_API_KEY \
+           -H "Content-Type: application/json" \
+           "{{jira_url}}/rest/api/3/issue/{{ticket_key}}/comment" \
+           -d '{"body": {"type": "doc", "version": 1, "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Implementation complete. Branch: <branch-name>. Changes: <summary>"}]}]}}'
+
+      3. If configured, transition the ticket to "In Review" or "Done" status.
+
+      Report the branch name and commit SHA.

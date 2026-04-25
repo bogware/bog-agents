@@ -1,0 +1,21 @@
+name: morning-standup
+description: "Daily standup prep — review git log, open PRs, and draft your standup update"
+steps:
+  - id: git-status
+    type: message
+    text: "Show me a summary of what I committed or changed yesterday. Run: git log --since='yesterday 00:00' --until='today 00:00' --oneline --all and git status --short"
+
+  - id: open-prs
+    type: message
+    text: "List any open pull requests or issues assigned to me. Check GitHub or the local repo for anything pending review or blocked."
+
+  - id: draft-standup
+    type: message
+    text: |
+      Based on what you found above, draft my standup update in this format:
+
+      **Yesterday:** [what I completed]
+      **Today:** [what I plan to work on]
+      **Blockers:** [anything in my way]
+
+      Keep each section to 1–3 bullet points. Be specific about ticket/PR numbers where relevant.

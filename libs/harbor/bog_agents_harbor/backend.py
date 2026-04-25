@@ -1,4 +1,19 @@
-"""Harbor sandbox backend for executing commands in Harbor environments."""
+"""Harbor sandbox backend for executing commands in Harbor environments.
+
+Design note — async-only
+------------------------
+HarborSandbox is intentionally async-only. All file and shell operations
+communicate with a remote Harbor environment over an async transport, so
+blocking sync wrappers would deadlock or stall the event loop.
+
+For scripting or testing outside an async context, use the module-level
+`run_sync()` helper::
+
+    from bog_agents_harbor.backend import run_sync, HarborSandbox
+    result = run_sync(sandbox.aexecute("ls"))
+
+Do NOT call `run_sync()` from inside async code — use ``await`` directly.
+"""
 
 import asyncio
 import base64
@@ -15,7 +30,34 @@ from bog_agents.backends.protocol import (
 )
 from harbor.environments.base import BaseEnvironment
 
-_SYNC_NOT_SUPPORTED = "This backend only supports async execution. Use the async variant instead."
+_SYNC_NOT_SUPPORTED = (
+    "HarborSandbox is async-only. Use aexecute(), aread(), etc. "
+    "For sync contexts, wrap with asyncio.run(sandbox.aexecute(cmd))."
+)
+
+
+def run_sync(coro: object) -> object:
+    """Run an async coroutine synchronously.
+
+    Convenience helper for testing and scripting contexts where an event loop
+    is not already running. Do NOT use this inside async code — use ``await``
+    directly.
+
+    Args:
+        coro: An awaitable (coroutine) returned by any ``HarborSandbox.a*`` method.
+
+    Returns:
+        The result of the coroutine.
+
+    Example:
+        ```python
+        from bog_agents_harbor.backend import run_sync, HarborSandbox
+
+        sandbox = HarborSandbox(environment)
+        result = run_sync(sandbox.aexecute("echo hello"))
+        ```
+    """
+    return asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
 
 # Shell exit codes used by the aedit command script
 _EXIT_NOT_FOUND = 1

@@ -34,9 +34,24 @@ class ExtendedSkillMetadata(SkillMetadata):
     Attributes:
         source: Origin of the skill. One of `'built-in'`, `'extension'`,
             `'user'`, or `'project'`.
+        fs_path: Real filesystem path to the SKILL.md file (not the virtual backend path).
     """
 
     source: str
+    fs_path: str
+
+
+def _virtual_to_fs_path(root_dir: Path, virtual_path: str) -> str:
+    """Convert a virtual backend path to a real filesystem path.
+
+    Args:
+        root_dir: The backend's root directory on disk.
+        virtual_path: Virtual path as returned by `FilesystemBackend` (e.g. `/web-research/SKILL.md`).
+
+    Returns:
+        Absolute filesystem path string.
+    """
+    return str(root_dir / virtual_path.lstrip("/"))
 
 
 # Re-export for CLI commands
@@ -106,7 +121,14 @@ def list_skills(
                 # cast(): type checkers can't infer TypedDict from spread syntax
                 extended_skill = cast(
                     "ExtendedSkillMetadata",
-                    {**skill, "source": "built-in", "metadata": enriched_metadata},
+                    {
+                        **skill,
+                        "source": "built-in",
+                        "metadata": enriched_metadata,
+                        "fs_path": _virtual_to_fs_path(
+                            built_in_skills_dir, skill["path"]
+                        ),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:
@@ -127,7 +149,12 @@ def list_skills(
             )
             for skill in extension_skills:
                 extended_skill = cast(
-                    "ExtendedSkillMetadata", {**skill, "source": "extension"}
+                    "ExtendedSkillMetadata",
+                    {
+                        **skill,
+                        "source": "extension",
+                        "fs_path": _virtual_to_fs_path(extension_dir, skill["path"]),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:
@@ -147,7 +174,12 @@ def list_skills(
             for skill in user_skills:
                 # cast(): type checkers can't infer TypedDict from spread syntax
                 extended_skill = cast(
-                    "ExtendedSkillMetadata", {**skill, "source": "user"}
+                    "ExtendedSkillMetadata",
+                    {
+                        **skill,
+                        "source": "user",
+                        "fs_path": _virtual_to_fs_path(user_skills_dir, skill["path"]),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:
@@ -167,7 +199,14 @@ def list_skills(
             for skill in user_agent_skills:
                 # cast(): type checkers can't infer TypedDict from spread syntax
                 extended_skill = cast(
-                    "ExtendedSkillMetadata", {**skill, "source": "user"}
+                    "ExtendedSkillMetadata",
+                    {
+                        **skill,
+                        "source": "user",
+                        "fs_path": _virtual_to_fs_path(
+                            user_agent_skills_dir, skill["path"]
+                        ),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:
@@ -187,7 +226,14 @@ def list_skills(
             for skill in project_skills:
                 # cast(): type checkers can't infer TypedDict from spread syntax
                 extended_skill = cast(
-                    "ExtendedSkillMetadata", {**skill, "source": "project"}
+                    "ExtendedSkillMetadata",
+                    {
+                        **skill,
+                        "source": "project",
+                        "fs_path": _virtual_to_fs_path(
+                            project_skills_dir, skill["path"]
+                        ),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:
@@ -210,7 +256,14 @@ def list_skills(
             for skill in project_agent_skills:
                 # cast(): type checkers can't infer TypedDict from spread syntax
                 extended_skill = cast(
-                    "ExtendedSkillMetadata", {**skill, "source": "project"}
+                    "ExtendedSkillMetadata",
+                    {
+                        **skill,
+                        "source": "project",
+                        "fs_path": _virtual_to_fs_path(
+                            project_agent_skills_dir, skill["path"]
+                        ),
+                    },
                 )
                 all_skills[skill["name"]] = extended_skill
         except OSError:

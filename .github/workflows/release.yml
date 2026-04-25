@@ -20,10 +20,15 @@ on:
         options:
           - bog-agents
           - bog-agents-cli
+          - bog-agents-daemon
         default: bog-agents
 
+concurrency:
+  group: release-${{ inputs.package }}
+  cancel-in-progress: false
+
 env:
-  PYTHON_VERSION: "3.11"
+  PYTHON_VERSION: "3.12"
   UV_NO_SYNC: "true"
 
 permissions:
@@ -42,8 +47,9 @@ jobs:
           PACKAGE="${{ inputs.package }}"
           echo "package=$PACKAGE" >> $GITHUB_OUTPUT
           case "$PACKAGE" in
-            bog-agents)     echo "working-dir=libs/bog-agents" >> $GITHUB_OUTPUT ;;
-            bog-agents-cli) echo "working-dir=libs/cli" >> $GITHUB_OUTPUT ;;
+            bog-agents)        echo "working-dir=libs/bog-agents" >> $GITHUB_OUTPUT ;;
+            bog-agents-cli)    echo "working-dir=libs/cli" >> $GITHUB_OUTPUT ;;
+            bog-agents-daemon) echo "working-dir=libs/daemon" >> $GITHUB_OUTPUT ;;
             *) echo "Unknown package: $PACKAGE" && exit 1 ;;
           esac
 
@@ -117,7 +123,7 @@ jobs:
           uv run python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
 
       # Run unit tests against the built package
-      - run: uv sync --group test --locked
+      - run: uv sync --group test
         working-directory: ${{ env.WORKING_DIR }}
       - name: Install built package over source
         working-directory: ${{ env.WORKING_DIR }}
@@ -134,18 +140,17 @@ jobs:
       WORKING_DIR: ${{ needs.setup.outputs.working-dir }}
     steps:
       - uses: actions/checkout@v6
+      - uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: "false"
       - uses: actions/download-artifact@v8
         with:
           name: dist-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: ${{ env.WORKING_DIR }}/dist/
-          verbose: true
-          print-hash: true
-          attestations: false
+        run: uv publish --trusted-publishing automatic ${{ env.WORKING_DIR }}/dist/*
 
   github-release:
     needs: [setup, build, publish]

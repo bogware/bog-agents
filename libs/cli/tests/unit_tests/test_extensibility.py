@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -14,8 +15,7 @@ class TestExtensibility:
 
     @staticmethod
     def _make_config_dir() -> Path:
-        base = Path("E:/Code/bog-agents/libs/cli/.tmp-ext-tests")
-        path = base / uuid4().hex
+        path = Path(tempfile.mkdtemp()) / uuid4().hex
         path.mkdir(parents=True, exist_ok=True)
         return path
 

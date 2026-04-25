@@ -13,7 +13,7 @@ import subprocess  # noqa: S404
 from difflib import SequenceMatcher
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from bog_agents_cli.command_registry import get_slash_commands
 from bog_agents_cli.project_utils import find_project_root
@@ -102,7 +102,7 @@ Hidden keywords are space-separated terms that participate in fuzzy matching
 but are never displayed to the user.
 """
 
-MAX_SUGGESTIONS = 10
+MAX_SUGGESTIONS = 15
 """UI cap so the completion popup doesn't get unwieldy."""
 
 _MIN_SLASH_FUZZY_SCORE = 25
@@ -110,6 +110,72 @@ _MIN_SLASH_FUZZY_SCORE = 25
 
 _MIN_DESC_SEARCH_LEN = 2
 """Minimum query length to search command descriptions (avoids single-char noise)."""
+
+
+def fuzzy_score(query: str, candidate: str) -> int:
+    """Compute a fuzzy match score for query against candidate.
+
+    Returns 0 if no match, higher is better.
+
+    Algorithm:
+
+    - Exact prefix match: score 1000 + (100 - len difference)
+    - All chars of query appear in candidate in order: score = 500 + consecutive_bonus
+    - Each char found: +10; consecutive chars: +20 bonus per consecutive pair
+    - Case-insensitive matching
+
+    Args:
+        query: The search term typed by the user.
+        candidate: The command name or description to score against.
+
+    Returns:
+        Integer score; 0 means no match, higher is a better match.
+    """
+    if not query:
+        return 0
+
+    q = query.lower()
+    c = candidate.lower()
+
+    # Exact prefix match — highest tier
+    if c.startswith(q):
+        return 1000 + max(0, 100 - (len(c) - len(q)))
+
+    # Sequential character matching (fuzzy)
+    # Check that all chars of query appear in candidate in order
+    ci = 0
+    qi = 0
+    first_match = -1
+    while qi < len(q) and ci < len(c):
+        if q[qi] == c[ci]:
+            if first_match < 0:
+                first_match = ci
+            qi += 1
+        ci += 1
+
+    if qi < len(q):
+        # Not all query chars found in order — no match
+        return 0
+
+    # All chars matched — compute bonus
+    char_score = len(q) * 10
+
+    # Consecutive bonus: scan through candidate tracking consecutive matched positions
+    matched_positions: list[int] = []
+    ci = 0
+    for ch in q:
+        while ci < len(c) and c[ci] != ch:
+            ci += 1
+        if ci < len(c):
+            matched_positions.append(ci)
+            ci += 1
+
+    consecutive_bonus = 0
+    for i in range(1, len(matched_positions)):
+        if matched_positions[i] == matched_positions[i - 1] + 1:
+            consecutive_bonus += 20
+
+    return 500 + char_score + consecutive_bonus
 
 
 class SlashCommandController:
@@ -207,14 +273,24 @@ class SlashCommandController:
                 :MAX_SUGGESTIONS
             ]
         else:
-            # Score and filter commands using fuzzy matching
-            scored = [
-                (score, cmd, desc)
-                for cmd, desc, kw in self._commands
-                if (score := self._score_command(search, cmd, desc, kw)) > 0
-            ]
-            scored.sort(key=lambda x: -x[0])
-            suggestions = [(cmd, desc) for _, cmd, desc in scored[:MAX_SUGGESTIONS]]
+            # Score and filter commands using fuzzy matching.
+            # Use _score_command as primary scorer; fall back to fuzzy_score
+            # (scaled to keep it below the existing tier thresholds) for
+            # candidates that _score_command rates at 0.
+            all_scored: list[tuple[float, str, str]] = []
+            for cmd, desc, kw in self._commands:
+                primary = self._score_command(search, cmd, desc, kw)
+                if primary > 0:
+                    all_scored.append((primary, cmd, desc))
+                else:
+                    # fuzzy_score operates on the bare command name (without /)
+                    fs = fuzzy_score(search, cmd.lstrip("/"))
+                    if fs > 0:
+                        # Scale into the fuzzy tier (below 25, above 0)
+                        scaled = min(fs / 100.0, _MIN_SLASH_FUZZY_SCORE - 1)
+                        all_scored.append((scaled, cmd, desc))
+            all_scored.sort(key=lambda x: -x[0])
+            suggestions = [(cmd, desc) for _, cmd, desc in all_scored[:MAX_SUGGESTIONS]]
 
         if suggestions:
             self._suggestions = suggestions
@@ -477,12 +553,24 @@ class FuzzyFileController:
         """Force refresh of file cache."""
         self._file_cache = None
 
+    # Typed mention prefixes shown when user types bare @
+    _MENTION_TYPES: ClassVar[list[tuple[str, str]]] = [
+        ("@file:", "Inject file contents"),
+        ("@folder:", "Inject directory listing"),
+        ("@repo:", "Inject repo context from workspace.toml"),
+        ("@search:", "Hybrid codebase search"),
+        ("@symbol:", "Inject symbol from repo map"),
+        ("@url:", "Fetch and inject webpage"),
+        ("@memory:", "Inject a memory entry"),
+        ("@skill:", "Inject a skill definition"),
+    ]
+
     @staticmethod
     def can_handle(text: str, cursor_index: int) -> bool:
         """Handle input that contains @ not followed by space.
 
         Returns:
-            True if cursor is after @ and within a file mention context.
+            True if cursor is after @ and within a mention context.
         """
         if cursor_index <= 0 or cursor_index > len(text):
             return False
@@ -516,7 +604,7 @@ class FuzzyFileController:
         at_index = before_cursor.rfind("@")
         search = before_cursor[at_index + 1 :]
 
-        suggestions = self._get_fuzzy_suggestions(search)
+        suggestions = self._get_mention_suggestions(search)
 
         if suggestions:
             self._suggestions = suggestions
@@ -527,27 +615,94 @@ class FuzzyFileController:
         else:
             self.reset()
 
-    def _get_fuzzy_suggestions(self, search: str) -> list[tuple[str, str]]:
-        """Get fuzzy file suggestions.
+    def _get_mention_suggestions(self, search: str) -> list[tuple[str, str]]:
+        """Get suggestions for the fragment after @.
+
+        Handles three cases:
+        - bare ``@`` or ``@partial`` — show mention type prefixes
+        - ``@file:query`` — show fuzzy file matches
+        - ``@folder:query`` — show fuzzy folder matches
+
+        Returns:
+            List of (label, description) tuples.
+        """
+        # @file:<query> → fuzzy file completions
+        if search.startswith("file:"):
+            query = search[5:]
+            return self._get_file_suggestions(query, prefix="@file:")
+
+        # @folder:<query> → fuzzy folder completions
+        if search.startswith("folder:"):
+            query = search[7:]
+            return self._get_folder_suggestions(query)
+
+        # Bare @ or @<partial-type> — offer the type prefixes
+        # Only show if no colon yet (user hasn't chosen a type)
+        if ":" not in search:
+            matches = [
+                (label, desc)
+                for label, desc in self._MENTION_TYPES
+                if label[1:].startswith(search.lower())  # e.g. "fi" matches "file:"
+            ]
+            return matches or []
+
+        # Unknown prefix (e.g. @symbol:, @url:, @memory:, @skill:) — no completion
+        return []
+
+    def _get_file_suggestions(
+        self, query: str, *, prefix: str = "@"
+    ) -> list[tuple[str, str]]:
+        """Return fuzzy file suggestions.
 
         Returns:
             List of (label, type_hint) tuples for matching files.
         """
         files = self._get_files()
-        # Include dotfiles only if query starts with "."
-        include_dots = search.startswith(".")
+        include_dots = query.startswith(".")
         matches = _fuzzy_search(
-            search, files, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
+            query, files, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
         )
 
         suggestions: list[tuple[str, str]] = []
         for path in matches:
-            # Get file extension for type hint
             ext = Path(path).suffix.lower()
             type_hint = ext[1:] if ext else "file"
-            suggestions.append((f"@{path}", type_hint))
-
+            suggestions.append((f"{prefix}{path}", type_hint))
         return suggestions
+
+    def _get_folder_suggestions(self, query: str) -> list[tuple[str, str]]:
+        """Return folder suggestions relative to project root.
+
+        Returns:
+            List of (label, description) tuples for matching directories.
+        """
+        try:
+            dirs: list[str] = []
+            for p in sorted(self._project_root.rglob("*")):
+                if p.is_dir() and not any(
+                    part.startswith(".")
+                    for part in p.relative_to(self._project_root).parts
+                ):
+                    rel = p.relative_to(self._project_root).as_posix()
+                    dirs.append(rel)
+                if len(dirs) >= 500:
+                    break
+
+            include_dots = query.startswith(".")
+            matches = _fuzzy_search(
+                query, dirs, limit=MAX_SUGGESTIONS, include_dotfiles=include_dots
+            )
+            return [(f"@folder:{d}", "dir") for d in matches]
+        except OSError:
+            return []
+
+    def _get_fuzzy_suggestions(self, search: str) -> list[tuple[str, str]]:
+        """Legacy: get fuzzy file suggestions (bare @ path).
+
+        Returns:
+            List of (label, type_hint) tuples for matching files.
+        """
+        return self._get_file_suggestions(search)
 
     def on_key(
         self, event: events.Key, text: str, cursor_index: int

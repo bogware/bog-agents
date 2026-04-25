@@ -1,0 +1,46 @@
+name: bug-investigation
+description: "Systematic bug investigation — reproduce, isolate root cause, fix, and verify"
+variables:
+  - bug_description
+  - error_message
+steps:
+  - id: reproduce
+    type: message
+    text: |
+      Help me investigate this bug.
+
+      Bug: {{bug_description}}
+      Error: {{error_message}}
+
+      First, try to reproduce it. Check:
+      - Recent commits that touched relevant code (git log --oneline -20)
+      - Any related error patterns in the codebase
+      - Test files that might cover this behaviour
+
+  - id: root-cause
+    type: prompt
+    name: debug-help
+    variables:
+      error: "{{error_message}}"
+      code: "Relevant code found during reproduction step"
+      tried: "Initial reproduction attempt above"
+
+  - id: fix
+    type: message
+    text: |
+      Based on the root cause analysis above, implement the fix.
+
+      Requirements:
+      - Fix the root cause, not the symptom
+      - Don't break existing tests
+      - Add a regression test that would have caught this bug
+      - Keep the change minimal and focused
+
+  - id: verify
+    type: message
+    text: |
+      Verify the fix is complete:
+      1. Run the relevant tests
+      2. Check for similar patterns elsewhere in the codebase that might have the same bug
+      3. Review the fix for any new issues introduced
+      4. Summarise what was fixed and why it happened

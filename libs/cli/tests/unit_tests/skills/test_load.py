@@ -60,7 +60,8 @@ This is a test skill.
         assert skills[0]["name"] == "test-skill"
         assert skills[0]["description"] == "A test skill"
         assert skills[0]["source"] == "user"
-        assert Path(skills[0]["path"]) == skill_md
+        # path is a virtual backend path; fs_path is the real filesystem path
+        assert Path(skills[0]["fs_path"]) == skill_md
 
     def test_list_skills_source_parameter(self, tmp_path: Path) -> None:
         """Test that source parameter is correctly set for project skills."""

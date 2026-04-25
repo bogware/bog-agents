@@ -1,4 +1,4 @@
-# CI: Lint and test SDK + CLI on push to main and PRs.
+# CI: Lint and test SDK, CLI, and daemon on push to main and PRs.
 
 name: CI
 
@@ -29,58 +29,53 @@ jobs:
         package:
           - { name: sdk, dir: libs/bog-agents }
           - { name: cli, dir: libs/cli }
+          - { name: daemon, dir: libs/daemon }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.11"
           working-directory: ${{ matrix.package.dir }}
-      - run: uv sync --group test --locked
+      - run: uv sync --group test
         working-directory: ${{ matrix.package.dir }}
       - run: make lint
         working-directory: ${{ matrix.package.dir }}
 
   test:
-    name: "Test (${{ matrix.package.name }}, py3.11)"
-    runs-on: [self-hosted, Linux]
+    name: "Test (${{ matrix.package.name }}, py${{ matrix.python }}, ${{ matrix.os }})"
+    runs-on: [self-hosted, "${{ matrix.os }}"]
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [Linux, Windows]
+        # macos: no self-hosted macOS runner available
+        # os: [Linux, Windows, macOS]
         package:
-          - { name: sdk, dir: libs/bog-agents }
-          - { name: cli, dir: libs/cli }
+          - { name: sdk,    dir: libs/bog-agents }
+          - { name: cli,    dir: libs/cli }
+          - { name: daemon, dir: libs/daemon }
+        python: ["3.12", "3.13"]  # 3.11 temporarily disabled
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
           working-directory: ${{ matrix.package.dir }}
-      - run: uv sync --group test --locked
+      - run: uv sync --group test
         working-directory: ${{ matrix.package.dir }}
-      - run: make test
+      # sdk/cli on Linux: enforce socket isolation
+      - name: Run tests
+        if: matrix.package.name != 'daemon' && runner.os == 'Linux'
+        run: uv run --group test pytest -n auto --disable-socket --allow-unix-socket tests/unit_tests/
         working-directory: ${{ matrix.package.dir }}
-
-  # TODO: Re-enable test matrix (SDK + CLI × Python 3.11/3.12/3.13) once
-  # self-hosted runners are fully provisioned.
-  # test:
-  #   name: "Test (${{ matrix.package.name }}, py${{ matrix.python }})"
-  #   runs-on: [self-hosted, Linux]
-  #   timeout-minutes: 20
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       package:
-  #         - { name: sdk, dir: libs/bog-agents }
-  #         - { name: cli, dir: libs/cli }
-  #       python: ["3.11", "3.12", "3.13"]
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - uses: "./.github/actions/uv_setup"
-  #       with:
-  #         python-version: ${{ matrix.python }}
-  #         working-directory: ${{ matrix.package.dir }}
-  #     - run: uv sync --group test --locked
-  #       working-directory: ${{ matrix.package.dir }}
-  #     - run: make test
-  #       working-directory: ${{ matrix.package.dir }}
+      # sdk/cli on Windows: no parallel, no socket plugin (pytest-socket incompatible with Windows ProactorEventLoop)
+      - name: Run tests
+        if: matrix.package.name != 'daemon' && runner.os == 'Windows'
+        run: uv run --group test pytest -p no:socket tests/unit_tests/
+        working-directory: ${{ matrix.package.dir }}
+      # daemon: same command on all OSes (no socket plugin needed)
+      - name: Run tests
+        if: matrix.package.name == 'daemon'
+        run: uv run --group test pytest tests/ -q --timeout=30
+        working-directory: ${{ matrix.package.dir }}

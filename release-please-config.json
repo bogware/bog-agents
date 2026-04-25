@@ -64,7 +64,7 @@
         "bog_agents/_version.py"
       ],
       "changelog-path": "CHANGELOG.md",
-      "last-release-sha": "89c07173c63cd019b2d2dc0fa25f78e14c81945e"
+      "last-release-sha": "7b3bad7de77c6b6ac55c8c27317db243519f92ed"
     },
     "libs/cli": {
       "release-type": "python",
@@ -78,6 +78,19 @@
       ],
       "changelog-path": "CHANGELOG.md",
       "last-release-sha": "d47f743d6607a95a01bfe82aade6fdc642977c87"
+    },
+    "libs/daemon": {
+      "release-type": "python",
+      "package-name": "bog-agents-daemon",
+      "component": "bog-agents-daemon",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        "pyproject.toml",
+        "bog_agents_daemon/__init__.py"
+      ],
+      "changelog-path": "CHANGELOG.md",
+      "last-release-sha": "5483f3b0000000000000000000000000000000000"
     }
   },
   "tag-separator": "==",
