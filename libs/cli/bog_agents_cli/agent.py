@@ -766,7 +766,9 @@ def create_cli_agent(
 
         agent_middleware.append(
             MemoryMiddleware(
-                backend=FilesystemBackend(),
+                # virtual_mode=False: memory sources are CLI-controlled absolute paths
+                # spanning multiple roots (user home + project), not agent-supplied input.
+                backend=FilesystemBackend(virtual_mode=False),
                 sources=memory_sources,
             )
         )
@@ -799,7 +801,9 @@ def create_cli_agent(
 
         agent_middleware.append(
             SkillsMiddleware(
-                backend=FilesystemBackend(),
+                # virtual_mode=False: skill sources are CLI-controlled absolute paths
+                # spanning multiple roots (built-in, extensions, user, project).
+                backend=FilesystemBackend(virtual_mode=False),
                 sources=sources,
             )
         )
@@ -825,7 +829,9 @@ def create_cli_agent(
             )
         else:
             # No shell access - use plain FilesystemBackend
-            backend = FilesystemBackend(root_dir=root_dir)
+            # virtual_mode=False: agent file tools use real absolute paths.
+            # Explicit to survive SDK default flips (0.7.1 changed default to True).
+            backend = FilesystemBackend(root_dir=root_dir, virtual_mode=False)
     else:
         # ========== REMOTE SANDBOX MODE ==========
         backend = sandbox  # Remote sandbox (ModalBackend, etc.)

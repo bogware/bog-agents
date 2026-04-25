@@ -286,6 +286,10 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
         if ".." in normalized.split("/"):
             msg = f"Path traversal detected after normalization: {path} -> {normalized}"
             raise ValueError(msg)
+        # For non-drive-letter paths, prepend "/" to match POSIX virtual-path
+        # semantics (parity with the non-Windows branch below).
+        if not normalized.startswith("/") and not re.match(r"^[a-zA-Z]:", normalized):
+            normalized = f"/{normalized}"
         if allowed_prefixes is not None and not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
             msg = f"Path must start with one of {allowed_prefixes}: {path}"
             raise ValueError(msg)

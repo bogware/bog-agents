@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from typing import cast
@@ -15,6 +16,8 @@ from bog_agents.backends.protocol import (
     FileUploadResponse,
 )
 from bog_agents.backends.sandbox import BaseSandbox
+
+logger = logging.getLogger(__name__)
 
 SyncPollingInterval = float | Callable[[float], float]
 PollingStrategy = Callable[[float], float]
@@ -150,7 +153,14 @@ class DaytonaSandbox(BaseSandbox):
         if not download_requests:
             return responses
 
-        daytona_responses = self._sandbox.fs.download_files(download_requests)
+        try:
+            daytona_responses = self._sandbox.fs.download_files(download_requests)
+        except Exception:  # noqa: BLE001  # Daytona SDK can raise arbitrary errors; map all failed paths to file_not_found
+            logger.exception("Daytona batch download failed")
+            for i, path in enumerate(paths):
+                if responses[i].error is None:
+                    responses[i] = FileDownloadResponse(path=path, content=None, error="file_not_found")
+            return responses
 
         mapped_responses: list[FileDownloadResponse] = []
         for resp in daytona_responses:
@@ -196,6 +206,16 @@ class DaytonaSandbox(BaseSandbox):
             responses.append(FileUploadResponse(path=path, error=None))
 
         if upload_requests:
-            self._sandbox.fs.upload_files(upload_requests)
+            try:
+                self._sandbox.fs.upload_files(upload_requests)
+            except PermissionError:
+                for i, (path, _) in enumerate(files):
+                    if responses[i].error is None:
+                        responses[i] = FileUploadResponse(path=path, error="permission_denied")
+            except Exception:  # noqa: BLE001  # Daytona SDK can raise arbitrary errors; map all failed paths to invalid_path
+                logger.exception("Daytona batch upload failed")
+                for i, (path, _) in enumerate(files):
+                    if responses[i].error is None:
+                        responses[i] = FileUploadResponse(path=path, error="invalid_path")
 
         return responses

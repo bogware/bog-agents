@@ -7,6 +7,8 @@ import pytest
 
 from bog_agents.backends.utils import _glob_search_files, validate_path
 
+_IS_WINDOWS = sys.platform == "win32"
+
 
 @pytest.mark.skipif(
     sys.platform == "win32",
@@ -35,8 +37,22 @@ class TestValidatePath:
             ("../etc/passwd", "Path traversal not allowed"),
             ("foo/../../etc", "Path traversal not allowed"),
             ("~/secret.txt", "Path traversal not allowed"),
-            ("C:\\Users\\file.txt", "Windows absolute paths are not supported"),
-            ("D:/data/file.txt", "Windows absolute paths are not supported"),
+            pytest.param(
+                "C:\\Users\\file.txt",
+                "Windows absolute paths are not supported",
+                marks=pytest.mark.skipif(
+                    _IS_WINDOWS,
+                    reason="Windows hosts intentionally accept native absolute paths",
+                ),
+            ),
+            pytest.param(
+                "D:/data/file.txt",
+                "Windows absolute paths are not supported",
+                marks=pytest.mark.skipif(
+                    _IS_WINDOWS,
+                    reason="Windows hosts intentionally accept native absolute paths",
+                ),
+            ),
         ],
     )
     def test_invalid_paths_rejected(self, invalid_path: str, error_match: str) -> None:

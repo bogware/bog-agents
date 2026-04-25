@@ -9627,7 +9627,9 @@ class BogAgentsApp(App):
             if compact_backend is None:
                 from bog_agents.backends.filesystem import FilesystemBackend
 
-                compact_backend = FilesystemBackend()
+                # virtual_mode=False: compaction reads CLI-controlled paths,
+                # not agent-supplied input. Explicit to survive SDK default flips.
+                compact_backend = FilesystemBackend(virtual_mode=False)
                 logger.info("Using local FilesystemBackend for compaction")
             middleware = SummarizationMiddleware(
                 model=model,
@@ -10044,6 +10046,19 @@ class BogAgentsApp(App):
                     "tools are not supported",
                 )
             )
+            # The langgraph SSE stream forwards server-side exceptions as
+            # `RemoteException({'error': 'ResponseError', 'message': 'An
+            # internal error occurred'})` — the original detail is lost.
+            # When the user is on Ollama and we see this generic shape, the
+            # most likely cause is a model that does not support tool calls.
+            if (
+                err_name == "RemoteException"
+                and "'responseerror'" in err_str
+                and "internal error" in err_str
+            ):
+                model_id = (self._base_model_spec or "").lower()
+                if model_id.startswith("ollama:"):
+                    is_tool_capability_error = True
             is_auth_error = any(
                 keyword in err_name.lower() or keyword in err_str
                 for keyword in (

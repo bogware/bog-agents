@@ -49,8 +49,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Update version
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+      - name: Validate and update version
+        run: |
+          if [[ ! "$EXT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $EXT_VERSION" && exit 1
+          fi
+          npm version "$EXT_VERSION" --no-git-tag-version
+        env:
+          EXT_VERSION: ${{ inputs.version }}
 
       - name: Package extension
         run: npx @vscode/vsce package
@@ -81,8 +87,14 @@ jobs:
       - name: Compile
         run: npm run compile
 
-      - name: Update version
-        run: npm version ${{ inputs.version }} --no-git-tag-version
+      - name: Validate and update version
+        run: |
+          if [[ ! "$EXT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version format: $EXT_VERSION" && exit 1
+          fi
+          npm version "$EXT_VERSION" --no-git-tag-version
+        env:
+          EXT_VERSION: ${{ inputs.version }}
 
       - name: Publish to VS Code Marketplace
         run: npx @vscode/vsce publish

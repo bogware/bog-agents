@@ -1,13 +1,13 @@
 # Bog Agents CLI
 
-A coding agent in your terminal. Point it at the problem, step back, let it work.
+A coding agent that lives in your terminal. Point it at the work, step back, let it run.
 
-No scaffolding, no boilerplate, no configuration ceremony. One install and you've got a
-full-blooded AI agent — file access, shell commands, git workflow, code review, planning,
-sub-agents, the whole outfit. Runs on any LLM that supports tool calling: Anthropic, OpenAI,
-AWS Bedrock, Google, Ollama, and a dozen others.
+No scaffolding. No config ceremony. One install and you've got file access, a shell,
+git, code review, planning, sub-agents — the whole outfit. Works with any LLM that does
+tool calls: Anthropic, OpenAI, Bedrock, Google, Ollama, and a dozen others.
 
-Built on the [Bog Agents SDK](https://github.com/bogware/bog-agents) and [LangGraph](https://github.com/langchain-ai/langgraph). MIT licensed.
+Built on the [Bog Agents SDK](https://github.com/bogware/bog-agents) and
+[LangGraph](https://github.com/langchain-ai/langgraph). MIT.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents-cli)](https://pypi.org/project/bog-agents-cli/)
 [![License](https://img.shields.io/pypi/l/bog-agents-cli)](https://opensource.org/licenses/MIT)
@@ -20,10 +20,9 @@ Built on the [Bog Agents SDK](https://github.com/bogware/bog-agents) and [LangGr
 ```bash
 pip install bog-agents-cli
 
-# Pick your provider (OpenAI included by default)
-pip install 'bog-agents-cli[anthropic]'
+pip install 'bog-agents-cli[anthropic]'      # Claude
 pip install 'bog-agents-cli[bedrock]'        # AWS Bedrock
-pip install 'bog-agents-cli[ollama]'         # Local, no API key
+pip install 'bog-agents-cli[ollama]'         # Local models, no key
 pip install 'bog-agents-cli[all-providers]'  # Everything
 ```
 
@@ -33,24 +32,24 @@ Or with `uv`:
 uv tool install 'bog-agents-cli[anthropic]'
 ```
 
-## First Run
+## First run
 
 ```bash
 bog-agents
 ```
 
-If you've got an API key in your environment or AWS credentials in `~/.aws/`, it picks them up
-automatically. No key? The setup wizard walks you through it — 30 seconds and you're riding.
+If there's a key in your environment — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, AWS creds,
+anything — it finds them and gets moving. No key, no problem: the setup wizard handles
+the introductions in about thirty seconds.
 
 ```bash
-# Or specify your model explicitly
 bog-agents -M claude-sonnet-4-6
 bog-agents -M gpt-4o
-bog-agents -M ollama:llama3            # No API key needed
-bog-agents -M bedrock_converse:anthropic.claude-sonnet-4-6  # AWS credentials
+bog-agents -M ollama:llama3              # local, free
+bog-agents -M bedrock_converse:anthropic.claude-sonnet-4-6
 ```
 
-Check your setup any time:
+Something feeling off? Ask it.
 
 ```bash
 bog-agents --doctor
@@ -58,158 +57,171 @@ bog-agents --doctor
 
 ---
 
-## Features
+## What it does
 
-### Interactive TUI
+**Runs in a real TUI.** Streaming tokens, syntax highlighting, inline diffs, approve
+tools one-by-one or not at all. Terminal only — no browser, no Electron, no nonsense.
 
-A rich terminal interface with streaming responses, syntax highlighting, inline diffs, and
-tool-call approval. Everything happens in the terminal — no browser, no Electron, no nonsense.
+**Keeps state between runs.** Every session is a thread you can come back to. Memory,
+summaries, labels, and per-project context persist in `~/.bog-agents/`.
 
-### Slash Commands
+**Scripts cleanly.** `-n`, `-p`, `--json`, `--no-stream`, and proper exit codes make it
+a tool you can pipe, cron, and drop into CI without regret.
 
-Type `/` in the interactive session and the autocomplete shows you everything. The list below
-focuses on the commands that are shipped, wired, and ready to use today:
+**Separates concerns.** Named agents each get their own prompt, memory, skills, and
+thread history. A `researcher`, a `reviewer`, a `debugger` — all on the same install.
 
-| Command | What It Does |
+**Scales out.** Remote sandboxes for isolated work. MCP for external tools. An HTTP
+server mode when something else needs to drive.
+
+---
+
+## Slash commands
+
+Hit `/` in an interactive session and autocomplete shows you everything. The commands
+that carry the most weight:
+
+| Command | What it does |
 |---------|-------------|
-| `/model` | Switch LLM mid-session — Anthropic, OpenAI, Ollama, anything |
-| `/plan` | Read-only plan mode. Agent sees the lay of the land without touching a thing |
-| `/effort` | Set reasoning depth: `low` (fast), `medium`, `high`, `max` (thorough) |
-| `/review` | Code review on staged changes, a commit, or specific files |
+| `/model` | Switch LLM mid-session |
+| `/plan` | Read-only mode. Agent scouts the territory without touching anything |
+| `/effort` | Reasoning depth: `low`, `medium`, `high`, `max` |
+| `/review` | Review staged changes, a commit, or specific files |
 | `/diff` | Show pending file changes as unified diffs |
-| `/compact` | Compress conversation context (`aggressive`, `moderate`, or custom rules) |
-| `/cost` | Real-time token usage, cost estimate, and budget enforcement |
-| `/context` | Show context window usage with breakdown |
-| `/remember` | Persist insights to agent memory (survives across sessions) |
+| `/compact` | Trim conversation context when it gets heavy |
+| `/cost` | Token usage, cost estimate, budget |
+| `/context` | Context-window usage with a breakdown |
+| `/remember` | Persist an insight to agent memory across sessions |
 | `/agent` | Spawn and manage parallel agent threads |
-| `/background` | Queue local background work and monitor status |
-| `/dashboard` | Show a live multi-agent snapshot |
-| `/worktree` | Isolated git worktrees for parallel work streams |
-| `/doctor` | Health check — Python, packages, API keys, tools, sandbox support |
-| `/threads` | Browse and resume previous conversations |
-| `/recommend` | AI-powered code review with persona-based analysis |
-| `/onboard` | Interactive codebase tour for getting up to speed |
-| `/docs` | Open documentation and project guides |
-| `/changelog` | Open the project changelog |
-| `/mcp` | Show active MCP servers and available tools |
-| `/extensions` | Manage installed extensions |
-| `/plugin` | Unified plugin and extension install/list/info/enable/disable flow |
-| `/keybindings` | Show current keybindings or the config path |
-| `/remote` | Submit a task for remote execution, including SSH sandbox providers |
+| `/background` | Queue local work and watch it from the side |
+| `/dashboard` | Live multi-agent snapshot |
+| `/worktree` | Isolated git worktrees for parallel streams |
+| `/resume` | Resume latest, specific, or tagged threads |
+| `/threads` | Browse and manage past conversations |
+| `/recommend` | Persona-based code review |
+| `/onboard` | Walk a new codebase with you |
+| `/mcp` | Show active MCP servers and tools |
+| `/plugin` | Install, list, enable, disable extensions |
+| `/remote` | Submit, track, and stop remote tasks |
+| `/doctor` | Health check: Python, packages, keys, tools, sandboxes |
 | `/profile` | Switch configuration presets |
-| `/session` | Show and persist label, tags, project, summary, and exports |
-| `/resume` | Resume the latest thread, a specific thread, or threads by tag/project |
+| `/session` | Label, tag, summarize, and export a thread |
+| `/keybindings` | Show bindings or the config path |
 | `/clear` | Start a fresh thread |
 | `/quit` | Hang up your hat |
 
-### Non-Interactive Mode
+---
 
-This is where automation lives. One command, one task, exit code tells the story.
+## Non-interactive mode
+
+Where the automation lives. One command, one task, exit code tells the story.
 
 ```bash
-# Basic task — no shell access by default
+# Basic task — no shell, safe by default
 bog-agents -n 'Summarize the README'
 
-# Grant shell access (safe defaults)
+# Grant shell access with a curated allow-list
 bog-agents -n 'Run the test suite' --shell-allow-list recommended
 
 # Specific commands only
 bog-agents -n 'Search logs for errors' --shell-allow-list cat,grep,find
 
-# Full shell access
+# Unrestricted shell — trusted environments only
 bog-agents -n 'Fix the failing tests and commit' --shell-allow-list all
 
 # Clean output for piping
 bog-agents -p 'Explain this code' < my_file.py
-
-# Pipe to another command
 bog-agents -p 'Write a code review' < pr_diff.patch | tee review.md
 
-# Machine-readable JSON
+# Machine-readable
 bog-agents -n 'List all TODO comments' --json
-
-# No streaming (buffer full response)
-bog-agents -n 'Refactor the auth module' --no-stream
 
 # Fix an issue and open a PR in one shot
 bog-agents -n 'Fix issue #42' --pr --shell-allow-list all
 
-# Create a draft PR against a specific branch
+# Draft PR against a specific branch
 bog-agents -n 'Add dark mode' --pr --pr-base develop --pr-draft --shell-allow-list all
 ```
 
 **Exit codes:** `0` success, `1` error, `130` interrupted.
 
-**Shell access in non-interactive mode** is off by default — you grant it explicitly:
-- `--shell-allow-list recommended` — curated safe commands (`ls`, `cat`, `grep`, `find`, `wc`, etc.)
-- `--shell-allow-list ls,cat,grep` — your own allow-list
-- `--shell-allow-list all` — unrestricted shell (use in trusted environments)
+**Shell access** is off by default. Three ways to turn it on:
+- `--shell-allow-list recommended` — curated safe commands (`ls`, `cat`, `grep`, `find`, `wc`, more)
+- `--shell-allow-list ls,cat,grep` — roll your own
+- `--shell-allow-list all` — no guardrails
 
-### Conversation Resume
+---
 
-Pick up where you left off. Every conversation is a thread with full history.
+## Threads and memory
+
+Come back to what you were working on.
 
 ```bash
-bog-agents -r              # Resume most recent thread
-bog-agents -r abc123       # Resume a specific thread
-bog-agents threads list    # See all threads
-bog-agents threads delete abc123  # Clean up
+bog-agents -r              # Latest thread
+bog-agents -r abc123       # Specific thread
+bog-agents threads list    # See 'em all
+bog-agents threads delete abc123
 ```
 
-### Persistent Memory
+Persistent memory lives in `~/.bog-agents/<agent>/AGENTS.md`. Use `/remember` to add
+a note the agent should carry forward. Use `/session` to attach labels, tags, project
+names, and summaries to the current thread so you can find it later.
 
-The agent remembers things across sessions. Use `/remember` to persist insights, and use
-`/session` to attach labels, tags, project names, summaries, and exports to a thread.
-Memory is stored per-agent in `~/.bog-agents/`.
+Project-level memory lives in `.bog-agents/AGENTS.md` at your repo root — check it in,
+and every teammate on this codebase gets the same context when they fire up the CLI.
 
-### Custom Skills
+---
 
-Extend the agent with reusable skills and packaged extensions. Skills are instruction bundles
-with a `SKILL.md` manifest, and extensions can contribute both skills and slash commands.
+## Skills and extensions
+
+Teach the agent something once, reuse it forever. A skill is a `SKILL.md` manifest plus
+whatever scripts and prompts it needs. Extensions bundle skills and slash commands together.
 
 ```bash
-bog-agents skills list           # See installed skills
-bog-agents skills create         # Scaffold a new skill
-bog-agents skills info my-skill  # Show skill details
+bog-agents skills list
+bog-agents skills create              # Scaffold a new skill
+bog-agents skills info my-skill
 bog-agents skills delete my-skill
 ```
 
-In the interactive TUI:
+In the TUI:
 
 ```text
-/plugin
 /plugin install <path-or-url>
 /plugin info <name>
 /plugin enable <name>
 /plugin disable <name>
 ```
 
-### Named Agents
+---
 
-Run multiple agents with separate memory, prompts, and thread history.
+## Named agents
 
-```bash
-bog-agents -a researcher    # Use the "researcher" agent
-bog-agents -a reviewer      # Use the "reviewer" agent
-bog-agents list             # See all agents
-bog-agents reset --agent researcher  # Reset an agent's prompt
-```
-
-### Remote Sandboxes
-
-Bog Agents supports both built-in runtime sandboxes and tracked remote tasks. Use the
-runtime sandbox flags when you want a single interactive or non-interactive session isolated
-from your local machine, and use `/remote` when you want queueing, status tracking, or an
-SSH-backed sandbox workflow.
+Run separate agents with separate memory, prompts, and history. Same install, different
+hats.
 
 ```bash
-bog-agents --sandbox modal           # Modal serverless sandbox
-bog-agents --sandbox daytona         # Daytona cloud sandbox
-bog-agents --sandbox runloop         # Runloop sandbox
-bog-agents --sandbox-id existing-id  # Reuse an existing sandbox
+bog-agents -a researcher
+bog-agents -a reviewer
+bog-agents list                           # All agents
+bog-agents reset --agent researcher       # Back to default prompt
 ```
 
-Inside the TUI:
+---
+
+## Remote sandboxes
+
+When the work's too rough for the local machine, or you want it to run somewhere else
+while you get on with yours.
+
+```bash
+bog-agents --sandbox modal                # Modal serverless
+bog-agents --sandbox daytona              # Daytona cloud
+bog-agents --sandbox runloop              # Runloop
+bog-agents --sandbox-id existing-id       # Hop back on an existing sandbox
+```
+
+Inside the TUI, `/remote` queues tracked tasks:
 
 ```text
 /remote config
@@ -218,29 +230,31 @@ Inside the TUI:
 /remote stop <id>
 ```
 
-### MCP (Model Context Protocol)
+---
 
-Load external tools via MCP servers. Auto-discovers `.mcp.json` in your project, or specify
-a config file.
+## MCP (Model Context Protocol)
+
+External tools, loaded on demand. The CLI auto-finds `.mcp.json` in your project, or
+you can point at one.
 
 ```bash
 bog-agents --mcp-config ./my-mcp-servers.json
-bog-agents --no-mcp                  # Disable MCP entirely
-bog-agents --trust-project-mcp       # Skip the approval prompt
+bog-agents --no-mcp                       # Off
+bog-agents --trust-project-mcp            # Skip the approval prompt
 ```
 
-### HTTP API Server
+---
 
-Serve the agent as an HTTP API for integration with other tools.
+## Server modes
+
+Put the agent behind an HTTP API when another tool wants to drive.
 
 ```bash
-bog-agents --serve                           # localhost:8420
+bog-agents --serve                                    # localhost:8420
 bog-agents --serve --serve-host 0.0.0.0 --serve-port 9000
 ```
 
-### ACP Server
-
-Run as an Agent Client Protocol server (for Zed editor integration).
+Or run as an Agent Client Protocol server, for Zed:
 
 ```bash
 bog-agents --acp
@@ -248,33 +262,34 @@ bog-agents --acp
 
 ---
 
-## Model Configuration
+## Model configuration
 
-### Auto-Detection
+### Detection order
 
-The CLI checks for credentials in this order:
+No `-M` flag? The CLI looks for credentials in this order and picks the first it finds:
+
 1. `[models].default` in `~/.bog-agents/config.toml`
 2. `[models].recent` (last `/model` switch)
-3. `ANTHROPIC_API_KEY` env var
-4. `OPENAI_API_KEY` env var
+3. `ANTHROPIC_API_KEY`
+4. `OPENAI_API_KEY`
 5. AWS Bedrock (`~/.aws/credentials`, `AWS_ACCESS_KEY_ID`, `AWS_PROFILE`)
-6. `GOOGLE_API_KEY` env var
+6. `GOOGLE_API_KEY`
 7. `GOOGLE_CLOUD_PROJECT` (Vertex AI)
-8. `NVIDIA_API_KEY` env var
-9. Ollama (checks if `ollama` binary exists)
-10. Interactive setup wizard (if nothing found)
+8. `NVIDIA_API_KEY`
+9. Ollama (if the `ollama` binary is on PATH)
+10. Setup wizard (if nothing found)
 
-### Setting a Default
+### Setting a default
 
 ```bash
 bog-agents --default-model anthropic:claude-sonnet-4-6
-bog-agents --default-model                       # Show current default
-bog-agents --clear-default-model                 # Remove default
+bog-agents --default-model                    # Show current
+bog-agents --clear-default-model              # Remove
 ```
 
-### Configuration File
+### Config file
 
-Advanced configuration lives in `~/.bog-agents/config.toml`:
+Advanced knobs live in `~/.bog-agents/config.toml`:
 
 ```toml
 [models]
@@ -288,7 +303,7 @@ max_tokens = 8192
 api_base = "https://my-proxy.example.com/v1"
 ```
 
-### Runtime Model Parameters
+### Runtime overrides
 
 ```bash
 bog-agents -M gpt-4o --model-params '{"temperature": 0.2, "max_tokens": 4096}'
@@ -297,11 +312,11 @@ bog-agents -M claude-sonnet-4-6 --profile-override '{"max_input_tokens": 100000}
 
 ---
 
-## Supported Providers
+## Providers
 
-Any LangChain-compatible chat model works. Use `provider:model` format.
+Use `provider:model` format. Any LangChain-compatible chat model works.
 
-| Provider | Install Extra | Example |
+| Provider | Extra | Example |
 |----------|--------------|---------|
 | Anthropic | `anthropic` | `anthropic:claude-sonnet-4-6` |
 | OpenAI | *(included)* | `openai:gpt-4o` |
@@ -324,59 +339,59 @@ Any LangChain-compatible chat model works. Use `provider:model` format.
 
 ---
 
-## CI/CD & Scripting Recipes
+## Recipes for CI and scripting
 
 ```bash
 # Code review in CI
 git diff main...HEAD | bog-agents -p 'Review this diff for bugs and style issues'
 
-# Generate commit messages
+# Commit message from staged changes
 bog-agents -p 'Write a conventional commit message for the staged changes' \
   --shell-allow-list git
 
-# Automated refactoring
+# Automated refactor
 bog-agents -n 'Rename getUserData to fetch_user_data across the codebase' \
   --shell-allow-list recommended
 
-# Documentation generation
+# Docstring pass
 bog-agents -n 'Generate docstrings for all public functions in src/' \
   --shell-allow-list recommended
 
-# Security audit
+# Security audit, JSON out
 bog-agents -n 'Audit this repo for security vulnerabilities' \
   --shell-allow-list recommended --json
 
-# Fix and PR in one shot (great for issue bots)
+# Issue bot: fix and open a PR
 bog-agents -n 'Fix issue #123' --pr --shell-allow-list all
 ```
 
 ---
 
-## Environment Variables
+## Environment variables
 
 | Variable | Purpose |
 |----------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `OPENAI_API_KEY` | OpenAI API key |
-| `AWS_ACCESS_KEY_ID` / `AWS_PROFILE` | AWS Bedrock credentials |
-| `GOOGLE_API_KEY` | Google AI API key |
-| `GOOGLE_CLOUD_PROJECT` | Vertex AI project |
-| `NVIDIA_API_KEY` | NVIDIA API key |
+| `ANTHROPIC_API_KEY` | Anthropic |
+| `OPENAI_API_KEY` | OpenAI |
+| `AWS_ACCESS_KEY_ID` / `AWS_PROFILE` | AWS Bedrock |
+| `GOOGLE_API_KEY` | Google AI |
+| `GOOGLE_CLOUD_PROJECT` | Vertex AI |
+| `NVIDIA_API_KEY` | NVIDIA |
 | `TAVILY_API_KEY` | Tavily web search |
 | `BOG_AGENTS_SHELL_ALLOW_LIST` | Default shell allow-list |
 | `BOG_AGENTS_LANGSMITH_PROJECT` | LangSmith tracing project |
 
-Keys can also be set in `.env` (project-level) or `~/.bog-agents/.env` (user-level).
+Keys can also sit in a project-level `.env` or a user-level `~/.bog-agents/.env`.
 
 ---
 
-## Full CLI Reference
+## CLI reference
 
 ```
 bog-agents [OPTIONS] [COMMAND]
 
 Commands:
-  list                          List available agents
+  list                          List agents
   reset                         Reset an agent's prompt
   skills                        Manage skills (list/create/info/delete)
   threads                       Manage threads (list/delete)
@@ -430,17 +445,15 @@ Server:
 ## Requirements
 
 - Python 3.11+
-- At least one LLM provider (API key or local model)
-
----
+- At least one LLM provider (key or local model)
 
 ## Contributing
 
-We're open to contributions. See [CONTRIBUTING.md](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
+See [CONTRIBUTING.md](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
 
 ## License
 
-MIT
+MIT.
 
 ---
 

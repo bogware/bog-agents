@@ -694,6 +694,7 @@ async def execute_task_textual(
     # when multiple subagents stream in parallel
     pending_text_by_namespace: dict[tuple, str] = {}
     assistant_message_by_namespace: dict[tuple, Any] = {}
+    todo_message_by_namespace: dict[tuple, AppMessage] = {}
 
     # Finalize todos from the previous turn: add a dim "turn ended" footer so
     # users know the displayed state reflects the end of that turn, not the

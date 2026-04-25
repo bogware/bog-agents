@@ -114,6 +114,10 @@ jobs:
           PKG_NAME: ${{ needs.build.outputs.pkg-name }}
         run: |
           uv venv
+          # Pre-install the SDK from the local checkout so that the CLI wheel's
+          # bog-agents==X.Y.Z dependency is satisfied without relying on PyPI
+          # propagation, which can lag several minutes after a fresh SDK publish.
+          VIRTUAL_ENV=.venv uv pip install ../bog-agents/
           VIRTUAL_ENV=.venv uv pip install dist/*.whl
           IMPORT_NAME="$(echo "$PKG_NAME" | sed s/-/_/g)"
           uv run python -c "import $IMPORT_NAME; print(dir($IMPORT_NAME))"
