@@ -1066,6 +1066,18 @@ def cli_main() -> None:
     if sys.platform == "darwin":
         os.environ["GRPC_ENABLE_FORK_SUPPORT"] = "0"
 
+    # On legacy Windows consoles (cp1252) rich's checkmark/box-drawing glyphs
+    # crash with UnicodeEncodeError. Reconfigure stdio to UTF-8 with a
+    # replacement fallback so output never crashes the CLI.
+    if sys.platform == "win32":
+        for stream in (sys.stdout, sys.stderr):
+            reconfigure = getattr(stream, "reconfigure", None)
+            if reconfigure is not None:
+                try:
+                    reconfigure(encoding="utf-8", errors="replace")
+                except (OSError, ValueError):
+                    pass
+
     # Note: LANGSMITH_PROJECT is already overridden in config.py
     # (before LangChain imports). This ensures agent traces use
     # BOG_AGENTS_LANGSMITH_PROJECT while shell commands use the

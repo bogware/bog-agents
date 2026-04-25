@@ -868,7 +868,26 @@ async def run_non_interactive(
         return 1
     except Exception as e:
         logger.exception("Unexpected error during non-interactive execution")
-        console.print(f"\n[red]Unexpected error ({type(e).__name__}): {e}[/red]")
+        # langgraph forwards server-side exceptions as `RemoteException` with a
+        # generic 'An internal error occurred' message — the original detail is
+        # lost over SSE. When running on Ollama, the most likely cause is a
+        # model that does not support tool calls.
+        err_str = str(e).lower()
+        is_tool_capability_error = (
+            type(e).__name__ == "RemoteException"
+            and "'responseerror'" in err_str
+            and "internal error" in err_str
+            and (model_name or "").lower().startswith("ollama:")
+        )
+        if is_tool_capability_error:
+            console.print(f"\n[red]Unexpected error ({type(e).__name__}): {e}[/red]")
+            console.print(
+                "[yellow]The selected Ollama model likely does not support tool calls. "
+                "Try a tool-capable model such as `qwen3-coder-next:latest` or `gpt-oss:20b`, "
+                "or run `bog-agents --doctor` to confirm Ollama is reachable.[/yellow]"
+            )
+        else:
+            console.print(f"\n[red]Unexpected error ({type(e).__name__}): {e}[/red]")
         return 1
     else:
         return 0

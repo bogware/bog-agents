@@ -6405,6 +6405,19 @@ class BogAgentsApp(App):
                     "tools are not supported",
                 )
             )
+            # The langgraph SSE stream forwards server-side exceptions as
+            # `RemoteException({'error': 'ResponseError', 'message': 'An
+            # internal error occurred'})` — the original detail is lost.
+            # When the user is on Ollama and we see this generic shape, the
+            # most likely cause is a model that does not support tool calls.
+            if (
+                err_name == "RemoteException"
+                and "'responseerror'" in err_str
+                and "internal error" in err_str
+            ):
+                model_id = (self._base_model_spec or "").lower()
+                if model_id.startswith("ollama:"):
+                    is_tool_capability_error = True
             is_auth_error = any(
                 keyword in err_name.lower() or keyword in err_str
                 for keyword in (
