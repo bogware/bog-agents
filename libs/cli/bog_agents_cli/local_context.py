@@ -9,6 +9,10 @@ same detection logic works regardless of where the agent runs.
 from __future__ import annotations
 
 import logging
+import shutil
+import sys
+import tempfile
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -18,6 +22,8 @@ from typing import (
     cast,
     runtime_checkable,
 )
+
+_IS_WINDOWS = sys.platform == "win32"
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -380,7 +386,59 @@ def build_detect_script() -> str:
     return f"bash <<'__DETECT_CONTEXT_EOF__'\n{body}\n__DETECT_CONTEXT_EOF__\n"
 
 
+def build_detect_script_body() -> str:
+    """Build the bash script body without the heredoc wrapper.
+
+    Used on Windows where the host shell (cmd.exe) cannot parse the
+    heredoc, so the body is written to a temp file and invoked via
+    Git Bash directly.
+
+    Returns:
+        Bash script body suitable for `bash <file>` invocation.
+    """
+    serial_prefix = f"{_section_header()}\n{_section_project()}"
+    parallel_sections = [
+        ("02_pkgmgr", _section_package_managers()),
+        ("03_runtimes", _section_runtimes()),
+        ("04_git", _section_git()),
+        ("05_testcmd", _section_test_command()),
+        ("06_files", _section_files()),
+        ("07_tree", _section_tree()),
+        ("08_makefile", _section_makefile()),
+    ]
+    parallel_setup = "_DCT=$(mktemp -d) || exit 1\ntrap 'rm -rf \"$_DCT\"' EXIT"
+    parallel_block = "\n".join(
+        f'(\n{body}\n) > "$_DCT/{name}" 2>"$_DCT/{name}.err" &'
+        for name, body in parallel_sections
+    )
+    cat_line = "cat " + " ".join(f'"$_DCT/{name}"' for name, _ in parallel_sections)
+    return f"{serial_prefix}\n{parallel_setup}\n{parallel_block}\nwait\n{cat_line}"
+
+
 DETECT_CONTEXT_SCRIPT = build_detect_script()
+DETECT_CONTEXT_BODY = build_detect_script_body()
+
+
+def _find_bash_on_windows() -> str | None:
+    """Locate a bash executable on Windows hosts.
+
+    Checks PATH first, then standard Git Bash install locations.
+
+    Returns:
+        Absolute path to a bash executable, or None if none was found.
+    """
+    found = shutil.which("bash")
+    if found:
+        return found
+    candidates = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    return None
 
 # ---------------------------------------------------------------------------
 # State schema
@@ -443,8 +501,45 @@ class LocalContextMiddleware(AgentMiddleware):
         Returns:
             Stripped script output, or `None` on failure/empty output.
         """
+        # On Windows, the host shell is cmd.exe, which can't parse the bash
+        # heredoc wrapper. Route through Git Bash directly when available;
+        # otherwise skip context detection cleanly.
+        script: str
+        cleanup_path: Path | None = None
+        if _IS_WINDOWS:
+            bash_path = _find_bash_on_windows()
+            if bash_path is None:
+                logger.debug(
+                    "Local context detection skipped: no bash shell found "
+                    "on Windows (install Git for Windows to enable)"
+                )
+                return None
+            # Write the script body to a temp file and invoke via bash.
+            # Forward-slash the path so cmd.exe quoting is happy.
+            tf = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False, encoding="utf-8"
+            )
+            try:
+                tf.write(DETECT_CONTEXT_BODY)
+            finally:
+                tf.close()
+            cleanup_path = Path(tf.name)
+            bash_fwd = bash_path.replace("\\", "/")
+            script_fwd = str(cleanup_path).replace("\\", "/")
+            script = f'"{bash_fwd}" "{script_fwd}"'
+        else:
+            script = DETECT_CONTEXT_SCRIPT
+
         try:
-            result = self.backend.execute(DETECT_CONTEXT_SCRIPT)
+            # allow_dangerous=True: the detect script is CLI-controlled (not
+            # agent input) and intentionally uses `trap 'rm -rf "$_DCT"' EXIT`
+            # to clean up its own tempdir. LocalShellBackend's safety gate
+            # would otherwise block this on every agent run.
+            try:
+                result = self.backend.execute(script, allow_dangerous=True)
+            except TypeError:
+                # Backend doesn't accept allow_dangerous (e.g., sandbox); call without.
+                result = self.backend.execute(script)
         except Exception:
             logger.warning(
                 "Local context detection failed (backend: %s); context will "
@@ -453,6 +548,12 @@ class LocalContextMiddleware(AgentMiddleware):
                 exc_info=True,
             )
             return None
+        finally:
+            if cleanup_path is not None:
+                try:
+                    cleanup_path.unlink()
+                except OSError:
+                    pass
 
         output = result.output.strip() if result.output else ""
         if result.exit_code is None or result.exit_code != 0:

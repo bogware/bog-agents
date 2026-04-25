@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -233,12 +234,20 @@ def _run_to_response(run: JobRun) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
+def create_app(
+    *,
+    token: str,
+    scheduler: DaemonScheduler,
+    request_shutdown: Callable[[], None] | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         token: The auth token used to authenticate API requests.
         scheduler: The DaemonScheduler instance (passed for future extension).
+        request_shutdown: Optional callback the `/shutdown` endpoint invokes
+            to ask the server to exit gracefully. When `None`, `/shutdown`
+            returns 503.
 
     Returns:
         A configured FastAPI application.
@@ -264,6 +273,29 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
         _check_auth(request, token)
         jobs = load_jobs()
         return {"status": "ok", "version": __version__, "job_count": len(jobs)}
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
+    @app.post("/shutdown", status_code=202)
+    async def shutdown_endpoint(request: Request) -> dict[str, str]:
+        """Request graceful shutdown of the daemon.
+
+        Token-protected. Useful on Windows where signal-based termination
+        through PID files is unreliable, and for scripted control.
+
+        Returns:
+            Status dict indicating shutdown was requested.
+
+        Raises:
+            HTTPException: 503 if no shutdown callback is wired.
+        """
+        _check_auth(request, token)
+        if request_shutdown is None:
+            raise HTTPException(status_code=503, detail="Shutdown callback not configured")
+        request_shutdown()
+        return {"status": "shutting down"}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
