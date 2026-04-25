@@ -822,7 +822,9 @@ def create_cli_agent(
             )
         else:
             # No shell access - use plain FilesystemBackend
-            backend = FilesystemBackend(root_dir=root_dir)
+            # virtual_mode=False: agent file tools use real absolute paths.
+            # Explicit to survive SDK default flips (0.7.1 changed default to True).
+            backend = FilesystemBackend(root_dir=root_dir, virtual_mode=False)
     else:
         # ========== REMOTE SANDBOX MODE ==========
         backend = sandbox  # Remote sandbox (ModalBackend, etc.)

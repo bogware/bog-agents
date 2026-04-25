@@ -6052,7 +6052,9 @@ class BogAgentsApp(App):
             if compact_backend is None:
                 from bog_agents.backends.filesystem import FilesystemBackend
 
-                compact_backend = FilesystemBackend()
+                # virtual_mode=False: compaction reads CLI-controlled paths,
+                # not agent-supplied input. Explicit to survive SDK default flips.
+                compact_backend = FilesystemBackend(virtual_mode=False)
                 logger.info("Using local FilesystemBackend for compaction")
             middleware = SummarizationMiddleware(
                 model=model,
