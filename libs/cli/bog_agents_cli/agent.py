@@ -759,7 +759,9 @@ def create_cli_agent(
 
         agent_middleware.append(
             MemoryMiddleware(
-                backend=FilesystemBackend(),
+                # virtual_mode=False: memory sources are CLI-controlled absolute paths
+                # spanning multiple roots (user home + project), not agent-supplied input.
+                backend=FilesystemBackend(virtual_mode=False),
                 sources=memory_sources,
             )
         )
@@ -792,7 +794,9 @@ def create_cli_agent(
 
         agent_middleware.append(
             SkillsMiddleware(
-                backend=FilesystemBackend(),
+                # virtual_mode=False: skill sources are CLI-controlled absolute paths
+                # spanning multiple roots (built-in, extensions, user, project).
+                backend=FilesystemBackend(virtual_mode=False),
                 sources=sources,
             )
         )
