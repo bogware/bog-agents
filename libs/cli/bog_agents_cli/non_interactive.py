@@ -539,6 +539,7 @@ async def _run_agent_loop(
     quiet: bool = False,
     stream: bool = True,
     thread_url_lookup: ThreadUrlLookupState | None = None,
+    output_format: str = "text",
 ) -> None:
     """Run the agent and handle HITL interrupts until the task completes.
 
@@ -595,12 +596,38 @@ async def _run_agent_loop(
 
     wall_time = time.monotonic() - start_time
 
-    if state.full_response:
-        if not state.stream:
-            _write_text("".join(state.full_response))
-        _write_newline()
+    if output_format == "json":
+        # JSON envelope replaces the streamed text response. Stream chunks
+        # were already written to stdout, but for --json users want a
+        # single machine-readable envelope. We discard partial text in
+        # favour of the assembled final response and stats.
+        import json as _json
 
-    if not quiet:
+        envelope = {
+            "schema_version": 1,
+            "command": "run",
+            "data": {
+                "thread_id": thread_id,
+                "response": "".join(state.full_response).strip(),
+                "stats": {
+                    "wall_time_seconds": round(wall_time, 3),
+                    "model": getattr(state.stats, "model_name", None)
+                    if hasattr(state.stats, "model_name")
+                    else None,
+                    "request_count": getattr(state.stats, "request_count", 0),
+                    "input_tokens": getattr(state.stats, "input_tokens", 0),
+                    "output_tokens": getattr(state.stats, "output_tokens", 0),
+                },
+            },
+        }
+        _write_text(_json.dumps(envelope) + "\n")
+    else:
+        if state.full_response:
+            if not state.stream:
+                _write_text("".join(state.full_response))
+            _write_newline()
+
+    if not quiet and output_format != "json":
         console.print()
         if (
             thread_url_lookup is not None
@@ -679,6 +706,7 @@ async def run_non_interactive(
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool = False,
+    output_format: str = "text",
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -840,15 +868,20 @@ async def run_non_interactive(
 
             file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=None)
 
+            # JSON output: suppress mid-stream stdout writes so only the
+            # envelope reaches stdout. Diagnostic chrome is already routed
+            # via stderr console.
+            effective_stream = stream and output_format != "json"
             await _run_agent_loop(
                 agent,
                 message,
                 config,
                 console,
                 file_op_tracker,
-                quiet=quiet,
-                stream=stream,
+                quiet=quiet or output_format == "json",
+                stream=effective_stream,
                 thread_url_lookup=thread_url_lookup,
+                output_format=output_format,
             )
 
     except KeyboardInterrupt:

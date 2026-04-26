@@ -1178,7 +1178,8 @@ def cli_main() -> None:
             except ImportError as exc:
                 msg = (
                     f"ACP dependencies not available: {exc}\n"
-                    "Install with: pip install bog-agents-acp\n"
+                    "Install with: pip install 'bog-agents-cli[acp]'\n"
+                    "  or: uv add 'bog-agents-cli[acp]'\n"
                 )
                 sys.stderr.write(msg)
                 sys.stderr.flush()
@@ -1304,7 +1305,12 @@ def cli_main() -> None:
         if args.shell_allow_list:
             from bog_agents_cli.config import parse_shell_allow_list
 
-            settings.shell_allow_list = parse_shell_allow_list(args.shell_allow_list)
+            try:
+                settings.shell_allow_list = parse_shell_allow_list(args.shell_allow_list)
+            except ValueError as exc:
+                sys.stderr.write(f"Error: --shell-allow-list: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
 
         apply_stdin_pipe(args)
 
@@ -1456,6 +1462,19 @@ def cli_main() -> None:
             # Non-interactive mode - execute single task and exit
             from bog_agents_cli.non_interactive import run_non_interactive
 
+            # Validate --mcp-config early so a missing/unreadable file produces
+            # a clean one-line error instead of a deep traceback through the
+            # agent setup. This mirrors the interactive path's check above.
+            mcp_config_arg = getattr(args, "mcp_config", None)
+            if mcp_config_arg:
+                from pathlib import Path as _Path
+                if not _Path(mcp_config_arg).is_file():
+                    sys.stderr.write(
+                        f"Error: --mcp-config file not found: {mcp_config_arg}\n",
+                    )
+                    sys.stderr.flush()
+                    sys.exit(2)
+
             exit_code = asyncio.run(
                 run_non_interactive(
                     message=args.non_interactive_message,
@@ -1468,6 +1487,7 @@ def cli_main() -> None:
                     sandbox_setup=getattr(args, "sandbox_setup", None),
                     quiet=args.quiet,
                     stream=not args.no_stream,
+                    output_format=getattr(args, "output_format", "text"),
                     mcp_config_path=getattr(args, "mcp_config", None),
                     no_mcp=getattr(args, "no_mcp", False),
                     trust_project_mcp=getattr(args, "trust_project_mcp", False),
