@@ -160,7 +160,16 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
         result_output = ""
         async for chunk in agent.astream({"messages": [("human", prompt)]}):
             for node_output in chunk.values():
-                messages = node_output.get("messages", [])
+                # Some middleware writes state via langgraph reducer
+                # primitives (Overwrite, Send, Command) that aren't
+                # iterable. Only consume `messages` when it's an actual
+                # list — the add_messages reducer normalises real
+                # message updates into a list before they show up here.
+                if not isinstance(node_output, dict):
+                    continue
+                messages = node_output.get("messages")
+                if not isinstance(messages, list):
+                    continue
                 for msg in messages:
                     content = getattr(msg, "content", None)
                     if content and hasattr(msg, "type") and msg.type == "ai":
