@@ -147,6 +147,10 @@ from bog_agents.middleware.summarization import (
 from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
 from bog_agents.middleware.test_generation import TestGenerationMiddleware
 from bog_agents.middleware.thinking import ThinkingMiddleware
+from bog_agents.middleware.tool_call_parser import (
+    ToolCallParserMiddleware,
+    parse_tool_calls_from_text,
+)
 from bog_agents.middleware.version_control import VersionControlMiddleware
 from bog_agents.middleware.voice_io import VoiceIOMiddleware
 from bog_agents.middleware.worktree import ParallelWorktreeMiddleware, WorktreeMiddleware
@@ -253,6 +257,7 @@ __all__ = [
     "TaxOptimizationMiddleware",
     "TestGenerationMiddleware",
     "ThinkingMiddleware",
+    "ToolCallParserMiddleware",
     "UsageInfo",
     "VersionControlMiddleware",
     "VoiceIOMiddleware",
@@ -261,6 +266,7 @@ __all__ = [
     "detect_project",
     "is_tool_safe",
     "load_all_jobs",
+    "parse_tool_calls_from_text",
     "load_job",
     "load_workspace",
     "make_job_id",

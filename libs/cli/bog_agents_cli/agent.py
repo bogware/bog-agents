@@ -749,6 +749,15 @@ def create_cli_agent(
     agent_middleware = []
     agent_middleware.append(ConfigurableModelMiddleware())
 
+    # Auto-enable tool-call parser for Ollama models. Many local models emit
+    # tool calls as text (Mistral [TOOL_CALLS], Hermes <tool_call>, fenced
+    # JSON) instead of using OpenAI's structured tool_calls field; the parser
+    # recovers them so the agent loop can proceed. No-op for cloud providers.
+    if (settings.model_provider or "").lower() == "ollama":
+        from bog_agents.middleware import ToolCallParserMiddleware
+
+        agent_middleware.append(ToolCallParserMiddleware())
+
     # Add ask_user middleware (must be early so its tool is available)
     from bog_agents_cli.ask_user import AskUserMiddleware
 
