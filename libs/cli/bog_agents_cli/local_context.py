@@ -629,6 +629,46 @@ class LocalContextMiddleware(AgentMiddleware):
             return {"local_context": output}
         return None
 
+    # override - state parameter is intentionally narrowed from
+    # AgentState to LocalContextState for type safety within this middleware.
+    async def abefore_agent(  # type: ignore[override]
+        self,
+        state: LocalContextState,
+        runtime: Runtime,  # noqa: ARG002  # Required by interface but not used here
+    ) -> dict[str, Any] | None:
+        """Async variant of `before_agent`.
+
+        Runs the same detect-script logic but routes the blocking
+        `subprocess.run` call through `asyncio.to_thread` so it does not
+        block the event loop. Without this, langgraph's runtime detects
+        the synchronous subprocess call inside an async path and raises
+        `BlockingError` on Windows where the detect script is invoked
+        through Git Bash via `subprocess.run(shell=True)`.
+        """
+        import asyncio  # noqa: PLC0415
+
+        raw_event = state.get("_summarization_event")
+        if raw_event is not None:
+            event: SummarizationEvent = raw_event
+            cutoff = event.get("cutoff_index")
+            refreshed_cutoff = state.get("_local_context_refreshed_at_cutoff")
+            if cutoff != refreshed_cutoff:
+                output = await asyncio.to_thread(self._run_detect_script)
+                if output:
+                    return {
+                        "local_context": output,
+                        "_local_context_refreshed_at_cutoff": cutoff,
+                    }
+                return {"_local_context_refreshed_at_cutoff": cutoff}
+
+        if state.get("local_context"):
+            return None
+
+        output = await asyncio.to_thread(self._run_detect_script)
+        if output:
+            return {"local_context": output}
+        return None
+
     def _get_modified_request(self, request: ModelRequest) -> ModelRequest | None:
         """Append local context and MCP info to the system prompt if available.
 

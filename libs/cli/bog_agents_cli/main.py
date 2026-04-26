@@ -467,6 +467,31 @@ def parse_args() -> argparse.Namespace:
         "(equivalent to -n TEXT -q). Ideal for scripting and editor integrations.",
     )
 
+    parser.add_argument(
+        "--prompt",
+        dest="prompt_name",
+        metavar="NAME",
+        help="Run a saved prompt from ~/.bog-agents/prompt_library.toml "
+        "as the non-interactive task. Use --prompt-vars to supply "
+        "variables. Mutually exclusive with -n / -p.",
+    )
+    parser.add_argument(
+        "--prompt-vars",
+        dest="prompt_vars",
+        metavar="JSON",
+        help="JSON object of variables to substitute into the prompt body "
+        "(e.g. '{\"code\": \"...\", \"language\": \"python\"}'). "
+        "Used with --prompt.",
+    )
+    parser.add_argument(
+        "--pipeline",
+        dest="pipeline_name",
+        metavar="NAME",
+        help="Run a saved pipeline from ~/.bog-agents/pipelines/<NAME>.yaml "
+        "as the non-interactive task. The pipeline's steps are inlined as "
+        "a multi-step prompt. Mutually exclusive with -n / -p / --prompt.",
+    )
+
     add_json_output_arg(parser, default="text")
 
     parser.add_argument(
@@ -1296,6 +1321,102 @@ def cli_main() -> None:
             args.non_interactive_message = args.print_message
             args.quiet = True
 
+        # --prompt and --pipeline expand into a non-interactive task.
+        # Resolution: read the named prompt/pipeline from disk, substitute
+        # variables for prompts, inline pipeline steps for pipelines.
+        _prompt_name = getattr(args, "prompt_name", None)
+        _pipeline_name = getattr(args, "pipeline_name", None)
+        if _prompt_name and _pipeline_name:
+            sys.stderr.write(
+                "Error: --prompt and --pipeline are mutually exclusive.\n",
+            )
+            sys.stderr.flush()
+            sys.exit(2)
+        if (_prompt_name or _pipeline_name) and args.non_interactive_message:
+            sys.stderr.write(
+                "Error: --prompt/--pipeline cannot be combined with -n/-p; "
+                "they each replace the task.\n",
+            )
+            sys.stderr.flush()
+            sys.exit(2)
+
+        if _prompt_name:
+            try:
+                from bog_agents_cli.prompts import resolve_prompt
+            except ImportError:
+                from pathlib import Path as _P
+                import tomllib  # noqa: PLC0415
+
+                def resolve_prompt(name: str, variables: dict) -> str:  # type: ignore[no-redef]
+                    cands = [
+                        _P.cwd() / ".bog-agents" / "prompt_library.toml",
+                        _P.home() / ".bog-agents" / "prompt_library.toml",
+                    ]
+                    for p in cands:
+                        if p.is_file():
+                            data = tomllib.loads(p.read_text(encoding="utf-8"))
+                            entry = (data.get("prompts") or {}).get(name)
+                            if not entry:
+                                continue
+                            body = entry.get("body", "")
+                            for k, v in (variables or {}).items():
+                                body = body.replace("{{" + k + "}}", str(v))
+                            return body
+                    msg = f"Prompt '{name}' not found in prompt_library.toml"
+                    raise ValueError(msg)
+
+            try:
+                _vars = json.loads(args.prompt_vars) if args.prompt_vars else {}
+            except json.JSONDecodeError as exc:
+                sys.stderr.write(f"Error: --prompt-vars is not valid JSON: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
+            try:
+                args.non_interactive_message = resolve_prompt(_prompt_name, _vars)
+            except (FileNotFoundError, ValueError) as exc:
+                sys.stderr.write(f"Error: --prompt: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
+
+        if _pipeline_name:
+            from pathlib import Path as _P
+            import yaml as _yaml  # noqa: PLC0415
+
+            cands = [
+                _P.cwd() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yaml",
+                _P.cwd() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yml",
+                _P.home() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yaml",
+                _P.home() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yml",
+            ]
+            yaml_path = next((c for c in cands if c.is_file()), None)
+            if yaml_path is None:
+                sys.stderr.write(
+                    f"Error: --pipeline: '{_pipeline_name}' not found "
+                    f"under .bog-agents/pipelines or ~/.bog-agents/pipelines\n",
+                )
+                sys.stderr.flush()
+                sys.exit(2)
+            data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            steps = data.get("steps", []) or []
+            description = data.get("description", "")
+            lines = [
+                f"You are running the pipeline `{_pipeline_name}`.",
+                f"Description: {description}" if description else "",
+                "",
+                "Execute these steps in order, using your tools as needed.",
+                "Treat each step as its own subtask and complete it fully",
+                "before moving on. The final response should summarise the",
+                "outcome of every step.",
+                "",
+                "Steps:",
+            ]
+            for i, step in enumerate(steps, 1):
+                step_id = step.get("id", f"step-{i}")
+                step_type = step.get("type", "message")
+                body = step.get("text") or step.get("name", "")
+                lines.append(f"{i}. [{step_type}] {step_id}: {body}")
+            args.non_interactive_message = "\n".join(lines)
+
         # --doctor: run diagnostics and exit
         if getattr(args, "doctor", False):
             _run_doctor(console)
@@ -1474,6 +1595,48 @@ def cli_main() -> None:
                     )
                     sys.stderr.flush()
                     sys.exit(2)
+
+            # Validate the configured model's API key is present BEFORE we spin
+            # up the agent. Without this, missing creds surface as a deep
+            # traceback ending in "Could not resolve authentication method"
+            # after the agent is already running.
+            _model_arg = getattr(args, "model", None)
+            try:
+                from bog_agents_cli.config import detect_provider
+                from bog_agents_cli.model_config import (
+                    PROVIDER_API_KEY_ENV,
+                    ModelConfig,
+                )
+
+                _spec_for_creds = _model_arg
+                if _spec_for_creds is None:
+                    _cfg = ModelConfig.load()
+                    _spec_for_creds = _cfg.default_model or _cfg.recent_model
+                if _spec_for_creds:
+                    if ":" in _spec_for_creds:
+                        _provider = _spec_for_creds.split(":", 1)[0].lower()
+                    else:
+                        _provider = (detect_provider(_spec_for_creds) or "").lower()
+                    _env_var = PROVIDER_API_KEY_ENV.get(_provider)
+                    # Local providers (ollama) don't need an API key; bedrock/
+                    # vertexai use other auth flows. Skip the gate for them.
+                    if (
+                        _env_var
+                        and _provider not in ("ollama", "bedrock_converse", "vertexai")
+                        and not os.environ.get(_env_var)
+                    ):
+                        sys.stderr.write(
+                            f"Error: model '{_spec_for_creds}' requires "
+                            f"{_env_var} to be set in the environment.\n"
+                            f"Hint: export {_env_var}=... or set it in "
+                            f"~/.bog-agents/.env\n",
+                        )
+                        sys.stderr.flush()
+                        sys.exit(2)
+            except SystemExit:
+                raise
+            except Exception:  # noqa: BLE001  # pre-flight only; agent will surface real errors
+                logger.debug("API key pre-flight check failed", exc_info=True)
 
             exit_code = asyncio.run(
                 run_non_interactive(

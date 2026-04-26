@@ -1,0 +1,43 @@
+fix(cli,daemon): blocking errors, early API-key check, real pipeline/skill execution, --prompt/--pipeline flags
+
+Four bugs and one feature gap addressed in one batch.
+
+#13 BlockingError on shell tool runs (Windows)
+    langgraph dev's blockbuster guard was aborting agent runs the moment
+    the model called any subprocess (tsc, ls, npx). It is a false positive
+    for a single-user local dev server. Pass --allow-blocking to
+    langgraph dev so the guard is off, plus set BG_JOB_ISOLATED_LOOPS=true
+    for newer langgraph_api coverage. Verified end-to-end: agent now runs
+    npx tsc, gets exit code, and reports it cleanly.
+
+    Also added LocalContextMiddleware.abefore_agent that routes the
+    detect-script subprocess through asyncio.to_thread so the event loop
+    doesn't block during agent setup.
+
+#14 Missing API key fails late with deep traceback
+    Added a pre-flight check in main.py before run_non_interactive spins
+    up. Reads PROVIDER_API_KEY_ENV from model_config, checks the env var
+    corresponding to the configured model's provider, and exits with a
+    clean one-line error pointing at the right env var. Skips the gate
+    for ollama/bedrock/vertexai (other auth flows).
+
+#15 Daemon pipeline_name / skill_name actually execute now
+    The runner's _build_prompt was producing prose like "Run the pipeline
+    named X." Replaced with real resolution: skill_name reads the matching
+    SKILL.md from .bog-agents/skills/<name>/ (project, project-agent,
+    user-agent, or user-level locations), and pipeline_name reads the YAML
+    and inlines its steps as a structured multi-step prompt. Added pyyaml
+    as a daemon dep. Tests updated and pass.
+
+#69 New --prompt and --pipeline CLI flags for non-interactive mode
+    Previously prompts and pipelines were TUI-only (slash commands). Adds:
+    - bog-agents --prompt NAME --prompt-vars '{...}' [--json]
+      loads from prompt_library.toml, substitutes vars, runs as -n.
+    - bog-agents --pipeline NAME loads pipeline yaml, builds a numbered
+      step list, runs as -n.
+    Mutex with -n/-p enforced at parse time with clean errors.
+
+Verified each fix end-to-end against the local oregon-trail workspace
+with claude-sonnet-4-6.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

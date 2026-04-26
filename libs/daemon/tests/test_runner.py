@@ -35,12 +35,47 @@ class TestBuildPrompt:
         assert _build_prompt(job) == "Hello world"
 
     def test_falls_back_to_skill(self) -> None:
-        job = AmbientJob(name="j", skill_name="summarise")
-        assert "summarise" in _build_prompt(job)
+        # Skill resolution now reads the actual SKILL.md content. With no
+        # such skill on disk, _build_prompt raises with the skill name in
+        # the message — verify that path.
+        job = AmbientJob(name="j", skill_name="definitely-not-a-real-skill-xyz")
+        with pytest.raises(ValueError, match="definitely-not-a-real-skill-xyz"):
+            _build_prompt(job)
 
     def test_falls_back_to_pipeline(self) -> None:
-        job = AmbientJob(name="j", pipeline_name="daily-digest")
-        assert "daily-digest" in _build_prompt(job)
+        # Pipeline resolution now reads the actual yaml. With no such
+        # pipeline on disk, _build_prompt raises with the pipeline name.
+        job = AmbientJob(name="j", pipeline_name="definitely-not-a-real-pipeline-xyz")
+        with pytest.raises(ValueError, match="definitely-not-a-real-pipeline-xyz"):
+            _build_prompt(job)
+
+    def test_skill_resolves_when_skill_md_exists(self, tmp_path, monkeypatch) -> None:
+        skills = tmp_path / ".bog-agents" / "skills" / "smoke" / "SKILL.md"
+        skills.parent.mkdir(parents=True)
+        skills.write_text("Smoke skill body content.", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        job = AmbientJob(name="j", skill_name="smoke")
+        prompt = _build_prompt(job)
+        assert "smoke" in prompt
+        assert "Smoke skill body content." in prompt
+
+    def test_pipeline_resolves_when_yaml_exists(self, tmp_path, monkeypatch) -> None:
+        pipeline_dir = tmp_path / ".bog-agents" / "pipelines"
+        pipeline_dir.mkdir(parents=True)
+        (pipeline_dir / "smoke.yaml").write_text(
+            "name: smoke\n"
+            "description: smoke pipeline\n"
+            "steps:\n"
+            "  - id: do-thing\n"
+            "    type: message\n"
+            "    text: Do the thing\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        job = AmbientJob(name="j", pipeline_name="smoke")
+        prompt = _build_prompt(job)
+        assert "smoke pipeline" in prompt
+        assert "Do the thing" in prompt
 
     def test_raises_when_nothing_configured(self) -> None:
         job = AmbientJob(name="j")

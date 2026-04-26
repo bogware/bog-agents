@@ -93,6 +93,13 @@ async def run_job(
 def _build_prompt(job: AmbientJob) -> str:
     """Build the prompt string for a job invocation.
 
+    For raw `prompt` jobs, the prompt is returned verbatim. For
+    `skill_name` jobs, the skill's SKILL.md content is read from
+    `~/.bog-agents/{agent}/skills/{skill}/SKILL.md` and inlined as the
+    prompt body so the model has the full skill instructions, not just
+    the skill name. For `pipeline_name` jobs, the YAML definition is
+    loaded and converted to a structured request.
+
     Args:
         job: The job whose prompt to resolve.
 
@@ -100,15 +107,93 @@ def _build_prompt(job: AmbientJob) -> str:
         The resolved prompt string.
 
     Raises:
-        ValueError: If no prompt source is configured.
+        ValueError: If no prompt source is configured or the named
+            skill/pipeline can't be located.
     """
     if job.prompt:
         return job.prompt
     if job.skill_name:
-        return f"Run the skill named '{job.skill_name}'."
+        return _resolve_skill_prompt(job.skill_name)
     if job.pipeline_name:
-        return f"Run the pipeline named '{job.pipeline_name}'."
+        return _resolve_pipeline_prompt(job.pipeline_name)
     msg = f"Job '{job.name}' ({job.job_id}) has no prompt, skill, or pipeline configured"
+    raise ValueError(msg)
+
+
+def _resolve_skill_prompt(skill_name: str) -> str:
+    """Load a skill's SKILL.md content and wrap it as a runnable prompt.
+
+    Looks under common skill locations: project-level
+    `<cwd>/.bog-agents/skills/<name>/SKILL.md`, project agent skills
+    `<cwd>/.agents/skills/<name>/SKILL.md`, then user-level
+    `~/.bog-agents/agent/skills/<name>/SKILL.md` and
+    `~/.bog-agents/skills/<name>/SKILL.md`.
+    """
+    from pathlib import Path
+
+    candidates = [
+        Path.cwd() / ".bog-agents" / "skills" / skill_name / "SKILL.md",
+        Path.cwd() / ".agents" / "skills" / skill_name / "SKILL.md",
+        Path.home() / ".bog-agents" / "agent" / "skills" / skill_name / "SKILL.md",
+        Path.home() / ".bog-agents" / "skills" / skill_name / "SKILL.md",
+    ]
+    for path in candidates:
+        if path.is_file():
+            content = path.read_text(encoding="utf-8")
+            return (
+                f"You are running the skill `{skill_name}`. Follow the "
+                f"instructions in this SKILL.md to completion:\n\n{content}"
+            )
+    msg = (
+        f"Skill '{skill_name}' not found under .bog-agents/skills, "
+        f".agents/skills, or ~/.bog-agents/.../skills"
+    )
+    raise ValueError(msg)
+
+
+def _resolve_pipeline_prompt(pipeline_name: str) -> str:
+    """Load a pipeline YAML and synthesise a multi-step prompt.
+
+    Looks under `<cwd>/.bog-agents/pipelines/<name>.yaml`, then
+    `~/.bog-agents/pipelines/<name>.yaml`. The agent receives the
+    pipeline's description plus an enumerated step list and is
+    instructed to walk it deterministically.
+    """
+    from pathlib import Path
+    import yaml  # noqa: PLC0415
+
+    candidates = [
+        Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+        Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
+        Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+        Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
+    ]
+    for path in candidates:
+        if path.is_file():
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+            steps = data.get("steps", []) or []
+            description = data.get("description", "")
+            lines = [
+                f"You are running the pipeline `{pipeline_name}`.",
+                f"Description: {description}" if description else "",
+                "",
+                "Execute these steps in order, using your tools as needed.",
+                "Treat each step as its own subtask and complete it fully",
+                "before moving on. The final response should summarise the",
+                "outcome of every step.",
+                "",
+                "Steps:",
+            ]
+            for i, step in enumerate(steps, 1):
+                step_id = step.get("id", f"step-{i}")
+                step_type = step.get("type", "message")
+                body = step.get("text") or step.get("name", "")
+                lines.append(f"{i}. [{step_type}] {step_id}: {body}")
+            return "\n".join(lines)
+    msg = (
+        f"Pipeline '{pipeline_name}' not found under .bog-agents/pipelines "
+        f"or ~/.bog-agents/pipelines"
+    )
     raise ValueError(msg)
 
 
