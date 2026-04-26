@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -141,6 +142,14 @@ class FilesystemBackend(BackendProtocol):
         When `virtual_mode=False`, preserve legacy behavior: absolute paths are allowed
         as-is; relative paths resolve under cwd.
 
+        On Windows specifically, POSIX-style absolute paths (e.g. ``/foo.txt``)
+        emitted by LLMs are rewritten to be cwd-relative so they don't silently
+        land at the current drive root. Drive-letter absolute paths (``C:\\foo``)
+        are still honored. This addresses a class of bugs where local models
+        (notably Llama 3.1, Gemma 4) emit POSIX paths in tool args on Windows
+        hosts and writes end up at ``C:\\foo.txt`` instead of the intended
+        location under cwd.
+
         Args:
             key: File path (absolute, relative, or virtual when `virtual_mode=True`).
 
@@ -163,6 +172,27 @@ class FilesystemBackend(BackendProtocol):
                 msg = f"Path:{full} outside root directory: {self.cwd}"
                 raise ValueError(msg) from None
             return full
+
+        # Windows safety net: a POSIX-shaped path that starts with `/` or
+        # `\` but has no drive letter (e.g. "/foo/bar") would otherwise be
+        # treated as drive-rooted by pathlib — `(E:/cwd) / "/foo/bar"`
+        # resolves to `E:\foo\bar` (drive root), silently mis-routing
+        # writes. Local LLMs (Llama 3.1, Gemma 4) emit paths in this shape
+        # all the time. Treat them as cwd-relative instead. A drive-letter
+        # path (`C:\foo`, `D:/data`) is still honoured as truly absolute.
+        if (
+            sys.platform == "win32"
+            and (key.startswith("/") or key.startswith("\\"))
+            and not re.match(r"^[\\/][a-zA-Z]:", key)
+        ):
+            stripped = key.lstrip("/\\")
+            if stripped:
+                logger.debug(
+                    "Rewriting drive-rooted path '%s' to cwd-relative '%s' on Windows",
+                    key,
+                    stripped,
+                )
+                return (self.cwd / stripped).resolve()
 
         path = Path(key)
         if path.is_absolute():

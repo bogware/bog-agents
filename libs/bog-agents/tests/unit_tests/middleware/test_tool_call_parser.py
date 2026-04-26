@@ -134,6 +134,44 @@ class TestFencedJSON:
 # ---------------------------------------------------------------------------
 
 
+class TestGemmaFormat:
+    """Gemma 4 native `<|tool_call>call:NAME{...}<tool_call|>` format."""
+
+    def test_single_call_with_string_args(self) -> None:
+        text = '<|tool_call>call:write_file{file_path:<|"|>ack.txt<|"|>,content:<|"|>ACK<|"|>}<tool_call|>'
+        calls, residual = parse_tool_calls_from_text(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "write_file"
+        assert calls[0]["args"] == {"file_path": "ack.txt", "content": "ACK"}
+        assert residual == ""
+
+    def test_numeric_and_bool_args(self) -> None:
+        text = '<|tool_call>call:set_temp{value:42,active:true}<tool_call|>'
+        calls, _ = parse_tool_calls_from_text(text)
+        assert calls[0]["args"] == {"value": 42, "active": True}
+
+    def test_string_with_special_chars(self) -> None:
+        text = '<|tool_call>call:run{cmd:<|"|>echo "hi", world<|"|>}<tool_call|>'
+        calls, _ = parse_tool_calls_from_text(text)
+        assert calls[0]["args"] == {"cmd": 'echo "hi", world'}
+
+    def test_preserves_surrounding_prose(self) -> None:
+        text = (
+            "I'll create the file now.\n"
+            '<|tool_call>call:write_file{file_path:<|"|>a<|"|>,content:<|"|>b<|"|>}<tool_call|>'
+            "\nDone."
+        )
+        calls, residual = parse_tool_calls_from_text(text)
+        assert len(calls) == 1
+        assert "create the file now" in residual
+        assert "Done." in residual
+
+    def test_format_filter_excludes_gemma(self) -> None:
+        text = '<|tool_call>call:f{x:<|"|>1<|"|>}<tool_call|>'
+        calls, _ = parse_tool_calls_from_text(text, formats=("mistral", "hermes"))
+        assert calls == []
+
+
 class TestThinkingStrip:
     """Reasoning-mode envelopes are stripped before parsing."""
 
