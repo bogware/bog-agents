@@ -616,8 +616,15 @@ class FilesystemBackend(BackendProtocol):
             List of `FileInfo` dicts for matching files, sorted by path. Each dict
                 contains `path`, `is_dir`, `size`, and `modified_at` fields.
         """
-        if pattern.startswith("/"):
-            pattern = pattern.lstrip("/")
+        # Strip any anchor from the pattern. Python 3.13's `Path.rglob`
+        # raises NotImplementedError on anchored patterns, and models often
+        # emit absolute-looking patterns like `/foo/**/*.py` or
+        # `E:/proj/**/*.tsx`. We treat them all as relative-from-search-root.
+        if pattern.startswith(("/", "\\")):
+            pattern = pattern.lstrip("/\\")
+        elif len(pattern) >= 2 and pattern[1] == ":" and pattern[0].isalpha():
+            # Windows drive-letter prefix: strip it AND any following sep.
+            pattern = pattern[2:].lstrip("/\\")
 
         if self.virtual_mode and ".." in Path(pattern).parts:
             msg = "Path traversal not allowed in glob pattern"
