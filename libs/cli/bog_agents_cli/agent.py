@@ -764,10 +764,15 @@ def create_cli_agent(
 
         agent_middleware.append(ToolCallParserMiddleware())
 
-    # Add ask_user middleware (must be early so its tool is available)
-    from bog_agents_cli.ask_user import AskUserMiddleware
+    # Add ask_user middleware (must be early so its tool is available).
+    # Skip in non-interactive mode: there is no user to answer, and a stray
+    # `ask_user` call mid-run produces a malformed HITL interrupt that the
+    # CLI rejects, which derails the agent without recourse. Headless agents
+    # should make a best-effort decision and proceed instead.
+    if interactive:
+        from bog_agents_cli.ask_user import AskUserMiddleware
 
-    agent_middleware.append(AskUserMiddleware())
+        agent_middleware.append(AskUserMiddleware())
 
     # Add memory middleware
     if enable_memory:
