@@ -905,9 +905,30 @@ async def run_non_interactive(
             if auto_commit:
                 from bog_agents_cli.auto_commit import run_auto_commit
 
-                sha = await run_auto_commit(cwd=Path.cwd())
+                # Scope auto-commit to files the agent actually edited (Fix
+                # #25). Without this, `git add -A` sweeps in scratch files,
+                # log artifacts, and node_modules-adjacent noise.
+                edited_paths: list[str] = []
+                for op in file_op_tracker.completed:
+                    if op.tool_name not in {"write_file", "edit_file"}:
+                        continue
+                    if op.physical_path is None:
+                        continue
+                    p = str(op.physical_path)
+                    if p not in edited_paths:
+                        edited_paths.append(p)
+
+                sha = await run_auto_commit(
+                    cwd=Path.cwd(),
+                    paths=edited_paths or None,
+                )
                 if sha and not quiet and output_format != "json":
-                    console.print(f"[dim]auto-commit: created {sha}[/dim]")
+                    if edited_paths:
+                        console.print(
+                            f"[dim]auto-commit: created {sha} ({len(edited_paths)} file(s))[/dim]"
+                        )
+                    else:
+                        console.print(f"[dim]auto-commit: created {sha}[/dim]")
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted[/yellow]")
