@@ -707,6 +707,7 @@ async def run_non_interactive(
     no_mcp: bool = False,
     trust_project_mcp: bool = False,
     output_format: str = "text",
+    auto_commit: bool = False,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -883,6 +884,13 @@ async def run_non_interactive(
                 thread_url_lookup=thread_url_lookup,
                 output_format=output_format,
             )
+
+            if auto_commit:
+                from bog_agents_cli.auto_commit import run_auto_commit
+
+                sha = await run_auto_commit(cwd=Path.cwd())
+                if sha and not quiet and output_format != "json":
+                    console.print(f"[dim]auto-commit: created {sha}[/dim]")
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted[/yellow]")

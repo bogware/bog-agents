@@ -387,14 +387,19 @@ def create_app(
 
     @app.post("/jobs/{job_id}/run", status_code=202)
     async def trigger_job_endpoint(request: Request, job_id: str, body: TriggerRunRequest | None = None) -> dict[str, Any]:
-        """Trigger an immediate manual run of a job.
+        """Trigger a manual run of a job.
+
+        The run is started in the background and the initial JobRun record
+        (status=running) is returned immediately so that HTTP clients with
+        short timeouts don't disconnect during a long-running agent
+        invocation. Poll `/jobs/{job_id}/runs` for completion state.
 
         Args:
             job_id: The job identifier.
             body: Optional trigger context.
 
         Returns:
-            The initiated JobRun dict.
+            A JobRun dict with status=running and a freshly assigned run_id.
 
         Raises:
             HTTPException: 404 if not found.
@@ -406,13 +411,30 @@ def create_app(
 
         import asyncio
 
+        from bog_agents_daemon.models import JobRun, JobStatus
         from bog_agents_daemon.runner import run_job
+        from bog_agents_daemon.store import save_run
+
         context = body.context if body else {}
-        run = await asyncio.shield(
-            asyncio.create_task(
-                run_job(job, trigger_type=TriggerType.MANUAL, trigger_context=context)
-            )
+
+        # Persist a placeholder run record up front so callers (and the CLI's
+        # `jobs run`) see a real run_id and status=running immediately.
+        run = JobRun(
+            job_id=job.job_id,
+            job_name=job.name,
+            status=JobStatus.RUNNING,
+            trigger_type=TriggerType.MANUAL,
+            trigger_context=context,
         )
+        save_run(run)
+
+        async def _do_run() -> None:
+            try:
+                await run_job(job, trigger_type=TriggerType.MANUAL, trigger_context=context, _existing_run=run)
+            except Exception:  # noqa: BLE001  # background task — already logged inside run_job
+                pass
+
+        asyncio.create_task(_do_run())
         return _run_to_response(run)
 
     # ------------------------------------------------------------------

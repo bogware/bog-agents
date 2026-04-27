@@ -30,6 +30,7 @@ from bog_agents.middleware.memory import MemoryMiddleware
 from bog_agents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from bog_agents.middleware.skills import SkillsMiddleware
 from bog_agents.middleware.subagents import (
+    DEFAULT_SUBAGENT_PROMPT,
     GENERAL_PURPOSE_SUBAGENT,
     CompiledSubAgent,
     SubAgent,
@@ -504,11 +505,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
             subagent_interrupt_on = spec.get("interrupt_on", interrupt_on)
 
+            # Prepend the anti-fabrication preamble so every subagent (custom
+            # or built-in) inherits the same honesty rules as the general-
+            # purpose agent. Subagents commonly omit shell access in their
+            # AGENTS.md but still get told "run npm test"; without the rule
+            # they hallucinate the output.
+            user_prompt = spec.get("system_prompt", "") or ""
             processed_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
                 **spec,
                 "model": subagent_model,
                 "tools": spec.get("tools", tools or []),
                 "middleware": subagent_middleware,
+                "system_prompt": f"{DEFAULT_SUBAGENT_PROMPT}\n\n{user_prompt}".strip(),
             }
             if subagent_interrupt_on is not None:
                 processed_spec["interrupt_on"] = subagent_interrupt_on

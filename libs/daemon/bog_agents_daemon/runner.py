@@ -32,28 +32,35 @@ async def run_job(
     *,
     trigger_type: TriggerType = TriggerType.MANUAL,
     trigger_context: dict[str, Any] | None = None,
+    _existing_run: JobRun | None = None,
 ) -> JobRun:
     """Execute an AmbientJob and persist the result.
 
-    Creates a JobRun record, invokes the agent with the job's prompt, captures
-    the output, updates the job's run history, and dispatches to all configured
-    output targets.
+    Creates a JobRun record (or reuses one), invokes the agent with the
+    job's prompt, captures the output, updates the job's run history, and
+    dispatches to all configured output targets.
 
     Args:
         job: The job to execute.
         trigger_type: How this execution was initiated.
         trigger_context: Optional metadata from the trigger (e.g. webhook payload).
+        _existing_run: When the API has already persisted a placeholder run
+            record (so HTTP clients can see a run_id immediately), reuse it
+            instead of allocating a new one.
 
     Returns:
         The completed JobRun record.
     """
-    run = JobRun(
-        job_id=job.job_id,
-        job_name=job.name,
-        trigger_type=trigger_type,
-        trigger_context=trigger_context or {},
-    )
-    save_run(run)
+    if _existing_run is not None:
+        run = _existing_run
+    else:
+        run = JobRun(
+            job_id=job.job_id,
+            job_name=job.name,
+            trigger_type=trigger_type,
+            trigger_context=trigger_context or {},
+        )
+        save_run(run)
 
     try:
         prompt = _build_prompt(job)
@@ -77,9 +84,10 @@ async def run_job(
     save_run(run)
 
     # Dispatch outputs best-effort
+    job_wd = Path(job.working_dir) if job.working_dir else None
     for output_config in job.outputs:
         try:
-            await _dispatch_output(run, output_config)
+            await _dispatch_output(run, output_config, working_dir=job_wd)
         except Exception:
             logger.exception(
                 "Output dispatch failed for job %s target %s",
@@ -232,12 +240,24 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
         TimeoutError: If the agent does not complete within the allowed time.
     """
     from bog_agents import create_agent
+    from bog_agents.backends.local_shell import LocalShellBackend
 
-    kwargs: dict[str, Any] = {"enable_git_tools": True}
+    # Root the agent's filesystem and shell at the job's working_dir so
+    # skills/pipelines that read or grep project files actually work. Without
+    # this the SDK falls back to StateBackend and the agent reports "no files
+    # are mounted" even when --working-dir was set.
+    root_dir = Path(job.working_dir) if job.working_dir else Path.cwd()
+    # virtual_mode=False so the agent operates on real absolute paths inside
+    # the project tree (mirrors how the CLI wires its LocalShellBackend).
+    backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=False)
+
+    kwargs: dict[str, Any] = {
+        "enable_git_tools": True,
+        "backend": backend,
+        "working_dir": str(root_dir),
+    }
     if job.model:
         kwargs["model"] = job.model
-    if job.working_dir:
-        kwargs["working_dir"] = job.working_dir
 
     agent = create_agent(**kwargs)
 
@@ -268,17 +288,18 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
         raise TimeoutError(msg) from None
 
 
-async def _dispatch_output(run: JobRun, output: OutputConfig) -> None:
+async def _dispatch_output(run: JobRun, output: OutputConfig, *, working_dir: Path | None = None) -> None:
     """Send run output to a configured target.
 
     Args:
         run: The completed job run with output to dispatch.
         output: The output destination configuration.
+        working_dir: Optional job working directory, forwarded to file output.
     """
     target = output.target
 
     if target == OutputTarget.FILE:
-        await _dispatch_file(run, output)
+        await _dispatch_file(run, output, working_dir=working_dir)
     elif target == OutputTarget.STDOUT:
         logger.info("Job '%s' (%s): %s", run.job_name, run.job_id, run.output)
     elif target == OutputTarget.LOG:
@@ -298,30 +319,53 @@ async def _dispatch_output(run: JobRun, output: OutputConfig) -> None:
         await _dispatch_github_comment(run, output)
 
 
-async def _dispatch_file(run: JobRun, output: OutputConfig) -> None:
+async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path | None = None) -> None:
     """Write run output to a file.
 
-    Only writes to paths inside the user's home directory or /tmp to prevent
-    path traversal attacks where a crafted job config could overwrite system files.
+    Guards against path traversal: only writes to paths inside the user's
+    home directory, the system temp dir, the current working directory, or
+    the job's configured `working_dir`. A relative `file_path` is anchored
+    to `working_dir` (or cwd) before resolution so jobs can write into
+    their own project tree.
 
     Args:
         run: The completed job run.
         output: The file output configuration.
+        working_dir: Optional job working directory used as both the
+            anchor for relative paths and an additional allow-listed root.
     """
     import aiofiles
+    import tempfile
 
     file_path = output.file_path
     if not file_path:
         logger.warning("File output for job %s has no file_path configured", run.job_id)
         return
 
-    # Resolve to absolute path and guard against traversal
-    resolved = Path(file_path).expanduser().resolve()
-    allowed_roots = (Path.home().resolve(), Path("/tmp").resolve())
-    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+    base = (working_dir or Path.cwd()).expanduser().resolve()
+    raw = Path(file_path).expanduser()
+    if not raw.is_absolute():
+        raw = base / raw
+    resolved = raw.resolve()
+
+    allowed_roots = {
+        Path.home().resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+        Path.cwd().resolve(),
+        base,
+    }
+
+    def _is_under(child: Path, parent: Path) -> bool:
+        try:
+            child.relative_to(parent)
+        except ValueError:
+            return False
+        return True
+
+    if not any(_is_under(resolved, root) for root in allowed_roots):
         logger.error(
-            "File output for job %s rejected: path %s is outside allowed directories",
-            run.job_id, resolved,
+            "File output for job %s rejected: path %s is outside allowed directories %s",
+            run.job_id, resolved, sorted(str(r) for r in allowed_roots),
         )
         return
 

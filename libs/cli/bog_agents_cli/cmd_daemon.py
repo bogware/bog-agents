@@ -53,6 +53,29 @@ def _is_running(pid: int) -> bool:
         return False
 
 
+def _find_daemon_executable() -> str | None:
+    """Locate the bog-agents-daemon binary.
+
+    Tries PATH first, then falls back to the directory containing the current
+    Python interpreter so that `uv run` and venv-only installs (where the venv
+    Scripts/bin dir is not on the host PATH) still work.
+
+    Returns:
+        Absolute path to the daemon executable, or None if not found.
+    """
+    found = shutil.which("bog-agents-daemon")
+    if found is not None:
+        return found
+
+    interp_dir = Path(sys.executable).resolve().parent
+    suffix = ".exe" if sys.platform == "win32" else ""
+    for candidate_dir in (interp_dir, interp_dir.parent / "Scripts", interp_dir.parent / "bin"):
+        candidate = candidate_dir / f"bog-agents-daemon{suffix}"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def _api_get(path: str, *, port: int = _DEFAULT_PORT) -> Any:  # noqa: ANN401
     token = _read_token()
     url = f"{_daemon_url(port)}{path}"
@@ -126,10 +149,10 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
         print(f"Daemon is already running (PID {pid}).")  # noqa: T201
         return
 
-    exe = shutil.which("bog-agents-daemon")
+    exe = _find_daemon_executable()
     if exe is None:
         print(  # noqa: T201
-            "bog-agents-daemon not found on PATH.\n"
+            "bog-agents-daemon not found on PATH or in the CLI's environment.\n"
             "Install it with: pip install bog-agents-daemon"
         )
         sys.exit(1)
@@ -214,9 +237,9 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         )
         sys.exit(1)
 
-    exe = shutil.which("bog-agents-daemon")
+    exe = _find_daemon_executable()
     if exe is None:
-        print("bog-agents-daemon not found on PATH. Install it first.")  # noqa: T201
+        print("bog-agents-daemon not found on PATH or in the CLI's environment.")  # noqa: T201
         sys.exit(1)
 
     resolved_platform = platform or (
@@ -417,14 +440,18 @@ def cmd_jobs_delete(job_id: str, port: int = _DEFAULT_PORT) -> None:
 
 
 def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
-    """Trigger an immediate manual run of a job and wait for the result.
+    """Trigger a manual run of a job and poll until it completes.
+
+    The daemon's `/jobs/{id}/run` endpoint returns immediately with a
+    `running` placeholder so it never times out under HTTP. We then poll
+    the run-history endpoint until the run reaches a terminal state.
 
     Args:
         job_id: The job identifier.
         port: Port the daemon is listening on.
     """
     try:
-        run = _api_post(f"/jobs/{job_id}/run", {}, port=port)
+        triggered = _api_post(f"/jobs/{job_id}/run", {}, port=port)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             print(f"Job '{job_id}' not found.")  # noqa: T201
@@ -434,11 +461,34 @@ def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
     except (urllib.error.URLError, OSError):
         _unreachable(port)
 
-    print(f"Run {run.get('run_id')}  status={run.get('status')}")  # noqa: T201
-    if run.get("output"):
-        print(run["output"])  # noqa: T201
-    if run.get("error"):
-        print(f"Error: {run['error']}")  # noqa: T201
+    run_id = triggered.get("run_id", "")
+    print(f"Run {run_id}  status=running (polling for completion)")  # noqa: T201
+
+    deadline = time.monotonic() + 1800  # 30 min — matches daemon's BOG_DAEMON_AGENT_TIMEOUT
+    final_run: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        try:
+            runs = _api_get(f"/jobs/{job_id}/runs", port=port)
+        except (urllib.error.URLError, OSError):
+            time.sleep(2)
+            continue
+        for r in runs:
+            if r.get("run_id") == run_id and r.get("status") in ("completed", "failed"):
+                final_run = r
+                break
+        if final_run is not None:
+            break
+        time.sleep(3)
+
+    if final_run is None:
+        print(f"Run {run_id} did not finish within 30 minutes.")  # noqa: T201
+        sys.exit(1)
+
+    print(f"Run {final_run['run_id']}  status={final_run['status']}")  # noqa: T201
+    if final_run.get("output"):
+        print(final_run["output"])  # noqa: T201
+    if final_run.get("error"):
+        print(f"Error: {final_run['error']}")  # noqa: T201
 
 
 def cmd_jobs_enable(job_id: str, port: int = _DEFAULT_PORT) -> None:
