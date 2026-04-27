@@ -159,13 +159,12 @@ def _balanced_json_objects(text: str) -> list[str]:
                         esc = True
                     elif c == '"':
                         in_str = False
-                else:
-                    if c == '"':
-                        in_str = True
-                    elif c in "{[":
-                        depth += 1
-                    elif c in "}]":
-                        depth -= 1
+                elif c == '"':
+                    in_str = True
+                elif c in "{[":
+                    depth += 1
+                elif c in "}]":
+                    depth -= 1
                 j += 1
             if depth == 0:
                 out.append(text[i:j])
@@ -210,9 +209,7 @@ def _coerce_call(obj: Any) -> _ParsedCall | None:
         return None
 
     # Unwrap an OpenAI-style wrapper: {"type": "function", "function": {...}}
-    if "function" in obj and isinstance(obj["function"], dict) and (
-        "name" in obj["function"] or "arguments" in obj["function"]
-    ):
+    if "function" in obj and isinstance(obj["function"], dict) and ("name" in obj["function"] or "arguments" in obj["function"]):
         obj = obj["function"]
 
     name = obj.get("name") or obj.get("tool") or obj.get("recipient")
@@ -262,7 +259,7 @@ def _parse_body(body: str) -> list[_ParsedCall]:
         for o in objs:
             try:
                 decoded.append(json.loads(o))
-            except (TypeError, ValueError):  # noqa: PERF203
+            except (TypeError, ValueError):
                 continue
         if not decoded:
             return []
@@ -355,7 +352,7 @@ def _required_fields_of_tool(tool: Any) -> list[str]:
                     if is_required():
                         out.append(name)
                         continue
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             # Fallback: a missing default + no default_factory implies required
             default = getattr(field, "default", None)
@@ -413,10 +410,7 @@ def _strip_bare_object(text: str) -> tuple[_ParsedCall, str] | None:
     has_args = any(k in decoded for k in ("arguments", "args", "parameters", "input"))
     if not (has_name and has_args):
         # Wrapped form: {"type": "function", "function": {...}}
-        if (
-            decoded.get("type") == "function"
-            and isinstance(decoded.get("function"), dict)
-        ):
+        if decoded.get("type") == "function" and isinstance(decoded.get("function"), dict):
             pass
         else:
             return None
@@ -646,20 +640,14 @@ class ToolCallParserMiddleware(AgentMiddleware[ToolCallParserState, ContextT, Re
         if not required:
             return None
         names = ", ".join(required)
-        msg = (
-            f"Error: tool '{tool.name}' was called with empty arguments. "
-            f"Required fields: {names}. Re-call with values for each "
-            f"required field."
-        )
+        msg = f"Error: tool '{tool.name}' was called with empty arguments. Required fields: {names}. Re-call with values for each required field."
         if self._log_recoveries:
             logger.info(
                 "Empty-args feedback for tool %s; required fields: %s",
                 tool.name,
                 names,
             )
-        tool_call_id = (
-            request.tool_call.get("id") if hasattr(request.tool_call, "get") else None
-        )
+        tool_call_id = request.tool_call.get("id") if hasattr(request.tool_call, "get") else None
         return ToolMessage(
             content=msg,
             tool_call_id=tool_call_id or "unknown",

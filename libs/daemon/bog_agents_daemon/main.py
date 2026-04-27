@@ -160,11 +160,11 @@ def _stop_via_http(port: int, token: str, *, timeout: float = 5.0) -> bool:
         headers={"X-Daemon-Token": token},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return 200 <= resp.status < 300
     except urllib.error.URLError:
         return False
-    except Exception:  # noqa: BLE001  # we want to know the daemon's unreachable, not crash
+    except Exception:  # we want to know the daemon's unreachable, not crash
         return False
 
 
@@ -176,8 +176,9 @@ def _force_kill(pid: int) -> bool:
     """
     if sys.platform == "win32":
         try:
-            import subprocess  # noqa: PLC0415
-            subprocess.run(  # noqa: S603, S607
+            import subprocess
+
+            subprocess.run(
                 ["taskkill", "/F", "/PID", str(pid)],
                 check=False,
                 capture_output=True,
@@ -187,7 +188,7 @@ def _force_kill(pid: int) -> bool:
         except OSError:
             return False
     try:
-        import os as _os  # noqa: PLC0415
+        import os as _os
 
         _os.kill(pid, signal.SIGKILL)
         return True
@@ -211,7 +212,8 @@ def _cmd_start(port: int, log_level: str) -> int:
                 "Failed to bind to port %d: %s. "
                 "Is another instance running? Use --port to choose a different port "
                 "or `bog-agents-daemon stop` to stop the existing one.",
-                port, exc.strerror,
+                port,
+                exc.strerror,
             )
             return 1
         raise
@@ -228,7 +230,7 @@ def _cmd_stop(port: int, *, force: bool, wait_seconds: float) -> int:
         1 on failure to stop.
     """
     if not _TOKEN_FILE.exists():
-        print("No token file at", _TOKEN_FILE, "— is the daemon installed?")  # noqa: T201
+        print("No token file at", _TOKEN_FILE, "— is the daemon installed?")
         return 1
 
     token = _TOKEN_FILE.read_text().strip()
@@ -238,34 +240,33 @@ def _cmd_stop(port: int, *, force: bool, wait_seconds: float) -> int:
     if _stop_via_http(port, token):
         # Wait briefly for the process to exit
         if pid is not None:
-            import time  # noqa: PLC0415
+            import time
 
             deadline = time.time() + wait_seconds
             while time.time() < deadline:
                 if not _process_alive(pid):
-                    print("Daemon stopped.")  # noqa: T201
+                    print("Daemon stopped.")
                     return 0
                 time.sleep(0.2)
         else:
-            print("Shutdown requested.")  # noqa: T201
+            print("Shutdown requested.")
             return 0
 
     # 2. If --force or graceful failed, force-kill via PID
     if force and pid is not None:
         if _force_kill(pid):
-            print(f"Force-killed daemon PID {pid}.")  # noqa: T201
+            print(f"Force-killed daemon PID {pid}.")
             _clear_pid()
             return 0
-        print(f"Could not force-kill PID {pid}.")  # noqa: T201
+        print(f"Could not force-kill PID {pid}.")
         return 1
 
     if pid is None:
-        print("No daemon PID found.")  # noqa: T201
+        print("No daemon PID found.")
         return 0
 
-    print(  # noqa: T201
-        f"Daemon (PID {pid}) did not respond to graceful shutdown. "
-        "Re-run with --force to taskkill it.",
+    print(
+        f"Daemon (PID {pid}) did not respond to graceful shutdown. Re-run with --force to taskkill it.",
     )
     return 1
 
@@ -273,10 +274,10 @@ def _cmd_stop(port: int, *, force: bool, wait_seconds: float) -> int:
 def _process_alive(pid: int) -> bool:
     """Check if a PID is still running. Cross-platform."""
     if sys.platform == "win32":
-        import subprocess  # noqa: PLC0415
+        import subprocess
 
         try:
-            result = subprocess.run(  # noqa: S603, S607
+            result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                 check=False,
                 capture_output=True,
@@ -297,12 +298,12 @@ def _cmd_status() -> int:
     """Print daemon status and return 0 if running, 1 if not."""
     pid = _read_pid()
     if pid is None:
-        print("Daemon: not running (no PID file).")  # noqa: T201
+        print("Daemon: not running (no PID file).")
         return 1
     if _process_alive(pid):
-        print(f"Daemon: running (PID {pid}).")  # noqa: T201
+        print(f"Daemon: running (PID {pid}).")
         return 0
-    print(f"Daemon: stale PID file ({pid}); process is not running.")  # noqa: T201
+    print(f"Daemon: stale PID file ({pid}); process is not running.")
     return 1
 
 
@@ -315,7 +316,7 @@ def main() -> None:
                          falling back to a platform force-kill.
         status:          print whether a daemon is running.
     """
-    import argparse  # noqa: PLC0415
+    import argparse
 
     parser = argparse.ArgumentParser(description="Bog Agents Daemon")
     parser.add_argument("--port", type=int, default=_DEFAULT_PORT)

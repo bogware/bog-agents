@@ -62,13 +62,15 @@ DEFAULT_AGENT_NAME = "agent"
 REQUIRE_COMPACT_TOOL_APPROVAL: bool = True
 """When `True`, `compact_conversation` requires HITL approval like other gated tools."""
 
-_RESERVED_AGENT_HOME_DIRS = frozenset({
-    "daemon",      # bog-agents-daemon state (token, runs/, daemon.pid)
-    "logs",
-    "pipelines",   # CLI pipeline definitions, not an agent
-    "plugins",
-    "skills",
-})
+_RESERVED_AGENT_HOME_DIRS = frozenset(
+    {
+        "daemon",  # bog-agents-daemon state (token, runs/, daemon.pid)
+        "logs",
+        "pipelines",  # CLI pipeline definitions, not an agent
+        "plugins",
+        "skills",
+    }
+)
 """Directories under `~/.bog-agents` reserved for global CLI state, not agents."""
 
 

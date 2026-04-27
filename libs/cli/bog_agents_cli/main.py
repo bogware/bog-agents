@@ -480,7 +480,7 @@ def parse_args() -> argparse.Namespace:
         dest="prompt_vars",
         metavar="JSON",
         help="JSON object of variables to substitute into the prompt body "
-        "(e.g. '{\"code\": \"...\", \"language\": \"python\"}'). "
+        '(e.g. \'{"code": "...", "language": "python"}\'). '
         "Used with --prompt.",
     )
     parser.add_argument(
@@ -1227,7 +1227,6 @@ def cli_main() -> None:
                     mcp_config_path=getattr(args, "mcp_config", None),
                     no_mcp=getattr(args, "no_mcp", False),
                     trust_project_mcp=getattr(args, "trust_project_mcp", False),
-                    auto_commit=getattr(args, "auto_commit", False),
                 )
             )
             sys.exit(exit_code)
@@ -1345,8 +1344,8 @@ def cli_main() -> None:
             try:
                 from bog_agents_cli.prompts import resolve_prompt
             except ImportError:
+                import tomllib
                 from pathlib import Path as _P
-                import tomllib  # noqa: PLC0415
 
                 def resolve_prompt(name: str, variables: dict) -> str:  # type: ignore[no-redef]
                     cands = [
@@ -1381,7 +1380,8 @@ def cli_main() -> None:
 
         if _pipeline_name:
             from pathlib import Path as _P
-            import yaml as _yaml  # noqa: PLC0415
+
+            import yaml as _yaml
 
             cands = [
                 _P.cwd() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yaml",
@@ -1428,7 +1428,9 @@ def cli_main() -> None:
             from bog_agents_cli.config import parse_shell_allow_list
 
             try:
-                settings.shell_allow_list = parse_shell_allow_list(args.shell_allow_list)
+                settings.shell_allow_list = parse_shell_allow_list(
+                    args.shell_allow_list
+                )
             except ValueError as exc:
                 sys.stderr.write(f"Error: --shell-allow-list: {exc}\n")
                 sys.stderr.flush()
@@ -1584,12 +1586,45 @@ def cli_main() -> None:
             # Non-interactive mode - execute single task and exit
             from bog_agents_cli.non_interactive import run_non_interactive
 
+            # Resolve -r in non-interactive mode so thread history is loaded
+            # into the LangGraph checkpointer before the agent runs. This
+            # mirrors the interactive path's resume logic but uses stderr-
+            # safe error reporting so --quiet/--json output stays clean.
+            resume_thread_id: str | None = None
+            resume_arg = getattr(args, "resume_thread", None)
+            if resume_arg:
+                from bog_agents_cli.sessions import (
+                    get_most_recent,
+                    get_thread_agent,
+                    thread_exists,
+                )
+
+                if resume_arg == "__MOST_RECENT__":
+                    agent_filter = (
+                        args.agent if args.agent != _DEFAULT_AGENT_NAME else None
+                    )
+                    resume_thread_id = asyncio.run(get_most_recent(agent_filter))
+                    if resume_thread_id and args.agent == _DEFAULT_AGENT_NAME:
+                        resolved_agent = asyncio.run(get_thread_agent(resume_thread_id))
+                        if resolved_agent:
+                            args.agent = resolved_agent
+                elif asyncio.run(thread_exists(resume_arg)):
+                    resume_thread_id = resume_arg
+                    if args.agent == _DEFAULT_AGENT_NAME:
+                        resolved_agent = asyncio.run(get_thread_agent(resume_thread_id))
+                        if resolved_agent:
+                            args.agent = resolved_agent
+                else:
+                    sys.stderr.write(f"Error: thread '{resume_arg}' not found.\n")
+                    sys.exit(2)
+
             # Validate --mcp-config early so a missing/unreadable file produces
             # a clean one-line error instead of a deep traceback through the
             # agent setup. This mirrors the interactive path's check above.
             mcp_config_arg = getattr(args, "mcp_config", None)
             if mcp_config_arg:
                 from pathlib import Path as _Path
+
                 if not _Path(mcp_config_arg).is_file():
                     sys.stderr.write(
                         f"Error: --mcp-config file not found: {mcp_config_arg}\n",
@@ -1636,7 +1671,7 @@ def cli_main() -> None:
                         sys.exit(2)
             except SystemExit:
                 raise
-            except Exception:  # noqa: BLE001  # pre-flight only; agent will surface real errors
+            except Exception:  # pre-flight only; agent will surface real errors
                 logger.debug("API key pre-flight check failed", exc_info=True)
 
             exit_code = asyncio.run(
@@ -1656,6 +1691,7 @@ def cli_main() -> None:
                     no_mcp=getattr(args, "no_mcp", False),
                     trust_project_mcp=getattr(args, "trust_project_mcp", False),
                     auto_commit=getattr(args, "auto_commit", False),
+                    resume_thread_id=resume_thread_id,
                 )
             )
             sys.exit(exit_code)

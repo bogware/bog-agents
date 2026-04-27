@@ -46,11 +46,37 @@ def _read_pid() -> int | None:
 
 
 def _is_running(pid: int) -> bool:
+    """Return True if a process with the given PID is alive.
+
+    Windows is the awkward case: `os.kill(pid, 0)` for a dead PID can
+    raise OSError [WinError 87] *and* CPython sometimes propagates this
+    as a `SystemError: returned a result with an exception set` (a
+    known C-level quirk). On POSIX, `kill(pid, 0)` raises
+    ProcessLookupError for dead PIDs. We use tasklist on Windows for
+    a robust answer and fall back to os.kill on POSIX.
+    """
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        # tasklist prints a row containing the PID when the process exists,
+        # otherwise emits "INFO: No tasks are running..."
+        return f'"{pid}"' in (result.stdout or "")
+
     try:
         os.kill(pid, 0)
-        return True
     except (ProcessLookupError, PermissionError):
         return False
+    except OSError:
+        return False
+    return True
 
 
 def _find_daemon_executable() -> str | None:
@@ -69,7 +95,11 @@ def _find_daemon_executable() -> str | None:
 
     interp_dir = Path(sys.executable).resolve().parent
     suffix = ".exe" if sys.platform == "win32" else ""
-    for candidate_dir in (interp_dir, interp_dir.parent / "Scripts", interp_dir.parent / "bin"):
+    for candidate_dir in (
+        interp_dir,
+        interp_dir.parent / "Scripts",
+        interp_dir.parent / "bin",
+    ):
         candidate = candidate_dir / f"bog-agents-daemon{suffix}"
         if candidate.is_file():
             return str(candidate)
@@ -157,11 +187,17 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
         )
         sys.exit(1)
 
+    # Pass env explicitly: on Windows the .exe shim + start_new_session
+    # combination can drop ANTHROPIC_API_KEY (and other provider keys) from
+    # the child's environment. Forward the CLI's full env so daemon-driven
+    # jobs can reach LLM providers without the user having to set keys
+    # again at the daemon level.
     proc = subprocess.Popen(  # noqa: S603
         [exe, "--port", str(port), "--log-level", log_level],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=os.environ.copy(),
     )
 
     # Brief wait for daemon to bind and write PID file
@@ -174,7 +210,16 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
 
 
 def cmd_daemon_stop() -> None:
-    """Stop a running daemon by sending SIGTERM to its PID."""
+    """Stop a running daemon, preferring HTTP /shutdown over signal-based kill.
+
+    Uses the daemon's REST `/shutdown` endpoint first (cross-platform and
+    doesn't race with signal delivery), then falls back to `os.kill`. On
+    Windows, `signal.SIGKILL` doesn't exist and `os.kill(SIGTERM)` already
+    maps to TerminateProcess for a normal exit, so we don't need a separate
+    SIGKILL path. All `os.kill` calls are wrapped against OSError so a
+    stale PID file or a process that exits between the alive-check and
+    the signal doesn't crash the CLI.
+    """
     pid = _read_pid()
     if pid is None:
         print("Daemon is not running (no PID file).")  # noqa: T201
@@ -183,16 +228,53 @@ def cmd_daemon_stop() -> None:
         print(f"Daemon PID {pid} is not running. Cleaning up stale PID file.")  # noqa: T201
         _PID_FILE.unlink(missing_ok=True)
         return
-    os.kill(pid, signal.SIGTERM)
-    # Wait up to 5 s for graceful shutdown
+
+    # 1) Try graceful HTTP shutdown first.
+    token = _read_token() or ""
+    try:
+        url = f"{_daemon_url(_DEFAULT_PORT)}/shutdown"
+        req = urllib.request.Request(
+            url,
+            data=b"",
+            headers={"X-Daemon-Token": token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except (urllib.error.URLError, OSError):
+        # Daemon may already be exiting, on a different port, or unauthorised.
+        # Fall through to signal-based stop.
+        pass
+
+    # 2) Wait up to 5s for graceful exit (HTTP shutdown or otherwise).
     for _ in range(20):
         time.sleep(0.25)
         if not _is_running(pid):
             break
+
+    # 3) Last resort: SIGTERM (Windows maps to TerminateProcess; POSIX to graceful term).
     if _is_running(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        for _ in range(8):
+            time.sleep(0.25)
+            if not _is_running(pid):
+                break
+
+    # 4) Stronger kill on POSIX only — SIGKILL doesn't exist on Windows.
+    if _is_running(pid) and hasattr(signal, "SIGKILL"):
         print(f"Daemon (PID {pid}) did not stop in time; sending SIGKILL.")  # noqa: T201
-        os.kill(pid, signal.SIGKILL)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    if _is_running(pid):
+        print(f"Daemon (PID {pid}) is still running; manual cleanup may be needed.")  # noqa: T201
     else:
+        _PID_FILE.unlink(missing_ok=True)
         print(f"Daemon (PID {pid}) stopped.")  # noqa: T201
 
 
@@ -464,7 +546,9 @@ def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
     run_id = triggered.get("run_id", "")
     print(f"Run {run_id}  status=running (polling for completion)")  # noqa: T201
 
-    deadline = time.monotonic() + 1800  # 30 min — matches daemon's BOG_DAEMON_AGENT_TIMEOUT
+    deadline = (
+        time.monotonic() + 1800
+    )  # 30 min — matches daemon's BOG_DAEMON_AGENT_TIMEOUT
     final_run: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         try:

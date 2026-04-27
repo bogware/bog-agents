@@ -1,9 +1,9 @@
 """FastAPI REST API for the bog-agents daemon."""
 
-
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -429,12 +429,20 @@ def create_app(
         save_run(run)
 
         async def _do_run() -> None:
-            try:
-                await run_job(job, trigger_type=TriggerType.MANUAL, trigger_context=context, _existing_run=run)
-            except Exception:  # noqa: BLE001  # background task — already logged inside run_job
-                pass
+            with contextlib.suppress(Exception):
+                # Background task — run_job already logs internally.
+                await run_job(
+                    job,
+                    trigger_type=TriggerType.MANUAL,
+                    trigger_context=context,
+                    _existing_run=run,
+                )
 
-        asyncio.create_task(_do_run())
+        # Hold a strong reference so the loop doesn't garbage-collect
+        # the task mid-flight (RUF006); discarded from the set on done.
+        bg_task = asyncio.create_task(_do_run())
+        webhook_tasks.add(bg_task)
+        bg_task.add_done_callback(webhook_tasks.discard)
         return _run_to_response(run)
 
     # ------------------------------------------------------------------
@@ -551,6 +559,7 @@ def create_app(
                 if not _fnmatch.fnmatch(branch, pattern):
                     continue
                 from bog_agents_daemon.runner import run_job
+
                 task = asyncio.create_task(
                     run_job(
                         job,
@@ -584,6 +593,7 @@ def create_app(
         raw_body = await request.body()
         try:
             import json as _json
+
             payload = _json.loads(raw_body) if raw_body else {}
         except Exception:
             payload = {}
@@ -604,18 +614,23 @@ def create_app(
                 # HMAC secret validation — reject if secret configured but sig absent/wrong
                 if trigger.webhook_secret:
                     sig_header = request.headers.get("X-Hub-Signature-256", "")
-                    expected = "sha256=" + hmac.new(
-                        trigger.webhook_secret.encode(),
-                        raw_body,
-                        hashlib.sha256,
-                    ).hexdigest()
+                    expected = (
+                        "sha256="
+                        + hmac.new(
+                            trigger.webhook_secret.encode(),
+                            raw_body,
+                            hashlib.sha256,
+                        ).hexdigest()
+                    )
                     if not hmac.compare_digest(sig_header, expected):
                         logger.warning(
                             "Webhook signature mismatch for job %s trigger path %s",
-                            job.job_id, webhook_path,
+                            job.job_id,
+                            webhook_path,
                         )
                         break  # wrong secret — don't trigger this job
                 from bog_agents_daemon.runner import run_job
+
                 task = asyncio.create_task(
                     run_job(
                         job,

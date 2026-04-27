@@ -440,6 +440,7 @@ def _find_bash_on_windows() -> str | None:
             return c
     return None
 
+
 # ---------------------------------------------------------------------------
 # State schema
 # ---------------------------------------------------------------------------
@@ -645,7 +646,7 @@ class LocalContextMiddleware(AgentMiddleware):
         `BlockingError` on Windows where the detect script is invoked
         through Git Bash via `subprocess.run(shell=True)`.
         """
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         raw_event = state.get("_summarization_event")
         if raw_event is not None:

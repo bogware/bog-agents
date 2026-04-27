@@ -148,14 +148,8 @@ def _resolve_skill_prompt(skill_name: str) -> str:
     for path in candidates:
         if path.is_file():
             content = path.read_text(encoding="utf-8")
-            return (
-                f"You are running the skill `{skill_name}`. Follow the "
-                f"instructions in this SKILL.md to completion:\n\n{content}"
-            )
-    msg = (
-        f"Skill '{skill_name}' not found under .bog-agents/skills, "
-        f".agents/skills, or ~/.bog-agents/.../skills"
-    )
+            return f"You are running the skill `{skill_name}`. Follow the instructions in this SKILL.md to completion:\n\n{content}"
+    msg = f"Skill '{skill_name}' not found under .bog-agents/skills, .agents/skills, or ~/.bog-agents/.../skills"
     raise ValueError(msg)
 
 
@@ -168,7 +162,8 @@ def _resolve_pipeline_prompt(pipeline_name: str) -> str:
     instructed to walk it deterministically.
     """
     from pathlib import Path
-    import yaml  # noqa: PLC0415
+
+    import yaml
 
     candidates = [
         Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
@@ -198,10 +193,7 @@ def _resolve_pipeline_prompt(pipeline_name: str) -> str:
                 body = step.get("text") or step.get("name", "")
                 lines.append(f"{i}. [{step_type}] {step_id}: {body}")
             return "\n".join(lines)
-    msg = (
-        f"Pipeline '{pipeline_name}' not found under .bog-agents/pipelines "
-        f"or ~/.bog-agents/pipelines"
-    )
+    msg = f"Pipeline '{pipeline_name}' not found under .bog-agents/pipelines or ~/.bog-agents/pipelines"
     raise ValueError(msg)
 
 
@@ -334,8 +326,9 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
         working_dir: Optional job working directory used as both the
             anchor for relative paths and an additional allow-listed root.
     """
-    import aiofiles
     import tempfile
+
+    import aiofiles
 
     file_path = output.file_path
     if not file_path:
@@ -365,7 +358,9 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
     if not any(_is_under(resolved, root) for root in allowed_roots):
         logger.error(
             "File output for job %s rejected: path %s is outside allowed directories %s",
-            run.job_id, resolved, sorted(str(r) for r in allowed_roots),
+            run.job_id,
+            resolved,
+            sorted(str(r) for r in allowed_roots),
         )
         return
 

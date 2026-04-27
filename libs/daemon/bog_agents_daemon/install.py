@@ -147,12 +147,7 @@ def generate_git_hook(daemon_url: str = "http://localhost:7391", token: str = ""
 
     # Embed values as single-quoted bash assignments — immune to special chars.
     daemon_url_assignment = f"DAEMON_URL={shlex.quote(daemon_url)}"
-    token_block = (
-        f"BOG_TOKEN={shlex.quote(token)}\n"
-        "TOKEN_HEADER=(-H \"X-Daemon-Token: $BOG_TOKEN\")"
-        if token else
-        'TOKEN_HEADER=()'
-    )
+    token_block = f'BOG_TOKEN={shlex.quote(token)}\nTOKEN_HEADER=(-H "X-Daemon-Token: $BOG_TOKEN")' if token else "TOKEN_HEADER=()"
     curl_auth = '"${TOKEN_HEADER[@]}"' if token else ""
     return textwrap.dedent(f"""\
         #!/usr/bin/env bash

@@ -180,11 +180,7 @@ class FilesystemBackend(BackendProtocol):
         # writes. Local LLMs (Llama 3.1, Gemma 4) emit paths in this shape
         # all the time. Treat them as cwd-relative instead. A drive-letter
         # path (`C:\foo`, `D:/data`) is still honoured as truly absolute.
-        if (
-            sys.platform == "win32"
-            and (key.startswith("/") or key.startswith("\\"))
-            and not re.match(r"^[\\/][a-zA-Z]:", key)
-        ):
+        if sys.platform == "win32" and (key.startswith("/") or key.startswith("\\")) and not re.match(r"^[\\/][a-zA-Z]:", key):
             stripped = key.lstrip("/\\")
             if stripped:
                 logger.debug(

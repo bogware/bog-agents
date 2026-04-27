@@ -559,6 +559,9 @@ async def _run_agent_loop(
             the end.
         thread_url_lookup: Optional non-blocking lookup state for rendering
             a fast-follow LangSmith thread link.
+        output_format: Output format selector — `"text"` for streamed
+            human output, `"json"` for a buffered envelope flushed at
+            end of run.
 
     Raises:
         HITLIterationLimitError: If the HITL iteration limit is exceeded.
@@ -621,11 +624,10 @@ async def _run_agent_loop(
             },
         }
         _write_text(_json.dumps(envelope) + "\n")
-    else:
-        if state.full_response:
-            if not state.stream:
-                _write_text("".join(state.full_response))
-            _write_newline()
+    elif state.full_response:
+        if not state.stream:
+            _write_text("".join(state.full_response))
+        _write_newline()
 
     if not quiet and output_format != "json":
         console.print()
@@ -708,6 +710,7 @@ async def run_non_interactive(
     trust_project_mcp: bool = False,
     output_format: str = "text",
     auto_commit: bool = False,
+    resume_thread_id: str | None = None,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -755,13 +758,25 @@ async def run_non_interactive(
         trust_project_mcp: When `True`, allow project-level stdio MCP
             servers. When `False` (default), project stdio servers are
             silently skipped.
+        output_format: Output format — `"text"` (default, human-readable
+            stream) or `"json"` (single-line envelope on stdout, all
+            chrome routed to stderr).
+        auto_commit: When `True`, run `run_auto_commit()` after the agent
+            loop completes successfully so file changes land in a
+            conventional commit tagged `(bog-agent)`. No-op outside a
+            git repo or when there are no changes.
+        resume_thread_id: When set, resume the named LangGraph thread
+            instead of allocating a fresh one — exposes `-r THREAD_ID`
+            to non-interactive mode.
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
     """
     # stderr=True routes all console.print() to stderr; agent response text
-    # uses _write_text() -> sys.stdout directly.
-    console = Console(stderr=True) if quiet else Console()
+    # uses _write_text() -> sys.stdout directly. Both --quiet and --json
+    # need stdout reserved for the actual payload — chrome (server-ready,
+    # thread headers, status line) must land on stderr.
+    console = Console(stderr=True) if (quiet or output_format == "json") else Console()
     try:
         result = create_model(
             model_name,
@@ -773,7 +788,9 @@ async def run_non_interactive(
         return 1
 
     result.apply_to_settings()
-    thread_id = generate_thread_id()
+    # If the caller passed -r THREAD_ID, resume that thread so its history
+    # is loaded into the LangGraph checkpointer; otherwise allocate fresh.
+    thread_id = resume_thread_id or generate_thread_id()
 
     try:
         cwd = str(Path.cwd())
