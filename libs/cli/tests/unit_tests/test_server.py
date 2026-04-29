@@ -190,6 +190,12 @@ class TestServerProcess:
 
         with (
             patch("bog_agents_cli.server._port_in_use", return_value=False),
+            # 0.7.3 #33 fix: SDKServer.start() always calls _find_free_port
+            # when self.port is the default. The real implementation opens a
+            # raw TCP socket which pytest-socket --disable-socket blocks on
+            # Linux CI, so we patch it explicitly instead of relying on
+            # _port_in_use=False to short-circuit the call.
+            patch("bog_agents_cli.server._find_free_port", return_value=2025),
             patch(
                 "bog_agents_cli.server.tempfile.NamedTemporaryFile",
                 return_value=log_file,
@@ -231,6 +237,9 @@ class TestServerProcess:
 
         with (
             patch("bog_agents_cli.server._port_in_use", return_value=False),
+            # See test_start_cleans_up_partial_state_on_health_failure for
+            # why we patch _find_free_port too (0.7.3 #33 fix).
+            patch("bog_agents_cli.server._find_free_port", return_value=2025),
             patch(
                 "bog_agents_cli.server.tempfile.NamedTemporaryFile",
                 return_value=log_file,
