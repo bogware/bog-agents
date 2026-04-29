@@ -1692,6 +1692,7 @@ def cli_main() -> None:
                     trust_project_mcp=getattr(args, "trust_project_mcp", False),
                     auto_commit=getattr(args, "auto_commit", False),
                     resume_thread_id=resume_thread_id,
+                    auto_approve=getattr(args, "auto_approve", False),
                 )
             )
             sys.exit(exit_code)

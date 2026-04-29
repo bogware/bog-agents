@@ -885,6 +885,7 @@ async def run_non_interactive(
     output_format: str = "text",
     auto_commit: bool = False,
     resume_thread_id: str | None = None,
+    auto_approve: bool = False,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -942,6 +943,12 @@ async def run_non_interactive(
         resume_thread_id: When set, resume the named LangGraph thread
             instead of allocating a fresh one — exposes `-r THREAD_ID`
             to non-interactive mode.
+        auto_approve: When `True` (typically because the caller passed
+            `--auto-approve`), opt the headless run into full
+            autonomy: shell access is enabled and HITL gating is
+            bypassed, so the agent can run typecheck/tests/etc.
+            without a human approving each command. Without this,
+            `-n` mode silently runs without shell tools (Fix #36).
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
@@ -1017,11 +1024,17 @@ async def run_non_interactive(
             logger.warning("MCP metadata preload task creation failed", exc_info=True)
 
     try:
-        enable_shell = bool(settings.shell_allow_list)
-        shell_is_unrestricted = isinstance(
+        # When the caller passes --auto-approve they're opting into headless
+        # autonomy — the agent should have shell access to run tsc/vitest/
+        # npm/etc. Otherwise shell is gated by --shell-allow-list (Fix #36).
+        # Without this, --auto-approve was silently dropped in -n mode and
+        # the agent kept emitting "Please run X in your terminal" because
+        # it had no execute tool to call (recurring #18 symptom).
+        enable_shell = auto_approve or bool(settings.shell_allow_list)
+        shell_is_unrestricted = auto_approve or isinstance(
             settings.shell_allow_list, type(SHELL_ALLOW_ALL)
         )
-        use_auto_approve = not enable_shell or shell_is_unrestricted
+        use_auto_approve = auto_approve or (not enable_shell) or shell_is_unrestricted
 
         if not quiet:
             console.print(Text("Starting LangGraph server...", style="dim"))
