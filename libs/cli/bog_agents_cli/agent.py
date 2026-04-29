@@ -62,7 +62,15 @@ DEFAULT_AGENT_NAME = "agent"
 REQUIRE_COMPACT_TOOL_APPROVAL: bool = True
 """When `True`, `compact_conversation` requires HITL approval like other gated tools."""
 
-_RESERVED_AGENT_HOME_DIRS = frozenset({"logs", "plugins", "skills"})
+_RESERVED_AGENT_HOME_DIRS = frozenset(
+    {
+        "daemon",  # bog-agents-daemon state (token, runs/, daemon.pid)
+        "logs",
+        "pipelines",  # CLI pipeline definitions, not an agent
+        "plugins",
+        "skills",
+    }
+)
 """Directories under `~/.bog-agents` reserved for global CLI state, not agents."""
 
 
@@ -732,9 +740,16 @@ def create_cli_agent(
         else settings.get_project_agents_dir()
     )
 
+    # Bundled-agents seeding: if the project is Python/Node/Rust/Go and
+    # the user hasn't authored their own subagents, this pulls in
+    # code-reviewer, test-author, and language-specific specialists from
+    # the package's bundled_agents/ tree. User and project subagents
+    # override on name conflict.
+    project_root_for_bundled = effective_cwd if effective_cwd is not None else None
     for subagent_meta in list_subagents(
         user_agents_dir=user_agents_dir,
         project_agents_dir=project_agents_dir,
+        project_root=project_root_for_bundled,
     ):
         subagent: SubAgent = {
             "name": subagent_meta["name"],
@@ -749,10 +764,24 @@ def create_cli_agent(
     agent_middleware = []
     agent_middleware.append(ConfigurableModelMiddleware())
 
-    # Add ask_user middleware (must be early so its tool is available)
-    from bog_agents_cli.ask_user import AskUserMiddleware
+    # Auto-enable tool-call parser for Ollama models. Many local models emit
+    # tool calls as text (Mistral [TOOL_CALLS], Hermes <tool_call>, fenced
+    # JSON) instead of using OpenAI's structured tool_calls field; the parser
+    # recovers them so the agent loop can proceed. No-op for cloud providers.
+    if (settings.model_provider or "").lower() == "ollama":
+        from bog_agents.middleware import ToolCallParserMiddleware
 
-    agent_middleware.append(AskUserMiddleware())
+        agent_middleware.append(ToolCallParserMiddleware())
+
+    # Add ask_user middleware (must be early so its tool is available).
+    # Skip in non-interactive mode: there is no user to answer, and a stray
+    # `ask_user` call mid-run produces a malformed HITL interrupt that the
+    # CLI rejects, which derails the agent without recourse. Headless agents
+    # should make a best-effort decision and proceed instead.
+    if interactive:
+        from bog_agents_cli.ask_user import AskUserMiddleware
+
+        agent_middleware.append(AskUserMiddleware())
 
     # Add memory middleware
     if enable_memory:

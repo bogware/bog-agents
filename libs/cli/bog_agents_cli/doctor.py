@@ -47,6 +47,45 @@ def _get_ollama_version() -> str | None:
     return str(version).strip() if version else None
 
 
+# Models that have been verified end-to-end with the bog-agents tool-call
+# stack on Ollama. Add to this list as new candidates are validated.
+_OLLAMA_KNOWN_GOOD = (
+    "gpt-oss",
+    # `mistral-nemo`, `hermes3`, and `qwen2.5-coder` partially work via the
+    # ToolCallParserMiddleware text-format recovery; not on the known-good
+    # list because recovery is best-effort and depends on prompt shape.
+)
+
+
+def _is_known_good_ollama_model(model: str) -> bool:
+    """Return True if `model` is on the validated Ollama tool-call list."""
+    name = model.lower()
+    return any(prefix in name for prefix in _OLLAMA_KNOWN_GOOD)
+
+
+def _read_default_ollama_model() -> str | None:
+    """Read the user's configured default model and return it iff it's Ollama.
+
+    Returns the bare model identifier (without the ``ollama:`` prefix), or
+    ``None`` if no default is set or the default isn't an Ollama model.
+    """
+    try:
+        from bog_agents_cli.model_config import ModelConfig
+    except ImportError:
+        return None
+    try:
+        cfg = ModelConfig.load()
+    except (OSError, ValueError):
+        return None
+    spec = cfg.default_model or cfg.recent_model
+    if not spec:
+        return None
+    spec_lower = spec.lower()
+    if spec_lower.startswith("ollama:"):
+        return spec.split(":", 1)[1] or None
+    return None
+
+
 def run_doctor() -> str:
     """Run comprehensive health checks and return a diagnostic report.
 
@@ -128,6 +167,23 @@ def run_doctor() -> str:
     ollama_version = _get_ollama_version()
     if ollama_version:
         checks.append(("Ollama daemon", "OK", f"Reachable (v{ollama_version})"))
+
+        # If the configured default is an Ollama model, hint about which one
+        # actually engages tool calling reliably. Most non-OpenAI-trained
+        # models emit tool calls in a text format that bog-agents now tries
+        # to recover via ToolCallParserMiddleware, but recovery isn't 100%.
+        default_model = _read_default_ollama_model()
+        if default_model and not _is_known_good_ollama_model(default_model):
+            checks.append(
+                (
+                    "Ollama default model",
+                    "WARN",
+                    f"'{default_model}' may not engage tool calls cleanly. "
+                    "Recommended: 'gpt-oss:20b' (OpenAI tool-call format). "
+                    "ToolCallParserMiddleware will try to recover Mistral/"
+                    "Hermes/qwen text-shaped tool calls automatically.",
+                )
+            )
     elif shutil.which("ollama"):
         checks.append(
             (

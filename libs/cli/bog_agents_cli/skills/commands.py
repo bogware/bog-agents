@@ -521,7 +521,10 @@ def _create(
 
     template = _generate_template(skill_name)
     skill_md = skill_dir / "SKILL.md"
-    skill_md.write_text(template)
+    # Force UTF-8: the default `write_text` encoding on Windows is cp1252,
+    # which will silently encode unicode dashes / smart quotes from the
+    # template as bytes that fail UTF-8 decoding on subsequent reads.
+    skill_md.write_text(template, encoding="utf-8")
 
     if output_format == "json":
         from bog_agents_cli.output import write_json

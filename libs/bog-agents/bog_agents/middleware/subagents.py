@@ -110,7 +110,20 @@ class CompiledSubAgent(TypedDict):
     """
 
 
-DEFAULT_SUBAGENT_PROMPT = "In order to complete the objective that the user asks of you, you have access to a number of standard tools."
+DEFAULT_SUBAGENT_PROMPT = (
+    "In order to complete the objective that the user asks of you, you have access to a number of standard tools.\n\n"
+    "CRITICAL — no fabricated tool output:\n"
+    "- Never claim that a shell command, test, build, install, or other tool "
+    "invocation 'ran' or 'passed' unless you actually called the tool in this "
+    "turn and observed its output. Do not paraphrase what you think the "
+    "output would have been.\n"
+    "- If a step you were asked to perform requires a tool you cannot call "
+    "(missing permission, missing dependency, no shell access), state that "
+    "explicitly in your final report — e.g. 'I could not run npm test "
+    "because <reason>.' Do not silently substitute prose for execution.\n"
+    "- Your final report to the parent agent must distinguish 'I ran X and "
+    "saw Y' from 'I read the code and reasoned that X would produce Y'."
+)
 
 # State keys that are excluded when passing state to subagents and when returning
 # updates from subagents.

@@ -300,6 +300,17 @@ def parse_args() -> argparse.Namespace:
 
     setup_daemon_parser(subparsers)
 
+    # Project verification subcommand — auto-detects typecheck/lint/test
+    # commands or runs an explicit `.bog-agents/verify.{sh,cmd}` override.
+    from bog_agents_cli.cmd_verify import setup_verify_parser
+
+    setup_verify_parser(subparsers)
+
+    # Thin HTTP client for a long-lived `--serve` instance.
+    from bog_agents_cli.cmd_call import setup_call_parser
+
+    setup_call_parser(subparsers)
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -465,6 +476,31 @@ def parse_args() -> argparse.Namespace:
         metavar="TEXT",
         help="Run a single prompt non-interactively with clean output "
         "(equivalent to -n TEXT -q). Ideal for scripting and editor integrations.",
+    )
+
+    parser.add_argument(
+        "--prompt",
+        dest="prompt_name",
+        metavar="NAME",
+        help="Run a saved prompt from ~/.bog-agents/prompt_library.toml "
+        "as the non-interactive task. Use --prompt-vars to supply "
+        "variables. Mutually exclusive with -n / -p.",
+    )
+    parser.add_argument(
+        "--prompt-vars",
+        dest="prompt_vars",
+        metavar="JSON",
+        help="JSON object of variables to substitute into the prompt body "
+        '(e.g. \'{"code": "...", "language": "python"}\'). '
+        "Used with --prompt.",
+    )
+    parser.add_argument(
+        "--pipeline",
+        dest="pipeline_name",
+        metavar="NAME",
+        help="Run a saved pipeline from ~/.bog-agents/pipelines/<NAME>.yaml "
+        "as the non-interactive task. The pipeline's steps are inlined as "
+        "a multi-step prompt. Mutually exclusive with -n / -p / --prompt.",
     )
 
     add_json_output_arg(parser, default="text")
@@ -1078,7 +1114,12 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
 
 
 def cli_main() -> None:
-    """Entry point for console script."""
+    """Entry point for console script.
+
+    Raises:
+        SystemExit: Propagated from `sys.exit()` in subcommand dispatch
+            paths (the standard argparse + subcommand exit pattern).
+    """
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1178,7 +1219,8 @@ def cli_main() -> None:
             except ImportError as exc:
                 msg = (
                     f"ACP dependencies not available: {exc}\n"
-                    "Install with: pip install bog-agents-acp\n"
+                    "Install with: pip install 'bog-agents-cli[acp]'\n"
+                    "  or: uv add 'bog-agents-cli[acp]'\n"
                 )
                 sys.stderr.write(msg)
                 sys.stderr.flush()
@@ -1295,6 +1337,100 @@ def cli_main() -> None:
             args.non_interactive_message = args.print_message
             args.quiet = True
 
+        # --prompt and --pipeline expand into a non-interactive task.
+        # Resolution: read the named prompt/pipeline from disk, substitute
+        # variables for prompts, inline pipeline steps for pipelines.
+        prompt_name = getattr(args, "prompt_name", None)
+        pipeline_name = getattr(args, "pipeline_name", None)
+        if prompt_name and pipeline_name:
+            sys.stderr.write(
+                "Error: --prompt and --pipeline are mutually exclusive.\n",
+            )
+            sys.stderr.flush()
+            sys.exit(2)
+        if (prompt_name or pipeline_name) and args.non_interactive_message:
+            sys.stderr.write(
+                "Error: --prompt/--pipeline cannot be combined with -n/-p; "
+                "they each replace the task.\n",
+            )
+            sys.stderr.flush()
+            sys.exit(2)
+
+        if prompt_name:
+            try:
+                from bog_agents_cli.prompts import resolve_prompt
+            except ImportError:
+                import tomllib
+
+                def resolve_prompt(name: str, variables: dict) -> str:  # type: ignore[no-redef]
+                    cands = [
+                        Path.cwd() / ".bog-agents" / "prompt_library.toml",
+                        Path.home() / ".bog-agents" / "prompt_library.toml",
+                    ]
+                    for p in cands:
+                        if p.is_file():
+                            data = tomllib.loads(p.read_text(encoding="utf-8"))
+                            entry = (data.get("prompts") or {}).get(name)
+                            if not entry:
+                                continue
+                            body = entry.get("body", "")
+                            for k, v in (variables or {}).items():
+                                body = body.replace("{{" + k + "}}", str(v))
+                            return body
+                    msg = f"Prompt '{name}' not found in prompt_library.toml"
+                    raise ValueError(msg)
+
+            try:
+                prompt_vars = json.loads(args.prompt_vars) if args.prompt_vars else {}
+            except json.JSONDecodeError as exc:
+                sys.stderr.write(f"Error: --prompt-vars is not valid JSON: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
+            try:
+                args.non_interactive_message = resolve_prompt(prompt_name, prompt_vars)
+            except (FileNotFoundError, ValueError) as exc:
+                sys.stderr.write(f"Error: --prompt: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
+
+        if pipeline_name:
+            import yaml as _yaml
+
+            cands = [
+                Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+                Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
+                Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+                Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
+            ]
+            yaml_path = next((c for c in cands if c.is_file()), None)
+            if yaml_path is None:
+                sys.stderr.write(
+                    f"Error: --pipeline: '{pipeline_name}' not found "
+                    f"under .bog-agents/pipelines or ~/.bog-agents/pipelines\n",
+                )
+                sys.stderr.flush()
+                sys.exit(2)
+            data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            steps = data.get("steps", []) or []
+            description = data.get("description", "")
+            lines = [
+                f"You are running the pipeline `{pipeline_name}`.",
+                f"Description: {description}" if description else "",
+                "",
+                "Execute these steps in order, using your tools as needed.",
+                "Treat each step as its own subtask and complete it fully",
+                "before moving on. The final response should summarise the",
+                "outcome of every step.",
+                "",
+                "Steps:",
+            ]
+            for i, step in enumerate(steps, 1):
+                step_id = step.get("id", f"step-{i}")
+                step_type = step.get("type", "message")
+                body = step.get("text") or step.get("name", "")
+                lines.append(f"{i}. [{step_type}] {step_id}: {body}")
+            args.non_interactive_message = "\n".join(lines)
+
         # --doctor: run diagnostics and exit
         if getattr(args, "doctor", False):
             _run_doctor(console)
@@ -1304,7 +1440,14 @@ def cli_main() -> None:
         if args.shell_allow_list:
             from bog_agents_cli.config import parse_shell_allow_list
 
-            settings.shell_allow_list = parse_shell_allow_list(args.shell_allow_list)
+            try:
+                settings.shell_allow_list = parse_shell_allow_list(
+                    args.shell_allow_list
+                )
+            except ValueError as exc:
+                sys.stderr.write(f"Error: --shell-allow-list: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(2)
 
         apply_stdin_pipe(args)
 
@@ -1365,12 +1508,12 @@ def cli_main() -> None:
 
             model_spec = args.default_model
             # Auto-detect provider for bare model names
-            from bog_agents_cli.config import detect_provider
+            from bog_agents_cli.config import detectprovider
             from bog_agents_cli.model_config import ModelSpec
 
             parsed = ModelSpec.try_parse(model_spec)
             if not parsed:
-                provider = detect_provider(model_spec)
+                provider = detectprovider(model_spec)
                 if provider:
                     model_spec = f"{provider}:{model_spec}"
 
@@ -1406,6 +1549,14 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_daemon import execute_daemon_command
 
             execute_daemon_command(args)
+        elif args.command == "verify":
+            from bog_agents_cli.cmd_verify import cmd_verify
+
+            sys.exit(cmd_verify(args))
+        elif args.command == "call":
+            from bog_agents_cli.cmd_call import cmd_call
+
+            sys.exit(cmd_call(args))
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,
@@ -1456,6 +1607,94 @@ def cli_main() -> None:
             # Non-interactive mode - execute single task and exit
             from bog_agents_cli.non_interactive import run_non_interactive
 
+            # Resolve -r in non-interactive mode so thread history is loaded
+            # into the LangGraph checkpointer before the agent runs. This
+            # mirrors the interactive path's resume logic but uses stderr-
+            # safe error reporting so --quiet/--json output stays clean.
+            resume_thread_id: str | None = None
+            resume_arg = getattr(args, "resume_thread", None)
+            if resume_arg:
+                from bog_agents_cli.sessions import (
+                    get_most_recent,
+                    get_thread_agent,
+                    thread_exists,
+                )
+
+                if resume_arg == "__MOST_RECENT__":
+                    agent_filter = (
+                        args.agent if args.agent != _DEFAULT_AGENT_NAME else None
+                    )
+                    resume_thread_id = asyncio.run(get_most_recent(agent_filter))
+                    if resume_thread_id and args.agent == _DEFAULT_AGENT_NAME:
+                        resolved_agent = asyncio.run(get_thread_agent(resume_thread_id))
+                        if resolved_agent:
+                            args.agent = resolved_agent
+                elif asyncio.run(thread_exists(resume_arg)):
+                    resume_thread_id = resume_arg
+                    if args.agent == _DEFAULT_AGENT_NAME:
+                        resolved_agent = asyncio.run(get_thread_agent(resume_thread_id))
+                        if resolved_agent:
+                            args.agent = resolved_agent
+                else:
+                    sys.stderr.write(f"Error: thread '{resume_arg}' not found.\n")
+                    sys.exit(2)
+
+            # Validate --mcp-config early so a missing/unreadable file produces
+            # a clean one-line error instead of a deep traceback through the
+            # agent setup. This mirrors the interactive path's check above.
+            mcp_config_arg = getattr(args, "mcp_config", None)
+            if mcp_config_arg:
+                from pathlib import Path as _Path
+
+                if not _Path(mcp_config_arg).is_file():
+                    sys.stderr.write(
+                        f"Error: --mcp-config file not found: {mcp_config_arg}\n",
+                    )
+                    sys.stderr.flush()
+                    sys.exit(2)
+
+            # Validate the configured model's API key is present BEFORE we spin
+            # up the agent. Without this, missing creds surface as a deep
+            # traceback ending in "Could not resolve authentication method"
+            # after the agent is already running.
+            model_arg = getattr(args, "model", None)
+            try:
+                from bog_agents_cli.config import detectprovider
+                from bog_agents_cli.model_config import (
+                    PROVIDER_API_KEY_ENV,
+                    ModelConfig,
+                )
+
+                spec_for_creds = model_arg
+                if spec_for_creds is None:
+                    cfg = ModelConfig.load()
+                    spec_for_creds = cfg.default_model or cfg.recent_model
+                if spec_for_creds:
+                    if ":" in spec_for_creds:
+                        provider = spec_for_creds.split(":", 1)[0].lower()
+                    else:
+                        provider = (detectprovider(spec_for_creds) or "").lower()
+                    env_var = PROVIDER_API_KEY_ENV.get(provider)
+                    # Local providers (ollama) don't need an API key; bedrock/
+                    # vertexai use other auth flows. Skip the gate for them.
+                    if (
+                        env_var
+                        and provider not in ("ollama", "bedrock_converse", "vertexai")
+                        and not os.environ.get(env_var)
+                    ):
+                        sys.stderr.write(
+                            f"Error: model '{spec_for_creds}' requires "
+                            f"{env_var} to be set in the environment.\n"
+                            f"Hint: export {env_var}=... or set it in "
+                            f"~/.bog-agents/.env\n",
+                        )
+                        sys.stderr.flush()
+                        sys.exit(2)
+            except SystemExit:
+                raise
+            except Exception:  # pre-flight only; agent will surface real errors
+                logger.debug("API key pre-flight check failed", exc_info=True)
+
             exit_code = asyncio.run(
                 run_non_interactive(
                     message=args.non_interactive_message,
@@ -1468,9 +1707,13 @@ def cli_main() -> None:
                     sandbox_setup=getattr(args, "sandbox_setup", None),
                     quiet=args.quiet,
                     stream=not args.no_stream,
+                    output_format=getattr(args, "output_format", "text"),
                     mcp_config_path=getattr(args, "mcp_config", None),
                     no_mcp=getattr(args, "no_mcp", False),
                     trust_project_mcp=getattr(args, "trust_project_mcp", False),
+                    auto_commit=getattr(args, "auto_commit", False),
+                    resume_thread_id=resume_thread_id,
+                    auto_approve=getattr(args, "auto_approve", False),
                 )
             )
             sys.exit(exit_code)

@@ -130,6 +130,12 @@ class StreamState:
     """Maps a tool-call index or ID to its name/ID metadata for in-progress
     tool calls."""
 
+    edited_paths: list[str] = field(default_factory=list)
+    """Ordered, de-duplicated list of file paths the agent wrote or edited
+    during this run. Populated from tool_call blocks for
+    write_file / edit_file / multi_edit_file. Used to scope --auto-commit
+    to only the files the agent actually touched (Fix #25)."""
+
     pending_interrupts: dict[str, HITLRequest] = field(default_factory=dict)
     """Maps interrupt IDs to their validated HITL requests that are awaiting
     decisions."""
@@ -259,6 +265,27 @@ def _process_ai_message(
         elif total_toks:
             state.stats.record_request(active_model, total_toks, 0)
 
+    # Capture file paths from the AIMessage's complete `tool_calls` list.
+    # langchain populates this once a tool-call's args have fully streamed,
+    # which is the only reliable place to read complete args (the per-chunk
+    # tool_call_chunk blocks only carry partial JSON fragments).
+    completed_tool_calls = getattr(message_obj, "tool_calls", None) or []
+    for tc in completed_tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        if tc.get("name") not in {"write_file", "edit_file", "multi_edit_file"}:
+            continue
+        args = tc.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        candidate = args.get("file_path") or args.get("path")
+        if (
+            isinstance(candidate, str)
+            and candidate
+            and candidate not in state.edited_paths
+        ):
+            state.edited_paths.append(candidate)
+
     if not hasattr(message_obj, "content_blocks"):
         logger.debug("AIMessage missing content_blocks attribute, skipping")
         return
@@ -291,6 +318,25 @@ def _process_ai_message(
                 if state.full_response and not state.quiet:
                     _write_newline()
                 console.print(f"[dim]🔧 Calling tool: {chunk_name}[/dim]")
+
+            # Track file paths the agent is editing so --auto-commit can
+            # scope `git add` precisely (Fix #25). The block_type
+            # "tool_call" carries args; "tool_call_chunk" usually doesn't,
+            # so we only look at the complete-call shape.
+            if block_type == "tool_call" and chunk_name in {
+                "write_file",
+                "edit_file",
+                "multi_edit_file",
+            }:
+                args = block.get("args") or {}
+                if isinstance(args, dict):
+                    candidate = args.get("file_path") or args.get("path")
+                    if (
+                        isinstance(candidate, str)
+                        and candidate
+                        and candidate not in state.edited_paths
+                    ):
+                        state.edited_paths.append(candidate)
 
 
 def _process_message_chunk(
@@ -333,6 +379,138 @@ def _process_message_chunk(
             console.print(f"[dim]📝 {record.display_path}[/dim]")
 
 
+_FILE_EDIT_TOOL_NAMES = frozenset({"write_file", "edit_file", "multi_edit_file"})
+
+
+def _git_dirty_paths_sync(cwd: Path) -> set[str]:
+    """Return the set of paths that `git status --porcelain` reports as dirty.
+
+    Synchronous (subprocess.run) by design: the previous async variant used
+    `asyncio.create_subprocess_exec("git", ...)` which on Windows fails to
+    locate `git.exe` reliably without an absolute path, returning an empty
+    set silently and breaking the `--auto-commit` scope (Fix #25). Routing
+    through `shutil.which()` + `subprocess.run()` is what the rest of the
+    auto_commit module already uses and works cross-platform.
+
+    Args:
+        cwd: Repo root to query.
+
+    Returns:
+        Set of paths (repo-relative) that `git status --porcelain` reports
+        as dirty. Empty set when git isn't installed, the directory isn't
+        a repo, or anything else goes wrong.
+    """
+    import shutil
+    import subprocess  # noqa: S404 — git is invoked with shutil.which-resolved absolute path, no shell
+
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        return set()
+    try:
+        proc = subprocess.run(  # noqa: S603
+            [git_exe, "status", "--porcelain"],
+            cwd=str(cwd),
+            capture_output=True,
+            timeout=10,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return set()
+    if proc.returncode != 0:
+        return set()
+
+    paths: set[str] = set()
+    for raw_line in (proc.stdout or "").splitlines():
+        # Porcelain v1 lines are 'XY <path>' (and 'XY <orig> -> <new>'
+        # for renames). Strip the 2-char status + space, take the
+        # rename-target if present.
+        if len(raw_line) < 4:
+            continue
+        path = raw_line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if path:
+            paths.add(path)
+    return paths
+
+
+async def _git_dirty_paths(cwd: Path) -> set[str]:
+    """Async-compatible wrapper around _git_dirty_paths_sync.
+
+    Runs the synchronous subprocess in a worker thread so the event loop
+    isn't blocked. Kept as `async` so callers don't need to change.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(_git_dirty_paths_sync, cwd)
+
+
+def _record_edited_path_from_args(args: object, state: StreamState) -> None:
+    """Append the file_path from a tool-call args dict to state.edited_paths."""
+    if not isinstance(args, dict):
+        return
+    candidate = args.get("file_path") or args.get("path")
+    if isinstance(candidate, str) and candidate and candidate not in state.edited_paths:
+        state.edited_paths.append(candidate)
+
+
+def _capture_edited_paths(stream_mode: str, data: object, state: StreamState) -> None:
+    """Scan a stream chunk for file-editing tool calls and record their paths.
+
+    Looks at three places langgraph emits tool-call args:
+
+    1. `messages` mode: AIMessage.tool_calls (complete-args list).
+    2. `updates` mode: each node update may contain a 'messages' list whose
+       AIMessages also expose tool_calls.
+    3. Both shapes: AIMessage.content_blocks may contain `tool_call` blocks
+       with full args (the streaming `tool_call_chunk` form is only
+       fragments, so we ignore it for path capture).
+
+    Args:
+        stream_mode: Stream mode label from the chunk tuple.
+        data: Raw chunk payload.
+        state: StreamState to populate.
+    """
+    # 1. messages mode -> (msg_obj, metadata)
+    if (
+        stream_mode == "messages"
+        and isinstance(data, tuple)
+        and len(data) == _MESSAGE_DATA_LENGTH
+    ):
+        _scan_message_for_edits(data[0], state)
+        return
+
+    # 2. updates mode -> {node_name: {messages: [...]}}
+    if stream_mode == "updates" and isinstance(data, dict):
+        for node_update in data.values():
+            if not isinstance(node_update, dict):
+                continue
+            for msg in node_update.get("messages") or []:
+                _scan_message_for_edits(msg, state)
+
+
+def _scan_message_for_edits(msg: object, state: StreamState) -> None:
+    """Pull edited file_path values out of a single AIMessage's tool calls."""
+    if not isinstance(msg, AIMessage):
+        return
+    for tc in getattr(msg, "tool_calls", None) or []:
+        if not isinstance(tc, dict):
+            continue
+        if tc.get("name") in _FILE_EDIT_TOOL_NAMES:
+            _record_edited_path_from_args(tc.get("args"), state)
+    # Some streams only populate content_blocks, not the tool_calls list.
+    for block in getattr(msg, "content_blocks", None) or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "tool_call":
+            continue
+        if block.get("name") in _FILE_EDIT_TOOL_NAMES:
+            _record_edited_path_from_args(block.get("args"), state)
+
+
 def _process_stream_chunk(
     chunk: object,
     state: StreamState,
@@ -361,6 +539,14 @@ def _process_stream_chunk(
 
     namespace, stream_mode, data = chunk
     is_main_agent = not namespace
+
+    # Best-effort: capture edited file paths from the stream so
+    # --auto-commit can scope `git add` precisely. The cross-namespace
+    # scan covers both messages-mode and updates-mode payloads. When the
+    # langgraph dev server flattens or rewraps messages such that args
+    # never reach us, we still have a porcelain-diff fallback in
+    # run_non_interactive itself (Fix #25).
+    _capture_edited_paths(stream_mode, data, state)
 
     if not is_main_agent:
         return
@@ -539,7 +725,8 @@ async def _run_agent_loop(
     quiet: bool = False,
     stream: bool = True,
     thread_url_lookup: ThreadUrlLookupState | None = None,
-) -> None:
+    output_format: str = "text",
+) -> StreamState:
     """Run the agent and handle HITL interrupts until the task completes.
 
     The loop processes at most `_MAX_HITL_ITERATIONS` rounds to prevent
@@ -558,6 +745,9 @@ async def _run_agent_loop(
             the end.
         thread_url_lookup: Optional non-blocking lookup state for rendering
             a fast-follow LangSmith thread link.
+        output_format: Output format selector — `"text"` for streamed
+            human output, `"json"` for a buffered envelope flushed at
+            end of run.
 
     Raises:
         HITLIterationLimitError: If the HITL iteration limit is exceeded.
@@ -595,12 +785,37 @@ async def _run_agent_loop(
 
     wall_time = time.monotonic() - start_time
 
-    if state.full_response:
+    if output_format == "json":
+        # JSON envelope replaces the streamed text response. Stream chunks
+        # were already written to stdout, but for --json users want a
+        # single machine-readable envelope. We discard partial text in
+        # favour of the assembled final response and stats.
+        import json as _json
+
+        envelope = {
+            "schema_version": 1,
+            "command": "run",
+            "data": {
+                "thread_id": thread_id,
+                "response": "".join(state.full_response).strip(),
+                "stats": {
+                    "wall_time_seconds": round(wall_time, 3),
+                    "model": getattr(state.stats, "model_name", None)
+                    if hasattr(state.stats, "model_name")
+                    else None,
+                    "request_count": getattr(state.stats, "request_count", 0),
+                    "input_tokens": getattr(state.stats, "input_tokens", 0),
+                    "output_tokens": getattr(state.stats, "output_tokens", 0),
+                },
+            },
+        }
+        _write_text(_json.dumps(envelope) + "\n")
+    elif state.full_response:
         if not state.stream:
             _write_text("".join(state.full_response))
         _write_newline()
 
-    if not quiet:
+    if not quiet and output_format != "json":
         console.print()
         if (
             thread_url_lookup is not None
@@ -618,6 +833,8 @@ async def _run_agent_loop(
 
     await dispatch_hook("task.complete", {"thread_id": thread_id})
     await dispatch_hook("session.end", {"thread_id": thread_id})
+
+    return state
 
 
 def _build_non_interactive_header(
@@ -679,6 +896,10 @@ async def run_non_interactive(
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool = False,
+    output_format: str = "text",
+    auto_commit: bool = False,
+    resume_thread_id: str | None = None,
+    auto_approve: bool = False,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -726,13 +947,31 @@ async def run_non_interactive(
         trust_project_mcp: When `True`, allow project-level stdio MCP
             servers. When `False` (default), project stdio servers are
             silently skipped.
+        output_format: Output format — `"text"` (default, human-readable
+            stream) or `"json"` (single-line envelope on stdout, all
+            chrome routed to stderr).
+        auto_commit: When `True`, run `run_auto_commit()` after the agent
+            loop completes successfully so file changes land in a
+            conventional commit tagged `(bog-agent)`. No-op outside a
+            git repo or when there are no changes.
+        resume_thread_id: When set, resume the named LangGraph thread
+            instead of allocating a fresh one — exposes `-r THREAD_ID`
+            to non-interactive mode.
+        auto_approve: When `True` (typically because the caller passed
+            `--auto-approve`), opt the headless run into full
+            autonomy: shell access is enabled and HITL gating is
+            bypassed, so the agent can run typecheck/tests/etc.
+            without a human approving each command. Without this,
+            `-n` mode silently runs without shell tools (Fix #36).
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
     """
     # stderr=True routes all console.print() to stderr; agent response text
-    # uses _write_text() -> sys.stdout directly.
-    console = Console(stderr=True) if quiet else Console()
+    # uses _write_text() -> sys.stdout directly. Both --quiet and --json
+    # need stdout reserved for the actual payload — chrome (server-ready,
+    # thread headers, status line) must land on stderr.
+    console = Console(stderr=True) if (quiet or output_format == "json") else Console()
     try:
         result = create_model(
             model_name,
@@ -744,7 +983,9 @@ async def run_non_interactive(
         return 1
 
     result.apply_to_settings()
-    thread_id = generate_thread_id()
+    # If the caller passed -r THREAD_ID, resume that thread so its history
+    # is loaded into the LangGraph checkpointer; otherwise allocate fresh.
+    thread_id = resume_thread_id or generate_thread_id()
 
     try:
         cwd = str(Path.cwd())
@@ -797,11 +1038,17 @@ async def run_non_interactive(
             logger.warning("MCP metadata preload task creation failed", exc_info=True)
 
     try:
-        enable_shell = bool(settings.shell_allow_list)
-        shell_is_unrestricted = isinstance(
+        # When the caller passes --auto-approve they're opting into headless
+        # autonomy — the agent should have shell access to run tsc/vitest/
+        # npm/etc. Otherwise shell is gated by --shell-allow-list (Fix #36).
+        # Without this, --auto-approve was silently dropped in -n mode and
+        # the agent kept emitting "Please run X in your terminal" because
+        # it had no execute tool to call (recurring #18 symptom).
+        enable_shell = auto_approve or bool(settings.shell_allow_list)
+        shell_is_unrestricted = auto_approve or isinstance(
             settings.shell_allow_list, type(SHELL_ALLOW_ALL)
         )
-        use_auto_approve = not enable_shell or shell_is_unrestricted
+        use_auto_approve = auto_approve or (not enable_shell) or shell_is_unrestricted
 
         if not quiet:
             console.print(Text("Starting LangGraph server...", style="dim"))
@@ -840,16 +1087,59 @@ async def run_non_interactive(
 
             file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=None)
 
-            await _run_agent_loop(
+            # JSON output: suppress mid-stream stdout writes so only the
+            # envelope reaches stdout. Diagnostic chrome is already routed
+            # via stderr console.
+            effective_stream = stream and output_format != "json"
+            # Snapshot the working tree just before the agent runs so we
+            # can diff against it after to compute the exact set of
+            # files the run created or modified. This is the bulletproof
+            # fallback when stream-introspection misses tool calls hidden
+            # inside subagent / langgraph-dev namespaces.
+            pre_run_dirty = await _git_dirty_paths(Path.cwd()) if auto_commit else set()
+
+            final_state = await _run_agent_loop(
                 agent,
                 message,
                 config,
                 console,
                 file_op_tracker,
-                quiet=quiet,
-                stream=stream,
+                quiet=quiet or output_format == "json",
+                stream=effective_stream,
                 thread_url_lookup=thread_url_lookup,
+                output_format=output_format,
             )
+
+            if auto_commit:
+                from bog_agents_cli.auto_commit import run_auto_commit
+
+                # Scope auto-commit to files the agent actually touched
+                # (Fix #25). Two sources of truth, unioned:
+                #   1. StreamState.edited_paths captured from tool_call
+                #      args while the stream ran (best when the path
+                #      shows up).
+                #   2. `git status --porcelain` diff between pre-run and
+                #      post-run — catches everything that ended up in
+                #      the working tree, regardless of which subgraph
+                #      issued the write. Critical because langgraph-dev
+                #      sub-graph messages don't always carry their
+                #      args back to the CLI process.
+                stream_paths = set(final_state.edited_paths)
+                post_run_dirty = await _git_dirty_paths(Path.cwd())
+                fresh_dirty = post_run_dirty - pre_run_dirty
+                edited_paths = sorted(stream_paths | fresh_dirty)
+
+                sha = await run_auto_commit(
+                    cwd=Path.cwd(),
+                    paths=edited_paths or None,
+                )
+                if sha and not quiet and output_format != "json":
+                    if edited_paths:
+                        console.print(
+                            f"[dim]auto-commit: created {sha} ({len(edited_paths)} file(s))[/dim]"
+                        )
+                    else:
+                        console.print(f"[dim]auto-commit: created {sha}[/dim]")
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted[/yellow]")

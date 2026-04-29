@@ -46,11 +46,81 @@ def _read_pid() -> int | None:
 
 
 def _is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
+    """Return True if a process with the given PID is alive.
+
+    Thin wrapper that delegates to the cross-platform helper in `_proc`.
+    Kept as a module-private function for backwards compatibility with
+    in-tree tests that monkeypatch this name.
+    """
+    from bog_agents_cli._proc import is_running
+
+    return is_running(pid)
+
+
+_MSYS_GIT_PREFIXES: tuple[str, ...] = (
+    # Common Git-for-Windows install locations whose 'hooks/' directory
+    # is the most likely false positive when MSYS rewrites '/hooks/...'.
+    "C:/Program Files/Git",
+    "C:\\Program Files\\Git",
+    "C:/Program Files (x86)/Git",
+    "C:\\Program Files (x86)\\Git",
+)
+
+
+def _strip_msys_path_mangle(value: str) -> str:
+    """Recover an absolute-style arg that Git Bash converted into a Windows path.
+
+    When a user passes ``--webhook-path /hooks/foo`` from MSYS / Git Bash on
+    Windows, the MSYS path-conversion layer rewrites the arg to something
+    like ``C:/Program Files/Git/hooks/foo`` *before* argparse sees it.
+    Detect that exact mangle and restore the intended ``/hooks/foo``.
+
+    Only triggers on Windows + when the value starts with a known Git
+    install prefix and the next segment is the literal word ``hooks``.
+    Anything else is returned unchanged so we never alter legitimate
+    user-provided paths.
+
+    Args:
+        value: Raw arg string from argparse.
+
+    Returns:
+        The recovered path on detected mangle, otherwise the input verbatim.
+    """
+    if sys.platform != "win32" or not value:
+        return value
+    for prefix in _MSYS_GIT_PREFIXES:
+        if value.startswith(prefix):
+            tail = value[len(prefix) :].replace("\\", "/")
+            if tail.startswith("/hooks/") or tail == "/hooks":
+                return tail
+    return value
+
+
+def _find_daemon_executable() -> str | None:
+    """Locate the bog-agents-daemon binary.
+
+    Tries PATH first, then falls back to the directory containing the current
+    Python interpreter so that `uv run` and venv-only installs (where the venv
+    Scripts/bin dir is not on the host PATH) still work.
+
+    Returns:
+        Absolute path to the daemon executable, or None if not found.
+    """
+    found = shutil.which("bog-agents-daemon")
+    if found is not None:
+        return found
+
+    interp_dir = Path(sys.executable).resolve().parent
+    suffix = ".exe" if sys.platform == "win32" else ""
+    for candidate_dir in (
+        interp_dir,
+        interp_dir.parent / "Scripts",
+        interp_dir.parent / "bin",
+    ):
+        candidate = candidate_dir / f"bog-agents-daemon{suffix}"
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def _api_get(path: str, *, port: int = _DEFAULT_PORT) -> Any:  # noqa: ANN401
@@ -126,19 +196,25 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
         print(f"Daemon is already running (PID {pid}).")  # noqa: T201
         return
 
-    exe = shutil.which("bog-agents-daemon")
+    exe = _find_daemon_executable()
     if exe is None:
         print(  # noqa: T201
-            "bog-agents-daemon not found on PATH.\n"
+            "bog-agents-daemon not found on PATH or in the CLI's environment.\n"
             "Install it with: pip install bog-agents-daemon"
         )
         sys.exit(1)
 
+    # Pass env explicitly: on Windows the .exe shim + start_new_session
+    # combination can drop ANTHROPIC_API_KEY (and other provider keys) from
+    # the child's environment. Forward the CLI's full env so daemon-driven
+    # jobs can reach LLM providers without the user having to set keys
+    # again at the daemon level.
     proc = subprocess.Popen(  # noqa: S603
         [exe, "--port", str(port), "--log-level", log_level],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=os.environ.copy(),
     )
 
     # Brief wait for daemon to bind and write PID file
@@ -151,7 +227,16 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
 
 
 def cmd_daemon_stop() -> None:
-    """Stop a running daemon by sending SIGTERM to its PID."""
+    """Stop a running daemon, preferring HTTP /shutdown over signal-based kill.
+
+    Uses the daemon's REST `/shutdown` endpoint first (cross-platform and
+    doesn't race with signal delivery), then falls back to `os.kill`. On
+    Windows, `signal.SIGKILL` doesn't exist and `os.kill(SIGTERM)` already
+    maps to TerminateProcess for a normal exit, so we don't need a separate
+    SIGKILL path. All `os.kill` calls are wrapped against OSError so a
+    stale PID file or a process that exits between the alive-check and
+    the signal doesn't crash the CLI.
+    """
     pid = _read_pid()
     if pid is None:
         print("Daemon is not running (no PID file).")  # noqa: T201
@@ -160,16 +245,53 @@ def cmd_daemon_stop() -> None:
         print(f"Daemon PID {pid} is not running. Cleaning up stale PID file.")  # noqa: T201
         _PID_FILE.unlink(missing_ok=True)
         return
-    os.kill(pid, signal.SIGTERM)
-    # Wait up to 5 s for graceful shutdown
+
+    # 1) Try graceful HTTP shutdown first.
+    token = _read_token() or ""
+    try:
+        url = f"{_daemon_url(_DEFAULT_PORT)}/shutdown"
+        req = urllib.request.Request(
+            url,
+            data=b"",
+            headers={"X-Daemon-Token": token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+    except (urllib.error.URLError, OSError):
+        # Daemon may already be exiting, on a different port, or unauthorised.
+        # Fall through to signal-based stop.
+        pass
+
+    # 2) Wait up to 5s for graceful exit (HTTP shutdown or otherwise).
     for _ in range(20):
         time.sleep(0.25)
         if not _is_running(pid):
             break
+
+    # 3) Last resort: SIGTERM (Windows maps to TerminateProcess; POSIX to graceful term).
     if _is_running(pid):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        for _ in range(8):
+            time.sleep(0.25)
+            if not _is_running(pid):
+                break
+
+    # 4) Stronger kill on POSIX only — SIGKILL doesn't exist on Windows.
+    if _is_running(pid) and hasattr(signal, "SIGKILL"):
         print(f"Daemon (PID {pid}) did not stop in time; sending SIGKILL.")  # noqa: T201
-        os.kill(pid, signal.SIGKILL)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    if _is_running(pid):
+        print(f"Daemon (PID {pid}) is still running; manual cleanup may be needed.")  # noqa: T201
     else:
+        _PID_FILE.unlink(missing_ok=True)
         print(f"Daemon (PID {pid}) stopped.")  # noqa: T201
 
 
@@ -214,9 +336,9 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         )
         sys.exit(1)
 
-    exe = shutil.which("bog-agents-daemon")
+    exe = _find_daemon_executable()
     if exe is None:
-        print("bog-agents-daemon not found on PATH. Install it first.")  # noqa: T201
+        print("bog-agents-daemon not found on PATH or in the CLI's environment.")  # noqa: T201
         sys.exit(1)
 
     resolved_platform = platform or (
@@ -311,7 +433,12 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
             }
         )
     if args.webhook_path:
-        triggers.append({"type": "webhook", "webhook_path": args.webhook_path})
+        # MSYS / Git Bash on Windows rewrites a leading-slash arg into an
+        # absolute path under the Git install (e.g. /hooks/foo becomes
+        # 'C:/Program Files/Git/hooks/foo'). Detect that mangle and
+        # recover the intended path. See cross-platform-notes.md.
+        webhook_path = _strip_msys_path_mangle(args.webhook_path)
+        triggers.append({"type": "webhook", "webhook_path": webhook_path})
     if args.git_branch:
         triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
 
@@ -324,6 +451,24 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         out["slack_webhook_url"] = args.output_slack
     elif output_target == "webhook":
         out["webhook_url"] = args.output_webhook
+    elif output_target == "email":
+        # SMTP password is intentionally read from the arg directly so users
+        # can either pass it inline or stuff it into a wrapper script that
+        # reads from env. The daemon does not log it.
+        to_addrs = [
+            a.strip()
+            for a in (getattr(args, "output_email_to", "") or "").split(",")
+            if a.strip()
+        ]
+        out["to_addrs"] = to_addrs
+        out["from_addr"] = getattr(args, "output_email_from", "") or ""
+        out["smtp_host"] = getattr(args, "output_email_smtp_host", "") or ""
+        out["smtp_port"] = getattr(args, "output_email_smtp_port", 587)
+        out["smtp_username"] = getattr(args, "output_email_smtp_user", "") or ""
+        out["smtp_password"] = getattr(args, "output_email_smtp_password", "") or ""
+    elif output_target == "github_comment":
+        out["github_repo"] = getattr(args, "output_github_repo", "") or ""
+        out["github_issue_or_pr"] = getattr(args, "output_github_issue", 0) or 0
 
     payload: dict[str, Any] = {
         "name": args.name,
@@ -417,14 +562,18 @@ def cmd_jobs_delete(job_id: str, port: int = _DEFAULT_PORT) -> None:
 
 
 def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
-    """Trigger an immediate manual run of a job and wait for the result.
+    """Trigger a manual run of a job and poll until it completes.
+
+    The daemon's `/jobs/{id}/run` endpoint returns immediately with a
+    `running` placeholder so it never times out under HTTP. We then poll
+    the run-history endpoint until the run reaches a terminal state.
 
     Args:
         job_id: The job identifier.
         port: Port the daemon is listening on.
     """
     try:
-        run = _api_post(f"/jobs/{job_id}/run", {}, port=port)
+        triggered = _api_post(f"/jobs/{job_id}/run", {}, port=port)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             print(f"Job '{job_id}' not found.")  # noqa: T201
@@ -434,11 +583,36 @@ def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
     except (urllib.error.URLError, OSError):
         _unreachable(port)
 
-    print(f"Run {run.get('run_id')}  status={run.get('status')}")  # noqa: T201
-    if run.get("output"):
-        print(run["output"])  # noqa: T201
-    if run.get("error"):
-        print(f"Error: {run['error']}")  # noqa: T201
+    run_id = triggered.get("run_id", "")
+    print(f"Run {run_id}  status=running (polling for completion)")  # noqa: T201
+
+    deadline = (
+        time.monotonic() + 1800
+    )  # 30 min — matches daemon's BOG_DAEMON_AGENT_TIMEOUT
+    final_run: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        try:
+            runs = _api_get(f"/jobs/{job_id}/runs", port=port)
+        except (urllib.error.URLError, OSError):
+            time.sleep(2)
+            continue
+        for r in runs:
+            if r.get("run_id") == run_id and r.get("status") in ("completed", "failed"):
+                final_run = r
+                break
+        if final_run is not None:
+            break
+        time.sleep(3)
+
+    if final_run is None:
+        print(f"Run {run_id} did not finish within 30 minutes.")  # noqa: T201
+        sys.exit(1)
+
+    print(f"Run {final_run['run_id']}  status={final_run['status']}")  # noqa: T201
+    if final_run.get("output"):
+        print(final_run["output"])  # noqa: T201
+    if final_run.get("error"):
+        print(f"Error: {final_run['error']}")  # noqa: T201
 
 
 def cmd_jobs_enable(job_id: str, port: int = _DEFAULT_PORT) -> None:
@@ -655,8 +829,16 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     create_p.add_argument(
         "--output",
         default="log",
-        choices=["log", "stdout", "file", "slack", "webhook"],
-        help="Output target (default: log)",
+        choices=[
+            "log",
+            "stdout",
+            "file",
+            "slack",
+            "webhook",
+            "email",
+            "github_comment",
+        ],
+        help="Output target (default: log). 'email' / 'github_comment' use the per-target flags below.",
     )
     create_p.add_argument(
         "--output-file",
@@ -678,6 +860,66 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="URL",
         help="Webhook URL when --output=webhook",
+    )
+    # email output (smtp_*, to_addrs, from_addr, subject_template)
+    create_p.add_argument(
+        "--output-email-to",
+        dest="output_email_to",
+        default="",
+        metavar="ADDR[,ADDR...]",
+        help="Comma-separated recipient list when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-from",
+        dest="output_email_from",
+        default="",
+        metavar="ADDR",
+        help="From address when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-host",
+        dest="output_email_smtp_host",
+        default="",
+        metavar="HOST",
+        help="SMTP host when --output=email (defaults to localhost)",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-port",
+        dest="output_email_smtp_port",
+        type=int,
+        default=587,
+        metavar="PORT",
+        help="SMTP port when --output=email (587=STARTTLS, 465=SSL, 25=plain; default 587)",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-user",
+        dest="output_email_smtp_user",
+        default="",
+        metavar="USER",
+        help="SMTP username when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-password",
+        dest="output_email_smtp_password",
+        default="",
+        metavar="PW",
+        help="SMTP password when --output=email (env-passable; do not commit)",
+    )
+    # github_comment output
+    create_p.add_argument(
+        "--output-github-repo",
+        dest="output_github_repo",
+        default="",
+        metavar="OWNER/REPO",
+        help="Repo when --output=github_comment",
+    )
+    create_p.add_argument(
+        "--output-github-issue",
+        dest="output_github_issue",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Issue or PR number when --output=github_comment",
     )
     create_p.add_argument(
         "--disabled", action="store_true", help="Create the job in a disabled state"

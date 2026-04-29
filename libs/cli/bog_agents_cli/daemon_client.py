@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -27,17 +26,15 @@ def is_daemon_running() -> bool:
     Returns:
         True if the daemon is running, False otherwise.
     """
+    from bog_agents_cli._proc import is_running
+
     if not _PID_FILE.exists():
         return False
     try:
         pid = int(_PID_FILE.read_text().strip())
     except (ValueError, OSError):
         return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError, OSError):
-        return False
+    return is_running(pid)
 
 
 def get_daemon_token() -> str | None:

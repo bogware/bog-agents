@@ -103,6 +103,10 @@ def show_help() -> None:
     console.print("  reset --agent NAME [--target SRC]   Reset an agent's prompt")
     console.print("  skills <list|create|info|delete>     Manage agent skills")
     console.print("  threads <list|delete>                Manage conversation threads")
+    console.print("  verify                              Run typecheck + lint + tests")
+    console.print(
+        "  call MESSAGE                        Talk to a running --serve instance"
+    )
     console.print()
 
     # --- Core Options ---
@@ -135,6 +139,15 @@ def show_help() -> None:
     console.print("  -q, --quiet                Suppress chrome, pipe-friendly output")
     console.print("  --no-stream                Buffer full response (don't stream)")
     console.print("  --json                     Machine-readable JSON output")
+    console.print(
+        "  --prompt NAME              Run a saved prompt from prompt_library.toml"
+    )
+    console.print(
+        "  --prompt-vars JSON         JSON object of {var: value} for --prompt"
+    )
+    console.print(
+        "  --pipeline NAME            Run a saved pipeline from .bog-agents/pipelines/"
+    )
     console.print(
         "  --shell-allow-list CMDS    Shell access: 'recommended', 'all', or comma list"
     )

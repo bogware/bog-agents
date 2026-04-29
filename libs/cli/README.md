@@ -337,6 +337,28 @@ Use `provider:model` format. Any LangChain-compatible chat model works.
 | HuggingFace | `huggingface` | `huggingface:meta-llama/Llama-3` |
 | Azure OpenAI | *(via openai)* | `azure_openai:gpt-4o` |
 
+### Local Ollama: which model to use
+
+Ollama's chat API mimics OpenAI's tools-API JSON schema. Models trained
+against that exact schema engage tools cleanly; models trained against
+other formats (Mistral's `[TOOL_CALLS]{}`, Hermes' `<tool_call>{}</tool_call>`,
+Qwen's chat-template tool call) emit calls in the message text and Ollama's
+adapter doesn't translate them. The CLI ships a parser middleware that
+recovers most text-shaped tool calls automatically when you select an
+`ollama:` model, but recovery is best-effort.
+
+- **Recommended**: `ollama:gpt-oss:20b` — OpenAI tools-API native, works
+  end-to-end with no recovery needed. Fits in 16GB of VRAM.
+- **Recovers via parser**: `ollama:mistral-nemo:12b`, `ollama:hermes3:8b`,
+  some `ollama:qwen2.5-coder` runs.
+- **Doesn't work**: `ollama:deepseek-coder-v2:16b` (Ollama's manifest
+  doesn't expose the `tools` capability — see
+  [ollama/ollama#3303](https://github.com/ollama/ollama/issues) if you want
+  to nudge upstream), `ollama:starcoder2`, `ollama:codellama`.
+
+Run `bog-agents --doctor` to see whether your configured default Ollama
+model is on the known-good list.
+
 ---
 
 ## Recipes for CI and scripting

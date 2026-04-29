@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -132,7 +133,7 @@ class FilesystemBackend(BackendProtocol):
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
 
     def _resolve_path(self, key: str) -> Path:
-        """Resolve a file path with security checks.
+        r"""Resolve a file path with security checks.
 
         When `virtual_mode=True`, treat incoming paths as virtual absolute paths under
         `self.cwd`, disallow traversal (`..`, `~`) and ensure resolved path stays within
@@ -140,6 +141,14 @@ class FilesystemBackend(BackendProtocol):
 
         When `virtual_mode=False`, preserve legacy behavior: absolute paths are allowed
         as-is; relative paths resolve under cwd.
+
+        On Windows specifically, POSIX-style absolute paths (e.g. ``/foo.txt``)
+        emitted by LLMs are rewritten to be cwd-relative so they don't silently
+        land at the current drive root. Drive-letter absolute paths (``C:\\foo``)
+        are still honored. This addresses a class of bugs where local models
+        (notably Llama 3.1, Gemma 4) emit POSIX paths in tool args on Windows
+        hosts and writes end up at ``C:\\foo.txt`` instead of the intended
+        location under cwd.
 
         Args:
             key: File path (absolute, relative, or virtual when `virtual_mode=True`).
@@ -163,6 +172,23 @@ class FilesystemBackend(BackendProtocol):
                 msg = f"Path:{full} outside root directory: {self.cwd}"
                 raise ValueError(msg) from None
             return full
+
+        # Windows safety net: a POSIX-shaped path that starts with `/` or
+        # `\` but has no drive letter (e.g. "/foo/bar") would otherwise be
+        # treated as drive-rooted by pathlib — `(E:/cwd) / "/foo/bar"`
+        # resolves to `E:\foo\bar` (drive root), silently mis-routing
+        # writes. Local LLMs (Llama 3.1, Gemma 4) emit paths in this shape
+        # all the time. Treat them as cwd-relative instead. A drive-letter
+        # path (`C:\foo`, `D:/data`) is still honoured as truly absolute.
+        if sys.platform == "win32" and (key.startswith(("/", "\\"))) and not re.match(r"^[\\/][a-zA-Z]:", key):
+            stripped = key.lstrip("/\\")
+            if stripped:
+                logger.debug(
+                    "Rewriting drive-rooted path '%s' to cwd-relative '%s' on Windows",
+                    key,
+                    stripped,
+                )
+                return (self.cwd / stripped).resolve()
 
         path = Path(key)
         if path.is_absolute():
@@ -586,8 +612,15 @@ class FilesystemBackend(BackendProtocol):
             List of `FileInfo` dicts for matching files, sorted by path. Each dict
                 contains `path`, `is_dir`, `size`, and `modified_at` fields.
         """
-        if pattern.startswith("/"):
-            pattern = pattern.lstrip("/")
+        # Strip any anchor from the pattern. Python 3.13's `Path.rglob`
+        # raises NotImplementedError on anchored patterns, and models often
+        # emit absolute-looking patterns like `/foo/**/*.py` or
+        # `E:/proj/**/*.tsx`. We treat them all as relative-from-search-root.
+        if pattern.startswith(("/", "\\")):
+            pattern = pattern.lstrip("/\\")
+        elif len(pattern) >= 2 and pattern[1] == ":" and pattern[0].isalpha():  # noqa: PLR2004 — `2` = "<drive-letter>:" prefix length
+            # Windows drive-letter prefix: strip it AND any following sep.
+            pattern = pattern[2:].lstrip("/\\")
 
         if self.virtual_mode and ".." in Path(pattern).parts:
             msg = "Path traversal not allowed in glob pattern"

@@ -232,7 +232,9 @@ class DaemonScheduler:
                 if _is_cron_due(trigger.cron, job.last_run_at):
                     logger.debug(
                         "Cron trigger due for job %s (%s): %s",
-                        job.job_id, job.name, trigger.cron,
+                        job.job_id,
+                        job.name,
+                        trigger.cron,
                     )
                     return TriggerType.CRON, None
 
@@ -240,7 +242,9 @@ class DaemonScheduler:
                 if _is_interval_due(trigger.interval_seconds, job.last_run_at):
                     logger.debug(
                         "Interval trigger due for job %s (%s): every %ds",
-                        job.job_id, job.name, trigger.interval_seconds,
+                        job.job_id,
+                        job.name,
+                        trigger.interval_seconds,
                     )
                     return TriggerType.INTERVAL, None
 
@@ -250,13 +254,13 @@ class DaemonScheduler:
                     debounce = max(0.0, trigger.debounce_seconds)
                     if debounce > 0:
                         # Record first detection time; only fire after debounce window
-                        first_seen = self._file_change_pending.setdefault(
-                            job.job_id, time.time()
-                        )
+                        first_seen = self._file_change_pending.setdefault(job.job_id, time.time())
                         if time.time() - first_seen < debounce:
                             logger.debug(
                                 "File-change debouncing job %s (%s): %s, %.1fs remaining",
-                                job.job_id, job.name, changed_path,
+                                job.job_id,
+                                job.name,
+                                changed_path,
                                 debounce - (time.time() - first_seen),
                             )
                             continue
@@ -264,7 +268,9 @@ class DaemonScheduler:
                     self._file_change_pending.pop(job.job_id, None)
                     logger.debug(
                         "File-change trigger fired for job %s (%s): %s",
-                        job.job_id, job.name, changed_path,
+                        job.job_id,
+                        job.name,
+                        changed_path,
                     )
                     return TriggerType.FILE_CHANGE, {
                         "trigger_path": str(changed_path),

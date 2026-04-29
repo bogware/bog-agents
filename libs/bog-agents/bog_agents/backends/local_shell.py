@@ -357,6 +357,15 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 shell=True,  # Intentional: designed for LLM-controlled shell execution
                 capture_output=True,
                 text=True,
+                # Force UTF-8 decoding for stdout/stderr regardless of the
+                # platform default. Windows' cp1252 default would crash the
+                # subprocess reader thread on byte sequences emitted by
+                # common tools — npx/vitest checkmarks (✓), tsc colored
+                # output, ripgrep box-drawing, ripgrep ANSI sequences with
+                # \xa0, etc. errors='replace' guarantees the reader never
+                # dies and the agent always sees the actual command output.
+                encoding="utf-8",
+                errors="replace",
                 timeout=effective_timeout,
                 env=self._env,
                 cwd=str(self.cwd),  # Use the root_dir from FilesystemBackend

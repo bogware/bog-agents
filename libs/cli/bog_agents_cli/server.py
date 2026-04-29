@@ -244,6 +244,11 @@ def _build_server_cmd(config_path: Path, *, host: str, port: int) -> list[str]:
         str(port),
         "--no-browser",
         "--no-reload",
+        # blockbuster's blocking-call detector aborts user runs on benign
+        # sync calls (os.getcwd from realpath, file_system tool ops on
+        # Windows). The CLI runs a single-user dev server where this guard
+        # has no value — disable it explicitly.
+        "--allow-blocking",
         "--config",
         str(config_path),
     ]
@@ -261,11 +266,17 @@ def _build_server_env() -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["LANGGRAPH_AUTH_TYPE"] = "noop"
-    # Allow synchronous blocking I/O (e.g. boto3 in ChatBedrockConverse).
-    # The CLI runs a single-user local dev server where blockbuster's
-    # blocking-call detection adds no value but breaks providers that
-    # use sync HTTP clients wrapped in run_in_executor.
+    # Allow synchronous blocking I/O (e.g. boto3 in ChatBedrockConverse,
+    # the local file_system tool's filesystem ops on Windows, the agent's
+    # HITL middleware which calls os.getcwd via realpath). The CLI runs a
+    # single-user local dev server where blockbuster's blocking-call
+    # detection adds no value but produces false-positive aborts.
+    #
+    # Both env vars are honoured by langgraph_api so we set both; older
+    # versions only respected LANGGRAPH_ALLOW_BLOCKING, newer versions
+    # require BG_JOB_ISOLATED_LOOPS for full coverage of the worker loop.
     env["LANGGRAPH_ALLOW_BLOCKING"] = "true"
+    env["BG_JOB_ISOLATED_LOOPS"] = "true"
     for key in (
         "LANGGRAPH_AUTH",
         "LANGGRAPH_CLOUD_LICENSE_KEY",
@@ -379,9 +390,13 @@ class ServerProcess:
             )
             raise RuntimeError(msg)
 
-        if _port_in_use(self.host, self.port):
+        # Concurrent CLI invocations all see the default port as free at the
+        # same instant and race to bind it (Note #33). Always pick a fresh
+        # ephemeral port unless the user explicitly overrode self.port to a
+        # non-default value (e.g. tests pinning a known port).
+        if self.port == _DEFAULT_PORT or _port_in_use(self.host, self.port):
             self.port = _find_free_port(self.host)
-            logger.info("Default port in use, using port %d instead", self.port)
+            logger.info("Allocated free port %d for langgraph dev", self.port)
 
         cmd = _build_server_cmd(config_path, host=self.host, port=self.port)
         env = _build_server_env()

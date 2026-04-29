@@ -1236,9 +1236,13 @@ class TestCreateCliAgentProjectContext:
         sources = captured_sources[0]
         assert str(project_skills_dir) in sources
         assert str(project_agent_skills_dir) in sources
+        # 0.7.3+ also threads `project_root` through to enable the bundled-
+        # subagent library (Python/Node/Rust/Go specialists shipped with the
+        # package). Effective cwd from project_context drives the detection.
         mock_list.assert_called_once_with(
             user_agents_dir=tmp_path / "agents",
             project_agents_dir=project_agents_dir,
+            project_root=project_context.user_cwd,
         )
 
     def test_project_context_drives_project_agents_md_paths(

@@ -1,12 +1,13 @@
 """FastAPI REST API for the bog-agents daemon."""
 
-
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -189,14 +190,31 @@ def _output_config_from_model(m: OutputConfigModel) -> OutputConfig:
     )
 
 
+_REDACTED_OUTPUT_FIELDS: tuple[str, ...] = (
+    "smtp_password",
+    "github_token",
+    "webhook_secret",
+)
+_REDACTED_TRIGGER_FIELDS: tuple[str, ...] = ("webhook_secret",)
+_REDACTED_PLACEHOLDER = "***"
+
+
 def _job_to_response(job: AmbientJob) -> dict[str, Any]:
     """Serialize an AmbientJob to a JSON-safe dict for API responses.
+
+    Secrets that the daemon needs at run time (SMTP password, GitHub
+    token, webhook HMAC secret) are persisted on disk in jobs.json but
+    must not be echoed back through the HTTP API — anyone with valid
+    daemon-token access could otherwise read them. We redact them to a
+    fixed placeholder so the field shape stays stable for clients but
+    the actual value is never exposed.
 
     Args:
         job: The job to serialize.
 
     Returns:
-        A dict suitable for returning from a FastAPI endpoint.
+        A dict suitable for returning from a FastAPI endpoint, with
+        secret-bearing fields replaced by `'***'` when present.
     """
     import dataclasses
 
@@ -205,9 +223,15 @@ def _job_to_response(job: AmbientJob) -> dict[str, Any]:
     for trigger in d.get("triggers", []):
         if "type" in trigger and hasattr(trigger["type"], "value"):
             trigger["type"] = trigger["type"].value
+        for redacted in _REDACTED_TRIGGER_FIELDS:
+            if trigger.get(redacted):
+                trigger[redacted] = _REDACTED_PLACEHOLDER
     for output in d.get("outputs", []):
         if "target" in output and hasattr(output["target"], "value"):
             output["target"] = output["target"].value
+        for redacted in _REDACTED_OUTPUT_FIELDS:
+            if output.get(redacted):
+                output[redacted] = _REDACTED_PLACEHOLDER
     return d
 
 
@@ -233,12 +257,20 @@ def _run_to_response(run: JobRun) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
+def create_app(
+    *,
+    token: str,
+    scheduler: DaemonScheduler,
+    request_shutdown: Callable[[], None] | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         token: The auth token used to authenticate API requests.
         scheduler: The DaemonScheduler instance (passed for future extension).
+        request_shutdown: Optional callback the `/shutdown` endpoint invokes
+            to ask the server to exit gracefully. When `None`, `/shutdown`
+            returns 503.
 
     Returns:
         A configured FastAPI application.
@@ -264,6 +296,29 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
         _check_auth(request, token)
         jobs = load_jobs()
         return {"status": "ok", "version": __version__, "job_count": len(jobs)}
+
+    # ------------------------------------------------------------------
+    # Shutdown
+    # ------------------------------------------------------------------
+
+    @app.post("/shutdown", status_code=202)
+    async def shutdown_endpoint(request: Request) -> dict[str, str]:
+        """Request graceful shutdown of the daemon.
+
+        Token-protected. Useful on Windows where signal-based termination
+        through PID files is unreliable, and for scripted control.
+
+        Returns:
+            Status dict indicating shutdown was requested.
+
+        Raises:
+            HTTPException: 503 if no shutdown callback is wired.
+        """
+        _check_auth(request, token)
+        if request_shutdown is None:
+            raise HTTPException(status_code=503, detail="Shutdown callback not configured")
+        request_shutdown()
+        return {"status": "shutting down"}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
@@ -355,14 +410,19 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
 
     @app.post("/jobs/{job_id}/run", status_code=202)
     async def trigger_job_endpoint(request: Request, job_id: str, body: TriggerRunRequest | None = None) -> dict[str, Any]:
-        """Trigger an immediate manual run of a job.
+        """Trigger a manual run of a job.
+
+        The run is started in the background and the initial JobRun record
+        (status=running) is returned immediately so that HTTP clients with
+        short timeouts don't disconnect during a long-running agent
+        invocation. Poll `/jobs/{job_id}/runs` for completion state.
 
         Args:
             job_id: The job identifier.
             body: Optional trigger context.
 
         Returns:
-            The initiated JobRun dict.
+            A JobRun dict with status=running and a freshly assigned run_id.
 
         Raises:
             HTTPException: 404 if not found.
@@ -374,13 +434,38 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
 
         import asyncio
 
+        from bog_agents_daemon.models import JobRun, JobStatus
         from bog_agents_daemon.runner import run_job
+        from bog_agents_daemon.store import save_run
+
         context = body.context if body else {}
-        run = await asyncio.shield(
-            asyncio.create_task(
-                run_job(job, trigger_type=TriggerType.MANUAL, trigger_context=context)
-            )
+
+        # Persist a placeholder run record up front so callers (and the CLI's
+        # `jobs run`) see a real run_id and status=running immediately.
+        run = JobRun(
+            job_id=job.job_id,
+            job_name=job.name,
+            status=JobStatus.RUNNING,
+            trigger_type=TriggerType.MANUAL,
+            trigger_context=context,
         )
+        save_run(run)
+
+        async def _do_run() -> None:
+            with contextlib.suppress(Exception):
+                # Background task — run_job already logs internally.
+                await run_job(
+                    job,
+                    trigger_type=TriggerType.MANUAL,
+                    trigger_context=context,
+                    _existing_run=run,
+                )
+
+        # Hold a strong reference so the loop doesn't garbage-collect
+        # the task mid-flight (RUF006); discarded from the set on done.
+        bg_task = asyncio.create_task(_do_run())
+        webhook_tasks.add(bg_task)
+        bg_task.add_done_callback(webhook_tasks.discard)
         return _run_to_response(run)
 
     # ------------------------------------------------------------------
@@ -497,6 +582,7 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
                 if not _fnmatch.fnmatch(branch, pattern):
                     continue
                 from bog_agents_daemon.runner import run_job
+
                 task = asyncio.create_task(
                     run_job(
                         job,
@@ -526,10 +612,22 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
         Returns:
             Dict reporting how many jobs were triggered.
         """
-        _check_auth(request, token)
+        # Auth model for /webhooks/{path}: external services (GitHub, Slack,
+        # CI) cannot send the daemon's local-management bearer token, so we
+        # gate inbound webhooks on the per-trigger HMAC `webhook_secret`
+        # instead. We still accept a daemon-token request — that's how the
+        # in-process CLI test harness fires webhooks — but we no longer
+        # *require* it, which would have made external use impossible.
+        # If a trigger configures a webhook_secret, the X-Hub-Signature-256
+        # check below is the sole guard. If neither auth is presented and
+        # the trigger has no secret, we treat the webhook as a public
+        # entry point (as documented).
+        provided_token = request.headers.get("X-Daemon-Token", "")
+        is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token)
         raw_body = await request.body()
         try:
             import json as _json
+
             payload = _json.loads(raw_body) if raw_body else {}
         except Exception:
             payload = {}
@@ -547,21 +645,28 @@ def create_app(*, token: str, scheduler: DaemonScheduler) -> FastAPI:
                 trigger_path = trigger.webhook_path.lstrip("/")
                 if trigger_path != normalized:
                     continue
-                # HMAC secret validation — reject if secret configured but sig absent/wrong
-                if trigger.webhook_secret:
+                # HMAC secret validation — reject if secret configured but sig absent/wrong.
+                # When the request bears a valid daemon token we trust the caller
+                # and skip HMAC (so the local CLI test path keeps working).
+                if trigger.webhook_secret and not is_token_authed:
                     sig_header = request.headers.get("X-Hub-Signature-256", "")
-                    expected = "sha256=" + hmac.new(
-                        trigger.webhook_secret.encode(),
-                        raw_body,
-                        hashlib.sha256,
-                    ).hexdigest()
+                    expected = (
+                        "sha256="
+                        + hmac.new(
+                            trigger.webhook_secret.encode(),
+                            raw_body,
+                            hashlib.sha256,
+                        ).hexdigest()
+                    )
                     if not hmac.compare_digest(sig_header, expected):
                         logger.warning(
                             "Webhook signature mismatch for job %s trigger path %s",
-                            job.job_id, webhook_path,
+                            job.job_id,
+                            webhook_path,
                         )
                         break  # wrong secret — don't trigger this job
                 from bog_agents_daemon.runner import run_job
+
                 task = asyncio.create_task(
                     run_job(
                         job,

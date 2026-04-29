@@ -167,21 +167,30 @@ class TestEnableDisable:
 
 class TestTriggerJob:
     def test_trigger_dispatches_run(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        # The endpoint now returns immediately with status=running so HTTP
+        # clients with short timeouts don't disconnect during long-running
+        # agent invocations; the actual run happens in the background.
         job = AmbientJob(name="run-me", prompt="go")
         upsert_job(job)
 
-        fake_run = JobRun(job_id=job.job_id, job_name=job.name, status=JobStatus.COMPLETED, output="done")
-
         async def _fake_run(j: AmbientJob, **kwargs: object) -> JobRun:
-            return fake_run
+            existing = kwargs.get("_existing_run")
+            if existing is not None:
+                existing.status = JobStatus.COMPLETED
+                existing.output = "done"
+                return existing
+            return JobRun(job_id=j.job_id, job_name=j.name, status=JobStatus.COMPLETED, output="done")
 
         with patch("bog_agents_daemon.runner.run_job", side_effect=_fake_run):
             resp = client.post(f"/jobs/{job.job_id}/run", headers=auth)
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["status"] == "completed"
-        assert data["output"] == "done"
+        # The response is the placeholder run record — status=running, no
+        # output yet. Callers poll /jobs/{id}/runs for the terminal state.
+        assert data["status"] == "running"
+        assert data["job_id"] == job.job_id
+        assert data["run_id"]
 
     def test_trigger_nonexistent_404(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
         assert client.post("/jobs/bad-id/run", headers=auth).status_code == 404

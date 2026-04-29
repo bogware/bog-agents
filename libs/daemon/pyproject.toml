@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents-daemon"
-version = "0.7.2"
+version = "0.7.3"
 description = "Ambient agent daemon for bog-agents — run agents on schedules, file-change triggers, webhooks, and git pushes"
 readme = "README.md"
 license = { text = "MIT" }
@@ -28,6 +28,52 @@ dependencies = [
     "aiofiles>=23.0.0,<25.0.0",
 ]
 
+[project.optional-dependencies]
+# Model providers — mirror bog-agents-cli so a daemon install can run agents
+# end-to-end without a separate `pip install langchain-<provider>` dance.
+anthropic = ["langchain-anthropic>=1.0.0,<2.0.0"]
+baseten = ["langchain-baseten>=0.1.9,<1.0.0"]
+bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
+cohere = ["langchain-cohere>=0.5.0,<1.0.0"]
+deepseek = ["langchain-deepseek>=1.0.0,<2.0.0"]
+fireworks = ["langchain-fireworks>=1.0.0,<2.0.0"]
+google-genai = ["langchain-google-genai>=4.0.0,<5.0.0"]
+groq = ["langchain-groq>=1.0.0,<2.0.0"]
+huggingface = ["langchain-huggingface>=1.0.0,<2.0.0"]
+ibm = ["langchain-ibm>=1.0.0,<2.0.0"]
+litellm = ["langchain-litellm>=0.6.1,<2.0.0"]
+mistralai = ["langchain-mistralai>=1.0.0,<2.0.0"]
+nvidia = ["langchain-nvidia-ai-endpoints>=1.0.0,<2.0.0"]
+ollama = ["langchain-ollama>=1.0.0,<2.0.0"]
+openai = ["langchain-openai>=1.1.8,<2.0.0"]
+openrouter = ["langchain-openrouter>=0.1.0,<2.0.0"]
+perplexity = ["langchain-perplexity>=1.0.0,<2.0.0"]
+vertexai = ["langchain-google-vertexai>=3.0.0,<4.0.0"]
+xai = ["langchain-xai>=1.0.0,<2.0.0"]
+all-providers = [
+    "bog-agents-daemon[anthropic,baseten,bedrock,cohere,deepseek,fireworks,google-genai,groq,huggingface,ibm,litellm,mistralai,nvidia,ollama,openai,openrouter,perplexity,vertexai,xai]",
+]
+# Sandbox integrations (heavy; install only if you submit jobs that target one)
+sandbox = [
+    "langsmith[sandbox]>=0.7.7",
+    "daytona>=0.113.0,<1.0.0",
+    "modal>=0.65.0,<2.0.0",
+    "runloop-api-client>=0.69.0",
+]
+daytona-sandbox = ["daytona>=0.113.0,<1.0.0"]
+modal-sandbox = ["modal>=0.65.0,<2.0.0"]
+runloop-sandbox = ["runloop-api-client>=0.69.0"]
+langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
+# Web search
+web-search = ["tavily-python>=0.7.21,<1.0.0"]
+# Agent Client Protocol
+acp = ["bog-agents-acp>=0.0.4"]
+# Everything (excludes harbor: harbor requires Python 3.12+ but the daemon
+# supports 3.11+ — users on 3.12+ can `pip install bog-agents-harbor` directly)
+all = [
+    "bog-agents-daemon[all-providers,sandbox,web-search,acp]",
+]
+
 [project.scripts]
 bog-agents-daemon = "bog_agents_daemon.main:main"
 
@@ -46,10 +92,11 @@ packages = ["bog_agents_daemon"]
 
 [tool.uv.sources]
 bog_agents = { path = "../bog-agents", editable = true }
+bog-agents-acp = { path = "../acp", editable = true }
 
 [dependency-groups]
 test = [
-    "pytest>=8.3.2",
+    "pytest>=9.0.3",  # CVE-2025-71176 — fix landed in 9.0.3
     "pytest-asyncio>=0.24.0",
     "pytest-timeout>=2.3.1",
     "httpx>=0.27.0",
