@@ -128,29 +128,120 @@ def _build_prompt(job: AmbientJob) -> str:
     raise ValueError(msg)
 
 
-def _resolve_skill_prompt(skill_name: str) -> str:
-    """Load a skill's SKILL.md content and wrap it as a runnable prompt.
+_SKILL_SEARCH_PATHS = (
+    (".bog-agents", "skills"),
+    (".agents", "skills"),
+)
 
-    Looks under common skill locations: project-level
-    `<cwd>/.bog-agents/skills/<name>/SKILL.md`, project agent skills
-    `<cwd>/.agents/skills/<name>/SKILL.md`, then user-level
-    `~/.bog-agents/agent/skills/<name>/SKILL.md` and
-    `~/.bog-agents/skills/<name>/SKILL.md`.
+
+def _find_skill_file(skill_name: str) -> Path | None:
+    """Locate a SKILL.md by name under the standard search paths.
+
+    Returns the first path that exists, or None when the skill isn't
+    found anywhere.
     """
-    from pathlib import Path
-
-    candidates = [
-        Path.cwd() / ".bog-agents" / "skills" / skill_name / "SKILL.md",
-        Path.cwd() / ".agents" / "skills" / skill_name / "SKILL.md",
+    candidates = [Path.cwd() / segs[0] / segs[1] / skill_name / "SKILL.md" for segs in _SKILL_SEARCH_PATHS] + [
         Path.home() / ".bog-agents" / "agent" / "skills" / skill_name / "SKILL.md",
         Path.home() / ".bog-agents" / "skills" / skill_name / "SKILL.md",
     ]
     for path in candidates:
         if path.is_file():
-            content = path.read_text(encoding="utf-8")
-            return f"You are running the skill `{skill_name}`. Follow the instructions in this SKILL.md to completion:\n\n{content}"
-    msg = f"Skill '{skill_name}' not found under .bog-agents/skills, .agents/skills, or ~/.bog-agents/.../skills"
-    raise ValueError(msg)
+            return path
+    return None
+
+
+def _parse_skill_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    """Extract YAML frontmatter from a SKILL.md.
+
+    Args:
+        content: Raw SKILL.md text.
+
+    Returns:
+        Tuple of (frontmatter dict, body string). Returns ({}, content)
+        when no frontmatter is present.
+    """
+    import re
+
+    import yaml
+
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", content, re.DOTALL)
+    if not match:
+        return {}, content
+    try:
+        frontmatter = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        frontmatter = {}
+    if not isinstance(frontmatter, dict):
+        frontmatter = {}
+    return frontmatter, match.group(2)
+
+
+def _resolve_skill_prompt(
+    skill_name: str,
+    *,
+    _seen: set[str] | None = None,
+    _depth: int = 0,
+) -> str:
+    """Load a skill's SKILL.md content and wrap it as a runnable prompt.
+
+    Skill chaining: when a SKILL.md frontmatter declares a `chain:` list
+    of skill names, those skills are loaded recursively and their bodies
+    are concatenated into a single composite prompt with clear section
+    boundaries. Cycle-safe (a skill can't transitively depend on itself);
+    capped at 8 levels deep to bound runtime cost.
+
+    Args:
+        skill_name: Skill identifier.
+        _seen: Internal — set of names already in the current chain
+            traversal (used to detect cycles). Callers should leave this
+            at the default.
+        _depth: Internal — recursion depth gate.
+
+    Raises:
+        ValueError: If the skill can't be located, or a chain cycle/depth
+            limit is hit.
+    """
+    if _depth > 8:
+        msg = f"Skill chain exceeds 8 levels deep (currently resolving '{skill_name}')"
+        raise ValueError(msg)
+    if _seen is None:
+        _seen = set()
+    if skill_name in _seen:
+        chain_repr = " -> ".join([*sorted(_seen), skill_name])
+        msg = f"Skill chain cycle detected: {chain_repr}"
+        raise ValueError(msg)
+    _seen = _seen | {skill_name}
+
+    path = _find_skill_file(skill_name)
+    if path is None:
+        msg = f"Skill '{skill_name}' not found under .bog-agents/skills, .agents/skills, or ~/.bog-agents/.../skills"
+        raise ValueError(msg)
+
+    raw = path.read_text(encoding="utf-8")
+    frontmatter, body = _parse_skill_frontmatter(raw)
+
+    # Resolve chained skills first so their content is available for
+    # context. The `chain:` value can be a list of names or a single name.
+    chain_field = frontmatter.get("chain")
+    chained_sections: list[str] = []
+    if chain_field:
+        chain_names: list[str] = [chain_field] if isinstance(chain_field, str) else list(chain_field)
+        for chained_name in chain_names:
+            if not isinstance(chained_name, str) or not chained_name.strip():
+                continue
+            chained_body = _resolve_skill_prompt(chained_name.strip(), _seen=_seen, _depth=_depth + 1)
+            chained_sections.append(f"### Skill `{chained_name.strip()}` (chained)\n\n{chained_body}")
+
+    if chained_sections:
+        chained_block = "\n\n".join(chained_sections)
+        return (
+            f"You are running the skill `{skill_name}` which composes "
+            f"{len(chained_sections)} chained skill(s). Execute each chained "
+            f"skill's instructions in order, then apply this skill's body.\n\n"
+            f"{chained_block}\n\n"
+            f"### Skill `{skill_name}` (primary)\n\n{body}"
+        )
+    return f"You are running the skill `{skill_name}`. Follow the instructions in this SKILL.md to completion:\n\n{body}"
 
 
 def _resolve_pipeline_prompt(pipeline_name: str) -> str:

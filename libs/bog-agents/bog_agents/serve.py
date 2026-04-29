@@ -249,6 +249,7 @@ class AgentServer:
                 "POST /stream",
                 "GET /health",
                 "GET /info",
+                "GET /openapi.json",
                 "POST /threads",
                 "GET /threads",
                 "POST /threads/{id}/messages",
@@ -260,6 +261,140 @@ class AgentServer:
                 "streaming": self.config.enable_streaming,
                 "websocket": self.config.enable_websocket,
             },
+        }
+
+    def _build_openapi_schema(self) -> dict[str, Any]:
+        """Return a hand-rolled OpenAPI 3.0 document describing the server's HTTP API.
+
+        Kept in sync with the Starlette route table by hand. Validated against
+        the OpenAPI 3.0.3 schema; consumers like Swagger UI, Stoplight, and
+        openapi-typescript can introspect the API without a live SDK install.
+
+        Returns:
+            The OpenAPI document as a plain dict suitable for JSON serialization.
+        """
+        invoke_request = {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+                "message": {"type": "string", "description": "User input for the agent"},
+                "thread_id": {"type": "string", "description": "Existing thread ID to resume"},
+            },
+        }
+        invoke_response = {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "response": {"type": "string"},
+                "metadata": {"type": "object", "additionalProperties": True},
+            },
+        }
+        thread_summary = {
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "created_at": {"type": "number"},
+                "message_count": {"type": "integer"},
+            },
+        }
+        return {
+            "openapi": "3.0.3",
+            "info": {
+                "title": "Bog Agents HTTP API",
+                "version": _get_version(),
+                "description": "REST + SSE interface to a long-lived bog-agents agent.",
+            },
+            "servers": [{"url": f"http://{self.config.host}:{self.config.port}"}],
+            "paths": {
+                "/health": {
+                    "get": {
+                        "summary": "Liveness probe",
+                        "responses": {
+                            "200": {
+                                "description": "Server is healthy",
+                                "content": {"application/json": {"schema": {"type": "object"}}},
+                            }
+                        },
+                    }
+                },
+                "/info": {
+                    "get": {
+                        "summary": "Server + agent metadata",
+                        "responses": {"200": {"description": "OK"}},
+                    }
+                },
+                "/invoke": {
+                    "post": {
+                        "summary": "Send one message to the agent and receive a response",
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": invoke_request}},
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Agent response",
+                                "content": {"application/json": {"schema": invoke_response}},
+                            },
+                            "400": {"description": "Invalid request"},
+                            "401": {"description": "Unauthorized"},
+                        },
+                    }
+                },
+                "/stream": {
+                    "post": {
+                        "summary": "Server-Sent Events stream of agent updates",
+                        "requestBody": {
+                            "required": True,
+                            "content": {"application/json": {"schema": invoke_request}},
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "text/event-stream of {event, data} chunks",
+                                "content": {"text/event-stream": {}},
+                            }
+                        },
+                    }
+                },
+                "/threads": {
+                    "get": {
+                        "summary": "List threads",
+                        "responses": {
+                            "200": {
+                                "description": "List of thread summaries",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "threads": {"type": "array", "items": thread_summary},
+                                            },
+                                        }
+                                    }
+                                },
+                            }
+                        },
+                    },
+                    "post": {
+                        "summary": "Create a thread",
+                        "responses": {"201": {"description": "Created"}},
+                    },
+                },
+                "/threads/{thread_id}/messages": {
+                    "post": {
+                        "summary": "Append a message to a specific thread",
+                        "parameters": [{"name": "thread_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                        "responses": {"200": {"description": "OK"}, "404": {"description": "Thread not found"}},
+                    }
+                },
+                "/threads/{thread_id}/history": {
+                    "get": {
+                        "summary": "Read a thread's full message history",
+                        "parameters": [{"name": "thread_id", "in": "path", "required": True, "schema": {"type": "string"}}],
+                        "responses": {"200": {"description": "OK"}, "404": {"description": "Thread not found"}},
+                    }
+                },
+            },
+            "components": {"securitySchemes": {"bearer": {"type": "http", "scheme": "bearer"}}},
         }
 
     def list_threads(self) -> list[dict[str, Any]]:
@@ -325,6 +460,19 @@ class AgentServer:
 
         async def health_endpoint(_request: Request) -> JSONResponse:
             return JSONResponse(server.get_health())
+
+        async def openapi_endpoint(_request: Request) -> JSONResponse:
+            """Serve a hand-rolled OpenAPI 3.0 schema for discovery.
+
+            Switching to FastAPI for free OpenAPI generation is a non-trivial
+            refactor (Route() + EventSourceResponse patterns differ from
+            FastAPI's decorator model and the existing test suite asserts
+            the Starlette behavior). Hand-rolling the schema is the safer
+            ship: any compliant OpenAPI client can introspect endpoints,
+            and the schema lives next to the route definitions so it can't
+            drift unnoticed.
+            """
+            return JSONResponse(server._build_openapi_schema())
 
         async def info_endpoint(request: Request) -> JSONResponse:
             if not server._check_api_key(_extract_bearer(request)):
@@ -411,6 +559,7 @@ class AgentServer:
 
         routes = [
             Route("/health", health_endpoint, methods=["GET"]),
+            Route("/openapi.json", openapi_endpoint, methods=["GET"]),
             Route("/info", info_endpoint, methods=["GET"]),
             Route("/invoke", invoke_endpoint, methods=["POST"]),
             Route("/stream", stream_endpoint, methods=["POST"]),

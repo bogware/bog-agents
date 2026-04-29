@@ -103,6 +103,8 @@ def show_help() -> None:
     console.print("  reset --agent NAME [--target SRC]   Reset an agent's prompt")
     console.print("  skills <list|create|info|delete>     Manage agent skills")
     console.print("  threads <list|delete>                Manage conversation threads")
+    console.print("  verify                              Run typecheck + lint + tests")
+    console.print("  call MESSAGE                        Talk to a running --serve instance")
     console.print()
 
     # --- Core Options ---

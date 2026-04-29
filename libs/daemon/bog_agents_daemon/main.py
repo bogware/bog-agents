@@ -289,9 +289,14 @@ def _process_alive(pid: int) -> bool:
             return False
     try:
         os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, OSError):
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        # PID belongs to another user but the process IS alive.
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _cmd_status() -> int:

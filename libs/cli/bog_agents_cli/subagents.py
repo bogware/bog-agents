@@ -143,30 +143,95 @@ def _load_subagents_from_dir(
     return subagents
 
 
+_PROJECT_TYPE_INDICATORS: tuple[tuple[str, str], ...] = (
+    ("pyproject.toml", "python"),
+    ("setup.py", "python"),
+    ("package.json", "node"),
+    ("Cargo.toml", "rust"),
+    ("go.mod", "go"),
+)
+
+
+def detect_project_language(project_root: Path | None) -> str | None:
+    """Detect a project's primary language from indicator files.
+
+    Used to surface the matching set of bundled subagents (Python, Node,
+    Rust, Go) without the user authoring AGENTS.md by hand.
+
+    Args:
+        project_root: Project root to inspect. None disables detection.
+
+    Returns:
+        One of `'python'`, `'node'`, `'rust'`, `'go'`, or None when no
+        indicator is found.
+    """
+    if project_root is None:
+        return None
+    for indicator, language in _PROJECT_TYPE_INDICATORS:
+        if (project_root / indicator).is_file():
+            return language
+    return None
+
+
+def get_bundled_agents_dir(language: str) -> Path | None:
+    """Return the bundled-agents directory for *language*, if any.
+
+    Args:
+        language: Language label returned by `detect_project_language`.
+
+    Returns:
+        Path to the bundled subagents directory, or None when the
+        language has no bundled defaults.
+    """
+    bundled_root = Path(__file__).parent / "bundled_agents" / language
+    return bundled_root if bundled_root.is_dir() else None
+
+
 def list_subagents(
     *,
     user_agents_dir: Path | None = None,
     project_agents_dir: Path | None = None,
+    project_root: Path | None = None,
+    include_bundled: bool = True,
 ) -> list[SubagentMetadata]:
     """List subagents from user and/or project directories.
 
-    Scans for subagent definitions in the provided directories.
-    Project subagents override user subagents with the same name.
+    Precedence (low → high): bundled defaults < user agents < project agents.
+    A subagent name defined at a higher precedence level overrides any
+    same-named entry at a lower level — so users can shadow a bundled
+    `code-reviewer` simply by writing their own AGENTS.md with the same
+    `name:` field.
 
     Args:
         user_agents_dir: Path to user-level agents directory.
         project_agents_dir: Path to project-level agents directory.
+        project_root: Project root used to detect language for the
+            bundled-agents library. None disables bundled loading.
+        include_bundled: When True (default), seed the listing with the
+            bundled defaults that match the project language. Set False
+            to get the legacy "only what's on disk" behavior.
 
     Returns:
-        List of subagent metadata, with project subagents taking precedence.
+        List of subagent metadata, with later sources overriding earlier
+        ones on name conflict.
     """
     all_subagents: dict[str, SubagentMetadata] = {}
 
-    # Load user subagents first (lower priority)
+    # Bundled defaults (lowest priority): seed the project with sensible
+    # subagents (code-reviewer, test-author, refactorer/react-ink-artist
+    # depending on language) on first use.
+    if include_bundled:
+        language = detect_project_language(project_root)
+        if language:
+            bundled_dir = get_bundled_agents_dir(language)
+            if bundled_dir is not None:
+                all_subagents.update(_load_subagents_from_dir(bundled_dir, "bundled"))
+
+    # User subagents
     if user_agents_dir is not None:
         all_subagents.update(_load_subagents_from_dir(user_agents_dir, "user"))
 
-    # Load project subagents second (override user)
+    # Project subagents (highest priority — overrides bundled + user)
     if project_agents_dir is not None:
         all_subagents.update(_load_subagents_from_dir(project_agents_dir, "project"))
 

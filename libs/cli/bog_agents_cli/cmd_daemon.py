@@ -48,35 +48,52 @@ def _read_pid() -> int | None:
 def _is_running(pid: int) -> bool:
     """Return True if a process with the given PID is alive.
 
-    Windows is the awkward case: `os.kill(pid, 0)` for a dead PID can
-    raise OSError [WinError 87] *and* CPython sometimes propagates this
-    as a `SystemError: returned a result with an exception set` (a
-    known C-level quirk). On POSIX, `kill(pid, 0)` raises
-    ProcessLookupError for dead PIDs. We use tasklist on Windows for
-    a robust answer and fall back to os.kill on POSIX.
+    Thin wrapper that delegates to the cross-platform helper in `_proc`.
+    Kept as a module-private function for backwards compatibility with
+    in-tree tests that monkeypatch this name.
     """
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(  # noqa: S603
-                ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return False
-        # tasklist prints a row containing the PID when the process exists,
-        # otherwise emits "INFO: No tasks are running..."
-        return f'"{pid}"' in (result.stdout or "")
+    from bog_agents_cli._proc import is_running
 
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, PermissionError):
-        return False
-    except OSError:
-        return False
-    return True
+    return is_running(pid)
+
+
+_MSYS_GIT_PREFIXES: tuple[str, ...] = (
+    # Common Git-for-Windows install locations whose 'hooks/' directory
+    # is the most likely false positive when MSYS rewrites '/hooks/...'.
+    "C:/Program Files/Git",
+    "C:\\Program Files\\Git",
+    "C:/Program Files (x86)/Git",
+    "C:\\Program Files (x86)\\Git",
+)
+
+
+def _strip_msys_path_mangle(value: str) -> str:
+    """Recover an absolute-style arg that Git Bash converted into a Windows path.
+
+    When a user passes ``--webhook-path /hooks/foo`` from MSYS / Git Bash on
+    Windows, the MSYS path-conversion layer rewrites the arg to something
+    like ``C:/Program Files/Git/hooks/foo`` *before* argparse sees it.
+    Detect that exact mangle and restore the intended ``/hooks/foo``.
+
+    Only triggers on Windows + when the value starts with a known Git
+    install prefix and the next segment is the literal word ``hooks``.
+    Anything else is returned unchanged so we never alter legitimate
+    user-provided paths.
+
+    Args:
+        value: Raw arg string from argparse.
+
+    Returns:
+        The recovered path on detected mangle, otherwise the input verbatim.
+    """
+    if sys.platform != "win32" or not value:
+        return value
+    for prefix in _MSYS_GIT_PREFIXES:
+        if value.startswith(prefix):
+            tail = value[len(prefix) :].replace("\\", "/")
+            if tail.startswith("/hooks/") or tail == "/hooks":
+                return tail
+    return value
 
 
 def _find_daemon_executable() -> str | None:
@@ -416,7 +433,12 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
             }
         )
     if args.webhook_path:
-        triggers.append({"type": "webhook", "webhook_path": args.webhook_path})
+        # MSYS / Git Bash on Windows rewrites a leading-slash arg into an
+        # absolute path under the Git install (e.g. /hooks/foo becomes
+        # 'C:/Program Files/Git/hooks/foo'). Detect that mangle and
+        # recover the intended path. See cross-platform-notes.md.
+        webhook_path = _strip_msys_path_mangle(args.webhook_path)
+        triggers.append({"type": "webhook", "webhook_path": webhook_path})
     if args.git_branch:
         triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
 

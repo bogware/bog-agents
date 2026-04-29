@@ -740,9 +740,16 @@ def create_cli_agent(
         else settings.get_project_agents_dir()
     )
 
+    # Bundled-agents seeding: if the project is Python/Node/Rust/Go and
+    # the user hasn't authored their own subagents, this pulls in
+    # code-reviewer, test-author, and language-specific specialists from
+    # the package's bundled_agents/ tree. User and project subagents
+    # override on name conflict.
+    project_root_for_bundled = effective_cwd if effective_cwd is not None else None
     for subagent_meta in list_subagents(
         user_agents_dir=user_agents_dir,
         project_agents_dir=project_agents_dir,
+        project_root=project_root_for_bundled,
     ):
         subagent: SubAgent = {
             "name": subagent_meta["name"],

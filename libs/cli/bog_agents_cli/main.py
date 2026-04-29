@@ -300,6 +300,17 @@ def parse_args() -> argparse.Namespace:
 
     setup_daemon_parser(subparsers)
 
+    # Project verification subcommand — auto-detects typecheck/lint/test
+    # commands or runs an explicit `.bog-agents/verify.{sh,cmd}` override.
+    from bog_agents_cli.cmd_verify import setup_verify_parser
+
+    setup_verify_parser(subparsers)
+
+    # Thin HTTP client for a long-lived `--serve` instance.
+    from bog_agents_cli.cmd_call import setup_call_parser
+
+    setup_call_parser(subparsers)
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -1536,6 +1547,14 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_daemon import execute_daemon_command
 
             execute_daemon_command(args)
+        elif args.command == "verify":
+            from bog_agents_cli.cmd_verify import cmd_verify
+
+            sys.exit(cmd_verify(args))
+        elif args.command == "call":
+            from bog_agents_cli.cmd_call import cmd_call
+
+            sys.exit(cmd_call(args))
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,

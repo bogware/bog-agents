@@ -589,7 +589,18 @@ def create_app(
         Returns:
             Dict reporting how many jobs were triggered.
         """
-        _check_auth(request, token)
+        # Auth model for /webhooks/{path}: external services (GitHub, Slack,
+        # CI) cannot send the daemon's local-management bearer token, so we
+        # gate inbound webhooks on the per-trigger HMAC `webhook_secret`
+        # instead. We still accept a daemon-token request — that's how the
+        # in-process CLI test harness fires webhooks — but we no longer
+        # *require* it, which would have made external use impossible.
+        # If a trigger configures a webhook_secret, the X-Hub-Signature-256
+        # check below is the sole guard. If neither auth is presented and
+        # the trigger has no secret, we treat the webhook as a public
+        # entry point (as documented).
+        provided_token = request.headers.get("X-Daemon-Token", "")
+        is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token)
         raw_body = await request.body()
         try:
             import json as _json
@@ -611,8 +622,10 @@ def create_app(
                 trigger_path = trigger.webhook_path.lstrip("/")
                 if trigger_path != normalized:
                     continue
-                # HMAC secret validation — reject if secret configured but sig absent/wrong
-                if trigger.webhook_secret:
+                # HMAC secret validation — reject if secret configured but sig absent/wrong.
+                # When the request bears a valid daemon token we trust the caller
+                # and skip HMAC (so the local CLI test path keeps working).
+                if trigger.webhook_secret and not is_token_authed:
                     sig_header = request.headers.get("X-Hub-Signature-256", "")
                     expected = (
                         "sha256="

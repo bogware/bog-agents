@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import logging
@@ -180,11 +181,27 @@ def _load_jobs_unlocked() -> list[AmbientJob]:
 
 
 def _save_jobs_unlocked(jobs: list[AmbientJob]) -> None:
-    """Persist jobs without acquiring the lock (caller must hold _jobs_lock)."""
+    """Persist jobs without acquiring the lock (caller must hold _jobs_lock).
+
+    Durable atomic write: write into a sibling tmp file, fsync the file's
+    contents to disk, then atomic-rename over the destination. Without
+    the fsync a hard kill of the daemon between the write and the rename
+    can leave the OS buffer cache holding the new bytes that never make
+    it to disk — the symptom we observed when the daemon crashed mid-run
+    and the freshly created job was missing on next start.
+    """
     _ensure_dirs()
     tmp_path = _JOBS_FILE.with_suffix(".json.tmp")
     data = [_job_to_dict(j) for j in jobs]
-    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    serialised = json.dumps(data, indent=2)
+    # Open + write + flush + fsync in one go so the bytes are on disk
+    # before the rename. Falls back gracefully on platforms that don't
+    # support fsync on regular files (very rare).
+    with tmp_path.open("w", encoding="utf-8") as f:
+        f.write(serialised)
+        f.flush()
+        with contextlib.suppress(OSError, AttributeError):
+            os.fsync(f.fileno())
     Path(tmp_path).replace(_JOBS_FILE)
 
 
@@ -279,7 +296,14 @@ def save_run(run: JobRun) -> None:
     """
     _ensure_dirs()
     run_file = _RUNS_DIR / f"{run.job_id}_{run.run_id}.json"
-    run_file.write_text(json.dumps(_run_to_dict(run), indent=2), encoding="utf-8")
+    serialised = json.dumps(_run_to_dict(run), indent=2)
+    # Durable write — fsync before close so a daemon crash between write
+    # and disk-flush can't lose the run record. Mirrors _save_jobs_unlocked.
+    with run_file.open("w", encoding="utf-8") as f:
+        f.write(serialised)
+        f.flush()
+        with contextlib.suppress(OSError, AttributeError):
+            os.fsync(f.fileno())
     _prune_runs(run.job_id)
 
 

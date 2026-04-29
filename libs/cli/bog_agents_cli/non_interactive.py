@@ -382,44 +382,47 @@ def _process_message_chunk(
 _FILE_EDIT_TOOL_NAMES = frozenset({"write_file", "edit_file", "multi_edit_file"})
 
 
-async def _git_dirty_paths(cwd: Path) -> set[str]:
+def _git_dirty_paths_sync(cwd: Path) -> set[str]:
     """Return the set of paths that `git status --porcelain` reports as dirty.
 
-    Paths are returned as they appear in the porcelain output (relative to
-    the repo root). Returns an empty set when not in a git repo or git is
-    unavailable, so callers can use this as a no-op fallback.
-
-    Used by run_non_interactive's --auto-commit scope path-discovery
-    (Fix #25): diffing the porcelain output before vs after a run gives
-    us the exact set of files the agent created or modified, regardless
-    of whether the responsible tool call surfaced its args through the
-    langgraph stream.
+    Synchronous (subprocess.run) by design: the previous async variant used
+    `asyncio.create_subprocess_exec("git", ...)` which on Windows fails to
+    locate `git.exe` reliably without an absolute path, returning an empty
+    set silently and breaking the `--auto-commit` scope (Fix #25). Routing
+    through `shutil.which()` + `subprocess.run()` is what the rest of the
+    auto_commit module already uses and works cross-platform.
 
     Args:
-        cwd: Working directory; usually `Path.cwd()`.
+        cwd: Repo root to query.
 
     Returns:
-        Set of porcelain-formatted path strings (relative to repo root).
+        Set of paths (repo-relative) that `git status --porcelain` reports
+        as dirty. Empty set when git isn't installed, the directory isn't
+        a repo, or anything else goes wrong.
     """
-    import asyncio
+    import shutil
+    import subprocess
 
+    git_exe = shutil.which("git")
+    if git_exe is None:
+        return set()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "status",
-            "--porcelain",
+        proc = subprocess.run(  # noqa: S603
+            [git_exe, "status", "--porcelain"],
             cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            capture_output=True,
+            timeout=10,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-    except (TimeoutError, OSError, FileNotFoundError):
+    except (subprocess.SubprocessError, OSError):
         return set()
     if proc.returncode != 0:
         return set()
 
     paths: set[str] = set()
-    for raw_line in stdout.decode(errors="replace").splitlines():
+    for raw_line in (proc.stdout or "").splitlines():
         # Porcelain v1 lines are 'XY <path>' (and 'XY <orig> -> <new>'
         # for renames). Strip the 2-char status + space, take the
         # rename-target if present.
@@ -432,6 +435,17 @@ async def _git_dirty_paths(cwd: Path) -> set[str]:
         if path:
             paths.add(path)
     return paths
+
+
+async def _git_dirty_paths(cwd: Path) -> set[str]:
+    """Async-compatible wrapper around _git_dirty_paths_sync.
+
+    Runs the synchronous subprocess in a worker thread so the event loop
+    isn't blocked. Kept as `async` so callers don't need to change.
+    """
+    import asyncio
+
+    return await asyncio.to_thread(_git_dirty_paths_sync, cwd)
 
 
 def _record_edited_path_from_args(args: object, state: StreamState) -> None:
