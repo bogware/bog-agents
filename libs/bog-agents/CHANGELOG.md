@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.7.2...bog-agents==0.7.3) (2026-04-29)
+
+
+### Features
+
+* verify/call subcommands, shell reliability, cross-platform hardening, 12 CVEs closed ([#51](https://github.com/bogware/bog-agents/issues/51)) ([5f13fb4](https://github.com/bogware/bog-agents/commit/5f13fb4de5aa7cb50731b634796f0732a8a25f65))
+
 ## [0.7.2](https://github.com/bogware/bog-agents/compare/bog-agents==0.7.1...bog-agents==0.7.2) (2026-04-25)
 
 
