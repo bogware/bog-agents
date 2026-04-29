@@ -390,9 +390,13 @@ class ServerProcess:
             )
             raise RuntimeError(msg)
 
-        if _port_in_use(self.host, self.port):
+        # Concurrent CLI invocations all see the default port as free at the
+        # same instant and race to bind it (Note #33). Always pick a fresh
+        # ephemeral port unless the user explicitly overrode self.port to a
+        # non-default value (e.g. tests pinning a known port).
+        if self.port == _DEFAULT_PORT or _port_in_use(self.host, self.port):
             self.port = _find_free_port(self.host)
-            logger.info("Default port in use, using port %d instead", self.port)
+            logger.info("Allocated free port %d for langgraph dev", self.port)
 
         cmd = _build_server_cmd(config_path, host=self.host, port=self.port)
         env = _build_server_env()

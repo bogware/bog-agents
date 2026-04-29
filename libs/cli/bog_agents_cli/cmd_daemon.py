@@ -429,6 +429,24 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         out["slack_webhook_url"] = args.output_slack
     elif output_target == "webhook":
         out["webhook_url"] = args.output_webhook
+    elif output_target == "email":
+        # SMTP password is intentionally read from the arg directly so users
+        # can either pass it inline or stuff it into a wrapper script that
+        # reads from env. The daemon does not log it.
+        to_addrs = [
+            a.strip()
+            for a in (getattr(args, "output_email_to", "") or "").split(",")
+            if a.strip()
+        ]
+        out["to_addrs"] = to_addrs
+        out["from_addr"] = getattr(args, "output_email_from", "") or ""
+        out["smtp_host"] = getattr(args, "output_email_smtp_host", "") or ""
+        out["smtp_port"] = getattr(args, "output_email_smtp_port", 587)
+        out["smtp_username"] = getattr(args, "output_email_smtp_user", "") or ""
+        out["smtp_password"] = getattr(args, "output_email_smtp_password", "") or ""
+    elif output_target == "github_comment":
+        out["github_repo"] = getattr(args, "output_github_repo", "") or ""
+        out["github_issue_or_pr"] = getattr(args, "output_github_issue", 0) or 0
 
     payload: dict[str, Any] = {
         "name": args.name,
@@ -789,8 +807,16 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     create_p.add_argument(
         "--output",
         default="log",
-        choices=["log", "stdout", "file", "slack", "webhook"],
-        help="Output target (default: log)",
+        choices=[
+            "log",
+            "stdout",
+            "file",
+            "slack",
+            "webhook",
+            "email",
+            "github_comment",
+        ],
+        help="Output target (default: log). 'email' / 'github_comment' use the per-target flags below.",
     )
     create_p.add_argument(
         "--output-file",
@@ -812,6 +838,66 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="URL",
         help="Webhook URL when --output=webhook",
+    )
+    # email output (smtp_*, to_addrs, from_addr, subject_template)
+    create_p.add_argument(
+        "--output-email-to",
+        dest="output_email_to",
+        default="",
+        metavar="ADDR[,ADDR...]",
+        help="Comma-separated recipient list when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-from",
+        dest="output_email_from",
+        default="",
+        metavar="ADDR",
+        help="From address when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-host",
+        dest="output_email_smtp_host",
+        default="",
+        metavar="HOST",
+        help="SMTP host when --output=email (defaults to localhost)",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-port",
+        dest="output_email_smtp_port",
+        type=int,
+        default=587,
+        metavar="PORT",
+        help="SMTP port when --output=email (587=STARTTLS, 465=SSL, 25=plain; default 587)",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-user",
+        dest="output_email_smtp_user",
+        default="",
+        metavar="USER",
+        help="SMTP username when --output=email",
+    )
+    create_p.add_argument(
+        "--output-email-smtp-password",
+        dest="output_email_smtp_password",
+        default="",
+        metavar="PW",
+        help="SMTP password when --output=email (env-passable; do not commit)",
+    )
+    # github_comment output
+    create_p.add_argument(
+        "--output-github-repo",
+        dest="output_github_repo",
+        default="",
+        metavar="OWNER/REPO",
+        help="Repo when --output=github_comment",
+    )
+    create_p.add_argument(
+        "--output-github-issue",
+        dest="output_github_issue",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Issue or PR number when --output=github_comment",
     )
     create_p.add_argument(
         "--disabled", action="store_true", help="Create the job in a disabled state"
