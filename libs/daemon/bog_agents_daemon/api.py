@@ -190,14 +190,31 @@ def _output_config_from_model(m: OutputConfigModel) -> OutputConfig:
     )
 
 
+_REDACTED_OUTPUT_FIELDS: tuple[str, ...] = (
+    "smtp_password",
+    "github_token",
+    "webhook_secret",
+)
+_REDACTED_TRIGGER_FIELDS: tuple[str, ...] = ("webhook_secret",)
+_REDACTED_PLACEHOLDER = "***"
+
+
 def _job_to_response(job: AmbientJob) -> dict[str, Any]:
     """Serialize an AmbientJob to a JSON-safe dict for API responses.
+
+    Secrets that the daemon needs at run time (SMTP password, GitHub
+    token, webhook HMAC secret) are persisted on disk in jobs.json but
+    must not be echoed back through the HTTP API — anyone with valid
+    daemon-token access could otherwise read them. We redact them to a
+    fixed placeholder so the field shape stays stable for clients but
+    the actual value is never exposed.
 
     Args:
         job: The job to serialize.
 
     Returns:
-        A dict suitable for returning from a FastAPI endpoint.
+        A dict suitable for returning from a FastAPI endpoint, with
+        secret-bearing fields replaced by `'***'` when present.
     """
     import dataclasses
 
@@ -206,9 +223,15 @@ def _job_to_response(job: AmbientJob) -> dict[str, Any]:
     for trigger in d.get("triggers", []):
         if "type" in trigger and hasattr(trigger["type"], "value"):
             trigger["type"] = trigger["type"].value
+        for redacted in _REDACTED_TRIGGER_FIELDS:
+            if trigger.get(redacted):
+                trigger[redacted] = _REDACTED_PLACEHOLDER
     for output in d.get("outputs", []):
         if "target" in output and hasattr(output["target"], "value"):
             output["target"] = output["target"].value
+        for redacted in _REDACTED_OUTPUT_FIELDS:
+            if output.get(redacted):
+                output[redacted] = _REDACTED_PLACEHOLDER
     return d
 
 

@@ -1,11 +1,10 @@
 # Bog Agents
 
+A production-grade Python SDK for building LangGraph-based AI agents. One `create_agent()` call gets you a compiled graph with file/shell/git tools, sub-agents, plan mode, auto-quality checks, and 80+ composable middleware. Pluggable backends (local, sandbox, composite). Works with any tool-calling LLM.
+
 [![PyPI](https://img.shields.io/pypi/v/bog-agents)](https://pypi.org/project/bog-agents/)
 [![License](https://img.shields.io/pypi/l/bog-agents)](https://opensource.org/licenses/MIT)
 [![Downloads](https://img.shields.io/pepy/dt/bog-agents)](https://pypistats.org/packages/bog-agents)
-
-To help you ship LangChain apps to production faster, check out [LangSmith](https://smith.langchain.com).
-LangSmith is a unified developer platform for building, testing, and monitoring LLM applications.
 
 ## Quick Install
 

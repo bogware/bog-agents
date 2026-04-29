@@ -40,6 +40,14 @@ def _ensure_token() -> str:
     If the token file does not exist, generates a new token, writes it with
     mode 0o600, and returns it. If it already exists, returns the existing value.
 
+    On Windows, `chmod(0o600)` only flips the read-only bit — it does NOT
+    restrict access by user. Modern Windows user-profile directories
+    (`C:\\Users\\<user>\\`) are protected by ACLs that already deny other
+    standard users, so this is fine on a single-user machine. On
+    multi-user / shared systems the token file inherits its parent's
+    ACL — operators who need stricter isolation should set
+    `BOG_DAEMON_DATA_DIR` to a directory with explicit ACLs.
+
     Returns:
         The daemon auth token string.
     """
@@ -49,6 +57,22 @@ def _ensure_token() -> str:
     token = _generate_token()
     _TOKEN_FILE.write_text(token)
     _TOKEN_FILE.chmod(0o600)
+    # Windows-specific belt-and-suspenders: try icacls to grant only the
+    # current user read/write, blocking inherited ACEs. Best-effort —
+    # icacls failures don't fail token creation.
+    if sys.platform == "win32":
+        import contextlib
+        import subprocess
+
+        username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+        if username:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["icacls", str(_TOKEN_FILE), "/inheritance:r", "/grant", f"{username}:F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
     return token
 
 

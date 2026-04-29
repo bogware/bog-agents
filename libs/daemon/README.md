@@ -1,9 +1,14 @@
 # bog-agents-daemon
 
-**v0.7.0** — Ambient agent daemon for [Bog Agents](https://github.com/bogware/bog-agents). Run AI agents on schedules, file-change triggers, webhooks, and git pushes without keeping a terminal open.
+Ambient agent daemon for [Bog Agents](https://github.com/bogware/bog-agents). Run AI agents on schedules, file-change triggers, webhooks, and git pushes — without keeping a terminal open.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
 [![License](https://img.shields.io/pypi/l/bog-agents-daemon)](https://opensource.org/licenses/MIT)
+
+Five trigger types. Seven output targets. A small authenticated REST API. Cross-platform (POSIX + Windows), HMAC-validated inbound webhooks, and `os.fsync()`-durable job persistence so a hard kill never loses a freshly-created job.
+
+**Triggers:** `cron` · `interval` · `file_change` · `webhook` · `git_push`
+**Outputs:** `log` · `stdout` · `file` · `slack` · `webhook` · `email` · `github_comment`
 
 ---
 

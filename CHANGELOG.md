@@ -137,6 +137,37 @@ decoding in the subprocess reader thread).
   variant was unreliable on Windows (couldn't locate `git.exe`
   without an absolute path).
 
+### Security
+
+This release closes 12 known CVEs in the dependency graph by raising
+the minimum-version floor on direct deps and adding defensive
+constraints on transitive deps. After the bumps, `pip-audit` reports
+**zero known vulnerabilities** across all three package venvs.
+
+| Package | Old | New | Advisory |
+|---|---|---|---|
+| `langchain-core` | 1.2.18 | 1.2.28 | CVE-2026-40087 |
+| `langchain-openai` | 1.1.8 | 1.1.14 | GHSA-r7w7-9xr2-qq2r |
+| `langsmith` | 0.7.7 | 0.7.31 | GHSA-rr7j-v2q5-chgv |
+| `pillow` | 10.0.0 | 12.2.0 | CVE-2026-40192 |
+| `python-dotenv` | 1.0.0 | 1.2.2 | CVE-2026-28684 |
+| `requests` | 2.0.0 | 2.33.0 | CVE-2026-25645 |
+| `pyjwt` | (transitive) | 2.12.0 | CVE-2026-32597 (auth-validation) |
+| `cryptography` | (transitive) | 46.0.7 | CVE-2026-34073 + CVE-2026-39892 (TLS) |
+| `python-multipart` | (transitive) | 0.0.26 | CVE-2026-40347 (DoS) |
+| `pygments` | (transitive) | 2.20.0 | CVE-2026-4539 (ReDoS) |
+| `pyasn1` | (transitive) | 0.6.3 | CVE-2026-30922 (DoS) |
+| `pytest` (test-only) | 8.3.4 | 9.0.3 | CVE-2025-71176 |
+
+In addition: daemon API responses now redact `smtp_password`,
+`github_token`, and `webhook_secret` to `'***'` (the on-disk
+`jobs.json` retains them — the daemon needs them to authenticate, but
+they're never echoed back through HTTP).
+
+Token-file ACLs on Windows: `chmod(0o600)` only flips the read-only
+bit on Windows, but the daemon now also runs `icacls /inheritance:r
+/grant <user>:F` best-effort to drop inherited ACEs on the token file.
+
 ### Known limitations
 
 - `--sandbox modal/daytona/runloop/langsmith` requires live cloud
