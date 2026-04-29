@@ -1114,7 +1114,12 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
 
 
 def cli_main() -> None:
-    """Entry point for console script."""
+    """Entry point for console script.
+
+    Raises:
+        SystemExit: Propagated from `sys.exit()` in subcommand dispatch
+            paths (the standard argparse + subcommand exit pattern).
+    """
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1335,15 +1340,15 @@ def cli_main() -> None:
         # --prompt and --pipeline expand into a non-interactive task.
         # Resolution: read the named prompt/pipeline from disk, substitute
         # variables for prompts, inline pipeline steps for pipelines.
-        _prompt_name = getattr(args, "prompt_name", None)
-        _pipeline_name = getattr(args, "pipeline_name", None)
-        if _prompt_name and _pipeline_name:
+        prompt_name = getattr(args, "prompt_name", None)
+        pipeline_name = getattr(args, "pipeline_name", None)
+        if prompt_name and pipeline_name:
             sys.stderr.write(
                 "Error: --prompt and --pipeline are mutually exclusive.\n",
             )
             sys.stderr.flush()
             sys.exit(2)
-        if (_prompt_name or _pipeline_name) and args.non_interactive_message:
+        if (prompt_name or pipeline_name) and args.non_interactive_message:
             sys.stderr.write(
                 "Error: --prompt/--pipeline cannot be combined with -n/-p; "
                 "they each replace the task.\n",
@@ -1351,17 +1356,16 @@ def cli_main() -> None:
             sys.stderr.flush()
             sys.exit(2)
 
-        if _prompt_name:
+        if prompt_name:
             try:
                 from bog_agents_cli.prompts import resolve_prompt
             except ImportError:
                 import tomllib
-                from pathlib import Path as _P
 
                 def resolve_prompt(name: str, variables: dict) -> str:  # type: ignore[no-redef]
                     cands = [
-                        _P.cwd() / ".bog-agents" / "prompt_library.toml",
-                        _P.home() / ".bog-agents" / "prompt_library.toml",
+                        Path.cwd() / ".bog-agents" / "prompt_library.toml",
+                        Path.home() / ".bog-agents" / "prompt_library.toml",
                     ]
                     for p in cands:
                         if p.is_file():
@@ -1377,33 +1381,31 @@ def cli_main() -> None:
                     raise ValueError(msg)
 
             try:
-                _vars = json.loads(args.prompt_vars) if args.prompt_vars else {}
+                prompt_vars = json.loads(args.prompt_vars) if args.prompt_vars else {}
             except json.JSONDecodeError as exc:
                 sys.stderr.write(f"Error: --prompt-vars is not valid JSON: {exc}\n")
                 sys.stderr.flush()
                 sys.exit(2)
             try:
-                args.non_interactive_message = resolve_prompt(_prompt_name, _vars)
+                args.non_interactive_message = resolve_prompt(prompt_name, prompt_vars)
             except (FileNotFoundError, ValueError) as exc:
                 sys.stderr.write(f"Error: --prompt: {exc}\n")
                 sys.stderr.flush()
                 sys.exit(2)
 
-        if _pipeline_name:
-            from pathlib import Path as _P
-
+        if pipeline_name:
             import yaml as _yaml
 
             cands = [
-                _P.cwd() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yaml",
-                _P.cwd() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yml",
-                _P.home() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yaml",
-                _P.home() / ".bog-agents" / "pipelines" / f"{_pipeline_name}.yml",
+                Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+                Path.cwd() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
+                Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yaml",
+                Path.home() / ".bog-agents" / "pipelines" / f"{pipeline_name}.yml",
             ]
             yaml_path = next((c for c in cands if c.is_file()), None)
             if yaml_path is None:
                 sys.stderr.write(
-                    f"Error: --pipeline: '{_pipeline_name}' not found "
+                    f"Error: --pipeline: '{pipeline_name}' not found "
                     f"under .bog-agents/pipelines or ~/.bog-agents/pipelines\n",
                 )
                 sys.stderr.flush()
@@ -1412,7 +1414,7 @@ def cli_main() -> None:
             steps = data.get("steps", []) or []
             description = data.get("description", "")
             lines = [
-                f"You are running the pipeline `{_pipeline_name}`.",
+                f"You are running the pipeline `{pipeline_name}`.",
                 f"Description: {description}" if description else "",
                 "",
                 "Execute these steps in order, using your tools as needed.",
@@ -1506,12 +1508,12 @@ def cli_main() -> None:
 
             model_spec = args.default_model
             # Auto-detect provider for bare model names
-            from bog_agents_cli.config import detect_provider
+            from bog_agents_cli.config import detectprovider
             from bog_agents_cli.model_config import ModelSpec
 
             parsed = ModelSpec.try_parse(model_spec)
             if not parsed:
-                provider = detect_provider(model_spec)
+                provider = detectprovider(model_spec)
                 if provider:
                     model_spec = f"{provider}:{model_spec}"
 
@@ -1655,35 +1657,35 @@ def cli_main() -> None:
             # up the agent. Without this, missing creds surface as a deep
             # traceback ending in "Could not resolve authentication method"
             # after the agent is already running.
-            _model_arg = getattr(args, "model", None)
+            model_arg = getattr(args, "model", None)
             try:
-                from bog_agents_cli.config import detect_provider
+                from bog_agents_cli.config import detectprovider
                 from bog_agents_cli.model_config import (
                     PROVIDER_API_KEY_ENV,
                     ModelConfig,
                 )
 
-                _spec_for_creds = _model_arg
-                if _spec_for_creds is None:
-                    _cfg = ModelConfig.load()
-                    _spec_for_creds = _cfg.default_model or _cfg.recent_model
-                if _spec_for_creds:
-                    if ":" in _spec_for_creds:
-                        _provider = _spec_for_creds.split(":", 1)[0].lower()
+                spec_for_creds = model_arg
+                if spec_for_creds is None:
+                    cfg = ModelConfig.load()
+                    spec_for_creds = cfg.default_model or cfg.recent_model
+                if spec_for_creds:
+                    if ":" in spec_for_creds:
+                        provider = spec_for_creds.split(":", 1)[0].lower()
                     else:
-                        _provider = (detect_provider(_spec_for_creds) or "").lower()
-                    _env_var = PROVIDER_API_KEY_ENV.get(_provider)
+                        provider = (detectprovider(spec_for_creds) or "").lower()
+                    env_var = PROVIDER_API_KEY_ENV.get(provider)
                     # Local providers (ollama) don't need an API key; bedrock/
                     # vertexai use other auth flows. Skip the gate for them.
                     if (
-                        _env_var
-                        and _provider not in ("ollama", "bedrock_converse", "vertexai")
-                        and not os.environ.get(_env_var)
+                        env_var
+                        and provider not in ("ollama", "bedrock_converse", "vertexai")
+                        and not os.environ.get(env_var)
                     ):
                         sys.stderr.write(
-                            f"Error: model '{_spec_for_creds}' requires "
-                            f"{_env_var} to be set in the environment.\n"
-                            f"Hint: export {_env_var}=... or set it in "
+                            f"Error: model '{spec_for_creds}' requires "
+                            f"{env_var} to be set in the environment.\n"
+                            f"Hint: export {env_var}=... or set it in "
                             f"~/.bog-agents/.env\n",
                         )
                         sys.stderr.flush()

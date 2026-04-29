@@ -133,7 +133,7 @@ class FilesystemBackend(BackendProtocol):
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
 
     def _resolve_path(self, key: str) -> Path:
-        """Resolve a file path with security checks.
+        r"""Resolve a file path with security checks.
 
         When `virtual_mode=True`, treat incoming paths as virtual absolute paths under
         `self.cwd`, disallow traversal (`..`, `~`) and ensure resolved path stays within
@@ -180,7 +180,7 @@ class FilesystemBackend(BackendProtocol):
         # writes. Local LLMs (Llama 3.1, Gemma 4) emit paths in this shape
         # all the time. Treat them as cwd-relative instead. A drive-letter
         # path (`C:\foo`, `D:/data`) is still honoured as truly absolute.
-        if sys.platform == "win32" and (key.startswith("/") or key.startswith("\\")) and not re.match(r"^[\\/][a-zA-Z]:", key):
+        if sys.platform == "win32" and (key.startswith(("/", "\\"))) and not re.match(r"^[\\/][a-zA-Z]:", key):
             stripped = key.lstrip("/\\")
             if stripped:
                 logger.debug(
@@ -618,7 +618,7 @@ class FilesystemBackend(BackendProtocol):
         # `E:/proj/**/*.tsx`. We treat them all as relative-from-search-root.
         if pattern.startswith(("/", "\\")):
             pattern = pattern.lstrip("/\\")
-        elif len(pattern) >= 2 and pattern[1] == ":" and pattern[0].isalpha():
+        elif len(pattern) >= 2 and pattern[1] == ":" and pattern[0].isalpha():  # noqa: PLR2004 — `2` = "<drive-letter>:" prefix length
             # Windows drive-letter prefix: strip it AND any following sep.
             pattern = pattern[2:].lstrip("/\\")
 

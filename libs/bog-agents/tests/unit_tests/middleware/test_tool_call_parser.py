@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage
@@ -14,7 +12,6 @@ from bog_agents.middleware.tool_call_parser import (
     _coerce_call,
     parse_tool_calls_from_text,
 )
-
 
 # ---------------------------------------------------------------------------
 # Format-specific parser tests
@@ -33,10 +30,7 @@ class TestMistralFormat:
         assert residual == ""
 
     def test_array_of_objects(self) -> None:
-        text = (
-            '[TOOL_CALLS][{"name": "read_file", "arguments": {"path": "a"}}, '
-            '{"name": "write_file", "arguments": {"path": "b", "content": "x"}}]'
-        )
+        text = '[TOOL_CALLS][{"name": "read_file", "arguments": {"path": "a"}}, {"name": "write_file", "arguments": {"path": "b", "content": "x"}}]'
         calls, _ = parse_tool_calls_from_text(text)
         assert [c["name"] for c in calls] == ["read_file", "write_file"]
 
@@ -48,11 +42,7 @@ class TestMistralFormat:
         assert residual == ""
 
     def test_preserves_surrounding_text(self) -> None:
-        text = (
-            "Sure, I'll do that.\n"
-            '[TOOL_CALLS]{"name": "write_file", "arguments": {"path": "x", "content": "y"}}\n'
-            "Let me know if anything else."
-        )
+        text = 'Sure, I\'ll do that.\n[TOOL_CALLS]{"name": "write_file", "arguments": {"path": "x", "content": "y"}}\nLet me know if anything else.'
         calls, residual = parse_tool_calls_from_text(text)
         assert len(calls) == 1
         assert "Sure, I'll do that." in residual
@@ -77,21 +67,12 @@ class TestHermesFormat:
         assert residual == ""
 
     def test_multiline_body(self) -> None:
-        text = (
-            "<tool_call>\n"
-            '{"name": "write_file",\n'
-            ' "arguments": {"path": "a.ts", "content": "export const x = 1;"}}\n'
-            "</tool_call>"
-        )
+        text = '<tool_call>\n{"name": "write_file",\n "arguments": {"path": "a.ts", "content": "export const x = 1;"}}\n</tool_call>'
         calls, _ = parse_tool_calls_from_text(text)
         assert calls[0]["name"] == "write_file"
 
     def test_multiple_calls_in_one_message(self) -> None:
-        text = (
-            '<tool_call>{"name": "a", "arguments": {}}</tool_call>'
-            ' some prose '
-            '<tool_call>{"name": "b", "arguments": {}}</tool_call>'
-        )
+        text = '<tool_call>{"name": "a", "arguments": {}}</tool_call> some prose <tool_call>{"name": "b", "arguments": {}}</tool_call>'
         calls, residual = parse_tool_calls_from_text(text)
         assert [c["name"] for c in calls] == ["a", "b"]
         assert "some prose" in residual
@@ -107,24 +88,14 @@ class TestFencedJSON:
     """Fenced code blocks tagged json/tool_call/function."""
 
     def test_tool_call_fence(self) -> None:
-        text = (
-            "Calling the tool now.\n"
-            "```tool_call\n"
-            '{"name": "write_file", "arguments": {"path": "a", "content": "b"}}\n'
-            "```\n"
-            "Done."
-        )
+        text = 'Calling the tool now.\n```tool_call\n{"name": "write_file", "arguments": {"path": "a", "content": "b"}}\n```\nDone.'
         calls, residual = parse_tool_calls_from_text(text)
         assert calls[0]["name"] == "write_file"
         assert "Calling the tool now." in residual
         assert "Done." in residual
 
     def test_function_fence(self) -> None:
-        text = (
-            "```function\n"
-            '{"name": "search", "arguments": {"q": "x"}}\n'
-            "```"
-        )
+        text = '```function\n{"name": "search", "arguments": {"q": "x"}}\n```'
         calls, _ = parse_tool_calls_from_text(text)
         assert calls[0]["name"] == "search"
 
@@ -146,7 +117,7 @@ class TestGemmaFormat:
         assert residual == ""
 
     def test_numeric_and_bool_args(self) -> None:
-        text = '<|tool_call>call:set_temp{value:42,active:true}<tool_call|>'
+        text = "<|tool_call>call:set_temp{value:42,active:true}<tool_call|>"
         calls, _ = parse_tool_calls_from_text(text)
         assert calls[0]["args"] == {"value": 42, "active": True}
 
@@ -156,11 +127,7 @@ class TestGemmaFormat:
         assert calls[0]["args"] == {"cmd": 'echo "hi", world'}
 
     def test_preserves_surrounding_prose(self) -> None:
-        text = (
-            "I'll create the file now.\n"
-            '<|tool_call>call:write_file{file_path:<|"|>a<|"|>,content:<|"|>b<|"|>}<tool_call|>'
-            "\nDone."
-        )
+        text = 'I\'ll create the file now.\n<|tool_call>call:write_file{file_path:<|"|>a<|"|>,content:<|"|>b<|"|>}<tool_call|>\nDone.'
         calls, residual = parse_tool_calls_from_text(text)
         assert len(calls) == 1
         assert "create the file now" in residual
@@ -185,10 +152,7 @@ class TestThinkingStrip:
         assert "<think>" not in residual
 
     def test_thinking_disabled_keeps_envelope(self) -> None:
-        text = (
-            "<think>reasoning</think>"
-            '[TOOL_CALLS]{"name": "f", "arguments": {}}'
-        )
+        text = '<think>reasoning</think>[TOOL_CALLS]{"name": "f", "arguments": {}}'
         calls, residual = parse_tool_calls_from_text(text, strip_thinking=False)
         # Call still parses (it's outside the think block) but envelope survives.
         assert len(calls) == 1
@@ -198,11 +162,7 @@ class TestThinkingStrip:
         # Edge: tool call accidentally emitted inside <think> by a confused model.
         # With strip_thinking=False, the parser still sees and recovers it
         # because the regex doesn't care about envelope context.
-        text = (
-            '<think>I will call '
-            '[TOOL_CALLS]{"name": "f", "arguments": {}}'
-            ' now.</think>'
-        )
+        text = '<think>I will call [TOOL_CALLS]{"name": "f", "arguments": {}} now.</think>'
         calls, _ = parse_tool_calls_from_text(text, strip_thinking=False)
         assert len(calls) == 1
 
@@ -300,9 +260,7 @@ class TestMiddleware:
 
     def test_recovers_mistral_format(self) -> None:
         mw = ToolCallParserMiddleware()
-        response = self._model_response_with(
-            '[TOOL_CALLS]{"name": "write_file", "arguments": {"path": "a", "content": "hi"}}'
-        )
+        response = self._model_response_with('[TOOL_CALLS]{"name": "write_file", "arguments": {"path": "a", "content": "hi"}}')
 
         def call_next(_request: object) -> ModelResponse:
             return response
@@ -355,9 +313,7 @@ class TestMiddleware:
     @pytest.mark.asyncio
     async def test_async_recovery(self) -> None:
         mw = ToolCallParserMiddleware()
-        response = self._model_response_with(
-            '<tool_call>{"name": "ls", "arguments": {"path": "/"}}</tool_call>'
-        )
+        response = self._model_response_with('<tool_call>{"name": "ls", "arguments": {"path": "/"}}</tool_call>')
 
         async def call_next(_request: object) -> ModelResponse:
             return response
@@ -369,9 +325,7 @@ class TestMiddleware:
     def test_format_filtering(self) -> None:
         # Restrict to mistral; hermes should be ignored.
         mw = ToolCallParserMiddleware(formats=("mistral",))
-        response = self._model_response_with(
-            '<tool_call>{"name": "f", "arguments": {}}</tool_call>'
-        )
+        response = self._model_response_with('<tool_call>{"name": "f", "arguments": {}}</tool_call>')
 
         def call_next(_request: object) -> ModelResponse:
             return response

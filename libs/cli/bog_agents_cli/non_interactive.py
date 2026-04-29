@@ -401,7 +401,7 @@ def _git_dirty_paths_sync(cwd: Path) -> set[str]:
         a repo, or anything else goes wrong.
     """
     import shutil
-    import subprocess
+    import subprocess  # noqa: S404 — git is invoked with shutil.which-resolved absolute path, no shell
 
     git_exe = shutil.which("git")
     if git_exe is None:

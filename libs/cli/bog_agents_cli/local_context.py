@@ -25,7 +25,7 @@ from typing import (
 
 _IS_WINDOWS = sys.platform == "win32"
 
-from langchain.agents.middleware.types import (
+from langchain.agents.middleware.types import (  # noqa: E402 — import grouped after _IS_WINDOWS for clarity
     AgentMiddleware,
     AgentState,
     ModelRequest,
@@ -517,7 +517,7 @@ class LocalContextMiddleware(AgentMiddleware):
                 return None
             # Write the script body to a temp file and invoke via bash.
             # Forward-slash the path so cmd.exe quoting is happy.
-            tf = tempfile.NamedTemporaryFile(
+            tf = tempfile.NamedTemporaryFile(  # noqa: SIM115 — explicit close in finally is intentional; tf must outlive the with-block to be passed to subprocess
                 mode="w", suffix=".sh", delete=False, encoding="utf-8"
             )
             try:
