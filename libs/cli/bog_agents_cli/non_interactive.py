@@ -130,6 +130,12 @@ class StreamState:
     """Maps a tool-call index or ID to its name/ID metadata for in-progress
     tool calls."""
 
+    edited_paths: list[str] = field(default_factory=list)
+    """Ordered, de-duplicated list of file paths the agent wrote or edited
+    during this run. Populated from tool_call blocks for
+    write_file / edit_file / multi_edit_file. Used to scope --auto-commit
+    to only the files the agent actually touched (Fix #25)."""
+
     pending_interrupts: dict[str, HITLRequest] = field(default_factory=dict)
     """Maps interrupt IDs to their validated HITL requests that are awaiting
     decisions."""
@@ -259,6 +265,27 @@ def _process_ai_message(
         elif total_toks:
             state.stats.record_request(active_model, total_toks, 0)
 
+    # Capture file paths from the AIMessage's complete `tool_calls` list.
+    # langchain populates this once a tool-call's args have fully streamed,
+    # which is the only reliable place to read complete args (the per-chunk
+    # tool_call_chunk blocks only carry partial JSON fragments).
+    completed_tool_calls = getattr(message_obj, "tool_calls", None) or []
+    for tc in completed_tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        if tc.get("name") not in {"write_file", "edit_file", "multi_edit_file"}:
+            continue
+        args = tc.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        candidate = args.get("file_path") or args.get("path")
+        if (
+            isinstance(candidate, str)
+            and candidate
+            and candidate not in state.edited_paths
+        ):
+            state.edited_paths.append(candidate)
+
     if not hasattr(message_obj, "content_blocks"):
         logger.debug("AIMessage missing content_blocks attribute, skipping")
         return
@@ -291,6 +318,25 @@ def _process_ai_message(
                 if state.full_response and not state.quiet:
                     _write_newline()
                 console.print(f"[dim]🔧 Calling tool: {chunk_name}[/dim]")
+
+            # Track file paths the agent is editing so --auto-commit can
+            # scope `git add` precisely (Fix #25). The block_type
+            # "tool_call" carries args; "tool_call_chunk" usually doesn't,
+            # so we only look at the complete-call shape.
+            if block_type == "tool_call" and chunk_name in {
+                "write_file",
+                "edit_file",
+                "multi_edit_file",
+            }:
+                args = block.get("args") or {}
+                if isinstance(args, dict):
+                    candidate = args.get("file_path") or args.get("path")
+                    if (
+                        isinstance(candidate, str)
+                        and candidate
+                        and candidate not in state.edited_paths
+                    ):
+                        state.edited_paths.append(candidate)
 
 
 def _process_message_chunk(
@@ -333,6 +379,124 @@ def _process_message_chunk(
             console.print(f"[dim]📝 {record.display_path}[/dim]")
 
 
+_FILE_EDIT_TOOL_NAMES = frozenset({"write_file", "edit_file", "multi_edit_file"})
+
+
+async def _git_dirty_paths(cwd: Path) -> set[str]:
+    """Return the set of paths that `git status --porcelain` reports as dirty.
+
+    Paths are returned as they appear in the porcelain output (relative to
+    the repo root). Returns an empty set when not in a git repo or git is
+    unavailable, so callers can use this as a no-op fallback.
+
+    Used by run_non_interactive's --auto-commit scope path-discovery
+    (Fix #25): diffing the porcelain output before vs after a run gives
+    us the exact set of files the agent created or modified, regardless
+    of whether the responsible tool call surfaced its args through the
+    langgraph stream.
+
+    Args:
+        cwd: Working directory; usually `Path.cwd()`.
+
+    Returns:
+        Set of porcelain-formatted path strings (relative to repo root).
+    """
+    import asyncio
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "status",
+            "--porcelain",
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except (TimeoutError, OSError, FileNotFoundError):
+        return set()
+    if proc.returncode != 0:
+        return set()
+
+    paths: set[str] = set()
+    for raw_line in stdout.decode(errors="replace").splitlines():
+        # Porcelain v1 lines are 'XY <path>' (and 'XY <orig> -> <new>'
+        # for renames). Strip the 2-char status + space, take the
+        # rename-target if present.
+        if len(raw_line) < 4:
+            continue
+        path = raw_line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if path:
+            paths.add(path)
+    return paths
+
+
+def _record_edited_path_from_args(args: object, state: StreamState) -> None:
+    """Append the file_path from a tool-call args dict to state.edited_paths."""
+    if not isinstance(args, dict):
+        return
+    candidate = args.get("file_path") or args.get("path")
+    if isinstance(candidate, str) and candidate and candidate not in state.edited_paths:
+        state.edited_paths.append(candidate)
+
+
+def _capture_edited_paths(stream_mode: str, data: object, state: StreamState) -> None:
+    """Scan a stream chunk for file-editing tool calls and record their paths.
+
+    Looks at three places langgraph emits tool-call args:
+
+    1. `messages` mode: AIMessage.tool_calls (complete-args list).
+    2. `updates` mode: each node update may contain a 'messages' list whose
+       AIMessages also expose tool_calls.
+    3. Both shapes: AIMessage.content_blocks may contain `tool_call` blocks
+       with full args (the streaming `tool_call_chunk` form is only
+       fragments, so we ignore it for path capture).
+
+    Args:
+        stream_mode: Stream mode label from the chunk tuple.
+        data: Raw chunk payload.
+        state: StreamState to populate.
+    """
+    # 1. messages mode -> (msg_obj, metadata)
+    if (
+        stream_mode == "messages"
+        and isinstance(data, tuple)
+        and len(data) == _MESSAGE_DATA_LENGTH
+    ):
+        _scan_message_for_edits(data[0], state)
+        return
+
+    # 2. updates mode -> {node_name: {messages: [...]}}
+    if stream_mode == "updates" and isinstance(data, dict):
+        for node_update in data.values():
+            if not isinstance(node_update, dict):
+                continue
+            for msg in node_update.get("messages") or []:
+                _scan_message_for_edits(msg, state)
+
+
+def _scan_message_for_edits(msg: object, state: StreamState) -> None:
+    """Pull edited file_path values out of a single AIMessage's tool calls."""
+    if not isinstance(msg, AIMessage):
+        return
+    for tc in getattr(msg, "tool_calls", None) or []:
+        if not isinstance(tc, dict):
+            continue
+        if tc.get("name") in _FILE_EDIT_TOOL_NAMES:
+            _record_edited_path_from_args(tc.get("args"), state)
+    # Some streams only populate content_blocks, not the tool_calls list.
+    for block in getattr(msg, "content_blocks", None) or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") != "tool_call":
+            continue
+        if block.get("name") in _FILE_EDIT_TOOL_NAMES:
+            _record_edited_path_from_args(block.get("args"), state)
+
+
 def _process_stream_chunk(
     chunk: object,
     state: StreamState,
@@ -361,6 +525,14 @@ def _process_stream_chunk(
 
     namespace, stream_mode, data = chunk
     is_main_agent = not namespace
+
+    # Best-effort: capture edited file paths from the stream so
+    # --auto-commit can scope `git add` precisely. The cross-namespace
+    # scan covers both messages-mode and updates-mode payloads. When the
+    # langgraph dev server flattens or rewraps messages such that args
+    # never reach us, we still have a porcelain-diff fallback in
+    # run_non_interactive itself (Fix #25).
+    _capture_edited_paths(stream_mode, data, state)
 
     if not is_main_agent:
         return
@@ -540,7 +712,7 @@ async def _run_agent_loop(
     stream: bool = True,
     thread_url_lookup: ThreadUrlLookupState | None = None,
     output_format: str = "text",
-) -> None:
+) -> StreamState:
     """Run the agent and handle HITL interrupts until the task completes.
 
     The loop processes at most `_MAX_HITL_ITERATIONS` rounds to prevent
@@ -647,6 +819,8 @@ async def _run_agent_loop(
 
     await dispatch_hook("task.complete", {"thread_id": thread_id})
     await dispatch_hook("session.end", {"thread_id": thread_id})
+
+    return state
 
 
 def _build_non_interactive_header(
@@ -890,7 +1064,14 @@ async def run_non_interactive(
             # envelope reaches stdout. Diagnostic chrome is already routed
             # via stderr console.
             effective_stream = stream and output_format != "json"
-            await _run_agent_loop(
+            # Snapshot the working tree just before the agent runs so we
+            # can diff against it after to compute the exact set of
+            # files the run created or modified. This is the bulletproof
+            # fallback when stream-introspection misses tool calls hidden
+            # inside subagent / langgraph-dev namespaces.
+            pre_run_dirty = await _git_dirty_paths(Path.cwd()) if auto_commit else set()
+
+            final_state = await _run_agent_loop(
                 agent,
                 message,
                 config,
@@ -905,18 +1086,21 @@ async def run_non_interactive(
             if auto_commit:
                 from bog_agents_cli.auto_commit import run_auto_commit
 
-                # Scope auto-commit to files the agent actually edited (Fix
-                # #25). Without this, `git add -A` sweeps in scratch files,
-                # log artifacts, and node_modules-adjacent noise.
-                edited_paths: list[str] = []
-                for op in file_op_tracker.completed:
-                    if op.tool_name not in {"write_file", "edit_file"}:
-                        continue
-                    if op.physical_path is None:
-                        continue
-                    p = str(op.physical_path)
-                    if p not in edited_paths:
-                        edited_paths.append(p)
+                # Scope auto-commit to files the agent actually touched
+                # (Fix #25). Two sources of truth, unioned:
+                #   1. StreamState.edited_paths captured from tool_call
+                #      args while the stream ran (best when the path
+                #      shows up).
+                #   2. `git status --porcelain` diff between pre-run and
+                #      post-run — catches everything that ended up in
+                #      the working tree, regardless of which subgraph
+                #      issued the write. Critical because langgraph-dev
+                #      sub-graph messages don't always carry their
+                #      args back to the CLI process.
+                stream_paths = set(final_state.edited_paths)
+                post_run_dirty = await _git_dirty_paths(Path.cwd())
+                fresh_dirty = post_run_dirty - pre_run_dirty
+                edited_paths = sorted(stream_paths | fresh_dirty)
 
                 sha = await run_auto_commit(
                     cwd=Path.cwd(),
