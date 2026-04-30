@@ -790,12 +790,44 @@ def _has_bedrock_credentials() -> bool:
     return _check_bedrock_thorough()
 
 
+# Negative-cache for the bedrock credential probe. The langchain
+# auto-detect loop and the model resolver each call _has_bedrock_credentials
+# many times in succession; without caching, a single expired SSO session
+# produces 30+ identical TokenRetrievalError tracebacks in the log file
+# (issue #53). The cache key is the boto3 credential method (env vs
+# profile vs sso) — when that changes mid-process (extremely rare) we'd
+# stay stale for at most one probe, which is acceptable.
+_BEDROCK_PROBE_CACHE: dict[str, tuple[bool, str]] = {}
+
+
+def _classify_bedrock_probe_failure(exc: BaseException) -> str:
+    """Map a boto3 exception to a short stable classification string.
+
+    Used as the cache key + a hint for callers that want to know *why*
+    the probe failed without parsing the exception type themselves.
+    """
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if name == "TokenRetrievalError" or "token has expired" in msg or "sso" in msg:
+        return "sso-expired"
+    if name == "NoCredentialsError" or "unable to locate credentials" in msg:
+        return "no-credentials"
+    return f"other:{name}"
+
+
 def _check_bedrock_thorough() -> bool:
     """Resolve credentials via boto3 and verify the access key is non-empty.
 
-    This catches expired SSO tokens and misconfigured profiles without
-    making any network calls — it only checks that boto3 can produce a
-    frozen credential set with a non-empty access key.
+    Catches expired SSO tokens and misconfigured profiles without making
+    any network calls — it only checks that boto3 can produce a frozen
+    credential set with a non-empty access key.
+
+    The first failure of a given kind (sso-expired, no-credentials, etc.)
+    is logged at DEBUG level *with* its traceback for diagnostic value;
+    subsequent failures of the same kind log a one-line summary only.
+    This keeps the log file readable when a user runs with an expired
+    SSO session (issue #53 — a single ``bog-agents`` invocation
+    produces 20+ identical 50-line stack traces otherwise).
 
     Returns:
         True if boto3 resolves valid-looking credentials.
@@ -806,17 +838,35 @@ def _check_bedrock_thorough() -> bool:
         session = boto3.Session()
         creds = session.get_credentials()
         if creds is None:
-            logger.debug("boto3 returned no credentials")
+            cached = _BEDROCK_PROBE_CACHE.get("no-credentials")
+            if cached is None:
+                logger.debug("boto3 returned no credentials")
+                _BEDROCK_PROBE_CACHE["no-credentials"] = (
+                    False,
+                    "boto3 found no credentials",
+                )
             return False
         frozen = creds.get_frozen_credentials()
         has_key = bool(frozen.access_key)
         if not has_key:
             logger.debug("boto3 credentials resolved but access_key is empty")
         else:
+            # Reset the cache on success so a freshly-renewed SSO session
+            # is detected without restarting the process.
+            _BEDROCK_PROBE_CACHE.clear()
             logger.debug("boto3 credentials resolved successfully (thorough check)")
         return has_key
-    except Exception:
-        logger.debug("boto3 credential resolution failed", exc_info=True)
+    except Exception as exc:
+        kind = _classify_bedrock_probe_failure(exc)
+        cached = _BEDROCK_PROBE_CACHE.get(kind)
+        if cached is None:
+            # First failure of this kind: log the traceback once for
+            # diagnostic value and remember we've seen it.
+            logger.debug("boto3 credential resolution failed (%s)", kind, exc_info=True)
+            _BEDROCK_PROBE_CACHE[kind] = (False, f"{type(exc).__name__}: {exc}")
+        else:
+            # Subsequent failures: one-liner only.
+            logger.debug("boto3 credential resolution failed (%s; cached)", kind)
         return False
 
 
@@ -837,8 +887,14 @@ def _check_bedrock_boto3() -> bool:
         found = creds is not None
         logger.debug("boto3 credential check: found=%s", found)
         return found
-    except Exception:
-        logger.debug("boto3 credential check failed", exc_info=True)
+    except Exception as exc:
+        kind = _classify_bedrock_probe_failure(exc)
+        cached = _BEDROCK_PROBE_CACHE.get(f"boto3:{kind}")
+        if cached is None:
+            logger.debug("boto3 credential check failed (%s)", kind, exc_info=True)
+            _BEDROCK_PROBE_CACHE[f"boto3:{kind}"] = (False, str(exc))
+        else:
+            logger.debug("boto3 credential check failed (%s; cached)", kind)
         return False
 
 

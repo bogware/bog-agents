@@ -124,6 +124,27 @@ def _bedrock_credential_status() -> tuple[str, str]:
         class NoCredentialsError(Exception):  # type: ignore[no-redef]
             pass
 
+    # If the runtime credential probe already saw a failure this session,
+    # reuse its classification instead of triggering yet another expensive
+    # boto3 SSO refresh attempt (which would log another full traceback —
+    # issue #53). The cache only stores negative results; on success the
+    # runtime probe clears it so this branch falls through.
+    try:
+        from bog_agents_cli.model_config import _BEDROCK_PROBE_CACHE
+
+        if _BEDROCK_PROBE_CACHE:
+            for kind, (_ok, detail) in _BEDROCK_PROBE_CACHE.items():
+                if "sso-expired" in kind:
+                    return (
+                        "FAIL",
+                        f"AWS SSO token expired — run `aws sso login` ({detail})",
+                    )
+                if "no-credentials" in kind:
+                    return "WARN", "no AWS credentials found — run `aws configure`"
+                return "FAIL", f"AWS credential probe error: {detail}"
+    except ImportError:
+        pass
+
     try:
         session = boto3.Session()
         creds = session.get_credentials()

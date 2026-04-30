@@ -3048,3 +3048,98 @@ default = "anthropic:claude-sonnet-4-6"
         assert config.default_model == "anthropic:claude-sonnet-4-6"
         bedrock_cfg = config.providers.get("bedrock", {})
         assert bedrock_cfg.get("credential_check") == "files"
+
+
+class TestBedrockProbeCache:
+    """Issue #53 — repeated Bedrock probes must not log duplicate tracebacks."""
+
+    def setup_method(self) -> None:
+        """Clear the negative-result cache between tests."""
+        from bog_agents_cli.model_config import _BEDROCK_PROBE_CACHE
+
+        _BEDROCK_PROBE_CACHE.clear()
+
+    def test_classify_sso_expired(self) -> None:
+        """TokenRetrievalError is classified as sso-expired."""
+        from bog_agents_cli.model_config import _classify_bedrock_probe_failure
+
+        class FakeTokenRetrievalError(Exception):
+            pass
+
+        FakeTokenRetrievalError.__name__ = "TokenRetrievalError"
+        kind = _classify_bedrock_probe_failure(
+            FakeTokenRetrievalError("Token has expired and refresh failed")
+        )
+        assert kind == "sso-expired"
+
+    def test_classify_no_credentials(self) -> None:
+        """NoCredentialsError is classified distinctly from sso-expired."""
+        from bog_agents_cli.model_config import _classify_bedrock_probe_failure
+
+        class FakeNoCredsError(Exception):
+            pass
+
+        FakeNoCredsError.__name__ = "NoCredentialsError"
+        kind = _classify_bedrock_probe_failure(
+            FakeNoCredsError("Unable to locate credentials")
+        )
+        assert kind == "no-credentials"
+
+    def test_repeated_failure_logs_traceback_only_once(self, caplog) -> None:
+        """5x _check_bedrock_thorough with the same SSO failure logs ONE traceback, not 5."""
+        from bog_agents_cli.model_config import _check_bedrock_thorough
+
+        class FakeTokenRetrievalError(Exception):
+            pass
+
+        FakeTokenRetrievalError.__name__ = "TokenRetrievalError"
+
+        fake_creds = MagicMock()
+        fake_creds.get_frozen_credentials.side_effect = FakeTokenRetrievalError(
+            "Token has expired and refresh failed"
+        )
+        fake_session = MagicMock()
+        fake_session.get_credentials.return_value = fake_creds
+        fake_boto3 = MagicMock()
+        fake_boto3.Session.return_value = fake_session
+
+        with (
+            patch.dict(sys.modules, {"boto3": fake_boto3}),
+            caplog.at_level(logging.DEBUG, logger="bog_agents_cli.model_config"),
+        ):
+            for _ in range(5):
+                assert _check_bedrock_thorough() is False
+
+        with_tracebacks = [r for r in caplog.records if r.exc_info is not None]
+        assert len(with_tracebacks) == 1, (
+            f"expected exactly 1 traceback in logs, got {len(with_tracebacks)}"
+        )
+        cached_records = [r for r in caplog.records if "cached" in r.getMessage()]
+        assert len(cached_records) >= 1
+
+    def test_success_clears_cache(self) -> None:
+        """A successful probe clears the negative-result cache."""
+        from bog_agents_cli.model_config import (
+            _BEDROCK_PROBE_CACHE,
+            _check_bedrock_thorough,
+        )
+
+        _BEDROCK_PROBE_CACHE["sso-expired"] = (False, "stale")
+        assert _BEDROCK_PROBE_CACHE
+
+        fake_frozen = MagicMock()
+        fake_frozen.access_key = "AKIA..."
+        fake_creds = MagicMock()
+        fake_creds.get_frozen_credentials.return_value = fake_frozen
+        fake_creds.method = "sso"
+        fake_session = MagicMock()
+        fake_session.get_credentials.return_value = fake_creds
+        fake_boto3 = MagicMock()
+        fake_boto3.Session.return_value = fake_session
+
+        with patch.dict(sys.modules, {"boto3": fake_boto3}):
+            assert _check_bedrock_thorough() is True
+
+        assert _BEDROCK_PROBE_CACHE == {}, (
+            "successful probe should clear the negative-result cache"
+        )
