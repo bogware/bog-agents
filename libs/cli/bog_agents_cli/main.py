@@ -1113,6 +1113,69 @@ def _run_doctor(console: Any) -> None:  # noqa: ANN401
     console.print(run_doctor(), markup=False)
 
 
+_TERMINAL_RESTORE_SEQUENCES: tuple[str, ...] = (
+    # Disable mouse tracking in every protocol Textual / prompt-toolkit
+    # might have enabled. If the TUI exits abnormally (uncaught
+    # exception, SIGTERM, agent crash mid-launch) the terminal is left
+    # in mouse-tracking mode, and any subsequent click in the user's
+    # shell shows up as garbage like `[<35;57;14M[` on stdin.
+    "\033[?1003l",  # disable any-event mouse tracking
+    "\033[?1002l",  # disable button-event tracking
+    "\033[?1000l",  # disable basic mouse tracking
+    "\033[?1006l",  # disable SGR mouse mode (the `<...M` form we observed)
+    "\033[?1015l",  # disable urxvt mouse mode
+    "\033[?2004l",  # disable bracketed-paste mode
+    "\033[?25h",  # ensure cursor is visible
+    "\033[?1049l",  # leave alternate screen buffer
+)
+
+
+def _restore_terminal() -> None:
+    """Best-effort restore the terminal to a sane state.
+
+    Runs as an atexit handler and from SIGTERM/SIGINT signal handlers.
+    Idempotent: writing the disable sequences multiple times is safe.
+    Silently skipped when stdout is not a TTY (piped output).
+    """
+    try:
+        if not sys.stdout.isatty():
+            return
+        sys.stdout.write("".join(_TERMINAL_RESTORE_SEQUENCES))
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        # Closed stream during shutdown — nothing to restore.
+        pass
+
+
+def _install_terminal_restore_handlers() -> None:
+    """Wire `_restore_terminal` to atexit + SIGTERM/SIGINT.
+
+    Without this, a crash mid-Textual-startup leaves the terminal in
+    mouse-tracking + alternate-screen mode and the user's shell shows
+    SGR escape sequences as input (e.g. `[<35;57;14M[`).
+    """
+    import atexit
+    import signal
+
+    atexit.register(_restore_terminal)
+
+    def _on_signal(_signum: int, _frame: object) -> None:
+        _restore_terminal()
+        # Re-raise the default signal so the process actually exits with
+        # the right exit code (KeyboardInterrupt for SIGINT, etc.).
+        sys.exit(130)
+
+    for sig_name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _on_signal)
+        except (OSError, ValueError):
+            # Some platforms (Windows) don't allow setting all signals.
+            pass
+
+
 def cli_main() -> None:
     """Entry point for console script.
 
@@ -1120,6 +1183,12 @@ def cli_main() -> None:
         SystemExit: Propagated from `sys.exit()` in subcommand dispatch
             paths (the standard argparse + subcommand exit pattern).
     """
+    # Install terminal-restore handlers early — if any subsequent setup
+    # crashes (e.g. before Textual takes over the screen) the terminal
+    # still ends up in a sane state. Belt-and-suspenders for Textual's
+    # own cleanup, which is bypassed on hard exits.
+    _install_terminal_restore_handlers()
+
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1676,10 +1745,13 @@ def cli_main() -> None:
                         provider = (detectprovider(spec_for_creds) or "").lower()
                     env_var = PROVIDER_API_KEY_ENV.get(provider)
                     # Local providers (ollama) don't need an API key; bedrock/
-                    # vertexai use other auth flows. Skip the gate for them.
+                    # vertexai use other auth flows. Skip the simple env-var
+                    # gate for them; bedrock gets a dedicated boto3 probe
+                    # below.
                     if (
                         env_var
-                        and provider not in ("ollama", "bedrock_converse", "vertexai")
+                        and provider
+                        not in ("ollama", "bedrock", "bedrock_converse", "vertexai")
                         and not os.environ.get(env_var)
                     ):
                         sys.stderr.write(
@@ -1690,6 +1762,27 @@ def cli_main() -> None:
                         )
                         sys.stderr.flush()
                         sys.exit(2)
+                    # Bedrock pre-flight: probe boto3's credential chain so
+                    # an expired SSO token surfaces as a clean one-line
+                    # message instead of as a generic "internal error
+                    # occurred" wrapped through langgraph's RemoteException.
+                    if provider in ("bedrock", "bedrock_converse"):
+                        try:
+                            from bog_agents_cli.doctor import (
+                                _bedrock_credential_status,
+                            )
+
+                            status, detail = _bedrock_credential_status()
+                        except (
+                            Exception
+                        ):  # pre-flight only — never block on its own bug
+                            status, detail = "OK", "probe-skipped"
+                        if status == "FAIL":
+                            sys.stderr.write(
+                                f"Error: Bedrock credentials unavailable: {detail}\n"
+                            )
+                            sys.stderr.flush()
+                            sys.exit(2)
             except SystemExit:
                 raise
             except Exception:  # pre-flight only; agent will surface real errors

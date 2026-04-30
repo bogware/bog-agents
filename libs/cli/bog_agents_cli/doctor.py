@@ -86,6 +86,64 @@ def _read_default_ollama_model() -> str | None:
     return None
 
 
+def _bedrock_credential_status() -> tuple[str, str]:
+    """Probe AWS credentials for the Bedrock provider and report their state.
+
+    Walks boto3's standard credential chain (env, profile, SSO, instance
+    role) without making a network call. Catches the common failure modes
+    a Bedrock user hits at the CLI:
+
+    - boto3 not installed (transitive dep of langchain-aws — should never
+      happen but reported gracefully).
+    - No credentials anywhere — points the user to ``aws configure``.
+    - SSO session expired (TokenRetrievalError) — points the user to
+      ``aws sso login``.
+    - Credentials present but access_key empty — points at the profile.
+
+    Returns:
+        (status, detail) tuple where status is "OK"/"WARN"/"FAIL" and
+        detail is a human-readable one-liner suitable for the doctor table.
+    """
+    try:
+        import boto3  # type: ignore[import-untyped]
+    except ImportError:
+        return "WARN", "boto3 not installed (transitive of langchain-aws)"
+
+    # botocore raises TokenRetrievalError when an SSO token has expired.
+    # Map it to a clean actionable message instead of a stack trace.
+    try:
+        from botocore.exceptions import (  # type: ignore[import-untyped]
+            NoCredentialsError,
+            TokenRetrievalError,
+        )
+    except ImportError:
+        # Older botocore — fall back to generic Exception
+        class TokenRetrievalError(Exception):  # type: ignore[no-redef]
+            pass
+
+        class NoCredentialsError(Exception):  # type: ignore[no-redef]
+            pass
+
+    try:
+        session = boto3.Session()
+        creds = session.get_credentials()
+        if creds is None:
+            return "WARN", "no AWS credentials found — run `aws configure`"
+        # `get_frozen_credentials()` is what triggers SSO token refresh,
+        # and where TokenRetrievalError surfaces if the SSO session expired.
+        frozen = creds.get_frozen_credentials()
+        if not frozen.access_key:
+            return "WARN", "AWS credentials resolved but access_key is empty"
+        method = getattr(creds, "method", "?")
+        return "OK", f"AWS credentials valid (source: {method})"
+    except TokenRetrievalError as exc:
+        return "FAIL", f"AWS SSO token expired — run `aws sso login` ({exc})"
+    except NoCredentialsError:
+        return "WARN", "no AWS credentials found — run `aws configure`"
+    except Exception as exc:
+        return "FAIL", f"AWS credential probe error: {type(exc).__name__}: {exc}"
+
+
 def run_doctor() -> str:
     """Run comprehensive health checks and return a diagnostic report.
 
@@ -132,6 +190,8 @@ def run_doctor() -> str:
         ("langchain-openai", "OPENAI_API_KEY"),
         ("langchain-google-genai", "GOOGLE_API_KEY"),
         ("langchain-ollama", None),
+        # Bedrock uses AWS credentials, not a single API key — handled below.
+        ("langchain-aws", "__BEDROCK__"),
     ]
     for pkg, env_key in providers:
         try:
@@ -139,6 +199,9 @@ def run_doctor() -> str:
             if env_key is None:
                 status = "OK"
                 detail = f"v{dist.version} (local provider)"
+            elif env_key == "__BEDROCK__":
+                status, bedrock_detail = _bedrock_credential_status()
+                detail = f"v{dist.version} ({bedrock_detail})"
             else:
                 has_key = bool(os.environ.get(env_key))
                 status = "OK" if has_key else "WARN"

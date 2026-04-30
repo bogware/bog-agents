@@ -10059,6 +10059,18 @@ class BogAgentsApp(App):
                 model_id = (self._base_model_spec or "").lower()
                 if model_id.startswith("ollama:"):
                     is_tool_capability_error = True
+            # Bedrock-specific: when the langgraph remote stream wraps a
+            # botocore TokenRetrievalError it ends up here as a generic
+            # 'internal error occurred' message. Detect by exception
+            # *name* (RemoteException carries the original class name in
+            # str(e) on most paths) AND by checking whether the active
+            # model is bedrock-flavoured. We surface a Bedrock-specific
+            # action hint below.
+            is_bedrock_model = (
+                (self._base_model_spec or "")
+                .lower()
+                .startswith(("bedrock:", "bedrock_converse:"))
+            )
             is_auth_error = any(
                 keyword in err_name.lower() or keyword in err_str
                 for keyword in (
@@ -10069,7 +10081,15 @@ class BogAgentsApp(App):
                     "accessdenied",
                     "expired",
                     "sso",
+                    "tokenretrievalerror",
+                    "nocredentialserror",
                 )
+            ) or (
+                # Generic 'internal error' from langgraph + bedrock model =
+                # almost always an SSO/credential issue at the AWS layer.
+                err_name == "RemoteException"
+                and "internal error" in err_str
+                and is_bedrock_model
             )
             if is_tool_capability_error:
                 await self._mount_message(
