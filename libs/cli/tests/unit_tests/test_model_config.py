@@ -3105,8 +3105,13 @@ class TestBedrockProbeCache:
 
         with (
             patch.dict(sys.modules, {"boto3": fake_boto3}),
+            patch.dict(
+                os.environ, {"BOG_AGENTS_BEDROCK_AUTH_MODE": "sso"}, clear=False
+            ),
             caplog.at_level(logging.DEBUG, logger="bog_agents_cli.model_config"),
         ):
+            os.environ.pop("AWS_PROFILE", None)
+            os.environ.pop("BOG_AGENTS_BEDROCK_PROFILE", None)
             for _ in range(5):
                 assert _check_bedrock_thorough() is False
 
@@ -3143,3 +3148,128 @@ class TestBedrockProbeCache:
         assert _BEDROCK_PROBE_CACHE == {}, (
             "successful probe should clear the negative-result cache"
         )
+
+
+class TestBedrockAuthMode:
+    """auth_mode toggle + auto-fallback from expired SSO to static creds."""
+
+    def setup_method(self) -> None:
+        from bog_agents_cli.model_config import _BEDROCK_PROBE_CACHE
+
+        _BEDROCK_PROBE_CACHE.clear()
+
+    def test_auth_mode_default_is_auto(self, tmp_path) -> None:
+        """When no config / env override is set, mode resolves to 'auto'."""
+        from bog_agents_cli.model_config import _bedrock_auth_mode
+
+        config_path = tmp_path / "config.toml"
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            with patch.dict(os.environ, {}, clear=False):
+                for var in (
+                    "BOG_AGENTS_BEDROCK_AUTH_MODE",
+                    "BOG_AGENTS_BEDROCK_PROFILE",
+                    "AWS_PROFILE",
+                ):
+                    os.environ.pop(var, None)
+                mode, profile = _bedrock_auth_mode()
+        assert mode == "auto"
+        assert profile == ""
+
+    def test_auth_mode_env_var_overrides_config(self, tmp_path) -> None:
+        """BOG_AGENTS_BEDROCK_AUTH_MODE wins over config.toml."""
+        from bog_agents_cli.model_config import _bedrock_auth_mode
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[models.providers.bedrock]\nauth_mode = "sso"\n')
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            with patch.dict(
+                os.environ, {"BOG_AGENTS_BEDROCK_AUTH_MODE": "static"}, clear=False
+            ):
+                mode, _profile = _bedrock_auth_mode()
+        assert mode == "static"
+
+    def test_save_bedrock_auth_mode_round_trip(self, tmp_path) -> None:
+        from bog_agents_cli.model_config import save_bedrock_auth_mode
+
+        config_path = tmp_path / "config.toml"
+        assert (
+            save_bedrock_auth_mode("static", profile="dev", config_path=config_path)
+            is True
+        )
+
+        config = ModelConfig.load(config_path)
+        bedrock_cfg = config.providers.get("bedrock", {})
+        assert bedrock_cfg.get("auth_mode") == "static"
+        assert bedrock_cfg.get("aws_profile") == "dev"
+
+    def test_save_bedrock_auth_mode_rejects_invalid_mode(self, tmp_path) -> None:
+        from bog_agents_cli.model_config import save_bedrock_auth_mode
+
+        with pytest.raises(ValueError, match="invalid auth_mode"):
+            save_bedrock_auth_mode("not-a-real-mode", config_path=tmp_path / "c.toml")
+
+    def test_auto_mode_falls_back_from_sso_expired_to_static(self, tmp_path) -> None:
+        """Issue #54: expired SSO + fresh static creds → auto mode succeeds.
+
+        boto3 walks the credential chain in order. If ~/.aws/config has
+        a [default] section with sso_session = X (expired), the SSO
+        provider short-circuits before ~/.aws/credentials is ever read.
+        Auto mode catches TokenRetrievalError and retries with the
+        SSO providers explicitly removed from the chain.
+        """
+        from bog_agents_cli.model_config import (
+            _BEDROCK_PROBE_CACHE,
+            _check_bedrock_thorough,
+        )
+
+        class FakeTokenRetrievalError(Exception):
+            pass
+
+        FakeTokenRetrievalError.__name__ = "TokenRetrievalError"
+
+        # First call: default chain finds expired SSO config.
+        sso_creds = MagicMock()
+        sso_creds.get_frozen_credentials.side_effect = FakeTokenRetrievalError(
+            "Token has expired and refresh failed"
+        )
+        sso_session = MagicMock()
+        sso_session.get_credentials.return_value = sso_creds
+
+        # Second call: static-credentials-only chain succeeds.
+        static_frozen = MagicMock()
+        static_frozen.access_key = "AKIASTATIC..."
+        static_creds = MagicMock()
+        static_creds.get_frozen_credentials.return_value = static_frozen
+        static_creds.method = "shared-credentials-file"
+        static_session = MagicMock()
+        static_session.get_credentials.return_value = static_creds
+
+        botocore_inner = MagicMock()
+        botocore_inner.get_component.return_value = MagicMock()
+
+        fake_boto3 = MagicMock()
+        fake_boto3.Session.side_effect = [sso_session, static_session]
+
+        fake_botocore_session_module = MagicMock()
+        fake_botocore_session_module.Session.return_value = botocore_inner
+
+        with patch.dict(
+            sys.modules,
+            {
+                "boto3": fake_boto3,
+                "botocore": MagicMock(),
+                "botocore.session": fake_botocore_session_module,
+            },
+        ):
+            with patch.dict(
+                os.environ, {"BOG_AGENTS_BEDROCK_AUTH_MODE": "auto"}, clear=False
+            ):
+                os.environ.pop("AWS_PROFILE", None)
+                os.environ.pop("BOG_AGENTS_BEDROCK_PROFILE", None)
+                result = _check_bedrock_thorough()
+
+        assert result is True, (
+            "auto mode should fall back to static creds on SSO failure"
+        )
+        # Static-fallback success clears the cache.
+        assert _BEDROCK_PROBE_CACHE == {}
