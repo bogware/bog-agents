@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.3...bog-agents-cli==0.7.4) (2026-04-30)
+
+
+### Bug Fixes
+
+* **bedrock:** add `auth_mode` toggle (`auto`/`sso`/`static`/`profile`/`iam`) plus auto-fallback from expired SSO to static credentials when `~/.aws/config` short-circuits the credential chain ([#54](https://github.com/bogware/bog-agents/issues/54)) ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+* **bedrock:** cache probe failures so a single expired SSO session no longer logs 20+ identical TokenRetrievalError tracebacks ([#53](https://github.com/bogware/bog-agents/issues/53)) ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+* **bedrock:** add `langchain-aws` + AWS credential probe to `--doctor`; pre-flight credential check in `-n` mode surfaces SSO-expired errors as a clean stderr line instead of a wrapped RemoteException ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+* **cli:** install atexit + signal handlers in `cli_main()` to emit terminal-restore sequences (disable mouse tracking, leave alternate screen, show cursor) so a Textual crash mid-launch no longer leaves SGR mouse-protocol garbage like `[<35;57;14M[` in the user's shell input line ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+
+
+### Catalog
+
+* refresh provider model lists against live docs (2026-04-30): Anthropic Opus 4.7 / Sonnet 4.6 / Haiku 4.5 + legacy 4.6/4.5/4.1; Bedrock `us.*` inference-profile IDs + base IDs for Anthropic + Amazon Nova (Premier/Pro/Lite/Micro) + Meta Llama 4 Maverick/Scout + 3.3 + Mistral Large 3 / Pixtral Large; Google Gemini 2.5 Pro/Flash/Flash-Lite + Gemini 3.1 preview family ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+
 ## [0.7.3](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.2...bog-agents-cli==0.7.3) (2026-04-29)
 
 

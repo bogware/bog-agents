@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.4](https://github.com/bogware/bog-agents/compare/bog-agents==0.7.3...bog-agents==0.7.4) (2026-04-30)
+
+
+### Bug Fixes
+
+* version-sync release alongside bog-agents-cli and bog-agents-daemon 0.7.4. No SDK code changes; published to keep linked versions in lockstep with the CLI's Bedrock auth_mode + auto-fallback fixes for [#54](https://github.com/bogware/bog-agents/issues/54) and the probe-cache fix for [#53](https://github.com/bogware/bog-agents/issues/53). ([fef8228](https://github.com/bogware/bog-agents/commit/fef82283e9fc07f5d286a26eea093e68d28cdb42))
+
 ## [0.7.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.7.2...bog-agents==0.7.3) (2026-04-29)
 
 
