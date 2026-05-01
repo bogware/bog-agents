@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents-daemon"
-version = "0.7.4"
+version = "0.7.5"
 description = "Ambient agent daemon for bog-agents — run agents on schedules, file-change triggers, webhooks, and git pushes"
 readme = "README.md"
 license = { text = "MIT" }

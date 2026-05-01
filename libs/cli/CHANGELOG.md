@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.4...bog-agents-cli==0.7.5) (2026-05-01)
+
+
+### Bug Fixes
+
+* **cli:** survive ReadTimeout from langgraph SSE stream ([#58](https://github.com/bogware/bog-agents/issues/58)) ([233ae54](https://github.com/bogware/bog-agents/commit/233ae54ef8aab22f2d25a7a5296c8822791146ed))
+
 ## [0.7.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.3...bog-agents-cli==0.7.4) (2026-04-30)
 
 
