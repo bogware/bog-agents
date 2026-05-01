@@ -57,9 +57,15 @@ BEDROCK_REGION_PREFIXES: tuple[str, ...] = (
 DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "anthropic": (
+            # Live API IDs from platform.claude.com/docs/en/docs/about-claude/models
+            # (fetched 2026-04-30). Latest first.
+            "claude-opus-4-7",
             "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "claude-opus-4-6",
             "claude-sonnet-4-5",
-            "claude-sonnet-4-20250514",
+            "claude-opus-4-5",
+            "claude-opus-4-1",
         ),
         "azure_openai": (
             "gpt-5.4",
@@ -68,20 +74,72 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "gpt-5.2",
             "gpt-5",
         ),
-        "bedrock_converse": (
-            "anthropic.claude-sonnet-4-20250514-v1:0",
+        "bedrock": (
+            # AWS Bedrock model IDs as of 2026-04-30. The us.* / eu.* /
+            # apac.* prefixes are cross-region inference profile IDs;
+            # use those when calling from a region that supports them.
+            # Anthropic (latest first)
+            "us.anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-7",
+            "us.anthropic.claude-sonnet-4-6",
+            "anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us.anthropic.claude-opus-4-6-v1",
+            "anthropic.claude-opus-4-6-v1",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us.anthropic.claude-opus-4-5-20251101-v1:0",
+            "anthropic.claude-opus-4-5-20251101-v1:0",
+            "us.anthropic.claude-opus-4-1-20250805-v1:0",
             "anthropic.claude-opus-4-1-20250805-v1:0",
-            "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            # Amazon Nova
+            "us.amazon.nova-premier-v1:0",
+            "us.amazon.nova-pro-v1:0",
+            "us.amazon.nova-lite-v1:0",
+            "us.amazon.nova-micro-v1:0",
+            # Meta Llama 4 + 3.3
+            "us.meta.llama4-maverick-17b-instruct-v1:0",
+            "us.meta.llama4-scout-17b-instruct-v1:0",
+            "us.meta.llama3-3-70b-instruct-v1:0",
+            # Mistral
+            "us.mistral.mistral-large-3-2411-v1:0",
+            "us.mistral.pixtral-large-2502-v1:0",
+        ),
+        # bedrock_converse is the modern wrapper; recommends the same IDs.
+        "bedrock_converse": (
+            "us.anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-7",
+            "us.anthropic.claude-sonnet-4-6",
+            "anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us.anthropic.claude-opus-4-6-v1",
+            "anthropic.claude-opus-4-6-v1",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us.amazon.nova-premier-v1:0",
+            "us.amazon.nova-pro-v1:0",
+            "us.amazon.nova-lite-v1:0",
+            "us.meta.llama4-maverick-17b-instruct-v1:0",
+            "us.mistral.mistral-large-3-2411-v1:0",
         ),
         "google_genai": (
+            # Live IDs from ai.google.dev/gemini-api/docs/models
+            # (fetched 2026-04-30). Preview models clearly marked.
             "gemini-2.5-pro",
-            "gemini-3-pro-preview",
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
         ),
         "google_vertexai": (
             "gemini-2.5-pro",
-            "gemini-3-pro-preview",
             "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
         ),
         "nvidia": (
             "nvidia/nemotron-3-super-120b-a12b",
@@ -100,7 +158,13 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
         ),
     }
 )
-"""Recommended model IDs, ordered from most to least preferred."""
+"""Recommended model IDs, ordered from most to least preferred.
+
+Bedrock entries include both base model IDs (``anthropic.claude-...``) and
+their cross-region inference profile counterparts (``us.anthropic.claude-...``).
+Use the regional profile when calling from a US-based region for higher
+quotas; the base IDs work in single-region calls.
+"""
 
 _OPENAI_GPT_5_4_FAMILY: dict[str, dict[str, Any]] = {
     "gpt-5.4": {

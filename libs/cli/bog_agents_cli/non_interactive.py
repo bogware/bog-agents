@@ -1163,21 +1163,39 @@ async def run_non_interactive(
         # lost over SSE. When running on Ollama, the most likely cause is a
         # model that does not support tool calls.
         err_str = str(e).lower()
+        err_name = type(e).__name__
+        spec_lower = (model_name or "").lower()
         is_tool_capability_error = (
-            type(e).__name__ == "RemoteException"
+            err_name == "RemoteException"
             and "'responseerror'" in err_str
             and "internal error" in err_str
-            and (model_name or "").lower().startswith("ollama:")
+            and spec_lower.startswith("ollama:")
+        )
+        is_bedrock_model = spec_lower.startswith(("bedrock:", "bedrock_converse:"))
+        is_bedrock_auth_error = is_bedrock_model and (
+            "tokenretrievalerror" in err_str
+            or "nocredentialserror" in err_str
+            or "expired" in err_str
+            or "sso" in err_str
+            or (err_name == "RemoteException" and "internal error" in err_str)
         )
         if is_tool_capability_error:
-            console.print(f"\n[red]Unexpected error ({type(e).__name__}): {e}[/red]")
+            console.print(f"\n[red]Unexpected error ({err_name}): {e}[/red]")
             console.print(
                 "[yellow]The selected Ollama model likely does not support tool calls. "
                 "Try a tool-capable model such as `qwen3-coder-next:latest` or `gpt-oss:20b`, "
                 "or run `bog-agents --doctor` to confirm Ollama is reachable.[/yellow]"
             )
+        elif is_bedrock_auth_error:
+            console.print(f"\n[red]Unexpected error ({err_name}): {e}[/red]")
+            console.print(
+                "[yellow]This looks like an AWS Bedrock credential issue. Try:\n"
+                "  - `aws sso login` to refresh an expired SSO session\n"
+                "  - `aws configure` if no credentials are set\n"
+                "  - `bog-agents --doctor` to verify the credential probe[/yellow]"
+            )
         else:
-            console.print(f"\n[red]Unexpected error ({type(e).__name__}): {e}[/red]")
+            console.print(f"\n[red]Unexpected error ({err_name}): {e}[/red]")
         return 1
     else:
         return 0

@@ -188,6 +188,33 @@ class ProviderConfig(TypedDict, total=False):
       Fastest but cannot detect expired credentials.
     """
 
+    auth_mode: str
+    """Bedrock-only — which credential source(s) to use, in priority order.
+
+    Supported values:
+    - `'auto'` (default): Try every source boto3 knows about. On
+      TokenRetrievalError from a configured-but-expired SSO session,
+      automatically retry with a static-credentials-only session so
+      fresh keys in `~/.aws/credentials` work even when the SSO config
+      in `~/.aws/config` is stale.
+    - `'sso'`: Force the SSO path. Fail loudly if the session is expired.
+    - `'static'`: Use only `~/.aws/credentials` (or AWS_ACCESS_KEY_ID /
+      AWS_SECRET_ACCESS_KEY env vars). Never touches SSO config — useful
+      when you have working static creds and want to ignore the SSO
+      session that boto3 would otherwise prefer.
+    - `'profile'`: Use the named AWS profile from the `aws_profile`
+      setting below. Both SSO-backed and static-creds profiles are honored.
+    - `'iam'`: Force IAM instance/role credentials (EC2/ECS/Lambda).
+    """
+
+    aws_profile: str
+    """Bedrock-only — the named AWS profile when `auth_mode='profile'`.
+
+    Distinct from the ``profile`` key above (which is the model-runtime
+    profile-overrides dict). Keep these separate to avoid a TOML key
+    collision; the boto3 profile lives at ``aws_profile`` in config.
+    """
+
 
 DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
 """Directory for user-level Bog Agents configuration (`~/.bog-agents`)."""
@@ -790,34 +817,289 @@ def _has_bedrock_credentials() -> bool:
     return _check_bedrock_thorough()
 
 
+# Negative-cache for the bedrock credential probe. The langchain
+# auto-detect loop and the model resolver each call _has_bedrock_credentials
+# many times in succession; without caching, a single expired SSO session
+# produces 30+ identical TokenRetrievalError tracebacks in the log file
+# (issue #53). The cache key is the boto3 credential method (env vs
+# profile vs sso) — when that changes mid-process (extremely rare) we'd
+# stay stale for at most one probe, which is acceptable.
+_BEDROCK_PROBE_CACHE: dict[str, tuple[bool, str]] = {}
+
+
+def _bedrock_auth_mode() -> tuple[str, str]:
+    """Resolve the Bedrock auth-mode + profile name from config / env.
+
+    Precedence (highest first):
+      1. ``BOG_AGENTS_BEDROCK_AUTH_MODE`` env var
+      2. ``[models.providers.bedrock] auth_mode`` in config.toml
+      3. ``[models.providers.bedrock_converse] auth_mode`` (legacy)
+      4. ``"auto"`` default
+
+    The profile name has the same precedence chain via the env var
+    ``BOG_AGENTS_BEDROCK_PROFILE`` and the ``profile`` config key, then
+    finally ``AWS_PROFILE`` from the environment as a sensible default.
+
+    Returns:
+        (mode, profile_name) — mode is one of the documented strings;
+        profile_name is the empty string when not configured.
+    """
+    env_mode = os.environ.get("BOG_AGENTS_BEDROCK_AUTH_MODE", "").strip().lower()
+    if env_mode:
+        mode = env_mode
+    else:
+        try:
+            cfg = ModelConfig.load()
+        except (OSError, ValueError):
+            cfg = None
+        bedrock_cfg: Mapping[str, Any] = {}
+        if cfg is not None:
+            bedrock_cfg = cfg.providers.get("bedrock_converse") or cfg.providers.get(
+                "bedrock", {}
+            )
+        mode = (bedrock_cfg.get("auth_mode") or "auto").strip().lower()
+
+    env_profile = os.environ.get("BOG_AGENTS_BEDROCK_PROFILE", "").strip()
+    if env_profile:
+        profile = env_profile
+    else:
+        try:
+            cfg = ModelConfig.load()
+        except (OSError, ValueError):
+            cfg = None
+        bedrock_cfg: Mapping[str, Any] = {}
+        if cfg is not None:
+            bedrock_cfg = cfg.providers.get("bedrock_converse") or cfg.providers.get(
+                "bedrock", {}
+            )
+        profile = (
+            bedrock_cfg.get("aws_profile") or os.environ.get("AWS_PROFILE", "")
+        ).strip()
+
+    valid = {"auto", "sso", "static", "profile", "iam"}
+    if mode not in valid:
+        logger.warning("Unknown bedrock auth_mode '%s'; falling back to 'auto'", mode)
+        mode = "auto"
+    return mode, profile
+
+
+def _build_static_creds_session(profile: str = "") -> Any:  # noqa: ANN401 — boto3.Session is dynamically typed
+    """Build a boto3 Session that uses only ~/.aws/credentials (and env vars).
+
+    Constructs a botocore Session with the SSO providers explicitly
+    removed from the credential chain, so an expired SSO config in
+    ~/.aws/config can't short-circuit the lookup. Used as the fallback
+    leg of the ``auto`` auth mode when an SSO probe raises
+    ``TokenRetrievalError``.
+
+    Args:
+        profile: Optional named profile. Empty string = default profile.
+
+    Returns:
+        A boto3.Session bound to a credentials-file-only botocore Session.
+    """
+    import boto3  # type: ignore[import-untyped]
+    from botocore.session import (
+        Session as BotocoreSession,  # type: ignore[import-untyped]
+    )
+
+    botocore_session = BotocoreSession()
+    if profile:
+        botocore_session.set_config_variable("profile", profile)
+    # Drop SSO providers from the chain — keep env vars + ~/.aws/credentials
+    # (the "shared-credentials-file" provider) + IAM. The names below are
+    # the canonical botocore provider IDs.
+    component = botocore_session.get_component("credential_provider")
+    for sso_provider in ("sso", "sso-token"):
+        try:
+            component.remove(sso_provider)
+        except (KeyError, ValueError):
+            pass
+    return boto3.Session(botocore_session=botocore_session)
+
+
+def _build_bedrock_session(mode: str, profile: str) -> Any:  # noqa: ANN401 — boto3.Session is dynamically typed
+    """Build the boto3 Session that the Bedrock probe + runtime should use.
+
+    Args:
+        mode: One of ``'auto'``, ``'sso'``, ``'static'``, ``'profile'``,
+            ``'iam'`` — see ``_bedrock_auth_mode`` docs.
+        profile: AWS profile name (used for ``'profile'`` mode and as a
+            hint for ``'static'`` / ``'sso'``).
+
+    Returns:
+        A boto3.Session configured per the requested auth mode. Caller is
+        responsible for catching credential-resolution exceptions.
+
+    Raises:
+        ValueError: When ``mode='profile'`` is set but no profile name
+            is provided via config or env var.
+    """
+    import boto3  # type: ignore[import-untyped]
+
+    if mode == "static":
+        return _build_static_creds_session(profile)
+    if mode == "sso":
+        if profile:
+            return boto3.Session(profile_name=profile)
+        return boto3.Session()
+    if mode == "profile":
+        if not profile:
+            msg = (
+                "auth_mode='profile' requires a profile name — set "
+                "[models.providers.bedrock] profile = ... in config.toml or "
+                "BOG_AGENTS_BEDROCK_PROFILE in the environment."
+            )
+            raise ValueError(msg)
+        return boto3.Session(profile_name=profile)
+    if mode == "iam":
+        # Disable env-var + shared-credentials-file + SSO providers so
+        # only the IAM/instance-metadata provider runs.
+        from botocore.session import (
+            Session as BotocoreSession,  # type: ignore[import-untyped]
+        )
+
+        botocore_session = BotocoreSession()
+        component = botocore_session.get_component("credential_provider")
+        for prov in (
+            "env",
+            "shared-credentials-file",
+            "sso",
+            "sso-token",
+            "assume-role",
+        ):
+            try:
+                component.remove(prov)
+            except (KeyError, ValueError):
+                pass
+        return boto3.Session(botocore_session=botocore_session)
+    # auto — default boto3 chain
+    if profile:
+        return boto3.Session(profile_name=profile)
+    return boto3.Session()
+
+
+def _classify_bedrock_probe_failure(exc: BaseException) -> str:
+    """Map a boto3 exception to a short stable classification string.
+
+    Used as the cache key + a hint for callers that want to know *why*
+    the probe failed without parsing the exception type themselves.
+    """
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if name == "TokenRetrievalError" or "token has expired" in msg or "sso" in msg:
+        return "sso-expired"
+    if name == "NoCredentialsError" or "unable to locate credentials" in msg:
+        return "no-credentials"
+    return f"other:{name}"
+
+
 def _check_bedrock_thorough() -> bool:
     """Resolve credentials via boto3 and verify the access key is non-empty.
 
-    This catches expired SSO tokens and misconfigured profiles without
-    making any network calls — it only checks that boto3 can produce a
-    frozen credential set with a non-empty access key.
+    Catches expired SSO tokens and misconfigured profiles without making
+    any network calls — it only checks that boto3 can produce a frozen
+    credential set with a non-empty access key.
+
+    The first failure of a given kind (sso-expired, no-credentials, etc.)
+    is logged at DEBUG level *with* its traceback for diagnostic value;
+    subsequent failures of the same kind log a one-line summary only.
+    This keeps the log file readable when a user runs with an expired
+    SSO session (issue #53 — a single ``bog-agents`` invocation
+    produces 20+ identical 50-line stack traces otherwise).
 
     Returns:
         True if boto3 resolves valid-looking credentials.
     """
-    try:
-        import boto3  # type: ignore[import-untyped]
+    mode, profile = _bedrock_auth_mode()
 
-        session = boto3.Session()
-        creds = session.get_credentials()
-        if creds is None:
-            logger.debug("boto3 returned no credentials")
+    def _probe(session_factory: Any, label: str) -> bool | None:  # noqa: ANN401
+        """Run the probe with ``session_factory()``.
+
+        Returns ``True`` on valid creds, ``False`` on no-creds (caller
+        should still try fallback), ``None`` on fatal error (cached).
+        """
+        try:
+            session = session_factory()
+            creds = session.get_credentials()
+            if creds is None:
+                logger.debug("boto3 returned no credentials (%s)", label)
+                return False
+            frozen = creds.get_frozen_credentials()
+            has_key = bool(frozen.access_key)
+            if has_key:
+                _BEDROCK_PROBE_CACHE.clear()
+                logger.debug(
+                    "boto3 credentials resolved (mode=%s%s, source=%s)",
+                    mode,
+                    f" profile={profile}" if profile else "",
+                    label,
+                )
+                return True
+            logger.debug(
+                "boto3 credentials resolved but access_key is empty (%s)", label
+            )
             return False
-        frozen = creds.get_frozen_credentials()
-        has_key = bool(frozen.access_key)
-        if not has_key:
-            logger.debug("boto3 credentials resolved but access_key is empty")
-        else:
-            logger.debug("boto3 credentials resolved successfully (thorough check)")
-        return has_key
-    except Exception:
-        logger.debug("boto3 credential resolution failed", exc_info=True)
+        except Exception as exc:
+            kind = _classify_bedrock_probe_failure(exc)
+            cached = _BEDROCK_PROBE_CACHE.get(f"{label}:{kind}")
+            if cached is None:
+                logger.debug(
+                    "boto3 credential resolution failed (%s, %s)",
+                    label,
+                    kind,
+                    exc_info=True,
+                )
+                _BEDROCK_PROBE_CACHE[f"{label}:{kind}"] = (
+                    False,
+                    f"{type(exc).__name__}: {exc}",
+                )
+            else:
+                logger.debug(
+                    "boto3 credential resolution failed (%s, %s; cached)", label, kind
+                )
+            # Auto-mode: a TokenRetrievalError on the SSO leg should not be
+            # fatal — let the caller try the static-creds fallback.
+            if mode == "auto" and kind == "sso-expired" and label == "default-chain":
+                return False
+            return None
+
+    try:
+        import boto3  # noqa: F401 — only here to surface ImportError cleanly
+    except ImportError:
+        logger.debug("boto3 not installed; cannot probe Bedrock credentials")
         return False
+
+    if mode == "auto":
+        # Try the default boto3 chain first. If SSO is expired, try the
+        # static-creds-only chain so fresh ~/.aws/credentials keys work.
+        result = _probe(
+            lambda: _build_bedrock_session("auto", profile), "default-chain"
+        )
+        if result:
+            return True
+        if result is False:
+            # The default chain didn't surface valid creds — fall back to
+            # static-only. This is the issue-#54 fix: an expired SSO
+            # session in ~/.aws/config short-circuits the lookup before
+            # boto3 ever reads ~/.aws/credentials.
+            logger.debug(
+                "Default credential chain came up empty; trying static-creds fallback"
+            )
+            result = _probe(
+                lambda: _build_static_creds_session(profile), "static-fallback"
+            )
+            return bool(result)
+        # result is None — fatal (cached); the SSO error already surfaced
+        # via the cache. Try the static fallback as a last resort so a
+        # user with both expired SSO AND fresh static keys still works.
+        logger.debug("SSO/default chain failed fatally; trying static-creds fallback")
+        result = _probe(lambda: _build_static_creds_session(profile), "static-fallback")
+        return bool(result)
+
+    # Forced mode — single attempt, no fallback.
+    result = _probe(lambda: _build_bedrock_session(mode, profile), mode)
+    return bool(result)
 
 
 def _check_bedrock_boto3() -> bool:
@@ -837,8 +1119,14 @@ def _check_bedrock_boto3() -> bool:
         found = creds is not None
         logger.debug("boto3 credential check: found=%s", found)
         return found
-    except Exception:
-        logger.debug("boto3 credential check failed", exc_info=True)
+    except Exception as exc:
+        kind = _classify_bedrock_probe_failure(exc)
+        cached = _BEDROCK_PROBE_CACHE.get(f"boto3:{kind}")
+        if cached is None:
+            logger.debug("boto3 credential check failed (%s)", kind, exc_info=True)
+            _BEDROCK_PROBE_CACHE[f"boto3:{kind}"] = (False, str(exc))
+        else:
+            logger.debug("boto3 credential check failed (%s; cached)", kind)
         return False
 
 
@@ -1825,6 +2113,79 @@ def save_bedrock_credential_check(mode: str, config_path: Path | None = None) ->
             raise
     except (OSError, tomllib.TOMLDecodeError):
         logger.exception("Could not save Bedrock credential check mode")
+        return False
+    else:
+        global _default_config_cache  # noqa: PLW0603
+        _default_config_cache = None
+        return True
+
+
+def save_bedrock_auth_mode(
+    mode: str,
+    profile: str | None = None,
+    config_path: Path | None = None,
+) -> bool:
+    """Persist the Bedrock auth-mode + optional profile to config.toml.
+
+    Writes ``[models.providers.bedrock].auth_mode`` and (optionally)
+    ``[models.providers.bedrock].profile``. The next ``bog-agents``
+    invocation will use the configured mode without any env vars.
+
+    Args:
+        mode: One of ``'auto'``, ``'sso'``, ``'static'``, ``'profile'``,
+            ``'iam'``.
+        profile: Optional AWS profile name. When None, the ``profile``
+            key is left unchanged. When the empty string, the key is
+            removed.
+        config_path: Path to config file. Defaults to
+            ``~/.bog-agents/config.toml``.
+
+    Returns:
+        True if save succeeded, False on I/O error.
+
+    Raises:
+        ValueError: If *mode* is not one of the supported strings.
+    """
+    valid_modes = {"auto", "sso", "static", "profile", "iam"}
+    if mode not in valid_modes:
+        msg = f"invalid auth_mode '{mode}'; must be one of {sorted(valid_modes)}"
+        raise ValueError(msg)
+
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+        else:
+            data = {}
+
+        bedrock_section = (
+            data.setdefault("models", {})
+            .setdefault("providers", {})
+            .setdefault("bedrock", {})
+        )
+        bedrock_section["auth_mode"] = mode
+        if profile is not None:
+            if profile:
+                bedrock_section["aws_profile"] = profile
+            else:
+                bedrock_section.pop("aws_profile", None)
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.exception("Could not save Bedrock auth mode")
         return False
     else:
         global _default_config_cache  # noqa: PLW0603

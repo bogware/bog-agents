@@ -4,6 +4,80 @@ All notable changes to bog-agents (SDK), bog-agents-cli, and
 bog-agents-daemon are documented here. The three packages are released
 together with synchronised version numbers.
 
+## [0.7.4] — 2026-04-30
+
+Targeted patch release closing two reported Bedrock issues plus a
+catalog refresh against live AWS / Anthropic / Google docs.
+
+### Fixed
+
+- **GH #53 — Bedrock probe flooded the log with TokenRetrievalError
+  tracebacks.** A single `bog-agents` invocation produced 20+
+  identical 50-line stack traces when the AWS SSO session was expired,
+  because the langchain auto-detect loop calls `_has_bedrock_credentials`
+  many times back-to-back. New negative-result cache in
+  `_check_bedrock_thorough` logs the first failure of each kind with
+  its traceback and emits a one-liner thereafter; a successful probe
+  clears the cache so a freshly-renewed SSO session is detected
+  without restarting the process.
+
+- **GH #54 — Bedrock failed entirely when SSO config was expired even
+  though `~/.aws/credentials` had fresh static keys.** boto3 walks
+  the credential chain in order — when `~/.aws/config` declares a
+  `sso_session = X` the SSO provider short-circuits the lookup
+  before ever reading `~/.aws/credentials`, so `TokenRetrievalError`
+  was the only outcome. The new `auth_mode` setting controls which
+  source(s) are tried; the default `'auto'` mode now catches the
+  SSO failure and **automatically retries with a static-credentials-
+  only session** (SSO providers explicitly removed from the chain).
+  Users with both expired SSO and fresh static keys now Just Work.
+
+### Added
+
+- **`auth_mode` for Bedrock**, with five values:
+  - `auto` (default) — try every source; auto-fall-back from expired
+    SSO to static credentials.
+  - `sso` — force the SSO path; fail loudly when expired.
+  - `static` — use only `~/.aws/credentials` (or
+    `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`).
+  - `profile` — use the named AWS profile from the new `aws_profile`
+    config key.
+  - `iam` — force IAM instance/role credentials (EC2/ECS/Lambda).
+
+  Configurable via `[models.providers.bedrock]` in
+  `~/.bog-agents/config.toml`, or via `BOG_AGENTS_BEDROCK_AUTH_MODE`
+  / `BOG_AGENTS_BEDROCK_PROFILE` env vars (env wins). New helper
+  `save_bedrock_auth_mode(mode, profile)` for programmatic config.
+
+- **Provider catalog refreshed against live docs (2026-04-30):**
+  - **Anthropic:** Claude Opus 4.7, Sonnet 4.6, Haiku 4.5 (current);
+    Opus 4.6, Sonnet 4.5, Opus 4.5, Opus 4.1 (legacy still available).
+  - **Bedrock:** added inference-profile-prefixed IDs
+    (`us.anthropic.claude-opus-4-7`, `us.anthropic.claude-sonnet-4-6`,
+    etc.) plus base IDs for Anthropic, Amazon Nova
+    (Premier/Pro/Lite/Micro), Meta Llama 4 Maverick + Scout + 3.3 70B,
+    and Mistral Large 3 / Pixtral Large.
+  - **Google:** Gemini 2.5 Pro / Flash / Flash-Lite GA, plus the
+    Gemini 3 preview family (`gemini-3.1-pro-preview`,
+    `gemini-3-flash-preview`, `gemini-3.1-flash-lite-preview`).
+
+### Tests
+
+- 5 new tests in `TestBedrockProbeCache` and `TestBedrockAuthMode`:
+  - probe-cache classification (sso-expired, no-credentials)
+  - 5x failure → 1 traceback (regression for #53)
+  - successful probe clears the cache
+  - default auth mode is `auto`
+  - env var overrides config
+  - `save_bedrock_auth_mode` round-trip
+  - `save_bedrock_auth_mode` rejects invalid modes
+  - **auto-fallback from expired SSO to static creds** (regression for #54)
+
+Full CI matrix (Windows variant): SDK 1226 passed, CLI 2685 passed,
+daemon 95 passed. Lint + ty clean.
+
+
+
 ## [0.7.3] — 2026-04-29
 
 This release lands ~20 fixes accumulated during multi-day validation
