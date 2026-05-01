@@ -1816,6 +1816,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 assert screen._confirming_delete is False
 
                 await pilot.press("ctrl+d")
@@ -1835,6 +1836,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("ctrl+d")
                 await pilot.pause()
@@ -1853,6 +1855,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("ctrl+d")
                 await pilot.pause()
@@ -1886,6 +1889,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("down")
                 await pilot.pause()
@@ -1964,6 +1968,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 last_index = len(screen._filtered_threads) - 1
 
                 for _ in range(last_index):
@@ -2002,6 +2007,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 original_count = len(screen._filtered_threads)
 
                 await pilot.press("ctrl+d")
