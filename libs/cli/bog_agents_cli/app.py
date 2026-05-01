@@ -10091,6 +10091,14 @@ class BogAgentsApp(App):
                 and "internal error" in err_str
                 and is_bedrock_model
             )
+            # Network/provider read timeout — distinct from auth errors.
+            # The langgraph server forwards an upstream HTTP read timeout as
+            # `RemoteException({'error': 'ReadTimeoutError', ...})`. The
+            # thread state on the server is preserved, so the user can just
+            # send another message to continue the turn.
+            is_read_timeout = (
+                err_name == "RemoteException" and "readtimeouterror" in err_str
+            ) or "readtimeout" in err_name.lower()
             if is_tool_capability_error:
                 await self._mount_message(
                     ErrorMessage(
@@ -10099,6 +10107,20 @@ class BogAgentsApp(App):
                         "  - `/model` to switch to a tool-capable model\n"
                         "  - For local Ollama, prefer coding/chat models with tool support such as `qwen3-coder-next:latest`\n"
                         "  - Use `--doctor` to confirm Ollama is reachable and the selected model is available"
+                    )
+                )
+            elif is_read_timeout:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Agent error: {e}\n\n"
+                        "The model provider stalled past the read deadline. "
+                        "The thread state on the server is preserved — send "
+                        "another message (or just press Enter on a blank line "
+                        "to retry the last turn) to continue.\n\n"
+                        "If this keeps happening:\n"
+                        "  - Set `BOG_AGENTS_REMOTE_READ_TIMEOUT=3600` (or `none`) "
+                        "to give long turns more headroom\n"
+                        "  - `/model` to try a faster provider"
                     )
                 )
             elif is_auth_error:

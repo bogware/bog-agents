@@ -82,6 +82,32 @@ async def _wait_for_widget(pilot: Any, query_fn: Any) -> Any:  # noqa: ANN401
     return query_fn()
 
 
+async def _wait_for_threads_loaded(
+    pilot: Any,  # noqa: ANN401
+    screen: Any,  # noqa: ANN401
+    expected_count: int,
+) -> None:
+    """Poll up to 5 s until `screen._filtered_threads` has `expected_count` items.
+
+    The thread list is populated by a background `run_worker(_load_threads)`
+    that finishes asynchronously. On Linux Python 3.12 two `pilot.pause()`
+    calls are not always enough to drive the worker to completion, so this
+    helper polls until the list reflects the patched data.
+    """
+    import time
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if len(screen._filtered_threads) == expected_count:
+            return
+        await pilot.pause()
+    msg = (
+        f"Threads not loaded after 5s: expected {expected_count}, "
+        f"got {len(screen._filtered_threads)}"
+    )
+    raise AssertionError(msg)
+
+
 def _patch_columns(columns: dict[str, bool] | None = None) -> Any:  # noqa: ANN401
     """Patch thread config loaders for tests."""
     import contextlib
@@ -1790,6 +1816,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 assert screen._confirming_delete is False
 
                 await pilot.press("ctrl+d")
@@ -1809,6 +1836,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("ctrl+d")
                 await pilot.pause()
@@ -1827,6 +1855,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("ctrl+d")
                 await pilot.pause()
@@ -1860,6 +1889,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
 
                 await pilot.press("down")
                 await pilot.pause()
@@ -1905,7 +1935,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
-                assert len(screen._filtered_threads) == 1
+                await _wait_for_threads_loaded(pilot, screen, expected_count=1)
 
                 await pilot.press("ctrl+d")
                 await pilot.pause()
@@ -1938,6 +1968,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 last_index = len(screen._filtered_threads) - 1
 
                 for _ in range(last_index):
@@ -1976,6 +2007,7 @@ class TestThreadSelectorDelete:
 
                 screen = app.screen
                 assert isinstance(screen, ThreadSelectorScreen)
+                await _wait_for_threads_loaded(pilot, screen, expected_count=3)
                 original_count = len(screen._filtered_threads)
 
                 await pilot.press("ctrl+d")

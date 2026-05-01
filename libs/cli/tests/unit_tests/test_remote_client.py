@@ -563,12 +563,13 @@ class TestRemoteAgentInit:
         )
         with patch("langgraph.pregel.remote.RemoteGraph") as mock_cls:
             agent._get_graph()
-            mock_cls.assert_called_once_with(
-                "agent",
-                url="http://localhost:8123",
-                api_key="sk-test-123",
-                headers=None,
-            )
+            args, kwargs = mock_cls.call_args
+            assert args == ("agent",)
+            assert kwargs["url"] == "http://localhost:8123"
+            assert kwargs["api_key"] == "sk-test-123"
+            assert kwargs["headers"] is None
+            assert kwargs["client"] is not None
+            assert kwargs["sync_client"] is not None
 
     def test_headers_passed_to_remote_graph(self) -> None:
         """Headers kwarg is forwarded to RemoteGraph."""
@@ -580,24 +581,17 @@ class TestRemoteAgentInit:
         )
         with patch("langgraph.pregel.remote.RemoteGraph") as mock_cls:
             agent._get_graph()
-            mock_cls.assert_called_once_with(
-                "agent",
-                url="http://localhost:8123",
-                api_key=None,
-                headers=hdrs,
-            )
+            _, kwargs = mock_cls.call_args
+            assert kwargs["headers"] == hdrs
 
     def test_defaults_no_auth(self) -> None:
         """Default construction passes None for api_key and headers."""
         agent = RemoteAgent(url="http://localhost:8123")
         with patch("langgraph.pregel.remote.RemoteGraph") as mock_cls:
             agent._get_graph()
-            mock_cls.assert_called_once_with(
-                "agent",
-                url="http://localhost:8123",
-                api_key=None,
-                headers=None,
-            )
+            _, kwargs = mock_cls.call_args
+            assert kwargs["api_key"] is None
+            assert kwargs["headers"] is None
 
     def test_graph_lazy_singleton(self) -> None:
         """_get_graph creates RemoteGraph once and caches it."""
@@ -608,8 +602,151 @@ class TestRemoteAgentInit:
             assert g1 is g2
             mock_cls.assert_called_once()
 
+    def test_extended_read_timeout_applied_to_clients(self) -> None:
+        """Default 1800s read timeout is configured on the underlying httpx clients.
+
+        The langgraph_sdk default is 300s; we extend it so /review-style turns
+        don't get killed mid-stream by the default deadline.
+        """
+        agent = RemoteAgent(url="http://localhost:8123")
+        with (
+            patch("langgraph.pregel.remote.RemoteGraph"),
+            patch("langgraph_sdk.client.get_client") as mock_async,
+            patch("langgraph_sdk.client.get_sync_client") as mock_sync,
+        ):
+            agent._get_graph()
+            for mock in (mock_async, mock_sync):
+                _, kwargs = mock.call_args
+                timeout = kwargs.get("timeout")
+                assert timeout is not None
+                assert timeout.read == 1800.0
+
+    def test_read_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """BOG_AGENTS_REMOTE_READ_TIMEOUT overrides the default."""
+        monkeypatch.setenv("BOG_AGENTS_REMOTE_READ_TIMEOUT", "60")
+        agent = RemoteAgent(url="http://localhost:8123")
+        with (
+            patch("langgraph.pregel.remote.RemoteGraph"),
+            patch("langgraph_sdk.client.get_client") as mock_async,
+            patch("langgraph_sdk.client.get_sync_client"),
+        ):
+            agent._get_graph()
+            _, kwargs = mock_async.call_args
+            assert kwargs["timeout"].read == 60.0
+
+    def test_read_timeout_env_disable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`none` in BOG_AGENTS_REMOTE_READ_TIMEOUT disables the deadline."""
+        monkeypatch.setenv("BOG_AGENTS_REMOTE_READ_TIMEOUT", "none")
+        agent = RemoteAgent(url="http://localhost:8123")
+        with (
+            patch("langgraph.pregel.remote.RemoteGraph"),
+            patch("langgraph_sdk.client.get_client") as mock_async,
+            patch("langgraph_sdk.client.get_sync_client"),
+        ):
+            agent._get_graph()
+            _, kwargs = mock_async.call_args
+            assert kwargs["timeout"].read is None
+
 
 class TestRemoteAgentWithConfig:
     def test_returns_self(self) -> None:
         agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
         assert agent.with_config({"configurable": {}}) is agent
+
+
+class TestRemoteAgentTransientRetry:
+    """Pre-first-event retry on ReadTimeoutError / transient SSE errors.
+
+    Once events have flowed, retrying is unsafe; the stream must propagate.
+    Before first event, we re-issue the call up to `_PRE_FIRST_EVENT_RETRIES`
+    times since the server hasn't begun mutating thread state.
+    """
+
+    @pytest.mark.asyncio
+    async def test_retries_then_succeeds_when_first_attempt_times_out(self) -> None:
+        from bog_agents_cli import remote_client as rc
+
+        calls: list[int] = []
+
+        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+            calls.append(1)
+            if len(calls) == 1:
+                msg = "ReadTimeoutError mid-handshake"
+                raise TimeoutError(msg)
+            yield ((), "updates", {"ok": True})
+
+        config = {"configurable": {"thread_id": _TEST_THREAD_ID}}
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        mock_graph = MagicMock()
+        mock_graph.astream = _gen
+        agent._graph = mock_graph
+
+        with patch.object(rc.asyncio, "sleep", AsyncMock()):
+            events = [chunk async for chunk in agent.astream({}, config=config)]
+
+        assert len(calls) == 2
+        assert events == [((), "updates", {"ok": True})]
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_after_first_event_emitted(self) -> None:
+        from bog_agents_cli import remote_client as rc
+
+        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+            yield ((), "updates", {"started": True})
+            msg = "ReadTimeoutError partway through"
+            raise TimeoutError(msg)
+
+        config = {"configurable": {"thread_id": _TEST_THREAD_ID}}
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        mock_graph = MagicMock()
+        mock_graph.astream = _gen
+        agent._graph = mock_graph
+
+        with (
+            patch.object(rc.asyncio, "sleep", AsyncMock()),
+            pytest.raises(TimeoutError),
+        ):
+            async for _ in agent.astream({}, config=config):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_non_transient_error_propagates_immediately(self) -> None:
+        from bog_agents_cli import remote_client as rc
+
+        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+            msg = "bad input"
+            raise ValueError(msg)
+            yield  # pragma: no cover  # makes this a generator
+
+        config = {"configurable": {"thread_id": _TEST_THREAD_ID}}
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        mock_graph = MagicMock()
+        mock_graph.astream = _gen
+        agent._graph = mock_graph
+
+        with (
+            patch.object(rc.asyncio, "sleep", AsyncMock()),
+            pytest.raises(ValueError, match="bad input"),
+        ):
+            async for _ in agent.astream({}, config=config):
+                pass
+
+
+class TestTransientErrorClassifier:
+    def test_readtimeout_is_transient(self) -> None:
+        from bog_agents_cli.remote_client import _is_transient_stream_error
+
+        assert _is_transient_stream_error(TimeoutError("ReadTimeoutError sock"))
+        assert _is_transient_stream_error(
+            RuntimeError("RemoteException: ReadTimeoutError")
+        )
+
+    def test_connecterror_is_transient(self) -> None:
+        from bog_agents_cli.remote_client import _is_transient_stream_error
+
+        assert _is_transient_stream_error(ConnectionError("network blip"))
+
+    def test_value_error_is_not_transient(self) -> None:
+        from bog_agents_cli.remote_client import _is_transient_stream_error
+
+        assert not _is_transient_stream_error(ValueError("schema mismatch"))
