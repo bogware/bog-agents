@@ -44,9 +44,9 @@ the introductions in about thirty seconds.
 
 ```bash
 bog-agents -M claude-sonnet-4-6
-bog-agents -M gpt-4o
-bog-agents -M ollama:llama3              # local, free
-bog-agents -M bedrock_converse:anthropic.claude-sonnet-4-6
+bog-agents -M openai:gpt-5.4
+bog-agents -M ollama:gpt-oss:20b                          # local, free, tool-capable
+bog-agents -M bedrock_converse:us.anthropic.claude-sonnet-4-6
 ```
 
 Something feeling off? Ask it.
@@ -319,15 +319,15 @@ Use `provider:model` format. Any LangChain-compatible chat model works.
 | Provider | Extra | Example |
 |----------|--------------|---------|
 | Anthropic | `anthropic` | `anthropic:claude-sonnet-4-6` |
-| OpenAI | *(included)* | `openai:gpt-4o` |
-| AWS Bedrock | `bedrock` | `bedrock_converse:anthropic.claude-sonnet-4-6` |
+| OpenAI | *(included)* | `openai:gpt-5.4` |
+| AWS Bedrock | `bedrock` | `bedrock_converse:us.anthropic.claude-sonnet-4-6` |
 | Google AI | `google-genai` | `google_genai:gemini-2.5-pro` |
 | Vertex AI | `vertexai` | `google_vertexai:gemini-2.5-pro` |
-| Ollama | `ollama` | `ollama:llama3` |
+| Ollama | `ollama` | `ollama:gpt-oss:20b` |
 | Groq | `groq` | `groq:llama-3.3-70b` |
 | DeepSeek | `deepseek` | `deepseek:deepseek-chat` |
 | Fireworks | `fireworks` | `fireworks:llama-v3p3-70b` |
-| Mistral | `mistralai` | `mistralai:mistral-large` |
+| Mistral | `mistralai` | `mistralai:mistral-large-3-2411` |
 | NVIDIA | `nvidia` | `nvidia:nemotron-70b` |
 | OpenRouter | `openrouter` | `openrouter:meta-llama/llama-3` |
 | Perplexity | `perplexity` | `perplexity:sonar-pro` |
@@ -336,6 +336,26 @@ Use `provider:model` format. Any LangChain-compatible chat model works.
 | Together | *(via litellm)* | `litellm:together/llama-3-70b` |
 | HuggingFace | `huggingface` | `huggingface:meta-llama/Llama-3` |
 | Azure OpenAI | *(via openai)* | `azure_openai:gpt-4o` |
+
+### AWS Bedrock: pick how you authenticate
+
+boto3's credential chain stops at the first config it sees. If `~/.aws/config`
+declares an SSO session that's expired but `~/.aws/credentials` has fresh static
+keys, the SSO leg short-circuits and the static keys never get a turn. The CLI
+handles this in `auto` mode (default) by retrying with a credentials-file-only
+session when the SSO probe fails.
+
+Force a specific path when you need to. Either set
+`BOG_AGENTS_BEDROCK_AUTH_MODE` in the env, or write to `~/.bog-agents/config.toml`:
+
+```toml
+[models.providers.bedrock]
+auth_mode = "static"            # auto | sso | static | profile | iam
+aws_profile = "dev"             # only when auth_mode = "profile"
+```
+
+`bog-agents --doctor` shows you which mode resolved and whether the credentials
+came back valid. New in 0.7.4.
 
 ### Local Ollama: which model to use
 
@@ -417,6 +437,9 @@ Commands:
   reset                         Reset an agent's prompt
   skills                        Manage skills (list/create/info/delete)
   threads                       Manage threads (list/delete)
+  daemon                        Manage the ambient daemon (start/stop/jobs/...)
+  verify                        Run typecheck + lint + tests; write verification_summary.md
+  call MESSAGE                  Talk to a running --serve instance (thin HTTP client)
 
 Core:
   -M, --model MODEL             Model to use

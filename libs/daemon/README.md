@@ -1,11 +1,15 @@
 # bog-agents-daemon
 
-Ambient agent daemon for [Bog Agents](https://github.com/bogware/bog-agents). Run AI agents on schedules, file-change triggers, webhooks, and git pushes — without keeping a terminal open.
+Quiet ambient runner for [`bog-agents`](https://github.com/bogware/bog-agents). Schedules. File watches. Inbound webhooks. Git pushes. Sits in the background, fires the agent when something happens, writes the result wherever you point it.
+
+No terminal needed. No hand-holding. Goes the distance.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
 [![License](https://img.shields.io/pypi/l/bog-agents-daemon)](https://opensource.org/licenses/MIT)
 
-Five trigger types. Seven output targets. A small authenticated REST API. Cross-platform (POSIX + Windows), HMAC-validated inbound webhooks, and `os.fsync()`-durable job persistence so a hard kill never loses a freshly-created job.
+Five trigger types. Seven output targets. A small authenticated REST API. POSIX
+and Windows. HMAC-validated inbound webhooks. `os.fsync()`-durable job
+persistence so a hard kill never loses a freshly-created job.
 
 **Triggers:** `cron` · `interval` · `file_change` · `webhook` · `git_push`
 **Outputs:** `log` · `stdout` · `file` · `slack` · `webhook` · `email` · `github_comment`
@@ -94,7 +98,14 @@ bog-agents daemon install
 
 ## REST API
 
-The daemon exposes a REST API on `http://127.0.0.1:7391` (localhost only). All endpoints except `/ready` require the `X-Daemon-Token` header.
+The daemon exposes a REST API on `http://127.0.0.1:7391` (localhost only).
+Most endpoints require the `X-Daemon-Token` header. Two exceptions:
+
+- `/ready` — readiness probe, no auth.
+- `/webhooks/{path}` — inbound from external services. Auth is the per-trigger
+  `webhook_secret` HMAC over `X-Hub-Signature-256` (timing-safe). The daemon
+  token also works on `/webhooks/{path}` if you happen to have it; useful for
+  local CLI tests.
 
 ```bash
 TOKEN=$(cat ~/.bog-agents/daemon/token)
@@ -104,6 +115,9 @@ curl -H "X-Daemon-Token: $TOKEN" http://localhost:7391/health
 
 # Readiness probe (no auth)
 curl http://localhost:7391/ready
+
+# OpenAPI 3.0 schema (for clients like Swagger UI)
+curl http://localhost:7391/openapi.json
 
 # List jobs
 curl -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs
@@ -158,11 +172,21 @@ The hook POSTs `{"ref": "refs/heads/main", "new_sha": "...", "old_sha": "..."}` 
 ## Security
 
 - API binds to `127.0.0.1` (localhost only) — not reachable from the network.
-- Auth token stored at `~/.bog-agents/daemon/token` (mode `0600`).
-- Webhook secrets validated with HMAC-SHA256 (`hmac.compare_digest` — timing-safe).
-- Token comparison uses `hmac.compare_digest` to prevent timing attacks.
-- File output restricted to `$HOME` and `/tmp` (path traversal guard).
+- Auth token stored at `~/.bog-agents/daemon/token` (`0600` on POSIX; on
+  Windows the daemon also runs `icacls /inheritance:r /grant <user>:F` to
+  drop inherited ACEs).
+- Webhook secrets validated with HMAC-SHA256 via `hmac.compare_digest` —
+  timing-safe, no token leaks.
+- Daemon-token comparison also uses `hmac.compare_digest`.
+- File output restricted to `$HOME`, the system temp dir, the current
+  working directory, and the job's `working_dir` (path traversal guard).
+  Relative file paths are anchored to `working_dir`.
+- API responses redact `smtp_password`, `github_token`, and `webhook_secret`
+  to `'***'` — they're persisted in `jobs.json` for runtime use but never
+  echoed back through HTTP, even with a valid token.
 - Git hook scripts use `shlex.quote()` to prevent shell injection.
+- Job records and run records are written through `os.fsync()` before
+  atomic-rename, so a hard kill never loses a freshly-created job.
 
 ---
 
