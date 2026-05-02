@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.5...bog-agents-cli==0.7.6) (2026-05-02)
+
+
+### Bug Fixes
+
+* 0.7.5 follow-up — resolve issue [#60](https://github.com/bogware/bog-agents/issues/60) (9 bug fixes) + dep-pin range ([#61](https://github.com/bogware/bog-agents/issues/61)) ([0a1c026](https://github.com/bogware/bog-agents/commit/0a1c0261dc58c55c20e2c5f89f3d95f00f4186db))
+
 ## [0.7.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.4...bog-agents-cli==0.7.5) (2026-05-01)
 
 
