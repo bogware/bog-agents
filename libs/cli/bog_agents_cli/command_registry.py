@@ -384,6 +384,20 @@ SLASH_COMMAND_SPECS: tuple[SlashCommandSpec, ...] = (
         available=True,
     ),
     SlashCommandSpec(
+        "/silent",
+        "Quiet mode: tool calls show as one-liners (full details still in log)",
+        "quiet collapse mute hide",
+        "ui",
+        available=True,
+    ),
+    SlashCommandSpec(
+        "/verbose",
+        "Verbose mode: tool calls show as expandable widgets (default)",
+        "loud expand show",
+        "ui",
+        available=True,
+    ),
+    SlashCommandSpec(
         "/skills",
         "Show loaded skills and their search paths",
         "abilities memory",

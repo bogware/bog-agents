@@ -16,12 +16,14 @@ class HistoryManager:
     safely write to the same history file without corruption.
     """
 
-    def __init__(self, history_file: Path, max_entries: int = 100) -> None:
+    def __init__(self, history_file: Path, max_entries: int = 1000) -> None:
         """Initialize the history manager.
 
         Args:
             history_file: Path to the JSON-lines history file
-            max_entries: Maximum number of entries to keep
+            max_entries: Maximum number of entries to keep. Default is
+                1000 — large enough to survive a long working session but
+                bounded so the file doesn't grow without limit.
         """
         self.history_file = history_file
         self.max_entries = max_entries
@@ -77,12 +79,15 @@ class HistoryManager:
     def add(self, text: str) -> None:
         """Add a command to history.
 
+        Slash commands and ordinary prompts are both recorded so the user
+        can recall any prior input with the up arrow.
+
         Args:
             text: The command text to add
         """
         text = text.strip()
-        # Skip empty or slash commands
-        if not text or text.startswith("/"):
+        # Skip empty
+        if not text:
             return
 
         # Skip duplicates of the last entry

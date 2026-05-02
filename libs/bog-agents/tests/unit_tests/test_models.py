@@ -31,7 +31,8 @@ class TestResolveModel:
             mock.return_value = MagicMock(spec=BaseChatModel)
             result = resolve_model("openai:gpt-5")
 
-        mock.assert_called_once_with("openai:gpt-5", use_responses_api=True)
+        # OpenAI also gets the long read timeout (3600s default).
+        mock.assert_called_once_with("openai:gpt-5", use_responses_api=True, timeout=3600.0)
         assert result is mock.return_value
 
     def test_non_openai_string(self) -> None:
@@ -39,8 +40,35 @@ class TestResolveModel:
             mock.return_value = MagicMock(spec=BaseChatModel)
             result = resolve_model("anthropic:claude-sonnet-4-6")
 
-        mock.assert_called_once_with("anthropic:claude-sonnet-4-6")
+        # Anthropic is forwarded with `timeout=` so long turns don't get cut off.
+        mock.assert_called_once_with("anthropic:claude-sonnet-4-6", timeout=3600.0)
         assert result is mock.return_value
+
+    def test_timeout_env_override_applied(self, monkeypatch: object) -> None:
+        """`BOG_AGENTS_MODEL_READ_TIMEOUT` overrides the default."""
+        monkeypatch.setenv("BOG_AGENTS_MODEL_READ_TIMEOUT", "120")  # type: ignore[attr-defined]
+        with patch("bog_agents._models.init_chat_model") as mock:
+            mock.return_value = MagicMock(spec=BaseChatModel)
+            resolve_model("anthropic:claude-sonnet-4-6")
+        mock.assert_called_once_with("anthropic:claude-sonnet-4-6", timeout=120.0)
+
+    def test_timeout_env_disable_omits_kwarg(self, monkeypatch: object) -> None:
+        """`BOG_AGENTS_MODEL_READ_TIMEOUT=none` skips the timeout kwarg entirely."""
+        monkeypatch.setenv("BOG_AGENTS_MODEL_READ_TIMEOUT", "none")  # type: ignore[attr-defined]
+        with patch("bog_agents._models.init_chat_model") as mock:
+            mock.return_value = MagicMock(spec=BaseChatModel)
+            resolve_model("anthropic:claude-sonnet-4-6")
+        mock.assert_called_once_with("anthropic:claude-sonnet-4-6")
+
+    def test_provider_rejecting_timeout_kwarg_falls_back_cleanly(self) -> None:
+        """A provider that doesn't accept timeout retries without it."""
+        with patch("bog_agents._models.init_chat_model") as mock:
+            ok_model = MagicMock(spec=BaseChatModel)
+            mock.side_effect = [TypeError("unexpected timeout"), ok_model]
+            result = resolve_model("exotic:model")
+
+        assert mock.call_count == 2
+        assert result is ok_model
 
 
 class TestGetModelIdentifier:

@@ -779,10 +779,18 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             self._move_selection(delta)
 
     def action_select(self) -> None:
-        """Select the current model."""
+        """Select the current model and persist it as the default.
+
+        Enter doubles as "set default" — picking a model from the selector
+        almost always means the user wants future sessions to use it. The
+        explicit Ctrl+S binding is preserved for the case where the user
+        wants to change the persisted default without dismissing the
+        selector. Use Esc to cancel without picking.
+        """
         # If there are filtered results, always select the highlighted model
         if self._filtered_models:
             model_spec, provider = self._filtered_models[self._selected_index]
+            ModelSelectorScreen._persist_as_default(model_spec)
             self.dismiss((model_spec, provider))
             return
 
@@ -792,9 +800,26 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
 
         if custom_input and ":" in custom_input:
             provider = custom_input.split(":", 1)[0]
+            ModelSelectorScreen._persist_as_default(custom_input)
             self.dismiss((custom_input, provider))
         elif custom_input:
+            ModelSelectorScreen._persist_as_default(custom_input)
             self.dismiss((custom_input, ""))
+
+    @staticmethod
+    def _persist_as_default(model_spec: str) -> None:
+        """Save `model_spec` as the user's default model, best-effort.
+
+        Failures are logged but not surfaced — selection should not be
+        blocked by a persistence problem (e.g., read-only config dir).
+        The next session simply falls back to the previous default.
+        """
+        try:
+            save_default_model(model_spec)
+        except Exception:
+            logger.warning(
+                "Could not persist default model %s", model_spec, exc_info=True
+            )
 
     async def action_set_default(self) -> None:
         """Toggle the highlighted model as the default.
@@ -834,8 +859,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         glyphs = get_glyphs()
         help_text = (
             f"{glyphs.arrow_up}/{glyphs.arrow_down} navigate"
-            f" {glyphs.bullet} Enter select"
-            f" {glyphs.bullet} Ctrl+S set default"
+            f" {glyphs.bullet} Enter select + set as default"
+            f" {glyphs.bullet} Ctrl+S toggle default"
             f" {glyphs.bullet} Esc cancel"
         )
         help_widget = self.query_one(".model-selector-help", Static)
