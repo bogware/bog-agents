@@ -39,28 +39,46 @@ logger = logging.getLogger(__name__)
 _DEFAULT_AGENT_NAME = "agent"
 
 
+_REQUIRED_CLI_PACKAGES: tuple[tuple[str, str], ...] = (
+    # (importable module name, pip distribution name)
+    ("requests", "requests"),
+    ("dotenv", "python-dotenv"),
+    ("textual", "textual"),
+    # langchain/langgraph/langsmith are pulled by `bog-agents-cli`'s
+    # runtime deps; an incomplete install (e.g. interrupted pip download)
+    # can leave them missing and crash the CLI deep inside textual_adapter
+    # or remote_client. Surface that here with a clean recovery hint.
+    ("langchain", "langchain"),
+    ("langchain_core", "langchain-core"),
+    ("langgraph", "langgraph"),
+    ("langgraph_sdk", "langgraph-sdk"),
+    ("langsmith", "langsmith"),
+    ("httpx", "httpx"),
+    ("bog_agents", "bog-agents"),
+)
+
+
 def check_cli_dependencies() -> None:
-    """Check if CLI optional dependencies are installed."""
-    missing = []
+    """Check that the CLI's required runtime packages are importable.
 
-    if importlib.util.find_spec("requests") is None:
-        missing.append("requests")
-
-    if importlib.util.find_spec("dotenv") is None:
-        missing.append("python-dotenv")
-
-    if importlib.util.find_spec("textual") is None:
-        missing.append("textual")
+    A missing package here usually means an incomplete pip install.
+    We fail fast with a clear `pip install --upgrade --force-reinstall`
+    hint instead of crashing later inside a deep import.
+    """
+    missing: list[str] = []
+    for module_name, pip_name in _REQUIRED_CLI_PACKAGES:
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(pip_name)
 
     if missing:
-        print("\nMissing required CLI dependencies!")  # noqa: T201  # CLI output for missing dependencies
-        print("\nThe following packages are required to use the bog-agents CLI:")  # noqa: T201  # CLI output for missing dependencies
+        print("\nMissing required CLI dependencies!")  # noqa: T201
+        print("\nThe following packages are required to use the bog-agents CLI:")  # noqa: T201
         for pkg in missing:
-            print(f"  - {pkg}")  # noqa: T201  # CLI output for missing dependencies
-        print("\nPlease install them with:")  # noqa: T201  # CLI output for missing dependencies
-        print("  pip install bog-agents-cli")  # noqa: T201  # CLI output for missing dependencies
-        print("\nOr install with all providers:")  # noqa: T201  # CLI output for missing dependencies
-        print("  pip install 'bog-agents-cli[all-providers]'")  # noqa: T201  # CLI output for missing dependencies
+            print(f"  - {pkg}")  # noqa: T201
+        print("\nFix with:")  # noqa: T201
+        print("  pip install --upgrade --force-reinstall bog-agents-cli")  # noqa: T201
+        print("\nOr install with all providers:")  # noqa: T201
+        print("  pip install --upgrade 'bog-agents-cli[all-providers]'")  # noqa: T201
         sys.exit(1)
 
 

@@ -128,6 +128,36 @@ class TestForwardNavigation:
         assert history.get_next() is None
 
 
+class TestAddRecordsAllInputs:
+    """Slash commands and ordinary prompts both land in history."""
+
+    def test_slash_commands_are_recorded(self, tmp_path: Path) -> None:
+        mgr = HistoryManager(tmp_path / "history.jsonl")
+        mgr.add("/model")
+        mgr.add("/help")
+        mgr.add("show me the auth flow")
+
+        # All three are recallable
+        assert mgr.get_previous("", query="") == "show me the auth flow"
+        assert mgr.get_previous("", query="") == "/help"
+        assert mgr.get_previous("", query="") == "/model"
+
+    def test_empty_input_is_skipped(self, tmp_path: Path) -> None:
+        mgr = HistoryManager(tmp_path / "history.jsonl")
+        mgr.add("real input")
+        mgr.add("")
+        mgr.add("   ")
+        assert mgr._entries == ["real input"]
+
+    def test_slash_command_persists_to_file(self, tmp_path: Path) -> None:
+        path = tmp_path / "history.jsonl"
+        mgr = HistoryManager(path)
+        mgr.add("/settings")
+        # Re-read from disk
+        mgr2 = HistoryManager(path)
+        assert "/settings" in mgr2._entries
+
+
 class TestResetClearsQuery:
     """`reset_navigation()` clears query state."""
 

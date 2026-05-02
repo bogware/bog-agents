@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -35,6 +36,39 @@ from bog_agents_cli.widgets.autocomplete import (
 from bog_agents_cli.widgets.history import HistoryManager
 
 logger = logging.getLogger(__name__)
+
+
+# CSI / SGR / OSC / DCS escape sequences that can appear in stdin when the
+# terminal momentarily toggles mouse tracking, bracketed-paste, or other
+# modes during agent streaming. We strip them from paste events so they
+# don't end up as visible junk in the user's input box.
+_ANSI_ESCAPE_RE = re.compile(
+    r"""
+    \x1b              # ESC
+    (?:
+        \[ [0-?]* [ -/]* [@-~]   # CSI ... terminator
+      | \] .*? (?: \x07 | \x1b\\ )  # OSC ... BEL or ST
+      | P .*? \x1b\\               # DCS ... ST
+      | [@-Z\\-_]                  # 2-byte ESC sequences (CSI=@, ST=\, etc.)
+    )
+    """,
+    re.VERBOSE | re.DOTALL,
+)
+
+
+def _strip_terminal_escapes(text: str) -> str:
+    r"""Remove ANSI/CSI/OSC/DCS escape sequences from `text`.
+
+    Args:
+        text: Raw paste text that may contain stray escape sequences.
+
+    Returns:
+        Text with control sequences removed. Lone `\x1b` characters
+        are also stripped so a partial sequence doesn't render as a
+        visible arrow or square in the input field.
+    """
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    return cleaned.replace("\x1b", "")
 
 
 _PASTE_BURST_CHAR_GAP_SECONDS = 0.03
@@ -644,10 +678,29 @@ class ChatTextArea(TextArea):
         return None
 
     async def _on_paste(self, event: events.Paste) -> None:
-        """Handle paste events and detect dragged file paths."""
+        r"""Handle paste events and detect dragged file paths.
+
+        Also strips ANSI/CSI control sequences (mouse-tracking SGR events
+        like `\x1b[<35;16;41M`, bracketed-paste markers, etc.) that can
+        leak into pasted text when the terminal briefly toggles mouse
+        capture during streaming. Without this filter the user sees raw
+        SGR strings appear in the input box if they move the mouse over
+        the terminal while the agent is working.
+        """
         self._backslash_pending_time = None
         if self._paste_burst_buffer:
             self._flush_paste_burst()
+
+        sanitized = _strip_terminal_escapes(event.text)
+        if sanitized != event.text:
+            # Replace the event.text with the sanitized version. We can't
+            # mutate the live event, so we prevent_default and insert the
+            # sanitized text ourselves.
+            event.prevent_default()
+            event.stop()
+            if sanitized:
+                self.insert(sanitized)
+            return
 
         from bog_agents_cli.input import parse_pasted_path_payload
 

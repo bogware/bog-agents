@@ -2120,6 +2120,132 @@ def save_bedrock_credential_check(mode: str, config_path: Path | None = None) ->
         return True
 
 
+_DEFAULT_AWS_REGION = "us-east-1"
+"""Default AWS region used for Bedrock when nothing else is configured.
+
+`us-east-1` is chosen because it has the broadest set of foundation
+models available (including Anthropic Claude family, Amazon Nova,
+Llama, Mistral) on Bedrock.
+"""
+
+
+def resolve_aws_region(
+    config: ModelConfig | None = None,
+    *,
+    fallback: str | None = _DEFAULT_AWS_REGION,
+) -> str | None:
+    """Resolve the AWS region for Bedrock from config + env, in that order.
+
+    Lookup order:
+
+    1. `config.providers["bedrock_converse"]["region"]` (or `bedrock`)
+    2. `AWS_DEFAULT_REGION` environment variable
+    3. `AWS_REGION` environment variable
+    4. boto3 session default (reads `~/.aws/config`)
+    5. `fallback` (defaults to `us-east-1`)
+
+    Args:
+        config: Pre-loaded ModelConfig; loaded fresh when `None`.
+        fallback: Region to return when nothing else resolves. Pass `None`
+            to surface "no region anywhere" as `None` so the caller can
+            raise a clear error.
+
+    Returns:
+        Resolved region string (e.g. `"us-east-1"`), or `fallback` if
+        nothing resolves.
+    """
+    if config is None:
+        try:
+            config = ModelConfig.load()
+        except (OSError, ValueError):
+            config = None
+
+    if config is not None:
+        for provider_key in ("bedrock_converse", "bedrock"):
+            section = config.providers.get(provider_key) or {}
+            region = section.get("region") if isinstance(section, dict) else None
+            if isinstance(region, str) and region.strip():
+                return region.strip()
+
+    for env_key in ("AWS_DEFAULT_REGION", "AWS_REGION"):
+        env_value = os.environ.get(env_key)
+        if env_value and env_value.strip():
+            return env_value.strip()
+
+    try:
+        import boto3  # type: ignore[import-untyped]
+
+        session = boto3.Session()
+        if session.region_name:
+            return str(session.region_name)
+    except ImportError:
+        pass
+    except Exception:  # boto3 config probe is best-effort
+        logger.debug("boto3 default region probe failed", exc_info=True)
+
+    return fallback
+
+
+def save_bedrock_region(
+    region: str,
+    config_path: Path | None = None,
+) -> bool:
+    """Persist the AWS region for Bedrock to config.toml.
+
+    Writes `[models.providers.bedrock].region`. Subsequent CLI runs will
+    use this region for Bedrock model construction without needing
+    `AWS_DEFAULT_REGION` set.
+
+    Args:
+        region: AWS region (e.g. `"us-east-1"`). Whitespace is stripped.
+            Empty after stripping clears the key instead of writing it.
+        config_path: Path to config file. Defaults to
+            `~/.bog-agents/config.toml`.
+
+    Returns:
+        True if save succeeded, False on I/O error.
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    region = region.strip()
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+        else:
+            data = {}
+
+        bedrock_section = (
+            data.setdefault("models", {})
+            .setdefault("providers", {})
+            .setdefault("bedrock", {})
+        )
+        if region:
+            bedrock_section["region"] = region
+        else:
+            bedrock_section.pop("region", None)
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.exception("Could not save Bedrock region")
+        return False
+    else:
+        global _default_config_cache  # noqa: PLW0603
+        _default_config_cache = None
+        return True
+
+
 def save_bedrock_auth_mode(
     mode: str,
     profile: str | None = None,

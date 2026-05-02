@@ -191,12 +191,18 @@ def run_doctor() -> str:
         )
     )
 
-    # 3. Package versions
+    # 3. Package versions — critical runtime deps that the CLI imports
+    # eagerly. A `MISSING` result here usually means an incomplete pip
+    # install; `pip install --upgrade --force-reinstall bog-agents-cli`
+    # is the recovery hint.
     for pkg_name in [
         "bog-agents",
         "langchain",
         "langchain-core",
         "langgraph",
+        "langgraph-sdk",
+        "langsmith",
+        "httpx",
         "textual",
     ]:
         try:
@@ -222,7 +228,17 @@ def run_doctor() -> str:
                 detail = f"v{dist.version} (local provider)"
             elif env_key == "__BEDROCK__":
                 status, bedrock_detail = _bedrock_credential_status()
-                detail = f"v{dist.version} ({bedrock_detail})"
+                # Surface the resolved region alongside credential state so
+                # users immediately see whether AWS_DEFAULT_REGION (or
+                # `[models.providers.bedrock] region`) is set up.
+                try:
+                    from bog_agents_cli.model_config import resolve_aws_region
+
+                    region = resolve_aws_region(fallback=None)
+                except Exception:  # best-effort doctor field
+                    region = None
+                region_part = f"region={region}" if region else "region=UNRESOLVED"
+                detail = f"v{dist.version} ({bedrock_detail}; {region_part})"
             else:
                 has_key = bool(os.environ.get(env_key))
                 status = "OK" if has_key else "WARN"

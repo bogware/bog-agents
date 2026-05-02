@@ -112,7 +112,9 @@ def _render_todos_text(todos: list[object]) -> Text:
         if status == "completed":
             completed += 1
             prefix = Text(f"{glyphs.checkmark} done  ", style="green")
-            body = Text(content, style="dim")
+            # Strike-through + dim so the item visibly "clears" out of the
+            # active reading order without being deleted from the scrollback.
+            body = Text(content, style="dim strike")
         elif status == "in_progress":
             active += 1
             prefix = Text(f"{glyphs.circle_filled} active ", style="yellow")
@@ -126,6 +128,18 @@ def _render_todos_text(todos: list[object]) -> Text:
         line.append_text(prefix)
         line.append_text(body)
         lines.append(line)
+
+    # When everything is done, collapse into a one-liner. Keeps the chat
+    # readable instead of leaving a stale 10-line list pinned in view after
+    # the agent has finished a long task.
+    if todos and active == 0 and pending == 0 and completed > 0:
+        rendered = Text()
+        rendered.append(f"{glyphs.checkmark} ", style="green")
+        rendered.append(
+            f"All {completed} todo{'s' if completed != 1 else ''} complete",
+            style="green",
+        )
+        return rendered
 
     header = Text("Todo list", style="bold cyan")
     stats = Text("  ")
@@ -476,6 +490,12 @@ class TextualUIAdapter:
     _token_tracker: Any
     """Token usage tracker for displaying counts."""
 
+    silent_tool_output: bool
+    """When True, render tool calls as a single dim line in the chat instead
+    of a full ToolCallMessage widget. Tool details still flow through the
+    log file (`~/.bog-agents/cli.log`). Toggle via `/silent` and `/verbose`.
+    """
+
     def __init__(
         self,
         mount_message: Callable[..., Awaitable[None]],
@@ -528,6 +548,8 @@ class TextualUIAdapter:
         # Persist todo widgets across turns so they are updated in-place rather
         # than mounting duplicate widgets.  Keyed by namespace tuple.
         self._active_todo_messages: dict[tuple, Any] = {}
+        # Silent mode is opt-in; verbose ToolCallMessage widgets are the default.
+        self.silent_tool_output = False
 
     def set_token_tracker(self, tracker: Any) -> None:  # noqa: ANN401  # Dynamic tracker type from Textual
         """Set the token tracker for usage tracking."""
@@ -678,9 +700,12 @@ async def execute_task_textual(
     turn_stats = SessionStats()
     start_time = time.monotonic()
 
-    # Show spinner
+    # Show spinner + mirror the same state into the status bar so the user
+    # has feedback both above the input (spinner) and at the bottom of the
+    # screen (status bar) while the agent works.
     if adapter._set_spinner:
         await adapter._set_spinner("Thinking")
+    adapter._update_status("Thinking…")
 
     # Hide token display during streaming (will be shown with accurate count at end)
     if adapter._token_tracker:
@@ -821,6 +846,13 @@ async def execute_task_textual(
                             current_todo_message._content = todo_text
                             try:
                                 current_todo_message.update(todo_text)
+                                # `update()` only schedules a re-render when
+                                # Textual detects the renderable changed.
+                                # Force a refresh so transitions like "all
+                                # done" reliably collapse into the one-liner
+                                # even when the previous Text happens to
+                                # compare equal.
+                                current_todo_message.refresh()
                             except Exception:
                                 logger.debug(
                                     "Failed to refresh mounted todo widget",
@@ -1102,9 +1134,13 @@ async def execute_task_textual(
                                     buffer_name, parsed_args, buffer_id
                                 )
 
-                                # Hide spinner before showing tool call
+                                # Hide spinner before showing tool call;
+                                # surface the running tool's name in the
+                                # status bar so the user sees activity even
+                                # while the spinner is hidden.
                                 if adapter._set_spinner:
                                     await adapter._set_spinner(None)
+                                adapter._update_status(f"Running {buffer_name}…")
 
                                 # Mount tool call message
                                 logger.debug(
@@ -1112,8 +1148,26 @@ async def execute_task_textual(
                                     buffer_name,
                                     repr(parsed_args)[:200],
                                 )
-                                tool_msg = ToolCallMessage(buffer_name, parsed_args)
-                                await adapter._mount_message(tool_msg)
+                                if adapter.silent_tool_output:
+                                    # In silent mode the chat shows a one-line
+                                    # marker; the full args/result are still
+                                    # written to the debug log so the user can
+                                    # `tail -f ~/.bog-agents/cli.log` if they
+                                    # want full detail.
+                                    silent_marker = AppMessage(
+                                        Text(
+                                            f"  {get_glyphs().bullet} {buffer_name}",
+                                            style="dim",
+                                        )
+                                    )
+                                    await adapter._mount_message(silent_marker)
+                                    # Still create a ToolCallMessage instance so
+                                    # the result-arrival path can call set_error
+                                    # / set_output on it; just don't mount it.
+                                    tool_msg = ToolCallMessage(buffer_name, parsed_args)
+                                else:
+                                    tool_msg = ToolCallMessage(buffer_name, parsed_args)
+                                    await adapter._mount_message(tool_msg)
                                 adapter._current_tool_messages[buffer_id] = tool_msg
 
                                 # Sticky scroll after tool call is shown
@@ -1147,6 +1201,7 @@ async def execute_task_textual(
                     )
                 if adapter._set_spinner:
                     await adapter._set_spinner("Thinking")
+                adapter._update_status("Thinking…")
 
             # Flush any remaining text from all namespaces
             for ns_key, pending_text in list(pending_text_by_namespace.items()):
@@ -1499,6 +1554,9 @@ async def execute_task_textual(
     turn_stats.wall_time_seconds = time.monotonic() - start_time
     if adapter._token_tracker and (captured_input_tokens or captured_output_tokens):
         adapter._token_tracker.add(captured_input_tokens, captured_output_tokens)
+    # Clear the working status now that the turn is complete; the status
+    # bar reverts to its idle text on the app side via set_status_message("").
+    adapter._update_status("")
     return turn_stats
 
 

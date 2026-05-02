@@ -1618,7 +1618,23 @@ def _run_setup_wizard() -> str:
 
         if _check_aws_credentials():
             con.print("[green]AWS credentials detected.[/green]")
-            from bog_agents_cli.model_config import save_default_model
+            from bog_agents_cli.model_config import (
+                resolve_aws_region,
+                save_bedrock_region,
+                save_default_model,
+            )
+
+            current_region = resolve_aws_region(fallback=None)
+            region_default = current_region or "us-east-1"
+            con.print(
+                f"\nAWS region for Bedrock [dim](press Enter to accept "
+                f"'{region_default}')[/dim]:"
+            )
+            chosen_region = (
+                Prompt.ask("Region", default=region_default).strip() or region_default
+            )
+            save_bedrock_region(chosen_region)
+            con.print(f"[green]Region set to {chosen_region}.[/green]")
 
             save_default_model(model_spec)
             return model_spec
@@ -1756,6 +1772,17 @@ def _get_provider_kwargs(
 
     if provider == "openrouter":
         _apply_openrouter_defaults(result)
+
+    if provider in ("bedrock", "bedrock_converse") and "region_name" not in result:
+        # Bedrock SDK requires a region. boto3's default-region resolution can
+        # be surprising on Windows shells where ~/.aws/config isn't read by
+        # default; surface a config-or-env value here with a us-east-1 fallback
+        # so users don't get cryptic "Could not find AWS_DEFAULT_REGION" errors.
+        from bog_agents_cli.model_config import resolve_aws_region
+
+        region = resolve_aws_region(config)
+        if region:
+            result["region_name"] = region
 
     return result
 

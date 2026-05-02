@@ -716,6 +716,8 @@ class BogAgentsApp(App):
         "/review": "_handle_review_command",
         "/session": "_handle_session_command",
         "/settings": "_handle_settings_command",
+        "/silent": "_handle_silent_command",
+        "/verbose": "_handle_verbose_command",
         "/skills": "_handle_skills_command",
         "/test": "_handle_test_command",
         "/team": "_handle_team_command",
@@ -1305,12 +1307,19 @@ class BogAgentsApp(App):
             self.call_after_refresh(self._scroll_chat_to_bottom_immediate)
             return
 
-        # Sticky scroll: scroll only when user is within 15% of the bottom
-        # (or 200px, whichever is larger) — tolerant enough to handle partial
-        # tool-output expansion without snapping away mid-read.
-        threshold = max(200, int(total * 0.15))
+        # Sticky scroll: scroll when user is within 25% of the bottom
+        # (or 300px, whichever is larger). The threshold was widened from
+        # 15%/200px after users on high-throughput runs reported the chat
+        # not auto-scrolling during long tool-output streams — content was
+        # arriving faster than they could close the gap.
+        threshold = max(300, int(total * 0.25))
         if (total - chat.scroll_y) < threshold:
             chat.scroll_end(animate=False)
+            # Re-scroll after the layout settles so we always end up at the
+            # *new* bottom, not the bottom that existed at scroll time. This
+            # closes a small race where high-frequency mounting could leave
+            # the view stuck a few rows above the latest message.
+            self.call_after_refresh(self._scroll_chat_to_bottom_immediate)
 
     def _scroll_chat_to_bottom_immediate(self) -> None:
         """Deferred scroll — called after the layout pass completes.
@@ -3950,6 +3959,39 @@ class BogAgentsApp(App):
             await self._mount_message(AppMessage(str(DEFAULT_CONFIG_PATH)))
             return
         await self._show_settings_screen()
+
+    async def _handle_silent_command(self, command: str) -> None:
+        """Toggle silent tool output: full ToolCallMessage widgets become one-liners.
+
+        Tool args/results still go to the log file (`~/.bog-agents/cli.log`)
+        so nothing is lost — only the chat view is quieter.
+        """
+        await self._mount_message(UserMessage(command))
+        if self._ui_adapter is None:
+            await self._mount_message(
+                AppMessage("Silent mode requires an active session.")
+            )
+            return
+        self._ui_adapter.silent_tool_output = True
+        await self._mount_message(
+            AppMessage(
+                "Silent mode on. Tool calls render as one-liners; "
+                "use /verbose to switch back."
+            )
+        )
+
+    async def _handle_verbose_command(self, command: str) -> None:
+        """Restore the default verbose tool-call rendering."""
+        await self._mount_message(UserMessage(command))
+        if self._ui_adapter is None:
+            await self._mount_message(
+                AppMessage("Verbose mode requires an active session.")
+            )
+            return
+        self._ui_adapter.silent_tool_output = False
+        await self._mount_message(
+            AppMessage("Verbose mode on. Tool calls render with expandable details.")
+        )
 
     async def _handle_unknown_command(self, command: str) -> None:
         """Render an unknown-command message with suggestions."""
