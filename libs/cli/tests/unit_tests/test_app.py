@@ -58,7 +58,7 @@ class TestInitialPromptOnMount:
         submitted: list[str] = []
 
         # Must be async to match _handle_user_message's signature
-        async def capture(msg: str) -> None:  # noqa: RUF029
+        async def capture(msg: str) -> None:
             submitted.append(msg)
 
         app._handle_user_message = capture  # type: ignore[assignment]
@@ -1740,20 +1740,15 @@ class TestCommandSurfaceEnhancements:
 
     async def test_record_and_replay_commands_round_trip(self) -> None:
         """`/record` and `/replay run` should capture and reuse replay sessions."""
+        from bog_agents_cli.replay import ReplaySession, ReplayStep
+
         app = BogAgentsApp(thread_id="thread-123")
-        replay_session = SimpleNamespace(
+        replay_session = ReplaySession(
             session_id="replay-abc123",
             name="bugfix-flow",
             recorded_at=1_700_000_000.0,
             description="Recorded from thread thread-123",
-            actions=[
-                SimpleNamespace(
-                    step=1,
-                    action_type="user_message",
-                    content="Investigate the bug",
-                    tool_name="",
-                )
-            ],
+            steps=[ReplayStep(kind="user_message", content="Investigate the bug")],
         )
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -1776,7 +1771,7 @@ class TestCommandSurfaceEnhancements:
                 patch(
                     "bog_agents_cli.replay.save_replay_session",
                     return_value=app_module.Path(
-                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.json"
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
                     ),
                 ),
             ):
@@ -1801,7 +1796,7 @@ class TestCommandSurfaceEnhancements:
             assert mock_send.await_args is not None
             assert "# Replay: bugfix-flow" in mock_send.await_args.args[0]
             app_msgs = app.query(AppMessage)
-            assert any("Saved replay session" in str(w._content) for w in app_msgs)
+            assert any("Saved replay" in str(w._content) for w in app_msgs)
 
     async def test_agent_command_spawn_uses_background_manager(self) -> None:
         """`/agent spawn` should submit work to the background manager."""

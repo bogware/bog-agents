@@ -275,7 +275,10 @@ ignore-var-parameters = true
     "ANN002",   # Missing type annotation for *args — not needed in tests
     "ANN003",   # Missing type annotation for **kwargs — not needed in tests
     "ANN201",   # Missing return type annotation — not needed in tests
+    "ANN202",   # Missing return type annotation — not needed in tests
+    "ARG001",   # Unused arg — common in stub callbacks for ask/prompt tests
     "ARG002",   # Unused method argument — fixture params (e.g. tmp_path) may be unused in some tests
+    "RUF029",   # Async function w/o await — required to satisfy async callback signatures
     "F841",     # Local variable assigned but unused — common in test setup
     "PT011",    # pytest.raises match= not required in tests — intent is clear from test name
     "SIM117",   # Nested with statements — readability in complex test setups
@@ -298,6 +301,40 @@ ignore-var-parameters = true
     "INP",      # Missing `__init__.py` — scripts are standalone
     "S",        # Security warnings — not applicable to scripts
     "T201",     # `print` found — scripts use print for output
+]
+# QA harness, vault, vars, replay: dynamic data wrangling with intentional
+# Any-typed inputs (YAML/JSON), shell execution, and helper dataclasses
+# whose to/from-dict pairs don't need separate docstrings.
+"bog_agents_cli/qa/**" = [
+    "ANN401",   # Any in YAML/JSON loaders — by design
+    "ASYNC210", # urllib in HTTP step — explicit choice to avoid extra deps
+    "D102",     # Missing docstring on dataclass to/from_dict helpers
+    "D105",     # Missing docstring on dunder methods
+    "DOC501",   # Raises missing from docstring — covered in module docstring
+    "DOC502",   # Documented raise from caller, not body
+    "PLR0915",  # Too many statements — handler scaffolding
+    "S404",     # subprocess imported — required for shell step
+    "TRY004",   # ValueError vs TypeError — kept for caller compatibility
+]
+"bog_agents_cli/vars.py" = [
+    "ANN401",   # Any in user-supplied values — by design
+    "D102",     # Missing docstring on dataclass to/from_dict helpers
+    "D105",     # Missing docstring on __post_init__ / dunder methods
+    "DOC501",   # VarError documented at module level
+    "DOC502",   # VarError raised in a helper, not the public method body
+    "TRY004",   # ValueError used uniformly for var bundle errors
+]
+"bog_agents_cli/vault.py" = [
+    "ANN401",   # Any in render() — recursively walks user data
+    "D105",     # Missing docstring on __repr__/__eq__/__hash__/__bool__
+    "PLW0603",  # Module-level singleton intentionally uses `global`
+]
+"bog_agents_cli/replay.py" = [
+    "ANN401",   # Any in YAML/JSON loaders — by design
+    "D102",     # Missing docstring on dataclass to/from_dict helpers
+    "D105",     # Missing docstring on dunder methods
+    "DOC501",   # ValueError documented at module level
+    "TRY004",   # ValueError used for shape/parse mismatches
 ]
 "examples/**" = [
     "ANN001",   # Missing type annotation for function argument — examples prioritize clarity

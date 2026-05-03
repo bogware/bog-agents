@@ -56,4 +56,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_jury_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/qa",
+            "Author and run acceptance-criteria QA plans against a deployed product",
+            "test acceptance criteria ac jira plan deploy verify",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_qa_command",
+    ),
 )

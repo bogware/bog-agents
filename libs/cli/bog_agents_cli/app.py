@@ -4104,6 +4104,224 @@ class BogAgentsApp(App):
             announcement=announcement,
         )
 
+    async def _handle_qa_command(self, command: str) -> None:
+        """Handle `/qa` for acceptance-criteria QA plans.
+
+        Subcommands:
+            /qa list                       — list saved plans
+            /qa show <plan_id>             — show a plan summary
+            /qa new [--from-jira ID|--from-file P|--from-json J]
+                                          — author a new plan (asks the
+                                            agent to draft it)
+            /qa run <plan_id> [--var k=v ...] [--output FMT]
+                                          — execute a saved plan
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.qa import (
+            emit_artifact,
+            execute_plan,
+            find_plan,
+            list_plans,
+            load_acceptance_criteria,
+            load_plan,
+        )
+        from bog_agents_cli.vars import VarBundle
+        from bog_agents_cli.vault import get_default_vault
+
+        raw_arg = command.strip()[len("/qa") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(AppMessage(f"Could not parse /qa arguments: {exc}"))
+            return
+        action = tokens[0].lower() if tokens else "list"
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage:\n"
+                    "  /qa list\n"
+                    "  /qa show <plan_id>\n"
+                    "  /qa new [--from-file <path> | --from-json <text-or-path>]\n"
+                    "  /qa run <plan_id> [--var name=value ...] [--output markdown|json|stdout|jira-comment]\n"
+                )
+            )
+            return
+
+        project_root = Path(self._cwd)
+
+        if action in {"", "list"}:
+            plans = await asyncio.to_thread(list_plans, project_root)
+            if not plans:
+                await self._mount_message(AppMessage("No QA plans saved in this project yet."))
+                return
+            lines = ["QA plans:"]
+            for plan in plans:
+                lines.append(
+                    f"  {plan.name or plan.plan_id} ({plan.plan_id}) — "
+                    f"{len(plan.acceptance_criteria)} AC, {len(plan.steps)} step(s)"
+                )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "show":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /qa show <plan_id>"))
+                return
+            path = await asyncio.to_thread(find_plan, project_root, tokens[1])
+            if path is None:
+                await self._mount_message(AppMessage(f"No plan matched '{tokens[1]}'."))
+                return
+            plan = await asyncio.to_thread(load_plan, path)
+            lines = [
+                f"Plan: {plan.name or plan.plan_id}",
+                f"  ID: {plan.plan_id}",
+                f"  Product: {plan.product or '(unspecified)'}",
+                f"  File: {path}",
+                "",
+                f"Acceptance Criteria ({len(plan.acceptance_criteria)}):",
+            ]
+            for ac in plan.acceptance_criteria:
+                lines.append(f"  - {ac.id}: {ac.text[:120]}")
+            lines.append("")
+            lines.append(f"Steps ({len(plan.steps)}):")
+            for step in plan.steps:
+                acs = ",".join(step.ac) if step.ac else "(unbound)"
+                lines.append(f"  - {step.id} [{step.kind.value}] AC={acs}")
+            if plan.vars_spec:
+                lines.append("")
+                lines.append(f"Variables ({len(plan.vars_spec)}):")
+                for vname, vspec in plan.vars_spec.items():
+                    lines.append(f"  - {vname}: {vspec.get('type', 'string')}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "new":
+            # /qa new is agent-driven: we hand the agent the AC plus a
+            # prompt asking it to inspect the project and draft a plan.
+            # The agent writes the plan YAML to disk via its file tools;
+            # we just supply the seed data here.
+            from_file: str | None = None
+            from_json: str | None = None
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--from-file" and i + 1 < len(tokens):
+                    from_file = tokens[i + 1]
+                    i += 2
+                elif t == "--from-json" and i + 1 < len(tokens):
+                    from_json = tokens[i + 1]
+                    i += 2
+                else:
+                    i += 1
+            try:
+                acs = await asyncio.to_thread(
+                    load_acceptance_criteria,
+                    from_file=from_file,
+                    from_json=from_json,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"Could not load AC: {exc}"))
+                return
+            if not acs:
+                await self._mount_message(
+                    AppMessage(
+                        "No acceptance criteria provided. Pass --from-file <path> or "
+                        "--from-json <text-or-path>, or open a plan template via "
+                        "`/qa show` and copy/edit it."
+                    )
+                )
+                return
+            ac_block = "\n".join(f"- {ac.id}: {ac.text}" for ac in acs)
+            prompt = (
+                "Author a QA plan (YAML) for the deployed product in this repository.\n"
+                "Save it to `.bog-agents/qa-plans/<plan_id>.yaml` using the `write_file` tool.\n\n"
+                "## Acceptance criteria\n\n"
+                f"{ac_block}\n\n"
+                "## Plan format\n\n"
+                "Each step has a `kind` (one of: agent, shell, http, mcp), `ac` "
+                "(list of AC ids it tests), and a `verdict` block "
+                "(`exit_code`, `status`, `contains`, `not_contains`, `regex`, `json_path`).\n"
+                "Declare needed inputs in the `vars` block — use `type: secret` for "
+                "credentials so they never get persisted.\n\n"
+                "Inspect the repo to figure out *how* the product is deployed and "
+                "what tools (curl, k6, vitest, etc.) are reasonable to use. Ask me "
+                "for clarification if you need it.\n"
+            )
+            await self._mount_message(AppMessage("Drafting QA plan..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if action == "run":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /qa run <plan_id> [--var k=v ...] [--output FMT]"))
+                return
+            cli_overrides: dict[str, str] = {}
+            output_fmt: str | None = None
+            i = 2
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--var" and i + 1 < len(tokens):
+                    pair = tokens[i + 1]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 2
+                elif t.startswith("--var="):
+                    pair = t[len("--var="):]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 1
+                elif t in ("--output", "-o") and i + 1 < len(tokens):
+                    output_fmt = tokens[i + 1]
+                    i += 2
+                elif t.startswith("--output="):
+                    output_fmt = t[len("--output="):]
+                    i += 1
+                else:
+                    i += 1
+            path = await asyncio.to_thread(find_plan, project_root, tokens[1])
+            if path is None:
+                await self._mount_message(AppMessage(f"No plan matched '{tokens[1]}'."))
+                return
+            plan = await asyncio.to_thread(load_plan, path)
+            if output_fmt:
+                plan.artifact_format = output_fmt
+
+            bundle = VarBundle.from_dict(plan.vars_spec, vault=get_default_vault())
+            try:
+                await bundle.resolve(
+                    prompt=self._resolve_var_via_ask,
+                    prompt_secret=self._resolve_var_via_ask,
+                    cli_overrides=cli_overrides,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"QA cancelled: {exc}"))
+                return
+
+            await self._mount_message(AppMessage(f"Running QA plan `{plan.name or plan.plan_id}`..."))
+            result = await execute_plan(plan, bundle)
+            results_dir = project_root / ".bog-agents" / "qa-results"
+            text, artifact_path = await asyncio.to_thread(
+                emit_artifact, plan, result, fmt=plan.artifact_format, out_dir=results_dir
+            )
+            verdict_glyph = {"pass": "✅", "fail": "❌", "inconclusive": "⚠️"}.get(result.overall_verdict, "?")
+            summary = (
+                f"{verdict_glyph} QA verdict: **{result.overall_verdict.upper()}** "
+                f"({len(result.step_results)} step(s), {result.duration_s:.1f}s)\n"
+            )
+            if artifact_path:
+                summary += f"\nReport saved to: {artifact_path}\n"
+            await self._mount_message(AppMessage(summary))
+            if plan.artifact_format in ("stdout", "jira-comment"):
+                await self._mount_message(AppMessage(text))
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /qa list | /qa show <id> | /qa new [...] | /qa run <id> [--var k=v] [--output FMT]")
+        )
+
     async def _handle_resolve_command(self, command: str) -> None:
         """Handle `/resolve` as a merge-conflict resolution workflow."""
         from bog_agents_cli.pr_cli import generate_conflict_resolution_prompt
@@ -5687,7 +5905,11 @@ class BogAgentsApp(App):
 
         scored: list[tuple[int, Any, Path]] = []
         for session in sessions:
-            file_path = replays_dir / f"{session.session_id}.json"
+            # New recordings save as .yaml; legacy ones may be .json. Pick
+            # whichever file actually exists.
+            yaml_path = replays_dir / f"{session.session_id}.yaml"
+            json_path = replays_dir / f"{session.session_id}.json"
+            file_path = yaml_path if yaml_path.exists() else json_path
             best = max(
                 self._replay_match_score(session.session_id, token),
                 self._replay_match_score(file_path.stem, token),
@@ -5700,6 +5922,34 @@ class BogAgentsApp(App):
         scored.sort(key=lambda item: (-item[0], item[1].session_id))
         _score, session, file_path = scored[0]
         return session, file_path
+
+    async def _resolve_var_via_ask(self, spec: Any) -> str:  # noqa: ANN401 — VarSpec lazy-imported to avoid heavy startup
+        """Prompt the user for a var value via the AskUserMenu widget.
+
+        Used by /replay and /qa to fill in unresolved string/secret/enum vars.
+        Returns the user's answer (raw string).
+
+        Raises:
+            ValueError: If the user cancels the ask-user widget.
+        """
+        prompt_text = f"Enter value for `{spec.name}`"
+        if spec.description:
+            prompt_text += f" — {spec.description}"
+        if spec.type == "secret":
+            prompt_text += "  (secret — kept in memory only, never saved)"
+        if spec.default is not None and spec.type != "secret":
+            prompt_text += f"  [default: {spec.default}]"
+        question: dict[str, Any] = {"question": prompt_text, "type": "text"}
+        if spec.type == "enum" and spec.choices:
+            question["type"] = "multiple_choice"
+            question["choices"] = [{"value": c} for c in spec.choices]
+        result_future = await self._request_ask_user([question])
+        result = await result_future
+        if result.get("type") != "answered":
+            msg = f"cancelled while resolving var '{spec.name}'"
+            raise ValueError(msg)
+        answers = result.get("answers") or []
+        return str(answers[0]) if answers else ""
 
     async def _handle_record_command(self, command: str) -> None:
         """Handle `/record` for replay capture management."""
@@ -5767,11 +6017,7 @@ class BogAgentsApp(App):
             if self._recording_state is None:
                 await self._mount_message(AppMessage("No replay recording is active."))
                 return
-            from bog_agents_cli.replay import (
-                ReplayAction,
-                ReplaySession,
-                save_replay_session,
-            )
+            from bog_agents_cli.replay import SessionRecorder, save_replay_session
             from bog_agents_cli.sessions import export_thread
 
             state = self._recording_state
@@ -5781,8 +6027,9 @@ class BogAgentsApp(App):
             )
             transcript_list = transcript if isinstance(transcript, list) else []
             entries = transcript_list[state.baseline_message_count :]
-            actions: list[Any] = []
-            step = 0
+
+            recorder = SessionRecorder(session_id=state.session_id, name=state.name)
+            recorder.start(context={"cwd": state.cwd, "thread_id": state.thread_id})
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
@@ -5792,21 +6039,18 @@ class BogAgentsApp(App):
                 if not content:
                     continue
                 if role == "human":
-                    action_type = "user_message"
+                    recorder.record_user_message(content)
                 elif role == "ai":
-                    action_type = "ai_message"
-                else:
-                    continue
-                step += 1
-                actions.append(
-                    ReplayAction(
-                        step=step,
-                        action_type=action_type,
-                        content=content[:500],
-                    )
-                )
+                    recorder.record_ai_message(content)
+                # Tool calls aren't surfaced through the transcript export
+                # in v1; we'll wire them into _mount_message in a follow-up
+                # so the recording captures tool use as well.
+            recorder.stop()
+            session = recorder.finalize()
+            session.description = f"Recorded from thread {state.thread_id}"
+            session.recorded_at = state.started_at
 
-            if not actions:
+            if not session.steps:
                 self._recording_state = None
                 await self._mount_message(
                     AppMessage(
@@ -5815,23 +6059,18 @@ class BogAgentsApp(App):
                 )
                 return
 
-            session = ReplaySession(
-                session_id=state.session_id,
-                name=state.name,
-                description=f"Recorded from thread {state.thread_id}",
-                recorded_at=state.started_at,
-                original_context={"cwd": state.cwd, "thread_id": state.thread_id},
-                actions=actions,
-            )
             file_path = await asyncio.to_thread(
                 save_replay_session,
                 settings.user_agents_dir,
                 session,
             )
             self._recording_state = None
+            var_count = len(session.vars_spec)
             await self._mount_message(
                 AppMessage(
-                    f"Saved replay session `{session.name}` with {len(actions)} step(s) to {file_path}"
+                    f"Saved replay `{session.name}` with {len(session.steps)} step(s) "
+                    f"and {var_count} auto-detected variable(s) to {file_path}.\n"
+                    f"Open the YAML file to refine variable names, types, or defaults."
                 )
             )
             return
@@ -5842,7 +6081,9 @@ class BogAgentsApp(App):
 
     async def _handle_replay_command(self, command: str) -> None:
         """Handle `/replay` for inspecting and rerunning recorded sessions."""
-        from bog_agents_cli.replay import generate_replay_prompt, list_replay_sessions
+        from bog_agents_cli.replay import build_replay_prompt, list_replay_sessions
+        from bog_agents_cli.vars import VarBundle
+        from bog_agents_cli.vault import get_default_vault
 
         await self._mount_message(UserMessage(command))
         raw_arg = command.strip()[len("/replay") :].strip()
@@ -5859,7 +6100,7 @@ class BogAgentsApp(App):
             await self._mount_message(
                 AppMessage(
                     "Usage: /replay | /replay list | /replay show <id-or-name> | "
-                    "/replay run <id-or-name> [extra-context]"
+                    "/replay run <id-or-name> [--var name=value ...] [extra-context]"
                 )
             )
             return
@@ -5877,7 +6118,8 @@ class BogAgentsApp(App):
                 lines.append(
                     "  "
                     f"{label} ({session.session_id}) - "
-                    f"{len(session.actions)} step(s), "
+                    f"{len(session.steps)} step(s), "
+                    f"{len(session.vars_spec)} var(s), "
                     f"{self._format_replay_timestamp(session.recorded_at)}"
                 )
             await self._mount_message(AppMessage("\n".join(lines)))
@@ -5886,7 +6128,7 @@ class BogAgentsApp(App):
         if len(tokens) < 2:
             await self._mount_message(
                 AppMessage(
-                    "Usage: /replay show <id-or-name> | /replay run <id-or-name> [extra-context]"
+                    "Usage: /replay show <id-or-name> | /replay run <id-or-name> [--var name=value ...] [extra-context]"
                 )
             )
             return
@@ -5905,30 +6147,67 @@ class BogAgentsApp(App):
                 f"ID: {session.session_id}",
                 f"Recorded: {self._format_replay_timestamp(session.recorded_at)}",
                 f"File: {file_path}",
-                f"Steps: {len(session.actions)}",
+                f"Steps: {len(session.steps)}",
+                f"Variables: {len(session.vars_spec)}",
                 "",
             ]
             if session.description:
                 lines.append(session.description)
                 lines.append("")
-            for action_item in session.actions[:12]:
-                preview = (
-                    action_item.content.strip() or action_item.tool_name or "(empty)"
-                )
-                lines.append(
-                    f"{action_item.step}. {action_item.action_type}: {preview[:120]}"
-                )
-            if len(session.actions) > 12:
+            if session.vars_spec:
+                lines.append("Variables:")
+                for vname, vspec in session.vars_spec.items():
+                    vtype = vspec.get("type", "string")
+                    default = vspec.get("default")
+                    extra = f" (default: {default!r})" if default is not None else ""
+                    lines.append(f"  - {vname}: {vtype}{extra}")
+                lines.append("")
+            for i, step in enumerate(session.steps[:12], 1):
+                preview = step.content.strip() or step.tool or "(empty)"
+                lines.append(f"{i}. {step.kind}: {preview[:120]}")
+            if len(session.steps) > 12:
                 lines.append("...")
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if action == "run":
-            extra_context = " ".join(tokens[2:]).strip()
-            prompt = generate_replay_prompt(
-                session,
-                {"cwd": str(self._cwd)},
-            )
+            # Parse --var key=value flags out of the remaining tokens; the
+            # rest becomes free-form extra context appended to the prompt.
+            cli_overrides: dict[str, str] = {}
+            extra_parts: list[str] = []
+            i = 2
+            while i < len(tokens):
+                tok = tokens[i]
+                if tok == "--var" and i + 1 < len(tokens):
+                    pair = tokens[i + 1]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 2
+                elif tok.startswith("--var="):
+                    pair = tok[len("--var=") :]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 1
+                else:
+                    extra_parts.append(tok)
+                    i += 1
+            extra_context = " ".join(extra_parts).strip()
+
+            bundle = VarBundle.from_dict(session.vars_spec, vault=get_default_vault())
+
+            try:
+                await bundle.resolve(
+                    prompt=self._resolve_var_via_ask,
+                    prompt_secret=self._resolve_var_via_ask,
+                    cli_overrides=cli_overrides,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"Replay cancelled: {exc}"))
+                return
+
+            prompt = build_replay_prompt(session, bundle)
             if extra_context:
                 prompt += f"\n\n## Extra Context\n\n{extra_context}\n"
             await self._mount_message(
@@ -5942,7 +6221,7 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage(
                 "Usage: /replay | /replay list | /replay show <id-or-name> | "
-                "/replay run <id-or-name> [extra-context]"
+                "/replay run <id-or-name> [--var name=value ...] [extra-context]"
             )
         )
 
