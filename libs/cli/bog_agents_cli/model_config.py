@@ -1207,6 +1207,24 @@ class ModelConfig:
     recent_model: str | None = None
     """The most recently switched-to model (from config file `[models].recent`)."""
 
+    apply_model: str | None = None
+    """Optional small fast model used for diff-applying / patch rewrites.
+
+    Read from ``[models].apply`` in config.toml. Falls back to the main
+    model if unset. The intent is the Cursor / Aider "apply model" pattern:
+    a strong model reasons and emits a patch, then a small fast model is
+    re-asked to literally apply that patch to the file. Splitting these
+    keeps cost down on the mechanical apply step.
+    """
+
+    plan_model: str | None = None
+    """Optional model to use when ``/plan`` mode is active.
+
+    Read from ``[models].plan`` in config.toml. Lets users keep a cheap
+    model for editing while routing planning turns through a stronger
+    reasoning model. Falls back to the main model if unset.
+    """
+
     fallbacks: tuple[str, ...] = ()
     """Ordered fallback model specs tried when the primary model fails.
 
@@ -1282,6 +1300,8 @@ class ModelConfig:
         config = cls(
             default_model=models_section.get("default"),
             recent_model=models_section.get("recent"),
+            apply_model=models_section.get("apply"),
+            plan_model=models_section.get("plan"),
             fallbacks=fallbacks,
             providers=models_section.get("providers", {}),
         )
@@ -1553,6 +1573,71 @@ def save_default_model(model_spec: str, config_path: Path | None = None) -> bool
         This function does not preserve comments in the config file.
     """
     return _save_model_field("default", model_spec, config_path)
+
+
+def get_apply_model(config_path: Path | None = None) -> str | None:
+    """Return the configured apply-model spec, or ``None`` if unset."""
+    return ModelConfig.load(config_path).apply_model
+
+
+def get_plan_model(config_path: Path | None = None) -> str | None:
+    """Return the configured plan-mode model spec, or ``None`` if unset."""
+    return ModelConfig.load(config_path).plan_model
+
+
+def save_apply_model(model_spec: str, config_path: Path | None = None) -> bool:
+    """Persist the small / fast apply-model spec to ``[models].apply``.
+
+    The apply-model is used by the diff-applying / patch-rewriting code
+    path so heavy reasoning happens on the main model and the mechanical
+    apply step uses a cheaper one. Pass an empty string to clear.
+    """
+    if not model_spec:
+        return _clear_model_field("apply", config_path)
+    return _save_model_field("apply", model_spec, config_path)
+
+
+def save_plan_model(model_spec: str, config_path: Path | None = None) -> bool:
+    """Persist the plan-mode model spec to ``[models].plan``.
+
+    When ``/plan`` is active, runs route through this model so users can
+    pair a cheap apply model with a stronger planner. Pass an empty
+    string to clear.
+    """
+    if not model_spec:
+        return _clear_model_field("plan", config_path)
+    return _save_model_field("plan", model_spec, config_path)
+
+
+def _clear_model_field(field_name: str, config_path: Path | None = None) -> bool:
+    """Delete ``[models].<field_name>`` if present."""
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+    if not config_path.exists():
+        return True
+
+    try:
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+        models_section = data.get("models")
+        if not isinstance(models_section, dict) or field_name not in models_section:
+            return True
+        del models_section[field_name]
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.exception("Failed to clear models.%s in %s", field_name, config_path)
+        return False
+    clear_caches()
+    return True
 
 
 def clear_default_model(config_path: Path | None = None) -> bool:

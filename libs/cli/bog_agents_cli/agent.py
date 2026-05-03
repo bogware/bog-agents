@@ -786,12 +786,14 @@ def create_cli_agent(
     # Add memory middleware
     if enable_memory:
         memory_sources = [str(settings.get_user_agent_md_path(assistant_id))]
-        project_agent_md_paths = (
-            project_context.project_agent_md_paths()
-            if project_context is not None
-            else settings.get_project_agent_md_path()
-        )
-        memory_sources.extend(str(p) for p in project_agent_md_paths)
+        if project_context is not None:
+            # Walk home → project → ancestor dirs → cwd so the deepest
+            # AGENTS.md (closest to the user's actual cwd) is loaded last
+            # and gets the most attention from the model.
+            hierarchical_paths = project_context.hierarchical_agent_md_paths()
+        else:
+            hierarchical_paths = list(settings.get_project_agent_md_path())
+        memory_sources.extend(str(p) for p in hierarchical_paths)
 
         agent_middleware.append(
             MemoryMiddleware(
@@ -827,6 +829,19 @@ def create_cli_agent(
             sources.append(str(project_skills_dir))
         if project_agent_skills_dir:
             sources.append(str(project_agent_skills_dir))
+
+        # Hierarchical skill layering: walk from project root → cwd so a
+        # subdirectory can override skills from a shallower .bog-agents/
+        # skills directory. The deepest layer loads last, so SkillsMiddleware
+        # honours its "last source wins on name conflict" rule.
+        if project_context is not None:
+            seen_skill_dirs = {Path(s).resolve() for s in sources if Path(s).exists()}
+            for hier_dir in project_context.hierarchical_skill_dirs():
+                resolved = hier_dir.resolve()
+                if resolved in seen_skill_dirs:
+                    continue
+                seen_skill_dirs.add(resolved)
+                sources.append(str(hier_dir))
 
         agent_middleware.append(
             SkillsMiddleware(

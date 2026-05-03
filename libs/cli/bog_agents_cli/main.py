@@ -548,10 +548,15 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--sandbox",
-        choices=["none", "modal", "daytona", "runloop", "langsmith"],
+        choices=["none", "docker", "modal", "daytona", "runloop", "langsmith"],
         default="none",
         metavar="TYPE",
-        help="Remote sandbox for code execution (default: none - local only)",
+        help=(
+            "Sandbox for code execution (default: none — local only). "
+            "``docker`` runs commands inside a local container; the others "
+            "are remote providers requiring credentials. Tune the docker "
+            "image with BOG_DOCKER_IMAGE (default python:3.11-slim)."
+        ),
     )
 
     parser.add_argument(

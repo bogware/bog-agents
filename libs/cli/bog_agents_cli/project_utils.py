@@ -78,6 +78,30 @@ class ProjectContext:
             return []
         return find_project_agent_md(self.project_root)
 
+    def hierarchical_agent_md_paths(self) -> list[Path]:
+        """Return AGENTS.md / CLAUDE.md files in cascading precedence.
+
+        Walks home → project root → ancestor dirs → cwd, deduping.
+        See :func:`find_hierarchical_agent_md` for the full ordering.
+        """
+        return find_hierarchical_agent_md(
+            user_cwd=self.user_cwd,
+            project_root=self.project_root,
+        )
+
+    def hierarchical_skill_dirs(self) -> list[Path]:
+        """Return ``.bog-agents/skills/`` dirs in shallow→deep precedence.
+
+        Walk from the project root down to the user's cwd (each ancestor
+        contributes if it has a ``.bog-agents/skills`` subdir). The
+        deepest dir loads last, so a feature-branch's local override
+        beats a project-wide skill of the same name.
+        """
+        return find_hierarchical_skill_dirs(
+            user_cwd=self.user_cwd,
+            project_root=self.project_root,
+        )
+
     def project_skills_dir(self) -> Path | None:
         """Return the project `.bog-agents/skills` directory, if any."""
         if self.project_root is None:
@@ -190,3 +214,149 @@ def find_project_agent_md(project_root: Path) -> list[Path]:
         except OSError:
             pass
     return paths
+
+
+def find_hierarchical_skill_dirs(
+    *,
+    user_cwd: Path,
+    project_root: Path | None,
+) -> list[Path]:
+    """Return ``.bog-agents/skills/`` dirs from project root → cwd.
+
+    Each ancestor directory between ``project_root`` (inclusive) and
+    ``user_cwd`` (inclusive) is checked; only existing dirs are
+    returned. Order is shallowest → deepest so the deepest dir wins
+    when SkillsMiddleware encounters duplicate skill names.
+
+    Args:
+        user_cwd: User's invocation directory.
+        project_root: Detected project root, or ``None``.
+
+    Returns:
+        Existing ``.bog-agents/skills`` directories in priority order.
+    """
+    cwd = user_cwd.resolve()
+    if project_root is None:
+        candidate = cwd / ".bog-agents" / "skills"
+        return [candidate] if candidate.is_dir() else []
+
+    root = project_root.resolve()
+    try:
+        relative = cwd.relative_to(root)
+    except ValueError:
+        # cwd is outside the project root — fall back to project + cwd.
+        out: list[Path] = []
+        proj_skills = root / ".bog-agents" / "skills"
+        if proj_skills.is_dir():
+            out.append(proj_skills)
+        cwd_skills = cwd / ".bog-agents" / "skills"
+        if cwd_skills.is_dir() and cwd_skills.resolve() != proj_skills.resolve():
+            out.append(cwd_skills)
+        return out
+
+    found: list[Path] = []
+    accumulated = root
+    candidate = accumulated / ".bog-agents" / "skills"
+    if candidate.is_dir():
+        found.append(candidate)
+    for part in relative.parts:
+        accumulated = accumulated / part
+        candidate = accumulated / ".bog-agents" / "skills"
+        if candidate.is_dir():
+            # Skip duplicates of the project root entry.
+            if found and candidate.resolve() == found[0].resolve():
+                continue
+            found.append(candidate)
+    return found
+
+
+def _agent_md_in_dir(directory: Path) -> list[Path]:
+    """Return AGENTS.md / CLAUDE.md files directly inside ``directory``."""
+    out: list[Path] = []
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        candidate = directory / name
+        try:
+            if candidate.is_file():
+                out.append(candidate)
+        except OSError:
+            pass
+    return out
+
+
+def find_hierarchical_agent_md(
+    *,
+    user_cwd: Path,
+    project_root: Path | None,
+    home: Path | None = None,
+) -> list[Path]:
+    """Return AGENTS.md / CLAUDE.md files in cascading precedence order.
+
+    The cascade is:
+
+    1. ``$HOME/.bog-agents/AGENTS.md`` (and ``CLAUDE.md``) — global rules.
+    2. Each ancestor of ``user_cwd`` from the project root *down to* the
+       parent of ``user_cwd`` (skipping the cwd itself, which lands in
+       step 4). Entries are added shallowest-to-deepest so deeper dirs
+       win.
+    3. Project root files (``project_root/.bog-agents/AGENTS.md``,
+       ``project_root/AGENTS.md``, ``project_root/CLAUDE.md``) — see
+       :func:`find_project_agent_md`. Skipped if the project root is
+       outside the cwd's ancestry (rare but possible).
+    4. ``user_cwd/AGENTS.md`` and ``user_cwd/CLAUDE.md`` — the most
+       specific files; placed LAST so the model sees them most recently.
+
+    Duplicates are removed while preserving the first occurrence's
+    position.
+
+    Args:
+        user_cwd: The directory the user invoked the CLI from.
+        project_root: The detected project root, or ``None`` if running
+            outside a project.
+        home: Override for ``Path.home()`` (used by tests).
+
+    Returns:
+        Ordered list of existing AGENTS.md / CLAUDE.md paths.
+    """
+    home_dir = home if home is not None else Path.home()
+    cwd = user_cwd.resolve()
+
+    paths: list[Path] = []
+
+    # 1. Home / global rules.
+    paths.extend(_agent_md_in_dir(home_dir / ".bog-agents"))
+    paths.extend(_agent_md_in_dir(home_dir))
+
+    # 2. Ancestor walk between project root (exclusive) and the cwd
+    # (exclusive). Walk shallow → deep so deeper directories appear
+    # later in the list and override.
+    if project_root is not None:
+        try:
+            relative = cwd.relative_to(project_root.resolve())
+        except ValueError:
+            relative = None
+    else:
+        relative = None
+
+    if project_root is not None and relative is not None:
+        # 3. Project root files.
+        paths.extend(find_project_agent_md(project_root))
+        # 2-cont: walk from project_root deeper toward (but not including) cwd.
+        accumulated = project_root.resolve()
+        for part in relative.parts[:-1]:
+            accumulated = accumulated / part
+            paths.extend(_agent_md_in_dir(accumulated))
+
+    # 4. The cwd itself — most specific, last.
+    if project_root is None or cwd != project_root.resolve():
+        paths.extend(_agent_md_in_dir(cwd))
+
+    # Deduplicate while preserving order.
+    seen: set[Path] = set()
+    deduped: list[Path] = []
+    for p in paths:
+        resolved = p.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(p)
+    return deduped

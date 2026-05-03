@@ -329,17 +329,42 @@ class RecordingSessionState:
 
 
 class TextualTokenTracker:
-    """Token tracker that updates the status bar."""
+    """Token tracker that updates the status bar.
+
+    Also fires the optional ``warn_callback`` whenever utilization crosses
+    one of the configured thresholds (default: 70 / 80 / 90 %). Each
+    threshold is fired at most once per crossing — if usage drops back
+    below a threshold (e.g. after ``/compact``), the threshold re-arms.
+    """
+
+    DEFAULT_WARN_THRESHOLDS: tuple[int, ...] = (70, 80, 90)
 
     def __init__(
         self,
         update_callback: Callable[[int], None],
         hide_callback: Callable[[], None] | None = None,
+        *,
+        context_window: int = 0,
+        warn_callback: Callable[[int, int], None] | None = None,
+        warn_thresholds: tuple[int, ...] = DEFAULT_WARN_THRESHOLDS,
     ) -> None:
         """Initialize with callbacks to update the display."""
         self._update_callback = update_callback
         self._hide_callback = hide_callback
         self.current_context = 0
+        self._context_window = context_window
+        self._warn_callback = warn_callback
+        self._warn_thresholds = tuple(sorted(set(warn_thresholds)))
+        self._fired_thresholds: set[int] = set()
+
+    def set_context_window(self, size: int) -> None:
+        """Set the context window in tokens. ``0`` disables warnings."""
+        self._context_window = max(0, int(size))
+        self._fired_thresholds.clear()
+
+    def set_warn_callback(self, cb: Callable[[int, int], None] | None) -> None:
+        """Replace the threshold callback (None disables warnings)."""
+        self._warn_callback = cb
 
     def add(self, total_tokens: int, _output_tokens: int = 0) -> None:
         """Update token count from a response.
@@ -350,11 +375,29 @@ class TextualTokenTracker:
         """
         self.current_context = total_tokens
         self._update_callback(self.current_context)
+        self._maybe_warn()
+
+    def _maybe_warn(self) -> None:
+        """Fire the warn callback when a new threshold is crossed."""
+        if not self._warn_callback or self._context_window <= 0:
+            return
+        pct = int((self.current_context / self._context_window) * 100)
+        # Re-arm: drop fired thresholds the user has fallen back below.
+        self._fired_thresholds = {t for t in self._fired_thresholds if pct >= t}
+        for threshold in self._warn_thresholds:
+            if pct >= threshold and threshold not in self._fired_thresholds:
+                self._fired_thresholds.add(threshold)
+                try:
+                    self._warn_callback(pct, threshold)
+                except Exception:
+                    logger.debug("token-warn callback failed", exc_info=True)
+                break  # one warning per .add() call
 
     def reset(self) -> None:
         """Reset token count."""
         self.current_context = 0
         self._update_callback(0)
+        self._fired_thresholds.clear()
 
     def hide(self) -> None:
         """Hide the token display (e.g., during streaming)."""
@@ -769,6 +812,7 @@ class BogAgentsApp(App):
         self._active_profile_name: str | None = None
         self._active_profile_prompt: str | None = None
         self._plan_mode_enabled = False
+        self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
         self._base_auto_approve = auto_approve
         self._base_model_spec = (
@@ -880,9 +924,14 @@ class BogAgentsApp(App):
             thread_id=self._lc_thread_id,
         )
 
-        # Create token tracker that updates status bar
+        # Create token tracker that updates status bar AND fires a
+        # context-utilization warning at 70/80/90% so users can /compact
+        # before the next call gets truncated.
         self._token_tracker = TextualTokenTracker(
-            self._update_tokens, self._hide_tokens
+            self._update_tokens,
+            self._hide_tokens,
+            context_window=self._resolve_context_window(),
+            warn_callback=self._emit_token_warning,
         )
 
         # Create UI adapter if agent is provided (deferred when connecting)
@@ -3176,7 +3225,18 @@ class BogAgentsApp(App):
             )
 
     async def _handle_model_command(self, command: str) -> None:
-        """Switch models or manage the default model."""
+        """Switch models or manage the default model.
+
+        Subcommands:
+            /model                          → open the picker
+            /model <spec>                   → switch active model
+            /model --default <spec>         → persist as default
+            /model --default --clear        → clear default
+            /model apply <spec>             → set the small "apply" model
+            /model apply --clear            → clear apply model
+            /model plan <spec>              → set the plan-mode model
+            /model plan --clear             → clear plan-mode model
+        """
         cmd = command.lower().strip()
         model_arg = None
         set_default = False
@@ -3189,6 +3249,14 @@ class BogAgentsApp(App):
                 await self._mount_message(UserMessage(command))
                 await self._mount_message(ErrorMessage(str(exc)))
                 return
+            # Apply / plan model subcommands — separate persisted slots
+            # so users can pair a cheap apply model with a strong primary.
+            for sub in ("apply", "plan"):
+                if raw_arg == sub or raw_arg.startswith(f"{sub} "):
+                    rest = raw_arg[len(sub) :].strip()
+                    await self._mount_message(UserMessage(command))
+                    await self._handle_model_slot_command(sub, rest)
+                    return
             if raw_arg.startswith("--default"):
                 set_default = True
                 model_arg = raw_arg[len("--default") :].strip() or None
@@ -3223,6 +3291,64 @@ class BogAgentsApp(App):
             return
 
         await self._show_model_selector(extra_kwargs=extra_kwargs)
+
+    async def _handle_model_slot_command(self, slot: str, arg: str) -> None:
+        """Persist or clear the apply / plan model slot.
+
+        Args:
+            slot: Either ``"apply"`` or ``"plan"``.
+            arg: Remainder after ``/model apply`` or ``/model plan``.
+                Empty → show current value. ``"--clear"`` → remove the
+                stored slot. Otherwise treated as a model spec.
+        """
+        from bog_agents_cli.model_config import (
+            ModelConfig,
+            save_apply_model,
+            save_plan_model,
+        )
+
+        config = ModelConfig.load()
+        if slot == "apply":
+            current = config.apply_model
+            saver = save_apply_model
+            label = "apply model"
+        else:
+            current = config.plan_model
+            saver = save_plan_model
+            label = "plan model"
+
+        arg = arg.strip()
+        if not arg:
+            if current:
+                await self._mount_message(
+                    AppMessage(f"Current {label}: [bold]{current}[/bold]")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        f"No {label} configured. "
+                        f"Set with [bold]/model {slot} provider:model[/bold]."
+                    )
+                )
+            return
+
+        if arg == "--clear":
+            if saver(""):
+                await self._mount_message(AppMessage(f"Cleared {label}."))
+            else:
+                await self._mount_message(
+                    ErrorMessage(f"Failed to clear {label}; check ~/.bog-agents/config.toml")
+                )
+            return
+
+        if saver(arg):
+            await self._mount_message(
+                AppMessage(f"Set {label} to [bold]{arg}[/bold].")
+            )
+        else:
+            await self._mount_message(
+                ErrorMessage(f"Failed to save {label}; check ~/.bog-agents/config.toml")
+            )
 
     async def _handle_reload_command(self, command: str) -> None:
         """Reload config from environment variables and `.env`."""
@@ -5181,12 +5307,93 @@ class BogAgentsApp(App):
             )
             return
 
+        # Plan/Act dual-model swap: when entering plan mode, switch the
+        # active model to ``[models].plan`` so users can pair a cheap
+        # apply / act model with a stronger planner. When leaving plan
+        # mode, restore the previous spec.
+        await self._maybe_swap_plan_model()
+
         state = "enabled" if self._plan_mode_enabled else "disabled"
         await self._mount_message(
             AppMessage(
                 f"Plan mode {state}. The new mode will apply on the next agent turn."
             )
         )
+
+    def _resolve_context_window(self) -> int:
+        """Best-effort lookup of the active model's context-window size."""
+        from bog_agents_cli.config import settings
+
+        spec = self._model_override or settings.model_name or ""
+        # ``CostTracker.context_window_size`` knows the SDK's published
+        # context limits per model — reuse that table instead of
+        # duplicating it here.
+        try:
+            from bog_agents.middleware.cost_tracker import (
+                _CONTEXT_WINDOWS as CONTEXT_WINDOWS,  # noqa: PLC2701  # SDK constant table
+            )
+
+            # Match either provider:model or bare model name.
+            bare = spec.split(":", 1)[1] if ":" in spec else spec
+            return int(CONTEXT_WINDOWS.get(bare, CONTEXT_WINDOWS.get(spec, 200_000)))
+        except Exception:
+            return 200_000
+
+    def _emit_token_warning(self, pct: int, threshold: int) -> None:
+        """Mount an inline AppMessage when context utilization crosses N%."""
+        # Severity escalates with the threshold so users notice the 90% alarm.
+        glyph = "⚠️" if threshold < 90 else "🚨"
+        msg = (
+            f"{glyph} Context window {pct}% full (≥ {threshold}% threshold).\n"
+            "Run [bold]/compact[/bold] to summarize the conversation, or "
+            "[bold]/compress[/bold] for an aggressive auto-compact."
+        )
+        # Mount via call_after_refresh so we don't block the streaming path.
+        try:
+            self.call_after_refresh(
+                lambda: self._spawn(self._mount_message(AppMessage(msg)))
+            )
+        except Exception:
+            logger.debug("could not mount token-warning message", exc_info=True)
+
+    async def _maybe_swap_plan_model(self) -> None:
+        """Swap to the plan model when entering /plan, restore on exit.
+
+        No-op when no plan model is configured. Stores the prior spec on
+        ``self._pre_plan_model_spec`` so leaving plan mode brings the
+        original choice back without the user having to remember it.
+        """
+        from bog_agents_cli.config import settings
+        from bog_agents_cli.model_config import get_plan_model
+
+        plan_model = get_plan_model()
+        if not plan_model:
+            return
+
+        if self._plan_mode_enabled:
+            # Entering plan mode — record the current model so we can
+            # roll back when the user exits.
+            current = self._model_override or settings.model_name
+            self._pre_plan_model_spec = current
+            try:
+                await self._apply_runtime_model_override(plan_model)
+            except Exception as exc:
+                logger.exception("plan-mode model swap failed")
+                await self._mount_message(
+                    ErrorMessage(f"Could not swap to plan model {plan_model}: {exc}")
+                )
+                self._pre_plan_model_spec = None
+            return
+
+        # Leaving plan mode — restore the previous spec if we have one.
+        prior = getattr(self, "_pre_plan_model_spec", None)
+        if not prior:
+            return
+        self._pre_plan_model_spec = None
+        try:
+            await self._apply_runtime_model_override(prior)
+        except Exception:
+            logger.exception("plan-mode model restore failed")
 
     async def _handle_effort_command(self, command: str) -> None:
         """Handle `/effort` runtime reasoning presets."""
