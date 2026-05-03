@@ -144,7 +144,7 @@ CATALOG: tuple[Recipe, ...] = (
     ),
     Recipe(
         id="typecheck-fix",
-        title="Typecheck → Fix",
+        title="Typecheck -> Fix",
         summary="Run the project's type checker and fix the first 5 errors.",
         yaml=_TYPECHECK_FIX_YAML,
         tags=("quality", "types"),

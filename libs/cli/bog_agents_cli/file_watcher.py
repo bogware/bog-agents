@@ -153,6 +153,18 @@ class _BogEventHandler:
         if not getattr(event, "is_directory", False):
             self._dispatch(event.dest_path, "moved")
 
+    def dispatch(self, event: Any) -> None:  # noqa: ANN401
+        """Route watchdog events to on_* handlers (watchdog >= 3 calls this)."""
+        event_type = getattr(event, "event_type", None)
+        if event_type == "created":
+            self.on_created(event)
+        elif event_type == "modified":
+            self.on_modified(event)
+        elif event_type == "deleted":
+            self.on_deleted(event)
+        elif event_type == "moved":
+            self.on_moved(event)
+
 
 # ---------------------------------------------------------------------------
 # Public watcher class

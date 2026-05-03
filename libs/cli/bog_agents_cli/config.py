@@ -1501,18 +1501,12 @@ def _get_default_model_spec() -> str:
     )
 
     provider_checks = (
-        ("anthropic", lambda: has_provider_credentials("anthropic") is True),
-        ("openai", lambda: has_provider_credentials("openai") is True),
-        (
-            "bedrock_converse",
-            lambda: has_provider_credentials("bedrock_converse") is True,
-        ),
-        ("google_genai", lambda: has_provider_credentials("google_genai") is True),
-        (
-            "google_vertexai",
-            lambda: has_provider_credentials("google_vertexai") is True,
-        ),
-        ("nvidia", lambda: has_provider_credentials("nvidia") is True),
+        ("anthropic", lambda: settings.has_anthropic),
+        ("openai", lambda: settings.has_openai),
+        ("bedrock_converse", lambda: settings.has_bedrock),
+        ("google_genai", lambda: settings.has_google),
+        ("google_vertexai", lambda: settings.has_vertex_ai),
+        ("nvidia", lambda: settings.has_nvidia),
     )
     for provider, is_available in provider_checks:
         if not is_available():

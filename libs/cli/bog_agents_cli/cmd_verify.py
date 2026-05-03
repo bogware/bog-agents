@@ -245,6 +245,13 @@ def _run_check(name: str, command: str, *, cwd: Path, timeout: int) -> CheckResu
                 output="",
                 skipped_reason="empty command",
             )
+        # On Windows, commands like `npm`, `npx`, `yarn` are .cmd wrappers that
+        # subprocess cannot find without shell=True. Resolve via shutil.which
+        # so we keep shell=False (safer) while still finding .cmd/.bat wrappers.
+        if sys.platform == "win32":
+            resolved = shutil.which(argv[0])
+            if resolved:
+                argv[0] = resolved
         proc = subprocess.run(  # noqa: S603
             argv,
             cwd=str(cwd),
