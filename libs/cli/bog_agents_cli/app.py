@@ -2144,8 +2144,19 @@ class BogAgentsApp(App):
     def _resolve_command_handler(
         self, command_name: str
     ) -> Callable[[str], Awaitable[None]] | None:
-        """Return the bound handler for a slash command."""
-        handler_name = self._COMMAND_HANDLER_NAMES.get(command_name)
+        """Return the bound handler for a slash command.
+
+        Resolution order:
+        1. Module-based ``commands/`` registry (preferred — each command
+           module owns its spec + handler reference).
+        2. Legacy ``_COMMAND_HANDLER_NAMES`` map for commands not yet
+           migrated. The two are kept in sync by a regression test.
+        """
+        from bog_agents_cli.commands import COMMAND_HANDLER_MAP
+
+        handler_name = COMMAND_HANDLER_MAP.get(command_name)
+        if handler_name is None:
+            handler_name = self._COMMAND_HANDLER_NAMES.get(command_name)
         if handler_name is None:
             return None
         handler = getattr(self, handler_name, None)

@@ -45,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
@@ -104,6 +105,10 @@ class AuditLog:
     advisor_id: str = ""
     started_at: str = ""
     _next_id: int = field(default=1, repr=False)
+    # Serializes ``add_entry`` so the entry-id counter and the entries list
+    # stay consistent under concurrent agent turns (e.g. parallel-worktree
+    # multi-agent runs that share an AuditLog instance).
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def add_entry(
         self,
@@ -126,19 +131,20 @@ class AuditLog:
         Returns:
             The newly created audit entry.
         """
-        entry = AuditEntry(
-            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime()),
-            action_type=action_type,
-            description=description,
-            data_sources=data_sources or [],
-            reasoning=reasoning,
-            metadata=metadata or {},
-            session_id=self.session_id,
-            advisor_id=self.advisor_id,
-            entry_id=self._next_id,
-        )
-        self.entries.append(entry)
-        self._next_id += 1
+        with self._lock:
+            entry = AuditEntry(
+                timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime()),
+                action_type=action_type,
+                description=description,
+                data_sources=data_sources or [],
+                reasoning=reasoning,
+                metadata=metadata or {},
+                session_id=self.session_id,
+                advisor_id=self.advisor_id,
+                entry_id=self._next_id,
+            )
+            self.entries.append(entry)
+            self._next_id += 1
         logger.debug("Audit entry #%d: %s — %s", entry.entry_id, action_type, description)
         return entry
 

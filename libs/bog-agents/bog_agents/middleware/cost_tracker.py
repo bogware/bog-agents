@@ -9,6 +9,7 @@ Feature #8: Effort/thinking levels — control reasoning depth.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -114,6 +115,10 @@ class CostTracker:
     session_start: float = field(default_factory=time.time)
     budget_usd: float | None = None
     snapshots: list[UsageSnapshot] = field(default_factory=list)
+    # Guards record_usage so token totals stay coherent under concurrent
+    # turns (parallel-worktree, multi-agent). Held only across the integer
+    # increments + snapshot append, never across model I/O.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def total_tokens(self) -> int:
@@ -162,22 +167,23 @@ class CostTracker:
             cache_read: Cache read tokens.
             cache_write: Cache write tokens.
         """
-        self.input_tokens += input_tokens
-        self.output_tokens += output_tokens
-        self.cache_read_tokens += cache_read
-        self.cache_write_tokens += cache_write
-        self.total_requests += 1
-        self.snapshots.append(
-            UsageSnapshot(
-                timestamp=time.time(),
-                input_tokens=self.input_tokens,
-                output_tokens=self.output_tokens,
-                cache_read_tokens=self.cache_read_tokens,
-                cache_write_tokens=self.cache_write_tokens,
-                total_tokens=self.total_tokens,
-                estimated_cost_usd=self.estimated_cost_usd,
+        with self._lock:
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens
+            self.cache_read_tokens += cache_read
+            self.cache_write_tokens += cache_write
+            self.total_requests += 1
+            self.snapshots.append(
+                UsageSnapshot(
+                    timestamp=time.time(),
+                    input_tokens=self.input_tokens,
+                    output_tokens=self.output_tokens,
+                    cache_read_tokens=self.cache_read_tokens,
+                    cache_write_tokens=self.cache_write_tokens,
+                    total_tokens=self.total_tokens,
+                    estimated_cost_usd=self.estimated_cost_usd,
+                )
             )
-        )
 
     def format_summary(self) -> str:
         """Format a human-readable cost summary.

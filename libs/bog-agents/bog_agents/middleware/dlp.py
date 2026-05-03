@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -125,6 +126,10 @@ class DLPLog:
     """Log of all DLP events in a session."""
 
     events: list[DLPEvent] = field(default_factory=list)
+    # Guards ``events.append`` so concurrent middleware turns can't tear
+    # the list. Held only during append; readers may iterate the list
+    # without holding it (Python list iteration is atomic).
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def total_detections(self) -> int:
@@ -286,16 +291,17 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
                 results = _scan_text(content, self._patterns)
                 if not results:
                     continue
-                for pattern, count in results:
-                    self.log.events.append(
-                        DLPEvent(
-                            pattern_name=pattern.name,
-                            category=pattern.category,
-                            action=self._mode,
-                            message_index=i,
-                            count=count,
+                with self.log._lock:
+                    for pattern, count in results:
+                        self.log.events.append(
+                            DLPEvent(
+                                pattern_name=pattern.name,
+                                category=pattern.category,
+                                action=self._mode,
+                                message_index=i,
+                                count=count,
+                            )
                         )
-                    )
                     logger.log(
                         logging.WARNING if self._mode == "warn" else logging.INFO,
                         "DLP: %s detected %d occurrence(s) of %s in message %d (mode=%s)",
@@ -317,16 +323,17 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
                         results = _scan_text(text, self._patterns)
                         if not results:
                             continue
-                        for pattern, count in results:
-                            self.log.events.append(
-                                DLPEvent(
-                                    pattern_name=pattern.name,
-                                    category=pattern.category,
-                                    action=self._mode,
-                                    message_index=i,
-                                    count=count,
+                        with self.log._lock:
+                            for pattern, count in results:
+                                self.log.events.append(
+                                    DLPEvent(
+                                        pattern_name=pattern.name,
+                                        category=pattern.category,
+                                        action=self._mode,
+                                        message_index=i,
+                                        count=count,
+                                    )
                                 )
-                            )
                         if redact:
                             part["text"] = _redact_text(text, self._patterns)
         return request
