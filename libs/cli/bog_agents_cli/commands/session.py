@@ -6,7 +6,7 @@ tuple. The package-level registry imports them on package load.
 
 from __future__ import annotations
 
-from bog_agents_cli.command_registry import SlashCommandSpec
+from bog_agents_cli._spec import SlashCommandSpec
 from bog_agents_cli.commands._base import SlashCommand
 
 COMMANDS: tuple[SlashCommand, ...] = (

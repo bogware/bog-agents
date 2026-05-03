@@ -660,86 +660,10 @@ class BogAgentsApp(App):
         Binding("3", "approval_no", "No", show=False),
         Binding("n", "approval_no", "No", show=False),
     ]
-    _COMMAND_HANDLER_NAMES: ClassVar[dict[str, str]] = {
-        "/agent": "_handle_agent_command",
-        "/audit": "_handle_audit_command",
-        "/background": "_dispatch_background_command",
-        "/branch": "_handle_branch_command",
-        "/changelog": "_handle_reference_url_command",
-        "/clear": "_handle_clear_command",
-        "/commands": "_handle_help_command",
-        "/compact": "_handle_compact_command",
-        "/compress": "_handle_compress_command",
-        "/context": "_handle_tokens_command",
-        "/cost": "_handle_tokens_command",
-        "/dashboard": "_dispatch_dashboard_command",
-        "/diff": "_handle_diff_command",
-        "/docs": "_handle_reference_url_command",
-        "/doctor": "_handle_doctor_command",
-        "/effort": "_handle_effort_command",
-        "/extensions": "_handle_plugin_command",
-        "/feedback": "_handle_reference_url_command",
-        "/harbor": "_handle_harbor_command",
-        "/jobs": "_handle_jobs_command",
-        "/langsmith": "_handle_langsmith_command",
-        "/health": "_handle_health_command",
-        "/help": "_handle_help_command",
-        "/image": "_handle_image_command",
-        "/init": "_dispatch_init_command",
-        "/infra": "_handle_infra_command",
-        "/keybindings": "_handle_keybindings_command",
-        "/logs": "_dispatch_logs_command",
-        "/mcp": "_handle_mcp_command",
-        "/migrate": "_handle_migrate_command",
-        "/model": "_handle_model_command",
-        "/onboard": "_dispatch_onboard_command",
-        "/pipeline": "_handle_pipeline_command",
-        "/plan": "_handle_plan_command",
-        "/permissions": "_handle_permissions_command",
-        "/plugin": "_handle_plugin_command",
-        "/pr": "_handle_pr_command",
-        "/prompt": "_handle_prompt_command",
-        "/preview": "_handle_preview_command",
-        "/profile": "_handle_profile_command",
-        "/q": "_handle_quit_command",
-        "/quit": "_handle_quit_command",
-        "/record": "_handle_record_command",
-        "/recommend": "_dispatch_recommend_command",
-        "/reload": "_handle_reload_command",
-        "/repomap": "_handle_repomap_command",
-        "/remember": "_handle_remember_command",
-        "/remote": "_handle_remote_command",
-        "/replay": "_handle_replay_command",
-        "/rewind": "_handle_rewind_command",
-        "/resolve": "_handle_resolve_command",
-        "/resume": "_handle_resume_command",
-        "/review": "_handle_review_command",
-        "/session": "_handle_session_command",
-        "/settings": "_handle_settings_command",
-        "/silent": "_handle_silent_command",
-        "/verbose": "_handle_verbose_command",
-        "/skills": "_handle_skills_command",
-        "/test": "_handle_test_command",
-        "/team": "_handle_team_command",
-        "/think": "_handle_think_command",
-        "/threads": "_handle_threads_command",
-        "/tokens": "_handle_tokens_command",
-        "/trace": "_handle_trace_command",
-        "/rules": "_handle_rules_command",
-        "/search": "_handle_search_command",
-        "/undo": "_handle_undo_command",
-        "/vars": "_handle_vars_command",
-        "/version": "_handle_version_command",
-        "/workspace": "_handle_workspace_command",
-        "/worktree": "_handle_worktree_command",
-        "/worktrees": "_handle_worktrees_command",
-        "/benchmark": "_handle_benchmark_command",
-        "/build": "_handle_build_command",
-        "/checkpoint": "_handle_checkpoint_command",
-        "/explain": "_handle_explain_command",
-        "/index": "_handle_index_command",
-        "/ambient": "_handle_ambient_command",
-    }
+    # Slash-command dispatch lives in ``bog_agents_cli/commands/`` — see the
+    # COMMAND_HANDLER_MAP populated by ``commands._registry.discover``. This
+    # class no longer carries a literal mapping so adding a slash command
+    # only requires editing the relevant module under ``commands/``.
 
     class ServerReady(Message):
         """Posted by the background server-startup worker on success."""
@@ -2146,17 +2070,13 @@ class BogAgentsApp(App):
     ) -> Callable[[str], Awaitable[None]] | None:
         """Return the bound handler for a slash command.
 
-        Resolution order:
-        1. Module-based ``commands/`` registry (preferred — each command
-           module owns its spec + handler reference).
-        2. Legacy ``_COMMAND_HANDLER_NAMES`` map for commands not yet
-           migrated. The two are kept in sync by a regression test.
+        Looks up ``command_name`` (or its alias) in the registry built by
+        ``bog_agents_cli/commands/_registry.discover``. The registry is the
+        single source of truth — there is no legacy map.
         """
         from bog_agents_cli.commands import COMMAND_HANDLER_MAP
 
         handler_name = COMMAND_HANDLER_MAP.get(command_name)
-        if handler_name is None:
-            handler_name = self._COMMAND_HANDLER_NAMES.get(command_name)
         if handler_name is None:
             return None
         handler = getattr(self, handler_name, None)

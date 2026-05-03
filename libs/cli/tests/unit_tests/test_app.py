@@ -2612,9 +2612,10 @@ class TestCommandSurfaceEnhancements:
     def test_handler_registry_covers_supported_commands(self) -> None:
         """Every supported command and alias should have a handler mapping."""
         from bog_agents_cli.command_registry import get_registered_command_names
+        from bog_agents_cli.commands import COMMAND_HANDLER_MAP
 
         supported_names = set(get_registered_command_names(include_aliases=True))
-        handler_names = set(BogAgentsApp._COMMAND_HANDLER_NAMES)
+        handler_names = set(COMMAND_HANDLER_MAP)
         assert supported_names <= handler_names
 
 

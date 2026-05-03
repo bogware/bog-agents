@@ -45,4 +45,49 @@ def discover() -> tuple[tuple[SlashCommand, ...], dict[str, str]]:
             for alias in command.spec.aliases:
                 handler_map[alias] = command.handler_method
 
+    # Stable order: featured commands first (in their canonical order),
+    # then everything else alphabetically. Featured commands match the
+    # /help showcase so the no-search autocomplete dropdown surfaces the
+    # commands a typical user reaches for first; the alphabetical tail
+    # keeps the rest discoverable and tests like
+    # ``/clear < /compact < /docs`` happy.
+    featured_priority = {
+        name: i for i, name in enumerate(_FEATURED_FIRST_ORDER)
+    }
+    commands.sort(
+        key=lambda c: (
+            featured_priority.get(c.name, len(featured_priority)),
+            c.name,
+        )
+    )
     return tuple(commands), handler_map
+
+
+# Curated head of the registry — these surface first in autocomplete /
+# palette views regardless of alphabetical position. Mirrors the /help
+# featured-commands grid so users see the same set in both surfaces.
+_FEATURED_FIRST_ORDER: tuple[str, ...] = (
+    "/help",
+    "/commands",
+    "/clear",
+    "/model",
+    "/profile",
+    "/plan",
+    "/effort",
+    "/compact",
+    "/resume",
+    "/threads",
+    "/session",
+    "/permissions",
+    "/diff",
+    "/worktree",
+    "/agent",
+    "/mcp",
+    "/trace",
+    "/tokens",
+    "/background",
+    "/plugin",
+    "/remote",
+    "/review",
+    "/quit",
+)

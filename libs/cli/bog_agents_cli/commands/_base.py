@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bog_agents_cli.command_registry import SlashCommandSpec
+from bog_agents_cli._spec import SlashCommandSpec
 
 
 @dataclass(frozen=True, slots=True)

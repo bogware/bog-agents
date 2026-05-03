@@ -1,9 +1,9 @@
-"""Regression tests for the modular ``bog_agents_cli/commands/`` registry.
+"""Tests for the modular ``bog_agents_cli/commands/`` registry.
 
-The ``commands/`` package is the new home for slash-command metadata. For
-phase 1 it lives alongside the legacy ``_COMMAND_HANDLER_NAMES`` map on
-``BogAgentsApp``. These tests assert that the registry is well-formed and
-that anything declared there actually maps to a real handler method.
+The ``commands/`` package is the only source of truth for slash-command
+dispatch and autocomplete. These tests catch drift between command
+modules, the aggregated registry, and the underlying handler methods on
+``BogAgentsApp``.
 """
 
 from __future__ import annotations
@@ -34,22 +34,27 @@ def test_registry_handler_map_includes_aliases() -> None:
             )
 
 
-def test_registry_does_not_collide_with_legacy_map() -> None:
-    """When a command is migrated, registry + legacy map must agree.
-
-    The legacy map can keep its entry as a fallback during the rollout,
-    but the two must point at the same handler method.
-    """
-    for slash_name, handler_name in COMMAND_HANDLER_MAP.items():
-        legacy = BogAgentsApp._COMMAND_HANDLER_NAMES.get(slash_name)
-        if legacy is None:
-            continue
-        assert legacy == handler_name, (
-            f"Conflict for {slash_name}: registry={handler_name}, legacy={legacy}"
-        )
-
-
 def test_session_module_exports_clear_resume_threads() -> None:
-    """Ensure the migrated session module is wired up."""
+    """The migrated session module must be wired up."""
     names = {c.name for c in COMMANDS}
     assert {"/clear", "/resume", "/threads"}.issubset(names)
+
+
+def test_registry_resolution_count_matches_legacy_surface() -> None:
+    """Sanity check: the new registry covers ~78 dispatch entries (75 specs + 3 aliases)."""
+    assert len(COMMANDS) >= 70
+    # Aliases bump the handler-map size.
+    assert len(COMMAND_HANDLER_MAP) >= len(COMMANDS)
+
+
+def test_handler_map_resolves_alias_q_for_quit() -> None:
+    """``/q`` is an alias of ``/quit`` — both should dispatch to the same method."""
+    assert COMMAND_HANDLER_MAP.get("/quit") == COMMAND_HANDLER_MAP.get("/q")
+
+
+def test_handler_map_resolves_alias_cost_and_context_for_tokens() -> None:
+    """``/cost`` and ``/context`` are aliases of ``/tokens``."""
+    target = COMMAND_HANDLER_MAP.get("/tokens")
+    assert target is not None
+    assert COMMAND_HANDLER_MAP.get("/cost") == target
+    assert COMMAND_HANDLER_MAP.get("/context") == target

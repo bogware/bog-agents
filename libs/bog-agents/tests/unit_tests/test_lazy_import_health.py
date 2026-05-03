@@ -19,7 +19,7 @@ import pytest
 from bog_agents import _LAZY_IMPORTS
 
 
-@pytest.mark.parametrize("name,target", sorted(_LAZY_IMPORTS.items()))
+@pytest.mark.parametrize(("name", "target"), sorted(_LAZY_IMPORTS.items()))
 def test_lazy_import_resolves(name: str, target: tuple[str, str]) -> None:
     module_path, attr = target
     module = importlib.import_module(module_path)
