@@ -610,7 +610,7 @@ def _build_interrupted_ai_message(
 
 
 async def _evaluate_auto_mode_batch(
-    action_requests: list[dict],  # noqa: ANN401
+    action_requests: list[dict],
 ) -> bool:
     """Evaluate a batch of tool-call requests under auto mode.
 
@@ -633,20 +633,20 @@ async def _evaluate_auto_mode_batch(
         load_auto_mode_settings,
     )
 
-    _am_settings = load_auto_mode_settings()
-    _engine = AutoModeRuleEngine(_am_settings)
+    am_settings = load_auto_mode_settings()
+    engine = AutoModeRuleEngine(am_settings)
 
     for req in action_requests:
         t_name = req.get("name", "")
         t_args = req.get("args", {}) or {}
         if not isinstance(t_args, dict):
             t_args = {}
-        verdict = _engine.evaluate(t_name, t_args)
+        verdict = engine.evaluate(t_name, t_args)
         if verdict.decision == AutoDecision.ASK:
             return False
-        if verdict.rule_source == "default" and _am_settings.haiku_eval.enabled:
+        if verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
             is_risky, _reason = await haiku_risk_eval(
-                t_name, t_args, model=_am_settings.haiku_eval.model
+                t_name, t_args, model=am_settings.haiku_eval.model
             )
             if is_risky:
                 return False
@@ -1409,16 +1409,16 @@ async def execute_task_textual(
 
                     # Determine whether to skip the approval dialog entirely.
                     # Priority: always_ask > auto_mode > auto_approve > ask.
-                    _should_auto_approve = False
+                    should_auto_approve = False
                     if session_state.auto_approve and not always_ask:
-                        _should_auto_approve = True
+                        should_auto_approve = True
                     elif auto_mode and not always_ask:
                         # Smart auto-mode: rule engine + optional Haiku eval.
-                        _should_auto_approve = await _evaluate_auto_mode_batch(
+                        should_auto_approve = await _evaluate_auto_mode_batch(
                             action_requests
                         )
 
-                    if _should_auto_approve:
+                    if should_auto_approve:
                         decisions: list[HITLDecision] = [
                             ApproveDecision(type="approve") for _ in action_requests
                         ]

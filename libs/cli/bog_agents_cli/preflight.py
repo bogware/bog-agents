@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
-from bog_agents_cli.auto_mode import AutoModeSettings, detect_ambiguities, haiku_preflight_check
+from bog_agents_cli.auto_mode import (
+    AutoModeSettings,
+    detect_ambiguities,
+    haiku_preflight_check,
+)
 
 
 async def run_preflight_qa(
@@ -52,16 +57,16 @@ async def run_preflight_qa(
     if not questions:
         return prompt
 
-    print("\n\033[1;33m[Auto Mode] Pre-flight clarification\033[0m", flush=True)
-    print("A few quick questions before starting:\n", flush=True)
+    print("\n\033[1;33m[Auto Mode] Pre-flight clarification\033[0m", flush=True)  # noqa: T201
+    print("A few quick questions before starting:\n", flush=True)  # noqa: T201
 
     answers: list[str] = []
     for i, question in enumerate(questions, 1):
-        print(f"  {i}. {question}", flush=True)
+        print(f"  {i}. {question}", flush=True)  # noqa: T201
         try:
-            answer = input("     → ").strip()
+            answer = (await asyncio.to_thread(input, "     → ")).strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n[Skipping remaining questions]", flush=True)
+            print("\n[Skipping remaining questions]", flush=True)  # noqa: T201
             break
         if answer:
             answers.append(f"Q: {question}\nA: {answer}")

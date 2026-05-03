@@ -116,7 +116,6 @@ from bog_agents_cli.model_config import (  # noqa: E402
     ModelConfigError,
     ModelSpec,
     get_available_models,
-    has_provider_credentials,
 )
 from bog_agents_cli.project_utils import (  # noqa: E402
     find_project_agent_md as _find_project_agent_md,

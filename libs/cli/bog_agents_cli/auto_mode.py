@@ -24,12 +24,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class AutoDecision(Enum):
+    """Whether a tool call should be auto-approved or shown to the user."""
+
     ALLOW = "allow"
     ASK = "ask"
 
 
 @dataclass(frozen=True)
 class RuleVerdict:
+    """Result of evaluating a tool call against the rule engine."""
+
     decision: AutoDecision
     reason: str
     rule_source: str  # "safe_tools", "risky_tools", "allow_list", "ask_list", "haiku", "default"
@@ -121,6 +125,7 @@ class HaikuEvalConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> HaikuEvalConfig:
+        """Construct from a plain dict (e.g. from JSON settings)."""
         return cls(
             enabled=bool(d.get("enabled", True)),
             model=str(d.get("model", "claude-haiku-4-5-20251001")),
@@ -286,15 +291,15 @@ async def haiku_risk_eval(
         "You are a security evaluator for an AI coding assistant. "
         "Respond with a JSON object ONLY — no prose.\n\n"
         f"Tool call: {cmd_repr}\n\n"
-        'Is this operation risky? Consider risky: deleting files, force-pushing git, '
-        'dropping databases, killing processes, overwriting production data, '
-        'destructive system changes. Consider safe: reading files, running tests, '
-        'type-checking, git status/log/diff, creating new files.\n\n'
+        "Is this operation risky? Consider risky: deleting files, force-pushing git, "
+        "dropping databases, killing processes, overwriting production data, "
+        "destructive system changes. Consider safe: reading files, running tests, "
+        "type-checking, git status/log/diff, creating new files.\n\n"
         '{"risky": true/false, "reason": "one sentence"}'
     )
     try:
-        client = anthropic.Anthropic()
-        msg = client.messages.create(
+        client = anthropic.AsyncAnthropic()
+        msg = await client.messages.create(
             model=model,
             max_tokens=80,
             messages=[{"role": "user", "content": prompt}],
@@ -366,13 +371,13 @@ async def haiku_preflight_check(
     )
     user_msg = (
         f"User request: {prompt}\n\n"
-        "If clear and specific: {\"questions\": []}\n"
-        "If unclear, up to 3 questions: {\"questions\": [\"q1\", \"q2\"]}\n"
+        'If clear and specific: {"questions": []}\n'
+        'If unclear, up to 3 questions: {"questions": ["q1", "q2"]}\n'
         "JSON only."
     )
     try:
-        client = anthropic.Anthropic()
-        msg = client.messages.create(
+        client = anthropic.AsyncAnthropic()
+        msg = await client.messages.create(
             model=model,
             max_tokens=200,
             system=system,
