@@ -334,6 +334,56 @@ class TestDLPMiddleware:
         mw = DLPMiddleware(mode="warn")
         assert mw._mode == "warn"
 
+    def test_process_messages_redact_mutates_string_content(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.dlp import DLPMiddleware
+
+        mw = DLPMiddleware(mode="redact")
+        msg = SimpleNamespace(content="My SSN is 123-45-6789 and email john@example.com")
+        request = SimpleNamespace(messages=[msg])
+        mw._process_messages(request)  # type: ignore[arg-type]
+
+        assert "123-45-6789" not in msg.content
+        assert "john@example.com" not in msg.content
+        assert "[SSN-REDACTED]" in msg.content
+        assert "[EMAIL-REDACTED]" in msg.content
+        assert mw.log.total_redactions >= 2
+
+    def test_process_messages_warn_does_not_mutate(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.dlp import DLPMiddleware
+
+        mw = DLPMiddleware(mode="warn")
+        original = "My SSN is 123-45-6789"
+        msg = SimpleNamespace(content=original)
+        request = SimpleNamespace(messages=[msg])
+        mw._process_messages(request)  # type: ignore[arg-type]
+
+        assert msg.content == original
+        assert mw.log.total_detections >= 1
+        assert mw.log.total_redactions == 0
+
+    def test_process_messages_redact_multimodal_text_blocks(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.dlp import DLPMiddleware
+
+        mw = DLPMiddleware(mode="redact")
+        content = [
+            {"type": "text", "text": "Card: 4111-1111-1111-1111"},
+            {"type": "image_url", "image_url": "data:image/png;base64,..."},
+        ]
+        msg = SimpleNamespace(content=content)
+        request = SimpleNamespace(messages=[msg])
+        mw._process_messages(request)  # type: ignore[arg-type]
+
+        assert "4111-1111-1111-1111" not in content[0]["text"]
+        assert "[CC-REDACTED]" in content[0]["text"]
+        # Non-text block untouched.
+        assert content[1] == {"type": "image_url", "image_url": "data:image/png;base64,..."}
+
 
 class TestVersionControlMiddleware:
     """Tests for VersionControlMiddleware (#33)."""

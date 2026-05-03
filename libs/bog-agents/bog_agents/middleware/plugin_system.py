@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -53,6 +55,106 @@ class InstalledPlugin:
     manifest: PluginManifest
     install_path: Path
     enabled: bool = True
+
+
+_ALLOWED_PERMISSIONS: frozenset[str] = frozenset({
+    "filesystem.read",
+    "filesystem.write",
+    "shell",
+    "network",
+    "subagents",
+    "tools.read",
+    "tools.write",
+    "mcp",
+})
+
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
+_VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}([\-+][A-Za-z0-9.\-]+)?$")
+
+
+class PluginValidationError(ValueError):
+    """Raised when a plugin manifest or payload fails validation."""
+
+
+def _contains_symlink(root: Path) -> Path | None:
+    """Return the first symlink found anywhere under ``root``, else None."""
+    if root.is_symlink():
+        return root
+    if not root.is_dir():
+        return None
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            return path
+    return None
+
+
+def validate_plugin_manifest(data: Any) -> PluginManifest:
+    """Validate raw manifest data and return a typed ``PluginManifest``.
+
+    Rejects unknown permission strings, malformed names/versions, and
+    non-http(s) MCP server URLs to prevent privilege escalation via crafted
+    manifests.
+    """
+    if not isinstance(data, dict):
+        msg = "manifest.json must contain a JSON object"
+        raise PluginValidationError(msg)
+
+    name = data.get("name")
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        msg = f"invalid plugin name: {name!r}"
+        raise PluginValidationError(msg)
+
+    version = data.get("version")
+    if not isinstance(version, str) or not _VERSION_RE.match(version):
+        msg = f"invalid plugin version: {version!r}"
+        raise PluginValidationError(msg)
+
+    description = data.get("description", "")
+    if not isinstance(description, str):
+        msg = "description must be a string"
+        raise PluginValidationError(msg)
+
+    permissions = data.get("permissions", []) or []
+    if not isinstance(permissions, list) or not all(isinstance(p, str) for p in permissions):
+        msg = "permissions must be a list of strings"
+        raise PluginValidationError(msg)
+    unknown = sorted(set(permissions) - _ALLOWED_PERMISSIONS)
+    if unknown:
+        msg = f"unknown permissions: {unknown}"
+        raise PluginValidationError(msg)
+
+    mcp_servers = data.get("mcp_servers", []) or []
+    if not isinstance(mcp_servers, list):
+        msg = "mcp_servers must be a list"
+        raise PluginValidationError(msg)
+    for entry in mcp_servers:
+        if not isinstance(entry, dict):
+            msg = "each mcp_servers entry must be an object"
+            raise PluginValidationError(msg)
+        url = entry.get("url", "")
+        if url:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                msg = f"mcp_servers url must be http(s) with a host: {url!r}"
+                raise PluginValidationError(msg)
+
+    compatible_tools = data.get("compatible_tools", []) or []
+    if not isinstance(compatible_tools, list) or not all(isinstance(t, str) for t in compatible_tools):
+        msg = "compatible_tools must be a list of strings"
+        raise PluginValidationError(msg)
+
+    return PluginManifest(
+        name=name,
+        version=version,
+        description=description,
+        author=data.get("author", "") or "",
+        homepage=data.get("homepage", "") or "",
+        skills=list(data.get("skills", []) or []),
+        hooks=list(data.get("hooks", []) or []),
+        mcp_servers=list(mcp_servers),
+        permissions=list(permissions),
+        compatible_tools=list(compatible_tools),
+    )
 
 
 def parse_skill_md(content: str) -> dict[str, Any]:
@@ -199,10 +301,9 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
             plugin_dir = middleware._plugins_dir / safe_name
 
             if source.startswith(("http://", "https://", "git@")):
-                # Git install
                 try:
                     result = subprocess.run(
-                        ["git", "clone", "--depth", "1", source, str(plugin_dir)],
+                        ["git", "clone", "--depth", "1", "--filter=blob:none", source, str(plugin_dir)],
                         capture_output=True,
                         text=True,
                         timeout=60,
@@ -213,21 +314,34 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
                 except (FileNotFoundError, subprocess.TimeoutExpired) as e:
                     return f"Error: {e}"
             elif Path(source).exists():
-                # Local install
-                shutil.copytree(source, plugin_dir, dirs_exist_ok=True, symlinks=False)
+                src_path = Path(source)
+                bad = _contains_symlink(src_path)
+                if bad is not None:
+                    return f"Refusing to install plugin: contains symlink ({bad}). Symlinks are blocked to prevent path-traversal attacks."
+                shutil.copytree(src_path, plugin_dir, dirs_exist_ok=True, symlinks=False, ignore_dangling_symlinks=True)
             else:
                 return f"Source not found: {source}"
 
-            # Load manifest
+            # Reject any symlink that snuck in via the source (git submodule symlinks etc.).
+            bad = _contains_symlink(plugin_dir)
+            if bad is not None:
+                shutil.rmtree(plugin_dir, ignore_errors=True)
+                return f"Refusing to install plugin: contains symlink ({bad.relative_to(plugin_dir) if bad.is_relative_to(plugin_dir) else bad})."
+
             manifest_path = plugin_dir / "manifest.json"
             if manifest_path.exists():
                 try:
                     data = json.loads(manifest_path.read_text(encoding="utf-8"))
-                    manifest = PluginManifest(**data)
-                    middleware._installed[manifest.name] = InstalledPlugin(manifest=manifest, install_path=plugin_dir)
-                    return f"Installed plugin '{manifest.name}' v{manifest.version}"
-                except (json.JSONDecodeError, TypeError) as e:
+                except json.JSONDecodeError as e:
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
+                    return f"Invalid manifest JSON: {e}"
+                try:
+                    manifest = validate_plugin_manifest(data)
+                except PluginValidationError as e:
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
                     return f"Invalid manifest: {e}"
+                middleware._installed[manifest.name] = InstalledPlugin(manifest=manifest, install_path=plugin_dir)
+                return f"Installed plugin '{manifest.name}' v{manifest.version}"
             return f"Plugin installed at {plugin_dir} (no manifest.json found)"
 
         def uninstall_plugin(

@@ -37,7 +37,7 @@ import fnmatch
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -311,24 +311,53 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
             ),
         ]
 
+    # RBAC's own admin tools are always permitted regardless of active role,
+    # otherwise an over-restrictive role would lock the user out of role
+    # management itself.
+    _ADMIN_TOOLS: frozenset[str] = frozenset({"define_role", "set_active_role", "check_permission", "list_roles"})
+
     def modify_request(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
-        """Inject RBAC instructions into the system prompt.
+        """Inject RBAC instructions and filter disallowed tools.
 
         Args:
             request: Model request to modify.
 
         Returns:
-            Modified request with RBAC instructions.
+            Modified request with RBAC instructions and tools restricted to
+            the active role's allow-list.
         """
         new_system_message = append_to_system_message(request.system_message, RBAC_SYSTEM_PROMPT)
-        return request.override(system_message=new_system_message)
+
+        if not self.store.active_role:
+            return request.override(system_message=new_system_message)
+
+        role = self.store.roles.get(self.store.active_role)
+        if role is None:
+            return request.override(system_message=new_system_message)
+
+        allowed_tools: list[BaseTool | dict[str, Any]] = []
+        for tool in request.tools:
+            tool_name = getattr(tool, "name", None) or (tool.get("name") if isinstance(tool, dict) else None)
+            if not tool_name:
+                allowed_tools.append(tool)
+                continue
+            if tool_name in self._ADMIN_TOOLS or role.can_use_tool(tool_name):
+                allowed_tools.append(tool)
+            else:
+                logger.warning(
+                    "RBAC: stripping tool '%s' from request — denied by role '%s'",
+                    tool_name,
+                    self.store.active_role,
+                )
+
+        return request.override(system_message=new_system_message, tools=allowed_tools)
 
     def wrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT]:
-        """Inject RBAC instructions and log permission warnings.
+        """Inject RBAC instructions and enforce tool access.
 
         Args:
             request: Model request.
@@ -337,19 +366,7 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        if self.store.active_role:
-            role = self.store.roles.get(self.store.active_role)
-            if role:
-                for tool in self.tools:
-                    if not role.can_use_tool(tool.name):
-                        logger.warning(
-                            "Active role '%s' cannot use tool '%s'",
-                            self.store.active_role,
-                            tool.name,
-                        )
-
-        modified = self.modify_request(request)
-        return call_next(modified)
+        return call_next(self.modify_request(request))
 
     async def awrap_model_call(
         self,
@@ -365,19 +382,7 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        if self.store.active_role:
-            role = self.store.roles.get(self.store.active_role)
-            if role:
-                for tool in self.tools:
-                    if not role.can_use_tool(tool.name):
-                        logger.warning(
-                            "Active role '%s' cannot use tool '%s'",
-                            self.store.active_role,
-                            tool.name,
-                        )
-
-        modified = self.modify_request(request)
-        return await call_next(modified)
+        return await call_next(self.modify_request(request))
 
 
 __all__ = ["RBACMiddleware", "RBACStore", "Role"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -180,6 +181,7 @@ class HotReloadSkillsMiddleware(AgentMiddleware):
         self.poll_interval = poll_interval
         self.state = HotReloadState(watched_dirs=resolved_dirs)
         self._on_reload = on_reload
+        self._lock = threading.Lock()
 
         # Initial scan
         self.state.skill_states = scan_skill_directories(resolved_dirs)
@@ -193,34 +195,40 @@ class HotReloadSkillsMiddleware(AgentMiddleware):
     def check_for_changes(self) -> tuple[list[str], list[str], list[str]]:
         """Check for skill file changes if poll interval has elapsed.
 
+        Concurrent callers are serialized through ``self._lock`` so the
+        skill-state map is updated atomically and ``reload_count`` is bumped
+        at most once per real change.
+
         Returns:
-            Tuple of (added, modified, removed) paths. Empty if no check needed.
+            Tuple of (added, modified, removed) paths. Empty if no check
+            was performed by this caller.
         """
-        now = time.time()
-        if now - self.state.last_scan < self.poll_interval:
-            return [], [], []
+        with self._lock:
+            now = time.time()
+            if now - self.state.last_scan < self.poll_interval:
+                return [], [], []
+            self.state.last_scan = now
 
-        self.state.last_scan = now
-        new_states = scan_skill_directories(self.watch_dirs)
-        added, modified, removed = detect_changes(self.state.skill_states, new_states)
+            new_states = scan_skill_directories(self.watch_dirs)
+            added, modified, removed = detect_changes(self.state.skill_states, new_states)
+            self.state.skill_states = new_states
 
-        if added or modified or removed:
-            self.state.skill_states = new_states
-            self.state.reload_count += 1
-            logger.info(
-                "Skills changed: +%d modified=%d -%d (reload #%d)",
-                len(added),
-                len(modified),
-                len(removed),
-                self.state.reload_count,
-            )
-            if self._on_reload:
-                try:
-                    self._on_reload(added, modified, removed)
-                except Exception:
-                    logger.debug("on_reload callback failed", exc_info=True)
-        else:
-            self.state.skill_states = new_states
+            changed = bool(added or modified or removed)
+            if changed:
+                self.state.reload_count += 1
+                logger.info(
+                    "Skills changed: +%d modified=%d -%d (reload #%d)",
+                    len(added),
+                    len(modified),
+                    len(removed),
+                    self.state.reload_count,
+                )
+
+        if changed and self._on_reload:
+            try:
+                self._on_reload(added, modified, removed)
+            except Exception:
+                logger.debug("on_reload callback failed", exc_info=True)
 
         return added, modified, removed
 
