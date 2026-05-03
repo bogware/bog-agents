@@ -179,14 +179,26 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
     is enough since we launched with ``start_new_session=True``.
     """
     if sys.platform == "win32":
+        # taskkill returncode meanings:
+        #   0   = process(es) terminated
+        #   128 = pid not found (process already gone — nothing to kill)
+        #   anything else = something else went wrong; fall back to
+        #     ``proc.kill()`` so we at least take a swing at the parent
+        # The previous code only fell back on OSError / TimeoutExpired,
+        # which meant ``check=False`` quietly hid these other-failure
+        # cases.
         try:
-            subprocess.run(  # noqa: S603
+            result = subprocess.run(  # noqa: S603
                 ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                 capture_output=True,
                 check=False,
                 timeout=5,
             )
         except (OSError, subprocess.TimeoutExpired):
+            with contextlib.suppress(Exception):
+                proc.kill()
+            return
+        if result.returncode not in (0, 128):
             with contextlib.suppress(Exception):
                 proc.kill()
     else:

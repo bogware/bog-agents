@@ -358,9 +358,24 @@ async def haiku_risk_eval(
                 messages=[{"role": "user", "content": prompt}],
             )
             text = msg.content[0].text.strip()
-            m = re.search(r"\{[^}]+\}", text, re.DOTALL)
+            # ``\{.*\}`` (greedy, DOTALL) — matches the outermost pair of
+            # braces. The previous ``\{[^}]+\}`` rejected nested braces in
+            # Haiku's reason field (e.g. ``"deletes {temp} files"``), which
+            # silently flipped the verdict to "risky".
+            m = re.search(r"\{.*\}", text, re.DOTALL)
             if m:
-                data = json.loads(m.group(0))
+                try:
+                    data = json.loads(m.group(0))
+                except json.JSONDecodeError:
+                    # Haiku occasionally adds trailing prose after the JSON;
+                    # try to find a *minimal* leading JSON object instead.
+                    inner = re.search(r"\{[^{}]*\}", text)
+                    if inner is None:
+                        return True, "haiku eval: malformed JSON — treating as risky"
+                    try:
+                        data = json.loads(inner.group(0))
+                    except json.JSONDecodeError:
+                        return True, "haiku eval: malformed JSON — treating as risky"
                 return bool(data.get("risky", False)), str(data.get("reason", "haiku eval"))
             return True, "haiku eval: inconclusive — treating as risky"
         except anthropic.NotFoundError:

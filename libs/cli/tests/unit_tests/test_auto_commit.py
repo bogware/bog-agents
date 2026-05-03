@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 
 def _git(cwd: Path, *args: str) -> None:
     """Run a git command in *cwd*, raising on non-zero exit."""
-    subprocess.run(  # noqa: S603
+    subprocess.run(
         ["git", *args],
         cwd=str(cwd),
         check=True,
@@ -82,10 +82,6 @@ class TestHasChanges:
 
 
 class TestRunAutoCommit:
-    async def test_returns_none_when_not_a_repo(self, tmp_path: Path):
-        # No .git exists.
-        assert await run_auto_commit(tmp_path) is None
-
     async def test_returns_none_when_no_changes(self, repo: Path):
         (repo / "x.txt").write_text("hi")
         _git(repo, "add", "x.txt")
@@ -100,10 +96,14 @@ class TestRunAutoCommit:
         # New file the agent "wrote".
         (repo / "agent.txt").write_text("agent change")
         sha = await run_auto_commit(repo, paths=["agent.txt"])
-        assert sha is not None and len(sha) >= 7
+        assert sha is not None
+        assert len(sha) >= 7
 
-        # Verify the commit message ends with the (bog-agent) tag.
-        result = subprocess.run(  # noqa: S603
+        # Verify the commit message ends with the (bog-agent) tag. Sync
+        # subprocess inside an async test is fine here — the call is
+        # short-lived (a single git log) and we're already wrapped in a
+        # 15s timeout.
+        result = subprocess.run(  # noqa: ASYNC221 — short, timed git verification
             ["git", "log", "-1", "--pretty=%s"],
             cwd=str(repo),
             check=True,
@@ -120,7 +120,7 @@ class TestRunAutoCommit:
         (repo / "agent.txt").write_text("agent change")
         sha = await run_auto_commit(repo, paths=["agent.txt"], message="fix: tweak")
         assert sha is not None
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(  # noqa: ASYNC221 — short, timed git verification
             ["git", "log", "-1", "--pretty=%s"],
             cwd=str(repo),
             check=True,

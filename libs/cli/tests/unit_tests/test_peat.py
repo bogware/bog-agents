@@ -491,6 +491,20 @@ class TestPromptBuilders:
         ):
             assert needle in out
 
+    def test_scheduled_prompt_handles_braces_in_task(self, tmp_path: Path):
+        # Regression: a previous version of the renderer ended with a
+        # leftover .format() call that crashed with KeyError if the user's
+        # job.prompt contained literal braces (a JSON snippet, code, etc.).
+        job = PeatJob(
+            job_id="j",
+            name="J",
+            prompt='Save {"key": "value"} as the result. Reasoning: {x: 1}.',
+        )
+        out = build_scheduled_prompt(DEFAULT_PEAT_PERSONA, job, "run-1", tmp_path)
+        # The braces must have survived to the output.
+        assert '{"key": "value"}' in out
+        assert "{x: 1}" in out
+
     def test_scheduled_tool_allowlist_excludes_shell(self):
         for shell_tool in ("execute", "run_command", "shell", "bash", "delete_file", "remove_directory"):
             assert shell_tool not in SCHEDULED_TOOL_ALLOWLIST

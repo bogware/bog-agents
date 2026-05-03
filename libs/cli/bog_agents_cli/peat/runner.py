@@ -100,7 +100,14 @@ def build_scheduled_prompt(persona: PeatPersona, job: PeatJob, run_id: str, run_
     Returns:
         A prompt for the sub-agent.
     """
-    output_path = run_dir / f"{run_id}.md"
+    # Forward-slash path string — agents (and write_file) accept either,
+    # but a single style is easier to splice into the prompt and avoids
+    # shell-quote ambiguity if the agent ever echoes it back.
+    output_path_str = str(run_dir / f"{run_id}.md").replace("\\", "/")
+    # Build the prompt with a single f-string and NO subsequent
+    # ``.format()`` call — a leftover ``.format()`` here previously
+    # crashed with ``KeyError`` whenever ``job.prompt`` contained literal
+    # braces (JSON snippets, code samples, AGENTS.md fragments).
     return (
         f"{persona.to_system_prompt()}\n"
         "\n## Scheduled run — restricted mode\n\n"
@@ -115,7 +122,7 @@ def build_scheduled_prompt(persona: PeatPersona, job: PeatJob, run_id: str, run_
         "4. **Stay within budget.** Hard timeout: "
         f"{job.timeout_s} seconds. Stop when you have something useful, even "
         "if not perfect.\n"
-        "5. **Write your output here:** `{output_path}`. Use `write_file` "
+        f"5. **Write your output here:** `{output_path_str}`. Use `write_file` "
         "with that exact path. The first line of the file should be a one-line "
         "summary the user can scan in their inbox.\n\n"
         "If you cannot complete the task within these rules, stop and write a "
@@ -126,7 +133,7 @@ def build_scheduled_prompt(persona: PeatPersona, job: PeatJob, run_id: str, run_
         f"**Run id:** {run_id}\n\n"
         "**Task:**\n\n"
         f"{job.prompt.strip()}\n"
-    ).format(output_path=str(output_path).replace("\\", "/"))
+    )
 
 
 # ---------------------------------------------------------------------------

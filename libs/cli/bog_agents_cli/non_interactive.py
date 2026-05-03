@@ -19,6 +19,7 @@ stderr, leaving stdout exclusively for the agent's response text.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
@@ -1052,6 +1053,14 @@ async def run_non_interactive(
                     style="bold red",
                 )
             )
+        # Cancel the MCP preload task we just spawned — leaving it running
+        # produces a "coroutine was never awaited" RuntimeWarning at
+        # interpreter shutdown and may even fire a network call after the
+        # process has bailed.
+        if mcp_task is not None:
+            mcp_task.cancel()
+            with contextlib.suppress(BaseException):
+                await mcp_task
         return 2
 
     try:

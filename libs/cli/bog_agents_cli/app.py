@@ -335,7 +335,7 @@ class RecordingSessionState:
     baseline_message_count: int = 0
     # Live recorder. Optional so older code paths that only stored the
     # state can keep working; new code always sets it.
-    recorder: Any | None = None  # noqa: ANN401 — SessionRecorder, lazy-imported
+    recorder: Any | None = None
 
 
 class TextualTokenTracker:
@@ -491,9 +491,19 @@ async def _get_current_git_branch() -> str | None:
     Returns:
         Branch name string, or None.
     """
+    # Resolve ``git`` via PATH explicitly. ``asyncio.create_subprocess_exec``
+    # inherits the same PATH-lookup quirks as ``Popen`` and on Windows
+    # CPython sometimes fails to locate ``git.exe`` from a bare ``"git"``
+    # argv0 — same root cause that bit ``non_interactive._git_dirty_paths``
+    # earlier and was fixed there with ``shutil.which``.
+    import shutil
+
+    git_path = shutil.which("git")
+    if git_path is None:
+        return None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git",
+            git_path,
             "rev-parse",
             "--abbrev-ref",
             "HEAD",
@@ -12731,7 +12741,7 @@ class BogAgentsApp(App):
         except NoMatches:
             pass
 
-    def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401 — duck-typed
+    def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401, PLR6301 — duck-typed; method form mirrors siblings
         """Translate a mounted message widget into a recorder event.
 
         Each branch maps to one of the three things the recorder cares

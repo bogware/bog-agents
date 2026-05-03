@@ -91,4 +91,4 @@ class TestServerCRUD:
 class TestPathHelper:
     def test_get_user_mcp_config_path_returns_module_constant(self):
         # Without patching, this should match the module-level constant.
-        assert mcm.get_user_mcp_config_path() == mcm._USER_MCP_CONFIG  # noqa: SLF001
+        assert mcm.get_user_mcp_config_path() == mcm._USER_MCP_CONFIG

@@ -168,9 +168,16 @@ def read_inbox(config_dir: Path) -> list[dict]:
 
 
 def clear_inbox(config_dir: Path) -> int:
-    """Empty the inbox. Returns the count of dropped entries."""
+    """Empty the inbox. Returns the count of dropped entries.
+
+    Uses ``atomic_write_text`` (matching ``append_inbox``) so a concurrent
+    ``append_inbox`` from a scheduler tick can't interleave with the
+    clear and produce a corrupt file.
+    """
     items = read_inbox(config_dir)
-    inbox_path(config_dir).write_text("[]", encoding="utf-8")
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    atomic_write_text(inbox_path(config_dir), "[]")
     return len(items)
 
 
@@ -250,8 +257,18 @@ class PeatScheduler:
                 raise
 
     async def _tick_once(self) -> None:
+        # Bail immediately if shutdown was requested between the wait and
+        # this tick — without this check, a tick that started just before
+        # ``stop()`` was called could still create new ``_fire`` tasks
+        # that aren't waited on during shutdown.
+        if self._stopping.is_set():
+            return
         now = time.time()
         for job in list_jobs(self._config_dir):
+            # Re-check between iterations so a long ``list_jobs`` doesn't
+            # span a shutdown.
+            if self._stopping.is_set():
+                return
             if not job.enabled:
                 continue
             if not job.schedule:
