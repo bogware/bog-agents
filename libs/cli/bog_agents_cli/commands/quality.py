@@ -66,4 +66,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_qa_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/peat",
+            "Peat — your personal assistant: chat, schedule, research, digest",
+            "assistant peat schedule cron job research digest inbox personal",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_peat_command",
+    ),
 )

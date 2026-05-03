@@ -336,6 +336,17 @@ ignore-var-parameters = true
     "DOC501",   # ValueError documented at module level
     "TRY004",   # ValueError used for shape/parse mismatches
 ]
+# Peat: prompt-builder package + schedulers + dataclass IO. Same shape as
+# the QA harness — short helper methods don't need duplicate docstrings.
+"bog_agents_cli/peat/**" = [
+    "ANN401",   # Any in YAML/JSON loaders — by design
+    "D102",     # Missing docstring on dataclass to/from_dict helpers
+    "D103",     # Missing docstring on small helpers (jobs_dir, etc.)
+    "D105",     # Missing docstring on dunder methods
+    "DOC501",   # ValueError documented at module level
+    "TRY004",   # ValueError used for shape/parse mismatches
+    "PLR0915",  # Too many statements in handler scaffolding
+]
 "examples/**" = [
     "ANN001",   # Missing type annotation for function argument — examples prioritize clarity
     "ANN201",   # Missing return type annotation — examples prioritize clarity

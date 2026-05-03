@@ -15,6 +15,7 @@ import webbrowser
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
@@ -4142,7 +4143,7 @@ class BogAgentsApp(App):
                     "Usage:\n"
                     "  /qa list\n"
                     "  /qa show <plan_id>\n"
-                    "  /qa new [--from-file <path> | --from-json <text-or-path>]\n"
+                    "  /qa new [--from-file <path> | --from-json <text-or-path> | --from-jira <TICKET>]\n"
                     "  /qa run <plan_id> [--var name=value ...] [--output markdown|json|stdout|jira-comment]\n"
                 )
             )
@@ -4203,6 +4204,7 @@ class BogAgentsApp(App):
             # we just supply the seed data here.
             from_file: str | None = None
             from_json: str | None = None
+            from_jira: str | None = None
             i = 1
             while i < len(tokens):
                 t = tokens[i]
@@ -4212,8 +4214,45 @@ class BogAgentsApp(App):
                 elif t == "--from-json" and i + 1 < len(tokens):
                     from_json = tokens[i + 1]
                     i += 2
+                elif t == "--from-jira" and i + 1 < len(tokens):
+                    from_jira = tokens[i + 1]
+                    i += 2
                 else:
                     i += 1
+
+            if from_jira:
+                # Jira ingestion runs through the live agent + MCP Jira
+                # tool — there's no offline fetch path. We construct a
+                # prompt that does fetch → parse → draft in one go, so
+                # the user only has to type the ticket id.
+                prompt = (
+                    f"Author a QA plan for ticket `{from_jira}` and the deployed "
+                    "product in this repository.\n\n"
+                    "## Step 1: Fetch the Jira ticket\n\n"
+                    f"Call the Jira MCP tool to retrieve `{from_jira}` (issue summary, "
+                    "description, and any acceptance-criteria comments). If no Jira MCP "
+                    "tool is configured, stop and tell me which one I need to enable.\n\n"
+                    "## Step 2: Extract acceptance criteria\n\n"
+                    "Parse out the AC list. Look in: the description (often under "
+                    "'Acceptance Criteria' or 'AC:' headers), checklist comments, and "
+                    "Gherkin Given/When/Then blocks.\n\n"
+                    "## Step 3: Draft the plan\n\n"
+                    "Write the plan to `.bog-agents/qa-plans/<plan_id>.yaml` using "
+                    "`write_file`. Each step has a `kind` (one of: agent, shell, http, "
+                    "mcp), `ac` (list of AC ids it tests), and a `verdict` block "
+                    "(`exit_code`, `status`, `contains`, `not_contains`, `regex`, "
+                    "`json_path`).\n\n"
+                    "Declare needed inputs in the `vars` block — use `type: secret` "
+                    "for credentials so they never get persisted. Inspect the repo "
+                    "to figure out how the product is deployed and what tools (curl, "
+                    "k6, vitest, etc.) make sense.\n"
+                )
+                await self._mount_message(
+                    AppMessage(f"Fetching {from_jira} from Jira and drafting QA plan...")
+                )
+                await self._send_prompt_to_agent(prompt)
+                return
+
             try:
                 acs = await asyncio.to_thread(
                     load_acceptance_criteria,
@@ -4226,9 +4265,9 @@ class BogAgentsApp(App):
             if not acs:
                 await self._mount_message(
                     AppMessage(
-                        "No acceptance criteria provided. Pass --from-file <path> or "
-                        "--from-json <text-or-path>, or open a plan template via "
-                        "`/qa show` and copy/edit it."
+                        "No acceptance criteria provided. Pass --from-file <path>, "
+                        "--from-json <text-or-path>, or --from-jira <TICKET-ID>, or "
+                        "open a plan template via `/qa show` and copy/edit it."
                     )
                 )
                 return
@@ -4321,6 +4360,343 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage("Usage: /qa list | /qa show <id> | /qa new [...] | /qa run <id> [--var k=v] [--output FMT]")
         )
+
+    async def _handle_peat_command(self, command: str) -> None:
+        """Handle ``/peat`` — chat with Peat, manage jobs, run digests/research.
+
+        Subcommands::
+
+            /peat                          # show inbox + status
+            /peat <free-form prompt>       # interactive chat with Peat
+            /peat schedule "<cron-or-@once> | <task>"
+            /peat jobs [list|show|enable|disable|delete] [<id>]
+            /peat run <job_id>             # fire a saved job now
+            /peat inbox [clear]            # show / clear buffered notifications
+            /peat research <topic> [--focus a,b,c]
+            /peat digest [--days N]
+            /peat config [show|reset]
+        """
+        from bog_agents_cli.peat import (
+            build_digest_prompt,
+            build_interactive_prompt,
+            build_research_prompt,
+            clear_inbox,
+            collect_digest_inputs,
+            delete_job,
+            find_job,
+            list_jobs,
+            load_job,
+            load_persona,
+            next_fire_time,
+            read_inbox,
+            save_job,
+        )
+        from bog_agents_cli.peat.jobs import PeatJob
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/peat") :].strip()
+
+        config_dir = settings.user_agents_dir
+        project_root = Path(self._cwd)
+        persona = await asyncio.to_thread(load_persona, project_root)
+
+        # `/peat` with no args → status panel.
+        if not raw_arg:
+            inbox = await asyncio.to_thread(read_inbox, config_dir)
+            jobs = await asyncio.to_thread(list_jobs, config_dir)
+            enabled = sum(1 for j in jobs if j.enabled and j.schedule)
+            lines = [
+                f"{persona.name}: {persona.role}",
+                "",
+                f"  Jobs: {len(jobs)} ({enabled} enabled & scheduled)",
+                f"  Inbox: {len(inbox)} unread",
+            ]
+            if inbox:
+                lines.append("")
+                lines.append("Recent notifications:")
+                for entry in inbox[-5:]:
+                    when = entry.get("when", "?")
+                    name = entry.get("job_name", entry.get("job_id", "?"))
+                    status = entry.get("status", "?")
+                    summary = (entry.get("summary") or "")[:80]
+                    lines.append(f"  [{when}] {name} — {status}: {summary}")
+            lines.append("")
+            lines.append(
+                'Try:  /peat <free prompt>  |  /peat schedule "<cron> | <task>"  |  '
+                "/peat jobs  |  /peat research <topic>  |  /peat digest"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        # First token decides whether this is a subcommand or free chat.
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+        first = tokens[0].lower() if tokens else ""
+
+        # ----- subcommands ------------------------------------------------
+        if first in ("help", "--help", "-h"):
+            await self._mount_message(
+                AppMessage(
+                    "Usage:\n"
+                    "  /peat                                # status + inbox\n"
+                    "  /peat <free prompt>                  # chat with Peat\n"
+                    '  /peat schedule "<schedule> | <task>" # add a recurring or one-shot job\n'
+                    "  /peat jobs                           # list jobs\n"
+                    "  /peat jobs show <id>                 # job details\n"
+                    "  /peat jobs enable|disable|delete <id>\n"
+                    "  /peat run <id>                       # fire a job now\n"
+                    "  /peat inbox [clear]\n"
+                    "  /peat research <topic> [--focus a,b,c]\n"
+                    "  /peat digest [--days N]\n"
+                    "  /peat config show|reset\n\n"
+                    "Schedule formats:\n"
+                    "  '0 9 * * 1-5'   (cron, 5 fields)\n"
+                    "  '@every 30m'    (or @every Ns|Nm|Nh|Nd)\n"
+                    "  '@once @ 2026-05-04T09:00:00Z'\n"
+                )
+            )
+            return
+
+        if first == "schedule":
+            # `/peat schedule "<schedule> | <task>"`
+            rest = raw_arg[len("schedule") :].strip()
+            if "|" not in rest:
+                await self._mount_message(
+                    AppMessage(
+                        'Usage: /peat schedule "<schedule> | <task>"\n'
+                        'Example: /peat schedule "0 9 * * 1-5 | summarize yesterday\'s QA results"'
+                    )
+                )
+                return
+            schedule_part, task_part = rest.split("|", 1)
+            schedule_str = schedule_part.strip().strip('"').strip("'")
+            task_str = task_part.strip()
+            if not schedule_str or not task_str:
+                await self._mount_message(AppMessage("Both schedule and task are required."))
+                return
+            nxt = next_fire_time(schedule_str)
+            if nxt is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Couldn't parse schedule {schedule_str!r}. Try a 5-field cron, "
+                        f"@every <Ns|Nm|Nh|Nd>, or @once @ <ISO-8601>."
+                    )
+                )
+                return
+            job = PeatJob(
+                job_id="",  # save_job assigns one
+                name=task_str[:60],
+                prompt=task_str,
+                schedule=schedule_str,
+                next_fire_at=nxt,
+            )
+            path = await asyncio.to_thread(save_job, config_dir, job)
+            from datetime import datetime
+
+            when = datetime.fromtimestamp(nxt, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            await self._mount_message(
+                AppMessage(
+                    f"Scheduled job `{job.job_id}` — next fires at {when}.\n"
+                    f"File: {path}"
+                )
+            )
+            return
+
+        if first == "jobs":
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                jobs = await asyncio.to_thread(list_jobs, config_dir)
+                if not jobs:
+                    await self._mount_message(AppMessage("No Peat jobs saved yet."))
+                    return
+                lines = ["Peat jobs:"]
+                for j in jobs:
+                    flag = "✓" if j.enabled else "✗"
+                    sched = j.schedule or "(manual)"
+                    lines.append(
+                        f"  [{flag}] {j.job_id} — {j.name or '(unnamed)'}  schedule={sched}  "
+                        f"runs={j.run_count}"
+                    )
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if len(tokens) < 3:
+                await self._mount_message(AppMessage("Usage: /peat jobs <show|enable|disable|delete> <id>"))
+                return
+            target = tokens[2]
+            path = await asyncio.to_thread(find_job, config_dir, target)
+            if path is None:
+                await self._mount_message(AppMessage(f"No job matched '{target}'."))
+                return
+            if sub == "show":
+                job = await asyncio.to_thread(load_job, path)
+                lines = [
+                    f"Job: {job.name or job.job_id}",
+                    f"  ID: {job.job_id}",
+                    f"  Schedule: {job.schedule or '(manual)'}",
+                    f"  Enabled: {job.enabled}",
+                    f"  Runs: {job.run_count}  Failures-in-row: {job.consecutive_failures}",
+                    f"  File: {path}",
+                    "",
+                    "Task:",
+                    job.prompt[:1000],
+                ]
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if sub in ("enable", "disable"):
+                job = await asyncio.to_thread(load_job, path)
+                job.enabled = sub == "enable"
+                if job.enabled and job.schedule:
+                    nxt = next_fire_time(job.schedule)
+                    if nxt is not None:
+                        job.next_fire_at = nxt
+                await asyncio.to_thread(save_job, config_dir, job)
+                await self._mount_message(
+                    AppMessage(f"Job `{job.job_id}` is now {'enabled' if job.enabled else 'disabled'}.")
+                )
+                return
+            if sub == "delete":
+                deleted = await asyncio.to_thread(delete_job, config_dir, target)
+                if deleted is None:
+                    await self._mount_message(AppMessage(f"No job matched '{target}'."))
+                else:
+                    await self._mount_message(AppMessage(f"Deleted {deleted}"))
+                return
+            await self._mount_message(AppMessage("Usage: /peat jobs <list|show|enable|disable|delete> [<id>]"))
+            return
+
+        if first == "run":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /peat run <job_id>"))
+                return
+            path = await asyncio.to_thread(find_job, config_dir, tokens[1])
+            if path is None:
+                await self._mount_message(AppMessage(f"No job matched '{tokens[1]}'."))
+                return
+            job = await asyncio.to_thread(load_job, path)
+            # Fire interactively — re-use the chat path so the user can see
+            # output in the live transcript instead of via the inbox.
+            prompt = build_interactive_prompt(persona, f"Run this saved task now:\n\n{job.prompt}")
+            await self._mount_message(AppMessage(f"Running job `{job.job_id}` interactively..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "inbox":
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub == "clear":
+                n = await asyncio.to_thread(clear_inbox, config_dir)
+                await self._mount_message(AppMessage(f"Cleared {n} inbox entr(y|ies)."))
+                return
+            entries = await asyncio.to_thread(read_inbox, config_dir)
+            if not entries:
+                await self._mount_message(AppMessage("Peat inbox is empty."))
+                return
+            lines = [f"Peat inbox — {len(entries)} entr(y|ies):"]
+            for entry in entries[-30:]:
+                when = entry.get("when", "?")
+                name = entry.get("job_name", entry.get("job_id", "?"))
+                status = entry.get("status", "?")
+                summary = (entry.get("summary") or "")[:120]
+                lines.append(f"  [{when}] {name}  status={status}\n    {summary}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if first == "research":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /peat research <topic> [--focus a,b,c]"))
+                return
+            # Extract --focus
+            focus = ""
+            topic_parts: list[str] = []
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t in ("--focus", "-f") and i + 1 < len(tokens):
+                    focus = tokens[i + 1]
+                    i += 2
+                elif t.startswith("--focus="):
+                    focus = t[len("--focus=") :]
+                    i += 1
+                else:
+                    topic_parts.append(t)
+                    i += 1
+            topic = " ".join(topic_parts).strip()
+            if not topic:
+                await self._mount_message(AppMessage("Usage: /peat research <topic> [--focus a,b,c]"))
+                return
+            prompt = build_research_prompt(persona, topic=topic, focus=focus, config_dir=config_dir)
+            await self._mount_message(AppMessage(f"Researching `{topic}`..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "digest":
+            days = 7
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--days" and i + 1 < len(tokens):
+                    try:
+                        days = max(1, int(tokens[i + 1]))
+                    except ValueError:
+                        await self._mount_message(AppMessage("--days requires an integer"))
+                        return
+                    i += 2
+                elif t.startswith("--days="):
+                    try:
+                        days = max(1, int(t[len("--days=") :]))
+                    except ValueError:
+                        await self._mount_message(AppMessage("--days requires an integer"))
+                        return
+                    i += 1
+                else:
+                    i += 1
+            inputs = await asyncio.to_thread(
+                collect_digest_inputs, config_dir, project_root=project_root, days=days
+            )
+            prompt = build_digest_prompt(persona, inputs=inputs, config_dir=config_dir)
+            await self._mount_message(AppMessage(f"Building {days}-day digest..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "config":
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub == "show":
+                lines = [
+                    f"Peat persona — {persona.name}",
+                    f"  role: {persona.role}",
+                    f"  sign_off: {persona.sign_off}",
+                    "",
+                    f"Goals ({len(persona.goals)}):",
+                ]
+                lines.extend(f"  - {g}" for g in persona.goals)
+                lines.append("")
+                lines.append(f"Style ({len(persona.style)}):")
+                lines.extend(f"  - {s}" for s in persona.style)
+                lines.append("")
+                lines.append(f"Restrictions ({len(persona.restrictions)}):")
+                lines.extend(f"  - {r}" for r in persona.restrictions)
+                lines.append("")
+                lines.append(
+                    "Override via ~/.bog-agents/settings.json under the `peat:` section. "
+                    "List fields extend defaults; pass `replace_<field>: true` to replace."
+                )
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if sub == "reset":
+                await self._mount_message(
+                    AppMessage(
+                        "To reset Peat to defaults, remove the `peat:` block from your "
+                        "settings.json file(s). I won't edit settings for you."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage("Usage: /peat config [show|reset]"))
+            return
+
+        # No subcommand match → free-form chat with Peat.
+        prompt = build_interactive_prompt(persona, raw_arg)
+        await self._send_prompt_to_agent(prompt)
 
     async def _handle_resolve_command(self, command: str) -> None:
         """Handle `/resolve` as a merge-conflict resolution workflow."""
