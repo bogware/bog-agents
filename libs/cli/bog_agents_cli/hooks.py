@@ -228,19 +228,33 @@ async def dispatch_tool_pre_hook(
 ) -> dict[str, Any] | None:
     """Fire pre-tool-call hooks and return modified args if any.
 
-    Dispatches both `tool.pre_call` (generic) and
-    `tool.pre_call.<tool_name>` (specific) events.
+    Dispatches both ``tool.pre_call`` (generic) and
+    ``tool.pre_call.<tool_name>`` (specific) hooks defined in
+    ``~/.bog-agents/hooks.json``, then runs project-local
+    ``.bog-agents/hooks/pre-tool/`` scripts, which CAN block or rewrite
+    args.
 
     Args:
         tool_name: Name of the tool being called.
         tool_args: Arguments being passed to the tool.
 
     Returns:
-        Modified tool_args if a hook modifies them, None otherwise.
+        A dict ``{"action": "modify", "args": {...}}`` with the rewritten
+        args, ``{"action": "block", "reason": "..."}`` to abort the call,
+        or ``None`` for pass-through.
     """
     payload = {"tool_name": tool_name, "tool_args": tool_args}
     await dispatch_hook("tool.pre_call", payload)
     await dispatch_hook(f"tool.pre_call.{tool_name}", payload)
+
+    # Project-local harness hooks have authority over the call.
+    from bog_agents_cli.project_hooks import run_hooks
+
+    decision = await run_hooks("pre-tool", payload)
+    if decision.blocked:
+        return {"action": "block", "reason": decision.reason}
+    if decision.modified_args is not None:
+        return {"action": "modify", "args": decision.modified_args}
     return None
 
 
@@ -261,6 +275,40 @@ async def dispatch_tool_post_hook(
     }
     await dispatch_hook("tool.post_call", payload)
     await dispatch_hook(f"tool.post_call.{tool_name}", payload)
+    # Project-local hooks: post-tool can audit / notify but cannot block.
+    from bog_agents_cli.project_hooks import run_hooks
+
+    await run_hooks("post-tool", payload)
+
+
+async def dispatch_user_prompt_hook(prompt: str) -> str | dict[str, Any]:
+    """Run ``.bog-agents/hooks/user-prompt/`` scripts on a submitted prompt.
+
+    Returns the (possibly rewritten) prompt to forward to the agent. If a
+    hook script returns ``{"action": "block", "reason": "..."}`` the
+    return value is the decision dict so the caller can surface the
+    veto to the user instead of submitting the message.
+    """
+    from bog_agents_cli.project_hooks import run_hooks
+
+    payload = {"prompt": prompt}
+    decision = await run_hooks("user-prompt", payload)
+    if decision.blocked:
+        return {"action": "block", "reason": decision.reason}
+    if decision.modified_prompt is not None:
+        return decision.modified_prompt
+    return prompt
+
+
+async def dispatch_stop_hook(reason: str = "") -> None:
+    """Run ``.bog-agents/hooks/stop/`` scripts when an agent turn ends.
+
+    Stop hooks can't block (the turn already ended); they're for
+    notifications, summaries, and post-run cleanup.
+    """
+    from bog_agents_cli.project_hooks import run_hooks
+
+    await run_hooks("stop", {"reason": reason})
 
 
 async def dispatch_file_hook(event: str, file_path: str, **kwargs: Any) -> None:

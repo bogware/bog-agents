@@ -1,4 +1,4 @@
-"""General-purpose commands (help, search, version, etc.)."""
+"""General-purpose commands (help, search, telephone, version, etc.)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
         ),
         handler_method="_handle_build_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/telephone",
+            "Rewrite a casual prompt as a production-grade LLM prompt before submitting",
+            "rewrite improve clarify polish prompt-engineering",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_telephone_command",
     ),
     SlashCommand(
         spec=SlashCommandSpec(

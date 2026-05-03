@@ -535,6 +535,18 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--always-ask",
+        action="store_true",
+        help=(
+            "Paranoid mode: every tool call requires explicit approval, "
+            "EVEN if --auto-approve is set or a shell command is on the "
+            "allow-list. Use for high-stakes sessions where you want to "
+            "inspect each action before it runs. Toggle at runtime via "
+            "/always-ask."
+        ),
+    )
+
+    parser.add_argument(
         "--sandbox",
         choices=["none", "modal", "daytona", "runloop", "langsmith"],
         default="none",
@@ -664,6 +676,7 @@ async def run_textual_cli_async(
     assistant_id: str,
     *,
     auto_approve: bool = False,
+    always_ask: bool = False,
     auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
@@ -685,6 +698,8 @@ async def run_textual_cli_async(
     Args:
         assistant_id: Agent identifier for memory storage
         auto_approve: Whether to auto-approve tool usage
+        always_ask: Paranoid mode — every tool call requires approval,
+            overriding auto-approve and the shell allow-list.
         auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
@@ -765,6 +780,7 @@ async def run_textual_cli_async(
             assistant_id=assistant_id,
             backend=None,
             auto_approve=auto_approve,
+            always_ask=always_ask,
             auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
@@ -1831,6 +1847,7 @@ def cli_main() -> None:
                     auto_commit=getattr(args, "auto_commit", False),
                     resume_thread_id=resume_thread_id,
                     auto_approve=getattr(args, "auto_approve", False),
+                    always_ask=getattr(args, "always_ask", False),
                 )
             )
             sys.exit(exit_code)
@@ -1922,6 +1939,7 @@ def cli_main() -> None:
                     run_textual_cli_async(
                         assistant_id=args.agent,
                         auto_approve=args.auto_approve,
+                        always_ask=getattr(args, "always_ask", False),
                         auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,

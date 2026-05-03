@@ -26,4 +26,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_verbose_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/always-ask",
+            "Toggle paranoid mode: every tool call requires approval (overrides auto-approve)",
+            "approval safe paranoid review confirm hitl",
+            "ui",
+            available=True,
+        ),
+        handler_method="_handle_always_ask_command",
+    ),
 )

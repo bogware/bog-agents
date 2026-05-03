@@ -416,7 +416,86 @@ _REGISTRY: dict[str, RegistryEntry] = {
         ),
         source="community",
     ),
+    "aws": RegistryEntry(
+        id="aws",
+        display_name="AWS",
+        description="AWS account access — list resources, query CloudWatch, manage S3/IAM/EC2 via boto3",
+        category="infra",
+        transport="stdio",
+        command="uvx",
+        args=["awslabs.aws-api-mcp-server@latest"],
+        optional_env=["AWS_PROFILE", "AWS_REGION"],
+        vars_hints={
+            "AWS_PROFILE": "Named profile from ~/.aws/credentials (default: 'default')",
+            "AWS_REGION": "Default AWS region (e.g. us-east-1)",
+        },
+        install_notes=(
+            "Authenticates via the local AWS credentials chain (env vars, ~/.aws/credentials, "
+            "IAM role). Run `aws configure` once before using. Read-only by default — see "
+            "the awslabs README for write-mode and least-privilege IAM examples."
+        ),
+        source="vendor",
+    ),
+    "datadog": RegistryEntry(
+        id="datadog",
+        display_name="Datadog",
+        description="Datadog metrics, logs, monitors, and dashboards — search APM traces and incidents",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@datadog/mcp-server"],
+        required_env=["DD_API_KEY", "DD_APP_KEY"],
+        optional_env=["DD_SITE"],
+        vars_hints={
+            "DD_API_KEY": "Datadog API key (Organization Settings → API Keys)",
+            "DD_APP_KEY": "Datadog Application key (Organization Settings → Application Keys)",
+            "DD_SITE": "Datadog site (datadoghq.com, datadoghq.eu, us3.datadoghq.com)",
+        },
+        install_notes=(
+            "Create an API key + Application key in Datadog org settings. The default site "
+            "is datadoghq.com — set DD_SITE if you're on EU or US3."
+        ),
+        source="vendor",
+    ),
+    "kubernetes": RegistryEntry(
+        id="kubernetes",
+        display_name="Kubernetes",
+        description="Kubernetes cluster ops — kubectl-style get/describe/logs/events for pods, services, deployments",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "mcp-server-kubernetes"],
+        optional_env=["KUBECONFIG"],
+        vars_hints={"KUBECONFIG": "Path to kubeconfig (default: ~/.kube/config)"},
+        install_notes=(
+            "Uses the local kubeconfig — point KUBECONFIG at the right cluster context. "
+            "Read-only operations by default; do NOT enable write tools on prod clusters."
+        ),
+        source="community",
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Curated featured set — surfaced by ``/mcp featured``.
+# ---------------------------------------------------------------------------
+
+FEATURED_IDS: tuple[str, ...] = (
+    "github",
+    "jira",
+    "linear",
+    "slack",
+    "postgres",
+    "aws",
+    "azure-devops",
+    "terraform",
+    "datadog",
+    "kubernetes",
+    "sentry",
+    "notion",
+)
+"""Curated quick-pick list for ``/mcp featured`` — the integrations a typical
+developer reaches for first. Order is intentional (most common first)."""
 
 
 # ---------------------------------------------------------------------------

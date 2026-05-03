@@ -900,6 +900,7 @@ async def run_non_interactive(
     auto_commit: bool = False,
     resume_thread_id: str | None = None,
     auto_approve: bool = False,
+    always_ask: bool = False,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -963,6 +964,10 @@ async def run_non_interactive(
             bypassed, so the agent can run typecheck/tests/etc.
             without a human approving each command. Without this,
             `-n` mode silently runs without shell tools (Fix #36).
+        always_ask: Reject the run with exit code 2 when `True`. The
+            paranoid always-ask mode requires a human to approve every
+            tool call, which is impossible in non-interactive mode; we
+            refuse the combination loudly rather than hanging.
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
@@ -1036,6 +1041,20 @@ async def run_non_interactive(
             )
         except Exception:
             logger.warning("MCP metadata preload task creation failed", exc_info=True)
+
+    if always_ask:
+        # Non-interactive mode has no human to approve tool calls, so
+        # always-ask would deadlock the run. Reject the combination loudly
+        # rather than hanging forever.
+        if not quiet:
+            console.print(
+                Text(
+                    "--always-ask requires an interactive TTY; refusing to run "
+                    "non-interactive task that would block waiting for approval.",
+                    style="bold red",
+                )
+            )
+        return 2
 
     try:
         # When the caller passes --auto-approve they're opting into headless

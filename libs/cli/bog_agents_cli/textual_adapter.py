@@ -1318,7 +1318,49 @@ async def execute_task_textual(
                 for interrupt_id, hitl_request in list(pending_interrupts.items()):
                     action_requests = hitl_request["action_requests"]
 
-                    if session_state.auto_approve:
+                    # Project-local pre-tool harness hooks run BEFORE any
+                    # approval logic. A hook can block a tool call (we
+                    # synthesize a rejection decision) or rewrite the
+                    # tool args (the modified args replace what the user
+                    # sees in the approval menu).
+                    from bog_agents_cli.hooks import dispatch_tool_pre_hook
+
+                    blocked_indexes: list[int] = []
+                    for i, req in enumerate(list(action_requests)):
+                        decision_dict = await dispatch_tool_pre_hook(
+                            req.get("name", ""),
+                            req.get("args", {}) or {},
+                        )
+                        if not isinstance(decision_dict, dict):
+                            continue
+                        action = decision_dict.get("action")
+                        if action == "block":
+                            blocked_indexes.append(i)
+                        elif action == "modify":
+                            new_args = decision_dict.get("args")
+                            if isinstance(new_args, dict):
+                                req["args"] = new_args
+
+                    if blocked_indexes:
+                        decisions = []
+                        for i, _ in enumerate(action_requests):
+                            decisions.append(
+                                RejectDecision(
+                                    type="reject",
+                                    message="blocked by .bog-agents/hooks/pre-tool",
+                                )
+                                if i in blocked_indexes
+                                else ApproveDecision(type="approve")
+                            )
+                        resume_payload[interrupt_id] = {"decisions": decisions}
+                        continue
+
+                    # ``always_ask`` is the paranoid-mode flag — when set it
+                    # overrides ``auto_approve`` so EVERY tool call still
+                    # surfaces an approval menu. Used for high-stakes
+                    # sessions where the user wants to inspect each action.
+                    always_ask = bool(getattr(session_state, "always_ask", False))
+                    if session_state.auto_approve and not always_ask:
                         decisions: list[HITLDecision] = [
                             ApproveDecision(type="approve") for _ in action_requests
                         ]

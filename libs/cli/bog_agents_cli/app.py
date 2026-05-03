@@ -461,15 +461,20 @@ class TextualSessionState:
         self,
         *,
         auto_approve: bool = False,
+        always_ask: bool = False,
         thread_id: str | None = None,
     ) -> None:
         """Initialize session state.
 
         Args:
-            auto_approve: Whether to auto-approve tool calls
+            auto_approve: Whether to auto-approve tool calls.
+            always_ask: When True, every tool call requires human approval —
+                overrides ``auto_approve`` and the shell allow-list. Used by
+                the ``/always-ask`` paranoid mode for high-stakes sessions.
             thread_id: Optional thread ID (generates UUID7 if not provided)
         """
         self.auto_approve = auto_approve
+        self.always_ask = always_ask
         self.thread_id = thread_id or _new_thread_id()
 
     def reset_thread(self) -> str:
@@ -693,6 +698,7 @@ class BogAgentsApp(App):
         assistant_id: str | None = None,
         backend: CompositeBackend | None = None,
         auto_approve: bool = False,
+        always_ask: bool = False,
         auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
@@ -712,6 +718,9 @@ class BogAgentsApp(App):
             assistant_id: Agent identifier for memory storage
             backend: Backend for file operations
             auto_approve: Whether to start with auto-approve enabled
+            always_ask: Whether to start with paranoid always-ask enabled —
+                forces a human approval for every tool call regardless of
+                auto-approve or shell allow-list policy.
             auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
@@ -737,6 +746,7 @@ class BogAgentsApp(App):
         self._assistant_id = assistant_id or "agent"
         self._backend = backend
         self._auto_approve = auto_approve
+        self._always_ask = always_ask
         self._auto_commit = auto_commit
         self._cwd = str(cwd) if cwd else str(Path.cwd())
         # Avoid collision with App._thread_id
@@ -866,6 +876,7 @@ class BogAgentsApp(App):
         # Create session state
         self._session_state = TextualSessionState(
             auto_approve=self._auto_approve,
+            always_ask=self._always_ask,
             thread_id=self._lc_thread_id,
         )
 
@@ -1524,8 +1535,12 @@ class BogAgentsApp(App):
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future = loop.create_future()
 
+        # ``always-ask`` mode disables every auto-approval bypass so the
+        # user sees every action before it runs.
+        always_ask_active = bool(self._session_state and self._session_state.always_ask)
+
         # Check if ALL actions in the batch are auto-approvable shell commands
-        if settings.shell_allow_list and action_requests:
+        if not always_ask_active and settings.shell_allow_list and action_requests:
             all_auto_approved = True
             approved_commands = []
 
@@ -2768,6 +2783,7 @@ class BogAgentsApp(App):
 
         Usage:
           /mcp                       — show active servers (viewer)
+          /mcp featured              — curated quick-pick list (jira, github, aws…)
           /mcp list                  — list configured servers in ~/.bog-agents/.mcp.json
           /mcp catalog               — browse the full registry
           /mcp search <query>        — search registry by keyword
@@ -2790,6 +2806,7 @@ class BogAgentsApp(App):
             server_exists,
         )
         from bog_agents_cli.mcp_registry import (
+            FEATURED_IDS,
             build_server_config,
             get_entry,
             list_categories,
@@ -2856,7 +2873,36 @@ class BogAgentsApp(App):
             lines.append(
                 "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
                 "Details with [bold]/mcp info <id>[/bold] · "
-                "Search with [bold]/mcp search <query>[/bold][/dim]"
+                "Search with [bold]/mcp search <query>[/bold] · "
+                "Quick picks with [bold]/mcp featured[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- featured: curated quick-pick list ----
+        elif subcommand == "featured":
+            configured = list_servers()
+            lines = [
+                "[bold]Featured MCP servers[/bold] — curated quick-pick list\n",
+            ]
+            for server_id in FEATURED_IDS:
+                entry = get_entry(server_id)
+                if entry is None:
+                    continue
+                installed = " [green]✓ installed[/green]" if server_id in configured else ""
+                env_hint = (
+                    f"  [dim]requires: {', '.join(entry.required_env)}[/dim]"
+                    if entry.required_env
+                    else ""
+                )
+                lines.append(
+                    f"  [cyan]{entry.id:<14}[/cyan] {entry.display_name:<22}{installed}\n"
+                    f"    [dim]{entry.description}[/dim]"
+                )
+                if env_hint:
+                    lines.append(env_hint)
+            lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
+                "Browse everything with [bold]/mcp catalog[/bold][/dim]"
             )
             await self._mount_message(AppMessage("\n".join(lines)))
 
@@ -3115,6 +3161,7 @@ class BogAgentsApp(App):
                 AppMessage(
                     "[bold]/mcp[/bold] — MCP server marketplace\n\n"
                     "  [cyan]/mcp[/cyan]                      — open live server viewer\n"
+                    "  [cyan]/mcp featured[/cyan]             — curated quick-pick list\n"
                     "  [cyan]/mcp list[/cyan]                 — list configured servers\n"
                     "  [cyan]/mcp catalog[/cyan]              — browse full registry\n"
                     "  [cyan]/mcp search <query>[/cyan]       — search registry\n"
@@ -3123,7 +3170,8 @@ class BogAgentsApp(App):
                     "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
                     "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
                     "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
-                    "[dim]Popular: jira · github · slack · postgres · terraform · azure-devops[/dim]"
+                    "[dim]Featured: github · jira · linear · slack · postgres · aws · "
+                    "azure-devops · terraform · datadog · kubernetes · sentry · notion[/dim]"
                 )
             )
 
@@ -3991,6 +4039,164 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage("Verbose mode on. Tool calls render with expandable details.")
         )
+
+    async def _handle_always_ask_command(self, command: str) -> None:
+        """``/always-ask`` — toggle paranoid approval mode.
+
+        Forces an approval menu for EVERY tool call regardless of
+        ``--auto-approve`` or the shell allow-list. Useful for unfamiliar
+        repos and high-stakes refactors. Pass ``on``, ``off``, or
+        ``status`` as an argument; bare ``/always-ask`` toggles.
+        """
+        await self._mount_message(UserMessage(command))
+        if self._session_state is None:
+            await self._mount_message(
+                ErrorMessage("/always-ask requires an active session.")
+            )
+            return
+
+        arg = command.strip().split(maxsplit=1)
+        verb = arg[1].strip().lower() if len(arg) > 1 else ""
+
+        if verb == "status":
+            current = "ON" if self._session_state.always_ask else "OFF"
+            await self._mount_message(
+                AppMessage(f"always-ask is currently {current}")
+            )
+            return
+
+        if verb == "on":
+            new_state = True
+        elif verb == "off":
+            new_state = False
+        elif verb in ("", "toggle"):
+            new_state = not self._session_state.always_ask
+        else:
+            await self._mount_message(
+                AppMessage("Usage: /always-ask [on|off|status]")
+            )
+            return
+
+        self._session_state.always_ask = new_state
+        self._always_ask = new_state
+        if new_state:
+            await self._mount_message(
+                AppMessage(
+                    "always-ask ON. Every tool call will require approval, "
+                    "overriding --auto-approve and the shell allow-list. "
+                    "Use /always-ask off to disable."
+                )
+            )
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "always-ask OFF. Approvals fall back to the normal "
+                    "auto-approve / shell-allow-list policy."
+                )
+            )
+
+    async def _handle_telephone_command(self, command: str) -> None:
+        """``/telephone <prompt>`` — rewrite the input as a production-grade prompt.
+
+        Workflow:
+            1. Parse the casual prompt out of the slash command argument.
+            2. Run it through the configured rewriter system prompt
+               (editable in ``/settings``) using the active model.
+            3. Show the rewritten prompt in a modal with three options:
+               Submit (send to agent), Redo (rerun rewriter), Ditch
+               (drop the rewrite, leave the original conversation alone).
+        """
+        await self._mount_message(UserMessage(command))
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        body = body[len(prefix) :].strip()
+        if not body:
+            await self._mount_message(
+                AppMessage("Usage: /telephone <prompt to rewrite>")
+            )
+            return
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /telephone while the agent is busy.")
+            )
+            return
+
+        await self._run_telephone_flow(body)
+
+    async def _run_telephone_flow(self, original_prompt: str) -> None:
+        """Drive one rewrite → confirm → submit/redo/ditch cycle.
+
+        ``Redo`` loops back into this method with the same original input
+        but a fresh model call.
+        """
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.telephone import rewrite_prompt_with_model
+        from bog_agents_cli.widgets.telephone import TelephoneMenu
+
+        model_spec = self._model_override or settings.model_name
+        try:
+            model_result = create_model(
+                model_spec,
+                profile_overrides=self._profile_override,
+            )
+        except Exception as exc:
+            await self._mount_message(
+                ErrorMessage(f"/telephone: failed to resolve model: {exc}")
+            )
+            return
+
+        await self._set_spinner("Rewriting prompt")
+        try:
+            rewritten = await rewrite_prompt_with_model(
+                original_prompt, model_result.model
+            )
+        except Exception as exc:
+            logger.exception("telephone rewrite failed")
+            await self._set_spinner("")
+            await self._mount_message(
+                ErrorMessage(f"/telephone: rewrite failed: {exc}")
+            )
+            return
+        finally:
+            await self._set_spinner("")
+
+        if not rewritten or rewritten.startswith("CLARIFY:"):
+            # The rewriter declined to invent details. Show the question
+            # to the user and abort the rewrite cycle so they can refine.
+            shown = rewritten or "(empty rewrite)"
+            await self._mount_message(
+                AppMessage(
+                    "Rewriter needs more detail before producing a clean prompt:\n"
+                    f"  {shown}\n"
+                    "Original input was kept; type a more specific prompt."
+                )
+            )
+            return
+
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        menu = TelephoneMenu(original_prompt=original_prompt, rewritten_prompt=rewritten)
+        menu.set_future(future)
+        await self._mount_message(menu)
+        decision = await future
+
+        # Remove the modal so chat scroll keeps moving forward.
+        try:
+            menu.remove()
+        except Exception:
+            logger.debug("Failed to remove telephone menu", exc_info=True)
+
+        if decision == "submit":
+            await self._mount_message(
+                AppMessage("Submitting rewritten prompt…")
+            )
+            await self._handle_user_message(rewritten)
+        elif decision == "redo":
+            await self._mount_message(AppMessage("Re-running rewriter…"))
+            await self._run_telephone_flow(original_prompt)
+        else:
+            await self._mount_message(AppMessage("Discarded rewrite."))
 
     async def _handle_unknown_command(self, command: str) -> None:
         """Render an unknown-command message with suggestions."""
@@ -10002,6 +10208,23 @@ class BogAgentsApp(App):
                 )
             return
 
+        # Run project-local user-prompt harness hooks first. They can
+        # rewrite the prompt (return string) or veto submission (return
+        # ``{"action": "block", ...}``). On veto we surface the reason
+        # and never mount the user message — the agent never sees it.
+        from bog_agents_cli.hooks import dispatch_user_prompt_hook
+
+        hook_result = await dispatch_user_prompt_hook(message)
+        if isinstance(hook_result, dict):
+            reason = hook_result.get("reason", "blocked by user-prompt hook")
+            await self._mount_message(UserMessage(message))
+            await self._mount_message(
+                ErrorMessage(f"Prompt blocked: {reason}")
+            )
+            return
+        if isinstance(hook_result, str) and hook_result != message:
+            message = hook_result
+
         # Mount the user message (show original text in UI)
         await self._mount_message(UserMessage(message))
 
@@ -10238,6 +10461,15 @@ class BogAgentsApp(App):
 
         # Remove spinner if present
         await self._set_spinner(None)
+
+        # Fire project-local stop hooks so users can run side-effects when
+        # an agent turn ends (post-run lint, ding, summary commit, …).
+        try:
+            from bog_agents_cli.hooks import dispatch_stop_hook
+
+            await dispatch_stop_hook(reason="cleanup")
+        except Exception:
+            logger.debug("stop hook dispatch failed", exc_info=True)
 
         if self._chat_input:
             self._chat_input.set_cursor_active(active=True)
@@ -12415,6 +12647,7 @@ async def run_textual_app(
     assistant_id: str | None = None,
     backend: CompositeBackend | None = None,
     auto_approve: bool = False,
+    always_ask: bool = False,
     auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
@@ -12436,6 +12669,9 @@ async def run_textual_app(
         assistant_id: Agent identifier for memory storage.
         backend: Backend for file operations.
         auto_approve: Whether to start with auto-approve enabled.
+        always_ask: Paranoid mode toggle — forces approval for every tool
+            call even when auto_approve is set or a command is on the
+            shell allow-list.
         auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
@@ -12458,6 +12694,7 @@ async def run_textual_app(
         assistant_id=assistant_id,
         backend=backend,
         auto_approve=auto_approve,
+        always_ask=always_ask,
         auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,
