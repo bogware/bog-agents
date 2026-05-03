@@ -60,8 +60,23 @@ _DEFAULT_SHELL_ASK_PATTERNS: tuple[str, ...] = (
     r"\bkill\b", r"\bkillall\b", r"\bpkill\b",
     # Move with path separators (potentially destructive overwrite)
     r"\bmv\b.+[/\\]",
-    # Overwrite redirects
-    r">\s*[^>]",  # single > redirect (overwrite)
+    # Overwrite redirects — single > but NOT >> (append)
+    r"(?<![>])>(?!>)\s*\S",
+    # Container engine cleanup
+    r"\bdocker\s+(rm|rmi|prune|system\s+prune)\b",
+    r"\bpodman\s+(rm|rmi|prune|system\s+prune)\b",
+    # Raw disk writes
+    r"\bdd\b.*\bof=",
+    # Privileged destructive operations
+    r"\bsudo\s+.*\b(rm|mv|dd|chmod\s+0|chown|mkfs|fdisk|parted)\b",
+    # Cloud storage deletion
+    r"\baws\s+s3\s+rm\b",
+    r"\bgsutil\s+rm\b",
+    r"\baz\s+storage\s+blob\s+delete\b",
+    # Package removal (can break environments)
+    r"\bpip\s+uninstall\b",
+    r"\bnpm\s+uninstall\b",
+    r"\buv\s+remove\b",
 )
 
 # Shell commands that are always safe to auto-approve
@@ -156,12 +171,20 @@ class AutoModeSettings:
             New AutoModeSettings with the overlaid values.
         """
         haiku_raw = d.get("haiku_eval", {})
+
+        def _coerce_str_list(key: str, fallback: list[str]) -> list[str]:
+            val = d.get(key, fallback)
+            if not isinstance(val, list):
+                logger.warning("auto_mode setting '%s' must be a list, got %s — ignoring", key, type(val).__name__)
+                return fallback
+            return [str(item) for item in val]
+
         return AutoModeSettings(
             enabled=bool(d.get("enabled", self.enabled)),
-            extra_shell_ask_patterns=list(d.get("shell_ask_patterns", self.extra_shell_ask_patterns)),
-            extra_shell_allow_patterns=list(d.get("shell_allow_patterns", self.extra_shell_allow_patterns)),
-            extra_safe_tools=list(d.get("safe_tools", self.extra_safe_tools)),
-            extra_risky_tools=list(d.get("risky_tools", self.extra_risky_tools)),
+            extra_shell_ask_patterns=_coerce_str_list("shell_ask_patterns", self.extra_shell_ask_patterns),
+            extra_shell_allow_patterns=_coerce_str_list("shell_allow_patterns", self.extra_shell_allow_patterns),
+            extra_safe_tools=_coerce_str_list("safe_tools", self.extra_safe_tools),
+            extra_risky_tools=_coerce_str_list("risky_tools", self.extra_risky_tools),
             haiku_eval=HaikuEvalConfig.from_dict(haiku_raw) if haiku_raw else self.haiku_eval,
             preflight_clarification=bool(d.get("preflight_clarification", self.preflight_clarification)),
         )
@@ -189,16 +212,28 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
     return settings
 
 
+_SETTINGS_MAX_BYTES = 1 * 1024 * 1024  # 1 MB — guard against absurdly large files
+
+
 def _apply_settings_file(base: AutoModeSettings, path: Path) -> AutoModeSettings:
     if not path.is_file():
         return base
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        if len(raw) > _SETTINGS_MAX_BYTES:
+            logger.warning(
+                "Auto-mode settings file %s is too large (%d bytes, max %d) — skipping",
+                path,
+                len(raw),
+                _SETTINGS_MAX_BYTES,
+            )
+            return base
+        data = json.loads(raw.decode("utf-8"))
         section = data.get("auto_mode", {})
         if isinstance(section, dict) and section:
             return base.merge_dict(section)
-    except (OSError, json.JSONDecodeError, TypeError, KeyError):
-        logger.debug("Failed to parse auto-mode settings from %s", path, exc_info=True)
+    except (OSError, json.JSONDecodeError, TypeError, KeyError) as exc:
+        logger.warning("Failed to parse auto-mode settings from %s: %s", path, exc)
     return base
 
 
@@ -246,14 +281,16 @@ class AutoModeRuleEngine:
         return RuleVerdict(AutoDecision.ALLOW, "no matching rule", "default")
 
     def _eval_shell(self, cmd: str) -> RuleVerdict:
-        # Allow-list first (fast path)
-        for rx in self._allow_re:
-            if rx.search(cmd):
-                return RuleVerdict(AutoDecision.ALLOW, f"allow: {rx.pattern[:50]}", "allow_list")
-        # Ask-list
+        # Ask-list checked FIRST — destructive patterns take priority over allow patterns.
+        # This ensures e.g. `echo foo > file.txt` is caught by the redirect ask-rule
+        # even though `echo` is also in the allow-list.
         for rx in self._ask_re:
             if rx.search(cmd):
                 return RuleVerdict(AutoDecision.ASK, f"ask: {rx.pattern[:50]}", "ask_list")
+        # Allow-list (fast path for known-safe commands with no destructive pattern)
+        for rx in self._allow_re:
+            if rx.search(cmd):
+                return RuleVerdict(AutoDecision.ALLOW, f"allow: {rx.pattern[:50]}", "allow_list")
         # Falls through to Haiku (caller decides)
         return RuleVerdict(AutoDecision.ALLOW, "no shell pattern matched — may escalate to haiku", "default")
 
@@ -286,6 +323,10 @@ async def haiku_risk_eval(
     except ImportError:
         return False, "anthropic not available"
 
+    # Normalise args — callers may pass None for tool calls with no arguments.
+    if not isinstance(tool_args, dict):
+        tool_args = {}
+
     cmd_repr = _format_tool_repr(tool_name, tool_args)
     prompt = (
         "You are a security evaluator for an AI coding assistant. "
@@ -310,8 +351,9 @@ async def haiku_risk_eval(
             data = json.loads(m.group(0))
             return bool(data.get("risky", False)), str(data.get("reason", "haiku eval"))
     except Exception as exc:
-        logger.debug("haiku_risk_eval error: %s", exc)
-    return False, "haiku eval: inconclusive"
+        logger.warning("haiku_risk_eval error (treating as risky for safety): %s", exc)
+        return True, f"haiku eval: API unavailable — treating as risky ({exc.__class__.__name__})"
+    return True, "haiku eval: inconclusive — treating as risky"
 
 
 def _format_tool_repr(tool_name: str, tool_args: dict[str, Any]) -> str:

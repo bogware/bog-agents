@@ -237,7 +237,8 @@ ignore-var-parameters = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-p no:cacheprovider"
+timeout = 30
+addopts = "-p no:cacheprovider --strict-markers"
 filterwarnings = [
     "ignore:.*virtual_mode.*:DeprecationWarning",
     "ignore:.*StoreBackend without explicit.*:DeprecationWarning",
