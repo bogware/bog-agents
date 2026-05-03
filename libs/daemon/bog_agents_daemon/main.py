@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -136,12 +137,30 @@ async def _run_daemon(port: int, token: str) -> None:
         logger.info("Received signal %d, shutting down", signum)
         server.should_exit = True
 
-    for sig in (signal.SIGTERM, signal.SIGINT):
+    def _reload_signal(signum: int, _frame: object) -> None:
+        # SIGHUP is the conventional "reload config" signal for unix daemons.
+        # We re-read jobs from disk so cron edits via the API land without
+        # a full restart. Anything else is a no-op for now.
+        logger.info("Received SIGHUP — reloading job store")
         try:
-            loop.add_signal_handler(sig, _shutdown_signal, sig, None)
+            scheduler.reload_jobs()
+        except Exception:  # pragma: no cover — defensive
+            logger.exception("SIGHUP reload failed")
+
+    _signal_targets: list[tuple[Any, Any]] = [
+        (signal.SIGTERM, _shutdown_signal),
+        (signal.SIGINT, _shutdown_signal),
+    ]
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is not None:
+        _signal_targets.append((sighup, _reload_signal))
+
+    for sig, handler in _signal_targets:
+        try:
+            loop.add_signal_handler(sig, handler, sig, None)
         except (NotImplementedError, OSError):
             # Windows / environments that don't support add_signal_handler
-            signal.signal(sig, _shutdown_signal)
+            signal.signal(sig, handler)
 
     try:
         async with asyncio.TaskGroup() as tg:
@@ -151,10 +170,16 @@ async def _run_daemon(port: int, token: str) -> None:
         # Expected when the scheduler is cancelled by /shutdown.
         pass
     finally:
-        # Wait up to 30 seconds for in-flight background tasks to finish
-        if scheduler._bg_tasks:
-            logger.info("Waiting for %d in-flight job(s) to complete…", len(scheduler._bg_tasks))
-            _done, pending = await asyncio.wait(scheduler._bg_tasks, timeout=30)
+        # Drain BOTH the scheduler's bg tasks and webhook-triggered jobs the
+        # API may have spawned. Without webhook-task draining, a `systemctl
+        # stop` arriving mid-webhook can lose in-flight runs.
+        in_flight: set[asyncio.Task[Any]] = set(scheduler._bg_tasks)
+        webhook_tasks = getattr(getattr(app, "state", None), "webhook_tasks", None)
+        if webhook_tasks:
+            in_flight.update(t for t in webhook_tasks if not t.done())
+        if in_flight:
+            logger.info("Waiting for %d in-flight job(s) to complete…", len(in_flight))
+            _done, pending = await asyncio.wait(in_flight, timeout=30)
             for task in pending:
                 task.cancel()
 

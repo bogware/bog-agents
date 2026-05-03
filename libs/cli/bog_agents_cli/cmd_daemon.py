@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
@@ -15,9 +16,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+contextlib_suppress = contextlib.suppress
+
 _DAEMON_DIR = Path.home() / ".bog-agents" / "daemon"
 _PID_FILE = _DAEMON_DIR / "daemon.pid"
 _TOKEN_FILE = _DAEMON_DIR / "token"
+_START_LOCK_FILE = _DAEMON_DIR / "start.lock"
 _DEFAULT_PORT = 7391
 
 
@@ -184,8 +188,52 @@ def _trigger_summary(t: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _acquire_start_lock() -> int | None:
+    """Atomically create the daemon start lock-file.
+
+    Returns the file descriptor on success, or ``None`` if another process
+    already holds the lock (in which case the caller must not start a new
+    daemon). Uses ``O_CREAT | O_EXCL`` for cross-platform atomicity. The
+    lock-file is also stamped with the locker's PID so a stale lock left
+    behind by a crashed `bog-agents daemon start` can be diagnosed.
+
+    Raises:
+        OSError: If writing the PID into the lock-file fails after we
+            successfully created it; the lock-file is removed before
+            re-raising so a retry can succeed.
+    """
+    _DAEMON_DIR.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(_START_LOCK_FILE), flags, 0o600)
+    except FileExistsError:
+        return None
+    try:
+        os.write(fd, str(os.getpid()).encode("ascii"))
+    except OSError:
+        os.close(fd)
+        with contextlib_suppress(OSError):
+            _START_LOCK_FILE.unlink()
+        raise
+    return fd
+
+
+def _release_start_lock(fd: int | None) -> None:
+    if fd is not None:
+        with contextlib_suppress(OSError):
+            os.close(fd)
+    with contextlib_suppress(OSError):
+        _START_LOCK_FILE.unlink()
+
+
 def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None:
     """Start the daemon as a background process.
+
+    Idempotent: if a daemon is already running, prints its connection info
+    and exits 0 instead of treating the duplicate-start as an error. Two
+    concurrent ``bog-agents daemon start`` invocations are serialized via
+    an exclusive lock-file to prevent both passing the alive-check and
+    spawning racing daemons that fight over the same port.
 
     Args:
         port: Port for the daemon REST API.
@@ -193,37 +241,61 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
     """
     pid = _read_pid()
     if pid is not None and _is_running(pid):
-        print(f"Daemon is already running (PID {pid}).")  # noqa: T201
+        print(f"Daemon is already running (PID {pid}) on {_daemon_url(port)}.")  # noqa: T201
         return
 
-    exe = _find_daemon_executable()
-    if exe is None:
+    lock_fd = _acquire_start_lock()
+    if lock_fd is None:
+        # Another start is in progress. Re-check pid once it likely finishes.
+        for _ in range(20):
+            time.sleep(0.25)
+            pid = _read_pid()
+            if pid is not None and _is_running(pid):
+                print(f"Daemon started by concurrent invocation (PID {pid}) on {_daemon_url(port)}.")  # noqa: T201
+                return
         print(  # noqa: T201
-            "bog-agents-daemon not found on PATH or in the CLI's environment.\n"
-            "Install it with: pip install bog-agents-daemon"
+            "Another `bog-agents daemon start` is in progress but did not finish in 5s.\n"
+            f"Remove the stale lock with: rm '{_START_LOCK_FILE}' if no daemon is starting."
         )
         sys.exit(1)
 
-    # Pass env explicitly: on Windows the .exe shim + start_new_session
-    # combination can drop ANTHROPIC_API_KEY (and other provider keys) from
-    # the child's environment. Forward the CLI's full env so daemon-driven
-    # jobs can reach LLM providers without the user having to set keys
-    # again at the daemon level.
-    proc = subprocess.Popen(  # noqa: S603
-        [exe, "--port", str(port), "--log-level", log_level],
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=os.environ.copy(),
-    )
+    try:
+        # Re-check inside the lock — the previous holder may have just started a daemon.
+        pid = _read_pid()
+        if pid is not None and _is_running(pid):
+            print(f"Daemon is already running (PID {pid}) on {_daemon_url(port)}.")  # noqa: T201
+            return
 
-    # Brief wait for daemon to bind and write PID file
-    for _ in range(20):
-        time.sleep(0.25)
-        if _PID_FILE.exists():
-            break
+        exe = _find_daemon_executable()
+        if exe is None:
+            print(  # noqa: T201
+                "bog-agents-daemon not found on PATH or in the CLI's environment.\n"
+                "Install it with: pip install bog-agents-daemon"
+            )
+            sys.exit(1)
 
-    print(f"Daemon started (PID {proc.pid}) on port {port}.")  # noqa: T201
+        # Pass env explicitly: on Windows the .exe shim + start_new_session
+        # combination can drop ANTHROPIC_API_KEY (and other provider keys) from
+        # the child's environment. Forward the CLI's full env so daemon-driven
+        # jobs can reach LLM providers without the user having to set keys
+        # again at the daemon level.
+        proc = subprocess.Popen(  # noqa: S603
+            [exe, "--port", str(port), "--log-level", log_level],
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=os.environ.copy(),
+        )
+
+        # Brief wait for daemon to bind and write PID file
+        for _ in range(20):
+            time.sleep(0.25)
+            if _PID_FILE.exists():
+                break
+
+        print(f"Daemon started (PID {proc.pid}) on port {port}.")  # noqa: T201
+    finally:
+        _release_start_lock(lock_fd)
 
 
 def cmd_daemon_stop() -> None:
@@ -319,6 +391,32 @@ def cmd_daemon_status(port: int = _DEFAULT_PORT) -> None:
         )
     except (urllib.error.URLError, OSError):
         print(f"  API       : {_daemon_url(port)} (unreachable)")  # noqa: T201
+
+
+def cmd_daemon_rotate_token(port: int = _DEFAULT_PORT) -> None:
+    """Rotate the daemon API token.
+
+    Calls ``POST /admin/rotate-token`` with the current token, persists the
+    new token to ``~/.bog-agents/daemon/token`` (the daemon does this server
+    side, but we re-read it here so the local CLI session uses the new
+    value immediately), and prints a confirmation. If the daemon isn't
+    running, exits with a non-zero status.
+    """
+    pid = _read_pid()
+    if pid is None or not _is_running(pid):
+        print("Daemon is not running. Start it before rotating the token.")  # noqa: T201
+        sys.exit(1)
+    try:
+        result = _api_post("/admin/rotate-token", {}, port=port)
+    except (urllib.error.URLError, OSError) as e:
+        print(f"Failed to rotate token: {e}")  # noqa: T201
+        sys.exit(1)
+    new_token = result.get("token") if isinstance(result, dict) else None
+    if not new_token:
+        print("Daemon did not return a new token.")  # noqa: T201
+        sys.exit(1)
+    print("Daemon API token rotated successfully.")  # noqa: T201
+    print(f"New token written to {_TOKEN_FILE}")  # noqa: T201
 
 
 def cmd_daemon_install(*, platform: str | None = None) -> None:
@@ -736,6 +834,13 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     status_p = daemon_sub.add_parser("status", help="Show daemon status and job count")
     status_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
+    # rotate-token
+    rotate_p = daemon_sub.add_parser(
+        "rotate-token",
+        help="Rotate the daemon API token (invalidates the current token immediately)",
+    )
+    rotate_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
     # jobs — subcommand group
     jobs_parser = daemon_sub.add_parser(
         "jobs",
@@ -1000,6 +1105,8 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
         cmd_daemon_stop()
     elif cmd == "status":
         cmd_daemon_status(port=args.port)
+    elif cmd == "rotate-token":
+        cmd_daemon_rotate_token(port=args.port)
     elif cmd == "jobs":
         _execute_jobs_command(args)
     elif cmd == "install":
@@ -1013,6 +1120,7 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
             "  start              Start the daemon in the background\n"
             "  stop               Stop the running daemon\n"
             "  status             Show daemon health and job count\n"
+            "  rotate-token       Rotate the daemon API token\n"
             "  jobs               Manage ambient jobs\n"
             "  install            Register as a system service (systemd/launchd)\n"
             "  install-git-hook   Install git post-receive hook for git-push triggers\n\n"
