@@ -211,9 +211,7 @@ class DaemonScheduler:
             # task creation) so a second tick or webhook arriving right now
             # cannot also pass the duplicate-check above and double-fire.
             self._running_jobs.add(job.job_id)
-            task = asyncio.create_task(
-                self._run_job_safely(job, trigger_type=trigger_type, trigger_context=trigger_context)
-            )
+            task = asyncio.create_task(self._run_job_safely(job, trigger_type=trigger_type, trigger_context=trigger_context))
             self._bg_tasks.add(task)
             task.add_done_callback(self._bg_tasks.discard)
 

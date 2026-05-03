@@ -46,4 +46,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_test_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/jury",
+            "Run the current diff past N jurors (different models) and aggregate verdicts",
+            "review vote panel jurors multi-model judges consensus",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_jury_command",
+    ),
 )

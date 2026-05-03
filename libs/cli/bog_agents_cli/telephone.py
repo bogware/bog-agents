@@ -119,7 +119,9 @@ def save_system_prompt(prompt: str, config_path: Path | None = None) -> bool:
             with path.open("rb") as f:
                 data = tomllib.load(f)
         except (OSError, tomllib.TOMLDecodeError):
-            logger.warning("Replacing unparseable %s when saving telephone prompt", path)
+            logger.warning(
+                "Replacing unparseable %s when saving telephone prompt", path
+            )
             data = {}
     section = data.get(_TELEPHONE_TOML_KEY)
     if not isinstance(section, dict):
@@ -199,11 +201,7 @@ def _strip_outer_fence(text: str) -> str:
     if not text:
         return text
     lines = text.splitlines()
-    if (
-        len(lines) >= 2
-        and lines[0].startswith("```")
-        and lines[-1].startswith("```")
-    ):
+    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].startswith("```"):
         return "\n".join(lines[1:-1]).strip()
     return text
 

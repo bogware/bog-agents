@@ -51,9 +51,7 @@ def discover() -> tuple[tuple[SlashCommand, ...], dict[str, str]]:
     # commands a typical user reaches for first; the alphabetical tail
     # keeps the rest discoverable and tests like
     # ``/clear < /compact < /docs`` happy.
-    featured_priority = {
-        name: i for i, name in enumerate(_FEATURED_FIRST_ORDER)
-    }
+    featured_priority = {name: i for i, name in enumerate(_FEATURED_FIRST_ORDER)}
     commands.sort(
         key=lambda c: (
             featured_priority.get(c.name, len(featured_priority)),

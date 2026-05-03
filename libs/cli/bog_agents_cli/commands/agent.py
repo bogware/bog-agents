@@ -56,4 +56,24 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_jobs_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/race",
+            "Fan a prompt out to N models in parallel; surface side-by-side and a suggested winner",
+            "parallel multi-model fanout race fleet flagship worktree compete",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_race_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/standing-orders",
+            "Browse and install curated daemon-job templates (PR summary, bug finder, etc.)",
+            "ambient daemon templates standing orders catalog flagship",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_standing_orders_command",
+    ),
 )

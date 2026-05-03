@@ -149,6 +149,21 @@ def _api_post(path: str, payload: dict[str, Any], *, port: int = _DEFAULT_PORT) 
         return json.loads(resp.read())
 
 
+def _api_patch(path: str, payload: dict[str, Any], *, port: int = _DEFAULT_PORT) -> Any:  # noqa: ANN401
+    """PATCH ``path`` with the given JSON body and return the parsed response."""
+    token = _read_token()
+    url = f"{_daemon_url(port)}{path}"
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"X-Daemon-Token": token or "", "Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
 def _api_delete(path: str, *, port: int = _DEFAULT_PORT) -> int:
     token = _read_token()
     url = f"{_daemon_url(port)}{path}"
@@ -251,7 +266,9 @@ def cmd_daemon_start(port: int = _DEFAULT_PORT, log_level: str = "INFO") -> None
             time.sleep(0.25)
             pid = _read_pid()
             if pid is not None and _is_running(pid):
-                print(f"Daemon started by concurrent invocation (PID {pid}) on {_daemon_url(port)}.")  # noqa: T201
+                print(  # noqa: T201
+                    f"Daemon started by concurrent invocation (PID {pid}) on {_daemon_url(port)}."
+                )
                 return
         print(  # noqa: T201
             "Another `bog-agents daemon start` is in progress but did not finish in 5s.\n"
@@ -659,6 +676,54 @@ def cmd_jobs_delete(job_id: str, port: int = _DEFAULT_PORT) -> None:
         _unreachable(port)
 
 
+def cmd_jobs_edit(args: Any, *, port: int = _DEFAULT_PORT) -> None:  # noqa: ANN401
+    """Patch fields on an existing job via the daemon REST API.
+
+    Pulls the user-supplied ``--prompt``, ``--model``, ``--enable``,
+    ``--disable``, etc. from the argparse namespace and forwards a
+    minimal payload to ``PATCH /jobs/{id}``. Fields the user did not
+    specify are left untouched on the daemon side.
+    """
+    payload: dict[str, Any] = {}
+    field_map = {
+        "name": "name",
+        "description": "description",
+        "prompt": "prompt",
+        "pipeline_name": "pipeline_name",
+        "skill_name": "skill_name",
+        "model": "model",
+        "working_dir": "working_dir",
+    }
+    for attr, key in field_map.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            payload[key] = value
+
+    enabled = getattr(args, "enabled", None)
+    if enabled is not None:
+        payload["enabled"] = enabled
+
+    if not payload:
+        print("Nothing to update — pass at least one of --prompt/--name/--enable/etc.")  # noqa: T201
+        sys.exit(2)
+
+    try:
+        result = _api_patch(f"/jobs/{args.job_id}", payload, port=port)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Job '{args.job_id}' not found.")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+        return
+
+    name = result.get("name", args.job_id) if isinstance(result, dict) else args.job_id
+    fields = ", ".join(sorted(payload))
+    print(f"Updated job '{name}' ({args.job_id}) — fields: {fields}")  # noqa: T201
+
+
 def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
     """Trigger a manual run of a job and poll until it completes.
 
@@ -1041,6 +1106,41 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     delete_p.add_argument("job_id", help="Job ID")
     delete_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
+    # jobs edit <id>
+    edit_p = jobs_sub.add_parser(
+        "edit",
+        help="Edit fields of an existing job in place (PATCH /jobs/{id})",
+    )
+    edit_p.add_argument("job_id", help="Job ID")
+    edit_p.add_argument("--name", help="New job name")
+    edit_p.add_argument("--description", help="New description")
+    edit_p.add_argument("--prompt", help="New prompt body")
+    edit_p.add_argument(
+        "--pipeline-name", dest="pipeline_name", help="New pipeline name"
+    )
+    edit_p.add_argument("--skill-name", dest="skill_name", help="New skill name")
+    edit_p.add_argument(
+        "--model", help="New model spec (e.g. anthropic:claude-sonnet-4-6)"
+    )
+    edit_p.add_argument(
+        "--working-dir", dest="working_dir", help="New working directory"
+    )
+    edit_p.add_argument(
+        "--enable",
+        dest="enabled",
+        action="store_const",
+        const=True,
+        help="Enable the job (mutually exclusive with --disable)",
+    )
+    edit_p.add_argument(
+        "--disable",
+        dest="enabled",
+        action="store_const",
+        const=False,
+        help="Disable the job",
+    )
+    edit_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
     # jobs run <id>
     run_p = jobs_sub.add_parser("run", help="Trigger an immediate manual run of a job")
     run_p.add_argument("job_id", help="Job ID")
@@ -1149,6 +1249,8 @@ def _execute_jobs_command(args: Any) -> None:  # noqa: ANN401
         cmd_jobs_show(args.job_id, port=port)
     elif jobs_cmd == "delete":
         cmd_jobs_delete(args.job_id, port=port)
+    elif jobs_cmd == "edit":
+        cmd_jobs_edit(args, port=port)
     elif jobs_cmd == "run":
         cmd_jobs_run(args.job_id, port=port)
     elif jobs_cmd == "enable":
@@ -1165,6 +1267,7 @@ def _execute_jobs_command(args: Any) -> None:  # noqa: ANN401
             "  create             Create a new job\n"
             "  show <id>          Show job details\n"
             "  delete <id>        Delete a job\n"
+            "  edit <id> [--prompt …] [--enable|--disable] …  Edit fields in place\n"
             "  run <id>           Trigger an immediate manual run\n"
             "  enable <id>        Enable a disabled job\n"
             "  disable <id>       Disable a job without deleting it\n"

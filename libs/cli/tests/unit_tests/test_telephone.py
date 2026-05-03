@@ -96,7 +96,10 @@ async def test_rewrite_handles_multimodal_text_blocks() -> None:
     ]
     model = MagicMock()
     model.ainvoke = AsyncMock(return_value=response)
-    assert await rewrite_prompt_with_model("anything", model, system_prompt="x") == "hello world"
+    assert (
+        await rewrite_prompt_with_model("anything", model, system_prompt="x")
+        == "hello world"
+    )
 
 
 async def test_rewrite_rejects_empty_prompt() -> None:

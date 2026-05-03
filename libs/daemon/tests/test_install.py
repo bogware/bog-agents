@@ -71,5 +71,6 @@ class TestInstallGitHook:
 
     def test_missing_git_dir_raises(self, tmp_path: Path):
         import pytest
+
         with pytest.raises(FileNotFoundError):
             install_git_hook(str(tmp_path))  # no .git/hooks directory

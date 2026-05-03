@@ -1130,7 +1130,9 @@ def _check_mcp_project_trust(*, trust_flag: bool = False) -> bool | None:
     # In non-interactive contexts (cron, CI, daemon, redirected stdin) never
     # block on input(): default to deny so the host process cannot hang.
     if not sys.stdin.isatty():
-        prompt_console.print("[dim]stdin is not a TTY — denying project MCP servers (set BOG_AGENTS_MCP_TRUST=1 to override).[/dim]")
+        prompt_console.print(
+            "[dim]stdin is not a TTY — denying project MCP servers (set BOG_AGENTS_MCP_TRUST=1 to override).[/dim]"
+        )
         return False
 
     try:

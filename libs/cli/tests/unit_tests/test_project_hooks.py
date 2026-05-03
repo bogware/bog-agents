@@ -64,7 +64,9 @@ def test_list_event_scripts_skips_hidden_and_underscored(tmp_path: Path) -> None
 
 
 @pytest.mark.skipif(WIN, reason="POSIX shebang required for this test")
-async def test_run_hooks_block_short_circuits_subsequent_scripts(tmp_path: Path) -> None:
+async def test_run_hooks_block_short_circuits_subsequent_scripts(
+    tmp_path: Path,
+) -> None:
     base = tmp_path / ".bog-agents" / "hooks" / "pre-tool"
     base.mkdir(parents=True)
     _write_executable(
@@ -75,7 +77,9 @@ async def test_run_hooks_block_short_circuits_subsequent_scripts(tmp_path: Path)
         base / "02-runs-anyway.sh",
         '#!/usr/bin/env bash\necho \'{"action":"modify","args":{"x":1}}\'\nexit 1\n',
     )
-    decision = await run_hooks("pre-tool", {"tool_name": "execute"}, project_root=tmp_path)
+    decision = await run_hooks(
+        "pre-tool", {"tool_name": "execute"}, project_root=tmp_path
+    )
     assert decision.blocked is True
     assert "nope" in decision.reason
     assert decision.modified_args is None

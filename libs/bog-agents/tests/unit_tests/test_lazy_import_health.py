@@ -23,10 +23,7 @@ from bog_agents import _LAZY_IMPORTS
 def test_lazy_import_resolves(name: str, target: tuple[str, str]) -> None:
     module_path, attr = target
     module = importlib.import_module(module_path)
-    assert hasattr(module, attr), (
-        f"_LAZY_IMPORTS[{name!r}] points at {module_path}.{attr} but that "
-        f"attribute does not exist in {module_path}."
-    )
+    assert hasattr(module, attr), f"_LAZY_IMPORTS[{name!r}] points at {module_path}.{attr} but that attribute does not exist in {module_path}."
 
 
 def test_lazy_import_keys_match_module_attr_access() -> None:

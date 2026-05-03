@@ -811,6 +811,8 @@ class BogAgentsApp(App):
         self._active_team_name: str | None = None
         self._active_profile_name: str | None = None
         self._active_profile_prompt: str | None = None
+        self._active_persona_id: str | None = None
+        self._active_persona_addendum: str | None = None
         self._plan_mode_enabled = False
         self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
@@ -1220,9 +1222,7 @@ class BogAgentsApp(App):
                 lambda: self._spawn(self._handle_user_message(prompt))
             )
         elif self._lc_thread_id and self._agent:
-            self.call_after_refresh(
-                lambda: self._spawn(self._load_thread_history())
-            )
+            self.call_after_refresh(lambda: self._spawn(self._load_thread_history()))
 
         # Drain any messages the user typed while the server was starting.
         # (If an initial prompt exists, its cleanup path will drain the queue.)
@@ -2204,6 +2204,11 @@ class BogAgentsApp(App):
         if self._active_profile_prompt:
             parts.append(self._active_profile_prompt)
 
+        # Inject the active persona (output-style) addendum so the agent
+        # speaks in the user's chosen voice without requiring a profile.
+        if self._active_persona_addendum:
+            parts.append(self._active_persona_addendum)
+
         # Inject team shared context if configured
         team_ctx = self._get_team_shared_context()
         if team_ctx:
@@ -2937,7 +2942,9 @@ class BogAgentsApp(App):
                 entry = get_entry(server_id)
                 if entry is None:
                     continue
-                installed = " [green]✓ installed[/green]" if server_id in configured else ""
+                installed = (
+                    " [green]✓ installed[/green]" if server_id in configured else ""
+                )
                 env_hint = (
                     f"  [dim]requires: {', '.join(entry.required_env)}[/dim]"
                     if entry.required_env
@@ -3337,14 +3344,14 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"Cleared {label}."))
             else:
                 await self._mount_message(
-                    ErrorMessage(f"Failed to clear {label}; check ~/.bog-agents/config.toml")
+                    ErrorMessage(
+                        f"Failed to clear {label}; check ~/.bog-agents/config.toml"
+                    )
                 )
             return
 
         if saver(arg):
-            await self._mount_message(
-                AppMessage(f"Set {label} to [bold]{arg}[/bold].")
-            )
+            await self._mount_message(AppMessage(f"Set {label} to [bold]{arg}[/bold]."))
         else:
             await self._mount_message(
                 ErrorMessage(f"Failed to save {label}; check ~/.bog-agents/config.toml")
@@ -4186,9 +4193,7 @@ class BogAgentsApp(App):
 
         if verb == "status":
             current = "ON" if self._session_state.always_ask else "OFF"
-            await self._mount_message(
-                AppMessage(f"always-ask is currently {current}")
-            )
+            await self._mount_message(AppMessage(f"always-ask is currently {current}"))
             return
 
         if verb == "on":
@@ -4198,9 +4203,7 @@ class BogAgentsApp(App):
         elif verb in ("", "toggle"):
             new_state = not self._session_state.always_ask
         else:
-            await self._mount_message(
-                AppMessage("Usage: /always-ask [on|off|status]")
-            )
+            await self._mount_message(AppMessage("Usage: /always-ask [on|off|status]"))
             return
 
         self._session_state.always_ask = new_state
@@ -4220,6 +4223,705 @@ class BogAgentsApp(App):
                     "auto-approve / shell-allow-list policy."
                 )
             )
+
+    async def _handle_standing_orders_command(self, command: str) -> None:
+        """``/standing-orders`` — curated daemon-job catalog.
+
+        Subcommands:
+            /standing-orders                  → list the catalog
+            /standing-orders show <id>        → show a template's full spec
+            /standing-orders install <id>     → POST to the daemon's /jobs API
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.daemon_client import add_daemon_job
+        from bog_agents_cli.standing_orders import CATALOG, get_order
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+
+        if not rest or rest in ("list", "ls"):
+            lines = ["[bold]Standing Orders[/bold] — curated daemon-job templates\n"]
+            for order in CATALOG:
+                tag_text = " ".join(f"[dim][{t}][/dim]" for t in order.tags)
+                lines.append(
+                    f"  [cyan]{order.id:<22}[/cyan] {order.title}\n"
+                    f"    [dim]{order.summary}[/dim]"
+                )
+                if tag_text:
+                    lines.append(f"    {tag_text}")
+            lines.append(
+                "\n[dim]Show details: [bold]/standing-orders show <id>[/bold]\n"
+                "Install: [bold]/standing-orders install <id>[/bold] (requires "
+                "the daemon running)[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        parts = rest.split(maxsplit=1)
+        verb = parts[0].lower()
+        order_id = parts[1].strip() if len(parts) > 1 else ""
+
+        if verb == "show":
+            if not order_id:
+                await self._mount_message(
+                    AppMessage("Usage: /standing-orders show <id>")
+                )
+                return
+            order = get_order(order_id)
+            if order is None:
+                await self._mount_message(
+                    ErrorMessage(f"No standing order with id '{order_id}'.")
+                )
+                return
+            import json
+
+            spec = json.dumps(order.to_create_payload(), indent=2)
+            notes = f"\n\n[dim]{order.notes}[/dim]" if order.notes else ""
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{order.title}[/bold] — {order.summary}\n\n"
+                    f"```json\n{spec}\n```{notes}"
+                )
+            )
+            return
+
+        if verb in ("install", "add"):
+            if not order_id:
+                await self._mount_message(
+                    AppMessage("Usage: /standing-orders install <id>")
+                )
+                return
+            order = get_order(order_id)
+            if order is None:
+                await self._mount_message(
+                    ErrorMessage(f"No standing order with id '{order_id}'.")
+                )
+                return
+            payload = order.to_create_payload()
+            try:
+                result = await add_daemon_job(payload)
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"Failed to call daemon: {exc}"))
+                return
+            if not result:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Daemon refused the job. Is it running? Try "
+                        "[bold]bog-agents daemon start[/bold] then retry."
+                    )
+                )
+                return
+            job_id = (
+                result.get("job_id") or result.get("id") or "?"
+                if isinstance(result, dict)
+                else "?"
+            )
+            extra = f"\n[dim]{order.notes}[/dim]" if order.notes else ""
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Installed[/green] standing order [bold]{order.id}[/bold] "
+                    f"as job [bold]{job_id}[/bold]. "
+                    "Use /ambient status to monitor."
+                    f"{extra}"
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /standing-orders [list|show <id>|install <id>]")
+        )
+
+    async def _handle_race_command(self, command: str) -> None:
+        """``/race`` — fan a prompt out to N models in parallel.
+
+        The lineup comes from ``[race].models`` in ``~/.bog-agents/config.toml``.
+        Without configuration we run the active model 3 times so the
+        feature is demoable out of the box.
+
+        Usage:
+            /race <prompt>          → run prompt against the configured lineup
+        """
+        await self._mount_message(UserMessage(command))
+
+        prefix = self._command_name(command)
+        prompt = command.strip()[len(prefix) :].strip()
+        if not prompt:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/race <prompt>[/bold]\n"
+                    "Configure jurors via [bold][race].models[/bold] in ~/.bog-agents/config.toml."
+                )
+            )
+            return
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.race import Racer, load_race_specs, pick_winner, run_race
+
+        specs = load_race_specs()
+        if not specs:
+            primary = self._model_override or settings.model_name
+            specs = [primary, primary, primary]
+
+        racers: list[Racer] = []
+        for i, spec in enumerate(specs, start=1):
+            if not spec:
+                continue
+            try:
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"Skipping racer #{i} ({spec}): {exc}")
+                )
+                continue
+            label = f"{spec}#{i}" if specs.count(spec) > 1 else str(spec)
+            racers.append(Racer(label=label, model=resolved.model))
+
+        if not racers:
+            await self._mount_message(
+                ErrorMessage(
+                    "No usable racers — configure [race].models in config.toml."
+                )
+            )
+            return
+
+        await self._set_spinner(f"Racing {len(racers)} models")
+        try:
+            report = await run_race(prompt, racers)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+
+        winner = pick_winner(report)
+        if winner is not None:
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
+                    f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+                )
+            )
+
+    async def _handle_jury_command(self, command: str) -> None:
+        """``/jury`` — multi-reviewer vote on the current diff.
+
+        Usage:
+            /jury                  → review the current ``git diff`` HEAD..
+            /jury staged           → review staged changes
+            /jury <ref>            → review ``git diff <ref>..HEAD``
+            /jury --paste          → paste a diff inline (next message)
+
+        The juror models come from ``[jury].models`` in
+        ``~/.bog-agents/config.toml``. If unset, the active model votes
+        three times — useful as a quick self-review.
+        """
+        await self._mount_message(UserMessage(command))
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        rest = body[len(prefix) :].strip()
+
+        diff_text = await self._gather_jury_diff(rest)
+        if diff_text is None:
+            return
+        if not diff_text.strip():
+            await self._mount_message(
+                AppMessage("No diff to review — working tree is clean.")
+            )
+            return
+
+        await self._run_jury_on_diff(diff_text)
+
+    async def _gather_jury_diff(self, arg: str) -> str | None:
+        """Gather a diff for /jury based on the user's argument.
+
+        Returns the diff string, or ``None`` if the command was rejected
+        and the caller has already mounted an error.
+        """
+        import subprocess  # noqa: S404  # bounded git invocation
+
+        from bog_agents_cli.config import settings
+
+        cwd = settings.project_root or Path(self._cwd)
+        if arg in ("--paste", "paste"):
+            await self._mount_message(
+                AppMessage(
+                    "Paste support is not yet wired up — pipe a diff to /jury via "
+                    "[bold]git diff | bog-agents -m '/jury <ref>'[/bold] or commit and use "
+                    "[bold]/jury <ref>[/bold]."
+                )
+            )
+            return None
+
+        cmd: list[str]
+        if arg in ("", "head", "working"):
+            cmd = ["git", "diff", "HEAD"]
+        elif arg == "staged":
+            cmd = ["git", "diff", "--cached"]
+        else:
+            # Treat as a ref. Reject anything that smells like a flag or
+            # contains shell metachars to keep argv hygiene tight.
+            if arg.startswith("-") or any(c in arg for c in " ;|&`$"):
+                await self._mount_message(
+                    ErrorMessage(f"Refusing suspicious /jury argument: {arg!r}")
+                )
+                return None
+            cmd = ["git", "diff", f"{arg}..HEAD"]
+
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,  # argv-form, no shell
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            await self._mount_message(ErrorMessage(f"git diff failed: {exc}"))
+            return None
+        if result.returncode != 0:
+            await self._mount_message(
+                ErrorMessage(
+                    f"git diff returned {result.returncode}: {result.stderr.strip()}"
+                )
+            )
+            return None
+        # ``capture_output=True, text=True`` always returns str; tighten the type
+        # so ty doesn't flag the bytes branch from subprocess.run's overload.
+        return str(result.stdout)
+
+    async def _run_jury_on_diff(self, diff_text: str) -> None:
+        """Build the juror list and run the jury, then mount the report."""
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.jury import load_jury_model_specs, run_jury
+
+        specs = load_jury_model_specs()
+        if not specs:
+            primary = self._model_override or settings.model_name
+            specs = [primary, primary, primary]
+
+        jurors: list[tuple[str, object]] = []
+        for i, spec in enumerate(specs, start=1):
+            if not spec:
+                continue
+            try:
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"Skipping juror {i} ({spec}): {exc}")
+                )
+                continue
+            label = f"{spec}#{i}" if specs.count(spec) > 1 else str(spec)
+            jurors.append((label, resolved.model))
+
+        if not jurors:
+            await self._mount_message(
+                ErrorMessage(
+                    "No usable jurors — configure [jury].models in config.toml."
+                )
+            )
+            return
+
+        await self._set_spinner(f"Polling {len(jurors)} jurors")
+        try:
+            report = await run_jury(diff_text, jurors)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/jury failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+
+    async def _handle_teach_command(self, command: str) -> None:
+        """``/teach`` — self-improving skill flywheel.
+
+        Subcommands:
+            /teach                   → propose new skills from this session
+            /teach list              → list pending proposals
+            /teach show <id>         → preview one proposal
+            /teach accept <id>       → promote into ~/.bog-agents/skills/
+            /teach reject <id>       → discard the proposal
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.skill_flywheel import (
+            accept_proposal,
+            list_proposals,
+            propose_skills_from_transcript,
+            reject_proposal,
+            write_proposal,
+        )
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+        parts = rest.split()
+        verb = parts[0].lower() if parts else ""
+        proposal_id = parts[1] if len(parts) > 1 else ""
+
+        if verb in ("list", "ls"):
+            proposals = list_proposals()
+            if not proposals:
+                await self._mount_message(
+                    AppMessage("No pending proposals. Run /teach to generate some.")
+                )
+                return
+            lines = [f"[bold]{len(proposals)} pending skill proposal(s):[/bold]"]
+            for path in proposals:
+                lines.append(f"  [cyan]{path.stem}[/cyan]   [dim]{path}[/dim]")
+            lines.append(
+                "\n[dim]Show: /teach show <id> · accept: /teach accept <id> · "
+                "reject: /teach reject <id>[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if verb == "show":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach show <id>"))
+                return
+            for path in list_proposals():
+                if path.stem == proposal_id:
+                    await self._mount_message(
+                        AppMessage(
+                            f"[bold]{path.stem}[/bold]\n\n"
+                            f"```markdown\n{path.read_text(encoding='utf-8')}\n```"
+                        )
+                    )
+                    return
+            await self._mount_message(
+                ErrorMessage(f"No pending proposal '{proposal_id}'.")
+            )
+            return
+
+        if verb == "accept":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach accept <id>"))
+                return
+            try:
+                dest = accept_proposal(proposal_id)
+            except FileNotFoundError as exc:
+                await self._mount_message(ErrorMessage(str(exc)))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Accepted[/green] proposal [bold]{proposal_id}[/bold] → "
+                    f"[dim]{dest}[/dim]"
+                )
+            )
+            return
+
+        if verb == "reject":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach reject <id>"))
+                return
+            removed = reject_proposal(proposal_id)
+            if removed:
+                await self._mount_message(
+                    AppMessage(f"Discarded proposal [bold]{proposal_id}[/bold].")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"No pending proposal '{proposal_id}'.")
+                )
+            return
+
+        # Default: propose from current session.
+        if not self._lc_thread_id:
+            await self._mount_message(
+                AppMessage("Nothing to teach from yet — start a conversation first.")
+            )
+            return
+
+        await self._set_spinner("Reviewing transcript")
+        try:
+            state_values = await self._get_thread_state_values(self._lc_thread_id)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
+            return
+
+        messages = state_values.get("messages", []) if state_values else []
+        if not messages:
+            await self._set_spinner("")
+            await self._mount_message(AppMessage("Conversation is empty."))
+            return
+
+        transcript_lines = []
+        for msg in messages[-40:]:  # cap to last 40 messages
+            kind = getattr(msg, "type", "msg")
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                transcript_lines.append(f"[{kind}] {content}")
+        transcript = "\n".join(transcript_lines)
+
+        model_spec = self._model_override or settings.model_name
+        try:
+            resolved = create_model(
+                model_spec, profile_overrides=self._profile_override
+            )
+            proposals = await propose_skills_from_transcript(transcript, resolved.model)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        if not proposals:
+            await self._mount_message(
+                AppMessage(
+                    "No durable skills surfaced from this session. Try /teach again "
+                    "after a longer or more varied conversation."
+                )
+            )
+            return
+
+        written: list[str] = []
+        for proposal in proposals:
+            try:
+                write_proposal(proposal, overwrite=True)
+                written.append(proposal.id)
+            except (ValueError, OSError) as exc:
+                logger.debug("could not write proposal %s: %s", proposal.id, exc)
+
+        if not written:
+            await self._mount_message(
+                AppMessage(
+                    "Could not write any proposals — check ~/.bog-agents/skills/."
+                )
+            )
+            return
+
+        bullets = "\n".join(
+            f"  [cyan]{p.id}[/cyan] — {p.description}"
+            for p in proposals
+            if p.id in written
+        )
+        await self._mount_message(
+            AppMessage(
+                f"[bold]{len(written)}[/bold] proposal(s) written to "
+                "~/.bog-agents/skills/proposed/:\n\n"
+                f"{bullets}\n\n"
+                "[dim]Review with [bold]/teach show <id>[/bold] · "
+                "accept with [bold]/teach accept <id>[/bold] · "
+                "reject with [bold]/teach reject <id>[/bold][/dim]"
+            )
+        )
+
+    async def _handle_recipe_command(self, command: str) -> None:
+        """``/recipe`` — curated YAML recipe pipelines.
+
+        Subcommands:
+            /recipe                     → list catalog
+            /recipe show <id>           → print recipe YAML
+            /recipe install <id>        → write to ~/.bog-agents/pipelines/<id>.yaml
+            /recipe install <id> --force → overwrite existing
+            /recipe uninstall <id>      → remove the installed file
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.recipes import (
+            CATALOG,
+            get_recipe,
+            install_recipe,
+            is_installed,
+            uninstall_recipe,
+        )
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+        parts = rest.split()
+        verb = parts[0].lower() if parts else ""
+        rest_args = parts[1:]
+
+        if not parts or verb in ("list", "ls"):
+            lines = ["[bold]Recipes[/bold] — curated YAML pipeline templates\n"]
+            for r in CATALOG:
+                marker = " [green]✓ installed[/green]" if is_installed(r.id) else ""
+                tag_text = " ".join(f"[dim][{t}][/dim]" for t in r.tags)
+                lines.append(
+                    f"  [cyan]{r.id:<22}[/cyan] {r.title}{marker}\n"
+                    f"    [dim]{r.summary}[/dim]"
+                )
+                if tag_text:
+                    lines.append(f"    {tag_text}")
+            lines.append(
+                "\n[dim]Install: [bold]/recipe install <id>[/bold] · "
+                "show: [bold]/recipe show <id>[/bold] · "
+                "remove: [bold]/recipe uninstall <id>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        recipe_id = rest_args[0] if rest_args else ""
+        if verb == "show":
+            if not recipe_id:
+                await self._mount_message(AppMessage("Usage: /recipe show <id>"))
+                return
+            recipe = get_recipe(recipe_id)
+            if recipe is None:
+                await self._mount_message(
+                    ErrorMessage(f"No recipe with id '{recipe_id}'.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{recipe.title}[/bold] — {recipe.summary}\n\n"
+                    f"```yaml\n{recipe.yaml}\n```"
+                )
+            )
+            return
+
+        if verb == "install":
+            if not recipe_id:
+                await self._mount_message(
+                    AppMessage("Usage: /recipe install <id> [--force]")
+                )
+                return
+            force = "--force" in rest_args
+            try:
+                target = install_recipe(recipe_id, overwrite=force)
+            except ValueError as exc:
+                await self._mount_message(ErrorMessage(str(exc)))
+                return
+            except FileExistsError as exc:
+                await self._mount_message(ErrorMessage(f"{exc} (or run with --force)"))
+                return
+            except OSError as exc:
+                await self._mount_message(ErrorMessage(f"Could not install: {exc}"))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Installed[/green] recipe [bold]{recipe_id}[/bold] → "
+                    f"[dim]{target}[/dim]\n"
+                    f"Run with [bold]/pipeline {recipe_id}[/bold]."
+                )
+            )
+            return
+
+        if verb == "uninstall":
+            if not recipe_id:
+                await self._mount_message(AppMessage("Usage: /recipe uninstall <id>"))
+                return
+            removed = uninstall_recipe(recipe_id)
+            if removed:
+                await self._mount_message(
+                    AppMessage(f"Uninstalled recipe [bold]{recipe_id}[/bold].")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"Recipe [bold]{recipe_id}[/bold] was not installed.")
+                )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /recipe [list|show <id>|install <id>|uninstall <id>]")
+        )
+
+    async def _handle_persona_command(self, command: str) -> None:
+        """``/persona`` — apply an output-style persona.
+
+        Usage:
+            /persona                  → list discovered personas
+            /persona <id>             → activate by id
+            /persona off|clear|none   → deactivate the current persona
+            /persona show             → show current + addendum body
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.config import settings
+        from bog_agents_cli.personas import discover_personas
+
+        project_root = settings.project_root
+        personas = discover_personas(project_root=project_root)
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        rest = body[len(prefix) :].strip()
+
+        if not rest:
+            if not personas:
+                await self._mount_message(
+                    AppMessage(
+                        "No personas found.\n\n"
+                        "Drop markdown files into [bold].bog-agents/personas/[/bold] "
+                        "(project) or [bold]~/.bog-agents/personas/[/bold] (user). "
+                        "Each file optionally starts with frontmatter:\n"
+                        "  [dim]---\n  name: terse-mentor\n  description: ...\n  ---[/dim]\n"
+                        "Body becomes a system-prompt addendum."
+                    )
+                )
+                return
+            lines = ["[bold]Available personas[/bold]"]
+            for persona in sorted(personas.values(), key=lambda p: p.id):
+                marker = (
+                    " [green]✓ active[/green]"
+                    if persona.id == self._active_persona_id
+                    else ""
+                )
+                desc = f" — {persona.description}" if persona.description else ""
+                lines.append(f"  [cyan]{persona.id}[/cyan]{marker}{desc}")
+            lines.append("")
+            lines.append(
+                "[dim]Activate with [bold]/persona <id>[/bold] · clear with [bold]/persona off[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        verb = rest.lower()
+        if verb in {"off", "clear", "none", "disable"}:
+            self._active_persona_id = None
+            self._active_persona_addendum = None
+            await self._mount_message(AppMessage("Persona cleared."))
+            return
+
+        if verb == "show":
+            if not self._active_persona_id:
+                await self._mount_message(AppMessage("No persona is active."))
+                return
+            persona = personas.get(self._active_persona_id)
+            if persona is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Active persona [bold]{self._active_persona_id}[/bold] is no longer "
+                        "discoverable on disk; it's still applied for this session."
+                    )
+                )
+                return
+            preview = (persona.body or "").strip()[:600]
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{persona.id}[/bold] — {persona.description or '(no description)'}\n\n"
+                    f"{preview}{'…' if persona.body and len(persona.body) > 600 else ''}"
+                )
+            )
+            return
+
+        target = personas.get(verb)
+        if target is None:
+            await self._mount_message(
+                ErrorMessage(
+                    f"Persona '{verb}' not found. "
+                    "Run /persona to list discovered personas."
+                )
+            )
+            return
+        self._active_persona_id = target.id
+        self._active_persona_addendum = target.system_addendum
+        await self._mount_message(
+            AppMessage(
+                f"Persona [bold]{target.id}[/bold] active. The new style applies on the next agent turn."
+            )
+        )
 
     async def _handle_telephone_command(self, command: str) -> None:
         """``/telephone <prompt>`` — rewrite the input as a production-grade prompt.
@@ -4302,7 +5004,9 @@ class BogAgentsApp(App):
             return
 
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-        menu = TelephoneMenu(original_prompt=original_prompt, rewritten_prompt=rewritten)
+        menu = TelephoneMenu(
+            original_prompt=original_prompt, rewritten_prompt=rewritten
+        )
         menu.set_future(future)
         await self._mount_message(menu)
         decision = await future
@@ -4314,9 +5018,7 @@ class BogAgentsApp(App):
             logger.debug("Failed to remove telephone menu", exc_info=True)
 
         if decision == "submit":
-            await self._mount_message(
-                AppMessage("Submitting rewritten prompt…")
-            )
+            await self._mount_message(AppMessage("Submitting rewritten prompt…"))
             await self._handle_user_message(rewritten)
         elif decision == "redo":
             await self._mount_message(AppMessage("Re-running rewriter…"))
@@ -10425,9 +11127,7 @@ class BogAgentsApp(App):
         if isinstance(hook_result, dict):
             reason = hook_result.get("reason", "blocked by user-prompt hook")
             await self._mount_message(UserMessage(message))
-            await self._mount_message(
-                ErrorMessage(f"Prompt blocked: {reason}")
-            )
+            await self._mount_message(ErrorMessage(f"Prompt blocked: {reason}"))
             return
         if isinstance(hook_result, str) and hook_result != message:
             message = hook_result

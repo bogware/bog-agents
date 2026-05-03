@@ -115,6 +115,25 @@ class TriggerRunRequest(BaseModel):
     context: dict[str, Any] = {}
 
 
+class UpdateJobRequest(BaseModel):
+    """Partial update for an existing ambient job.
+
+    Every field is optional. Only the fields the caller sends are
+    overwritten on the stored record; everything else is preserved.
+    """
+
+    name: str | None = Field(default=None, max_length=_MAX_NAME_LEN)
+    description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LEN)
+    prompt: str | None = Field(default=None, max_length=_MAX_PROMPT_LEN)
+    pipeline_name: str | None = Field(default=None, max_length=_MAX_PIPELINE_NAME_LEN)
+    skill_name: str | None = Field(default=None, max_length=_MAX_SKILL_NAME_LEN)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
+    working_dir: str | None = Field(default=None, max_length=_MAX_WORKING_DIR_LEN)
+    triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
+    outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
+    enabled: bool | None = None
+
+
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------
@@ -456,6 +475,56 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
         return _job_to_response(job)
+
+    @app.patch("/jobs/{job_id}")
+    async def patch_job_endpoint(
+        request: Request,
+        job_id: str,
+        body: UpdateJobRequest,
+    ) -> dict[str, Any]:
+        """Partially update an existing job.
+
+        Only the fields the caller sends are overwritten — every other
+        field on the stored record is preserved. Useful for edit-flow
+        ergonomics from the CLI (``daemon jobs edit``) without forcing
+        the user to round-trip the entire payload.
+        """
+        _check_auth(request, token_holder["value"])
+        existing = get_job(job_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+
+        import dataclasses
+
+        updates: dict[str, Any] = {}
+        if body.name is not None:
+            updates["name"] = body.name
+        if body.description is not None:
+            updates["description"] = body.description
+        if body.prompt is not None:
+            updates["prompt"] = body.prompt
+        if body.pipeline_name is not None:
+            updates["pipeline_name"] = body.pipeline_name
+        if body.skill_name is not None:
+            updates["skill_name"] = body.skill_name
+        if body.model is not None:
+            updates["model"] = body.model
+        if body.working_dir is not None:
+            updates["working_dir"] = body.working_dir
+        if body.triggers is not None:
+            updates["triggers"] = [_trigger_config_from_model(t) for t in body.triggers]
+        if body.outputs is not None:
+            updates["outputs"] = [_output_config_from_model(o) for o in body.outputs]
+        if body.enabled is not None:
+            updates["enabled"] = body.enabled
+
+        if not updates:
+            return _job_to_response(existing)
+
+        merged = dataclasses.replace(existing, **updates)
+        upsert_job(merged)
+        logger.info("Patched job %s (%s)", job_id, sorted(updates.keys()))
+        return _job_to_response(merged)
 
     @app.delete("/jobs/{job_id}", status_code=204)
     async def delete_job_endpoint(request: Request, job_id: str) -> None:

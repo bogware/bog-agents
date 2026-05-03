@@ -65,4 +65,7 @@ def test_list_entries_includes_new_curated_entries() -> None:
 def test_aws_install_notes_warn_about_credentials() -> None:
     aws = get_entry("aws")
     assert aws is not None
-    assert "aws configure" in aws.install_notes.lower() or "credentials" in aws.install_notes.lower()
+    assert (
+        "aws configure" in aws.install_notes.lower()
+        or "credentials" in aws.install_notes.lower()
+    )

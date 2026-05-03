@@ -145,6 +145,57 @@ class TestDeleteJob:
 
 
 # ---------------------------------------------------------------------------
+# PATCH /jobs/{id} — partial edit
+# ---------------------------------------------------------------------------
+
+
+class TestPatchJob:
+    def test_patch_prompt_persists(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job_id = client.post("/jobs", json={"name": "edit-me", "prompt": "before"}, headers=auth).json()["job_id"]
+        resp = client.patch(f"/jobs/{job_id}", json={"prompt": "after"}, headers=auth)
+        assert resp.status_code == 200
+        assert resp.json()["prompt"] == "after"
+        # GET should reflect the patched value too.
+        assert client.get(f"/jobs/{job_id}", headers=auth).json()["prompt"] == "after"
+
+    def test_patch_preserves_unset_fields(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job_id = client.post(
+            "/jobs",
+            json={"name": "keep-me", "prompt": "original", "description": "OG"},
+            headers=auth,
+        ).json()["job_id"]
+        resp = client.patch(f"/jobs/{job_id}", json={"prompt": "new"}, headers=auth)
+        body = resp.json()
+        assert body["prompt"] == "new"
+        # description was not in payload — must remain unchanged.
+        assert body["description"] == "OG"
+
+    def test_patch_with_empty_body_is_noop_and_returns_existing(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job_id = client.post("/jobs", json={"name": "noop-me", "prompt": "x"}, headers=auth).json()["job_id"]
+        resp = client.patch(f"/jobs/{job_id}", json={}, headers=auth)
+        assert resp.status_code == 200
+        assert resp.json()["prompt"] == "x"
+
+    def test_patch_unknown_returns_404(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.patch("/jobs/no-such-job", json={"prompt": "anything"}, headers=auth)
+        assert resp.status_code == 404
+
+    def test_patch_no_auth_returns_401(self, client: TestClient) -> None:
+        resp = client.patch("/jobs/whatever", json={"prompt": "x"})
+        assert resp.status_code == 401
+
+    def test_patch_can_toggle_enabled(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job_id = client.post(
+            "/jobs",
+            json={"name": "toggle-me", "prompt": "x", "enabled": True},
+            headers=auth,
+        ).json()["job_id"]
+        resp = client.patch(f"/jobs/{job_id}", json={"enabled": False}, headers=auth)
+        assert resp.status_code == 200
+        assert resp.json()["enabled"] is False
+
+
+# ---------------------------------------------------------------------------
 # POST /jobs/{id}/enable  &  /disable
 # ---------------------------------------------------------------------------
 

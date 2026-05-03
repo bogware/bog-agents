@@ -161,7 +161,9 @@ async def _run_one_script(script: Path, payload_bytes: bytes) -> dict[str, Any] 
             proc.communicate(payload_bytes), timeout=HOOK_TIMEOUT_SECONDS
         )
     except TimeoutError:
-        logger.warning("hook %s timed out after %.1fs; killing", script, HOOK_TIMEOUT_SECONDS)
+        logger.warning(
+            "hook %s timed out after %.1fs; killing", script, HOOK_TIMEOUT_SECONDS
+        )
         with contextlib.suppress(ProcessLookupError, OSError):
             proc.kill()
         await proc.wait()
@@ -186,10 +188,16 @@ async def _run_one_script(script: Path, payload_bytes: bytes) -> dict[str, Any] 
     try:
         decision = json.loads(raw)
     except json.JSONDecodeError as exc:
-        logger.warning("hook %s produced non-JSON stdout (%s): %.200s", script, exc, raw)
+        logger.warning(
+            "hook %s produced non-JSON stdout (%s): %.200s", script, exc, raw
+        )
         return None
     if not isinstance(decision, dict):
-        logger.warning("hook %s decision must be a JSON object, got %s", script, type(decision).__name__)
+        logger.warning(
+            "hook %s decision must be a JSON object, got %s",
+            script,
+            type(decision).__name__,
+        )
         return None
     return decision
 

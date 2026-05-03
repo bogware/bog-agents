@@ -422,9 +422,7 @@ class TestPluginSystemMiddleware:
         from bog_agents.middleware.plugin_system import PluginValidationError, validate_plugin_manifest
 
         with pytest.raises(PluginValidationError):
-            validate_plugin_manifest(
-                {"name": "p", "version": "1.0", "description": "", "permissions": ["root.escape"]}
-            )
+            validate_plugin_manifest({"name": "p", "version": "1.0", "description": "", "permissions": ["root.escape"]})
 
     def test_validate_manifest_rejects_non_http_mcp_url(self):
         import pytest

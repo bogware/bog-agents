@@ -15,6 +15,7 @@ Usage::
 
     from bog_agents.middleware._state import MiddlewareState
 
+
     class MyMiddleware:
         def __init__(self):
             self._state = MiddlewareState({"calls": 0})

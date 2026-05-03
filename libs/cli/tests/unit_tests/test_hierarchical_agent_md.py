@@ -75,9 +75,12 @@ def test_claude_md_also_collected(tmp_path: Path) -> None:
     (project / "CLAUDE.md").write_text("PROJECT-CLAUDE", encoding="utf-8")
     (cwd / "AGENTS.md").write_text("CWD-AGENTS", encoding="utf-8")
 
-    names = {p.name for p in find_hierarchical_agent_md(
-        user_cwd=cwd, project_root=project, home=home
-    )}
+    names = {
+        p.name
+        for p in find_hierarchical_agent_md(
+            user_cwd=cwd, project_root=project, home=home
+        )
+    }
     assert names == {"CLAUDE.md", "AGENTS.md"}
 
 

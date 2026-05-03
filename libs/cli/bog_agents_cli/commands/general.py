@@ -28,6 +28,36 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/persona",
+            "Apply an output-style persona from .bog-agents/personas/*.md",
+            "style voice tone persona output-style",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_persona_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/recipe",
+            "Browse and install curated YAML recipe pipelines (review, audit, triage, …)",
+            "pipeline recipe template yaml install registry workflow",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_recipe_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/teach",
+            "Self-improving flywheel: propose new skills from this session, accept or reject",
+            "skills learn flywheel propose accept memory teach",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_teach_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/commands",
             "Browse available slash commands and quick descriptions",
             "help reference discover",

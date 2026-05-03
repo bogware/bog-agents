@@ -57,16 +57,18 @@ class InstalledPlugin:
     enabled: bool = True
 
 
-_ALLOWED_PERMISSIONS: frozenset[str] = frozenset({
-    "filesystem.read",
-    "filesystem.write",
-    "shell",
-    "network",
-    "subagents",
-    "tools.read",
-    "tools.write",
-    "mcp",
-})
+_ALLOWED_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "filesystem.read",
+        "filesystem.write",
+        "shell",
+        "network",
+        "subagents",
+        "tools.read",
+        "tools.write",
+        "mcp",
+    }
+)
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}$")
 _VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}([\-+][A-Za-z0-9.\-]+)?$")

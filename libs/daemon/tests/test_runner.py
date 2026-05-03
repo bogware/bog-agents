@@ -63,12 +63,7 @@ class TestBuildPrompt:
         pipeline_dir = tmp_path / ".bog-agents" / "pipelines"
         pipeline_dir.mkdir(parents=True)
         (pipeline_dir / "smoke.yaml").write_text(
-            "name: smoke\n"
-            "description: smoke pipeline\n"
-            "steps:\n"
-            "  - id: do-thing\n"
-            "    type: message\n"
-            "    text: Do the thing\n",
+            "name: smoke\ndescription: smoke pipeline\nsteps:\n  - id: do-thing\n    type: message\n    text: Do the thing\n",
             encoding="utf-8",
         )
         monkeypatch.chdir(tmp_path)
