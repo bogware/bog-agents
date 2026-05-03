@@ -1739,8 +1739,14 @@ class TestCommandSurfaceEnhancements:
             process.terminate.assert_called_once()
 
     async def test_record_and_replay_commands_round_trip(self) -> None:
-        """`/record` and `/replay run` should capture and reuse replay sessions."""
+        """`/record` and `/replay run` should capture and reuse replay sessions.
+
+        The new flow attaches a live SessionRecorder to the recording state
+        and feeds it from ``_mount_message``. We exercise that path by
+        mounting a real UserMessage between start and stop.
+        """
         from bog_agents_cli.replay import ReplaySession, ReplayStep
+        from bog_agents_cli.widgets.messages import UserMessage as _UserMsg
 
         app = BogAgentsApp(thread_id="thread-123")
         replay_session = ReplaySession(
@@ -1753,32 +1759,22 @@ class TestCommandSurfaceEnhancements:
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with (
-                patch(
-                    "bog_agents_cli.sessions.export_thread",
-                    new=AsyncMock(
-                        side_effect=[
-                            {"transcript": []},
-                            {
-                                "transcript": [
-                                    {"role": "human", "content": "Investigate the bug"},
-                                    {"role": "ai", "content": "I will inspect it."},
-                                ]
-                            },
-                        ]
-                    ),
-                ),
-                patch(
-                    "bog_agents_cli.replay.save_replay_session",
-                    return_value=app_module.Path(
-                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
-                    ),
+            with patch(
+                "bog_agents_cli.replay.save_replay_session",
+                return_value=app_module.Path(
+                    "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
                 ),
             ):
                 await app._handle_command("/record start bugfix-flow")
                 await pilot.pause()
+                # Drive a real user message through the live capture path.
+                await app._mount_message(_UserMsg("Investigate the bug"))
+                await pilot.pause()
                 await app._handle_command("/record stop")
                 await pilot.pause()
+
+            # Live recorder should have captured at least one step.
+            assert app._recording_state is None  # cleared after stop
 
             with (
                 patch(

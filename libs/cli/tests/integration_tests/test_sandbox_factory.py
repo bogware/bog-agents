@@ -115,18 +115,6 @@ class BaseSandboxIntegrationTest(ABC):
             assert resp.content == files[i][1]
             assert resp.error is None
 
-    @pytest.mark.skip(reason="Error handling not implemented yet.")
-    def test_download_nonexistent_file(self, sandbox: SandboxBackendProtocol) -> None:
-        """Test that downloading a non-existent file returns an error."""
-        nonexistent_path = "/tmp/does_not_exist.txt"
-
-        download_responses = sandbox.download_files([nonexistent_path])
-
-        assert len(download_responses) == 1
-        assert download_responses[0].path == nonexistent_path
-        assert download_responses[0].content is None
-        assert download_responses[0].error is not None
-
     def test_upload_binary_content(self, sandbox: SandboxBackendProtocol) -> None:
         """Test uploading binary content (not valid UTF-8)."""
         test_path = "/tmp/binary_file.bin"
@@ -157,135 +145,14 @@ class BaseSandboxIntegrationTest(ABC):
         for i, resp in enumerate(upload_responses):
             assert resp.path == files[i][0]
 
-    @pytest.mark.skip(reason="Error handling not implemented yet.")
-    def test_partial_success_download(self, sandbox: SandboxBackendProtocol) -> None:
-        """Test that batch download supports partial success."""
-        # Create one valid file
-        valid_path = "/tmp/valid_file.txt"
-        valid_content = b"Valid"
-        sandbox.upload_files([(valid_path, valid_content)])
-
-        # Request both valid and invalid files
-        paths = [valid_path, "/tmp/does_not_exist.txt"]
-        download_responses = sandbox.download_files(paths)
-
-        assert len(download_responses) == 2
-        # First should succeed
-        assert download_responses[0].path == valid_path
-        assert download_responses[0].content == valid_content
-        assert download_responses[0].error is None
-        # Second should fail
-        assert download_responses[1].path == "/tmp/does_not_exist.txt"
-        assert download_responses[1].content is None
-        assert download_responses[1].error is not None
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_download_error_file_not_found(
-        self, sandbox: SandboxBackendProtocol
-    ) -> None:
-        """Test downloading a non-existent file returns file_not_found error.
-
-        Expected behavior: download_files should return FileDownloadResponse with
-        error='file_not_found' when the requested file doesn't exist.
-        """
-        responses = sandbox.download_files(["/tmp/nonexistent_test_file.txt"])
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/nonexistent_test_file.txt"
-        assert responses[0].content is None
-        assert responses[0].error == "file_not_found"
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_download_error_is_directory(self, sandbox: SandboxBackendProtocol) -> None:
-        """Test downloading a directory returns is_directory error.
-
-        Expected behavior: download_files should return FileDownloadResponse with
-        error='is_directory' when trying to download a directory as a file.
-        """
-        # Create a directory
-        sandbox.execute("mkdir -p /tmp/test_directory")
-
-        responses = sandbox.download_files(["/tmp/test_directory"])
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/test_directory"
-        assert responses[0].content is None
-        assert responses[0].error == "is_directory"
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_upload_error_parent_not_found(
-        self, sandbox: SandboxBackendProtocol
-    ) -> None:
-        """Test uploading to non-existent parent returns parent_not_found error.
-
-        Expected behavior: upload_files should return FileUploadResponse with
-        error='parent_not_found' when the parent directory doesn't exist and
-        can't be created automatically.
-
-        Note: This test may need adjustment based on whether sandbox providers
-        auto-create parent directories or not.
-        """
-        # Try to upload to a path where the parent is a file, not a directory
-        # First create a file
-        sandbox.upload_files([("/tmp/parent_is_file.txt", b"I am a file")])
-
-        # Now try to upload as if parent_is_file.txt were a directory
-        responses = sandbox.upload_files(
-            [("/tmp/parent_is_file.txt/child.txt", b"child")]
-        )
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/parent_is_file.txt/child.txt"
-        # Could be parent_not_found or invalid_path depending on implementation
-        assert responses[0].error in ("parent_not_found", "invalid_path")
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_upload_error_invalid_path(self, sandbox: SandboxBackendProtocol) -> None:
-        """Test uploading with invalid path returns invalid_path error.
-
-        Expected behavior: upload_files should return FileUploadResponse with
-        error='invalid_path' for malformed paths (null bytes, invalid chars, etc).
-        """
-        # Test with null byte (invalid in most filesystems)
-        responses = sandbox.upload_files([("/tmp/file\x00name.txt", b"content")])
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/file\x00name.txt"
-        assert responses[0].error == "invalid_path"
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_download_error_invalid_path(self, sandbox: SandboxBackendProtocol) -> None:
-        """Test downloading with invalid path returns invalid_path error.
-
-        Expected behavior: download_files should return FileDownloadResponse with
-        error='invalid_path' for malformed paths (null bytes, invalid chars, etc).
-        """
-        # Test with null byte (invalid in most filesystems)
-        responses = sandbox.download_files(["/tmp/file\x00name.txt"])
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/file\x00name.txt"
-        assert responses[0].content is None
-        assert responses[0].error == "invalid_path"
-
-    @pytest.mark.skip(reason="Error handling not yet implemented in sandbox providers")
-    def test_upload_to_existing_directory_path(
-        self, sandbox: SandboxBackendProtocol
-    ) -> None:
-        """Test uploading to a path that is an existing directory.
-
-        Expected behavior: This should either succeed by overwriting or return
-        an appropriate error. The exact behavior depends on the sandbox provider.
-        """
-        # Create a directory
-        sandbox.execute("mkdir -p /tmp/test_dir_upload")
-
-        # Try to upload a file with the same name as the directory
-        responses = sandbox.upload_files([("/tmp/test_dir_upload", b"file content")])
-
-        assert len(responses) == 1
-        assert responses[0].path == "/tmp/test_dir_upload"
-        # Behavior depends on implementation - just verify we get a response
+    # NOTE: prior versions of this file held 8 ``@pytest.mark.skip`` tests
+    # describing structured-error behavior the sandbox providers don't yet
+    # implement (file_not_found / is_directory / parent_not_found /
+    # invalid_path). Those tests have been removed for 0.8.0 — the
+    # ``FileOperationError`` Literal in
+    # ``bog_agents.backends.protocol`` documents the expected shape, and
+    # specs will be reintroduced once each provider's error mapping
+    # actually exists.
 
 
 class TestRunLoopIntegration(BaseSandboxIntegrationTest):

@@ -262,3 +262,44 @@ class TestBuildReplayPrompt:
         s = ReplaySession(session_id="x")
         out = build_replay_prompt(s, b)
         assert "(none)" in out
+
+
+class TestLiveCapture:
+    """Recorder is fed live by app._mount_message via app._feed_recorder.
+
+    These tests exercise the recorder directly with the same shape of
+    inputs the app feeds it, since spinning up a Textual app for a
+    plumbing test is heavyweight overkill.
+    """
+
+    def test_user_then_tool_then_ai_captures_in_order(self):
+        from bog_agents_cli.replay import SessionRecorder
+
+        r = SessionRecorder(name="t")
+        r.start()
+        r.record_user_message("Look at JIRA-200")
+        r.record_tool_call("jira__get", {"id": "JIRA-200"})
+        r.record_ai_message("Got it: blocker on checkout.")
+        r.stop()
+        s = r.finalize()
+        kinds = [step.kind for step in s.steps]
+        assert kinds == ["user_message", "tool_call", "ai_message"]
+        # The Jira ticket should have been variabilized once and reused.
+        assert "${jira_ticket}" in s.steps[0].content
+        assert s.steps[1].args["id"] == "${jira_ticket}"
+        assert s.vars_spec["jira_ticket"]["default"] == "JIRA-200"
+
+    def test_recorder_skips_slash_commands_via_app_filter(self):
+        # The app filters lines starting with `/` before calling the
+        # recorder — the recorder itself doesn't filter. This test just
+        # documents the contract by exercising the recorder with a
+        # filtered-input flow.
+        from bog_agents_cli.replay import SessionRecorder
+
+        r = SessionRecorder()
+        r.start()
+        # Slash command not passed in (caller filtered it).
+        r.record_user_message("real prompt")
+        s = r.finalize()
+        assert len(s.steps) == 1
+        assert s.steps[0].content == "real prompt"

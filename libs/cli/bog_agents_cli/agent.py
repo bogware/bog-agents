@@ -872,10 +872,32 @@ def create_cli_agent(
                 env=shell_env,
             )
         else:
-            # No shell access - use plain FilesystemBackend
-            # virtual_mode=False: agent file tools use real absolute paths.
-            # Explicit to survive SDK default flips (0.7.1 changed default to True).
-            backend = FilesystemBackend(root_dir=root_dir, virtual_mode=False)
+            # No shell access - use plain FilesystemBackend.
+            #
+            # 0.8.0: default is ``virtual_mode=True`` (secure-by-default).
+            # The agent's ``read_file`` / ``write_file`` / ``edit_file``
+            # tools are now confined to ``root_dir``; absolute paths and
+            # ``..`` traversal are blocked. Power users who need the old
+            # unrestricted behavior (e.g. cross-repo refactors, reading
+            # ~/.aws/credentials for an explicit IaC task) can opt back
+            # in via the ``BOG_AGENTS_FS_UNSANDBOXED=1`` env var.
+            unsandboxed = os.environ.get("BOG_AGENTS_FS_UNSANDBOXED", "").strip() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if unsandboxed:
+                logger.warning(
+                    "BOG_AGENTS_FS_UNSANDBOXED is set — agent filesystem "
+                    "tools may read/write outside %s. Use only when you "
+                    "intentionally want cross-repo or system-wide file "
+                    "access.",
+                    root_dir,
+                )
+            backend = FilesystemBackend(
+                root_dir=root_dir,
+                virtual_mode=not unsandboxed,
+            )
     else:
         # ========== REMOTE SANDBOX MODE ==========
         backend = sandbox  # Remote sandbox (ModalBackend, etc.)

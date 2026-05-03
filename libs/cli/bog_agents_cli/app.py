@@ -319,7 +319,13 @@ class PreviewServerRecord:
 
 @dataclass(slots=True)
 class RecordingSessionState:
-    """Ephemeral replay-recording state for `/record`."""
+    """Ephemeral replay-recording state for `/record`.
+
+    A live :class:`bog_agents_cli.replay.SessionRecorder` is attached and
+    fed by ``_mount_message`` so the recording captures user prompts, AI
+    text, AND tool calls as they happen. ``stop()``/``finalize()`` produce
+    the YAML artifact.
+    """
 
     session_id: str
     name: str
@@ -327,6 +333,9 @@ class RecordingSessionState:
     cwd: str
     started_at: float
     baseline_message_count: int = 0
+    # Live recorder. Optional so older code paths that only stored the
+    # state can keep working; new code always sets it.
+    recorder: Any | None = None  # noqa: ANN401 — SessionRecorder, lazy-imported
 
 
 class TextualTokenTracker:
@@ -1010,36 +1019,24 @@ class BogAgentsApp(App):
             group="startup-vault-check",
         )
 
-        # Start the Peat job scheduler. Scheduled jobs persist as YAML and
-        # the scheduler writes a notification to ~/.bog-agents/peat/inbox.json
-        # when each one is due. The "runner" here records that the job
-        # fired and tells the user to run it manually (`/peat run <id>`):
-        # full unattended agent execution requires deeper plumbing through
-        # the langgraph server and is tracked as a follow-up. This wiring
-        # at minimum makes scheduled jobs visible to the user instead of
-        # silently never firing.
+        # Start the Peat job scheduler. Scheduled jobs persist as YAML; the
+        # scheduler ticks while the CLI is open and dispatches due jobs
+        # through ``_run_peat_unattended`` — which reuses the live agent
+        # server (no subprocess spawning), serializes fires through a
+        # single-flight lock, captures the final AI text into the run
+        # artifact, and writes an inbox entry.
         self._peat_scheduler = None
+        # Lock so two scheduled jobs don't run on the agent at the same
+        # time. The interactive UI also takes this lock when it dispatches
+        # interactive prompts, so a scheduled job will simply wait for the
+        # user's current turn to complete before firing.
+        self._peat_run_lock = asyncio.Lock()
         try:
-            from bog_agents_cli.peat import PeatJob, PeatJobRun, PeatScheduler
-
-            async def _peat_default_runner(job: PeatJob) -> PeatJobRun:  # noqa: RUF029 — must be async to satisfy RunnerFn signature
-                import time as _time
-
-                return PeatJobRun(
-                    job_id=job.job_id,
-                    run_id=f"run-{int(_time.time())}",
-                    started_at=_time.time(),
-                    duration_s=0.0,
-                    status="ok",
-                    summary=(
-                        f"Job `{job.job_id}` is due. Run it interactively with "
-                        f"/peat run {job.job_id}"
-                    ),
-                )
+            from bog_agents_cli.peat import PeatScheduler
 
             self._peat_scheduler = PeatScheduler(
                 settings.user_agents_dir,
-                runner=_peat_default_runner,
+                runner=self._run_peat_unattended,
             )
             await self._peat_scheduler.start()
         except Exception:
@@ -6346,6 +6343,167 @@ class BogAgentsApp(App):
         _score, session, file_path = scored[0]
         return session, file_path
 
+    async def _run_peat_unattended(self, job: Any) -> Any:  # noqa: ANN401 — PeatJob, lazy-imported
+        """Execute a scheduled Peat job against the live agent.
+
+        Called by the :class:`PeatScheduler` when a job's
+        ``next_fire_at`` arrives. Reuses the running langgraph server
+        (no subprocess spawn) and serializes fires through
+        ``self._peat_run_lock`` so a scheduled job can never overlap with
+        an interactive turn or another scheduled fire.
+
+        The agent's final ``AssistantMessage`` for this turn is captured
+        via a transient recorder, written to
+        ``~/.bog-agents/peat/runs/<job_id>/<run_id>.md``, and a one-line
+        summary is returned to the scheduler (which writes an inbox
+        entry).
+
+        On any error we still return a ``PeatJobRun`` with ``status="fail"``
+        so the scheduler can surface it.
+
+        Args:
+            job: The :class:`PeatJob` being fired.
+
+        Returns:
+            Completed :class:`PeatJobRun`.
+        """
+        import time as _time
+        import uuid as _uuid
+
+        from bog_agents_cli.peat import PeatJobRun, build_scheduled_prompt, load_persona
+        from bog_agents_cli.replay import SessionRecorder
+
+        started = _time.time()
+        run_id = f"run-{int(started)}-{_uuid.uuid4().hex[:4]}"
+        run_dir = settings.user_agents_dir / "peat" / "runs" / job.job_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=0.0,
+                status="fail",
+                error=f"could not create run dir: {exc}",
+            )
+        output_path = run_dir / f"{run_id}.md"
+
+        # If the agent isn't ready (e.g. server still starting up), defer
+        # by reporting the fire as inconclusive — the next tick will retry.
+        if not (self._agent and self._ui_adapter and self._session_state):
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=0.0,
+                status="fail",
+                error="agent not ready (will retry on next tick)",
+            )
+
+        persona = await asyncio.to_thread(load_persona, Path(self._cwd))
+        prompt = build_scheduled_prompt(persona, job, run_id, run_dir)
+
+        # Take the single-flight lock so we don't trample interactive
+        # turns or other scheduled jobs.
+        async with self._peat_run_lock:
+            # Wait for any in-flight interactive worker to finish first.
+            worker = self._agent_worker
+            if worker is not None and not worker.is_finished:
+                try:
+                    await asyncio.wait_for(worker.wait(), timeout=300)
+                except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                    return PeatJobRun(
+                        job_id=job.job_id,
+                        run_id=run_id,
+                        started_at=started,
+                        duration_s=_time.time() - started,
+                        status="fail",
+                        error="user turn still running after 5 min — skipping fire",
+                    )
+
+            await self._mount_message(
+                AppMessage(
+                    f"[Peat] Firing scheduled job `{job.name or job.job_id}`..."
+                )
+            )
+
+            # Attach a transient recorder so we can harvest the AI text
+            # the agent produces during this turn. The recorder uses the
+            # same _mount_message tap as /record but isn't promoted to a
+            # saved replay — we just want the final assistant message.
+            transient = SessionRecorder(session_id=run_id, name=f"peat:{job.job_id}")
+            transient.start(context={"cwd": str(self._cwd), "job_id": job.job_id})
+            previous_state = self._recording_state
+            self._recording_state = RecordingSessionState(
+                session_id=run_id,
+                name=f"peat:{job.job_id}",
+                thread_id=self._lc_thread_id or "",
+                cwd=str(self._cwd),
+                started_at=started,
+                recorder=transient,
+            )
+            try:
+                # Dispatch and wait for completion.
+                await self._send_prompt_to_agent(prompt)
+                worker = self._agent_worker
+                if worker is not None:
+                    try:
+                        await asyncio.wait_for(worker.wait(), timeout=job.timeout_s)
+                    except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                        return PeatJobRun(
+                            job_id=job.job_id,
+                            run_id=run_id,
+                            started_at=started,
+                            duration_s=_time.time() - started,
+                            status="timeout",
+                            error=f"agent ran past {job.timeout_s}s budget",
+                        )
+            finally:
+                # Restore prior recording state (a user-initiated /record
+                # could have been active when the scheduler fired).
+                self._recording_state = previous_state
+                transient.stop()
+
+            session = transient.finalize()
+            ai_chunks = [s.content for s in session.steps if s.kind == "ai_message"]
+            text = "\n\n".join(ai_chunks).strip()
+            duration = _time.time() - started
+
+            # Persist the artifact.
+            try:
+                if text:
+                    body = text + ("\n\n" + persona.sign_off + "\n" if persona.sign_off else "\n")
+                    await asyncio.to_thread(output_path.write_text, body, encoding="utf-8")
+                else:
+                    body = "(no agent output produced)\n"
+                    await asyncio.to_thread(output_path.write_text, body, encoding="utf-8")
+            except OSError as exc:
+                logger.warning("peat: failed to write run artifact %s: %s", output_path, exc)
+
+            summary_line = ""
+            for chunk in ai_chunks:
+                for line in chunk.splitlines():
+                    s = line.strip()
+                    if s:
+                        summary_line = s[:200]
+                        break
+                if summary_line:
+                    break
+            if not summary_line:
+                summary_line = f"job `{job.name or job.job_id}` fired (no text output)"
+
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=duration,
+                status="ok" if text else "fail",
+                summary=summary_line,
+                output_path=str(output_path),
+                error="" if text else "no agent output captured",
+            )
+
     async def _resolve_var_via_ask(self, spec: Any) -> str:  # noqa: ANN401 — VarSpec lazy-imported to avoid heavy startup
         """Prompt the user for a var value via the AskUserMenu widget.
 
@@ -6415,24 +6573,26 @@ class BogAgentsApp(App):
                     )
                 )
                 return
-            from bog_agents_cli.sessions import export_thread
+            from bog_agents_cli.replay import SessionRecorder
 
-            payload = await export_thread(thread_id)
-            transcript = (
-                payload.get("transcript", []) if isinstance(payload, dict) else []
-            )
-            baseline = len(transcript) if isinstance(transcript, list) else 0
+            session_id = f"replay-{uuid.uuid4().hex[:8]}"
             name = raw_arg[5:].strip() or f"Replay {thread_id[:8]}"
+            recorder = SessionRecorder(session_id=session_id, name=name)
+            recorder.start(context={"cwd": str(self._cwd), "thread_id": thread_id})
             self._recording_state = RecordingSessionState(
-                session_id=f"replay-{uuid.uuid4().hex[:8]}",
+                session_id=session_id,
                 name=name,
                 thread_id=thread_id,
                 cwd=str(self._cwd),
                 started_at=time.time(),
-                baseline_message_count=baseline,
+                baseline_message_count=0,
+                recorder=recorder,
             )
             await self._mount_message(
-                AppMessage(f"Started replay recording `{name}` on thread {thread_id}.")
+                AppMessage(
+                    f"Started replay recording `{name}` on thread {thread_id}.\n"
+                    "Captures user prompts, AI responses, and tool calls live."
+                )
             )
             return
 
@@ -6440,34 +6600,18 @@ class BogAgentsApp(App):
             if self._recording_state is None:
                 await self._mount_message(AppMessage("No replay recording is active."))
                 return
-            from bog_agents_cli.replay import SessionRecorder, save_replay_session
-            from bog_agents_cli.sessions import export_thread
+            from bog_agents_cli.replay import save_replay_session
 
             state = self._recording_state
-            payload = await export_thread(state.thread_id)
-            transcript = (
-                payload.get("transcript", []) if isinstance(payload, dict) else []
-            )
-            transcript_list = transcript if isinstance(transcript, list) else []
-            entries = transcript_list[state.baseline_message_count :]
-
-            recorder = SessionRecorder(session_id=state.session_id, name=state.name)
-            recorder.start(context={"cwd": state.cwd, "thread_id": state.thread_id})
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                entry_dict = cast("dict[str, object]", entry)
-                role = str(entry_dict.get("role", "")).lower()
-                content = str(entry_dict.get("content", "")).strip()
-                if not content:
-                    continue
-                if role == "human":
-                    recorder.record_user_message(content)
-                elif role == "ai":
-                    recorder.record_ai_message(content)
-                # Tool calls aren't surfaced through the transcript export
-                # in v1; we'll wire them into _mount_message in a follow-up
-                # so the recording captures tool use as well.
+            recorder = state.recorder
+            if recorder is None:
+                # Defensive: an older state without a live recorder. Surface
+                # the inconsistency rather than silently dropping the recording.
+                self._recording_state = None
+                await self._mount_message(
+                    AppMessage("Recording stopped — no live recorder was attached.")
+                )
+                return
             recorder.stop()
             session = recorder.finalize()
             session.description = f"Recorded from thread {state.thread_id}"
@@ -6477,7 +6621,7 @@ class BogAgentsApp(App):
                 self._recording_state = None
                 await self._mount_message(
                     AppMessage(
-                        "Recording stopped, but no new replayable conversation steps were captured."
+                        "Recording stopped, but no replayable steps were captured."
                     )
                 )
                 return
@@ -6489,11 +6633,13 @@ class BogAgentsApp(App):
             )
             self._recording_state = None
             var_count = len(session.vars_spec)
+            tool_calls = sum(1 for s in session.steps if s.kind == "tool_call")
             await self._mount_message(
                 AppMessage(
                     f"Saved replay `{session.name}` with {len(session.steps)} step(s) "
-                    f"and {var_count} auto-detected variable(s) to {file_path}.\n"
-                    f"Open the YAML file to refine variable names, types, or defaults."
+                    f"({tool_calls} tool call(s)) and {var_count} auto-detected "
+                    f"variable(s) to {file_path}.\n"
+                    "Open the YAML file to refine variable names, types, or defaults."
                 )
             )
             return
@@ -12549,6 +12695,17 @@ class BogAgentsApp(App):
         except NoMatches:
             return
 
+        # Feed the live recorder if /record is active. We tap here because
+        # _mount_message is the single chokepoint every message widget
+        # passes through, regardless of whether it originated from a user
+        # turn, a streaming AI chunk, or a tool-call invocation.
+        rec_state = self._recording_state
+        if rec_state is not None and rec_state.recorder is not None:
+            try:
+                self._feed_recorder(rec_state.recorder, widget)
+            except Exception:
+                logger.warning("recorder feed failed; continuing", exc_info=True)
+
         # Store message data for virtualization
         message_data = MessageData.from_widget(widget)
         # Ensure the widget's DOM id matches the store id so that
@@ -12573,6 +12730,54 @@ class BogAgentsApp(App):
             input_container.scroll_visible()
         except NoMatches:
             pass
+
+    def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401 — duck-typed
+        """Translate a mounted message widget into a recorder event.
+
+        Each branch maps to one of the three things the recorder cares
+        about: user_message, ai_message, tool_call. Other widgets
+        (AppMessage chrome, error notices, summarization markers) are
+        ignored — they aren't replayable signals.
+
+        Args:
+            recorder: The active :class:`SessionRecorder`.
+            widget: The widget that was just mounted to ``#messages``.
+        """
+        # Lazy imports keep this function cold-import-safe.
+        from bog_agents_cli.widgets.messages import (
+            AssistantMessage,
+            ToolCallMessage,
+            UserMessage,
+        )
+
+        # User-typed turn.
+        if isinstance(widget, UserMessage):
+            content = getattr(widget, "_content", "") or ""
+            if content:
+                # Skip slash-command echoes — they aren't part of the
+                # replayable turn semantics.
+                stripped = content.lstrip()
+                if not stripped.startswith("/"):
+                    recorder.record_user_message(content)
+            return
+
+        # AI text response.
+        if isinstance(widget, AssistantMessage):
+            content = getattr(widget, "_content", "") or ""
+            if content:
+                recorder.record_ai_message(content)
+            return
+
+        # Tool call. We snapshot args at mount time; the result/output
+        # arrives later via ``set_output`` — too late to capture here, so
+        # we record the call with an empty result for now. The recorder
+        # itself caps result_pattern length anyway.
+        if isinstance(widget, ToolCallMessage):
+            tool_name = getattr(widget, "_tool_name", "") or ""
+            tool_args = getattr(widget, "_args", {}) or {}
+            if tool_name:
+                recorder.record_tool_call(tool_name, dict(tool_args))
+            return
 
     async def _prune_old_messages(self) -> None:
         """Prune oldest message widgets if we exceed the window size.
