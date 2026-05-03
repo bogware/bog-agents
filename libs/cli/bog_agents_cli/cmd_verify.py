@@ -494,9 +494,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         else:
             results.append(_run_check("tests", profile.test, cwd=root, timeout=timeout))
 
+    no_output = bool(getattr(args, "no_output", False))
     summary = _format_summary(profile, results, override)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(summary, encoding="utf-8")
+    if not no_output:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(summary, encoding="utf-8")
 
     if output_format == "json":
         _emit_json_report(profile, results, output_path)
@@ -553,6 +555,12 @@ def setup_verify_parser(
         "--skip-test",
         action="store_true",
         help="Don't run the auto-detected test command",
+    )
+    p.add_argument(
+        "--no-output",
+        action="store_true",
+        default=False,
+        help="Skip writing verification_summary.md (results still printed to console)",
     )
     p.add_argument(
         "--json",

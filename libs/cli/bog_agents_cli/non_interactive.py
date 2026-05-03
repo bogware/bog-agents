@@ -800,9 +800,7 @@ async def _run_agent_loop(
                 "response": "".join(state.full_response).strip(),
                 "stats": {
                     "wall_time_seconds": round(wall_time, 3),
-                    "model": getattr(state.stats, "model_name", None)
-                    if hasattr(state.stats, "model_name")
-                    else None,
+                    "model": next(iter(state.stats.per_model), None),
                     "request_count": getattr(state.stats, "request_count", 0),
                     "input_tokens": getattr(state.stats, "input_tokens", 0),
                     "output_tokens": getattr(state.stats, "output_tokens", 0),

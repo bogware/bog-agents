@@ -1476,6 +1476,11 @@ def cli_main() -> None:
         # variables for prompts, inline pipeline steps for pipelines.
         prompt_name = getattr(args, "prompt_name", None)
         pipeline_name = getattr(args, "pipeline_name", None)
+        if getattr(args, "prompt_vars", None) and not prompt_name:
+            sys.stderr.write(
+                "Warning: --prompt-vars has no effect without --prompt.\n",
+            )
+            sys.stderr.flush()
         if prompt_name and pipeline_name:
             sys.stderr.write(
                 "Error: --prompt and --pipeline are mutually exclusive.\n",
