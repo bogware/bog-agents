@@ -1070,21 +1070,41 @@ async def run_non_interactive(
         if not quiet:
             console.print(Text("Starting LangGraph server...", style="dim"))
 
-        async with server_session(
-            assistant_id=assistant_id,
-            model_name=model_name,
-            model_params=model_params,
-            auto_approve=use_auto_approve,
-            sandbox_type=sandbox_type,
-            sandbox_id=sandbox_id,
-            sandbox_setup=sandbox_setup,
-            enable_shell=enable_shell,
-            enable_ask_user=False,
-            mcp_config_path=mcp_config_path,
-            no_mcp=no_mcp,
-            trust_project_mcp=trust_project_mcp,
-            interactive=False,
-        ) as (agent, _server_proc):
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as stack:
+            # Bound only server startup, not the agent loop body. 45 s
+            # comfortably covers langgraph subprocess boot + first client
+            # handshake on a slow host; longer means the server is stuck
+            # (port collision, missing deps, infinite import loop) and we'd
+            # rather fail loudly than hang the CLI forever.
+            session_cm = server_session(
+                assistant_id=assistant_id,
+                model_name=model_name,
+                model_params=model_params,
+                auto_approve=use_auto_approve,
+                sandbox_type=sandbox_type,
+                sandbox_id=sandbox_id,
+                sandbox_setup=sandbox_setup,
+                enable_shell=enable_shell,
+                enable_ask_user=False,
+                mcp_config_path=mcp_config_path,
+                no_mcp=no_mcp,
+                trust_project_mcp=trust_project_mcp,
+                interactive=False,
+            )
+            try:
+                async with asyncio.timeout(45):
+                    agent, _server_proc = await stack.enter_async_context(session_cm)
+            except TimeoutError:
+                console.print(
+                    "\n[red]LangGraph server failed to start within 45 s.[/red]\n"
+                    "[yellow]Possible causes: port already in use, missing "
+                    "dependencies, or a broken provider config. Run "
+                    "`bog-agents --doctor` to investigate.[/yellow]"
+                )
+                return 1
+
             # Collect MCP preload result (ran concurrently with server startup)
             if mcp_task is not None:
                 try:
@@ -1182,8 +1202,9 @@ async def run_non_interactive(
         err_str = str(e).lower()
         err_name = type(e).__name__
         spec_lower = (model_name or "").lower()
+        is_remote = err_name == "RemoteException"
         is_tool_capability_error = (
-            err_name == "RemoteException"
+            is_remote
             and "'responseerror'" in err_str
             and "internal error" in err_str
             and spec_lower.startswith("ollama:")
@@ -1194,8 +1215,35 @@ async def run_non_interactive(
             or "nocredentialserror" in err_str
             or "expired" in err_str
             or "sso" in err_str
-            or (err_name == "RemoteException" and "internal error" in err_str)
+            or (is_remote and "internal error" in err_str)
         )
+        is_connection_error = (
+            err_name in ("ConnectError", "ConnectTimeout", "ReadTimeout", "ConnectionRefusedError", "ClientConnectorError")
+            or "connection refused" in err_str
+            or "connection reset" in err_str
+            or "name or service not known" in err_str
+            or "failed to establish a new connection" in err_str
+        )
+        is_model_not_found = (
+            "not_found_error" in err_str
+            or "model_not_found" in err_str
+            or err_name == "NotFoundError"
+            or (is_remote and "model" in err_str and "not found" in err_str)
+        )
+        is_rate_limit = (
+            err_name == "RateLimitError"
+            or "rate_limit" in err_str
+            or "rate limit" in err_str
+            or "429" in err_str
+        )
+        is_auth_error = (
+            err_name in ("AuthenticationError", "PermissionDeniedError")
+            or "invalid api key" in err_str
+            or "incorrect api key" in err_str
+            or "unauthorized" in err_str
+            or "authentication" in err_str
+        )
+
         if is_tool_capability_error:
             console.print(f"\n[red]Unexpected error ({err_name}): {e}[/red]")
             console.print(
@@ -1210,6 +1258,33 @@ async def run_non_interactive(
                 "  - `aws sso login` to refresh an expired SSO session\n"
                 "  - `aws configure` if no credentials are set\n"
                 "  - `bog-agents --doctor` to verify the credential probe[/yellow]"
+            )
+        elif is_connection_error:
+            console.print(f"\n[red]Connection error ({err_name}): {e}[/red]")
+            console.print(
+                "[yellow]Could not reach the model provider. Check your network "
+                "connection, proxy settings, and (for local providers like Ollama) "
+                "that the service is running. `bog-agents --doctor` can help.[/yellow]"
+            )
+        elif is_model_not_found:
+            console.print(f"\n[red]Model not found ({err_name}): {e}[/red]")
+            console.print(
+                f"[yellow]The model {model_name!r} was not recognized by the "
+                "provider. Verify the model id (run `bog-agents --list-models` "
+                "for available options).[/yellow]"
+            )
+        elif is_auth_error:
+            console.print(f"\n[red]Authentication error ({err_name}): {e}[/red]")
+            console.print(
+                "[yellow]The provider rejected your credentials. Check the relevant "
+                "environment variable (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY) and "
+                "run `bog-agents --doctor` to confirm.[/yellow]"
+            )
+        elif is_rate_limit:
+            console.print(f"\n[red]Rate limited ({err_name}): {e}[/red]")
+            console.print(
+                "[yellow]The provider is rate-limiting requests. Wait a minute "
+                "and retry, or switch to a different model/provider.[/yellow]"
             )
         else:
             console.print(f"\n[red]Unexpected error ({err_name}): {e}[/red]")

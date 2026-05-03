@@ -51,6 +51,7 @@ Common sections include:
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Annotated, NotRequired, TypedDict
 
 if TYPE_CHECKING:
@@ -170,6 +171,11 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
 
     state_schema = MemoryState
 
+    # Per-source size cap for AGENTS.md content. 64 KiB is generous for legitimate
+    # memory files but bounds the system-prompt blast radius from a malicious or
+    # accidentally-huge file (prompt injection, token overflow, OOM).
+    MAX_SOURCE_BYTES: int = 64 * 1024
+
     def __init__(
         self,
         *,
@@ -214,6 +220,35 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
             )
             return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
+
+    def _decode_and_bound(self, path: str, raw: bytes) -> str:
+        """Decode source bytes, truncate to MAX_SOURCE_BYTES, and neutralize injection.
+
+        Args:
+            path: Source path (used in log messages and the truncation marker).
+            raw: Raw file bytes.
+
+        Returns:
+            Decoded text, capped at ``MAX_SOURCE_BYTES``, with stray
+            ``</agent_memory>`` close-tags neutralized so a memory file cannot
+            forge an early end of the system-prompt section.
+        """
+        if len(raw) > self.MAX_SOURCE_BYTES:
+            logger.warning(
+                "Memory source %s is %d bytes (> %d cap) — truncating",
+                path,
+                len(raw),
+                self.MAX_SOURCE_BYTES,
+            )
+            raw = raw[: self.MAX_SOURCE_BYTES]
+            text = raw.decode("utf-8", errors="replace")
+            text += f"\n\n[truncated by MemoryMiddleware at {self.MAX_SOURCE_BYTES} bytes]"
+        else:
+            text = raw.decode("utf-8", errors="replace")
+        # Defang close-tags so a memory file can't forge the end of the
+        # <agent_memory> section. Case-insensitive; also covers variants with
+        # whitespace inside the tag.
+        return re.sub(r"</\s*agent_memory\s*>", "<\\/agent_memory>", text, flags=re.IGNORECASE)
 
     def _format_agent_memory(self, contents: dict[str, str]) -> str:
         """Format memory with locations and contents paired together.
@@ -264,7 +299,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
                 msg = f"Failed to download {path}: {response.error}"
                 raise ValueError(msg)
             if response.content is not None:
-                contents[path] = response.content.decode("utf-8")
+                contents[path] = self._decode_and_bound(path, response.content)
                 logger.debug("Loaded memory from: %s", path)
 
         return MemoryStateUpdate(memory_contents=contents)
@@ -298,7 +333,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
                 msg = f"Failed to download {path}: {response.error}"
                 raise ValueError(msg)
             if response.content is not None:
-                contents[path] = response.content.decode("utf-8")
+                contents[path] = self._decode_and_bound(path, response.content)
                 logger.debug("Loaded memory from: %s", path)
 
         return MemoryStateUpdate(memory_contents=contents)

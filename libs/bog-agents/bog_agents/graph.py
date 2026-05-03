@@ -335,6 +335,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     processed_subagents: list[SubAgent | CompiledSubAgent] = []
     async_subagents: list[AsyncSubAgent] = []
     for spec in subagents or []:
+        # Runtime sanity-check: TypedDicts give static guarantees only. Without
+        # this, a typo like `descripton=...` silently produces a subagent the
+        # main agent can't usefully describe to the user, and the failure
+        # surfaces much later as a confusing tool-call error.
+        if not isinstance(spec, dict):
+            msg = f"subagents entries must be dicts; got {type(spec).__name__}"
+            raise TypeError(msg)
+        if "runnable" not in spec and "graph_id" not in spec:
+            missing = [k for k in ("name", "description", "system_prompt") if k not in spec]
+            if missing:
+                msg = f"subagent {spec.get('name', '<unnamed>')!r} is missing required keys: {missing}"
+                raise ValueError(msg)
         if "graph_id" in spec:
             async_subagents.append(cast("AsyncSubAgent", spec))
             continue

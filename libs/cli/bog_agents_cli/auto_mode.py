@@ -135,6 +135,7 @@ class HaikuEvalConfig:
     """Configuration for the Haiku risk evaluator."""
     enabled: bool = True
     model: str = "claude-haiku-4-5-20251001"
+    fallback_model: str = "claude-haiku-4-5"
     for_shell_commands: bool = True
     for_destructive_ops: bool = True
 
@@ -144,6 +145,7 @@ class HaikuEvalConfig:
         return cls(
             enabled=bool(d.get("enabled", True)),
             model=str(d.get("model", "claude-haiku-4-5-20251001")),
+            fallback_model=str(d.get("fallback_model", "claude-haiku-4-5")),
             for_shell_commands=bool(d.get("for_shell_commands", True)),
             for_destructive_ops=bool(d.get("for_destructive_ops", True)),
         )
@@ -304,16 +306,22 @@ async def haiku_risk_eval(
     tool_args: dict[str, Any],
     *,
     model: str = "claude-haiku-4-5-20251001",
+    fallback_model: str = "claude-haiku-4-5",
 ) -> tuple[bool, str]:
     """Ask Haiku whether a tool call is risky.
 
     Only called when the rule engine's verdict is ``default`` (no pattern
     matched). Returns (is_risky, reason).
 
+    Retries with ``fallback_model`` when the primary model is not found (e.g.
+    after a version-dated snapshot is retired by the API).
+
     Args:
         tool_name: Name of the tool.
         tool_args: Tool arguments.
         model: Model to use for evaluation.
+        fallback_model: Model to retry with if ``model`` returns a not-found
+            error.
 
     Returns:
         Tuple of (is_risky, reason_string).
@@ -338,21 +346,32 @@ async def haiku_risk_eval(
         "type-checking, git status/log/diff, creating new files.\n\n"
         '{"risky": true/false, "reason": "one sentence"}'
     )
-    try:
-        client = anthropic.AsyncAnthropic()
-        msg = await client.messages.create(
-            model=model,
-            max_tokens=80,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = msg.content[0].text.strip()
-        m = re.search(r"\{[^}]+\}", text, re.DOTALL)
-        if m:
-            data = json.loads(m.group(0))
-            return bool(data.get("risky", False)), str(data.get("reason", "haiku eval"))
-    except Exception as exc:
-        logger.warning("haiku_risk_eval error (treating as risky for safety): %s", exc)
-        return True, f"haiku eval: API unavailable — treating as risky ({exc.__class__.__name__})"
+    models_to_try = [model]
+    if fallback_model and fallback_model != model:
+        models_to_try.append(fallback_model)
+    client = anthropic.AsyncAnthropic()
+    for attempt_model in models_to_try:
+        try:
+            msg = await client.messages.create(
+                model=attempt_model,
+                max_tokens=80,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = msg.content[0].text.strip()
+            m = re.search(r"\{[^}]+\}", text, re.DOTALL)
+            if m:
+                data = json.loads(m.group(0))
+                return bool(data.get("risky", False)), str(data.get("reason", "haiku eval"))
+            return True, "haiku eval: inconclusive — treating as risky"
+        except anthropic.NotFoundError:
+            if attempt_model != models_to_try[-1]:
+                logger.warning("haiku_risk_eval: model %r not found, retrying with fallback %r", attempt_model, models_to_try[-1])
+                continue
+            logger.warning("haiku_risk_eval: fallback model %r also not found — treating as risky", attempt_model)
+            return True, f"haiku eval: model not found ({attempt_model}) — treating as risky"
+        except Exception as exc:
+            logger.warning("haiku_risk_eval error (treating as risky for safety): %s", exc)
+            return True, f"haiku eval: API unavailable — treating as risky ({exc.__class__.__name__})"
     return True, "haiku eval: inconclusive — treating as risky"
 
 
@@ -391,12 +410,18 @@ async def haiku_preflight_check(
     prompt: str,
     *,
     model: str = "claude-haiku-4-5-20251001",
+    fallback_model: str = "claude-haiku-4-5",
 ) -> list[str]:
     """Use Haiku to generate clarifying questions for an ambiguous prompt.
+
+    Retries with ``fallback_model`` when the primary model is not found (e.g.
+    after a version-dated snapshot is retired by the API).
 
     Args:
         prompt: The user's prompt to check.
         model: Model to use.
+        fallback_model: Model to retry with if ``model`` returns a not-found
+            error.
 
     Returns:
         List of clarifying questions (empty list if prompt is clear).
@@ -417,21 +442,31 @@ async def haiku_preflight_check(
         'If unclear, up to 3 questions: {"questions": ["q1", "q2"]}\n'
         "JSON only."
     )
-    try:
-        client = anthropic.AsyncAnthropic()
-        msg = await client.messages.create(
-            model=model,
-            max_tokens=200,
-            system=system,
-            messages=[{"role": "user", "content": user_msg}],
-        )
-        text = msg.content[0].text.strip()
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            data = json.loads(m.group(0))
-            qs = data.get("questions", [])
-            if isinstance(qs, list):
-                return [str(q) for q in qs if q]
-    except Exception as exc:
-        logger.debug("haiku_preflight_check error: %s", exc)
+    models_to_try = [model]
+    if fallback_model and fallback_model != model:
+        models_to_try.append(fallback_model)
+    client = anthropic.AsyncAnthropic()
+    for attempt_model in models_to_try:
+        try:
+            msg = await client.messages.create(
+                model=attempt_model,
+                max_tokens=200,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            text = msg.content[0].text.strip()
+            m = re.search(r"\{.*\}", text, re.DOTALL)
+            if m:
+                data = json.loads(m.group(0))
+                qs = data.get("questions", [])
+                if isinstance(qs, list):
+                    return [str(q) for q in qs if q]
+            return []
+        except anthropic.NotFoundError:
+            if attempt_model != models_to_try[-1]:
+                logger.warning("haiku_preflight_check: model %r not found, retrying with fallback %r", attempt_model, models_to_try[-1])
+                continue
+            logger.debug("haiku_preflight_check: fallback model %r also not found", attempt_model)
+        except Exception as exc:
+            logger.debug("haiku_preflight_check error: %s", exc)
     return []
