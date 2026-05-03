@@ -4,6 +4,115 @@ All notable changes to bog-agents (SDK), bog-agents-cli, and
 bog-agents-daemon are documented here. The three packages are released
 together with synchronised version numbers.
 
+## [0.8.0] — 2026-05-03
+
+Major feature release. Several large feature drops shipped in successive
+commits since 0.7.4 are consolidated here.
+
+### Added — CLI
+
+- **/peat — personal assistant + scheduler.** Long-lived in-process
+  sub-agent with a hand-crafted persona (override via
+  `~/.bog-agents/settings.json` `peat:` section). Subcommands: chat,
+  `schedule "<cron>|<task>"`, `jobs`, `run`, `inbox`, `research <topic>`,
+  `digest [--days N]`, `config`. Hybrid tool surface — full set when
+  interactive, restricted (no shell, no destructive ops, write-only into
+  the peat/ tree) when scheduled. Jobs persist to
+  `~/.bog-agents/peat/jobs/<id>.yaml`; results buffer to
+  `~/.bog-agents/peat/inbox.json` while the CLI is closed.
+- **/qa — adaptive QA harness.** Acceptance-criteria ingestion from
+  `--from-file`, `--from-json`, `--from-jira <TICKET>` (via MCP), or
+  inline. Hybrid step model (agent / shell / http / mcp) with verdicts
+  (`exit_code`, `status`, `contains`, `not_contains`, `regex`,
+  `json_path`). Artifact outputs: markdown, JSON, stdout, jira-comment.
+  Plans saved to `<project>/.bog-agents/qa-plans/`.
+- **/record + /replay rewrite to YAML.** Auto-variabilizer detects Jira
+  IDs, GitHub repo URLs, plain URLs, and UUIDs and turns repeated
+  literals into a single `${var}` placeholder. Recordings save to
+  `~/.bog-agents/replays/<id>.yaml`; legacy JSON loader retained for
+  back-compat (no auto-migration).
+- **Vault — session-only secret store.** `SecretStr` with redacted
+  repr/str/format. Optional read-only OS-keychain bridge via the
+  `keyring` library. Nothing written to disk; nothing exported to env.
+- **Vars subsystem.** Typed slots (`string`, `secret`, `enum`, `int`,
+  `bool`) with `${name}` substitution. Shared by /replay and /qa; CLI
+  `--var key=value` overrides; missing values prompt the user via the
+  AskUserMenu widget.
+- Plus eight 0.8.0-track features that landed earlier (commits
+  `13685c8`, `ad9bdab`, `393a2f2`, `2e42689`): personas, jury, race,
+  full daemon CLI, standing orders, recipes, bug finder, skill flywheel,
+  agent-md cascade, skill cascade, apply/plan models, token warnings,
+  docker sandbox, telephone, always-ask, hooks, MCP catalog, auto mode
+  (smart approval rule engine + Haiku risk eval).
+
+### Added — SDK
+
+- Subagent runtime validation in `create_agent()` — typo'd `name` /
+  `description` / `system_prompt` fail fast instead of surfacing as
+  KeyError later.
+- `FileOperationError` Literal extended with `"parent_not_found"`.
+
+### Changed
+
+- **`FilesystemBackend` `virtual_mode` default flipped to `True`** —
+  secure-by-default. `False` is deprecated and emits a
+  `DeprecationWarning`. `LocalShellBackend` follows the same default.
+- **`MemoryMiddleware`** caps each AGENTS.md source at 64 KiB and
+  neutralizes `</agent_memory>` close-tags (prompt-injection defense).
+- **CLI Python 3.14 classifier removed** until the wider stack supports
+  it.
+
+### Fixed
+
+- `haiku_risk_eval` and `haiku_preflight_check` retry with a
+  `fallback_model` when the primary returns `NotFoundError` (Haiku
+  pinned-snapshot expiry guard).
+- `non_interactive`: `server_session()` startup is now bounded by an
+  `asyncio.timeout(45)` via `AsyncExitStack` (timeout covers boot only,
+  not the agent loop).
+- `non_interactive`: expanded RemoteException taxonomy with actionable
+  messages for connection / model-not-found / auth / rate-limit errors.
+- `preflight`: input prompt wrapped in `asyncio.wait_for(timeout=30)` so
+  a hung TTY can't block the run forever.
+- `auto_mode`: settings-file reads capped at 1 MiB; ASK patterns are now
+  evaluated *before* ALLOW patterns (ensures `echo foo > file.txt` is
+  caught even though `echo` is in the allow-list); `haiku_risk_eval`
+  fails closed (treats API errors as risky).
+- `cmd_explain`: regex symbol search uses `re.escape()` and ripgrep `-F`
+  (ReDoS hardening).
+- `AgentBuilder`: `with_sandbox(allow_dangerous=True)` and `with_mcp(...)`
+  no longer crash `.build()` — the values now flow through correctly
+  (or are documented as backend-layer concerns).
+- `graph.py:create_agent`: `backend = backend if backend is not None
+  else (StateBackend)` — the parens were grouping, not a function call;
+  fixed to use the bare class as a `BackendFactory`.
+- Various subprocess calls hardened with explicit `timeout=` (clipboard
+  helpers, `auto_commit`, `cmd_pr_review`).
+- `oauth_mcp.py`: token files now written atomically with `0o600` mode
+  set on the temp file *before* the rename — closes the brief
+  world-readable window.
+- `peat/inbox.json`: writes are now atomic (tempfile + rename).
+- `SecretStr.__hash__` disabled to prevent dict-key/set-membership leaks.
+
+### Internal
+
+- New `peat/`, `qa/`, `vault.py`, `vars.py` packages with comprehensive
+  unit-test coverage (200+ new tests).
+- `PeatScheduler` started in `BogAgentsApp.on_mount`; cleanly stopped in
+  `on_unmount`.
+- Public `__init__.py` exports updated for all new feature modules.
+
+### Known follow-ups (tracked, not blockers)
+
+- Peat scheduled-job runner is currently a "needs-interactive-execution"
+  notifier — full unattended langgraph dispatch is a follow-up.
+- `SessionRecorder.record_tool_call` exists but isn't yet wired into the
+  live message stream; `/record` currently captures user/AI text only.
+- Eight `@pytest.mark.skip(reason="not implemented yet")` tests in
+  `test_sandbox_factory.py` need ship-or-delete decision.
+- No integration test runs `non_interactive` against a live langgraph
+  server end-to-end.
+
 ## [0.7.4] — 2026-04-30
 
 Targeted patch release closing two reported Bedrock issues plus a

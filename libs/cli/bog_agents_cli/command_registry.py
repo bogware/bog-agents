@@ -33,6 +33,8 @@ FEATURED_HELP_COMMANDS_LEFT: tuple[str, ...] = (
     "/threads",
     "/session",
     "/permissions",
+    "/qa",
+    "/peat",
 )
 
 FEATURED_HELP_COMMANDS_RIGHT: tuple[str, ...] = (
@@ -46,6 +48,8 @@ FEATURED_HELP_COMMANDS_RIGHT: tuple[str, ...] = (
     "/plugin",
     "/remote",
     "/review",
+    "/record",
+    "/replay",
     "/quit",
 )
 

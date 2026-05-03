@@ -381,7 +381,10 @@ def _format_tool_repr(tool_name: str, tool_args: dict[str, Any]) -> str:
     if "path" in tool_args or "file_path" in tool_args:
         path = tool_args.get("path") or tool_args.get("file_path", "")
         return f"{tool_name}({path})"
-    return f"{tool_name}({json.dumps(tool_args)[:120]})"
+    # ``default=str`` so a SecretStr (or any other non-JSON-serializable value
+    # surfaced via VarBundle.substitute) renders as its redacted ``str()``
+    # form (``"***"`` for secrets) instead of crashing the rule engine.
+    return f"{tool_name}({json.dumps(tool_args, default=str)[:120]})"
 
 
 # ---------------------------------------------------------------------------

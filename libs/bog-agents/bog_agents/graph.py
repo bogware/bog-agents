@@ -309,7 +309,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     else:
         model = resolve_model(model)
 
-    backend = backend if backend is not None else (StateBackend)
+    # ``StateBackend`` is a class that doubles as a ``BackendFactory``
+    # (i.e. callable taking a ToolRuntime). Pass the class itself so
+    # downstream code which expects ``BackendProtocol | BackendFactory``
+    # gets a real factory rather than a typo'd grouping expression.
+    backend = backend if backend is not None else StateBackend
 
     # Build general-purpose subagent with default middleware stack
     gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [

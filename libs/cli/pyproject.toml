@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bog-agents-cli"
-version = "0.7.6"
+version = "0.8.0"
 description = "A coding agent in your terminal. 50+ commands, any LLM provider, persistent memory, git workflow, code review, plan mode, remote sandboxes, and CI/CD automation. One install, no code required."
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,8 +26,9 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    # Framework
-    "bog-agents>=0.7.5,<0.8.0",
+    # Framework — pin major-minor (0.8.x). The CLI tracks the SDK closely
+    # and uses internal APIs; relax this only after confirming compat.
+    "bog-agents>=0.8.0,<0.9.0",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",

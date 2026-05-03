@@ -147,7 +147,11 @@ def append_inbox(config_dir: Path, entry: dict) -> None:
     # Cap inbox size so a runaway scheduler can't fill the user's disk.
     if len(items) > 500:
         items = items[-500:]
-    path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    # Atomic write so a Ctrl-C / power-cut mid-write leaves the previous
+    # inbox intact rather than truncating to nothing or partial JSON.
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    atomic_write_text(path, json.dumps(items, indent=2))
 
 
 def read_inbox(config_dir: Path) -> list[dict]:

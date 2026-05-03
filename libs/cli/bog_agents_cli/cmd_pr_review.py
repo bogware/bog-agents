@@ -33,8 +33,9 @@ def detect_pr_platform(cwd: Path) -> str | None:
             text=True,
             check=False,
             cwd=cwd,
+            timeout=10,
         )
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
 
     if result.returncode != 0:
@@ -150,10 +151,10 @@ def get_azure_pr_diff(pr_number: str | None = None, *, cwd: Path) -> dict[str, s
     az_available = False
     try:
         probe = subprocess.run(
-            ["az", "--version"], capture_output=True, text=True, check=False
+            ["az", "--version"], capture_output=True, text=True, check=False, timeout=10
         )
         az_available = probe.returncode == 0
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     if az_available:

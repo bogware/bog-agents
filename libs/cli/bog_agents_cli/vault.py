@@ -63,10 +63,13 @@ class SecretStr:
             return _consteq(self._value, other)
         return NotImplemented
 
-    def __hash__(self) -> int:
-        # Hashing leaks structure but is needed for use as dict keys etc.
-        # Callers who care can avoid it; we don't store SecretStr as keys.
-        return hash(self._value)
+    # Disable hashing entirely. Using a SecretStr as a dict key or set
+    # member would expose the value via hash-bucket / collision oracles
+    # in the holding container; in practice the codebase never needs this,
+    # so we forbid it. Callers who need to *test* membership against a
+    # vault use ``SessionVault.has(name)`` against the var name, never the
+    # value.
+    __hash__ = None  # type: ignore[assignment]
 
     def __bool__(self) -> bool:
         return bool(self._value)

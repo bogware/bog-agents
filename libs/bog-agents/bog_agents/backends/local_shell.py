@@ -146,12 +146,12 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
 
                 - If not provided, defaults to the current working directory.
                 - Shell commands execute with this as their working directory.
-                - When `virtual_mode=False`: Paths are used as-is. Agents can access any
-                    file using absolute paths or `..` sequences.
                 - When `virtual_mode=True` (default): Acts as a virtual root for filesystem
                     operations. Useful with `CompositeBackend` to support routing file
                     operations across different backend implementations. **Note:** This does
                     NOT restrict shell commands.
+                - When `virtual_mode=False` (deprecated): Paths are used as-is. Agents can
+                    access any file using absolute paths or `..` sequences.
 
             virtual_mode: Enable virtual path mode for filesystem operations.
 
@@ -202,18 +202,18 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         self._allow_dangerous = allow_dangerous
 
         if virtual_mode is None:
+            virtual_mode = True
+        elif virtual_mode is False:
             warnings.warn(
-                "LocalShellBackend virtual_mode default will change in bog-agents 0.5.0; "
-                "please specify virtual_mode explicitly. "
-                "Note: virtual_mode is for virtual path semantics (e.g., CompositeBackend routing) and optional path-based guardrails; "
-                "it does not provide sandboxing or process isolation. "
-                "Security note: leaving virtual_mode=False allows absolute paths and '..' to bypass root_dir, "
-                "and LocalShellBackend provides no sandboxing (execute runs commands on the host; virtual_mode does not restrict shell execution). "
+                "LocalShellBackend virtual_mode=False is deprecated. The default flipped to "
+                "True (secure-by-default) in 0.8.0. Passing False disables path-based "
+                "guardrails: absolute paths and '..' can bypass root_dir for filesystem "
+                "operations. (Shell execution remains unrestricted regardless — "
+                "LocalShellBackend provides no process isolation.) "
                 "See https://github.com/bogware/bog-agents for usage guidelines.",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            virtual_mode = False
 
         # Initialize parent FilesystemBackend
         super().__init__(

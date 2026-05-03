@@ -444,7 +444,7 @@ def _read_clipboard_image() -> bytes | None:
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                     tmp = f.name
                 result = subprocess.run(  # noqa: S603
-                    ["pngpaste", tmp], capture_output=True, check=False
+                    ["pngpaste", tmp], capture_output=True, check=False, timeout=5
                 )
                 if result.returncode == 0:
                     data = Path(tmp).read_bytes()
@@ -457,6 +457,7 @@ def _read_clipboard_image() -> bytes | None:
                 ["wl-paste", "--type", "image/png"],
                 capture_output=True,
                 check=False,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout:
                 return result.stdout
@@ -466,6 +467,7 @@ def _read_clipboard_image() -> bytes | None:
                 ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
                 capture_output=True,
                 check=False,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout:
                 return result.stdout
@@ -1008,6 +1010,42 @@ class BogAgentsApp(App):
             group="startup-vault-check",
         )
 
+        # Start the Peat job scheduler. Scheduled jobs persist as YAML and
+        # the scheduler writes a notification to ~/.bog-agents/peat/inbox.json
+        # when each one is due. The "runner" here records that the job
+        # fired and tells the user to run it manually (`/peat run <id>`):
+        # full unattended agent execution requires deeper plumbing through
+        # the langgraph server and is tracked as a follow-up. This wiring
+        # at minimum makes scheduled jobs visible to the user instead of
+        # silently never firing.
+        self._peat_scheduler = None
+        try:
+            from bog_agents_cli.peat import PeatJob, PeatJobRun, PeatScheduler
+
+            async def _peat_default_runner(job: PeatJob) -> PeatJobRun:  # noqa: RUF029 — must be async to satisfy RunnerFn signature
+                import time as _time
+
+                return PeatJobRun(
+                    job_id=job.job_id,
+                    run_id=f"run-{int(_time.time())}",
+                    started_at=_time.time(),
+                    duration_s=0.0,
+                    status="ok",
+                    summary=(
+                        f"Job `{job.job_id}` is due. Run it interactively with "
+                        f"/peat run {job.job_id}"
+                    ),
+                )
+
+            self._peat_scheduler = PeatScheduler(
+                settings.user_agents_dir,
+                runner=_peat_default_runner,
+            )
+            await self._peat_scheduler.start()
+        except Exception:
+            logger.warning("peat scheduler failed to start", exc_info=True)
+            self._peat_scheduler = None
+
         # Warn about missing optional tools (advisory only — never block startup)
         try:
             from bog_agents_cli.main import (
@@ -1094,6 +1132,15 @@ class BogAgentsApp(App):
 
     async def on_unmount(self) -> None:
         """Cancel any tracked background tasks before the app tears down."""
+        # Stop the Peat scheduler first so its loop unwinds cleanly before
+        # we cancel the rest of the background-task pool.
+        scheduler = getattr(self, "_peat_scheduler", None)
+        if scheduler is not None:
+            try:
+                await scheduler.stop()
+            except Exception:
+                logger.warning("peat scheduler failed to stop cleanly", exc_info=True)
+
         if not self._background_tasks:
             return
         for task in list(self._background_tasks):
