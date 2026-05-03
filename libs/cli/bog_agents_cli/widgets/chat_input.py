@@ -46,29 +46,37 @@ _ANSI_ESCAPE_RE = re.compile(
     r"""
     \x1b              # ESC
     (?:
-        \[ [0-?]* [ -/]* [@-~]   # CSI ... terminator
+        \[ [0-?]* [ -/]* [@-~]       # CSI (incl. private '?' form) ... terminator
       | \] .*? (?: \x07 | \x1b\\ )  # OSC ... BEL or ST
       | P .*? \x1b\\               # DCS ... ST
-      | [@-Z\\-_]                  # 2-byte ESC sequences (CSI=@, ST=\, etc.)
+      | _ .*? \x1b\\               # APC ... ST
+      | \^ .*? \x1b\\              # PM ... ST
+      | [@-Z\\-_]                  # 2-byte ESC sequences (incl. SS2 N, SS3 O)
     )
     """,
     re.VERBOSE | re.DOTALL,
 )
 
+# 8-bit C1 control bytes (\x80-\x9f) plus stray NULs. Some terminals emit a
+# raw 0x9B (CSI) instead of the ESC[ form. We scrub them so they don't paint
+# the input field with garbage.
+_C1_AND_NUL_RE = re.compile(r"[\x00\x80-\x9f]")
+
 
 def _strip_terminal_escapes(text: str) -> str:
-    r"""Remove ANSI/CSI/OSC/DCS escape sequences from `text`.
+    r"""Remove ANSI/CSI/OSC/DCS/APC/PM escape sequences from `text`.
 
     Args:
         text: Raw paste text that may contain stray escape sequences.
 
     Returns:
-        Text with control sequences removed. Lone `\x1b` characters
-        are also stripped so a partial sequence doesn't render as a
-        visible arrow or square in the input field.
+        Text with control sequences removed. Lone `\x1b`, NUL bytes, and
+        8-bit C1 controls are also stripped so partial or 8-bit-form
+        sequences don't render as visible arrows or squares.
     """
     cleaned = _ANSI_ESCAPE_RE.sub("", text)
-    return cleaned.replace("\x1b", "")
+    cleaned = cleaned.replace("\x1b", "")
+    return _C1_AND_NUL_RE.sub("", cleaned)
 
 
 _PASTE_BURST_CHAR_GAP_SECONDS = 0.03

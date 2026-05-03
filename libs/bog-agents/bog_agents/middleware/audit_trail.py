@@ -42,6 +42,7 @@ middleware = AuditTrailMiddleware(
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -146,11 +147,29 @@ class AuditLog:
         """Number of entries in the audit log."""
         return len(self.entries)
 
-    def format_summary(self, *, last_n: int = 0) -> str:
+    @staticmethod
+    def _mask_id(value: str) -> str:
+        """Hash an identifier into a stable short prefix for default summaries.
+
+        Returns ``"sha256:<first-12-hex>"`` so two entries with the same
+        underlying ID stay correlatable, but the raw value never appears
+        in summaries that may be shared in tickets, slack, or screenshots.
+        """
+        if not value:
+            return ""
+        return "sha256:" + hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+    def format_summary(self, *, last_n: int = 0, include_sensitive: bool = False) -> str:
         """Format a human-readable audit trail summary.
+
+        By default, ``session_id`` and ``advisor_id`` are masked to a stable
+        short hash so the summary can be safely shared. Pass
+        ``include_sensitive=True`` for the full unmasked output (e.g. when
+        exporting for a regulator).
 
         Args:
             last_n: Show only the last N entries. 0 means all.
+            include_sensitive: If True, render raw session/advisor IDs.
 
         Returns:
             Formatted audit trail string.
@@ -159,10 +178,13 @@ class AuditLog:
         if not entries:
             return "Audit log is empty. No actions have been recorded yet."
 
+        session_render = self.session_id if include_sensitive else self._mask_id(self.session_id)
+        advisor_render = self.advisor_id if include_sensitive else self._mask_id(self.advisor_id)
+
         lines = [
             "## Compliance Audit Trail",
-            f"Session: {self.session_id}",
-            f"Advisor: {self.advisor_id}",
+            f"Session: {session_render}",
+            f"Advisor: {advisor_render}",
             f"Started: {self.started_at}",
             f"Total entries: {self.entry_count}",
             "",
@@ -182,20 +204,41 @@ class AuditLog:
 
         return "\n".join(lines)
 
-    def export_json(self) -> str:
-        """Export the full audit log as JSON for regulatory submission.
+    def export_json(self, *, include_sensitive: bool = True) -> str:
+        """Export the full audit log as JSON.
+
+        Defaults to ``include_sensitive=True`` because regulators expect the
+        unmasked record. Set ``False`` for non-compliance exports (e.g.
+        attaching a snippet to a bug report).
+
+        Args:
+            include_sensitive: If False, mask session/advisor/per-entry IDs.
 
         Returns:
             JSON string of the complete audit trail.
         """
+        if include_sensitive:
+            session_render = self.session_id
+            advisor_render = self.advisor_id
+            entries_render = [asdict(e) for e in self.entries]
+        else:
+            session_render = self._mask_id(self.session_id)
+            advisor_render = self._mask_id(self.advisor_id)
+            entries_render = []
+            for e in self.entries:
+                d = asdict(e)
+                d["session_id"] = self._mask_id(d.get("session_id", "") or "")
+                d["advisor_id"] = self._mask_id(d.get("advisor_id", "") or "")
+                entries_render.append(d)
+
         return json.dumps(
             {
-                "session_id": self.session_id,
-                "advisor_id": self.advisor_id,
+                "session_id": session_render,
+                "advisor_id": advisor_render,
                 "started_at": self.started_at,
                 "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime()),
                 "entry_count": self.entry_count,
-                "entries": [asdict(e) for e in self.entries],
+                "entries": entries_render,
             },
             indent=2,
             default=str,

@@ -4,6 +4,17 @@
   "description": "Bog Agents AI coding assistant for VS Code",
   "version": "0.1.0",
   "publisher": "bog-agents",
+  "license": "MIT",
+  "icon": "resources/icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bogware/bog-agents.git",
+    "directory": "libs/vscode-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/bogware/bog-agents/issues"
+  },
+  "homepage": "https://github.com/bogware/bog-agents#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -19,8 +30,23 @@
     "bog-agents",
     "assistant"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Bog Agents executes a CLI binary whose path is read from workspace settings; an untrusted workspace could redirect that to an attacker-controlled binary."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Bog Agents requires direct filesystem access to the workspace folder."
+    }
+  },
   "activationEvents": [
-    "onStartupFinished"
+    "onCommand:bog-agents.openChat",
+    "onCommand:bog-agents.reviewSelection",
+    "onCommand:bog-agents.explainSelection",
+    "onCommand:bog-agents.fixSelection",
+    "onCommand:bog-agents.runDoctor",
+    "onView:bog-agents.chatView"
   ],
   "main": "./out/extension.js",
   "contributes": {

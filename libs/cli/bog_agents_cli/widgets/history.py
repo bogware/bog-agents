@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -55,24 +56,37 @@ class HistoryManager:
             self._entries = []
 
     def _append_to_file(self, text: str) -> None:
-        """Append a single entry to history file (concurrent-safe)."""
+        """Append a single entry to history file (concurrent-safe).
+
+        ``flush`` + ``fsync`` so an immediate process crash after ``add()``
+        does not lose the entry the user just submitted.
+        """
         try:
             self.history_file.parent.mkdir(parents=True, exist_ok=True)
             with self.history_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(text) + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    # fsync is not available on all platforms (e.g. some
+                    # network filesystems). Best-effort.
+                    pass
         except OSError:
             pass
 
     def _compact_history(self) -> None:
-        """Rewrite history file to remove old entries.
-
-        Only called when entries exceed 2x max_entries to minimize rewrites.
-        """
+        """Rewrite history file to keep at most ``max_entries`` lines."""
         try:
             self.history_file.parent.mkdir(parents=True, exist_ok=True)
             with self.history_file.open("w", encoding="utf-8") as f:
                 for entry in self._entries:
                     f.write(json.dumps(entry) + "\n")
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
         except OSError:
             pass
 
@@ -80,13 +94,14 @@ class HistoryManager:
         """Add a command to history.
 
         Slash commands and ordinary prompts are both recorded so the user
-        can recall any prior input with the up arrow.
+        can recall any prior input with the up arrow. The on-disk history
+        is rewritten as soon as it exceeds ``max_entries`` so the file
+        does not grow to twice the configured bound between compactions.
 
         Args:
             text: The command text to add
         """
         text = text.strip()
-        # Skip empty
         if not text:
             return
 
@@ -96,13 +111,13 @@ class HistoryManager:
 
         self._entries.append(text)
 
-        # Append to file (fast, concurrent-safe)
-        self._append_to_file(text)
-
-        # Compact only when we have 2x max entries (rare operation)
-        if len(self._entries) > self.max_entries * 2:
+        if len(self._entries) > self.max_entries:
+            # Trim in-memory and rewrite the file in one shot. The full
+            # rewrite is bounded by max_entries lines so it stays cheap.
             self._entries = self._entries[-self.max_entries :]
             self._compact_history()
+        else:
+            self._append_to_file(text)
 
         self.reset_navigation()
 
