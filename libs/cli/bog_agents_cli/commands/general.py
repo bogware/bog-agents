@@ -8,6 +8,16 @@ from bog_agents_cli.commands._base import SlashCommand
 COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
+            "/auto",
+            "Toggle smart auto-mode: auto-approve safe tool calls, ask only for risky ops",
+            "auto mode approve safe risky rules smart automatic",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_auto_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/build",
             "Interactive wizard — create skills, prompts, and pipelines step by step",
             "wizard create new template scaffold variablize builder",

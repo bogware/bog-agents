@@ -547,6 +547,19 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--auto",
+        dest="auto_mode",
+        action="store_true",
+        default=False,
+        help=(
+            "Smart auto-approve: auto-run tool calls that pass the rule engine; "
+            "ask only for risky operations. Haiku evaluates uncertain shell "
+            "commands. Overridden by --always-ask. Configure rules in "
+            ".bog-agents/settings.json."
+        ),
+    )
+
+    parser.add_argument(
         "--sandbox",
         choices=["none", "docker", "modal", "daytona", "runloop", "langsmith"],
         default="none",
@@ -682,6 +695,7 @@ async def run_textual_cli_async(
     *,
     auto_approve: bool = False,
     always_ask: bool = False,
+    auto_mode: bool = False,
     auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
@@ -705,6 +719,9 @@ async def run_textual_cli_async(
         auto_approve: Whether to auto-approve tool usage
         always_ask: Paranoid mode — every tool call requires approval,
             overriding auto-approve and the shell allow-list.
+        auto_mode: Smart auto-approval — tool calls are evaluated by the rule
+            engine; only risky ones surface an approval dialog. Overridden by
+            ``always_ask``.
         auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
@@ -786,6 +803,7 @@ async def run_textual_cli_async(
             backend=None,
             auto_approve=auto_approve,
             always_ask=always_ask,
+            auto_mode=auto_mode,
             auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
@@ -1947,6 +1965,7 @@ def cli_main() -> None:
                         assistant_id=args.agent,
                         auto_approve=args.auto_approve,
                         always_ask=getattr(args, "always_ask", False),
+                        auto_mode=getattr(args, "auto_mode", False),
                         auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,

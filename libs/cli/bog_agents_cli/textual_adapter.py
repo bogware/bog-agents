@@ -609,6 +609,51 @@ def _build_interrupted_ai_message(
     )
 
 
+async def _evaluate_auto_mode_batch(
+    action_requests: list[dict],  # noqa: ANN401
+) -> bool:
+    """Evaluate a batch of tool-call requests under auto mode.
+
+    Runs the rule engine over every request in the batch. Falls back to Haiku
+    for any request whose verdict has ``rule_source == "default"``. Returns
+    ``True`` when all requests are safe to auto-approve, ``False`` if any
+    should surface an approval dialog.
+
+    Args:
+        action_requests: List of tool-call request dicts (each has ``name``
+            and ``args`` keys).
+
+    Returns:
+        True when the entire batch can be auto-approved, False otherwise.
+    """
+    from bog_agents_cli.auto_mode import (
+        AutoDecision,
+        AutoModeRuleEngine,
+        haiku_risk_eval,
+        load_auto_mode_settings,
+    )
+
+    _am_settings = load_auto_mode_settings()
+    _engine = AutoModeRuleEngine(_am_settings)
+
+    for req in action_requests:
+        t_name = req.get("name", "")
+        t_args = req.get("args", {}) or {}
+        if not isinstance(t_args, dict):
+            t_args = {}
+        verdict = _engine.evaluate(t_name, t_args)
+        if verdict.decision == AutoDecision.ASK:
+            return False
+        if verdict.rule_source == "default" and _am_settings.haiku_eval.enabled:
+            is_risky, _reason = await haiku_risk_eval(
+                t_name, t_args, model=_am_settings.haiku_eval.model
+            )
+            if is_risky:
+                return False
+
+    return True
+
+
 async def execute_task_textual(
     user_input: str,
     agent: Any,  # noqa: ANN401  # Dynamic agent graph type
@@ -1360,7 +1405,20 @@ async def execute_task_textual(
                     # surfaces an approval menu. Used for high-stakes
                     # sessions where the user wants to inspect each action.
                     always_ask = bool(getattr(session_state, "always_ask", False))
+                    auto_mode = bool(getattr(session_state, "auto_mode", False))
+
+                    # Determine whether to skip the approval dialog entirely.
+                    # Priority: always_ask > auto_mode > auto_approve > ask.
+                    _should_auto_approve = False
                     if session_state.auto_approve and not always_ask:
+                        _should_auto_approve = True
+                    elif auto_mode and not always_ask:
+                        # Smart auto-mode: rule engine + optional Haiku eval.
+                        _should_auto_approve = await _evaluate_auto_mode_batch(
+                            action_requests
+                        )
+
+                    if _should_auto_approve:
                         decisions: list[HITLDecision] = [
                             ApproveDecision(type="approve") for _ in action_requests
                         ]

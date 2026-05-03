@@ -126,6 +126,9 @@ def show_help() -> None:
         "  --always-ask               Paranoid mode: every tool call requires approval (overrides --auto-approve)"
     )
     console.print(
+        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (Haiku eval)"
+    )
+    console.print(
         "  --auto-commit              Auto-commit git changes after each agent turn"
     )
     console.print("  --doctor                   Diagnose your environment")

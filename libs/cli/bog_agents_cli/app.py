@@ -505,6 +505,7 @@ class TextualSessionState:
         *,
         auto_approve: bool = False,
         always_ask: bool = False,
+        auto_mode: bool = False,
         thread_id: str | None = None,
     ) -> None:
         """Initialize session state.
@@ -514,10 +515,14 @@ class TextualSessionState:
             always_ask: When True, every tool call requires human approval —
                 overrides ``auto_approve`` and the shell allow-list. Used by
                 the ``/always-ask`` paranoid mode for high-stakes sessions.
+            auto_mode: When True, smart auto-approval is active — tool calls
+                are evaluated by the rule engine; only risky ones surface an
+                approval dialog. Overridden by ``always_ask``.
             thread_id: Optional thread ID (generates UUID7 if not provided)
         """
         self.auto_approve = auto_approve
         self.always_ask = always_ask
+        self.auto_mode = auto_mode
         self.thread_id = thread_id or _new_thread_id()
 
     def reset_thread(self) -> str:
@@ -742,6 +747,7 @@ class BogAgentsApp(App):
         backend: CompositeBackend | None = None,
         auto_approve: bool = False,
         always_ask: bool = False,
+        auto_mode: bool = False,
         auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
@@ -764,6 +770,9 @@ class BogAgentsApp(App):
             always_ask: Whether to start with paranoid always-ask enabled —
                 forces a human approval for every tool call regardless of
                 auto-approve or shell allow-list policy.
+            auto_mode: Whether to start with smart auto-mode enabled — tool
+                calls are evaluated by the rule engine; only risky ones
+                surface an approval dialog. Overridden by ``always_ask``.
             auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
@@ -790,6 +799,7 @@ class BogAgentsApp(App):
         self._backend = backend
         self._auto_approve = auto_approve
         self._always_ask = always_ask
+        self._auto_mode = auto_mode
         self._auto_commit = auto_commit
         self._cwd = str(cwd) if cwd else str(Path.cwd())
         # Avoid collision with App._thread_id
@@ -923,6 +933,7 @@ class BogAgentsApp(App):
         self._session_state = TextualSessionState(
             auto_approve=self._auto_approve,
             always_ask=self._always_ask,
+            auto_mode=self._auto_mode,
             thread_id=self._lc_thread_id,
         )
 
@@ -4223,6 +4234,53 @@ class BogAgentsApp(App):
                     "auto-approve / shell-allow-list policy."
                 )
             )
+
+    async def _handle_auto_command(self, command: str) -> None:
+        """/auto — toggle smart auto-mode (rule-engine + haiku risk eval).
+
+        In auto mode the agent auto-approves tool calls that pass the built-in
+        rule engine. Uncertain shell commands are evaluated by Haiku; only
+        commands flagged as risky surface an approval dialog. ``/always-ask``
+        overrides auto mode.
+
+        Usage: /auto [on|off|status]
+        """
+        await self._mount_message(UserMessage(command))
+        if self._session_state is None:
+            await self._mount_message(ErrorMessage("/auto requires an active session."))
+            return
+
+        arg = command.strip().split(maxsplit=1)
+        verb = arg[1].strip().lower() if len(arg) > 1 else ""
+
+        if verb == "status":
+            current = "ON" if self._session_state.auto_mode else "OFF"
+            await self._mount_message(AppMessage(f"auto mode is currently {current}"))
+            return
+
+        if verb == "on":
+            new_state = True
+        elif verb == "off":
+            new_state = False
+        elif verb in ("", "toggle"):
+            new_state = not self._session_state.auto_mode
+        else:
+            await self._mount_message(AppMessage("Usage: /auto [on|off|status]"))
+            return
+
+        self._session_state.auto_mode = new_state
+        self._auto_mode = new_state
+        if new_state:
+            await self._mount_message(
+                AppMessage(
+                    "Auto mode ON. Tool calls are evaluated against built-in rules; "
+                    "risky shell commands are checked by Haiku before running. "
+                    "Use /auto off to return to interactive approval, or "
+                    "/always-ask to require approval for everything."
+                )
+            )
+        else:
+            await self._mount_message(AppMessage("Auto mode OFF. Returning to interactive approval."))
 
     async def _handle_standing_orders_command(self, command: str) -> None:
         """``/standing-orders`` — curated daemon-job catalog.
@@ -13555,6 +13613,7 @@ async def run_textual_app(
     backend: CompositeBackend | None = None,
     auto_approve: bool = False,
     always_ask: bool = False,
+    auto_mode: bool = False,
     auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
@@ -13579,6 +13638,9 @@ async def run_textual_app(
         always_ask: Paranoid mode toggle — forces approval for every tool
             call even when auto_approve is set or a command is on the
             shell allow-list.
+        auto_mode: Smart auto-approval toggle — tool calls are evaluated by
+            the rule engine; only risky ones surface an approval dialog.
+            Overridden by ``always_ask``.
         auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
@@ -13602,6 +13664,7 @@ async def run_textual_app(
         backend=backend,
         auto_approve=auto_approve,
         always_ask=always_ask,
+        auto_mode=auto_mode,
         auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,
