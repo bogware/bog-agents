@@ -27,6 +27,11 @@ _DEFAULT_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "config.toml"
 def compute_config_fingerprint(config_paths: list[Path]) -> str:
     """Compute a SHA-256 fingerprint over sorted, concatenated config contents.
 
+    Each file's path and content are mixed into the hash. If a file cannot be
+    read its OSError class name is mixed in too — this prevents an attacker
+    from making a config file unreadable to bypass the trust check (an
+    unreadable file produces a different fingerprint than the trusted one).
+
     Args:
         config_paths: Paths to config files to fingerprint.
 
@@ -35,10 +40,20 @@ def compute_config_fingerprint(config_paths: list[Path]) -> str:
     """
     hasher = hashlib.sha256()
     for path in sorted(config_paths):
+        # Path itself feeds the hash so the set of files is part of the
+        # fingerprint, not just their contents.
+        hasher.update(b"PATH:")
+        hasher.update(str(path).encode("utf-8", errors="replace"))
+        hasher.update(b"\0")
         try:
-            hasher.update(path.read_bytes())
-        except OSError:
-            logger.warning("Could not read %s for fingerprinting", path, exc_info=True)
+            data = path.read_bytes()
+            hasher.update(b"OK:")
+            hasher.update(data)
+        except OSError as exc:
+            logger.warning("Could not read %s for fingerprinting: %s", path, exc)
+            hasher.update(b"ERR:")
+            hasher.update(type(exc).__name__.encode("ascii"))
+        hasher.update(b"\0")
     return f"sha256:{hasher.hexdigest()}"
 
 

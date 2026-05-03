@@ -92,6 +92,24 @@ if _bog_agents_project:
     # Override LANGSMITH_PROJECT for agent traces
     os.environ["LANGSMITH_PROJECT"] = _bog_agents_project
 
+
+def child_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build an environment dict suitable for spawning user shell commands.
+
+    Restores the user's original ``LANGSMITH_PROJECT`` (so traces produced by
+    user-launched shells don't pollute the bog-agents project) and applies any
+    caller-supplied overrides.
+    """
+    env = dict(os.environ)
+    if _original_langsmith_project is not None:
+        env["LANGSMITH_PROJECT"] = _original_langsmith_project
+    elif _bog_agents_project and env.get("LANGSMITH_PROJECT") == _bog_agents_project:
+        env.pop("LANGSMITH_PROJECT", None)
+    if extra:
+        env.update(extra)
+    return env
+
+
 from bog_agents_cli.model_config import (  # noqa: E402
     PROVIDER_API_KEY_ENV,
     ModelConfig,

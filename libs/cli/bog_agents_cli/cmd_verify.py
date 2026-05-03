@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess  # noqa: S404
 import sys
@@ -234,9 +235,18 @@ def _run_check(name: str, command: str, *, cwd: Path, timeout: int) -> CheckResu
 
     start = time.monotonic()
     try:
-        proc = subprocess.run(  # noqa: S602
-            command,
-            shell=True,
+        argv = shlex.split(command, posix=sys.platform != "win32")
+        if not argv:
+            return CheckResult(
+                name=name,
+                command=command,
+                exit_code=0,
+                duration_seconds=0.0,
+                output="",
+                skipped_reason="empty command",
+            )
+        proc = subprocess.run(  # noqa: S603
+            argv,
             cwd=str(cwd),
             capture_output=True,
             timeout=timeout,
@@ -408,9 +418,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     override = _override_script(root)
     if override is not None:
-        cmd = (
-            f'bash "{override}"' if override.suffix == ".sh" else f'cmd /c "{override}"'
-        )
+        # Pass the script path through shlex.quote so _run_check (which now
+        # uses argv form, no shell=True) splits it back into a clean list.
+        if override.suffix == ".sh":
+            cmd = f"bash {shlex.quote(str(override))}"
+        else:
+            cmd = f"cmd /c {shlex.quote(str(override))}"
         result = _run_check("custom", cmd, cwd=root, timeout=timeout)
         results = [result]
         profile = ProjectProfile(

@@ -847,6 +847,8 @@ class BogAgentsApp(App):
         self._ui_adapter: TextualUIAdapter | None = None
         self._pending_approval_widget: ApprovalMenu | None = None
         self._pending_ask_user_widget: AskUserMenu | None = None
+        # Strong refs to background asyncio tasks so they aren't GC'd mid-flight.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         # Agent task tracking for interruption
         self._agent_worker: Worker[None] | None = None
         self._agent_running = False
@@ -928,6 +930,7 @@ class BogAgentsApp(App):
         """Initialize components after mount."""
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._chat_input = self.query_one("#input-area", ChatInput)
+        self._install_termination_signal_handlers()
 
         # Set initial auto-approve state
         if self._auto_approve:
@@ -1038,12 +1041,74 @@ class BogAgentsApp(App):
             if self._initial_prompt and self._initial_prompt.strip():
                 prompt = self._initial_prompt
                 self.call_after_refresh(
-                    lambda: asyncio.create_task(self._handle_user_message(prompt))
+                    lambda: self._spawn(self._handle_user_message(prompt))
                 )
             elif self._lc_thread_id and self._agent:
                 self.call_after_refresh(
-                    lambda: asyncio.create_task(self._load_thread_history())
+                    lambda: self._spawn(self._load_thread_history())
                 )
+
+    def _spawn(self, coro: Awaitable[Any]) -> asyncio.Task[Any]:
+        """Create an asyncio task and retain a strong reference to it.
+
+        Plain ``asyncio.create_task(...)`` only keeps a weak ref via the
+        running loop, so a fire-and-forget task can be garbage-collected
+        before completion. Tasks routed through this helper survive until
+        they finish.
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    def _install_termination_signal_handlers(self) -> None:
+        """Wire SIGTERM (and SIGHUP on POSIX) to a clean app exit.
+
+        Textual already handles SIGINT (Ctrl+C). For ``systemctl stop``,
+        container shutdown, or ``kill <pid>`` we want to drain in-flight
+        work via ``self.exit()`` rather than have the harness die abruptly.
+        ``loop.add_signal_handler`` is unavailable on Windows; we silently
+        skip there.
+        """
+        import signal as _signal
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _on_term() -> None:
+            logger.info("received termination signal — triggering clean exit")
+            try:
+                self.exit()
+            except Exception:
+                logger.exception("error during signal-triggered exit")
+
+        for sig_name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(_signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                loop.add_signal_handler(sig, _on_term)
+            except (NotImplementedError, RuntimeError, OSError):
+                # Windows / restricted environments: best-effort.
+                pass
+
+    async def on_unmount(self) -> None:
+        """Cancel any tracked background tasks before the app tears down."""
+        if not self._background_tasks:
+            return
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        # Give cancelled tasks a chance to settle so we don't lose log lines.
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self._background_tasks, return_exceptions=True),
+                timeout=2.0,
+            )
+        except TimeoutError:
+            logger.warning("Background tasks did not settle within 2s of unmount")
 
     def _init_agent_adapter(self) -> None:
         """Create the UI adapter and kick off background cache prewarming."""
@@ -1168,11 +1233,11 @@ class BogAgentsApp(App):
         if self._initial_prompt and self._initial_prompt.strip():
             prompt = self._initial_prompt
             self.call_after_refresh(
-                lambda: asyncio.create_task(self._handle_user_message(prompt))
+                lambda: self._spawn(self._handle_user_message(prompt))
             )
         elif self._lc_thread_id and self._agent:
             self.call_after_refresh(
-                lambda: asyncio.create_task(self._load_thread_history())
+                lambda: self._spawn(self._load_thread_history())
             )
 
         # Drain any messages the user typed while the server was starting.
@@ -1181,7 +1246,7 @@ class BogAgentsApp(App):
             self._initial_prompt and self._initial_prompt.strip()
         ):
             self.call_after_refresh(
-                lambda: asyncio.create_task(self._process_next_from_queue())
+                lambda: self._spawn(self._process_next_from_queue())
             )
 
     def on_bog_agents_app_server_start_failed(self, event: ServerStartFailed) -> None:
@@ -1822,6 +1887,8 @@ class BogAgentsApp(App):
         Raises:
             CancelledError: If the command is interrupted by the user.
         """
+        from bog_agents_cli.config import child_process_env
+
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -1829,6 +1896,7 @@ class BogAgentsApp(App):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._cwd,
                 start_new_session=(sys.platform != "win32"),
+                env=child_process_env(),
             )
             self._shell_process = proc
 
@@ -7019,11 +7087,14 @@ class BogAgentsApp(App):
                     )
                 )
                 return
+            from bog_agents_cli.config import child_process_env
+
             proc = await asyncio.create_subprocess_shell(
                 launch_command,
                 cwd=str(self._cwd),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=child_process_env(),
             )
             preview_id = f"preview-{uuid.uuid4().hex[:6]}"
             url = f"http://127.0.0.1:{port}" if port is not None else None
@@ -7917,7 +7988,7 @@ class BogAgentsApp(App):
                     label=label, prompt=prompt, repo_root=repo_root
                 )
                 task_ids.append(task.task_id)
-                asyncio.create_task(mw._run_task_in_worktree(task))  # noqa: RUF006
+                self._spawn(mw._run_task_in_worktree(task))
 
             await self._mount_message(
                 AppMessage(
@@ -11286,7 +11357,7 @@ class BogAgentsApp(App):
             def on_trigger(event: FileWatchEvent, config: FileWatchConfig) -> None:
                 # Post to Textual to run the pipeline
                 self.call_from_thread(
-                    lambda: asyncio.create_task(
+                    lambda: self._spawn(
                         self._run_pipeline_by_name(
                             config.pipeline_name,
                             trigger_context={
