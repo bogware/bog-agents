@@ -320,6 +320,26 @@ def _is_editable_install() -> bool:
 def _detect_charset_mode() -> CharsetMode:
     """Auto-detect terminal charset capabilities.
 
+    Modern Windows Terminal / pwsh / VS Code terminals all render unicode
+    correctly even when ``sys.stdout.encoding`` reports the legacy
+    ``cp1252`` (the encoding tag and the actual glyph rendering are
+    decoupled — Windows Terminal renders the bytes fine). Pre-0.8.0 the
+    auto-detect biased toward ASCII any time encoding wasn't ``utf-*``,
+    which silently downgraded most Windows users to the boring ASCII
+    banner.
+
+    The new policy is **default to UNICODE** unless we positively detect
+    a known-broken legacy console:
+
+    1. Explicit ``UI_CHARSET_MODE`` env var always wins.
+    2. UTF-* in ``sys.stdout.encoding`` or LANG/LC_ALL → UNICODE.
+    3. Windows console codepages 437 / 850 / 866 (true legacy DOS
+       prompts) → ASCII.
+    4. Otherwise → UNICODE.
+
+    Users on a genuine legacy console can opt back into ASCII via
+    ``UI_CHARSET_MODE=ascii``.
+
     Returns:
         The detected CharsetMode based on environment and terminal encoding.
     """
@@ -329,14 +349,24 @@ def _detect_charset_mode() -> CharsetMode:
     if env_mode == "ascii":
         return CharsetMode.ASCII
 
-    # Auto: check stdout encoding and LANG
+    # Auto: positive UTF-* detection.
     encoding = getattr(sys.stdout, "encoding", "") or ""
-    if "utf" in encoding.lower():
+    encoding_lower = encoding.lower()
+    if "utf" in encoding_lower:
         return CharsetMode.UNICODE
     lang = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
     if "utf" in lang.lower():
         return CharsetMode.UNICODE
-    return CharsetMode.ASCII
+
+    # Negative detection: known legacy DOS / OEM codepages that genuinely
+    # don't render box-drawing or shaded glyphs correctly. ``cp1252``
+    # (Windows ANSI) is INTENTIONALLY not in this list — modern Windows
+    # consoles render unicode fine over it.
+    if encoding_lower in {"cp437", "cp850", "cp866", "ibm437", "ibm850", "ibm866"}:
+        return CharsetMode.ASCII
+
+    # Default — modern terminal, render the cool banner.
+    return CharsetMode.UNICODE
 
 
 def get_glyphs() -> Glyphs:
