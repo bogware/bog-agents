@@ -107,18 +107,23 @@ class TestFormatToolDisplayExecute:
         assert result == f'{prefix} execute("echo hello")'
 
     def test_execute_with_default_timeout_hidden(self) -> None:
-        """Test execute display excludes timeout when it equals the default (120s)."""
+        """Test execute display excludes timeout when it equals the default (7200s)."""
+        from bog_agents.backends import DEFAULT_EXECUTE_TIMEOUT
+
         prefix = get_glyphs().tool_prefix
         result = format_tool_display(
-            "execute", {"command": "echo hello", "timeout": 120}
+            "execute", {"command": "echo hello", "timeout": DEFAULT_EXECUTE_TIMEOUT}
         )
         assert result == f'{prefix} execute("echo hello")'
 
     def test_execute_with_default_timeout_string_hidden(self) -> None:
         """Test execute display excludes timeout when default arrives as a string."""
+        from bog_agents.backends import DEFAULT_EXECUTE_TIMEOUT
+
         prefix = get_glyphs().tool_prefix
         result = format_tool_display(
-            "execute", {"command": "echo hello", "timeout": "120"}
+            "execute",
+            {"command": "echo hello", "timeout": str(DEFAULT_EXECUTE_TIMEOUT)},
         )
         assert result == f'{prefix} execute("echo hello")'
 

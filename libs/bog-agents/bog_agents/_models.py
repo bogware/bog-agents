@@ -12,11 +12,13 @@ from langchain_core.language_models import BaseChatModel
 logger = logging.getLogger(__name__)
 
 
-# Long-output, long-thinking model turns can run for many minutes, especially
-# for /review-style tasks that hit deep reasoning and large outputs. The default
-# is intentionally generous so legitimate long turns never get cut off; users
-# who want a shorter ceiling can lower it via the env var.
-_DEFAULT_MODEL_READ_TIMEOUT_SECS: float = 3600.0
+# Long-output, long-thinking model turns can legitimately run for an hour
+# or more, especially for /review-style tasks chained with long tool calls
+# (builds, test suites, fan-out research) inside a single turn. The default
+# is deliberately generous so legitimate long work never gets cut off; users
+# who want a tighter ceiling can lower it via the env var, and setting it
+# to ``none``/``0`` disables the read deadline entirely.
+_DEFAULT_MODEL_READ_TIMEOUT_SECS: float = 7200.0
 
 
 def _resolve_model_read_timeout() -> float | None:

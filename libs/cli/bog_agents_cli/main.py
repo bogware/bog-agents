@@ -1337,6 +1337,20 @@ def cli_main() -> None:
     if "--acp" not in sys.argv[1:] and "--serve" not in sys.argv[1:]:
         check_cli_dependencies()
 
+    # Translate the user's ``[timeouts]`` settings into env vars before any
+    # SDK code reads them. Existing env values win, so a shell override
+    # (``BOG_AGENTS_MODEL_READ_TIMEOUT=300 bog ...``) still takes precedence
+    # over what's in settings.json.
+    try:
+        from bog_agents_cli.timeouts import apply_to_env as _apply_timeout_env
+
+        project_root = Path.cwd() if (Path.cwd() / ".bog-agents").is_dir() else None
+        _apply_timeout_env(project_root=project_root)
+    except Exception:
+        # Misconfigured timeouts must never block startup. Log and continue
+        # with whatever defaults the SDK and remote_client provide.
+        logger.warning("timeouts: failed to apply settings cascade", exc_info=True)
+
     from bog_agents_cli.config import console, settings
 
     try:

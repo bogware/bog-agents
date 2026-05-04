@@ -21,19 +21,34 @@ from bog_agents_cli._debug import configure_debug_logging
 logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 
-# Default read timeout for the langgraph SDK's underlying httpx client.
-# The SDK default is 300s, which is too tight for /review-style turns that
-# can fan out to many tool calls and span 5-20 minutes of model work.
-# Aligned with ``BOG_AGENTS_MODEL_READ_TIMEOUT`` default (3600s) so the SSE
-# deadline never fires before the underlying model call has had its full
-# budget. Override with ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or
-# ``none``/``0`` to disable).
-_DEFAULT_READ_TIMEOUT_SECS: float = 3600.0
+# Default per-chunk read timeout for the langgraph SDK's underlying httpx
+# client. NB: httpx ``read`` is per-chunk, not total — a healthy SSE stream
+# that emits keepalives or token-streaming events stays alive indefinitely
+# under this deadline; only a *stall* longer than ``read`` fails. We pick
+# 2h so even a long-running tool call (build, test suite, slow MCP fetch)
+# that happens server-side between events doesn't trip the deadline.
+# Aligned with ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires
+# before the underlying model call has had its full budget. Override with
+# ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or ``none``/``0`` to disable).
+_DEFAULT_READ_TIMEOUT_SECS: float = 7200.0
 
 # Number of times to re-issue an astream() call when the SSE stream raises a
-# transient error *before any events have flowed*. Once events have been
-# emitted, retrying is unsafe (the server has already mutated state).
-_PRE_FIRST_EVENT_RETRIES: int = 2
+# transient error *before any events have flowed*. The server has not yet
+# committed any state, so retrying is fully safe.
+_PRE_FIRST_EVENT_RETRIES: int = 3
+
+# Number of times to re-issue an astream() call AFTER events have started
+# flowing but the stream then died from a transient network/provider error.
+# This is the resilience layer: the langgraph server persists thread state
+# checkpoint-by-checkpoint, so re-calling astream resumes from the last
+# committed checkpoint. The UI may briefly see duplicated events for the
+# in-flight checkpoint; the adapter dedupes by message ID.
+_MID_STREAM_RETRIES: int = 2
+
+# Initial backoff seconds for retry; doubles each attempt, capped at
+# ``_MAX_RETRY_BACKOFF_SECS``.
+_INITIAL_RETRY_BACKOFF_SECS: float = 1.0
+_MAX_RETRY_BACKOFF_SECS: float = 16.0
 
 # Substrings that indicate a transient (network/provider) failure worth
 # retrying when raised before the first event. Matched case-insensitively
@@ -138,11 +153,14 @@ class RemoteAgent:
                 the environment.
             headers: Extra HTTP headers to include in every request
                 (e.g. bearer tokens, proxy headers).
-            read_timeout: SSE read timeout in seconds. When `None`, the
-                value from `BOG_AGENTS_REMOTE_READ_TIMEOUT` is used,
-                falling back to `_DEFAULT_READ_TIMEOUT_SECS` (1800s) when
-                that env var is unset. Set the env var to `none`/`0` to
-                disable the read deadline entirely.
+            read_timeout: Per-chunk SSE read timeout in seconds. When `None`,
+                the value from `BOG_AGENTS_REMOTE_READ_TIMEOUT` is used,
+                falling back to `_DEFAULT_READ_TIMEOUT_SECS` (7200s, i.e.
+                2 hours) when that env var is unset. Set the env var to
+                `none`/`0` to disable the deadline entirely.
+
+                NB: this is a per-chunk read deadline, not a total
+                stream deadline — healthy streams stay alive indefinitely.
         """
         self._url = url
         self._graph_name = graph_name
@@ -239,12 +257,11 @@ class RemoteAgent:
         dropped_count = 0
 
         modes = stream_mode or ["messages", "updates"]
-        first_event_seen = False
-        attempt = 0
-        max_attempts = 1 + _PRE_FIRST_EVENT_RETRIES
+        events_emitted = 0
+        pre_first_event_attempt = 0
+        mid_stream_attempt = 0
 
         while True:
-            attempt += 1
             try:
                 async for ns, mode, data in graph.astream(
                     input,
@@ -253,33 +270,55 @@ class RemoteAgent:
                     config=config,
                     context=context,
                 ):
-                    first_event_seen = True
                     async for converted in RemoteAgent._process_chunk(
                         ns, mode, data, BaseMessage
                     ):
                         if converted is _DROPPED:
                             dropped_count += 1
                         else:
+                            events_emitted += 1
                             yield converted
                 break
             except Exception as exc:
-                if (
-                    not first_event_seen
-                    and attempt < max_attempts
-                    and _is_transient_stream_error(exc)
-                ):
-                    backoff = min(2 ** (attempt - 1), 8)
-                    logger.warning(
-                        "Transient %s before first stream event "
-                        "(attempt %d/%d); retrying in %.1fs",
-                        type(exc).__name__,
-                        attempt,
-                        max_attempts,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
-                raise
+                if not _is_transient_stream_error(exc):
+                    raise
+
+                # Two retry budgets: pre-first-event (fully safe — server
+                # has not committed any state yet) and mid-stream
+                # (resilience — server checkpoint replay may emit a few
+                # duplicate events but the UI dedupes by message ID).
+                if events_emitted == 0:
+                    pre_first_event_attempt += 1
+                    if pre_first_event_attempt > _PRE_FIRST_EVENT_RETRIES:
+                        raise
+                    attempt_no = pre_first_event_attempt
+                    max_attempts = _PRE_FIRST_EVENT_RETRIES
+                    phase = "pre-first-event"
+                else:
+                    mid_stream_attempt += 1
+                    if mid_stream_attempt > _MID_STREAM_RETRIES:
+                        raise
+                    attempt_no = mid_stream_attempt
+                    max_attempts = _MID_STREAM_RETRIES
+                    phase = "mid-stream"
+
+                backoff = min(
+                    _INITIAL_RETRY_BACKOFF_SECS * (2 ** (attempt_no - 1)),
+                    _MAX_RETRY_BACKOFF_SECS,
+                )
+                logger.warning(
+                    "Transient %s during %s phase (attempt %d/%d, %d events "
+                    "emitted); retrying in %.1fs — server will resume from "
+                    "checkpoint",
+                    type(exc).__name__,
+                    phase,
+                    attempt_no,
+                    max_attempts,
+                    events_emitted,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                continue
 
         if dropped_count:
             logger.warning(

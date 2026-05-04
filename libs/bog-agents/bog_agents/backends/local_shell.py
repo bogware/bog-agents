@@ -23,8 +23,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EXECUTE_TIMEOUT = 120
-"""Default timeout in seconds for shell command execution."""
+DEFAULT_EXECUTE_TIMEOUT = 7200
+"""Default timeout in seconds for shell command execution.
+
+Defaults to 2 hours so legitimate long-running commands (builds, test
+suites, large data fetches, fan-out scripts) don't get cut short. Lower
+it per-instance via ``LocalShellBackend(timeout=...)`` or per-call via
+the ``timeout`` kwarg on ``execute()`` / ``aexecute()`` if you want a
+tighter ceiling.
+"""
 
 # Patterns for commands that can cause catastrophic, irreversible damage.
 # Each entry is a (pattern, description) tuple. Blocked by default; pass
@@ -170,11 +177,13 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
 
             timeout: Default maximum time in seconds to wait for shell command execution.
 
-                Defaults to 120 seconds (2 minutes).
+                Defaults to 7200 seconds (2 hours) so legitimate long-running
+                commands (builds, test suites, large data fetches) don't get
+                cut short. Pass a smaller value here if you want a tighter
+                ceiling, or override per-command via the `timeout` parameter
+                on `execute()`.
 
                 Commands exceeding this timeout will be terminated.
-
-                Can be overridden per-command via the `timeout` parameter on `execute()`.
 
             max_output_bytes: Maximum number of bytes to capture from command output.
                 Output exceeding this limit will be truncated. Defaults to 100,000 bytes.
