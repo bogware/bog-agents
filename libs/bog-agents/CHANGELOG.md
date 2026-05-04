@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.8.1](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.0...bog-agents==0.8.1) (2026-05-04)
+
+
+### Features
+
+* 0.7.0 - daemon/mcp/plugins/hardening ([#40](https://github.com/bogware/bog-agents/issues/40)) ([2427dfb](https://github.com/bogware/bog-agents/commit/2427dfbda3bffc17ea34f6e38de8d2634a57f86f))
+* 0.8.0 — patient as still water ([#63](https://github.com/bogware/bog-agents/issues/63)) ([8b93798](https://github.com/bogware/bog-agents/commit/8b9379850e8c0360bb10dced6fe1dc83ebe9e11c))
+* **cli:** add deeper slash support/ui fixes/etc ([#35](https://github.com/bogware/bog-agents/issues/35)) ([5a0dbe3](https://github.com/bogware/bog-agents/commit/5a0dbe39c99a9d905ae146adf12f51a732d5ac9a))
+* **cli:** comprehensive docs, help screen, and rebrand sweep ([c053d58](https://github.com/bogware/bog-agents/commit/c053d589d1bbc69ef10aa82c6d6bbb294699ce87))
+* **cli:** Comprehensive docs, help screen, fixes ([bd7c325](https://github.com/bogware/bog-agents/commit/bd7c325802bc4fd67a6b9c37e107830b39d90027))
+* **cli:** Comprehensive docs, help screen, fixes ([bd7c325](https://github.com/bogware/bog-agents/commit/bd7c325802bc4fd67a6b9c37e107830b39d90027))
+* prompts/pipelines/bugfixes ([#38](https://github.com/bogware/bog-agents/issues/38)) ([1191992](https://github.com/bogware/bog-agents/commit/1191992cca613282ae792063269159d729a08194))
+* **sdk,cli:** add 17 killer features — middleware, serve API, CLI tools ([ab55111](https://github.com/bogware/bog-agents/commit/ab551118815438e538ae2dcbc1cdebcff84a49c5))
+* **sdk,cli:** complete all 5 recommendations for production readiness ([de02cd6](https://github.com/bogware/bog-agents/commit/de02cd650ca927dec7c2769b1a0cfa9ca209f4a0))
+* verify/call subcommands, shell reliability, cross-platform hardening, 12 CVEs closed ([#51](https://github.com/bogware/bog-agents/issues/51)) ([5f13fb4](https://github.com/bogware/bog-agents/commit/5f13fb4de5aa7cb50731b634796f0732a8a25f65))
+
+
+### Bug Fixes
+
+* 0.7.2 patch — memory/skills regression, ollama UX, partner resilience, Windows hardening ([#46](https://github.com/bogware/bog-agents/issues/46)) ([650975e](https://github.com/bogware/bog-agents/commit/650975e951997146a6299b8bcacb87e7c88389e5))
+* 0.7.5 follow-up — resolve issue [#60](https://github.com/bogware/bog-agents/issues/60) (9 bug fixes) + dep-pin range ([#61](https://github.com/bogware/bog-agents/issues/61)) ([0a1c026](https://github.com/bogware/bog-agents/commit/0a1c0261dc58c55c20e2c5f89f3d95f00f4186db))
+* **ci:** update uv from 0.5.25 to 0.8.17 to match lockfile format ([#33](https://github.com/bogware/bog-agents/issues/33)) ([59f2ada](https://github.com/bogware/bog-agents/commit/59f2adac2b54fa260bb15ca95b2df132e1e9014c))
+* **cli,sdk:** fix lint errors and failing test ([a6d2f58](https://github.com/bogware/bog-agents/commit/a6d2f58931ccb823f8ed64c54b1c91f4d36f86e2))
+* **cli:** resolve merge conflicts with main (v0.5.2) ([42aa364](https://github.com/bogware/bog-agents/commit/42aa3640935c5dbca45cc750ac4da29d33308025))
+* **cli:** switch Bedrock provider from bedrock to bedrock_converse  ([#31](https://github.com/bogware/bog-agents/issues/31)) ([77bcca3](https://github.com/bogware/bog-agents/commit/77bcca31db3d58e98958184a8075295ea6c31b3b))
+* **sdk,cli:** CTO review — fix 11 production readiness issues ([ed3be04](https://github.com/bogware/bog-agents/commit/ed3be044bf4f30f4ca6cbe47a38d4e47c5852920))
+* **sdk,cli:** fix 3 runtime bugs found in hands-on testing ([3a002af](https://github.com/bogware/bog-agents/commit/3a002affe19eb907981ae246521669428299e453))
+* **sdk:** add missing ty:ignore comments for starlette/uvicorn imports ([3405f28](https://github.com/bogware/bog-agents/commit/3405f28fc6089d9bf6451880316248bf9d36a53e))
+* **sdk:** add missing ty:ignore comments for starlette/uvicorn imports ([3405f28](https://github.com/bogware/bog-agents/commit/3405f28fc6089d9bf6451880316248bf9d36a53e))
+* **sdk:** add missing ty:ignore comments for starlette/uvicorn imports ([e5e4c72](https://github.com/bogware/bog-agents/commit/e5e4c7216809a04d99c1f5b11fea7bf01047fb75))
+* **sdk:** architect review — fix 5 bugs, add lazy imports, add serve deps ([1a17d78](https://github.com/bogware/bog-agents/commit/1a17d78e6c43dcdc5bee6172aaa1cdc62397b927))
+* **sdk:** implement real parallel execution in ParallelAgentsMiddleware ([6f6bdd2](https://github.com/bogware/bog-agents/commit/6f6bdd22995f953badfb0a4f2743021b09f0aabd))
+* **sdk:** remove unused imports and dead code in middleware modules ([c638bb0](https://github.com/bogware/bog-agents/commit/c638bb0ba9620feda2843a231cd1ab917f429968))
+* **sdk:** suppress ty unresolved-import errors for optional dependencies ([648a438](https://github.com/bogware/bog-agents/commit/648a4380bc316c0f239ecba87afad0042e74b7c1))
+
 ## [0.7.6](https://github.com/bogware/bog-agents/compare/bog-agents==0.7.5...bog-agents==0.7.6) (2026-05-02)
 
 

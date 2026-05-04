@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.1](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.8.0...bog-agents-daemon==0.8.1) (2026-05-04)
+
+
+### Features
+
+* 0.7.0 - daemon/mcp/plugins/hardening ([#40](https://github.com/bogware/bog-agents/issues/40)) ([2427dfb](https://github.com/bogware/bog-agents/commit/2427dfbda3bffc17ea34f6e38de8d2634a57f86f))
+* 0.8.0 — patient as still water ([#63](https://github.com/bogware/bog-agents/issues/63)) ([8b93798](https://github.com/bogware/bog-agents/commit/8b9379850e8c0360bb10dced6fe1dc83ebe9e11c))
+* verify/call subcommands, shell reliability, cross-platform hardening, 12 CVEs closed ([#51](https://github.com/bogware/bog-agents/issues/51)) ([5f13fb4](https://github.com/bogware/bog-agents/commit/5f13fb4de5aa7cb50731b634796f0732a8a25f65))
+
 ## [0.7.6](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.7.5...bog-agents-daemon==0.7.6) (2026-05-02)
 
 
