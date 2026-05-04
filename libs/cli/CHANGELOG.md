@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.8.1](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.0...bog-agents-cli==0.8.1) (2026-05-04)
+
+
+### Features
+
+* 0.7.0 - daemon/mcp/plugins/hardening ([#40](https://github.com/bogware/bog-agents/issues/40)) ([2427dfb](https://github.com/bogware/bog-agents/commit/2427dfbda3bffc17ea34f6e38de8d2634a57f86f))
+* 0.8.0 — patient as still water ([#63](https://github.com/bogware/bog-agents/issues/63)) ([8b93798](https://github.com/bogware/bog-agents/commit/8b9379850e8c0360bb10dced6fe1dc83ebe9e11c))
+* **cli:** add /init command, /onboard handler, CLAUDE.md context ([2a97670](https://github.com/bogware/bog-agents/commit/2a97670c13cf45c111eb8e0cd383d19dc6e128cb))
+* **cli:** add /init command, /onboard handler, CLAUDE.md context loa… ([2a97670](https://github.com/bogware/bog-agents/commit/2a97670c13cf45c111eb8e0cd383d19dc6e128cb))
+* **cli:** add /init command, /onboard handler, CLAUDE.md context loading ([b1f161e](https://github.com/bogware/bog-agents/commit/b1f161e683260be09f2e38b64180db2206a5e1fa))
+* **cli:** add Bedrock SSO support, provider fallback chain, and /settings command ([17e6e5f](https://github.com/bogware/bog-agents/commit/17e6e5fc92bb7ec8879aa94e0e04b29454a2c3a9))
+* **cli:** add Bedrock SSO support, provider fallback, /settings command, themes ([0efa283](https://github.com/bogware/bog-agents/commit/0efa283be6236b2bb03004eb8e2cf1a758738c21))
+* **cli:** add Bedrock SSO support, provider fallback, /settings command, themes ([0efa283](https://github.com/bogware/bog-agents/commit/0efa283be6236b2bb03004eb8e2cf1a758738c21))
+* **cli:** add deeper slash support/ui fixes/etc ([#35](https://github.com/bogware/bog-agents/issues/35)) ([5a0dbe3](https://github.com/bogware/bog-agents/commit/5a0dbe39c99a9d905ae146adf12f51a732d5ac9a))
+* **cli:** Bedrock credential check modes and provider model fixes ([#26](https://github.com/bogware/bog-agents/issues/26)) ([39e8fb2](https://github.com/bogware/bog-agents/commit/39e8fb2f556741e2354a6f5c857939caaf763790))
+* **cli:** comprehensive docs, help screen, and rebrand sweep ([c053d58](https://github.com/bogware/bog-agents/commit/c053d589d1bbc69ef10aa82c6d6bbb294699ce87))
+* **cli:** Comprehensive docs, help screen, fixes ([bd7c325](https://github.com/bogware/bog-agents/commit/bd7c325802bc4fd67a6b9c37e107830b39d90027))
+* **cli:** Comprehensive docs, help screen, fixes ([bd7c325](https://github.com/bogware/bog-agents/commit/bd7c325802bc4fd67a6b9c37e107830b39d90027))
+* **cli:** green theme, &lt;&gt; prompt prefix, and updated tagline ([7ac023b](https://github.com/bogware/bog-agents/commit/7ac023b83c4e4e67c020a2331e5e0e1c526ef406))
+* **cli:** resilient credential detection and interactive setup wizard ([8460244](https://github.com/bogware/bog-agents/commit/8460244720a6f1dfda9df11a1cf511d540470708))
+* **cli:** wire serve, PR, background, dashboard, and /recommend command ([c7f2fff](https://github.com/bogware/bog-agents/commit/c7f2fff7c0df7e4965e54b38142fdde12fb233ac))
+* prompts/pipelines/bugfixes ([#38](https://github.com/bogware/bog-agents/issues/38)) ([1191992](https://github.com/bogware/bog-agents/commit/1191992cca613282ae792063269159d729a08194))
+* **sdk,cli:** add 17 killer features — middleware, serve API, CLI tools ([ab55111](https://github.com/bogware/bog-agents/commit/ab551118815438e538ae2dcbc1cdebcff84a49c5))
+* **sdk,cli:** complete all 5 recommendations for production readiness ([de02cd6](https://github.com/bogware/bog-agents/commit/de02cd650ca927dec7c2769b1a0cfa9ca209f4a0))
+* verify/call subcommands, shell reliability, cross-platform hardening, 12 CVEs closed ([#51](https://github.com/bogware/bog-agents/issues/51)) ([5f13fb4](https://github.com/bogware/bog-agents/commit/5f13fb4de5aa7cb50731b634796f0732a8a25f65))
+
+
+### Bug Fixes
+
+* 0.7.2 patch — memory/skills regression, ollama UX, partner resilience, Windows hardening ([#46](https://github.com/bogware/bog-agents/issues/46)) ([650975e](https://github.com/bogware/bog-agents/commit/650975e951997146a6299b8bcacb87e7c88389e5))
+* 0.7.5 follow-up — resolve issue [#60](https://github.com/bogware/bog-agents/issues/60) (9 bug fixes) + dep-pin range ([#61](https://github.com/bogware/bog-agents/issues/61)) ([0a1c026](https://github.com/bogware/bog-agents/commit/0a1c0261dc58c55c20e2c5f89f3d95f00f4186db))
+* **ci:** update uv from 0.5.25 to 0.8.17 to match lockfile format ([#33](https://github.com/bogware/bog-agents/issues/33)) ([59f2ada](https://github.com/bogware/bog-agents/commit/59f2adac2b54fa260bb15ca95b2df132e1e9014c))
+* **cli,sdk:** fix lint errors and failing test ([a6d2f58](https://github.com/bogware/bog-agents/commit/a6d2f58931ccb823f8ed64c54b1c91f4d36f86e2))
+* **cli:** fix Windows-incompat URI/polish ([5e714f5](https://github.com/bogware/bog-agents/commit/5e714f5c02117ff334d1cc7de757240f6377fa2d))
+* **cli:** fix Windows-incompat URI/polish ([5e714f5](https://github.com/bogware/bog-agents/commit/5e714f5c02117ff334d1cc7de757240f6377fa2d))
+* **cli:** fix Windows-incompatible file URI and process termination ([bb24222](https://github.com/bogware/bog-agents/commit/bb2422250c30b631424693bdbc3067a4636f8008))
+* **cli:** remove tavily from required dep check, fix broken tests, rewrite README ([0753160](https://github.com/bogware/bog-agents/commit/0753160c91be33b3a85c1db6590198b268cf8258))
+* **cli:** resolve merge conflicts with main (v0.5.2) ([42aa364](https://github.com/bogware/bog-agents/commit/42aa3640935c5dbca45cc750ac4da29d33308025))
+* **cli:** resolve ruff lint errors in config.py setup wizard ([41125e5](https://github.com/bogware/bog-agents/commit/41125e5bb7bfd30c77214da331269e5d341be335))
+* **cli:** survive ReadTimeout from langgraph SSE stream ([#58](https://github.com/bogware/bog-agents/issues/58)) ([233ae54](https://github.com/bogware/bog-agents/commit/233ae54ef8aab22f2d25a7a5296c8822791146ed))
+* **cli:** switch Bedrock provider from bedrock to bedrock_converse  ([#31](https://github.com/bogware/bog-agents/issues/31)) ([77bcca3](https://github.com/bogware/bog-agents/commit/77bcca31db3d58e98958184a8075295ea6c31b3b))
+* **cli:** use compatible version range for SDK dependency ([326a9e8](https://github.com/bogware/bog-agents/commit/326a9e82bd0344826ba15a3980160e8c7ee12291))
+* **cli:** use compatible version range for SDK dependency ([326a9e8](https://github.com/bogware/bog-agents/commit/326a9e82bd0344826ba15a3980160e8c7ee12291))
+* **cli:** use compatible version range for SDK dependency ([64bef09](https://github.com/bogware/bog-agents/commit/64bef09942a1ff1784d58cd6e6b2edc4188adb49))
+* **cli:** use relative module refs for LangGraph server graph loading ([66e0dcc](https://github.com/bogware/bog-agents/commit/66e0dcc32f381b13a359147b2bd34ee557757aba))
+* **sdk,cli:** CTO review — fix 11 production readiness issues ([ed3be04](https://github.com/bogware/bog-agents/commit/ed3be044bf4f30f4ca6cbe47a38d4e47c5852920))
+* **sdk,cli:** fix 3 runtime bugs found in hands-on testing ([3a002af](https://github.com/bogware/bog-agents/commit/3a002affe19eb907981ae246521669428299e453))
+* **sdk:** architect review — fix 5 bugs, add lazy imports, add serve deps ([1a17d78](https://github.com/bogware/bog-agents/commit/1a17d78e6c43dcdc5bee6172aaa1cdc62397b927))
+
 ## [0.7.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.7.5...bog-agents-cli==0.7.6) (2026-05-02)
 
 
