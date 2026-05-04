@@ -27,6 +27,11 @@ $primary-lighten-1: #8effb3;
 $primary-lighten-2: #b8ffd0;
 $primary-darken-1: #4ad97f;
 $primary-darken-2: #2db864;
+/* Selection / hover highlight — deeper marsh, NOT neon. Used as
+ * background where bright text sits on top; the neon ``$primary``
+ * is reserved for foreground accents and thin borders. */
+$highlight: #1a4028;
+$highlight-soft: #122e1c;
 $secondary: #4dd0c5;
 $background: #050a07;
 $surface: #0a1410;
@@ -130,9 +135,11 @@ Screen {
 }
 
 .approval-menu .approval-option-selected {
-    background: $primary;
+    /* Deep marsh-green selection highlight, neon-green text — easier on
+     * the eyes than the previous full-neon background. */
+    background: $highlight;
     text-style: bold;
-    color: $background;
+    color: $primary-lighten-1;
 }
 
 .approval-menu .approval-help {

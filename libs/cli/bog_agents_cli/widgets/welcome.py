@@ -140,12 +140,36 @@ class WelcomeBanner(Static):
             Rich Text object containing the formatted banner.
         """
         banner = Text()
-        # Use orange for local, green for production
-        banner_color = (
-            COLORS["primary_dev"] if _is_editable_install() else COLORS["primary"]
-        )
+        # Bog/swamp gradient: cycle through deep-moss → neon → bright →
+        # neon → deep-moss line by line so the logo glows from its
+        # midline like marsh-light. Editable installs flip to a
+        # firefly-amber gradient so devs can tell at a glance they're
+        # running local code.
+        if _is_editable_install():
+            gradient_colors = [
+                "#7a4a08",  # deepest amber
+                "#b8731a",
+                "#ffc857",  # firefly amber midline
+                "#ffd97f",
+                "#ffc857",
+                "#b8731a",
+                "#7a4a08",
+            ]
+        else:
+            gradient_colors = [
+                "#0f3320",  # peat green
+                "#1a4028",
+                "#2db864",  # bright moss
+                "#66ff99",  # marsh-light midline
+                "#2db864",
+                "#1a4028",
+                "#0f3320",
+            ]
         raw_banner = get_banner()
-        banner.append(raw_banner + "\n", style=Style(bold=True, color=banner_color))
+        banner_lines = raw_banner.split("\n")
+        for i, line in enumerate(banner_lines):
+            color = gradient_colors[i % len(gradient_colors)]
+            banner.append(line + "\n", style=Style(bold=True, color=color))
         banner.append(
             "Terminal engineering cockpit for code, context, and execution.\n",
             style=Style(color=COLORS["dim"], italic=True),
@@ -153,11 +177,11 @@ class WelcomeBanner(Static):
 
         if self._project_name:
             banner.append(
-                "LangSmith",
+                " LangSmith ",
                 style=Style(
                     bold=True,
-                    color="#050a07",
-                    bgcolor=COLORS["thinking"],
+                    color=COLORS["thinking"],
+                    bgcolor="#0a2826",  # deep teal cartouche
                 ),
             )
             banner.append(" tracing: ", style=Style(color=COLORS["dim"]))
@@ -181,11 +205,11 @@ class WelcomeBanner(Static):
                 )
                 thread_line = Text.assemble(
                     (
-                        "Thread",
+                        " Thread ",
                         Style(
                             bold=True,
-                            color="#050a07",
-                            bgcolor=COLORS["primary"],
+                            color=COLORS["primary"],
+                            bgcolor="#0a2814",  # deep moss cartouche
                         ),
                     ),
                     (": ", "dim"),
@@ -195,22 +219,22 @@ class WelcomeBanner(Static):
                 banner.append_text(thread_line)
             else:
                 banner.append(
-                    "Thread",
+                    " Thread ",
                     style=Style(
                         bold=True,
-                        color="#050a07",
-                        bgcolor=COLORS["primary"],
+                        color=COLORS["primary"],
+                        bgcolor="#0a2814",
                     ),
                 )
                 banner.append(f": {self._cli_thread_id}\n", style="dim")
 
         if self._mcp_tool_count > 0:
             banner.append(
-                "MCP",
+                " MCP ",
                 style=Style(
                     bold=True,
-                    color="#050a07",
-                    bgcolor=COLORS["tool"],
+                    color=COLORS["tool"],
+                    bgcolor="#2a1f08",  # deep amber cartouche
                 ),
             )
             banner.append(" ready: ", style=Style(color=COLORS["dim"]))

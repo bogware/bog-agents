@@ -65,6 +65,13 @@ class _BogEventHandler:
         on_trigger: Callback invoked when an event matches and passes debounce.
     """
 
+    # Suppress events for the first ``_STARTUP_GRACE_S`` seconds after the
+    # handler is created. Watchdog (especially the polling backend) can
+    # emit synthetic "modified" events for files it sees during its
+    # initial scan, which would fire pipelines the user never asked
+    # for. The grace period scoops those up.
+    _STARTUP_GRACE_S: float = 2.0
+
     def __init__(
         self,
         configs: list[FileWatchConfig],
@@ -74,6 +81,7 @@ class _BogEventHandler:
         self._on_trigger = on_trigger
         # Per-config debounce tracking: key = (pipeline_name, pattern)
         self._last_fired: dict[str, float] = {}
+        self._started_at = time.time()
 
     def _dispatch(self, path: str, event_type: str) -> None:
         """Evaluate *path* against all configs and fire callbacks when due.
@@ -83,6 +91,16 @@ class _BogEventHandler:
             event_type: One of "created", "modified", "deleted", "moved".
         """
         now = time.time()
+        if now - self._started_at < self._STARTUP_GRACE_S:
+            # Within the startup grace window — silently drop spurious
+            # initial-scan events. Logged at DEBUG so it's visible if a
+            # user is genuinely missing real events.
+            logger.debug(
+                "file watcher: dropping %s event for %s (still in startup grace)",
+                event_type,
+                path,
+            )
+            return
         for config in self._configs:
             # Check ignore patterns first
             if any(fnmatch.fnmatch(path, ig) for ig in config.ignore_patterns):
