@@ -57,16 +57,29 @@ class TestAuditTrailMiddleware:
         assert log.entries[0].entry_id == 1
         assert log.entries[2].entry_id == 3
 
-    def test_audit_log_format_summary(self) -> None:
-        """Test formatted summary output."""
+    def test_audit_log_format_summary_masked_by_default(self) -> None:
+        """Default summary masks session/advisor IDs to a stable hash."""
         from bog_agents.middleware.audit_trail import AuditLog
 
         log = AuditLog(session_id="sess-1", advisor_id="FA-001")
         log.add_entry(action_type="llm_call", description="Analyzed filing")
         summary = log.format_summary()
         assert "Compliance Audit Trail" in summary
-        assert "sess-1" in summary
+        # IDs are masked by default — raw values must NOT appear.
+        assert "sess-1" not in summary
+        assert "FA-001" not in summary
+        assert "sha256:" in summary
         assert "Analyzed filing" in summary
+
+    def test_audit_log_format_summary_include_sensitive(self) -> None:
+        """include_sensitive=True renders raw IDs (e.g. for regulator export)."""
+        from bog_agents.middleware.audit_trail import AuditLog
+
+        log = AuditLog(session_id="sess-1", advisor_id="FA-001")
+        log.add_entry(action_type="llm_call", description="Analyzed filing")
+        summary = log.format_summary(include_sensitive=True)
+        assert "sess-1" in summary
+        assert "FA-001" in summary
 
     def test_audit_log_export_json(self) -> None:
         """Test JSON export for regulatory submission."""

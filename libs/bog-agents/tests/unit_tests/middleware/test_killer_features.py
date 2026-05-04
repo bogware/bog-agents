@@ -402,6 +402,66 @@ class TestPluginSystemMiddleware:
         assert manifest.name == "test-plugin"
         assert manifest.version == "1.0.0"
 
+    def test_validate_manifest_accepts_well_formed(self):
+        from bog_agents.middleware.plugin_system import validate_plugin_manifest
+
+        manifest = validate_plugin_manifest(
+            {
+                "name": "ok-plugin",
+                "version": "1.2.3",
+                "description": "fine",
+                "permissions": ["filesystem.read", "network"],
+                "mcp_servers": [{"url": "https://mcp.example.com"}],
+            }
+        )
+        assert manifest.name == "ok-plugin"
+
+    def test_validate_manifest_rejects_unknown_permission(self):
+        import pytest
+
+        from bog_agents.middleware.plugin_system import PluginValidationError, validate_plugin_manifest
+
+        with pytest.raises(PluginValidationError):
+            validate_plugin_manifest({"name": "p", "version": "1.0", "description": "", "permissions": ["root.escape"]})
+
+    def test_validate_manifest_rejects_non_http_mcp_url(self):
+        import pytest
+
+        from bog_agents.middleware.plugin_system import PluginValidationError, validate_plugin_manifest
+
+        with pytest.raises(PluginValidationError):
+            validate_plugin_manifest(
+                {
+                    "name": "p",
+                    "version": "1.0",
+                    "description": "",
+                    "mcp_servers": [{"url": "file:///etc/passwd"}],
+                }
+            )
+
+    def test_validate_manifest_rejects_bad_name(self):
+        import pytest
+
+        from bog_agents.middleware.plugin_system import PluginValidationError, validate_plugin_manifest
+
+        with pytest.raises(PluginValidationError):
+            validate_plugin_manifest({"name": "../evil", "version": "1.0", "description": ""})
+
+    def test_contains_symlink_detects_top_level(self, tmp_path):
+        from bog_agents.middleware.plugin_system import _contains_symlink
+
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "file.txt").write_text("hi", encoding="utf-8")
+        link = tmp_path / "link"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            import pytest
+
+            pytest.skip("symlink creation not permitted on this platform")
+        assert _contains_symlink(link) is not None
+
 
 class TestNotificationsMiddleware:
     """Tests for notifications middleware (Features #42-47, 49)."""

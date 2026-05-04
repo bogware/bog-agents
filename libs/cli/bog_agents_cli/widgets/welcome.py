@@ -140,12 +140,46 @@ class WelcomeBanner(Static):
             Rich Text object containing the formatted banner.
         """
         banner = Text()
-        # Use orange for local, green for production
-        banner_color = (
-            COLORS["primary_dev"] if _is_editable_install() else COLORS["primary"]
-        )
+        # Matte swamp gradient: walks deep peat → moss → moss-highlight
+        # → moss → deep peat line by line so the logo gently glows from
+        # its midline like dappled canopy light. NO neon — every stop
+        # is a desaturated bog tone. Editable installs flip to a muted
+        # ochre gradient so devs can tell at a glance they're running
+        # local code.
+        if _is_editable_install():
+            gradient_colors = [
+                "#3a2c14",  # deepest peat-amber
+                "#5e4622",
+                "#7e6334",
+                "#b89968",  # muted-ochre midline
+                "#7e6334",
+                "#5e4622",
+                "#3a2c14",
+            ]
+        else:
+            gradient_colors = [
+                "#1f3328",  # selection moss (deep peat)
+                "#3a5a48",  # bog-iron
+                "#557a63",  # deep moss
+                "#7aa888",  # matte-moss midline
+                "#557a63",
+                "#3a5a48",
+                "#1f3328",
+            ]
         raw_banner = get_banner()
-        banner.append(raw_banner + "\n", style=Style(bold=True, color=banner_color))
+        banner_lines = raw_banner.split("\n")
+        # Center the gradient on the visible content lines (skip leading
+        # blank line so the brightest stop lands on the wordmark, not
+        # whitespace).
+        nonblank_idx = 0
+        for line in banner_lines:
+            if line.strip():
+                color_idx = nonblank_idx % len(gradient_colors)
+                nonblank_idx += 1
+            else:
+                color_idx = 0
+            color = gradient_colors[color_idx]
+            banner.append(line + "\n", style=Style(bold=True, color=color))
         banner.append(
             "Terminal engineering cockpit for code, context, and execution.\n",
             style=Style(color=COLORS["dim"], italic=True),
@@ -153,11 +187,11 @@ class WelcomeBanner(Static):
 
         if self._project_name:
             banner.append(
-                "LangSmith",
+                " LangSmith ",
                 style=Style(
                     bold=True,
-                    color="#08131c",
-                    bgcolor=COLORS["thinking"],
+                    color=COLORS["thinking"],
+                    bgcolor="#142020",  # matte teal cartouche
                 ),
             )
             banner.append(" tracing: ", style=Style(color=COLORS["dim"]))
@@ -181,11 +215,11 @@ class WelcomeBanner(Static):
                 )
                 thread_line = Text.assemble(
                     (
-                        "Thread",
+                        " Thread ",
                         Style(
                             bold=True,
-                            color="#08131c",
-                            bgcolor=COLORS["primary"],
+                            color=COLORS["primary"],
+                            bgcolor="#152018",  # matte moss cartouche
                         ),
                     ),
                     (": ", "dim"),
@@ -195,22 +229,22 @@ class WelcomeBanner(Static):
                 banner.append_text(thread_line)
             else:
                 banner.append(
-                    "Thread",
+                    " Thread ",
                     style=Style(
                         bold=True,
-                        color="#08131c",
-                        bgcolor=COLORS["primary"],
+                        color=COLORS["primary"],
+                        bgcolor="#152018",
                     ),
                 )
                 banner.append(f": {self._cli_thread_id}\n", style="dim")
 
         if self._mcp_tool_count > 0:
             banner.append(
-                "MCP",
+                " MCP ",
                 style=Style(
                     bold=True,
-                    color="#08131c",
-                    bgcolor=COLORS["tool"],
+                    color=COLORS["tool"],
+                    bgcolor="#1f1810",  # matte ochre cartouche
                 ),
             )
             banner.append(" ready: ", style=Style(color=COLORS["dim"]))

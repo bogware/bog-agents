@@ -231,7 +231,7 @@ class TestServerSession:
         mock_server = MagicMock()
         mock_server.stop = MagicMock()
 
-        with (  # noqa: PT012
+        with (
             patch(
                 "bog_agents_cli.server_manager.start_server_and_get_agent",
                 new_callable=AsyncMock,

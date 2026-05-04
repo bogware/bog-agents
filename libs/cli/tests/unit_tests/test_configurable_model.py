@@ -253,7 +253,7 @@ class TestModelSwap:
 
         captured: list[ModelRequest] = []
 
-        async def handler(r: ModelRequest) -> ModelResponse[Any]:  # noqa: RUF029
+        async def handler(r: ModelRequest) -> ModelResponse[Any]:
             captured.append(r)
             return _make_response()
 
@@ -357,7 +357,7 @@ class TestAnthropicSettingsStripped:
         )
         captured: list[ModelRequest] = []
 
-        async def handler(r: ModelRequest) -> ModelResponse[Any]:  # noqa: RUF029
+        async def handler(r: ModelRequest) -> ModelResponse[Any]:
             captured.append(r)
             return _make_response()
 
@@ -503,7 +503,7 @@ class TestModelParams:
         )
         captured: list[ModelRequest] = []
 
-        async def handler(r: ModelRequest) -> ModelResponse[Any]:  # noqa: RUF029
+        async def handler(r: ModelRequest) -> ModelResponse[Any]:
             captured.append(r)
             return _make_response()
 

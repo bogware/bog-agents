@@ -182,10 +182,12 @@ def save_token(config_dir: Path, server_name: str, token: OAuthToken) -> None:
         "scopes": token.scopes,
     }
 
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(json.dumps(existing, indent=2))
-    # Restrict file permissions
-    token_path.chmod(0o600)
+    # Atomic write with 0o600 mode set on the temp file *before* the
+    # rename — closes the race window where ``write_text`` followed by
+    # ``chmod`` briefly leaves the file world-readable on POSIX.
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    atomic_write_text(token_path, json.dumps(existing, indent=2), mode=0o600)
 
 
 def generate_pkce_pair() -> tuple[str, str]:

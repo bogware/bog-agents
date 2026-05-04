@@ -1,7 +1,7 @@
 [project]
 name = "bog-agents-daemon"
-version = "0.7.6"
-description = "Ambient agent daemon for bog-agents — run agents on schedules, file-change triggers, webhooks, and git pushes"
+version = "0.8.0"
+description = "Bog Agents Daemon — the patient watcher. Runs your bog-agents on cron schedules, file-change triggers, webhooks, and git push events; survives reboots, persists state, and reports back. Use it when you want an agent that wakes itself rather than waiting for you. Pass through in harmony."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "bogware", email = "support@bogware.com" }]

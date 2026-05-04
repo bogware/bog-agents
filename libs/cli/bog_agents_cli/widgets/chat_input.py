@@ -46,29 +46,37 @@ _ANSI_ESCAPE_RE = re.compile(
     r"""
     \x1b              # ESC
     (?:
-        \[ [0-?]* [ -/]* [@-~]   # CSI ... terminator
+        \[ [0-?]* [ -/]* [@-~]       # CSI (incl. private '?' form) ... terminator
       | \] .*? (?: \x07 | \x1b\\ )  # OSC ... BEL or ST
       | P .*? \x1b\\               # DCS ... ST
-      | [@-Z\\-_]                  # 2-byte ESC sequences (CSI=@, ST=\, etc.)
+      | _ .*? \x1b\\               # APC ... ST
+      | \^ .*? \x1b\\              # PM ... ST
+      | [@-Z\\-_]                  # 2-byte ESC sequences (incl. SS2 N, SS3 O)
     )
     """,
     re.VERBOSE | re.DOTALL,
 )
 
+# 8-bit C1 control bytes (\x80-\x9f) plus stray NULs. Some terminals emit a
+# raw 0x9B (CSI) instead of the ESC[ form. We scrub them so they don't paint
+# the input field with garbage.
+_C1_AND_NUL_RE = re.compile(r"[\x00\x80-\x9f]")
+
 
 def _strip_terminal_escapes(text: str) -> str:
-    r"""Remove ANSI/CSI/OSC/DCS escape sequences from `text`.
+    r"""Remove ANSI/CSI/OSC/DCS/APC/PM escape sequences from `text`.
 
     Args:
         text: Raw paste text that may contain stray escape sequences.
 
     Returns:
-        Text with control sequences removed. Lone `\x1b` characters
-        are also stripped so a partial sequence doesn't render as a
-        visible arrow or square in the input field.
+        Text with control sequences removed. Lone `\x1b`, NUL bytes, and
+        8-bit C1 controls are also stripped so partial or 8-bit-form
+        sequences don't render as visible arrows or squares.
     """
     cleaned = _ANSI_ESCAPE_RE.sub("", text)
-    return cleaned.replace("\x1b", "")
+    cleaned = cleaned.replace("\x1b", "")
+    return _C1_AND_NUL_RE.sub("", cleaned)
 
 
 _PASTE_BURST_CHAR_GAP_SECONDS = 0.03
@@ -491,6 +499,53 @@ class ChatTextArea(TextArea):
 
     async def _on_key(self, event: events.Key) -> None:
         """Handle key events."""
+        now = time.monotonic()
+
+        # Mouse-tracking escape-sequence swallower.
+        #
+        # When a child process (e.g. the langgraph subprocess) toggles
+        # the terminal's bracketed-paste / mouse-tracking modes mid-run,
+        # mouse-move events arrive on stdin as raw SGR sequences like
+        # ``\x1b[<35;16;41M`` instead of being parsed by Textual as
+        # MouseMove events. Each character in the sequence is then
+        # delivered as a separate Key event — and by the time we see
+        # ``[`` or ``<`` or the digits, ``event.character`` is a normal
+        # printable that the underlying TextArea inserts. Result: the
+        # input box fills with garbage like ``[<35;16;41M`` whenever
+        # the user moves the mouse while the agent is busy.
+        #
+        # The fix: when we see an Escape key, enter a "swallowing" mode
+        # for a short window (200 ms — far longer than a real terminal
+        # takes to emit the rest of a CSI sequence, far shorter than a
+        # human takes to start typing again after pressing Esc). Within
+        # that window we eat every printable character without inserting
+        # it. The window resets on any non-printable key (Enter, Tab,
+        # arrows, etc.) so a deliberate Esc-then-key combo isn't broken.
+        if event.key == "escape":
+            self._escape_swallow_until = now + 0.2
+            event.prevent_default()
+            event.stop()
+            return
+        swallow_until = getattr(self, "_escape_swallow_until", 0.0)
+        if (
+            swallow_until > 0
+            and now < swallow_until
+            and event.character is not None
+            and len(event.character) == 1
+            and (event.character.isprintable() or event.character < " ")
+        ):
+            # Still inside the suspected CSI sequence — eat this key.
+            # SGR mouse sequences end with ``M`` or ``m``; once we see
+            # one of those, close the window early.
+            if event.character in ("M", "m"):
+                self._escape_swallow_until = 0.0
+            event.prevent_default()
+            event.stop()
+            return
+        # Window expired or non-printable key — clear the flag.
+        if swallow_until > 0 and now >= swallow_until:
+            self._escape_swallow_until = 0.0
+
         # VS Code 1.110 incorrectly sends space as a CSI u escape code
         # (`\x1b[32u`) instead of a plain ` ` character.  Textual parses
         # this as Key(key='space', character=None, is_printable=False), so
@@ -508,8 +563,6 @@ class ChatTextArea(TextArea):
             event.stop()
             self.insert(" ")
             return
-
-        now = time.monotonic()
         if self._paste_burst_buffer:
             if event.key == "enter":
                 self._append_paste_burst("\n", now)

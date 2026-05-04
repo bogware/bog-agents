@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 if TYPE_CHECKING:
     from bog_agents_daemon.models import JobRun
     from bog_agents_daemon.scheduler import DaemonScheduler
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from bog_agents_daemon import __version__
 from bog_agents_daemon.models import (
@@ -81,18 +81,31 @@ class OutputConfigModel(BaseModel):
     webhook_headers: dict[str, str] = {}
 
 
+# Size caps. Generous enough for legitimate use, tight enough that a single
+# request cannot blow up daemon memory.
+_MAX_NAME_LEN = 256
+_MAX_DESCRIPTION_LEN = 4_000
+_MAX_PROMPT_LEN = 200_000
+_MAX_PIPELINE_NAME_LEN = 256
+_MAX_SKILL_NAME_LEN = 256
+_MAX_MODEL_LEN = 256
+_MAX_WORKING_DIR_LEN = 4_096
+_MAX_TRIGGERS = 64
+_MAX_OUTPUTS = 64
+
+
 class CreateJobRequest(BaseModel):
     """Request body for creating an ambient job."""
 
-    name: str
-    description: str = ""
-    prompt: str = ""
-    pipeline_name: str = ""
-    skill_name: str = ""
-    model: str = ""
-    working_dir: str = ""
-    triggers: list[TriggerConfigModel] = []
-    outputs: list[OutputConfigModel] = []
+    name: str = Field(..., max_length=_MAX_NAME_LEN, min_length=1)
+    description: str = Field("", max_length=_MAX_DESCRIPTION_LEN)
+    prompt: str = Field("", max_length=_MAX_PROMPT_LEN)
+    pipeline_name: str = Field("", max_length=_MAX_PIPELINE_NAME_LEN)
+    skill_name: str = Field("", max_length=_MAX_SKILL_NAME_LEN)
+    model: str = Field("", max_length=_MAX_MODEL_LEN)
+    working_dir: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
+    outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
 
 
@@ -100,6 +113,25 @@ class TriggerRunRequest(BaseModel):
     """Optional body for manual job trigger."""
 
     context: dict[str, Any] = {}
+
+
+class UpdateJobRequest(BaseModel):
+    """Partial update for an existing ambient job.
+
+    Every field is optional. Only the fields the caller sends are
+    overwritten on the stored record; everything else is preserved.
+    """
+
+    name: str | None = Field(default=None, max_length=_MAX_NAME_LEN)
+    description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LEN)
+    prompt: str | None = Field(default=None, max_length=_MAX_PROMPT_LEN)
+    pipeline_name: str | None = Field(default=None, max_length=_MAX_PIPELINE_NAME_LEN)
+    skill_name: str | None = Field(default=None, max_length=_MAX_SKILL_NAME_LEN)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
+    working_dir: str | None = Field(default=None, max_length=_MAX_WORKING_DIR_LEN)
+    triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
+    outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
+    enabled: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -275,12 +307,27 @@ def create_app(
     Returns:
         A configured FastAPI application.
     """
+    # OpenAPI / Swagger / ReDoc are disabled by default — they leak job names,
+    # webhook paths, and schedules to anyone who can reach the (localhost-bound)
+    # port without auth. Operators who want them can opt in by setting
+    # BOG_AGENTS_DAEMON_DOCS=1.
+    import os as _os
+
+    _expose_docs = _os.environ.get("BOG_AGENTS_DAEMON_DOCS", "").lower() in ("1", "true", "yes")
     app = FastAPI(
         title="Bog Agents Daemon",
         version=__version__,
         description="Ambient agent daemon REST API",
+        docs_url="/docs" if _expose_docs else None,
+        redoc_url="/redoc" if _expose_docs else None,
+        openapi_url="/openapi.json" if _expose_docs else None,
     )
     webhook_tasks: set[asyncio.Task[Any]] = set()
+    # Expose to lifecycle code (main.py) so shutdown can drain in-flight
+    # webhook-triggered jobs alongside the scheduler's tracked tasks.
+    app.state.webhook_tasks = webhook_tasks
+    # Token holder is mutable so /admin/rotate-token can swap it at runtime.
+    token_holder: dict[str, str] = {"value": token}
 
     # ------------------------------------------------------------------
     # Health
@@ -293,7 +340,7 @@ def create_app(
         Returns:
             Status dict with version and job count.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         jobs = load_jobs()
         return {"status": "ok", "version": __version__, "job_count": len(jobs)}
 
@@ -314,7 +361,7 @@ def create_app(
         Raises:
             HTTPException: 503 if no shutdown callback is wired.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         if request_shutdown is None:
             raise HTTPException(status_code=503, detail="Shutdown callback not configured")
         request_shutdown()
@@ -329,6 +376,42 @@ def create_app(
         """
         return {"status": "ready"}
 
+    @app.post("/admin/rotate-token", status_code=200)
+    async def rotate_token_endpoint(request: Request) -> dict[str, str]:
+        """Rotate the daemon API token.
+
+        The caller must authenticate with the *current* token. On success a
+        new token is generated, persisted atomically (mode 0600) to the
+        on-disk token file, and immediately becomes the only valid token —
+        the old one is invalidated.
+
+        Returns:
+            Dict with ``token`` set to the new value. Callers must update
+            any stored copy of the token; the old one will fail auth on
+            the next request.
+        """
+        import os as _os
+        import secrets
+        import tempfile
+
+        _check_auth(request, token_holder["value"])
+        new_token = secrets.token_urlsafe(32)
+        _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=str(_TOKEN_FILE.parent), suffix=".tmp")
+        try:
+            with _os.fdopen(fd, "w", encoding="ascii") as f:
+                f.write(new_token)
+            Path(tmp_path).replace(_TOKEN_FILE)
+            with contextlib.suppress(OSError):
+                _TOKEN_FILE.chmod(0o600)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+        token_holder["value"] = new_token
+        logger.info("daemon API token rotated")
+        return {"token": new_token}
+
     # ------------------------------------------------------------------
     # Jobs collection
     # ------------------------------------------------------------------
@@ -340,7 +423,7 @@ def create_app(
         Returns:
             List of job dicts.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         return [_job_to_response(j) for j in load_jobs()]
 
     @app.post("/jobs", status_code=201)
@@ -353,7 +436,7 @@ def create_app(
         Returns:
             The newly created job dict.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         job = AmbientJob(
             name=body.name,
             description=body.description,
@@ -387,11 +470,61 @@ def create_app(
         Raises:
             HTTPException: 404 if not found.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         job = get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
         return _job_to_response(job)
+
+    @app.patch("/jobs/{job_id}")
+    async def patch_job_endpoint(
+        request: Request,
+        job_id: str,
+        body: UpdateJobRequest,
+    ) -> dict[str, Any]:
+        """Partially update an existing job.
+
+        Only the fields the caller sends are overwritten — every other
+        field on the stored record is preserved. Useful for edit-flow
+        ergonomics from the CLI (``daemon jobs edit``) without forcing
+        the user to round-trip the entire payload.
+        """
+        _check_auth(request, token_holder["value"])
+        existing = get_job(job_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+
+        import dataclasses
+
+        updates: dict[str, Any] = {}
+        if body.name is not None:
+            updates["name"] = body.name
+        if body.description is not None:
+            updates["description"] = body.description
+        if body.prompt is not None:
+            updates["prompt"] = body.prompt
+        if body.pipeline_name is not None:
+            updates["pipeline_name"] = body.pipeline_name
+        if body.skill_name is not None:
+            updates["skill_name"] = body.skill_name
+        if body.model is not None:
+            updates["model"] = body.model
+        if body.working_dir is not None:
+            updates["working_dir"] = body.working_dir
+        if body.triggers is not None:
+            updates["triggers"] = [_trigger_config_from_model(t) for t in body.triggers]
+        if body.outputs is not None:
+            updates["outputs"] = [_output_config_from_model(o) for o in body.outputs]
+        if body.enabled is not None:
+            updates["enabled"] = body.enabled
+
+        if not updates:
+            return _job_to_response(existing)
+
+        merged = dataclasses.replace(existing, **updates)
+        upsert_job(merged)
+        logger.info("Patched job %s (%s)", job_id, sorted(updates.keys()))
+        return _job_to_response(merged)
 
     @app.delete("/jobs/{job_id}", status_code=204)
     async def delete_job_endpoint(request: Request, job_id: str) -> None:
@@ -403,7 +536,7 @@ def create_app(
         Raises:
             HTTPException: 404 if not found.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         if not delete_job(job_id):
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
         logger.info("Deleted job %s", job_id)
@@ -427,7 +560,7 @@ def create_app(
         Raises:
             HTTPException: 404 if not found.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         job = get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -482,7 +615,7 @@ def create_app(
         Returns:
             List of run dicts sorted newest-first.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         runs = list_runs(job_id=job_id)
         return [_run_to_response(r) for r in runs]
 
@@ -493,7 +626,7 @@ def create_app(
         Returns:
             List of up to 20 run dicts sorted newest-first.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         runs = list_runs(limit=20)
         return [_run_to_response(r) for r in runs]
 
@@ -514,7 +647,7 @@ def create_app(
         Raises:
             HTTPException: 404 if not found.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         job = get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -535,7 +668,7 @@ def create_app(
         Raises:
             HTTPException: 404 if not found.
         """
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         job = get_job(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -560,7 +693,7 @@ def create_app(
         """
         import fnmatch as _fnmatch
 
-        _check_auth(request, token)
+        _check_auth(request, token_holder["value"])
         try:
             payload = await request.json()
         except Exception:
@@ -645,10 +778,21 @@ def create_app(
                 trigger_path = trigger.webhook_path.lstrip("/")
                 if trigger_path != normalized:
                     continue
-                # HMAC secret validation — reject if secret configured but sig absent/wrong.
-                # When the request bears a valid daemon token we trust the caller
-                # and skip HMAC (so the local CLI test path keeps working).
-                if trigger.webhook_secret and not is_token_authed:
+                # HMAC secret validation. The local CLI path bears a valid
+                # daemon token, so we trust the caller and skip HMAC.
+                # Otherwise the trigger MUST have a non-empty secret AND
+                # the request must carry a matching signature. An empty
+                # ``webhook_secret`` does not mean "public" — it means
+                # misconfigured, so we reject those instead of silently
+                # admitting unauthenticated callers.
+                if not is_token_authed:
+                    if not trigger.webhook_secret:
+                        logger.warning(
+                            "Refusing unauthenticated webhook for job %s trigger path %s: trigger has no webhook_secret",
+                            job.job_id,
+                            webhook_path,
+                        )
+                        break
                     sig_header = request.headers.get("X-Hub-Signature-256", "")
                     expected = (
                         "sha256="

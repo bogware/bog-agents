@@ -234,7 +234,7 @@ def make_mock_model(summary_response: str = "This is a test summary.") -> MagicM
 
 def make_model_request(
     state: "AgentState[Any]",
-    runtime: Any,  # noqa: ANN401
+    runtime: Any,
 ) -> ModelRequest:
     """Create a ModelRequest from a state dict.
 
@@ -259,7 +259,7 @@ def make_model_request(
 def call_wrap_model_call(
     middleware: SummarizationMiddleware,
     state: "AgentState[Any]",
-    runtime: Any,  # noqa: ANN401
+    runtime: Any,
 ) -> tuple["ModelResponse | ExtendedModelResponse", ModelRequest | None]:
     """Helper to call wrap_model_call and capture what was passed to handler.
 
@@ -289,7 +289,7 @@ def call_wrap_model_call(
 async def call_awrap_model_call(
     middleware: SummarizationMiddleware,
     state: "AgentState[Any]",
-    runtime: Any,  # noqa: ANN401
+    runtime: Any,
 ) -> tuple["ModelResponse | ExtendedModelResponse", ModelRequest | None]:
     """Helper to call awrap_model_call and capture what was passed to handler (async version).
 
@@ -2535,14 +2535,14 @@ async def test_async_offload_and_summary_run_concurrently() -> None:
     original_summary = middleware._acreate_summary
 
     async def slow_offload(
-        be: Any,  # noqa: ANN401
-        msgs: Any,  # noqa: ANN401
+        be: Any,
+        msgs: Any,
     ) -> str | None:
         await asyncio.sleep(delay)
         return await original_offload(be, msgs)
 
     async def slow_summary(
-        msgs: Any,  # noqa: ANN401
+        msgs: Any,
     ) -> str:
         await asyncio.sleep(delay)
         return await original_summary(msgs)

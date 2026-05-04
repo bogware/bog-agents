@@ -1,18 +1,39 @@
-# bog-agents-daemon
+# Bog Agents Daemon
 
-Quiet ambient runner for [`bog-agents`](https://github.com/bogware/bog-agents). Schedules. File watches. Inbound webhooks. Git pushes. Sits in the background, fires the agent when something happens, writes the result wherever you point it.
+> *The patient watcher. Wakes itself. Pass through in harmony.*
+
+Quiet ambient runner for [`bog-agents`](https://github.com/bogware/bog-agents).
+Schedules. File watches. Inbound webhooks. Git pushes. Sits in the
+background, fires the agent when something happens, writes the result
+wherever you point it.
 
 No terminal needed. No hand-holding. Goes the distance.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
+[![Python](https://img.shields.io/pypi/pyversions/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
 [![License](https://img.shields.io/pypi/l/bog-agents-daemon)](https://opensource.org/licenses/MIT)
 
-Five trigger types. Seven output targets. A small authenticated REST API. POSIX
-and Windows. HMAC-validated inbound webhooks. `os.fsync()`-durable job
-persistence so a hard kill never loses a freshly-created job.
+---
 
-**Triggers:** `cron` · `interval` · `file_change` · `webhook` · `git_push`
-**Outputs:** `log` · `stdout` · `file` · `slack` · `webhook` · `email` · `github_comment`
+## Why a daemon
+
+The CLI is great when you're at the keyboard. The daemon is what you reach
+for when you want an agent that watches *for* you — and reports back when
+something matters.
+
+- **Five trigger types**: `cron`, `interval`, `file_change`, `webhook`,
+  `git_push`.
+- **Seven output targets**: `log`, `stdout`, `file`, `slack`, `webhook`,
+  `email`, `github_comment`.
+- **Auth + integrity**: token-authenticated REST API; HMAC-validated
+  inbound webhooks; tokens stored with `0o600` permissions.
+- **Durable**: `os.fsync()`-durable job persistence so a hard kill never
+  loses a freshly-created job.
+- **Cross-platform**: POSIX systemd, Windows Task Scheduler, or just
+  `bog-agents-daemon run` in a shell. Same config either way.
+
+If the CLI is *patient as still water*, the daemon is the still water that
+keeps watch overnight.
 
 ---
 
@@ -20,181 +41,217 @@ persistence so a hard kill never loses a freshly-created job.
 
 ```bash
 pip install bog-agents-daemon
-
-# Or with uv
-uv tool install bog-agents-daemon
 ```
 
-Requires **Python 3.11+** and a running Bog Agents installation (`bog-agents>=0.7.0`).
-
----
-
-## Quick Start
+Pulls in [`bog-agents`](https://pypi.org/project/bog-agents/) automatically.
+Add provider extras you need:
 
 ```bash
-# 1. Start the daemon (runs on localhost:7391 by default)
-bog-agents-daemon
-
-# 2. Or manage it via the bog-agents CLI
-bog-agents daemon start
-bog-agents daemon status
-
-# 3. Create a job (cron trigger, every day at 9 AM)
-curl -s -X POST http://localhost:7391/jobs \
-  -H "X-Daemon-Token: $(cat ~/.bog-agents/daemon/token)" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "daily-standup",
-    "prompt": "Summarize recent git commits and open PRs",
-    "triggers": [{"type": "cron", "cron": "0 9 * * 1-5"}],
-    "outputs": [{"target": "log"}]
-  }'
+pip install "bog-agents-daemon[anthropic]"
+pip install "bog-agents-daemon[openai]"
+pip install "bog-agents-daemon[bedrock]"
 ```
 
 ---
 
-## Install as a System Service
+## 30-second tour
 
-The daemon can auto-register itself as a background service that starts on login:
+Start the daemon (foreground for a quick test):
 
 ```bash
-# Linux (systemd)
-bog-agents daemon install
-systemctl --user enable --now bog-agents-daemon
-
-# macOS (launchd)
-bog-agents daemon install
-# daemon starts automatically at login
+bog-agents-daemon run --port 7878
 ```
 
+Add a job that runs every weekday morning:
+
+```bash
+bog-agents-daemon job add \
+  --name morning-brief \
+  --cron "0 9 * * 1-5" \
+  --prompt "Summarize what changed in this repo since yesterday." \
+  --output slack:#engineering
+```
+
+The job persists to `~/.bog-agents/daemon/jobs/`. The scheduler picks it up
+on the next tick and fires it on the configured cadence.
+
 ---
 
-## Trigger Types
+## Triggers
 
-| Trigger | Config key | Description |
-|---------|-----------|-------------|
-| **cron** | `cron: "0 9 * * 1-5"` | Standard 5-field cron expression |
-| **interval** | `interval_seconds: 3600` | Every N seconds |
-| **file_change** | `watch_dir`, `watch_patterns` | Any matched file modified |
-| **webhook** | `webhook_path: "/hooks/deploy"` | POST to `/webhooks/<path>` |
-| **git_push** | `git_branch_pattern: "main"` | Git post-receive hook fires |
-| **manual** | — | `POST /jobs/{id}/run` |
+```yaml
+# A cron job
+triggers:
+  - type: cron
+    cron: "0 9 * * 1-5"      # 9am Mon–Fri
+
+# An interval
+triggers:
+  - type: interval
+    seconds: 1800            # every 30 min
+
+# A file watcher
+triggers:
+  - type: file_change
+    patterns: ["src/**/*.py"]
+    debounce_seconds: 5
+
+# An inbound webhook (HMAC-validated)
+triggers:
+  - type: webhook
+    path: /hooks/incident
+    secret_env: WEBHOOK_SECRET
+
+# A git push (post-receive on a remote)
+triggers:
+  - type: git_push
+    repo: /srv/git/main.git
+    branch: main
+```
+
+A job can have multiple triggers. The agent fires on any of them.
 
 ---
 
-## Output Targets
+## Outputs
 
-| Target | Description |
-|--------|-------------|
-| `log` | Daemon log (default) |
-| `file` | Append/overwrite a local file |
-| `email` | Send via SMTP |
-| `slack` | Post to a Slack incoming webhook |
-| `github_comment` | Comment on a GitHub issue or PR |
-| `webhook` | POST JSON to any URL |
-| `stdout` | Print to daemon stdout |
+Where the result of an agent run goes. Configure one or many:
+
+```yaml
+outputs:
+  - type: log              # systemd journal / stderr
+  - type: file
+    path: ~/.bog-agents/runs/morning-brief.md
+  - type: slack
+    channel: "#engineering"
+    token_env: SLACK_BOT_TOKEN
+  - type: webhook
+    url: https://hooks.example.com/agent-output
+    hmac_secret_env: OUTBOUND_WEBHOOK_SECRET
+  - type: email
+    to: oncall@example.com
+    from: bog-agents@example.com
+    smtp_env_prefix: SMTP_     # SMTP_HOST, SMTP_USER, SMTP_PASSWORD
+  - type: github_comment
+    repo: example/api
+    issue: 1234
+    token_env: GITHUB_TOKEN
+```
 
 ---
 
 ## REST API
 
-The daemon exposes a REST API on `http://127.0.0.1:7391` (localhost only).
-Most endpoints require the `X-Daemon-Token` header. Two exceptions:
+Once the daemon is running, you've got a small authenticated REST API for
+managing jobs:
 
-- `/ready` — readiness probe, no auth.
-- `/webhooks/{path}` — inbound from external services. Auth is the per-trigger
-  `webhook_secret` HMAC over `X-Hub-Signature-256` (timing-safe). The daemon
-  token also works on `/webhooks/{path}` if you happen to have it; useful for
-  local CLI tests.
+| Endpoint | Method | What |
+|---|---|---|
+| `/jobs` | GET | List all jobs |
+| `/jobs` | POST | Create a job |
+| `/jobs/{id}` | GET | Job detail |
+| `/jobs/{id}` | DELETE | Delete a job |
+| `/jobs/{id}/runs` | GET | Run history |
+| `/jobs/{id}/run` | POST | Fire the job manually |
+| `/health` | GET | Liveness probe |
+| `/metrics` | GET | Counter snapshot |
+
+Every endpoint requires `Authorization: Bearer <daemon_token>`. The token
+is generated on first start, stored at `~/.bog-agents/daemon/.token`
+with `0o600` permissions, and printed once to the foreground log so you
+can copy it.
+
+---
+
+## Running as a service
+
+### systemd (Linux)
 
 ```bash
-TOKEN=$(cat ~/.bog-agents/daemon/token)
+bog-agents-daemon install-systemd --user
+systemctl --user enable --now bog-agents-daemon
+systemctl --user status bog-agents-daemon
+```
 
-# Health
-curl -H "X-Daemon-Token: $TOKEN" http://localhost:7391/health
+### Windows Task Scheduler
 
-# Readiness probe (no auth)
-curl http://localhost:7391/ready
+```powershell
+bog-agents-daemon install-windows-task
+```
 
-# OpenAPI 3.0 schema (for clients like Swagger UI)
-curl http://localhost:7391/openapi.json
+Creates a `bog-agents-daemon` task that starts at logon and restarts on
+failure. Manage it with `schtasks` or the Task Scheduler GUI.
 
-# List jobs
-curl -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs
+### macOS launchd
 
-# Create job
-curl -X POST -H "X-Daemon-Token: $TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"my-job","prompt":"...","triggers":[...],"outputs":[...]}' \
-  http://localhost:7391/jobs
-
-# Trigger manually
-curl -X POST -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs/{id}/run
-
-# View run history
-curl -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs/{id}/runs
-
-# Enable/disable
-curl -X POST -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs/{id}/enable
-curl -X POST -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs/{id}/disable
-
-# Delete
-curl -X DELETE -H "X-Daemon-Token: $TOKEN" http://localhost:7391/jobs/{id}
+```bash
+bog-agents-daemon install-launchd --user
+launchctl load ~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist
 ```
 
 ---
 
-## Git Push Triggers
+## Security model
 
-Install a git post-receive hook to fire jobs on push:
-
-```bash
-# Via bog-agents CLI (recommended)
-bog-agents daemon install-git-hook --repo /path/to/repo
-
-# Or via daemon CLI
-bog-agents-daemon install-git-hook --repo /path/to/repo
-```
-
-The hook POSTs `{"ref": "refs/heads/main", "new_sha": "...", "old_sha": "..."}` to `/webhooks/git-push`. Jobs with `type: git_push` and a matching `git_branch_pattern` will fire.
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BOG_DAEMON_AGENT_TIMEOUT` | `1800` | Max seconds per agent run |
-| `BOG_DAEMON_MAX_CONCURRENT_JOBS` | `5` | Max parallel agent executions |
-| `BOG_DAEMON_MAX_RUNS_PER_JOB` | `100` | Run files kept per job (older pruned) |
+- **Token-authenticated API.** Every request needs `Authorization: Bearer`.
+  Tokens generated with `secrets.token_urlsafe`, compared with
+  `hmac.compare_digest`, stored at `0o600`.
+- **HMAC-validated inbound webhooks.** Each webhook trigger declares an
+  env-var holding its shared secret; the daemon verifies the HMAC-SHA256
+  signature on every request.
+- **Outbound webhook signing.** Outputs that POST to a webhook can sign
+  the body with HMAC-SHA256 so the receiver can verify it came from
+  this daemon.
+- **No secrets on disk.** Provider keys, Slack tokens, and webhook
+  secrets are all read from env vars — the daemon never persists them.
+- **Resource limits.** Configurable per-job CPU / memory / wall-clock
+  caps via the same FeatureConfig shape as the SDK.
 
 ---
 
-## Security
+## What's new in 0.8.0
 
-- API binds to `127.0.0.1` (localhost only) — not reachable from the network.
-- Auth token stored at `~/.bog-agents/daemon/token` (`0600` on POSIX; on
-  Windows the daemon also runs `icacls /inheritance:r /grant <user>:F` to
-  drop inherited ACEs).
-- Webhook secrets validated with HMAC-SHA256 via `hmac.compare_digest` —
-  timing-safe, no token leaks.
-- Daemon-token comparison also uses `hmac.compare_digest`.
-- File output restricted to `$HOME`, the system temp dir, the current
-  working directory, and the job's `working_dir` (path traversal guard).
-  Relative file paths are anchored to `working_dir`.
-- API responses redact `smtp_password`, `github_token`, and `webhook_secret`
-  to `'***'` — they're persisted in `jobs.json` for runtime use but never
-  echoed back through HTTP, even with a valid token.
-- Git hook scripts use `shlex.quote()` to prevent shell injection.
-- Job records and run records are written through `os.fsync()` before
-  atomic-rename, so a hard kill never loses a freshly-created job.
+Synced with `bog-agents` 0.8.0:
+
+- **Patient by default.** Every agent run is wrapped by
+  `ProviderRetryMiddleware` against transient provider failures.
+- **Subprocess `stdin=/dev/null`** — interactive shell commands fired
+  by the agent (e.g. Windows `date`) get an immediate EOF instead of
+  hanging the daemon forever.
+- **`virtual_mode=True` filesystem default** — agents launched by the
+  daemon are confined to their working directory unless you explicitly
+  opt out with `BOG_AGENTS_FS_UNSANDBOXED=1`.
+- **Structured event logs** at every chokepoint, ready for shippers.
 
 ---
 
-## Development
+## When to use this vs. `/peat` in the CLI
 
-```bash
-cd libs/daemon
-uv sync --group test
-uv run pytest tests/ -q
-uv run ruff check bog_agents_daemon/
-```
+| | Daemon | `/peat` |
+|---|---|---|
+| Survives reboot | ✓ | ✗ (only while CLI open) |
+| Fires while you're asleep | ✓ | ✗ |
+| Webhook / git-push triggers | ✓ | ✗ |
+| Slack / email / GitHub-comment outputs | ✓ | ✗ |
+| Reuses your interactive agent | ✗ | ✓ |
+| Zero ops (no service install) | ✗ | ✓ |
+
+`/peat` is the right tool when you're at the keyboard and want a personal
+assistant for the duration of the session. The daemon is the right tool
+when you want an agent that wakes itself.
+
+---
+
+## Documentation
+
+- Repo: <https://github.com/bogware/bog-agents>
+- Issues: <https://github.com/bogware/bog-agents/issues>
+- Changelog: [`CHANGELOG.md`](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
+
+---
+
+## License
+
+MIT. See [LICENSE](https://github.com/bogware/bog-agents/blob/main/LICENSE).
+
+*Pass through in harmony.*

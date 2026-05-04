@@ -1,19 +1,48 @@
-/* Bog Agents CLI Textual Stylesheet */
-
-/* Bog Agents visual system: deep slate surfaces, emerald accents, cyan highlights */
-$primary: #34d399;
-$primary-lighten-1: #6ee7b7;
-$primary-lighten-2: #a7f3d0;
-$secondary: #38bdf8;
-$background: #071019;
-$surface: #0d1723;
-$surface-lighten-1: #132233;
-$surface-darken-1: #09111a;
-$text: #e5eef6;
-$text-muted: #90a4b8;
-$success: #34d399;
-$warning: #fbbf24;
-$error: #fb7185;
+/* Bog Agents CLI Textual Stylesheet
+ *
+ * Theme: MATTE SWAMP — muted, low-saturation bog tones.
+ *
+ * Mood: a still pool under heavy canopy at dusk. Everything is
+ * desaturated and matte. No neon glow, no candy colors. The brightest
+ * thing on screen is a soft moss-light, not a retina-burning highlight.
+ * Warnings whisper with a muted ochre rather than a sandy yellow;
+ * errors are a faded heather-rust rather than a hot coral.
+ *
+ * Palette:
+ *   $background          peat-bottom black     #060a07
+ *   $surface             still bog water       #0d1410
+ *   $surface-lighten-1   shallow water         #16201a
+ *   $primary             matte moss            #7aa888
+ *   $primary-lighten-1   moss highlight        #9cc4a7
+ *   $primary-lighten-2   pale lichen           #c1d8c8
+ *   $primary-darken-1    deep moss             #557a63
+ *   $primary-darken-2    bog-iron              #3a5a48
+ *   $highlight           selection moss        #1f3328
+ *   $highlight-soft      hover veil            #16271d
+ *   $secondary           muted teal            #6a9b9b
+ *   $text                fogged grey-green     #c8d4ca
+ *   $text-muted          lichen mute           #6f8478
+ *   $warning             muted ochre           #b89968
+ *   $error               heather rust          #b86a78
+ */
+$primary: #7aa888;
+$primary-lighten-1: #9cc4a7;
+$primary-lighten-2: #c1d8c8;
+$primary-darken-1: #557a63;
+$primary-darken-2: #3a5a48;
+$highlight: #1f3328;
+$highlight-soft: #16271d;
+$secondary: #6a9b9b;
+$background: #060a07;
+$surface: #0d1410;
+$surface-lighten-1: #16201a;
+$surface-darken-1: #040705;
+$boundary: #243828;
+$text: #c8d4ca;
+$text-muted: #6f8478;
+$success: #7aa888;
+$warning: #b89968;
+$error: #b86a78;
 
 /* Define layers for z-ordering */
 Screen {
@@ -30,6 +59,8 @@ Screen {
     padding: 1 3 0 3;
     background: $background;
     scrollbar-size-vertical: 1;
+    scrollbar-background: $surface-darken-1;
+    scrollbar-color: $primary-darken-2;
     overflow-y: scroll;
 }
 
@@ -52,13 +83,14 @@ Screen {
     padding-bottom: 1;
 }
 
-/* Bottom app container - holds ChatInput (now inside scroll) */
+/* Bottom app container — holds ChatInput. A thin matte-moss divider
+ * marks the transition from transcript to input territory. */
 #bottom-app-container {
     height: auto;
     margin-top: 0;
     padding: 1 2 1 2;
     background: $background;
-    border-top: solid $surface-lighten-1;
+    border-top: solid $boundary;
 }
 
 /* Input area */
@@ -102,9 +134,11 @@ Screen {
 }
 
 .approval-menu .approval-option-selected {
-    background: $primary;
+    /* Deep marsh-green selection highlight, neon-green text — easier on
+     * the eyes than the previous full-neon background. */
+    background: $highlight;
     text-style: bold;
-    color: #08131c;
+    color: $primary-lighten-1;
 }
 
 .approval-menu .approval-help {
@@ -143,15 +177,15 @@ Screen {
 
 .diff-removed {
     height: auto;
-    color: #ff8787;
-    background: #4a2020;
+    color: #c89098;
+    background: #1a0e10;
     padding: 0 1;
 }
 
 .diff-added {
     height: auto;
-    color: #8ce99a;
-    background: #1e4620;
+    color: #9cc4a7;
+    background: #0e1a12;
     padding: 0 1;
 }
 

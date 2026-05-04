@@ -68,7 +68,13 @@ class TestMCPViewerScreen:
             assert len(tools) == 3
 
     async def test_render_empty_state(self) -> None:
-        """Viewer shows empty message when no servers configured."""
+        """Viewer shows the onboarding guide when no servers configured.
+
+        Pre-0.8.0 this asserted the dead-end ``--mcp-config`` hint.
+        The empty state was rewritten to walk the user through the
+        actual entry points (``/mcp marketplace`` etc.), so the
+        assertion now checks for the marketplace pointer instead.
+        """
         app = MCPViewerTestApp()
         async with app.run_test() as pilot:
             screen = MCPViewerScreen(server_info=[])
@@ -78,8 +84,9 @@ class TestMCPViewerScreen:
             title = screen.query_one(".mcp-viewer-title", Static)
             assert "MCP Servers" in _widget_text(title)
 
-            empty = screen.query_one(".mcp-empty", Static)
-            assert "--mcp-config" in _widget_text(empty)
+            empty_text = _widget_text(screen.query_one(".mcp-empty", Static))
+            assert "No MCP servers active" in empty_text
+            assert "/mcp marketplace" in empty_text
 
     async def test_escape_dismisses(self) -> None:
         """Pressing Escape closes the viewer."""
@@ -87,7 +94,7 @@ class TestMCPViewerScreen:
         async with app.run_test() as pilot:
             dismissed = False
 
-            def on_dismiss(result: None) -> None:  # noqa: ARG001
+            def on_dismiss(result: None) -> None:
                 nonlocal dismissed
                 dismissed = True
 

@@ -548,7 +548,7 @@ def _ai_message_with_usage(total_tokens: int, provider: str = "test-provider") -
 
 
 def _make_middleware_with_trigger(
-    trigger: Any,  # noqa: ANN401
+    trigger: Any,
     provider: str = "test-provider",
 ) -> SummarizationToolMiddleware:
     model = _make_mock_model()

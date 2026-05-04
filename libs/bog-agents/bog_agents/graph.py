@@ -1,5 +1,6 @@
 """Bog Agents come with planning, filesystem, and subagents."""
 
+import dataclasses
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -117,6 +118,57 @@ def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> Non
         seen.add(type(mw))
 
 
+_FEATURE_CONFIG_FIELD_NAMES: frozenset[str] = frozenset(f.name for f in dataclasses.fields(FeatureConfig))
+
+
+def _resolve_feature_config(
+    *,
+    config: FeatureConfig | None,
+    features: FeatureConfig | None,
+    legacy_flags: dict[str, Any],
+) -> FeatureConfig:
+    """Pick the right ``FeatureConfig`` for a ``create_agent`` call.
+
+    ``FeatureConfig`` is the single source of truth for feature flags. This
+    helper consolidates the three legacy entry points:
+
+    1. ``config=FeatureConfig(...)`` — preferred.
+    2. ``features=FeatureConfig(...)`` — deprecated alias of ``config``.
+    3. Bare ``enable_*`` / feature kwargs caught by ``**legacy_flags``.
+
+    A ``DeprecationWarning`` is emitted when the legacy kwarg surface is
+    used so callers can migrate. Unknown keys raise ``TypeError`` so a
+    typo doesn't silently fall through.
+    """
+    # ``config`` is the preferred name; ``features`` is a deprecated alias.
+    # When both are provided, ``config`` wins (preserving long-standing
+    # behaviour) and ``features`` is silently ignored.
+    explicit = config if config is not None else features
+
+    if not legacy_flags:
+        return explicit if explicit is not None else FeatureConfig()
+
+    unknown = sorted(set(legacy_flags) - _FEATURE_CONFIG_FIELD_NAMES)
+    if unknown:
+        msg = f"create_agent() got unexpected keyword argument(s): {unknown}"
+        raise TypeError(msg)
+
+    import warnings as _warnings
+
+    _warnings.warn(
+        "Passing individual feature flags as kwargs to create_agent() is "
+        "deprecated; pass `config=FeatureConfig(...)` instead. Affected "
+        f"flags: {sorted(legacy_flags)}",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+    if explicit is None:
+        return FeatureConfig(**legacy_flags)
+    # Merge: explicit FeatureConfig + legacy flag overrides on top.
+    return dataclasses.replace(explicit, **legacy_flags)
+
+
 def create_agent(  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
@@ -138,103 +190,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
     max_turns: int = 200,
-    # Individual feature flags (kept for backwards compatibility).
-    # When ``features`` is provided, these are ignored.
-    enable_git_tools: bool = False,
-    enable_repo_map: bool = False,
-    enable_checkpointing: bool = False,
-    enable_cost_tracking: bool = False,
-    enable_plan_mode: bool = False,
-    effort_level: str = "medium",
-    budget_usd: float | None = None,
-    architect_model: str | BaseChatModel | None = None,
-    reviewer_model: str | BaseChatModel | None = None,
-    auto_lint: bool = False,
-    auto_test: bool = False,
-    working_dir: str | None = None,
-    # New parameters for features #51-75
-    enable_worktree: bool = False,
-    enable_parallel_worktree: bool = False,
-    enable_multi_agent: bool = False,
-    max_agent_threads: int = 10,
-    enable_smart_context: bool = False,
-    max_context_tokens: int = 200000,
-    enable_conversation_branching: bool = False,
-    enable_image_input: bool = False,
-    enable_browser: bool = False,
-    allowed_browser_domains: list[str] | None = None,
-    enable_pr_management: bool = False,
-    enable_test_tools: bool = False,
-    test_framework: str = "pytest",
-    enable_enterprise: bool = False,
-    team_config_path: str | None = None,
-    current_role: str = "developer",
-    enable_multi_model: bool = False,
-    available_models: list[str] | None = None,
-    enable_code_intelligence: bool = False,
-    enable_plugin_system: bool = False,
-    plugins_dir: str | None = None,
-    enable_notifications: bool = False,
-    session_name: str = "",
-    # Financial advisor features
-    enable_audit_trail: bool = False,
-    audit_session_id: str = "",
-    audit_advisor_id: str = "",
-    enable_citations: bool = False,
-    enable_reasoning_chain: bool = False,
-    enable_hallucination_detection: bool = False,
-    enable_meeting_prep: bool = False,
-    enable_enhanced_skills: bool = False,
-    enhanced_skills_sources: list[str] | None = None,
-    enhanced_skills_cache_dir: str | None = None,
-    enable_saved_prompts: bool = False,
-    saved_prompts_sources: list[str] | None = None,
-    # Batch 2 financial advisor features
-    enable_portfolio_analysis: bool = False,
-    portfolio_risk_free_rate: float = 0.05,
-    enable_client_reports: bool = False,
-    client_reports_firm_name: str = "",
-    client_reports_advisor_name: str = "",
-    enable_deep_research: bool = False,
-    enable_dlp: bool = False,
-    dlp_mode: str = "redact",
-    enable_version_control: bool = False,
-    enable_scenario_engine: bool = False,
-    enable_tax_optimization: bool = False,
-    enable_nl_query: bool = False,
-    enable_peer_comparison: bool = False,
-    # Batch 3 financial advisor features
-    enable_code_review: bool = False,
-    enable_financial_data: bool = False,
-    enable_regulatory_alerts: bool = False,
-    enable_model_portfolio: bool = False,
-    enable_knowledge_graph: bool = False,
-    enable_client_knowledge_base: bool = False,
-    enable_rbac: bool = False,
-    enable_fact_check: bool = False,
-    enable_approval_gates: bool = False,
-    enable_earnings_analysis: bool = False,
-    enable_regulatory_impact: bool = False,
-    # Batch 4 (final) features
-    enable_browser_agent_fa: bool = False,
-    enable_agent_teams: bool = False,
-    enable_automations: bool = False,
-    enable_image_pdf_input: bool = False,
-    enable_cloud_sandbox: bool = False,
-    enable_computer_use: bool = False,
-    enable_opensearch_rag: bool = False,
-    enable_firm_deployment: bool = False,
-    enable_air_gapped: bool = False,
-    enable_sso_auth: bool = False,
-    enable_dashboard: bool = False,
-    enable_scheduled_reports: bool = False,
-    enable_collaborative_sessions: bool = False,
-    enable_messaging_integration: bool = False,
-    enable_voice_io: bool = False,
-    enable_due_diligence: bool = False,
-    enable_market_sentiment: bool = False,
-    enable_competitive_intel: bool = False,
-    enable_result_synthesis: bool = False,
+    **legacy_feature_flags: Any,
 ) -> CompiledStateGraph:
     """Create a bog-agents agent.
 
@@ -334,107 +290,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     Returns:
         A configured bog-agents agent.
     """
-    # Resolve config/features: `config` is the preferred name; `features` is kept
-    # for backward compat.  If both are given, `config` wins.
-    _feature_config = config if config is not None else features
-
-    # If a FeatureConfig was provided, use its values for all feature flags.
-    # This lets callers pass a single config object instead of 90+ kwargs.
-    if _feature_config is not None:
-        features = _feature_config  # normalise to single name for the block below
-
-    if features is not None:
-        f = features
-        enable_git_tools = f.enable_git_tools
-        enable_repo_map = f.enable_repo_map
-        enable_checkpointing = f.enable_checkpointing
-        enable_cost_tracking = f.enable_cost_tracking
-        enable_plan_mode = f.enable_plan_mode
-        effort_level = f.effort_level
-        budget_usd = f.budget_usd
-        architect_model = f.architect_model
-        reviewer_model = f.reviewer_model
-        auto_lint = f.auto_lint
-        auto_test = f.auto_test
-        working_dir = f.working_dir
-        enable_worktree = f.enable_worktree
-        enable_parallel_worktree = f.enable_parallel_worktree
-        enable_multi_agent = f.enable_multi_agent
-        max_agent_threads = f.max_agent_threads
-        enable_smart_context = f.enable_smart_context
-        max_context_tokens = f.max_context_tokens
-        enable_conversation_branching = f.enable_conversation_branching
-        enable_image_input = f.enable_image_input
-        enable_browser = f.enable_browser
-        allowed_browser_domains = f.allowed_browser_domains
-        enable_pr_management = f.enable_pr_management
-        enable_test_tools = f.enable_test_tools
-        test_framework = f.test_framework
-        enable_enterprise = f.enable_enterprise
-        team_config_path = f.team_config_path
-        current_role = f.current_role
-        enable_multi_model = f.enable_multi_model
-        available_models = f.available_models
-        enable_code_intelligence = f.enable_code_intelligence
-        enable_plugin_system = f.enable_plugin_system
-        plugins_dir = f.plugins_dir
-        enable_notifications = f.enable_notifications
-        session_name = f.session_name
-        enable_audit_trail = f.enable_audit_trail
-        audit_session_id = f.audit_session_id
-        audit_advisor_id = f.audit_advisor_id
-        enable_citations = f.enable_citations
-        enable_reasoning_chain = f.enable_reasoning_chain
-        enable_hallucination_detection = f.enable_hallucination_detection
-        enable_meeting_prep = f.enable_meeting_prep
-        enable_enhanced_skills = f.enable_enhanced_skills
-        enhanced_skills_sources = f.enhanced_skills_sources
-        enhanced_skills_cache_dir = f.enhanced_skills_cache_dir
-        enable_saved_prompts = f.enable_saved_prompts
-        saved_prompts_sources = f.saved_prompts_sources
-        enable_portfolio_analysis = f.enable_portfolio_analysis
-        portfolio_risk_free_rate = f.portfolio_risk_free_rate
-        enable_client_reports = f.enable_client_reports
-        client_reports_firm_name = f.client_reports_firm_name
-        client_reports_advisor_name = f.client_reports_advisor_name
-        enable_deep_research = f.enable_deep_research
-        enable_dlp = f.enable_dlp
-        dlp_mode = f.dlp_mode
-        enable_version_control = f.enable_version_control
-        enable_scenario_engine = f.enable_scenario_engine
-        enable_tax_optimization = f.enable_tax_optimization
-        enable_nl_query = f.enable_nl_query
-        enable_peer_comparison = f.enable_peer_comparison
-        enable_code_review = f.enable_code_review
-        enable_financial_data = f.enable_financial_data
-        enable_regulatory_alerts = f.enable_regulatory_alerts
-        enable_model_portfolio = f.enable_model_portfolio
-        enable_knowledge_graph = f.enable_knowledge_graph
-        enable_client_knowledge_base = f.enable_client_knowledge_base
-        enable_rbac = f.enable_rbac
-        enable_fact_check = f.enable_fact_check
-        enable_approval_gates = f.enable_approval_gates
-        enable_earnings_analysis = f.enable_earnings_analysis
-        enable_regulatory_impact = f.enable_regulatory_impact
-        enable_browser_agent_fa = f.enable_browser_agent_fa
-        enable_agent_teams = f.enable_agent_teams
-        enable_automations = f.enable_automations
-        enable_image_pdf_input = f.enable_image_pdf_input
-        enable_cloud_sandbox = f.enable_cloud_sandbox
-        enable_computer_use = f.enable_computer_use
-        enable_opensearch_rag = f.enable_opensearch_rag
-        enable_firm_deployment = f.enable_firm_deployment
-        enable_air_gapped = f.enable_air_gapped
-        enable_sso_auth = f.enable_sso_auth
-        enable_dashboard = f.enable_dashboard
-        enable_scheduled_reports = f.enable_scheduled_reports
-        enable_collaborative_sessions = f.enable_collaborative_sessions
-        enable_messaging_integration = f.enable_messaging_integration
-        enable_voice_io = f.enable_voice_io
-        enable_due_diligence = f.enable_due_diligence
-        enable_market_sentiment = f.enable_market_sentiment
-        enable_competitive_intel = f.enable_competitive_intel
-        enable_result_synthesis = f.enable_result_synthesis
+    f = _resolve_feature_config(config=config, features=features, legacy_flags=legacy_feature_flags)
 
     if model is None:
         _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
@@ -453,7 +309,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     else:
         model = resolve_model(model)
 
-    backend = backend if backend is not None else (StateBackend)
+    # ``StateBackend`` is a class that doubles as a ``BackendFactory``
+    # (i.e. callable taking a ToolRuntime). Pass the class itself so
+    # downstream code which expects ``BackendProtocol | BackendFactory``
+    # gets a real factory rather than a typo'd grouping expression.
+    backend = backend if backend is not None else StateBackend
 
     # Build general-purpose subagent with default middleware stack
     gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [
@@ -479,6 +339,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     processed_subagents: list[SubAgent | CompiledSubAgent] = []
     async_subagents: list[AsyncSubAgent] = []
     for spec in subagents or []:
+        # Runtime sanity-check: TypedDicts give static guarantees only. Without
+        # this, a typo like `descripton=...` silently produces a subagent the
+        # main agent can't usefully describe to the user, and the failure
+        # surfaces much later as a confusing tool-call error.
+        if not isinstance(spec, dict):
+            msg = f"subagents entries must be dicts; got {type(spec).__name__}"
+            raise TypeError(msg)
+        if "runnable" not in spec and "graph_id" not in spec:
+            missing = [k for k in ("name", "description", "system_prompt") if k not in spec]
+            if missing:
+                msg = f"subagent {spec.get('name', '<unnamed>')!r} is missing required keys: {missing}"
+                raise ValueError(msg)
         if "graph_id" in spec:
             async_subagents.append(cast("AsyncSubAgent", spec))
             continue
@@ -538,165 +410,165 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         agents_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
 
     # New feature middleware (#1-50)
-    _wd = Path(working_dir) if working_dir else None
+    _wd = Path(f.working_dir) if f.working_dir else None
 
-    if enable_git_tools:
+    if f.enable_git_tools:
         from bog_agents.middleware.git_tools import GitToolsMiddleware
 
         agents_middleware.append(GitToolsMiddleware(working_dir=_wd))
 
-    if enable_repo_map:
+    if f.enable_repo_map:
         from bog_agents.middleware.repo_map import RepoMapMiddleware
 
         agents_middleware.append(RepoMapMiddleware(working_dir=_wd))
 
-    if enable_checkpointing:
+    if f.enable_checkpointing:
         from bog_agents.middleware.checkpointing import CheckpointingMiddleware
 
         agents_middleware.append(CheckpointingMiddleware(working_dir=_wd))
 
-    if enable_cost_tracking or budget_usd is not None:
+    if f.enable_cost_tracking or f.budget_usd is not None:
         from bog_agents._models import get_model_identifier
         from bog_agents.middleware.cost_tracker import CostTrackerMiddleware
 
         model_name = get_model_identifier(model) or "" if isinstance(model, BaseChatModel) else str(model or "")
-        agents_middleware.append(CostTrackerMiddleware(model_name=model_name, budget_usd=budget_usd, effort_level=effort_level))
+        agents_middleware.append(CostTrackerMiddleware(model_name=model_name, budget_usd=f.budget_usd, effort_level=f.effort_level))
 
-    if enable_plan_mode:
+    if f.enable_plan_mode:
         from bog_agents.middleware.plan_mode import PlanModeMiddleware
 
         agents_middleware.append(PlanModeMiddleware(enabled=False))
 
-    if architect_model or reviewer_model:
+    if f.architect_model or f.reviewer_model:
         from bog_agents.middleware.architect import ArchitectMiddleware
 
         agents_middleware.append(
             ArchitectMiddleware(
-                architect_model=architect_model,
-                reviewer_model=reviewer_model,
+                architect_model=f.architect_model,
+                reviewer_model=f.reviewer_model,
             )
         )
 
-    if auto_lint or auto_test:
+    if f.auto_lint or f.auto_test:
         from bog_agents.middleware.auto_quality import AutoQualityMiddleware
 
         agents_middleware.append(
             AutoQualityMiddleware(
                 working_dir=_wd,
-                auto_lint=auto_lint,
-                auto_test=auto_test,
+                auto_lint=f.auto_lint,
+                auto_test=f.auto_test,
             )
         )
 
     # Feature middleware: worktree, multi-agent, context, etc.
-    if enable_worktree:
+    if f.enable_worktree:
         from bog_agents.middleware.worktree import WorktreeMiddleware
 
         agents_middleware.append(WorktreeMiddleware(working_dir=_wd))
 
-    if enable_parallel_worktree:
+    if f.enable_parallel_worktree:
         from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 
         agents_middleware.append(ParallelWorktreeMiddleware(working_dir=_wd))
 
-    if enable_multi_agent:
+    if f.enable_multi_agent:
         from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
 
-        agents_middleware.append(MultiAgentOrchestratorMiddleware(max_threads=max_agent_threads))
+        agents_middleware.append(MultiAgentOrchestratorMiddleware(max_threads=f.max_agent_threads))
 
-    if enable_smart_context:
+    if f.enable_smart_context:
         from bog_agents.middleware.smart_context import SmartContextMiddleware
 
-        agents_middleware.append(SmartContextMiddleware(working_dir=_wd, max_context_tokens=max_context_tokens))
+        agents_middleware.append(SmartContextMiddleware(working_dir=_wd, max_context_tokens=f.max_context_tokens))
 
-    if enable_conversation_branching:
+    if f.enable_conversation_branching:
         from bog_agents.middleware.conversation_branch import ConversationBranchMiddleware
 
         agents_middleware.append(ConversationBranchMiddleware(working_dir=_wd))
 
-    if enable_image_input:
+    if f.enable_image_input:
         from bog_agents.middleware.image_input import ImageInputMiddleware
 
         agents_middleware.append(ImageInputMiddleware(working_dir=_wd))
 
-    if enable_browser:
+    if f.enable_browser:
         from bog_agents.middleware.browser_agent import BrowserAgentMiddleware
 
-        agents_middleware.append(BrowserAgentMiddleware(working_dir=_wd, allowed_domains=allowed_browser_domains))
+        agents_middleware.append(BrowserAgentMiddleware(working_dir=_wd, allowed_domains=f.allowed_browser_domains))
 
-    if enable_pr_management:
+    if f.enable_pr_management:
         from bog_agents.middleware.pr_management import PRManagementMiddleware
 
         agents_middleware.append(PRManagementMiddleware(working_dir=_wd))
 
-    if enable_test_tools:
+    if f.enable_test_tools:
         from bog_agents.middleware.test_generation import TestGenerationMiddleware
 
-        agents_middleware.append(TestGenerationMiddleware(working_dir=_wd, test_framework=test_framework))
+        agents_middleware.append(TestGenerationMiddleware(working_dir=_wd, test_framework=f.test_framework))
 
-    if enable_enterprise:
+    if f.enable_enterprise:
         from bog_agents.middleware.enterprise import EnterpriseMiddleware
 
         agents_middleware.append(
             EnterpriseMiddleware(
                 working_dir=_wd,
-                team_config_path=Path(team_config_path) if team_config_path else None,
-                current_role=current_role,
+                team_config_path=Path(f.team_config_path) if f.team_config_path else None,
+                current_role=f.current_role,
             )
         )
 
-    if enable_multi_model:
+    if f.enable_multi_model:
         from bog_agents.middleware.multi_model import MultiModelMiddleware
 
-        agents_middleware.append(MultiModelMiddleware(available_models=available_models))
+        agents_middleware.append(MultiModelMiddleware(available_models=f.available_models))
 
-    if enable_code_intelligence:
+    if f.enable_code_intelligence:
         from bog_agents.middleware.code_intelligence import CodeIntelligenceMiddleware
 
         agents_middleware.append(CodeIntelligenceMiddleware(working_dir=_wd))
 
-    if enable_plugin_system:
+    if f.enable_plugin_system:
         from bog_agents.middleware.plugin_system import PluginSystemMiddleware
 
-        agents_middleware.append(PluginSystemMiddleware(plugins_dir=Path(plugins_dir) if plugins_dir else None))
+        agents_middleware.append(PluginSystemMiddleware(plugins_dir=Path(f.plugins_dir) if f.plugins_dir else None))
 
-    if enable_notifications:
+    if f.enable_notifications:
         from bog_agents.middleware.notifications import NotificationsMiddleware
 
-        agents_middleware.append(NotificationsMiddleware(session_name=session_name))
+        agents_middleware.append(NotificationsMiddleware(session_name=f.session_name))
 
     # Financial advisor middleware
-    if enable_audit_trail:
+    if f.enable_audit_trail:
         from bog_agents.middleware.audit_trail import AuditTrailMiddleware
 
-        agents_middleware.append(AuditTrailMiddleware(session_id=audit_session_id, advisor_id=audit_advisor_id))
+        agents_middleware.append(AuditTrailMiddleware(session_id=f.audit_session_id, advisor_id=f.audit_advisor_id))
 
-    if enable_citations:
+    if f.enable_citations:
         from bog_agents.middleware.citations import CitationsMiddleware
 
         agents_middleware.append(CitationsMiddleware())
 
-    if enable_reasoning_chain:
+    if f.enable_reasoning_chain:
         from bog_agents.middleware.reasoning_chain import ReasoningChainMiddleware
 
         agents_middleware.append(ReasoningChainMiddleware())
 
-    if enable_hallucination_detection:
+    if f.enable_hallucination_detection:
         from bog_agents.middleware.hallucination_detection import HallucinationDetectionMiddleware
 
         agents_middleware.append(HallucinationDetectionMiddleware())
 
-    if enable_meeting_prep:
+    if f.enable_meeting_prep:
         from bog_agents.middleware.meeting_prep import MeetingPrepMiddleware
 
         agents_middleware.append(MeetingPrepMiddleware())
 
-    if enable_enhanced_skills:
-        if not enhanced_skills_sources:
+    if f.enable_enhanced_skills:
+        if not f.enhanced_skills_sources:
             import logging as _logging
 
             _logging.getLogger(__name__).warning(
-                "enable_enhanced_skills=True but enhanced_skills_sources is empty — "
+                "enable_enhanced_skills=True but f.enhanced_skills_sources is empty — "
                 "EnhancedSkillsMiddleware will not be activated. "
                 "Pass enhanced_skills_sources=['/path/to/skills'] to enable."
             )
@@ -706,210 +578,210 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             agents_middleware.append(
                 EnhancedSkillsMiddleware(
                     backend=backend,
-                    sources=enhanced_skills_sources,
-                    cache_dir=enhanced_skills_cache_dir,
+                    sources=f.enhanced_skills_sources,
+                    cache_dir=f.enhanced_skills_cache_dir,
                 )
             )
 
-    if enable_saved_prompts and saved_prompts_sources:
+    if f.enable_saved_prompts and f.saved_prompts_sources:
         from bog_agents.middleware.saved_prompts import SavedPromptsMiddleware
 
-        agents_middleware.append(SavedPromptsMiddleware(backend=backend, sources=saved_prompts_sources))
+        agents_middleware.append(SavedPromptsMiddleware(backend=backend, sources=f.saved_prompts_sources))
 
     # Batch 2 financial advisor middleware
-    if enable_portfolio_analysis:
+    if f.enable_portfolio_analysis:
         from bog_agents.middleware.portfolio_analysis import PortfolioAnalysisMiddleware
 
-        agents_middleware.append(PortfolioAnalysisMiddleware(risk_free_rate=portfolio_risk_free_rate))
+        agents_middleware.append(PortfolioAnalysisMiddleware(risk_free_rate=f.portfolio_risk_free_rate))
 
-    if enable_client_reports:
+    if f.enable_client_reports:
         from bog_agents.middleware.client_reports import ClientReportsMiddleware
 
-        agents_middleware.append(ClientReportsMiddleware(firm_name=client_reports_firm_name, advisor_name=client_reports_advisor_name))
+        agents_middleware.append(ClientReportsMiddleware(firm_name=f.client_reports_firm_name, advisor_name=f.client_reports_advisor_name))
 
-    if enable_deep_research:
+    if f.enable_deep_research:
         from bog_agents.middleware.deep_research import DeepResearchMiddleware
 
         agents_middleware.append(DeepResearchMiddleware())
 
-    if enable_dlp:
+    if f.enable_dlp:
         from bog_agents.middleware.dlp import DLPMiddleware
 
-        agents_middleware.append(DLPMiddleware(mode=dlp_mode))
+        agents_middleware.append(DLPMiddleware(mode=f.dlp_mode))
 
-    if enable_version_control:
+    if f.enable_version_control:
         from bog_agents.middleware.version_control import VersionControlMiddleware
 
         agents_middleware.append(VersionControlMiddleware())
 
-    if enable_scenario_engine:
+    if f.enable_scenario_engine:
         from bog_agents.middleware.scenario_engine import ScenarioEngineMiddleware
 
         agents_middleware.append(ScenarioEngineMiddleware())
 
-    if enable_tax_optimization:
+    if f.enable_tax_optimization:
         from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
 
         agents_middleware.append(TaxOptimizationMiddleware())
 
-    if enable_nl_query:
+    if f.enable_nl_query:
         from bog_agents.middleware.nl_query import NLQueryMiddleware
 
         agents_middleware.append(NLQueryMiddleware())
 
-    if enable_peer_comparison:
+    if f.enable_peer_comparison:
         from bog_agents.middleware.peer_comparison import PeerComparisonMiddleware
 
         agents_middleware.append(PeerComparisonMiddleware())
 
     # Batch 3 financial advisor middleware
-    if enable_code_review:
+    if f.enable_code_review:
         from bog_agents.middleware.code_review import CodeReviewMiddleware
 
         agents_middleware.append(CodeReviewMiddleware())
 
-    if enable_financial_data:
+    if f.enable_financial_data:
         from bog_agents.middleware.financial_data import FinancialDataMiddleware
 
         agents_middleware.append(FinancialDataMiddleware())
 
-    if enable_regulatory_alerts:
+    if f.enable_regulatory_alerts:
         from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
 
         agents_middleware.append(RegulatoryAlertsMiddleware())
 
-    if enable_model_portfolio:
+    if f.enable_model_portfolio:
         from bog_agents.middleware.model_portfolio import ModelPortfolioMiddleware
 
         agents_middleware.append(ModelPortfolioMiddleware())
 
-    if enable_knowledge_graph:
+    if f.enable_knowledge_graph:
         from bog_agents.middleware.knowledge_graph import KnowledgeGraphMiddleware
 
         agents_middleware.append(KnowledgeGraphMiddleware())
 
-    if enable_client_knowledge_base:
+    if f.enable_client_knowledge_base:
         from bog_agents.middleware.client_knowledge_base import ClientKnowledgeBaseMiddleware
 
         agents_middleware.append(ClientKnowledgeBaseMiddleware())
 
-    if enable_rbac:
+    if f.enable_rbac:
         from bog_agents.middleware.rbac import RBACMiddleware
 
         agents_middleware.append(RBACMiddleware())
 
-    if enable_fact_check:
+    if f.enable_fact_check:
         from bog_agents.middleware.fact_check import FactCheckMiddleware
 
         agents_middleware.append(FactCheckMiddleware())
 
-    if enable_approval_gates:
+    if f.enable_approval_gates:
         from bog_agents.middleware.approval_gates import ApprovalGatesMiddleware
 
         agents_middleware.append(ApprovalGatesMiddleware())
 
-    if enable_earnings_analysis:
+    if f.enable_earnings_analysis:
         from bog_agents.middleware.earnings_analysis import EarningsAnalysisMiddleware
 
         agents_middleware.append(EarningsAnalysisMiddleware())
 
-    if enable_regulatory_impact:
+    if f.enable_regulatory_impact:
         from bog_agents.middleware.regulatory_impact import RegulatoryImpactMiddleware
 
         agents_middleware.append(RegulatoryImpactMiddleware())
 
     # Batch 4 (final) middleware
-    if enable_browser_agent_fa:
+    if f.enable_browser_agent_fa:
         from bog_agents.middleware.browser_agent_fa import BrowserAgentFAMiddleware
 
         agents_middleware.append(BrowserAgentFAMiddleware())
 
-    if enable_agent_teams:
+    if f.enable_agent_teams:
         from bog_agents.middleware.agent_teams import AgentTeamsMiddleware
 
         agents_middleware.append(AgentTeamsMiddleware())
 
-    if enable_automations:
+    if f.enable_automations:
         from bog_agents.middleware.automations import AutomationsMiddleware
 
         agents_middleware.append(AutomationsMiddleware())
 
-    if enable_image_pdf_input:
+    if f.enable_image_pdf_input:
         from bog_agents.middleware.image_pdf_input import ImagePdfInputMiddleware
 
         agents_middleware.append(ImagePdfInputMiddleware())
 
-    if enable_cloud_sandbox:
+    if f.enable_cloud_sandbox:
         from bog_agents.middleware.cloud_sandbox import CloudSandboxMiddleware
 
         agents_middleware.append(CloudSandboxMiddleware())
 
-    if enable_computer_use:
+    if f.enable_computer_use:
         from bog_agents.middleware.computer_use import ComputerUseMiddleware
 
         agents_middleware.append(ComputerUseMiddleware())
 
-    if enable_opensearch_rag:
+    if f.enable_opensearch_rag:
         from bog_agents.middleware.opensearch_rag import OpenSearchRAGMiddleware
 
         agents_middleware.append(OpenSearchRAGMiddleware())
 
-    if enable_firm_deployment:
+    if f.enable_firm_deployment:
         from bog_agents.middleware.firm_deployment import FirmDeploymentMiddleware
 
         agents_middleware.append(FirmDeploymentMiddleware())
 
-    if enable_air_gapped:
+    if f.enable_air_gapped:
         from bog_agents.middleware.air_gapped import AirGappedMiddleware
 
         agents_middleware.append(AirGappedMiddleware())
 
-    if enable_sso_auth:
+    if f.enable_sso_auth:
         from bog_agents.middleware.sso_auth import SSOAuthMiddleware
 
         agents_middleware.append(SSOAuthMiddleware())
 
-    if enable_dashboard:
+    if f.enable_dashboard:
         from bog_agents.middleware.dashboard import DashboardMiddleware
 
         agents_middleware.append(DashboardMiddleware())
 
-    if enable_scheduled_reports:
+    if f.enable_scheduled_reports:
         from bog_agents.middleware.scheduled_reports import ScheduledReportsMiddleware
 
         agents_middleware.append(ScheduledReportsMiddleware())
 
-    if enable_collaborative_sessions:
+    if f.enable_collaborative_sessions:
         from bog_agents.middleware.collaborative_sessions import CollaborativeSessionsMiddleware
 
         agents_middleware.append(CollaborativeSessionsMiddleware())
 
-    if enable_messaging_integration:
+    if f.enable_messaging_integration:
         from bog_agents.middleware.messaging_integration import MessagingIntegrationMiddleware
 
         agents_middleware.append(MessagingIntegrationMiddleware())
 
-    if enable_voice_io:
+    if f.enable_voice_io:
         from bog_agents.middleware.voice_io import VoiceIOMiddleware
 
         agents_middleware.append(VoiceIOMiddleware())
 
-    if enable_due_diligence:
+    if f.enable_due_diligence:
         from bog_agents.middleware.due_diligence import DueDiligenceMiddleware
 
         agents_middleware.append(DueDiligenceMiddleware())
 
-    if enable_market_sentiment:
+    if f.enable_market_sentiment:
         from bog_agents.middleware.market_sentiment import MarketSentimentMiddleware
 
         agents_middleware.append(MarketSentimentMiddleware())
 
-    if enable_competitive_intel:
+    if f.enable_competitive_intel:
         from bog_agents.middleware.competitive_intel import CompetitiveIntelMiddleware
 
         agents_middleware.append(CompetitiveIntelMiddleware())
 
-    if enable_result_synthesis:
+    if f.enable_result_synthesis:
         from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
         from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 

@@ -456,8 +456,26 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
         return
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
+
+    # Re-resolve AFTER mkdir to defeat a TOCTOU where the parent gets
+    # replaced with a symlink between the validation and the open. If the
+    # post-mkdir resolve no longer lies under an allowed root, abort.
+    try:
+        resolved_parent = resolved.parent.resolve(strict=True)
+    except OSError:
+        logger.error("File output for job %s: parent dir vanished after mkdir", run.job_id)
+        return
+    if not any(_is_under(resolved_parent, root) for root in allowed_roots):
+        logger.error(
+            "File output for job %s rejected: parent %s escaped allowed roots after mkdir",
+            run.job_id,
+            resolved_parent,
+        )
+        return
+
+    final_path = resolved_parent / resolved.name
     mode = "a" if output.append else "w"
-    async with aiofiles.open(resolved, mode=mode, encoding="utf-8") as f:
+    async with aiofiles.open(final_path, mode=mode, encoding="utf-8") as f:
         header = f"--- {run.job_name} ({run.run_id}) at {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(run.started_at))} ---\n"
         await f.write(header + run.output + "\n")
 

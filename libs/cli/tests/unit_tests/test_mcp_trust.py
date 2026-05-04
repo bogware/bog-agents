@@ -49,6 +49,30 @@ class TestComputeConfigFingerprint:
         fp = compute_config_fingerprint([missing])
         assert fp.startswith("sha256:")
 
+    def test_unreadable_file_changes_fingerprint(self, tmp_path: Path) -> None:
+        """A trusted-then-unreadable file must NOT match its trusted fingerprint.
+
+        This guards against an attacker swapping a config and then making
+        the original unreadable to silently bypass the trust check.
+        """
+        cfg = tmp_path / "real.json"
+        cfg.write_text('{"servers":{}}', encoding="utf-8")
+        trusted_fp = compute_config_fingerprint([cfg])
+
+        missing = tmp_path / "real.json"
+        missing.unlink()
+        unreadable_fp = compute_config_fingerprint([missing])
+
+        assert trusted_fp != unreadable_fp
+
+    def test_filename_is_part_of_fingerprint(self, tmp_path: Path) -> None:
+        """Same content under different filenames must produce different fps."""
+        a = tmp_path / "a.json"
+        b = tmp_path / "b.json"
+        a.write_text("same", encoding="utf-8")
+        b.write_text("same", encoding="utf-8")
+        assert compute_config_fingerprint([a]) != compute_config_fingerprint([b])
+
 
 class TestTrustStore:
     """Tests for is_project_mcp_trusted / trust_project_mcp / revoke."""

@@ -172,9 +172,32 @@ class DaemonScheduler:
                 logger.exception("Scheduler tick error")
             await asyncio.sleep(tick_seconds)
 
+    def reload_jobs(self) -> list[AmbientJob]:
+        """Force the scheduler to re-read jobs from the store.
+
+        Invoked from SIGHUP. The current scheduler always reloads on each
+        tick, so this is mostly a hook for future caching plus a place to
+        garbage-collect debounce state belonging to jobs that no longer exist.
+        """
+        jobs = self._store_loader()
+        live_ids = {job.job_id for job in jobs}
+        stale = [jid for jid in self._file_change_pending if jid not in live_ids]
+        for jid in stale:
+            self._file_change_pending.pop(jid, None)
+        if stale:
+            logger.debug("Cleared file-change debounce state for %d deleted job(s)", len(stale))
+        return jobs
+
     async def _tick(self) -> None:
         """Process one scheduling tick: load jobs and fire any that are due."""
         jobs = self._store_loader()
+
+        # Garbage-collect debounce entries for jobs that have been deleted.
+        live_ids = {job.job_id for job in jobs}
+        for jid in list(self._file_change_pending):
+            if jid not in live_ids:
+                self._file_change_pending.pop(jid, None)
+
         for job in jobs:
             if not job.enabled:
                 continue
@@ -182,10 +205,15 @@ class DaemonScheduler:
                 logger.debug("Job %s already running, skipping", job.job_id)
                 continue
             trigger_type, trigger_context = await self._check_job_triggers(job)
-            if trigger_type is not None:
-                task = asyncio.create_task(self._run_job_safely(job, trigger_type=trigger_type, trigger_context=trigger_context))
-                self._bg_tasks.add(task)
-                task.add_done_callback(self._bg_tasks.discard)
+            if trigger_type is None:
+                continue
+            # Reserve the running-jobs slot synchronously (before awaiting the
+            # task creation) so a second tick or webhook arriving right now
+            # cannot also pass the duplicate-check above and double-fire.
+            self._running_jobs.add(job.job_id)
+            task = asyncio.create_task(self._run_job_safely(job, trigger_type=trigger_type, trigger_context=trigger_context))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
 
     async def _run_job_safely(
         self,
@@ -201,14 +229,18 @@ class DaemonScheduler:
             trigger_type: How this execution was initiated.
             trigger_context: Optional metadata from the trigger.
         """
-        async with self._semaphore:
-            self._running_jobs.add(job.job_id)
-            try:
-                await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
-            except Exception:
-                logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
-            finally:
-                self._running_jobs.discard(job.job_id)
+        try:
+            async with self._semaphore:
+                # _running_jobs membership was already added by _tick before
+                # task creation; we re-assert here to handle the API path
+                # (where this method is invoked directly without _tick).
+                self._running_jobs.add(job.job_id)
+                try:
+                    await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
+                except Exception:
+                    logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
+        finally:
+            self._running_jobs.discard(job.job_id)
 
     async def _check_job_triggers(self, job: AmbientJob) -> tuple[TriggerType | None, dict[str, Any] | None]:
         """Check whether any trigger is currently due.

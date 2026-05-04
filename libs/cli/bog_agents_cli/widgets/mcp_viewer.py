@@ -189,25 +189,27 @@ class MCPViewerScreen(ModalScreen[None]):
     }
 
     MCPViewerScreen .mcp-tool-selected {
-        background: $primary;
+        /* Deep-marsh highlight + bright neon text — easier on the eyes
+         * than the previous full-neon background (which torched white
+         * letters with too much contrast). */
+        background: #1a4028;
         text-style: bold;
+        color: #8effb3;
     }
 
     MCPViewerScreen .mcp-tool-selected:hover {
-        background: $primary-lighten-1;
+        background: #1a4028;
     }
 
     MCPViewerScreen .mcp-empty {
-        color: $text-muted;
-        text-style: italic;
-        text-align: center;
-        margin-top: 2;
+        color: $text;
+        text-align: left;
+        margin: 1 2;
     }
 
     MCPViewerScreen .mcp-viewer-help {
-        height: 1;
+        height: auto;
         color: $text-muted;
-        text-style: italic;
         margin-top: 1;
         text-align: center;
     }
@@ -249,8 +251,20 @@ class MCPViewerScreen(ModalScreen[None]):
             with VerticalScroll(classes="mcp-list"):
                 if not self._server_info:
                     yield Static(
-                        "No MCP servers configured.\n"
-                        "Use `--mcp-config` to load servers.",
+                        "[bold]No MCP servers active in this session.[/bold]\n"
+                        "\n"
+                        "[dim]MCP servers extend the agent with external tools — "
+                        "Jira, GitHub, Postgres, AWS, Slack, and many more.[/dim]\n"
+                        "\n"
+                        "[bold]Browse + install (close this viewer first):[/bold]\n"
+                        "  [#66ff99]/mcp marketplace[/#66ff99]   browse the full catalog (35+ servers)\n"
+                        "  [#66ff99]/mcp featured[/#66ff99]      curated quick-pick list\n"
+                        "  [#66ff99]/mcp install <id>[/#66ff99]  install from the catalog\n"
+                        "  [#66ff99]/mcp add <name> <cmd>[/#66ff99] add any custom stdio server\n"
+                        "  [#66ff99]/mcp list[/#66ff99]          list configured servers\n"
+                        "  [#66ff99]/mcp help[/#66ff99]          full reference\n"
+                        "\n"
+                        "[dim]Once installed, restart the CLI for the agent to pick them up.[/dim]",
                         classes="mcp-empty",
                     )
                 else:
@@ -279,11 +293,21 @@ class MCPViewerScreen(ModalScreen[None]):
                             yield widget
                             flat_index += 1
 
-            help_text = (
-                f"{glyphs.arrow_up}/{glyphs.arrow_down} navigate"
-                f" {glyphs.bullet} Enter expand/collapse"
-                f" {glyphs.bullet} Esc close"
-            )
+            # Footer always shows controls + how to manage. Distinct
+            # from the empty-state body above so users with active
+            # servers ALSO see how to add more.
+            if self._server_info:
+                help_text = (
+                    f"[bold]{glyphs.arrow_up}/{glyphs.arrow_down}[/bold] navigate"
+                    f"  {glyphs.bullet}  [bold]Enter[/bold] expand/collapse"
+                    f"  {glyphs.bullet}  [bold]Esc[/bold] close"
+                    f"\n[dim]Manage servers: [#66ff99]/mcp marketplace[/#66ff99] "
+                    f"{glyphs.bullet} [#66ff99]/mcp install <id>[/#66ff99] "
+                    f"{glyphs.bullet} [#66ff99]/mcp remove <name>[/#66ff99] "
+                    f"{glyphs.bullet} [#66ff99]/mcp help[/#66ff99][/dim]"
+                )
+            else:
+                help_text = "[bold]Esc[/bold] close"
             yield Static(help_text, classes="mcp-viewer-help")
 
     async def on_mount(self) -> None:

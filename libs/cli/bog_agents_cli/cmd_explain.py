@@ -7,6 +7,7 @@ prompt for the /explain slash command.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess  # noqa: S404
 from pathlib import Path
@@ -101,10 +102,11 @@ def _find_definition(symbol: str, cwd: Path) -> tuple[Path, int] | None:
     """
     tool = _grep_tool()
     # Build a pattern that matches common definition keywords
+    sym = re.escape(symbol)
     pattern = (
-        rf"^\s*(def {symbol}|class {symbol}|function {symbol}|"
-        rf"const {symbol}|type {symbol}|interface {symbol}|"
-        rf"fn {symbol}|func {symbol})[(\s{{]"
+        rf"^\s*(def {sym}|class {sym}|function {sym}|"
+        rf"const {sym}|type {sym}|interface {sym}|"
+        rf"fn {sym}|func {sym})[(\s{{]"
     )
 
     if tool == "rg":
@@ -151,9 +153,9 @@ def _find_callers(
     tool = _grep_tool()
 
     if tool == "rg":
-        cmd = ["rg", "--line-number", "--no-heading", symbol, str(cwd)]
+        cmd = ["rg", "--line-number", "--no-heading", "-F", symbol, str(cwd)]
     else:
-        cmd = ["grep", "-rn", "--include=*.*", symbol, str(cwd)]
+        cmd = ["grep", "-rn", "--include=*.*", "-F", symbol, str(cwd)]
 
     try:
         result = subprocess.run(  # noqa: S603

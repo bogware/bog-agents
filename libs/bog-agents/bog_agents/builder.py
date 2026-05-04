@@ -595,8 +595,12 @@ class AgentBuilder:
         sbx = self._config.sandbox
         if sbx.backend is not None:
             kwargs["backend"] = sbx.backend
-        if sbx.allow_dangerous:
-            kwargs["allow_dangerous"] = True
+        # Note: ``allow_dangerous`` is consumed at the *backend* layer
+        # (e.g. LocalShellBackend), not by ``create_agent`` directly. The
+        # builder accepts it for ergonomics but the value is only honored
+        # when the caller also constructs the sandbox backend themselves.
+        # Forwarding the flag as a top-level kwarg crashes ``create_agent``
+        # — drop it here and surface the limitation in the docstring.
 
         # Cost
         cost = self._config.cost
@@ -650,10 +654,11 @@ class AgentBuilder:
         if self._config.subagents:
             kwargs["subagents"] = list(self._config.subagents)
 
-        # MCP servers (passed as extra kwargs — no dedicated param yet)
-        if self._config.mcp_servers:
-            kwargs.setdefault("mcp_servers", [])
-            kwargs["mcp_servers"].extend(self._config.mcp_servers)
+        # MCP servers — there is no dedicated ``create_agent`` kwarg today,
+        # and forwarding ``mcp_servers=...`` crashes the early-validation in
+        # ``_resolve_feature_config``. Users wiring MCP must construct the
+        # corresponding middleware (``mcp_tools.load_mcp_tools_for_agents``)
+        # and pass it via ``with_middleware(...)`` for now.
 
         # Extra kwargs override everything above
         kwargs.update(self._config.extra_kwargs)

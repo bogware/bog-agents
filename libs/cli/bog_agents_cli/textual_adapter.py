@@ -609,6 +609,51 @@ def _build_interrupted_ai_message(
     )
 
 
+async def _evaluate_auto_mode_batch(
+    action_requests: list[dict],
+) -> bool:
+    """Evaluate a batch of tool-call requests under auto mode.
+
+    Runs the rule engine over every request in the batch. Falls back to Haiku
+    for any request whose verdict has ``rule_source == "default"``. Returns
+    ``True`` when all requests are safe to auto-approve, ``False`` if any
+    should surface an approval dialog.
+
+    Args:
+        action_requests: List of tool-call request dicts (each has ``name``
+            and ``args`` keys).
+
+    Returns:
+        True when the entire batch can be auto-approved, False otherwise.
+    """
+    from bog_agents_cli.auto_mode import (
+        AutoDecision,
+        AutoModeRuleEngine,
+        haiku_risk_eval,
+        load_auto_mode_settings,
+    )
+
+    am_settings = load_auto_mode_settings()
+    engine = AutoModeRuleEngine(am_settings)
+
+    for req in action_requests:
+        t_name = req.get("name", "")
+        t_args = req.get("args", {}) or {}
+        if not isinstance(t_args, dict):
+            t_args = {}
+        verdict = engine.evaluate(t_name, t_args)
+        if verdict.decision == AutoDecision.ASK:
+            return False
+        if verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
+            is_risky, _reason = await haiku_risk_eval(
+                t_name, t_args, model=am_settings.haiku_eval.model
+            )
+            if is_risky:
+                return False
+
+    return True
+
+
 async def execute_task_textual(
     user_input: str,
     agent: Any,  # noqa: ANN401  # Dynamic agent graph type
@@ -1318,7 +1363,62 @@ async def execute_task_textual(
                 for interrupt_id, hitl_request in list(pending_interrupts.items()):
                     action_requests = hitl_request["action_requests"]
 
-                    if session_state.auto_approve:
+                    # Project-local pre-tool harness hooks run BEFORE any
+                    # approval logic. A hook can block a tool call (we
+                    # synthesize a rejection decision) or rewrite the
+                    # tool args (the modified args replace what the user
+                    # sees in the approval menu).
+                    from bog_agents_cli.hooks import dispatch_tool_pre_hook
+
+                    blocked_indexes: list[int] = []
+                    for i, req in enumerate(list(action_requests)):
+                        decision_dict = await dispatch_tool_pre_hook(
+                            req.get("name", ""),
+                            req.get("args", {}) or {},
+                        )
+                        if not isinstance(decision_dict, dict):
+                            continue
+                        action = decision_dict.get("action")
+                        if action == "block":
+                            blocked_indexes.append(i)
+                        elif action == "modify":
+                            new_args = decision_dict.get("args")
+                            if isinstance(new_args, dict):
+                                req["args"] = new_args
+
+                    if blocked_indexes:
+                        decisions = []
+                        for i, _ in enumerate(action_requests):
+                            decisions.append(
+                                RejectDecision(
+                                    type="reject",
+                                    message="blocked by .bog-agents/hooks/pre-tool",
+                                )
+                                if i in blocked_indexes
+                                else ApproveDecision(type="approve")
+                            )
+                        resume_payload[interrupt_id] = {"decisions": decisions}
+                        continue
+
+                    # ``always_ask`` is the paranoid-mode flag — when set it
+                    # overrides ``auto_approve`` so EVERY tool call still
+                    # surfaces an approval menu. Used for high-stakes
+                    # sessions where the user wants to inspect each action.
+                    always_ask = bool(getattr(session_state, "always_ask", False))
+                    auto_mode = bool(getattr(session_state, "auto_mode", False))
+
+                    # Determine whether to skip the approval dialog entirely.
+                    # Priority: always_ask > auto_mode > auto_approve > ask.
+                    should_auto_approve = False
+                    if session_state.auto_approve and not always_ask:
+                        should_auto_approve = True
+                    elif auto_mode and not always_ask:
+                        # Smart auto-mode: rule engine + optional Haiku eval.
+                        should_auto_approve = await _evaluate_auto_mode_batch(
+                            action_requests
+                        )
+
+                    if should_auto_approve:
                         decisions: list[HITLDecision] = [
                             ApproveDecision(type="approve") for _ in action_requests
                         ]

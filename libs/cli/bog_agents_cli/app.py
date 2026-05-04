@@ -15,6 +15,7 @@ import webbrowser
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
@@ -318,7 +319,13 @@ class PreviewServerRecord:
 
 @dataclass(slots=True)
 class RecordingSessionState:
-    """Ephemeral replay-recording state for `/record`."""
+    """Ephemeral replay-recording state for `/record`.
+
+    A live :class:`bog_agents_cli.replay.SessionRecorder` is attached and
+    fed by ``_mount_message`` so the recording captures user prompts, AI
+    text, AND tool calls as they happen. ``stop()``/``finalize()`` produce
+    the YAML artifact.
+    """
 
     session_id: str
     name: str
@@ -326,20 +333,48 @@ class RecordingSessionState:
     cwd: str
     started_at: float
     baseline_message_count: int = 0
+    # Live recorder. Optional so older code paths that only stored the
+    # state can keep working; new code always sets it.
+    recorder: Any | None = None
 
 
 class TextualTokenTracker:
-    """Token tracker that updates the status bar."""
+    """Token tracker that updates the status bar.
+
+    Also fires the optional ``warn_callback`` whenever utilization crosses
+    one of the configured thresholds (default: 70 / 80 / 90 %). Each
+    threshold is fired at most once per crossing — if usage drops back
+    below a threshold (e.g. after ``/compact``), the threshold re-arms.
+    """
+
+    DEFAULT_WARN_THRESHOLDS: tuple[int, ...] = (70, 80, 90)
 
     def __init__(
         self,
         update_callback: Callable[[int], None],
         hide_callback: Callable[[], None] | None = None,
+        *,
+        context_window: int = 0,
+        warn_callback: Callable[[int, int], None] | None = None,
+        warn_thresholds: tuple[int, ...] = DEFAULT_WARN_THRESHOLDS,
     ) -> None:
         """Initialize with callbacks to update the display."""
         self._update_callback = update_callback
         self._hide_callback = hide_callback
         self.current_context = 0
+        self._context_window = context_window
+        self._warn_callback = warn_callback
+        self._warn_thresholds = tuple(sorted(set(warn_thresholds)))
+        self._fired_thresholds: set[int] = set()
+
+    def set_context_window(self, size: int) -> None:
+        """Set the context window in tokens. ``0`` disables warnings."""
+        self._context_window = max(0, int(size))
+        self._fired_thresholds.clear()
+
+    def set_warn_callback(self, cb: Callable[[int, int], None] | None) -> None:
+        """Replace the threshold callback (None disables warnings)."""
+        self._warn_callback = cb
 
     def add(self, total_tokens: int, _output_tokens: int = 0) -> None:
         """Update token count from a response.
@@ -350,11 +385,29 @@ class TextualTokenTracker:
         """
         self.current_context = total_tokens
         self._update_callback(self.current_context)
+        self._maybe_warn()
+
+    def _maybe_warn(self) -> None:
+        """Fire the warn callback when a new threshold is crossed."""
+        if not self._warn_callback or self._context_window <= 0:
+            return
+        pct = int((self.current_context / self._context_window) * 100)
+        # Re-arm: drop fired thresholds the user has fallen back below.
+        self._fired_thresholds = {t for t in self._fired_thresholds if pct >= t}
+        for threshold in self._warn_thresholds:
+            if pct >= threshold and threshold not in self._fired_thresholds:
+                self._fired_thresholds.add(threshold)
+                try:
+                    self._warn_callback(pct, threshold)
+                except Exception:
+                    logger.debug("token-warn callback failed", exc_info=True)
+                break  # one warning per .add() call
 
     def reset(self) -> None:
         """Reset token count."""
         self.current_context = 0
         self._update_callback(0)
+        self._fired_thresholds.clear()
 
     def hide(self) -> None:
         """Hide the token display (e.g., during streaming)."""
@@ -400,7 +453,7 @@ def _read_clipboard_image() -> bytes | None:
                 with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                     tmp = f.name
                 result = subprocess.run(  # noqa: S603
-                    ["pngpaste", tmp], capture_output=True, check=False
+                    ["pngpaste", tmp], capture_output=True, check=False, timeout=5
                 )
                 if result.returncode == 0:
                     data = Path(tmp).read_bytes()
@@ -413,6 +466,7 @@ def _read_clipboard_image() -> bytes | None:
                 ["wl-paste", "--type", "image/png"],
                 capture_output=True,
                 check=False,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout:
                 return result.stdout
@@ -422,6 +476,7 @@ def _read_clipboard_image() -> bytes | None:
                 ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
                 capture_output=True,
                 check=False,
+                timeout=5,
             )
             if result.returncode == 0 and result.stdout:
                 return result.stdout
@@ -436,9 +491,19 @@ async def _get_current_git_branch() -> str | None:
     Returns:
         Branch name string, or None.
     """
+    # Resolve ``git`` via PATH explicitly. ``asyncio.create_subprocess_exec``
+    # inherits the same PATH-lookup quirks as ``Popen`` and on Windows
+    # CPython sometimes fails to locate ``git.exe`` from a bare ``"git"``
+    # argv0 — same root cause that bit ``non_interactive._git_dirty_paths``
+    # earlier and was fixed there with ``shutil.which``.
+    import shutil
+
+    git_path = shutil.which("git")
+    if git_path is None:
+        return None
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git",
+            git_path,
             "rev-parse",
             "--abbrev-ref",
             "HEAD",
@@ -461,15 +526,25 @@ class TextualSessionState:
         self,
         *,
         auto_approve: bool = False,
+        always_ask: bool = False,
+        auto_mode: bool = False,
         thread_id: str | None = None,
     ) -> None:
         """Initialize session state.
 
         Args:
-            auto_approve: Whether to auto-approve tool calls
+            auto_approve: Whether to auto-approve tool calls.
+            always_ask: When True, every tool call requires human approval —
+                overrides ``auto_approve`` and the shell allow-list. Used by
+                the ``/always-ask`` paranoid mode for high-stakes sessions.
+            auto_mode: When True, smart auto-approval is active — tool calls
+                are evaluated by the rule engine; only risky ones surface an
+                approval dialog. Overridden by ``always_ask``.
             thread_id: Optional thread ID (generates UUID7 if not provided)
         """
         self.auto_approve = auto_approve
+        self.always_ask = always_ask
+        self.auto_mode = auto_mode
         self.thread_id = thread_id or _new_thread_id()
 
     def reset_thread(self) -> str:
@@ -660,86 +735,10 @@ class BogAgentsApp(App):
         Binding("3", "approval_no", "No", show=False),
         Binding("n", "approval_no", "No", show=False),
     ]
-    _COMMAND_HANDLER_NAMES: ClassVar[dict[str, str]] = {
-        "/agent": "_handle_agent_command",
-        "/audit": "_handle_audit_command",
-        "/background": "_dispatch_background_command",
-        "/branch": "_handle_branch_command",
-        "/changelog": "_handle_reference_url_command",
-        "/clear": "_handle_clear_command",
-        "/commands": "_handle_help_command",
-        "/compact": "_handle_compact_command",
-        "/compress": "_handle_compress_command",
-        "/context": "_handle_tokens_command",
-        "/cost": "_handle_tokens_command",
-        "/dashboard": "_dispatch_dashboard_command",
-        "/diff": "_handle_diff_command",
-        "/docs": "_handle_reference_url_command",
-        "/doctor": "_handle_doctor_command",
-        "/effort": "_handle_effort_command",
-        "/extensions": "_handle_plugin_command",
-        "/feedback": "_handle_reference_url_command",
-        "/harbor": "_handle_harbor_command",
-        "/jobs": "_handle_jobs_command",
-        "/langsmith": "_handle_langsmith_command",
-        "/health": "_handle_health_command",
-        "/help": "_handle_help_command",
-        "/image": "_handle_image_command",
-        "/init": "_dispatch_init_command",
-        "/infra": "_handle_infra_command",
-        "/keybindings": "_handle_keybindings_command",
-        "/logs": "_dispatch_logs_command",
-        "/mcp": "_handle_mcp_command",
-        "/migrate": "_handle_migrate_command",
-        "/model": "_handle_model_command",
-        "/onboard": "_dispatch_onboard_command",
-        "/pipeline": "_handle_pipeline_command",
-        "/plan": "_handle_plan_command",
-        "/permissions": "_handle_permissions_command",
-        "/plugin": "_handle_plugin_command",
-        "/pr": "_handle_pr_command",
-        "/prompt": "_handle_prompt_command",
-        "/preview": "_handle_preview_command",
-        "/profile": "_handle_profile_command",
-        "/q": "_handle_quit_command",
-        "/quit": "_handle_quit_command",
-        "/record": "_handle_record_command",
-        "/recommend": "_dispatch_recommend_command",
-        "/reload": "_handle_reload_command",
-        "/repomap": "_handle_repomap_command",
-        "/remember": "_handle_remember_command",
-        "/remote": "_handle_remote_command",
-        "/replay": "_handle_replay_command",
-        "/rewind": "_handle_rewind_command",
-        "/resolve": "_handle_resolve_command",
-        "/resume": "_handle_resume_command",
-        "/review": "_handle_review_command",
-        "/session": "_handle_session_command",
-        "/settings": "_handle_settings_command",
-        "/silent": "_handle_silent_command",
-        "/verbose": "_handle_verbose_command",
-        "/skills": "_handle_skills_command",
-        "/test": "_handle_test_command",
-        "/team": "_handle_team_command",
-        "/think": "_handle_think_command",
-        "/threads": "_handle_threads_command",
-        "/tokens": "_handle_tokens_command",
-        "/trace": "_handle_trace_command",
-        "/rules": "_handle_rules_command",
-        "/search": "_handle_search_command",
-        "/undo": "_handle_undo_command",
-        "/vars": "_handle_vars_command",
-        "/version": "_handle_version_command",
-        "/workspace": "_handle_workspace_command",
-        "/worktree": "_handle_worktree_command",
-        "/worktrees": "_handle_worktrees_command",
-        "/benchmark": "_handle_benchmark_command",
-        "/build": "_handle_build_command",
-        "/checkpoint": "_handle_checkpoint_command",
-        "/explain": "_handle_explain_command",
-        "/index": "_handle_index_command",
-        "/ambient": "_handle_ambient_command",
-    }
+    # Slash-command dispatch lives in ``bog_agents_cli/commands/`` — see the
+    # COMMAND_HANDLER_MAP populated by ``commands._registry.discover``. This
+    # class no longer carries a literal mapping so adding a slash command
+    # only requires editing the relevant module under ``commands/``.
 
     class ServerReady(Message):
         """Posted by the background server-startup worker on success."""
@@ -769,6 +768,8 @@ class BogAgentsApp(App):
         assistant_id: str | None = None,
         backend: CompositeBackend | None = None,
         auto_approve: bool = False,
+        always_ask: bool = False,
+        auto_mode: bool = False,
         auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
@@ -788,6 +789,12 @@ class BogAgentsApp(App):
             assistant_id: Agent identifier for memory storage
             backend: Backend for file operations
             auto_approve: Whether to start with auto-approve enabled
+            always_ask: Whether to start with paranoid always-ask enabled —
+                forces a human approval for every tool call regardless of
+                auto-approve or shell allow-list policy.
+            auto_mode: Whether to start with smart auto-mode enabled — tool
+                calls are evaluated by the rule engine; only risky ones
+                surface an approval dialog. Overridden by ``always_ask``.
             auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
@@ -813,6 +820,8 @@ class BogAgentsApp(App):
         self._assistant_id = assistant_id or "agent"
         self._backend = backend
         self._auto_approve = auto_approve
+        self._always_ask = always_ask
+        self._auto_mode = auto_mode
         self._auto_commit = auto_commit
         self._cwd = str(cwd) if cwd else str(Path.cwd())
         # Avoid collision with App._thread_id
@@ -834,7 +843,10 @@ class BogAgentsApp(App):
         self._active_team_name: str | None = None
         self._active_profile_name: str | None = None
         self._active_profile_prompt: str | None = None
+        self._active_persona_id: str | None = None
+        self._active_persona_addendum: str | None = None
         self._plan_mode_enabled = False
+        self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
         self._base_auto_approve = auto_approve
         self._base_model_spec = (
@@ -847,6 +859,8 @@ class BogAgentsApp(App):
         self._ui_adapter: TextualUIAdapter | None = None
         self._pending_approval_widget: ApprovalMenu | None = None
         self._pending_ask_user_widget: AskUserMenu | None = None
+        # Strong refs to background asyncio tasks so they aren't GC'd mid-flight.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         # Agent task tracking for interruption
         self._agent_worker: Worker[None] | None = None
         self._agent_running = False
@@ -928,6 +942,7 @@ class BogAgentsApp(App):
         """Initialize components after mount."""
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._chat_input = self.query_one("#input-area", ChatInput)
+        self._install_termination_signal_handlers()
 
         # Set initial auto-approve state
         if self._auto_approve:
@@ -939,12 +954,19 @@ class BogAgentsApp(App):
         # Create session state
         self._session_state = TextualSessionState(
             auto_approve=self._auto_approve,
+            always_ask=self._always_ask,
+            auto_mode=self._auto_mode,
             thread_id=self._lc_thread_id,
         )
 
-        # Create token tracker that updates status bar
+        # Create token tracker that updates status bar AND fires a
+        # context-utilization warning at 70/80/90% so users can /compact
+        # before the next call gets truncated.
         self._token_tracker = TextualTokenTracker(
-            self._update_tokens, self._hide_tokens
+            self._update_tokens,
+            self._hide_tokens,
+            context_window=self._resolve_context_window(),
+            warn_callback=self._emit_token_warning,
         )
 
         # Create UI adapter if agent is provided (deferred when connecting)
@@ -1007,6 +1029,30 @@ class BogAgentsApp(App):
             group="startup-vault-check",
         )
 
+        # Start the Peat job scheduler. Scheduled jobs persist as YAML; the
+        # scheduler ticks while the CLI is open and dispatches due jobs
+        # through ``_run_peat_unattended`` — which reuses the live agent
+        # server (no subprocess spawning), serializes fires through a
+        # single-flight lock, captures the final AI text into the run
+        # artifact, and writes an inbox entry.
+        self._peat_scheduler = None
+        # Lock so two scheduled jobs don't run on the agent at the same
+        # time. The interactive UI also takes this lock when it dispatches
+        # interactive prompts, so a scheduled job will simply wait for the
+        # user's current turn to complete before firing.
+        self._peat_run_lock = asyncio.Lock()
+        try:
+            from bog_agents_cli.peat import PeatScheduler
+
+            self._peat_scheduler = PeatScheduler(
+                settings.user_agents_dir,
+                runner=self._run_peat_unattended,
+            )
+            await self._peat_scheduler.start()
+        except Exception:
+            logger.warning("peat scheduler failed to start", exc_info=True)
+            self._peat_scheduler = None
+
         # Warn about missing optional tools (advisory only — never block startup)
         try:
             from bog_agents_cli.main import (
@@ -1038,12 +1084,83 @@ class BogAgentsApp(App):
             if self._initial_prompt and self._initial_prompt.strip():
                 prompt = self._initial_prompt
                 self.call_after_refresh(
-                    lambda: asyncio.create_task(self._handle_user_message(prompt))
+                    lambda: self._spawn(self._handle_user_message(prompt))
                 )
             elif self._lc_thread_id and self._agent:
                 self.call_after_refresh(
-                    lambda: asyncio.create_task(self._load_thread_history())
+                    lambda: self._spawn(self._load_thread_history())
                 )
+
+    def _spawn(self, coro: Awaitable[Any]) -> asyncio.Task[Any]:
+        """Create an asyncio task and retain a strong reference to it.
+
+        Plain ``asyncio.create_task(...)`` only keeps a weak ref via the
+        running loop, so a fire-and-forget task can be garbage-collected
+        before completion. Tasks routed through this helper survive until
+        they finish.
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    def _install_termination_signal_handlers(self) -> None:
+        """Wire SIGTERM (and SIGHUP on POSIX) to a clean app exit.
+
+        Textual already handles SIGINT (Ctrl+C). For ``systemctl stop``,
+        container shutdown, or ``kill <pid>`` we want to drain in-flight
+        work via ``self.exit()`` rather than have the harness die abruptly.
+        ``loop.add_signal_handler`` is unavailable on Windows; we silently
+        skip there.
+        """
+        import signal as _signal
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _on_term() -> None:
+            logger.info("received termination signal — triggering clean exit")
+            try:
+                self.exit()
+            except Exception:
+                logger.exception("error during signal-triggered exit")
+
+        for sig_name in ("SIGTERM", "SIGHUP"):
+            sig = getattr(_signal, sig_name, None)
+            if sig is None:
+                continue
+            try:
+                loop.add_signal_handler(sig, _on_term)
+            except (NotImplementedError, RuntimeError, OSError):
+                # Windows / restricted environments: best-effort.
+                pass
+
+    async def on_unmount(self) -> None:
+        """Cancel any tracked background tasks before the app tears down."""
+        # Stop the Peat scheduler first so its loop unwinds cleanly before
+        # we cancel the rest of the background-task pool.
+        scheduler = getattr(self, "_peat_scheduler", None)
+        if scheduler is not None:
+            try:
+                await scheduler.stop()
+            except Exception:
+                logger.warning("peat scheduler failed to stop cleanly", exc_info=True)
+
+        if not self._background_tasks:
+            return
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        # Give cancelled tasks a chance to settle so we don't lose log lines.
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self._background_tasks, return_exceptions=True),
+                timeout=2.0,
+            )
+        except TimeoutError:
+            logger.warning("Background tasks did not settle within 2s of unmount")
 
     def _init_agent_adapter(self) -> None:
         """Create the UI adapter and kick off background cache prewarming."""
@@ -1168,12 +1285,10 @@ class BogAgentsApp(App):
         if self._initial_prompt and self._initial_prompt.strip():
             prompt = self._initial_prompt
             self.call_after_refresh(
-                lambda: asyncio.create_task(self._handle_user_message(prompt))
+                lambda: self._spawn(self._handle_user_message(prompt))
             )
         elif self._lc_thread_id and self._agent:
-            self.call_after_refresh(
-                lambda: asyncio.create_task(self._load_thread_history())
-            )
+            self.call_after_refresh(lambda: self._spawn(self._load_thread_history()))
 
         # Drain any messages the user typed while the server was starting.
         # (If an initial prompt exists, its cleanup path will drain the queue.)
@@ -1181,7 +1296,7 @@ class BogAgentsApp(App):
             self._initial_prompt and self._initial_prompt.strip()
         ):
             self.call_after_refresh(
-                lambda: asyncio.create_task(self._process_next_from_queue())
+                lambda: self._spawn(self._process_next_from_queue())
             )
 
     def on_bog_agents_app_server_start_failed(self, event: ServerStartFailed) -> None:
@@ -1535,8 +1650,12 @@ class BogAgentsApp(App):
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future = loop.create_future()
 
+        # ``always-ask`` mode disables every auto-approval bypass so the
+        # user sees every action before it runs.
+        always_ask_active = bool(self._session_state and self._session_state.always_ask)
+
         # Check if ALL actions in the batch are auto-approvable shell commands
-        if settings.shell_allow_list and action_requests:
+        if not always_ask_active and settings.shell_allow_list and action_requests:
             all_auto_approved = True
             approved_commands = []
 
@@ -1822,6 +1941,8 @@ class BogAgentsApp(App):
         Raises:
             CancelledError: If the command is interrupted by the user.
         """
+        from bog_agents_cli.config import child_process_env
+
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -1829,6 +1950,7 @@ class BogAgentsApp(App):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._cwd,
                 start_new_session=(sys.platform != "win32"),
+                env=child_process_env(),
             )
             self._shell_process = proc
 
@@ -2076,8 +2198,15 @@ class BogAgentsApp(App):
     def _resolve_command_handler(
         self, command_name: str
     ) -> Callable[[str], Awaitable[None]] | None:
-        """Return the bound handler for a slash command."""
-        handler_name = self._COMMAND_HANDLER_NAMES.get(command_name)
+        """Return the bound handler for a slash command.
+
+        Looks up ``command_name`` (or its alias) in the registry built by
+        ``bog_agents_cli/commands/_registry.discover``. The registry is the
+        single source of truth — there is no legacy map.
+        """
+        from bog_agents_cli.commands import COMMAND_HANDLER_MAP
+
+        handler_name = COMMAND_HANDLER_MAP.get(command_name)
         if handler_name is None:
             return None
         handler = getattr(self, handler_name, None)
@@ -2140,6 +2269,11 @@ class BogAgentsApp(App):
         parts: list[str] = []
         if self._active_profile_prompt:
             parts.append(self._active_profile_prompt)
+
+        # Inject the active persona (output-style) addendum so the agent
+        # speaks in the user's chosen voice without requiring a profile.
+        if self._active_persona_addendum:
+            parts.append(self._active_persona_addendum)
 
         # Inject team shared context if configured
         team_ctx = self._get_team_shared_context()
@@ -2768,14 +2902,15 @@ class BogAgentsApp(App):
         """Handle /mcp — MCP server marketplace and management.
 
         Usage:
-          /mcp                       — show active servers (viewer)
+          /mcp                       — open the live viewer (configured servers + tools)
+          /mcp marketplace           — browse the full catalog (24+ servers, all categories)
+          /mcp featured              — curated quick-pick list (jira, github, aws…)
           /mcp list                  — list configured servers in ~/.bog-agents/.mcp.json
-          /mcp catalog               — browse the full registry
-          /mcp search <query>        — search registry by keyword
-          /mcp install <id>          — install a server from the registry
+          /mcp search <query>        — search the catalog by keyword
+          /mcp install <id>          — install a server from the catalog
           /mcp add <name> <cmd> ...  — add a custom stdio server
           /mcp remove <name>         — remove a server from user config
-          /mcp info <id>             — show registry entry details
+          /mcp info <id>             — show catalog entry details
           /mcp trust                 — manage project stdio server trust
           /mcp help                  — show this help
 
@@ -2791,6 +2926,7 @@ class BogAgentsApp(App):
             server_exists,
         )
         from bog_agents_cli.mcp_registry import (
+            FEATURED_IDS,
             build_server_config,
             get_entry,
             list_categories,
@@ -2838,26 +2974,67 @@ class BogAgentsApp(App):
             )
             await self._mount_message(AppMessage("\n".join(lines)))
 
-        # ---- catalog ----
-        elif subcommand == "catalog":
+        # ---- catalog / marketplace / store / browse (aliases) ----
+        elif subcommand in {"catalog", "marketplace", "store", "browse", "all"}:
             entries = list_entries()
             categories = list_categories()
-            lines = [f"[bold]MCP Server Catalog[/bold] — {len(entries)} servers\n"]
+            lines = [
+                f"[bold #66ff99]MCP Marketplace[/bold #66ff99] — "
+                f"[bold]{len(entries)}[/bold] servers across "
+                f"[bold]{len(categories)}[/bold] categories\n"
+            ]
             for cat in categories:
                 cat_entries = [e for e in entries if e.category == cat]
-                lines.append(f"\n[bold yellow]{cat.upper()}[/bold yellow]")
+                if not cat_entries:
+                    continue
+                lines.append(
+                    f"\n[bold #ffd166]{cat.upper()}[/bold #ffd166] "
+                    f"[dim]({len(cat_entries)})[/dim]"
+                )
                 for e in cat_entries:
                     src_tag = (
                         f"[dim][{e.source}][/dim]" if e.source != "official" else ""
                     )
                     lines.append(
-                        f"  [cyan]{e.id:<22}[/cyan] {e.display_name:<20} {src_tag}\n"
+                        f"  [bold #66ff99]{e.id:<22}[/bold #66ff99] "
+                        f"{e.display_name:<24} {src_tag}\n"
                         f"    [dim]{e.description}[/dim]"
                     )
             lines.append(
+                "\n[dim]Install with [bold]/mcp install <id>[/bold]  ·  "
+                "Details with [bold]/mcp info <id>[/bold]  ·  "
+                "Search with [bold]/mcp search <query>[/bold]  ·  "
+                "Don't see what you need?  [bold]/mcp add <name> <command> <args...>[/bold] adds any custom stdio server.[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+
+        # ---- featured: curated quick-pick list ----
+        elif subcommand == "featured":
+            configured = list_servers()
+            lines = [
+                "[bold]Featured MCP servers[/bold] — curated quick-pick list\n",
+            ]
+            for server_id in FEATURED_IDS:
+                entry = get_entry(server_id)
+                if entry is None:
+                    continue
+                installed = (
+                    " [green]✓ installed[/green]" if server_id in configured else ""
+                )
+                env_hint = (
+                    f"  [dim]requires: {', '.join(entry.required_env)}[/dim]"
+                    if entry.required_env
+                    else ""
+                )
+                lines.append(
+                    f"  [cyan]{entry.id:<14}[/cyan] {entry.display_name:<22}{installed}\n"
+                    f"    [dim]{entry.description}[/dim]"
+                )
+                if env_hint:
+                    lines.append(env_hint)
+            lines.append(
                 "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
-                "Details with [bold]/mcp info <id>[/bold] · "
-                "Search with [bold]/mcp search <query>[/bold][/dim]"
+                "Browse everything with [bold]/mcp catalog[/bold][/dim]"
             )
             await self._mount_message(AppMessage("\n".join(lines)))
 
@@ -3116,6 +3293,7 @@ class BogAgentsApp(App):
                 AppMessage(
                     "[bold]/mcp[/bold] — MCP server marketplace\n\n"
                     "  [cyan]/mcp[/cyan]                      — open live server viewer\n"
+                    "  [cyan]/mcp featured[/cyan]             — curated quick-pick list\n"
                     "  [cyan]/mcp list[/cyan]                 — list configured servers\n"
                     "  [cyan]/mcp catalog[/cyan]              — browse full registry\n"
                     "  [cyan]/mcp search <query>[/cyan]       — search registry\n"
@@ -3124,12 +3302,24 @@ class BogAgentsApp(App):
                     "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
                     "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
                     "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
-                    "[dim]Popular: jira · github · slack · postgres · terraform · azure-devops[/dim]"
+                    "[dim]Featured: github · jira · linear · slack · postgres · aws · "
+                    "azure-devops · terraform · datadog · kubernetes · sentry · notion[/dim]"
                 )
             )
 
     async def _handle_model_command(self, command: str) -> None:
-        """Switch models or manage the default model."""
+        """Switch models or manage the default model.
+
+        Subcommands:
+            /model                          → open the picker
+            /model <spec>                   → switch active model
+            /model --default <spec>         → persist as default
+            /model --default --clear        → clear default
+            /model apply <spec>             → set the small "apply" model
+            /model apply --clear            → clear apply model
+            /model plan <spec>              → set the plan-mode model
+            /model plan --clear             → clear plan-mode model
+        """
         cmd = command.lower().strip()
         model_arg = None
         set_default = False
@@ -3142,6 +3332,14 @@ class BogAgentsApp(App):
                 await self._mount_message(UserMessage(command))
                 await self._mount_message(ErrorMessage(str(exc)))
                 return
+            # Apply / plan model subcommands — separate persisted slots
+            # so users can pair a cheap apply model with a strong primary.
+            for sub in ("apply", "plan"):
+                if raw_arg == sub or raw_arg.startswith(f"{sub} "):
+                    rest = raw_arg[len(sub) :].strip()
+                    await self._mount_message(UserMessage(command))
+                    await self._handle_model_slot_command(sub, rest)
+                    return
             if raw_arg.startswith("--default"):
                 set_default = True
                 model_arg = raw_arg[len("--default") :].strip() or None
@@ -3176,6 +3374,64 @@ class BogAgentsApp(App):
             return
 
         await self._show_model_selector(extra_kwargs=extra_kwargs)
+
+    async def _handle_model_slot_command(self, slot: str, arg: str) -> None:
+        """Persist or clear the apply / plan model slot.
+
+        Args:
+            slot: Either ``"apply"`` or ``"plan"``.
+            arg: Remainder after ``/model apply`` or ``/model plan``.
+                Empty → show current value. ``"--clear"`` → remove the
+                stored slot. Otherwise treated as a model spec.
+        """
+        from bog_agents_cli.model_config import (
+            ModelConfig,
+            save_apply_model,
+            save_plan_model,
+        )
+
+        config = ModelConfig.load()
+        if slot == "apply":
+            current = config.apply_model
+            saver = save_apply_model
+            label = "apply model"
+        else:
+            current = config.plan_model
+            saver = save_plan_model
+            label = "plan model"
+
+        arg = arg.strip()
+        if not arg:
+            if current:
+                await self._mount_message(
+                    AppMessage(f"Current {label}: [bold]{current}[/bold]")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(
+                        f"No {label} configured. "
+                        f"Set with [bold]/model {slot} provider:model[/bold]."
+                    )
+                )
+            return
+
+        if arg == "--clear":
+            if saver(""):
+                await self._mount_message(AppMessage(f"Cleared {label}."))
+            else:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Failed to clear {label}; check ~/.bog-agents/config.toml"
+                    )
+                )
+            return
+
+        if saver(arg):
+            await self._mount_message(AppMessage(f"Set {label} to [bold]{arg}[/bold]."))
+        else:
+            await self._mount_message(
+                ErrorMessage(f"Failed to save {label}; check ~/.bog-agents/config.toml")
+            )
 
     async def _handle_reload_command(self, command: str) -> None:
         """Reload config from environment variables and `.env`."""
@@ -3913,6 +4169,727 @@ class BogAgentsApp(App):
             announcement=announcement,
         )
 
+    async def _handle_qa_command(self, command: str) -> None:
+        """Handle `/qa` for acceptance-criteria QA plans.
+
+        Subcommands:
+            /qa list                       — list saved plans
+            /qa show <plan_id>             — show a plan summary
+            /qa new [--from-jira ID|--from-file P|--from-json J]
+                                          — author a new plan (asks the
+                                            agent to draft it)
+            /qa run <plan_id> [--var k=v ...] [--output FMT]
+                                          — execute a saved plan
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.qa import (
+            emit_artifact,
+            execute_plan,
+            find_plan,
+            list_plans,
+            load_acceptance_criteria,
+            load_plan,
+        )
+        from bog_agents_cli.vars import VarBundle
+        from bog_agents_cli.vault import get_default_vault
+
+        raw_arg = command.strip()[len("/qa") :].strip()
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError as exc:
+            await self._mount_message(
+                AppMessage(f"Could not parse /qa arguments: {exc}")
+            )
+            return
+        action = tokens[0].lower() if tokens else "list"
+
+        if action in {"help", "--help", "-h"}:
+            await self._mount_message(
+                AppMessage(
+                    "Usage:\n"
+                    "  /qa list\n"
+                    "  /qa show <plan_id>\n"
+                    "  /qa new [--from-file <path> | --from-json <text-or-path> | --from-jira <TICKET>]\n"
+                    "  /qa run <plan_id> [--var name=value ...] [--output markdown|json|stdout|jira-comment]\n"
+                )
+            )
+            return
+
+        project_root = Path(self._cwd)
+
+        if action in {"", "list"}:
+            plans = await asyncio.to_thread(list_plans, project_root)
+            if not plans:
+                # Empty state — instead of a dead end, walk the user through
+                # the three ways to author their first plan. The CLI is the
+                # *only* surface for creating QA plans (no separate UI), so
+                # we have to make the path obvious.
+                await self._mount_message(
+                    AppMessage(
+                        "[bold #66ff99]/qa[/bold #66ff99] — Acceptance-Criteria QA Harness\n"
+                        "\n"
+                        "[dim]No plans saved in this project yet — let's make one.[/dim]\n"
+                        "\n"
+                        "[bold]Author a new plan ([italic]pick whichever source you have[/italic]):[/bold]\n"
+                        "\n"
+                        "  [bold #66ff99]/qa new --from-jira PROJ-123[/bold #66ff99]\n"
+                        "      [dim]Pulls AC from a Jira ticket via your MCP Jira tool.[/dim]\n"
+                        "\n"
+                        "  [bold #66ff99]/qa new --from-file path/to/ac.md[/bold #66ff99]\n"
+                        "      [dim]Reads bullets / numbered list / Gherkin from a file.[/dim]\n"
+                        "\n"
+                        '  [bold #66ff99]/qa new --from-json \'["AC1 text", "AC2 text"]\'[/bold #66ff99]\n'
+                        "      [dim]Inline JSON or path to a JSON file.[/dim]\n"
+                        "\n"
+                        "Plans live at [cyan].bog-agents/qa-plans/<id>.yaml[/cyan] — edit them by hand to refine "
+                        "steps, verdicts, or vars.\n"
+                        "\n"
+                        "[dim]Once you have a plan:[/dim]\n"
+                        "  [bold]/qa show <id>[/bold]    — preview the plan\n"
+                        "  [bold]/qa run <id>[/bold]      — execute it (markdown / json / jira-comment artifact)\n"
+                        "\n"
+                        "[dim]Full reference:[/dim] [bold]/qa help[/bold]"
+                    )
+                )
+                return
+            lines = ["[bold #66ff99]QA plans in this project[/bold #66ff99]\n"]
+            for plan in plans:
+                lines.append(
+                    f"  [bold]{plan.name or plan.plan_id}[/bold] [dim]({plan.plan_id})[/dim] — "
+                    f"{len(plan.acceptance_criteria)} AC, {len(plan.steps)} step(s)"
+                )
+            lines.append(
+                "\n[dim]Run a plan with [bold]/qa run <id>[/bold] · "
+                "show details with [bold]/qa show <id>[/bold] · "
+                "author another with [bold]/qa new[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "show":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /qa show <plan_id>"))
+                return
+            path = await asyncio.to_thread(find_plan, project_root, tokens[1])
+            if path is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"No plan matched '{tokens[1]}'. "
+                        "Run [bold]/qa list[/bold] to see saved plans, or "
+                        "[bold]/qa new[/bold] to create one."
+                    )
+                )
+                return
+            plan = await asyncio.to_thread(load_plan, path)
+            lines = [
+                f"Plan: {plan.name or plan.plan_id}",
+                f"  ID: {plan.plan_id}",
+                f"  Product: {plan.product or '(unspecified)'}",
+                f"  File: {path}",
+                "",
+                f"Acceptance Criteria ({len(plan.acceptance_criteria)}):",
+            ]
+            for ac in plan.acceptance_criteria:
+                lines.append(f"  - {ac.id}: {ac.text[:120]}")
+            lines.append("")
+            lines.append(f"Steps ({len(plan.steps)}):")
+            for step in plan.steps:
+                acs = ",".join(step.ac) if step.ac else "(unbound)"
+                lines.append(f"  - {step.id} [{step.kind.value}] AC={acs}")
+            if plan.vars_spec:
+                lines.append("")
+                lines.append(f"Variables ({len(plan.vars_spec)}):")
+                for vname, vspec in plan.vars_spec.items():
+                    lines.append(f"  - {vname}: {vspec.get('type', 'string')}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action == "new":
+            # /qa new is agent-driven: we hand the agent the AC plus a
+            # prompt asking it to inspect the project and draft a plan.
+            # The agent writes the plan YAML to disk via its file tools;
+            # we just supply the seed data here.
+            from_file: str | None = None
+            from_json: str | None = None
+            from_jira: str | None = None
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--from-file" and i + 1 < len(tokens):
+                    from_file = tokens[i + 1]
+                    i += 2
+                elif t == "--from-json" and i + 1 < len(tokens):
+                    from_json = tokens[i + 1]
+                    i += 2
+                elif t == "--from-jira" and i + 1 < len(tokens):
+                    from_jira = tokens[i + 1]
+                    i += 2
+                else:
+                    i += 1
+
+            if from_jira:
+                # Jira ingestion runs through the live agent + MCP Jira
+                # tool — there's no offline fetch path. We construct a
+                # prompt that does fetch → parse → draft in one go, so
+                # the user only has to type the ticket id.
+                prompt = (
+                    f"Author a QA plan for ticket `{from_jira}` and the deployed "
+                    "product in this repository.\n\n"
+                    "## Step 1: Fetch the Jira ticket\n\n"
+                    f"Call the Jira MCP tool to retrieve `{from_jira}` (issue summary, "
+                    "description, and any acceptance-criteria comments). If no Jira MCP "
+                    "tool is configured, stop and tell me which one I need to enable.\n\n"
+                    "## Step 2: Extract acceptance criteria\n\n"
+                    "Parse out the AC list. Look in: the description (often under "
+                    "'Acceptance Criteria' or 'AC:' headers), checklist comments, and "
+                    "Gherkin Given/When/Then blocks.\n\n"
+                    "## Step 3: Draft the plan\n\n"
+                    "Write the plan to `.bog-agents/qa-plans/<plan_id>.yaml` using "
+                    "`write_file`. Each step has a `kind` (one of: agent, shell, http, "
+                    "mcp), `ac` (list of AC ids it tests), and a `verdict` block "
+                    "(`exit_code`, `status`, `contains`, `not_contains`, `regex`, "
+                    "`json_path`).\n\n"
+                    "Declare needed inputs in the `vars` block — use `type: secret` "
+                    "for credentials so they never get persisted. Inspect the repo "
+                    "to figure out how the product is deployed and what tools (curl, "
+                    "k6, vitest, etc.) make sense.\n"
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"Fetching {from_jira} from Jira and drafting QA plan..."
+                    )
+                )
+                await self._send_prompt_to_agent(prompt)
+                return
+
+            try:
+                acs = await asyncio.to_thread(
+                    load_acceptance_criteria,
+                    from_file=from_file,
+                    from_json=from_json,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"Could not load AC: {exc}"))
+                return
+            if not acs:
+                await self._mount_message(
+                    AppMessage(
+                        "No acceptance criteria provided. Pass --from-file <path>, "
+                        "--from-json <text-or-path>, or --from-jira <TICKET-ID>, or "
+                        "open a plan template via `/qa show` and copy/edit it."
+                    )
+                )
+                return
+            ac_block = "\n".join(f"- {ac.id}: {ac.text}" for ac in acs)
+            prompt = (
+                "Author a QA plan (YAML) for the deployed product in this repository.\n"
+                "Save it to `.bog-agents/qa-plans/<plan_id>.yaml` using the `write_file` tool.\n\n"
+                "## Acceptance criteria\n\n"
+                f"{ac_block}\n\n"
+                "## Plan format\n\n"
+                "Each step has a `kind` (one of: agent, shell, http, mcp), `ac` "
+                "(list of AC ids it tests), and a `verdict` block "
+                "(`exit_code`, `status`, `contains`, `not_contains`, `regex`, `json_path`).\n"
+                "Declare needed inputs in the `vars` block — use `type: secret` for "
+                "credentials so they never get persisted.\n\n"
+                "Inspect the repo to figure out *how* the product is deployed and "
+                "what tools (curl, k6, vitest, etc.) are reasonable to use. Ask me "
+                "for clarification if you need it.\n"
+            )
+            await self._mount_message(AppMessage("Drafting QA plan..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if action == "run":
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /qa run <plan_id> [--var k=v ...] [--output FMT]"
+                    )
+                )
+                return
+            cli_overrides: dict[str, str] = {}
+            output_fmt: str | None = None
+            i = 2
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--var" and i + 1 < len(tokens):
+                    pair = tokens[i + 1]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 2
+                elif t.startswith("--var="):
+                    pair = t[len("--var=") :]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 1
+                elif t in ("--output", "-o") and i + 1 < len(tokens):
+                    output_fmt = tokens[i + 1]
+                    i += 2
+                elif t.startswith("--output="):
+                    output_fmt = t[len("--output=") :]
+                    i += 1
+                else:
+                    i += 1
+            path = await asyncio.to_thread(find_plan, project_root, tokens[1])
+            if path is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"No plan matched '{tokens[1]}'. "
+                        "Run [bold]/qa list[/bold] to see saved plans, or "
+                        "[bold]/qa new[/bold] to create one."
+                    )
+                )
+                return
+            plan = await asyncio.to_thread(load_plan, path)
+            if output_fmt:
+                plan.artifact_format = output_fmt
+
+            bundle = VarBundle.from_dict(plan.vars_spec, vault=get_default_vault())
+            try:
+                await bundle.resolve(
+                    prompt=self._resolve_var_via_ask,
+                    prompt_secret=self._resolve_var_via_ask,
+                    cli_overrides=cli_overrides,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"QA cancelled: {exc}"))
+                return
+
+            await self._mount_message(
+                AppMessage(f"Running QA plan `{plan.name or plan.plan_id}`...")
+            )
+            result = await execute_plan(plan, bundle)
+            results_dir = project_root / ".bog-agents" / "qa-results"
+            text, artifact_path = await asyncio.to_thread(
+                emit_artifact,
+                plan,
+                result,
+                fmt=plan.artifact_format,
+                out_dir=results_dir,
+            )
+            verdict_glyph = {"pass": "✅", "fail": "❌", "inconclusive": "⚠️"}.get(
+                result.overall_verdict, "?"
+            )
+            summary = (
+                f"{verdict_glyph} QA verdict: **{result.overall_verdict.upper()}** "
+                f"({len(result.step_results)} step(s), {result.duration_s:.1f}s)\n"
+            )
+            if artifact_path:
+                summary += f"\nReport saved to: {artifact_path}\n"
+            await self._mount_message(AppMessage(summary))
+            if plan.artifact_format in ("stdout", "jira-comment"):
+                await self._mount_message(AppMessage(text))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage: /qa list | /qa show <id> | /qa new [...] | /qa run <id> [--var k=v] [--output FMT]"
+            )
+        )
+
+    async def _handle_peat_command(self, command: str) -> None:
+        """Handle ``/peat`` — chat with Peat, manage jobs, run digests/research.
+
+        Subcommands::
+
+            /peat                          # show inbox + status
+            /peat <free-form prompt>       # interactive chat with Peat
+            /peat schedule "<cron-or-@once> | <task>"
+            /peat jobs [list|show|enable|disable|delete] [<id>]
+            /peat run <job_id>             # fire a saved job now
+            /peat inbox [clear]            # show / clear buffered notifications
+            /peat research <topic> [--focus a,b,c]
+            /peat digest [--days N]
+            /peat config [show|reset]
+        """
+        from bog_agents_cli.peat import (
+            build_digest_prompt,
+            build_interactive_prompt,
+            build_research_prompt,
+            clear_inbox,
+            collect_digest_inputs,
+            delete_job,
+            find_job,
+            list_jobs,
+            load_job,
+            load_persona,
+            next_fire_time,
+            read_inbox,
+            save_job,
+        )
+        from bog_agents_cli.peat.jobs import PeatJob
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/peat") :].strip()
+
+        config_dir = settings.user_agents_dir
+        project_root = Path(self._cwd)
+        persona = await asyncio.to_thread(load_persona, project_root)
+
+        # `/peat` with no args → status panel.
+        if not raw_arg:
+            inbox = await asyncio.to_thread(read_inbox, config_dir)
+            jobs = await asyncio.to_thread(list_jobs, config_dir)
+            enabled = sum(1 for j in jobs if j.enabled and j.schedule)
+            lines = [
+                f"{persona.name}: {persona.role}",
+                "",
+                f"  Jobs: {len(jobs)} ({enabled} enabled & scheduled)",
+                f"  Inbox: {len(inbox)} unread",
+            ]
+            if inbox:
+                lines.append("")
+                lines.append("Recent notifications:")
+                for entry in inbox[-5:]:
+                    when = entry.get("when", "?")
+                    name = entry.get("job_name", entry.get("job_id", "?"))
+                    status = entry.get("status", "?")
+                    summary = (entry.get("summary") or "")[:80]
+                    lines.append(f"  [{when}] {name} — {status}: {summary}")
+            lines.append("")
+            lines.append(
+                'Try:  /peat <free prompt>  |  /peat schedule "<cron> | <task>"  |  '
+                "/peat jobs  |  /peat research <topic>  |  /peat digest"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        # First token decides whether this is a subcommand or free chat.
+        try:
+            tokens = shlex.split(raw_arg)
+        except ValueError:
+            tokens = raw_arg.split()
+        first = tokens[0].lower() if tokens else ""
+
+        # ----- subcommands ------------------------------------------------
+        if first in ("help", "--help", "-h"):
+            await self._mount_message(
+                AppMessage(
+                    "Usage:\n"
+                    "  /peat                                # status + inbox\n"
+                    "  /peat <free prompt>                  # chat with Peat\n"
+                    '  /peat schedule "<schedule> | <task>" # add a recurring or one-shot job\n'
+                    "  /peat jobs                           # list jobs\n"
+                    "  /peat jobs show <id>                 # job details\n"
+                    "  /peat jobs enable|disable|delete <id>\n"
+                    "  /peat run <id>                       # fire a job now\n"
+                    "  /peat inbox [clear]\n"
+                    "  /peat research <topic> [--focus a,b,c]\n"
+                    "  /peat digest [--days N]\n"
+                    "  /peat metrics                        # in-process counters this session\n"
+                    "  /peat config show|reset\n\n"
+                    "Schedule formats:\n"
+                    "  '0 9 * * 1-5'   (cron, 5 fields)\n"
+                    "  '@every 30m'    (or @every Ns|Nm|Nh|Nd)\n"
+                    "  '@once @ 2026-05-04T09:00:00Z'\n"
+                )
+            )
+            return
+
+        if first == "schedule":
+            # `/peat schedule "<schedule> | <task>"`
+            rest = raw_arg[len("schedule") :].strip()
+            if "|" not in rest:
+                await self._mount_message(
+                    AppMessage(
+                        'Usage: /peat schedule "<schedule> | <task>"\n'
+                        'Example: /peat schedule "0 9 * * 1-5 | summarize yesterday\'s QA results"'
+                    )
+                )
+                return
+            schedule_part, task_part = rest.split("|", 1)
+            schedule_str = schedule_part.strip().strip('"').strip("'")
+            task_str = task_part.strip()
+            if not schedule_str or not task_str:
+                await self._mount_message(
+                    AppMessage("Both schedule and task are required.")
+                )
+                return
+            nxt = next_fire_time(schedule_str)
+            if nxt is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Couldn't parse schedule {schedule_str!r}. Try a 5-field cron, "
+                        f"@every <Ns|Nm|Nh|Nd>, or @once @ <ISO-8601>."
+                    )
+                )
+                return
+            job = PeatJob(
+                job_id="",  # save_job assigns one
+                name=task_str[:60],
+                prompt=task_str,
+                schedule=schedule_str,
+                next_fire_at=nxt,
+            )
+            path = await asyncio.to_thread(save_job, config_dir, job)
+            from datetime import datetime
+
+            when = datetime.fromtimestamp(nxt, tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+            await self._mount_message(
+                AppMessage(
+                    f"Scheduled job `{job.job_id}` — next fires at {when}.\n"
+                    f"File: {path}"
+                )
+            )
+            return
+
+        if first == "jobs":
+            sub = tokens[1].lower() if len(tokens) > 1 else "list"
+            if sub == "list":
+                jobs = await asyncio.to_thread(list_jobs, config_dir)
+                if not jobs:
+                    await self._mount_message(AppMessage("No Peat jobs saved yet."))
+                    return
+                lines = ["Peat jobs:"]
+                for j in jobs:
+                    flag = "✓" if j.enabled else "✗"
+                    sched = j.schedule or "(manual)"
+                    lines.append(
+                        f"  [{flag}] {j.job_id} — {j.name or '(unnamed)'}  schedule={sched}  "
+                        f"runs={j.run_count}"
+                    )
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if len(tokens) < 3:
+                await self._mount_message(
+                    AppMessage("Usage: /peat jobs <show|enable|disable|delete> <id>")
+                )
+                return
+            target = tokens[2]
+            path = await asyncio.to_thread(find_job, config_dir, target)
+            if path is None:
+                await self._mount_message(AppMessage(f"No job matched '{target}'."))
+                return
+            if sub == "show":
+                job = await asyncio.to_thread(load_job, path)
+                lines = [
+                    f"Job: {job.name or job.job_id}",
+                    f"  ID: {job.job_id}",
+                    f"  Schedule: {job.schedule or '(manual)'}",
+                    f"  Enabled: {job.enabled}",
+                    f"  Runs: {job.run_count}  Failures-in-row: {job.consecutive_failures}",
+                    f"  File: {path}",
+                    "",
+                    "Task:",
+                    job.prompt[:1000],
+                ]
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if sub in ("enable", "disable"):
+                job = await asyncio.to_thread(load_job, path)
+                job.enabled = sub == "enable"
+                if job.enabled and job.schedule:
+                    nxt = next_fire_time(job.schedule)
+                    if nxt is not None:
+                        job.next_fire_at = nxt
+                await asyncio.to_thread(save_job, config_dir, job)
+                await self._mount_message(
+                    AppMessage(
+                        f"Job `{job.job_id}` is now {'enabled' if job.enabled else 'disabled'}."
+                    )
+                )
+                return
+            if sub == "delete":
+                deleted = await asyncio.to_thread(delete_job, config_dir, target)
+                if deleted is None:
+                    await self._mount_message(AppMessage(f"No job matched '{target}'."))
+                else:
+                    await self._mount_message(AppMessage(f"Deleted {deleted}"))
+                return
+            await self._mount_message(
+                AppMessage("Usage: /peat jobs <list|show|enable|disable|delete> [<id>]")
+            )
+            return
+
+        if first == "run":
+            if len(tokens) < 2:
+                await self._mount_message(AppMessage("Usage: /peat run <job_id>"))
+                return
+            path = await asyncio.to_thread(find_job, config_dir, tokens[1])
+            if path is None:
+                await self._mount_message(AppMessage(f"No job matched '{tokens[1]}'."))
+                return
+            job = await asyncio.to_thread(load_job, path)
+            # Fire interactively — re-use the chat path so the user can see
+            # output in the live transcript instead of via the inbox.
+            prompt = build_interactive_prompt(
+                persona, f"Run this saved task now:\n\n{job.prompt}"
+            )
+            await self._mount_message(
+                AppMessage(f"Running job `{job.job_id}` interactively...")
+            )
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "inbox":
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub == "clear":
+                n = await asyncio.to_thread(clear_inbox, config_dir)
+                await self._mount_message(AppMessage(f"Cleared {n} inbox entr(y|ies)."))
+                return
+            entries = await asyncio.to_thread(read_inbox, config_dir)
+            if not entries:
+                await self._mount_message(AppMessage("Peat inbox is empty."))
+                return
+            lines = [f"Peat inbox — {len(entries)} entr(y|ies):"]
+            for entry in entries[-30:]:
+                when = entry.get("when", "?")
+                name = entry.get("job_name", entry.get("job_id", "?"))
+                status = entry.get("status", "?")
+                summary = (entry.get("summary") or "")[:120]
+                lines.append(f"  [{when}] {name}  status={status}\n    {summary}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if first == "research":
+            if len(tokens) < 2:
+                await self._mount_message(
+                    AppMessage("Usage: /peat research <topic> [--focus a,b,c]")
+                )
+                return
+            # Extract --focus
+            focus = ""
+            topic_parts: list[str] = []
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t in ("--focus", "-f") and i + 1 < len(tokens):
+                    focus = tokens[i + 1]
+                    i += 2
+                elif t.startswith("--focus="):
+                    focus = t[len("--focus=") :]
+                    i += 1
+                else:
+                    topic_parts.append(t)
+                    i += 1
+            topic = " ".join(topic_parts).strip()
+            if not topic:
+                await self._mount_message(
+                    AppMessage("Usage: /peat research <topic> [--focus a,b,c]")
+                )
+                return
+            prompt = build_research_prompt(
+                persona, topic=topic, focus=focus, config_dir=config_dir
+            )
+            await self._mount_message(AppMessage(f"Researching `{topic}`..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "digest":
+            days = 7
+            i = 1
+            while i < len(tokens):
+                t = tokens[i]
+                if t == "--days" and i + 1 < len(tokens):
+                    try:
+                        days = max(1, int(tokens[i + 1]))
+                    except ValueError:
+                        await self._mount_message(
+                            AppMessage("--days requires an integer")
+                        )
+                        return
+                    i += 2
+                elif t.startswith("--days="):
+                    try:
+                        days = max(1, int(t[len("--days=") :]))
+                    except ValueError:
+                        await self._mount_message(
+                            AppMessage("--days requires an integer")
+                        )
+                        return
+                    i += 1
+                else:
+                    i += 1
+            inputs = await asyncio.to_thread(
+                collect_digest_inputs, config_dir, project_root=project_root, days=days
+            )
+            prompt = build_digest_prompt(persona, inputs=inputs, config_dir=config_dir)
+            await self._mount_message(AppMessage(f"Building {days}-day digest..."))
+            await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "metrics":
+            from bog_agents_cli._observability import get_metrics_snapshot
+
+            snapshot = get_metrics_snapshot()
+            counters = snapshot.get("counters") or {}
+            last_seen = snapshot.get("last_seen") or {}
+            if not counters:
+                await self._mount_message(
+                    AppMessage("No metrics recorded yet this session.")
+                )
+                return
+            from datetime import datetime
+
+            lines = ["Peat metrics — this CLI session", ""]
+            for event in sorted(counters):
+                labels = counters[event]
+                total = sum(labels.values())
+                last_ts = last_seen.get(event)
+                ago = ""
+                if last_ts:
+                    delta = max(0, int(time.time() - last_ts))
+                    if delta < 60:
+                        ago = f"  (last: {delta}s ago)"
+                    elif delta < 3600:
+                        ago = f"  (last: {delta // 60}m ago)"
+                    else:
+                        ago = f"  (last: {datetime.fromtimestamp(last_ts, tz=UTC).strftime('%Y-%m-%d %H:%M UTC')})"
+                lines.append(f"  {event}: {total}{ago}")
+                # Show top 3 label dimensions if there are any non-empty
+                # labels. Most events use the empty-string label.
+                non_empty = {k: v for k, v in labels.items() if k}
+                if non_empty:
+                    top = sorted(non_empty.items(), key=lambda kv: kv[1], reverse=True)[
+                        :3
+                    ]
+                    for label, count in top:
+                        lines.append(f"      {label}: {count}")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if first == "config":
+            sub = tokens[1].lower() if len(tokens) > 1 else "show"
+            if sub == "show":
+                lines = [
+                    f"Peat persona — {persona.name}",
+                    f"  role: {persona.role}",
+                    f"  sign_off: {persona.sign_off}",
+                    "",
+                    f"Goals ({len(persona.goals)}):",
+                ]
+                lines.extend(f"  - {g}" for g in persona.goals)
+                lines.append("")
+                lines.append(f"Style ({len(persona.style)}):")
+                lines.extend(f"  - {s}" for s in persona.style)
+                lines.append("")
+                lines.append(f"Restrictions ({len(persona.restrictions)}):")
+                lines.extend(f"  - {r}" for r in persona.restrictions)
+                lines.append("")
+                lines.append(
+                    "Override via ~/.bog-agents/settings.json under the `peat:` section. "
+                    "List fields extend defaults; pass `replace_<field>: true` to replace."
+                )
+                await self._mount_message(AppMessage("\n".join(lines)))
+                return
+            if sub == "reset":
+                await self._mount_message(
+                    AppMessage(
+                        "To reset Peat to defaults, remove the `peat:` block from your "
+                        "settings.json file(s). I won't edit settings for you."
+                    )
+                )
+                return
+            await self._mount_message(AppMessage("Usage: /peat config [show|reset]"))
+            return
+
+        # No subcommand match → free-form chat with Peat.
+        prompt = build_interactive_prompt(persona, raw_arg)
+        await self._send_prompt_to_agent(prompt)
+
     async def _handle_resolve_command(self, command: str) -> None:
         """Handle `/resolve` as a merge-conflict resolution workflow."""
         from bog_agents_cli.pr_cli import generate_conflict_resolution_prompt
@@ -3992,6 +4969,908 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage("Verbose mode on. Tool calls render with expandable details.")
         )
+
+    async def _handle_always_ask_command(self, command: str) -> None:
+        """``/always-ask`` — toggle paranoid approval mode.
+
+        Forces an approval menu for EVERY tool call regardless of
+        ``--auto-approve`` or the shell allow-list. Useful for unfamiliar
+        repos and high-stakes refactors. Pass ``on``, ``off``, or
+        ``status`` as an argument; bare ``/always-ask`` toggles.
+        """
+        await self._mount_message(UserMessage(command))
+        if self._session_state is None:
+            await self._mount_message(
+                ErrorMessage("/always-ask requires an active session.")
+            )
+            return
+
+        arg = command.strip().split(maxsplit=1)
+        verb = arg[1].strip().lower() if len(arg) > 1 else ""
+
+        if verb == "status":
+            current = "ON" if self._session_state.always_ask else "OFF"
+            await self._mount_message(AppMessage(f"always-ask is currently {current}"))
+            return
+
+        if verb == "on":
+            new_state = True
+        elif verb == "off":
+            new_state = False
+        elif verb in ("", "toggle"):
+            new_state = not self._session_state.always_ask
+        else:
+            await self._mount_message(AppMessage("Usage: /always-ask [on|off|status]"))
+            return
+
+        self._session_state.always_ask = new_state
+        self._always_ask = new_state
+        if new_state:
+            await self._mount_message(
+                AppMessage(
+                    "always-ask ON. Every tool call will require approval, "
+                    "overriding --auto-approve and the shell allow-list. "
+                    "Use /always-ask off to disable."
+                )
+            )
+        else:
+            await self._mount_message(
+                AppMessage(
+                    "always-ask OFF. Approvals fall back to the normal "
+                    "auto-approve / shell-allow-list policy."
+                )
+            )
+
+    async def _handle_auto_command(self, command: str) -> None:
+        """/auto — toggle smart auto-mode (rule-engine + haiku risk eval).
+
+        In auto mode the agent auto-approves tool calls that pass the built-in
+        rule engine. Uncertain shell commands are evaluated by Haiku; only
+        commands flagged as risky surface an approval dialog. ``/always-ask``
+        overrides auto mode.
+
+        Usage: /auto [on|off|status]
+        """
+        await self._mount_message(UserMessage(command))
+        if self._session_state is None:
+            await self._mount_message(ErrorMessage("/auto requires an active session."))
+            return
+
+        arg = command.strip().split(maxsplit=1)
+        verb = arg[1].strip().lower() if len(arg) > 1 else ""
+
+        if verb == "status":
+            current = "ON" if self._session_state.auto_mode else "OFF"
+            await self._mount_message(AppMessage(f"auto mode is currently {current}"))
+            return
+
+        if verb == "on":
+            new_state = True
+        elif verb == "off":
+            new_state = False
+        elif verb in ("", "toggle"):
+            new_state = not self._session_state.auto_mode
+        else:
+            await self._mount_message(AppMessage("Usage: /auto [on|off|status]"))
+            return
+
+        self._session_state.auto_mode = new_state
+        self._auto_mode = new_state
+        if new_state:
+            await self._mount_message(
+                AppMessage(
+                    "Auto mode ON. Tool calls are evaluated against built-in rules; "
+                    "risky shell commands are checked by Haiku before running. "
+                    "Use /auto off to return to interactive approval, or "
+                    "/always-ask to require approval for everything."
+                )
+            )
+        else:
+            await self._mount_message(
+                AppMessage("Auto mode OFF. Returning to interactive approval.")
+            )
+
+    async def _handle_standing_orders_command(self, command: str) -> None:
+        """``/standing-orders`` — curated daemon-job catalog.
+
+        Subcommands:
+            /standing-orders                  → list the catalog
+            /standing-orders show <id>        → show a template's full spec
+            /standing-orders install <id>     → POST to the daemon's /jobs API
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.daemon_client import add_daemon_job
+        from bog_agents_cli.standing_orders import CATALOG, get_order
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+
+        if not rest or rest in ("list", "ls"):
+            lines = ["[bold]Standing Orders[/bold] — curated daemon-job templates\n"]
+            for order in CATALOG:
+                tag_text = " ".join(f"[dim][{t}][/dim]" for t in order.tags)
+                lines.append(
+                    f"  [cyan]{order.id:<22}[/cyan] {order.title}\n"
+                    f"    [dim]{order.summary}[/dim]"
+                )
+                if tag_text:
+                    lines.append(f"    {tag_text}")
+            lines.append(
+                "\n[dim]Show details: [bold]/standing-orders show <id>[/bold]\n"
+                "Install: [bold]/standing-orders install <id>[/bold] (requires "
+                "the daemon running)[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        parts = rest.split(maxsplit=1)
+        verb = parts[0].lower()
+        order_id = parts[1].strip() if len(parts) > 1 else ""
+
+        if verb == "show":
+            if not order_id:
+                await self._mount_message(
+                    AppMessage("Usage: /standing-orders show <id>")
+                )
+                return
+            order = get_order(order_id)
+            if order is None:
+                await self._mount_message(
+                    ErrorMessage(f"No standing order with id '{order_id}'.")
+                )
+                return
+            import json
+
+            spec = json.dumps(order.to_create_payload(), indent=2)
+            notes = f"\n\n[dim]{order.notes}[/dim]" if order.notes else ""
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{order.title}[/bold] — {order.summary}\n\n"
+                    f"```json\n{spec}\n```{notes}"
+                )
+            )
+            return
+
+        if verb in ("install", "add"):
+            if not order_id:
+                await self._mount_message(
+                    AppMessage("Usage: /standing-orders install <id>")
+                )
+                return
+            order = get_order(order_id)
+            if order is None:
+                await self._mount_message(
+                    ErrorMessage(f"No standing order with id '{order_id}'.")
+                )
+                return
+            payload = order.to_create_payload()
+            try:
+                result = await add_daemon_job(payload)
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"Failed to call daemon: {exc}"))
+                return
+            if not result:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Daemon refused the job. Is it running? Try "
+                        "[bold]bog-agents daemon start[/bold] then retry."
+                    )
+                )
+                return
+            job_id = (
+                result.get("job_id") or result.get("id") or "?"
+                if isinstance(result, dict)
+                else "?"
+            )
+            extra = f"\n[dim]{order.notes}[/dim]" if order.notes else ""
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Installed[/green] standing order [bold]{order.id}[/bold] "
+                    f"as job [bold]{job_id}[/bold]. "
+                    "Use /ambient status to monitor."
+                    f"{extra}"
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /standing-orders [list|show <id>|install <id>]")
+        )
+
+    async def _handle_race_command(self, command: str) -> None:
+        """``/race`` — fan a prompt out to N models in parallel.
+
+        The lineup comes from ``[race].models`` in ``~/.bog-agents/config.toml``.
+        Without configuration we run the active model 3 times so the
+        feature is demoable out of the box.
+
+        Usage:
+            /race <prompt>          → run prompt against the configured lineup
+        """
+        await self._mount_message(UserMessage(command))
+
+        prefix = self._command_name(command)
+        prompt = command.strip()[len(prefix) :].strip()
+        if not prompt:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/race <prompt>[/bold]\n"
+                    "Configure jurors via [bold][race].models[/bold] in ~/.bog-agents/config.toml."
+                )
+            )
+            return
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.race import Racer, load_race_specs, pick_winner, run_race
+
+        specs = load_race_specs()
+        if not specs:
+            primary = self._model_override or settings.model_name
+            specs = [primary, primary, primary]
+
+        racers: list[Racer] = []
+        for i, spec in enumerate(specs, start=1):
+            if not spec:
+                continue
+            try:
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"Skipping racer #{i} ({spec}): {exc}")
+                )
+                continue
+            label = f"{spec}#{i}" if specs.count(spec) > 1 else str(spec)
+            racers.append(Racer(label=label, model=resolved.model))
+
+        if not racers:
+            await self._mount_message(
+                ErrorMessage(
+                    "No usable racers — configure [race].models in config.toml."
+                )
+            )
+            return
+
+        await self._set_spinner(f"Racing {len(racers)} models")
+        try:
+            report = await run_race(prompt, racers)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+
+        winner = pick_winner(report)
+        if winner is not None:
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
+                    f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+                )
+            )
+
+    async def _handle_jury_command(self, command: str) -> None:
+        """``/jury`` — multi-reviewer vote on the current diff.
+
+        Usage:
+            /jury                  → review the current ``git diff`` HEAD..
+            /jury staged           → review staged changes
+            /jury <ref>            → review ``git diff <ref>..HEAD``
+            /jury --paste          → paste a diff inline (next message)
+
+        The juror models come from ``[jury].models`` in
+        ``~/.bog-agents/config.toml``. If unset, the active model votes
+        three times — useful as a quick self-review.
+        """
+        await self._mount_message(UserMessage(command))
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        rest = body[len(prefix) :].strip()
+
+        diff_text = await self._gather_jury_diff(rest)
+        if diff_text is None:
+            return
+        if not diff_text.strip():
+            await self._mount_message(
+                AppMessage("No diff to review — working tree is clean.")
+            )
+            return
+
+        await self._run_jury_on_diff(diff_text)
+
+    async def _gather_jury_diff(self, arg: str) -> str | None:
+        """Gather a diff for /jury based on the user's argument.
+
+        Returns the diff string, or ``None`` if the command was rejected
+        and the caller has already mounted an error.
+        """
+        import subprocess  # noqa: S404  # bounded git invocation
+
+        from bog_agents_cli.config import settings
+
+        cwd = settings.project_root or Path(self._cwd)
+        if arg in ("--paste", "paste"):
+            await self._mount_message(
+                AppMessage(
+                    "Paste support is not yet wired up — pipe a diff to /jury via "
+                    "[bold]git diff | bog-agents -m '/jury <ref>'[/bold] or commit and use "
+                    "[bold]/jury <ref>[/bold]."
+                )
+            )
+            return None
+
+        cmd: list[str]
+        if arg in ("", "head", "working"):
+            cmd = ["git", "diff", "HEAD"]
+        elif arg == "staged":
+            cmd = ["git", "diff", "--cached"]
+        else:
+            # Treat as a ref. Reject anything that smells like a flag or
+            # contains shell metachars to keep argv hygiene tight.
+            if arg.startswith("-") or any(c in arg for c in " ;|&`$"):
+                await self._mount_message(
+                    ErrorMessage(f"Refusing suspicious /jury argument: {arg!r}")
+                )
+                return None
+            cmd = ["git", "diff", f"{arg}..HEAD"]
+
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,  # argv-form, no shell
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            await self._mount_message(ErrorMessage(f"git diff failed: {exc}"))
+            return None
+        if result.returncode != 0:
+            await self._mount_message(
+                ErrorMessage(
+                    f"git diff returned {result.returncode}: {result.stderr.strip()}"
+                )
+            )
+            return None
+        # ``capture_output=True, text=True`` always returns str; tighten the type
+        # so ty doesn't flag the bytes branch from subprocess.run's overload.
+        return str(result.stdout)
+
+    async def _run_jury_on_diff(self, diff_text: str) -> None:
+        """Build the juror list and run the jury, then mount the report."""
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.jury import load_jury_model_specs, run_jury
+
+        specs = load_jury_model_specs()
+        if not specs:
+            primary = self._model_override or settings.model_name
+            specs = [primary, primary, primary]
+
+        jurors: list[tuple[str, object]] = []
+        for i, spec in enumerate(specs, start=1):
+            if not spec:
+                continue
+            try:
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+            except Exception as exc:
+                await self._mount_message(
+                    AppMessage(f"Skipping juror {i} ({spec}): {exc}")
+                )
+                continue
+            label = f"{spec}#{i}" if specs.count(spec) > 1 else str(spec)
+            jurors.append((label, resolved.model))
+
+        if not jurors:
+            await self._mount_message(
+                ErrorMessage(
+                    "No usable jurors — configure [jury].models in config.toml."
+                )
+            )
+            return
+
+        await self._set_spinner(f"Polling {len(jurors)} jurors")
+        try:
+            report = await run_jury(diff_text, jurors)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/jury failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+
+    async def _handle_teach_command(self, command: str) -> None:
+        """``/teach`` — self-improving skill flywheel.
+
+        Subcommands:
+            /teach                   → propose new skills from this session
+            /teach list              → list pending proposals
+            /teach show <id>         → preview one proposal
+            /teach accept <id>       → promote into ~/.bog-agents/skills/
+            /teach reject <id>       → discard the proposal
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.skill_flywheel import (
+            accept_proposal,
+            list_proposals,
+            propose_skills_from_transcript,
+            reject_proposal,
+            write_proposal,
+        )
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+        parts = rest.split()
+        verb = parts[0].lower() if parts else ""
+        proposal_id = parts[1] if len(parts) > 1 else ""
+
+        if verb in ("list", "ls"):
+            proposals = list_proposals()
+            if not proposals:
+                await self._mount_message(
+                    AppMessage("No pending proposals. Run /teach to generate some.")
+                )
+                return
+            lines = [f"[bold]{len(proposals)} pending skill proposal(s):[/bold]"]
+            for path in proposals:
+                lines.append(f"  [cyan]{path.stem}[/cyan]   [dim]{path}[/dim]")
+            lines.append(
+                "\n[dim]Show: /teach show <id> · accept: /teach accept <id> · "
+                "reject: /teach reject <id>[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if verb == "show":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach show <id>"))
+                return
+            for path in list_proposals():
+                if path.stem == proposal_id:
+                    await self._mount_message(
+                        AppMessage(
+                            f"[bold]{path.stem}[/bold]\n\n"
+                            f"```markdown\n{path.read_text(encoding='utf-8')}\n```"
+                        )
+                    )
+                    return
+            await self._mount_message(
+                ErrorMessage(f"No pending proposal '{proposal_id}'.")
+            )
+            return
+
+        if verb == "accept":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach accept <id>"))
+                return
+            try:
+                dest = accept_proposal(proposal_id)
+            except FileNotFoundError as exc:
+                await self._mount_message(ErrorMessage(str(exc)))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Accepted[/green] proposal [bold]{proposal_id}[/bold] → "
+                    f"[dim]{dest}[/dim]"
+                )
+            )
+            return
+
+        if verb == "reject":
+            if not proposal_id:
+                await self._mount_message(AppMessage("Usage: /teach reject <id>"))
+                return
+            removed = reject_proposal(proposal_id)
+            if removed:
+                await self._mount_message(
+                    AppMessage(f"Discarded proposal [bold]{proposal_id}[/bold].")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"No pending proposal '{proposal_id}'.")
+                )
+            return
+
+        # Default: propose from current session.
+        if not self._lc_thread_id:
+            await self._mount_message(
+                AppMessage("Nothing to teach from yet — start a conversation first.")
+            )
+            return
+
+        await self._set_spinner("Reviewing transcript")
+        try:
+            state_values = await self._get_thread_state_values(self._lc_thread_id)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
+            return
+
+        messages = state_values.get("messages", []) if state_values else []
+        if not messages:
+            await self._set_spinner("")
+            await self._mount_message(AppMessage("Conversation is empty."))
+            return
+
+        transcript_lines = []
+        for msg in messages[-40:]:  # cap to last 40 messages
+            kind = getattr(msg, "type", "msg")
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                transcript_lines.append(f"[{kind}] {content}")
+        transcript = "\n".join(transcript_lines)
+
+        model_spec = self._model_override or settings.model_name
+        try:
+            resolved = create_model(
+                model_spec, profile_overrides=self._profile_override
+            )
+            proposals = await propose_skills_from_transcript(transcript, resolved.model)
+        except Exception as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        if not proposals:
+            await self._mount_message(
+                AppMessage(
+                    "No durable skills surfaced from this session. Try /teach again "
+                    "after a longer or more varied conversation."
+                )
+            )
+            return
+
+        written: list[str] = []
+        for proposal in proposals:
+            try:
+                write_proposal(proposal, overwrite=True)
+                written.append(proposal.id)
+            except (ValueError, OSError) as exc:
+                logger.debug("could not write proposal %s: %s", proposal.id, exc)
+
+        if not written:
+            await self._mount_message(
+                AppMessage(
+                    "Could not write any proposals — check ~/.bog-agents/skills/."
+                )
+            )
+            return
+
+        bullets = "\n".join(
+            f"  [cyan]{p.id}[/cyan] — {p.description}"
+            for p in proposals
+            if p.id in written
+        )
+        await self._mount_message(
+            AppMessage(
+                f"[bold]{len(written)}[/bold] proposal(s) written to "
+                "~/.bog-agents/skills/proposed/:\n\n"
+                f"{bullets}\n\n"
+                "[dim]Review with [bold]/teach show <id>[/bold] · "
+                "accept with [bold]/teach accept <id>[/bold] · "
+                "reject with [bold]/teach reject <id>[/bold][/dim]"
+            )
+        )
+
+    async def _handle_recipe_command(self, command: str) -> None:
+        """``/recipe`` — curated YAML recipe pipelines.
+
+        Subcommands:
+            /recipe                     → list catalog
+            /recipe show <id>           → print recipe YAML
+            /recipe install <id>        → write to ~/.bog-agents/pipelines/<id>.yaml
+            /recipe install <id> --force → overwrite existing
+            /recipe uninstall <id>      → remove the installed file
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.recipes import (
+            CATALOG,
+            get_recipe,
+            install_recipe,
+            is_installed,
+            uninstall_recipe,
+        )
+
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+        parts = rest.split()
+        verb = parts[0].lower() if parts else ""
+        rest_args = parts[1:]
+
+        if not parts or verb in ("list", "ls"):
+            lines = ["[bold]Recipes[/bold] — curated YAML pipeline templates\n"]
+            for r in CATALOG:
+                marker = " [green]✓ installed[/green]" if is_installed(r.id) else ""
+                tag_text = " ".join(f"[dim][{t}][/dim]" for t in r.tags)
+                lines.append(
+                    f"  [cyan]{r.id:<22}[/cyan] {r.title}{marker}\n"
+                    f"    [dim]{r.summary}[/dim]"
+                )
+                if tag_text:
+                    lines.append(f"    {tag_text}")
+            lines.append(
+                "\n[dim]Install: [bold]/recipe install <id>[/bold] · "
+                "show: [bold]/recipe show <id>[/bold] · "
+                "remove: [bold]/recipe uninstall <id>[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        recipe_id = rest_args[0] if rest_args else ""
+        if verb == "show":
+            if not recipe_id:
+                await self._mount_message(AppMessage("Usage: /recipe show <id>"))
+                return
+            recipe = get_recipe(recipe_id)
+            if recipe is None:
+                await self._mount_message(
+                    ErrorMessage(f"No recipe with id '{recipe_id}'.")
+                )
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{recipe.title}[/bold] — {recipe.summary}\n\n"
+                    f"```yaml\n{recipe.yaml}\n```"
+                )
+            )
+            return
+
+        if verb == "install":
+            if not recipe_id:
+                await self._mount_message(
+                    AppMessage("Usage: /recipe install <id> [--force]")
+                )
+                return
+            force = "--force" in rest_args
+            try:
+                target = install_recipe(recipe_id, overwrite=force)
+            except ValueError as exc:
+                await self._mount_message(ErrorMessage(str(exc)))
+                return
+            except FileExistsError as exc:
+                await self._mount_message(ErrorMessage(f"{exc} (or run with --force)"))
+                return
+            except OSError as exc:
+                await self._mount_message(ErrorMessage(f"Could not install: {exc}"))
+                return
+            await self._mount_message(
+                AppMessage(
+                    f"[green]Installed[/green] recipe [bold]{recipe_id}[/bold] → "
+                    f"[dim]{target}[/dim]\n"
+                    f"Run with [bold]/pipeline {recipe_id}[/bold]."
+                )
+            )
+            return
+
+        if verb == "uninstall":
+            if not recipe_id:
+                await self._mount_message(AppMessage("Usage: /recipe uninstall <id>"))
+                return
+            removed = uninstall_recipe(recipe_id)
+            if removed:
+                await self._mount_message(
+                    AppMessage(f"Uninstalled recipe [bold]{recipe_id}[/bold].")
+                )
+            else:
+                await self._mount_message(
+                    AppMessage(f"Recipe [bold]{recipe_id}[/bold] was not installed.")
+                )
+            return
+
+        await self._mount_message(
+            AppMessage("Usage: /recipe [list|show <id>|install <id>|uninstall <id>]")
+        )
+
+    async def _handle_persona_command(self, command: str) -> None:
+        """``/persona`` — apply an output-style persona.
+
+        Usage:
+            /persona                  → list discovered personas
+            /persona <id>             → activate by id
+            /persona off|clear|none   → deactivate the current persona
+            /persona show             → show current + addendum body
+        """
+        await self._mount_message(UserMessage(command))
+
+        from bog_agents_cli.config import settings
+        from bog_agents_cli.personas import discover_personas
+
+        project_root = settings.project_root
+        personas = discover_personas(project_root=project_root)
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        rest = body[len(prefix) :].strip()
+
+        if not rest:
+            if not personas:
+                await self._mount_message(
+                    AppMessage(
+                        "No personas found.\n\n"
+                        "Drop markdown files into [bold].bog-agents/personas/[/bold] "
+                        "(project) or [bold]~/.bog-agents/personas/[/bold] (user). "
+                        "Each file optionally starts with frontmatter:\n"
+                        "  [dim]---\n  name: terse-mentor\n  description: ...\n  ---[/dim]\n"
+                        "Body becomes a system-prompt addendum."
+                    )
+                )
+                return
+            lines = ["[bold]Available personas[/bold]"]
+            for persona in sorted(personas.values(), key=lambda p: p.id):
+                marker = (
+                    " [green]✓ active[/green]"
+                    if persona.id == self._active_persona_id
+                    else ""
+                )
+                desc = f" — {persona.description}" if persona.description else ""
+                lines.append(f"  [cyan]{persona.id}[/cyan]{marker}{desc}")
+            lines.append("")
+            lines.append(
+                "[dim]Activate with [bold]/persona <id>[/bold] · clear with [bold]/persona off[/bold][/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        verb = rest.lower()
+        if verb in {"off", "clear", "none", "disable"}:
+            self._active_persona_id = None
+            self._active_persona_addendum = None
+            await self._mount_message(AppMessage("Persona cleared."))
+            return
+
+        if verb == "show":
+            if not self._active_persona_id:
+                await self._mount_message(AppMessage("No persona is active."))
+                return
+            persona = personas.get(self._active_persona_id)
+            if persona is None:
+                await self._mount_message(
+                    AppMessage(
+                        f"Active persona [bold]{self._active_persona_id}[/bold] is no longer "
+                        "discoverable on disk; it's still applied for this session."
+                    )
+                )
+                return
+            preview = (persona.body or "").strip()[:600]
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]{persona.id}[/bold] — {persona.description or '(no description)'}\n\n"
+                    f"{preview}{'…' if persona.body and len(persona.body) > 600 else ''}"
+                )
+            )
+            return
+
+        target = personas.get(verb)
+        if target is None:
+            await self._mount_message(
+                ErrorMessage(
+                    f"Persona '{verb}' not found. "
+                    "Run /persona to list discovered personas."
+                )
+            )
+            return
+        self._active_persona_id = target.id
+        self._active_persona_addendum = target.system_addendum
+        await self._mount_message(
+            AppMessage(
+                f"Persona [bold]{target.id}[/bold] active. The new style applies on the next agent turn."
+            )
+        )
+
+    async def _handle_telephone_command(self, command: str) -> None:
+        """``/telephone <prompt>`` — rewrite the input as a production-grade prompt.
+
+        Workflow:
+            1. Parse the casual prompt out of the slash command argument.
+            2. Run it through the configured rewriter system prompt
+               (editable in ``/settings``) using the active model.
+            3. Show the rewritten prompt in a modal with three options:
+               Submit (send to agent), Redo (rerun rewriter), Ditch
+               (drop the rewrite, leave the original conversation alone).
+        """
+        await self._mount_message(UserMessage(command))
+
+        body = command.strip()
+        prefix = self._command_name(command)
+        body = body[len(prefix) :].strip()
+        if not body:
+            await self._mount_message(
+                AppMessage("Usage: /telephone <prompt to rewrite>")
+            )
+            return
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /telephone while the agent is busy.")
+            )
+            return
+
+        await self._run_telephone_flow(body)
+
+    async def _run_telephone_flow(self, original_prompt: str) -> None:
+        """Drive one rewrite → confirm → submit/redo/ditch cycle.
+
+        ``Redo`` loops back into this method with the same original input
+        but a fresh model call.
+        """
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.telephone import rewrite_prompt_with_model
+        from bog_agents_cli.widgets.telephone import TelephoneMenu
+
+        model_spec = self._model_override or settings.model_name
+        try:
+            model_result = create_model(
+                model_spec,
+                profile_overrides=self._profile_override,
+            )
+        except Exception as exc:
+            await self._mount_message(
+                ErrorMessage(f"/telephone: failed to resolve model: {exc}")
+            )
+            return
+
+        await self._set_spinner("Rewriting prompt")
+        try:
+            rewritten = await rewrite_prompt_with_model(
+                original_prompt, model_result.model
+            )
+        except Exception as exc:
+            logger.exception("telephone rewrite failed")
+            await self._set_spinner("")
+            await self._mount_message(
+                ErrorMessage(f"/telephone: rewrite failed: {exc}")
+            )
+            return
+        finally:
+            await self._set_spinner("")
+
+        if not rewritten or rewritten.startswith("CLARIFY:"):
+            # The rewriter declined to invent details. Show the question
+            # to the user and abort the rewrite cycle so they can refine.
+            shown = rewritten or "(empty rewrite)"
+            await self._mount_message(
+                AppMessage(
+                    "Rewriter needs more detail before producing a clean prompt:\n"
+                    f"  {shown}\n"
+                    "Original input was kept; type a more specific prompt."
+                )
+            )
+            return
+
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        menu = TelephoneMenu(
+            original_prompt=original_prompt, rewritten_prompt=rewritten
+        )
+        menu.set_future(future)
+        await self._mount_message(menu)
+        decision = await future
+
+        # Remove the modal so chat scroll keeps moving forward.
+        try:
+            menu.remove()
+        except Exception:
+            logger.debug("Failed to remove telephone menu", exc_info=True)
+
+        if decision == "submit":
+            await self._mount_message(AppMessage("Submitting rewritten prompt…"))
+            await self._handle_user_message(rewritten)
+        elif decision == "redo":
+            await self._mount_message(AppMessage("Re-running rewriter…"))
+            await self._run_telephone_flow(original_prompt)
+        else:
+            await self._mount_message(AppMessage("Discarded rewrite."))
 
     async def _handle_unknown_command(self, command: str) -> None:
         """Render an unknown-command message with suggestions."""
@@ -4087,11 +5966,17 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/resume") :].strip()
         lowered = raw_arg.lower()
 
-        if lowered in {"list", "browse"}:
+        # Bare ``/resume`` (and the explicit list/browse forms) opens the
+        # interactive thread-selector modal so the user can pick from
+        # recent threads with previews. The old "auto-jump-to-the-most-
+        # recent-other-thread" behaviour is preserved under the explicit
+        # ``/resume last`` (or ``latest`` / ``recent``) keyword for
+        # users who want a one-keystroke jump.
+        if not raw_arg or lowered in {"list", "browse"}:
             await self._show_thread_selector()
             return
 
-        if not raw_arg or lowered in {"last", "latest", "recent"}:
+        if lowered in {"last", "latest", "recent"}:
             from bog_agents_cli.sessions import list_threads
 
             current_thread = (
@@ -4596,7 +6481,11 @@ class BogAgentsApp(App):
 
         scored: list[tuple[int, Any, Path]] = []
         for session in sessions:
-            file_path = replays_dir / f"{session.session_id}.json"
+            # New recordings save as .yaml; legacy ones may be .json. Pick
+            # whichever file actually exists.
+            yaml_path = replays_dir / f"{session.session_id}.yaml"
+            json_path = replays_dir / f"{session.session_id}.json"
+            file_path = yaml_path if yaml_path.exists() else json_path
             best = max(
                 self._replay_match_score(session.session_id, token),
                 self._replay_match_score(file_path.stem, token),
@@ -4609,6 +6498,201 @@ class BogAgentsApp(App):
         scored.sort(key=lambda item: (-item[0], item[1].session_id))
         _score, session, file_path = scored[0]
         return session, file_path
+
+    async def _run_peat_unattended(self, job: Any) -> Any:  # noqa: ANN401 — PeatJob, lazy-imported
+        """Execute a scheduled Peat job against the live agent.
+
+        Called by the :class:`PeatScheduler` when a job's
+        ``next_fire_at`` arrives. Reuses the running langgraph server
+        (no subprocess spawn) and serializes fires through
+        ``self._peat_run_lock`` so a scheduled job can never overlap with
+        an interactive turn or another scheduled fire.
+
+        The agent's final ``AssistantMessage`` for this turn is captured
+        via a transient recorder, written to
+        ``~/.bog-agents/peat/runs/<job_id>/<run_id>.md``, and a one-line
+        summary is returned to the scheduler (which writes an inbox
+        entry).
+
+        On any error we still return a ``PeatJobRun`` with ``status="fail"``
+        so the scheduler can surface it.
+
+        Args:
+            job: The :class:`PeatJob` being fired.
+
+        Returns:
+            Completed :class:`PeatJobRun`.
+        """
+        import time as _time
+        import uuid as _uuid
+
+        from bog_agents_cli.peat import PeatJobRun, build_scheduled_prompt, load_persona
+        from bog_agents_cli.replay import SessionRecorder
+
+        started = _time.time()
+        run_id = f"run-{int(started)}-{_uuid.uuid4().hex[:4]}"
+        run_dir = settings.user_agents_dir / "peat" / "runs" / job.job_id
+        try:
+            run_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=0.0,
+                status="fail",
+                error=f"could not create run dir: {exc}",
+            )
+        output_path = run_dir / f"{run_id}.md"
+
+        # If the agent isn't ready (e.g. server still starting up), defer
+        # by reporting the fire as inconclusive — the next tick will retry.
+        if not (self._agent and self._ui_adapter and self._session_state):
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=0.0,
+                status="fail",
+                error="agent not ready (will retry on next tick)",
+            )
+
+        persona = await asyncio.to_thread(load_persona, Path(self._cwd))
+        prompt = build_scheduled_prompt(persona, job, run_id, run_dir)
+
+        # Take the single-flight lock so we don't trample interactive
+        # turns or other scheduled jobs.
+        async with self._peat_run_lock:
+            # Wait for any in-flight interactive worker to finish first.
+            worker = self._agent_worker
+            if worker is not None and not worker.is_finished:
+                try:
+                    await asyncio.wait_for(worker.wait(), timeout=300)
+                except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                    return PeatJobRun(
+                        job_id=job.job_id,
+                        run_id=run_id,
+                        started_at=started,
+                        duration_s=_time.time() - started,
+                        status="fail",
+                        error="user turn still running after 5 min — skipping fire",
+                    )
+
+            await self._mount_message(
+                AppMessage(f"[Peat] Firing scheduled job `{job.name or job.job_id}`...")
+            )
+
+            # Attach a transient recorder so we can harvest the AI text
+            # the agent produces during this turn. The recorder uses the
+            # same _mount_message tap as /record but isn't promoted to a
+            # saved replay — we just want the final assistant message.
+            transient = SessionRecorder(session_id=run_id, name=f"peat:{job.job_id}")
+            transient.start(context={"cwd": str(self._cwd), "job_id": job.job_id})
+            previous_state = self._recording_state
+            self._recording_state = RecordingSessionState(
+                session_id=run_id,
+                name=f"peat:{job.job_id}",
+                thread_id=self._lc_thread_id or "",
+                cwd=str(self._cwd),
+                started_at=started,
+                recorder=transient,
+            )
+            try:
+                # Dispatch and wait for completion.
+                await self._send_prompt_to_agent(prompt)
+                worker = self._agent_worker
+                if worker is not None:
+                    try:
+                        await asyncio.wait_for(worker.wait(), timeout=job.timeout_s)
+                    except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                        return PeatJobRun(
+                            job_id=job.job_id,
+                            run_id=run_id,
+                            started_at=started,
+                            duration_s=_time.time() - started,
+                            status="timeout",
+                            error=f"agent ran past {job.timeout_s}s budget",
+                        )
+            finally:
+                # Restore prior recording state (a user-initiated /record
+                # could have been active when the scheduler fired).
+                self._recording_state = previous_state
+                transient.stop()
+
+            session = transient.finalize()
+            ai_chunks = [s.content for s in session.steps if s.kind == "ai_message"]
+            text = "\n\n".join(ai_chunks).strip()
+            duration = _time.time() - started
+
+            # Persist the artifact.
+            try:
+                if text:
+                    body = text + (
+                        "\n\n" + persona.sign_off + "\n" if persona.sign_off else "\n"
+                    )
+                    await asyncio.to_thread(
+                        output_path.write_text, body, encoding="utf-8"
+                    )
+                else:
+                    body = "(no agent output produced)\n"
+                    await asyncio.to_thread(
+                        output_path.write_text, body, encoding="utf-8"
+                    )
+            except OSError as exc:
+                logger.warning(
+                    "peat: failed to write run artifact %s: %s", output_path, exc
+                )
+
+            summary_line = ""
+            for chunk in ai_chunks:
+                for line in chunk.splitlines():
+                    s = line.strip()
+                    if s:
+                        summary_line = s[:200]
+                        break
+                if summary_line:
+                    break
+            if not summary_line:
+                summary_line = f"job `{job.name or job.job_id}` fired (no text output)"
+
+            return PeatJobRun(
+                job_id=job.job_id,
+                run_id=run_id,
+                started_at=started,
+                duration_s=duration,
+                status="ok" if text else "fail",
+                summary=summary_line,
+                output_path=str(output_path),
+                error="" if text else "no agent output captured",
+            )
+
+    async def _resolve_var_via_ask(self, spec: Any) -> str:  # noqa: ANN401 — VarSpec lazy-imported to avoid heavy startup
+        """Prompt the user for a var value via the AskUserMenu widget.
+
+        Used by /replay and /qa to fill in unresolved string/secret/enum vars.
+        Returns the user's answer (raw string).
+
+        Raises:
+            ValueError: If the user cancels the ask-user widget.
+        """
+        prompt_text = f"Enter value for `{spec.name}`"
+        if spec.description:
+            prompt_text += f" — {spec.description}"
+        if spec.type == "secret":
+            prompt_text += "  (secret — kept in memory only, never saved)"
+        if spec.default is not None and spec.type != "secret":
+            prompt_text += f"  [default: {spec.default}]"
+        question: dict[str, Any] = {"question": prompt_text, "type": "text"}
+        if spec.type == "enum" and spec.choices:
+            question["type"] = "multiple_choice"
+            question["choices"] = [{"value": c} for c in spec.choices]
+        result_future = await self._request_ask_user([question])
+        result = await result_future
+        if result.get("type") != "answered":
+            msg = f"cancelled while resolving var '{spec.name}'"
+            raise ValueError(msg)
+        answers = result.get("answers") or []
+        return str(answers[0]) if answers else ""
 
     async def _handle_record_command(self, command: str) -> None:
         """Handle `/record` for replay capture management."""
@@ -4651,24 +6735,26 @@ class BogAgentsApp(App):
                     )
                 )
                 return
-            from bog_agents_cli.sessions import export_thread
+            from bog_agents_cli.replay import SessionRecorder
 
-            payload = await export_thread(thread_id)
-            transcript = (
-                payload.get("transcript", []) if isinstance(payload, dict) else []
-            )
-            baseline = len(transcript) if isinstance(transcript, list) else 0
+            session_id = f"replay-{uuid.uuid4().hex[:8]}"
             name = raw_arg[5:].strip() or f"Replay {thread_id[:8]}"
+            recorder = SessionRecorder(session_id=session_id, name=name)
+            recorder.start(context={"cwd": str(self._cwd), "thread_id": thread_id})
             self._recording_state = RecordingSessionState(
-                session_id=f"replay-{uuid.uuid4().hex[:8]}",
+                session_id=session_id,
                 name=name,
                 thread_id=thread_id,
                 cwd=str(self._cwd),
                 started_at=time.time(),
-                baseline_message_count=baseline,
+                baseline_message_count=0,
+                recorder=recorder,
             )
             await self._mount_message(
-                AppMessage(f"Started replay recording `{name}` on thread {thread_id}.")
+                AppMessage(
+                    f"Started replay recording `{name}` on thread {thread_id}.\n"
+                    "Captures user prompts, AI responses, and tool calls live."
+                )
             )
             return
 
@@ -4676,71 +6762,46 @@ class BogAgentsApp(App):
             if self._recording_state is None:
                 await self._mount_message(AppMessage("No replay recording is active."))
                 return
-            from bog_agents_cli.replay import (
-                ReplayAction,
-                ReplaySession,
-                save_replay_session,
-            )
-            from bog_agents_cli.sessions import export_thread
+            from bog_agents_cli.replay import save_replay_session
 
             state = self._recording_state
-            payload = await export_thread(state.thread_id)
-            transcript = (
-                payload.get("transcript", []) if isinstance(payload, dict) else []
-            )
-            transcript_list = transcript if isinstance(transcript, list) else []
-            entries = transcript_list[state.baseline_message_count :]
-            actions: list[Any] = []
-            step = 0
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                entry_dict = cast("dict[str, object]", entry)
-                role = str(entry_dict.get("role", "")).lower()
-                content = str(entry_dict.get("content", "")).strip()
-                if not content:
-                    continue
-                if role == "human":
-                    action_type = "user_message"
-                elif role == "ai":
-                    action_type = "ai_message"
-                else:
-                    continue
-                step += 1
-                actions.append(
-                    ReplayAction(
-                        step=step,
-                        action_type=action_type,
-                        content=content[:500],
-                    )
+            recorder = state.recorder
+            if recorder is None:
+                # Defensive: an older state without a live recorder. Surface
+                # the inconsistency rather than silently dropping the recording.
+                self._recording_state = None
+                await self._mount_message(
+                    AppMessage("Recording stopped — no live recorder was attached.")
                 )
+                return
+            recorder.stop()
+            session = recorder.finalize()
+            session.description = f"Recorded from thread {state.thread_id}"
+            session.recorded_at = state.started_at
 
-            if not actions:
+            if not session.steps:
                 self._recording_state = None
                 await self._mount_message(
                     AppMessage(
-                        "Recording stopped, but no new replayable conversation steps were captured."
+                        "Recording stopped, but no replayable steps were captured."
                     )
                 )
                 return
 
-            session = ReplaySession(
-                session_id=state.session_id,
-                name=state.name,
-                description=f"Recorded from thread {state.thread_id}",
-                recorded_at=state.started_at,
-                original_context={"cwd": state.cwd, "thread_id": state.thread_id},
-                actions=actions,
-            )
             file_path = await asyncio.to_thread(
                 save_replay_session,
                 settings.user_agents_dir,
                 session,
             )
             self._recording_state = None
+            var_count = len(session.vars_spec)
+            tool_calls = sum(1 for s in session.steps if s.kind == "tool_call")
             await self._mount_message(
                 AppMessage(
-                    f"Saved replay session `{session.name}` with {len(actions)} step(s) to {file_path}"
+                    f"Saved replay `{session.name}` with {len(session.steps)} step(s) "
+                    f"({tool_calls} tool call(s)) and {var_count} auto-detected "
+                    f"variable(s) to {file_path}.\n"
+                    "Open the YAML file to refine variable names, types, or defaults."
                 )
             )
             return
@@ -4751,7 +6812,9 @@ class BogAgentsApp(App):
 
     async def _handle_replay_command(self, command: str) -> None:
         """Handle `/replay` for inspecting and rerunning recorded sessions."""
-        from bog_agents_cli.replay import generate_replay_prompt, list_replay_sessions
+        from bog_agents_cli.replay import build_replay_prompt, list_replay_sessions
+        from bog_agents_cli.vars import VarBundle
+        from bog_agents_cli.vault import get_default_vault
 
         await self._mount_message(UserMessage(command))
         raw_arg = command.strip()[len("/replay") :].strip()
@@ -4768,7 +6831,7 @@ class BogAgentsApp(App):
             await self._mount_message(
                 AppMessage(
                     "Usage: /replay | /replay list | /replay show <id-or-name> | "
-                    "/replay run <id-or-name> [extra-context]"
+                    "/replay run <id-or-name> [--var name=value ...] [extra-context]"
                 )
             )
             return
@@ -4786,7 +6849,8 @@ class BogAgentsApp(App):
                 lines.append(
                     "  "
                     f"{label} ({session.session_id}) - "
-                    f"{len(session.actions)} step(s), "
+                    f"{len(session.steps)} step(s), "
+                    f"{len(session.vars_spec)} var(s), "
                     f"{self._format_replay_timestamp(session.recorded_at)}"
                 )
             await self._mount_message(AppMessage("\n".join(lines)))
@@ -4795,7 +6859,7 @@ class BogAgentsApp(App):
         if len(tokens) < 2:
             await self._mount_message(
                 AppMessage(
-                    "Usage: /replay show <id-or-name> | /replay run <id-or-name> [extra-context]"
+                    "Usage: /replay show <id-or-name> | /replay run <id-or-name> [--var name=value ...] [extra-context]"
                 )
             )
             return
@@ -4814,30 +6878,67 @@ class BogAgentsApp(App):
                 f"ID: {session.session_id}",
                 f"Recorded: {self._format_replay_timestamp(session.recorded_at)}",
                 f"File: {file_path}",
-                f"Steps: {len(session.actions)}",
+                f"Steps: {len(session.steps)}",
+                f"Variables: {len(session.vars_spec)}",
                 "",
             ]
             if session.description:
                 lines.append(session.description)
                 lines.append("")
-            for action_item in session.actions[:12]:
-                preview = (
-                    action_item.content.strip() or action_item.tool_name or "(empty)"
-                )
-                lines.append(
-                    f"{action_item.step}. {action_item.action_type}: {preview[:120]}"
-                )
-            if len(session.actions) > 12:
+            if session.vars_spec:
+                lines.append("Variables:")
+                for vname, vspec in session.vars_spec.items():
+                    vtype = vspec.get("type", "string")
+                    default = vspec.get("default")
+                    extra = f" (default: {default!r})" if default is not None else ""
+                    lines.append(f"  - {vname}: {vtype}{extra}")
+                lines.append("")
+            for i, step in enumerate(session.steps[:12], 1):
+                preview = step.content.strip() or step.tool or "(empty)"
+                lines.append(f"{i}. {step.kind}: {preview[:120]}")
+            if len(session.steps) > 12:
                 lines.append("...")
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if action == "run":
-            extra_context = " ".join(tokens[2:]).strip()
-            prompt = generate_replay_prompt(
-                session,
-                {"cwd": str(self._cwd)},
-            )
+            # Parse --var key=value flags out of the remaining tokens; the
+            # rest becomes free-form extra context appended to the prompt.
+            cli_overrides: dict[str, str] = {}
+            extra_parts: list[str] = []
+            i = 2
+            while i < len(tokens):
+                tok = tokens[i]
+                if tok == "--var" and i + 1 < len(tokens):
+                    pair = tokens[i + 1]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 2
+                elif tok.startswith("--var="):
+                    pair = tok[len("--var=") :]
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        cli_overrides[k.strip()] = v
+                    i += 1
+                else:
+                    extra_parts.append(tok)
+                    i += 1
+            extra_context = " ".join(extra_parts).strip()
+
+            bundle = VarBundle.from_dict(session.vars_spec, vault=get_default_vault())
+
+            try:
+                await bundle.resolve(
+                    prompt=self._resolve_var_via_ask,
+                    prompt_secret=self._resolve_var_via_ask,
+                    cli_overrides=cli_overrides,
+                )
+            except ValueError as exc:
+                await self._mount_message(AppMessage(f"Replay cancelled: {exc}"))
+                return
+
+            prompt = build_replay_prompt(session, bundle)
             if extra_context:
                 prompt += f"\n\n## Extra Context\n\n{extra_context}\n"
             await self._mount_message(
@@ -4851,7 +6952,7 @@ class BogAgentsApp(App):
         await self._mount_message(
             AppMessage(
                 "Usage: /replay | /replay list | /replay show <id-or-name> | "
-                "/replay run <id-or-name> [extra-context]"
+                "/replay run <id-or-name> [--var name=value ...] [extra-context]"
             )
         )
 
@@ -4976,12 +7077,93 @@ class BogAgentsApp(App):
             )
             return
 
+        # Plan/Act dual-model swap: when entering plan mode, switch the
+        # active model to ``[models].plan`` so users can pair a cheap
+        # apply / act model with a stronger planner. When leaving plan
+        # mode, restore the previous spec.
+        await self._maybe_swap_plan_model()
+
         state = "enabled" if self._plan_mode_enabled else "disabled"
         await self._mount_message(
             AppMessage(
                 f"Plan mode {state}. The new mode will apply on the next agent turn."
             )
         )
+
+    def _resolve_context_window(self) -> int:
+        """Best-effort lookup of the active model's context-window size."""
+        from bog_agents_cli.config import settings
+
+        spec = self._model_override or settings.model_name or ""
+        # ``CostTracker.context_window_size`` knows the SDK's published
+        # context limits per model — reuse that table instead of
+        # duplicating it here.
+        try:
+            from bog_agents.middleware.cost_tracker import (
+                _CONTEXT_WINDOWS as CONTEXT_WINDOWS,  # noqa: PLC2701  # SDK constant table
+            )
+
+            # Match either provider:model or bare model name.
+            bare = spec.split(":", 1)[1] if ":" in spec else spec
+            return int(CONTEXT_WINDOWS.get(bare, CONTEXT_WINDOWS.get(spec, 200_000)))
+        except Exception:
+            return 200_000
+
+    def _emit_token_warning(self, pct: int, threshold: int) -> None:
+        """Mount an inline AppMessage when context utilization crosses N%."""
+        # Severity escalates with the threshold so users notice the 90% alarm.
+        glyph = "⚠️" if threshold < 90 else "🚨"
+        msg = (
+            f"{glyph} Context window {pct}% full (≥ {threshold}% threshold).\n"
+            "Run [bold]/compact[/bold] to summarize the conversation, or "
+            "[bold]/compress[/bold] for an aggressive auto-compact."
+        )
+        # Mount via call_after_refresh so we don't block the streaming path.
+        try:
+            self.call_after_refresh(
+                lambda: self._spawn(self._mount_message(AppMessage(msg)))
+            )
+        except Exception:
+            logger.debug("could not mount token-warning message", exc_info=True)
+
+    async def _maybe_swap_plan_model(self) -> None:
+        """Swap to the plan model when entering /plan, restore on exit.
+
+        No-op when no plan model is configured. Stores the prior spec on
+        ``self._pre_plan_model_spec`` so leaving plan mode brings the
+        original choice back without the user having to remember it.
+        """
+        from bog_agents_cli.config import settings
+        from bog_agents_cli.model_config import get_plan_model
+
+        plan_model = get_plan_model()
+        if not plan_model:
+            return
+
+        if self._plan_mode_enabled:
+            # Entering plan mode — record the current model so we can
+            # roll back when the user exits.
+            current = self._model_override or settings.model_name
+            self._pre_plan_model_spec = current
+            try:
+                await self._apply_runtime_model_override(plan_model)
+            except Exception as exc:
+                logger.exception("plan-mode model swap failed")
+                await self._mount_message(
+                    ErrorMessage(f"Could not swap to plan model {plan_model}: {exc}")
+                )
+                self._pre_plan_model_spec = None
+            return
+
+        # Leaving plan mode — restore the previous spec if we have one.
+        prior = getattr(self, "_pre_plan_model_spec", None)
+        if not prior:
+            return
+        self._pre_plan_model_spec = None
+        try:
+            await self._apply_runtime_model_override(prior)
+        except Exception:
+            logger.exception("plan-mode model restore failed")
 
     async def _handle_effort_command(self, command: str) -> None:
         """Handle `/effort` runtime reasoning presets."""
@@ -7019,11 +9201,14 @@ class BogAgentsApp(App):
                     )
                 )
                 return
+            from bog_agents_cli.config import child_process_env
+
             proc = await asyncio.create_subprocess_shell(
                 launch_command,
                 cwd=str(self._cwd),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=child_process_env(),
             )
             preview_id = f"preview-{uuid.uuid4().hex[:6]}"
             url = f"http://127.0.0.1:{port}" if port is not None else None
@@ -7917,7 +10102,7 @@ class BogAgentsApp(App):
                     label=label, prompt=prompt, repo_root=repo_root
                 )
                 task_ids.append(task.task_id)
-                asyncio.create_task(mw._run_task_in_worktree(task))  # noqa: RUF006
+                self._spawn(mw._run_task_in_worktree(task))
 
             await self._mount_message(
                 AppMessage(
@@ -10000,6 +12185,21 @@ class BogAgentsApp(App):
                 )
             return
 
+        # Run project-local user-prompt harness hooks first. They can
+        # rewrite the prompt (return string) or veto submission (return
+        # ``{"action": "block", ...}``). On veto we surface the reason
+        # and never mount the user message — the agent never sees it.
+        from bog_agents_cli.hooks import dispatch_user_prompt_hook
+
+        hook_result = await dispatch_user_prompt_hook(message)
+        if isinstance(hook_result, dict):
+            reason = hook_result.get("reason", "blocked by user-prompt hook")
+            await self._mount_message(UserMessage(message))
+            await self._mount_message(ErrorMessage(f"Prompt blocked: {reason}"))
+            return
+        if isinstance(hook_result, str) and hook_result != message:
+            message = hook_result
+
         # Mount the user message (show original text in UI)
         await self._mount_message(UserMessage(message))
 
@@ -10236,6 +12436,15 @@ class BogAgentsApp(App):
 
         # Remove spinner if present
         await self._set_spinner(None)
+
+        # Fire project-local stop hooks so users can run side-effects when
+        # an agent turn ends (post-run lint, ding, summary commit, …).
+        try:
+            from bog_agents_cli.hooks import dispatch_stop_hook
+
+            await dispatch_stop_hook(reason="cleanup")
+        except Exception:
+            logger.debug("stop hook dispatch failed", exc_info=True)
 
         if self._chat_input:
             self._chat_input.set_cursor_active(active=True)
@@ -10648,6 +12857,17 @@ class BogAgentsApp(App):
         except NoMatches:
             return
 
+        # Feed the live recorder if /record is active. We tap here because
+        # _mount_message is the single chokepoint every message widget
+        # passes through, regardless of whether it originated from a user
+        # turn, a streaming AI chunk, or a tool-call invocation.
+        rec_state = self._recording_state
+        if rec_state is not None and rec_state.recorder is not None:
+            try:
+                self._feed_recorder(rec_state.recorder, widget)
+            except Exception:
+                logger.warning("recorder feed failed; continuing", exc_info=True)
+
         # Store message data for virtualization
         message_data = MessageData.from_widget(widget)
         # Ensure the widget's DOM id matches the store id so that
@@ -10672,6 +12892,54 @@ class BogAgentsApp(App):
             input_container.scroll_visible()
         except NoMatches:
             pass
+
+    def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401, PLR6301 — duck-typed; method form mirrors siblings
+        """Translate a mounted message widget into a recorder event.
+
+        Each branch maps to one of the three things the recorder cares
+        about: user_message, ai_message, tool_call. Other widgets
+        (AppMessage chrome, error notices, summarization markers) are
+        ignored — they aren't replayable signals.
+
+        Args:
+            recorder: The active :class:`SessionRecorder`.
+            widget: The widget that was just mounted to ``#messages``.
+        """
+        # Lazy imports keep this function cold-import-safe.
+        from bog_agents_cli.widgets.messages import (
+            AssistantMessage,
+            ToolCallMessage,
+            UserMessage,
+        )
+
+        # User-typed turn.
+        if isinstance(widget, UserMessage):
+            content = getattr(widget, "_content", "") or ""
+            if content:
+                # Skip slash-command echoes — they aren't part of the
+                # replayable turn semantics.
+                stripped = content.lstrip()
+                if not stripped.startswith("/"):
+                    recorder.record_user_message(content)
+            return
+
+        # AI text response.
+        if isinstance(widget, AssistantMessage):
+            content = getattr(widget, "_content", "") or ""
+            if content:
+                recorder.record_ai_message(content)
+            return
+
+        # Tool call. We snapshot args at mount time; the result/output
+        # arrives later via ``set_output`` — too late to capture here, so
+        # we record the call with an empty result for now. The recorder
+        # itself caps result_pattern length anyway.
+        if isinstance(widget, ToolCallMessage):
+            tool_name = getattr(widget, "_tool_name", "") or ""
+            tool_args = getattr(widget, "_args", {}) or {}
+            if tool_name:
+                recorder.record_tool_call(tool_name, dict(tool_args))
+            return
 
     async def _prune_old_messages(self) -> None:
         """Prune oldest message widgets if we exceed the window size.
@@ -11286,7 +13554,7 @@ class BogAgentsApp(App):
             def on_trigger(event: FileWatchEvent, config: FileWatchConfig) -> None:
                 # Post to Textual to run the pipeline
                 self.call_from_thread(
-                    lambda: asyncio.create_task(
+                    lambda: self._spawn(
                         self._run_pipeline_by_name(
                             config.pipeline_name,
                             trigger_context={
@@ -12413,6 +14681,8 @@ async def run_textual_app(
     assistant_id: str | None = None,
     backend: CompositeBackend | None = None,
     auto_approve: bool = False,
+    always_ask: bool = False,
+    auto_mode: bool = False,
     auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
@@ -12434,6 +14704,12 @@ async def run_textual_app(
         assistant_id: Agent identifier for memory storage.
         backend: Backend for file operations.
         auto_approve: Whether to start with auto-approve enabled.
+        always_ask: Paranoid mode toggle — forces approval for every tool
+            call even when auto_approve is set or a command is on the
+            shell allow-list.
+        auto_mode: Smart auto-approval toggle — tool calls are evaluated by
+            the rule engine; only risky ones surface an approval dialog.
+            Overridden by ``always_ask``.
         auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
@@ -12456,6 +14732,8 @@ async def run_textual_app(
         assistant_id=assistant_id,
         backend=backend,
         auto_approve=auto_approve,
+        always_ask=always_ask,
+        auto_mode=auto_mode,
         auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,

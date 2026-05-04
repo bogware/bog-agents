@@ -169,14 +169,15 @@ class TestReplay:
         recorder = SessionRecorder("test-session", "Test")
         assert not recorder.is_recording
 
-        recorder.start_recording({"cwd": "/home"})
+        recorder.start(context={"cwd": "/home"})
         assert recorder.is_recording
 
         recorder.record_tool_call("read_file", {"path": "/home/test"}, "result")
-        recorder.record_message("hello", "user")
+        recorder.record_user_message("hello")
 
-        session = recorder.stop_recording()
-        assert len(session.actions) == 2
+        recorder.stop()
+        session = recorder.finalize()
+        assert len(session.steps) == 2
         assert session.session_id == "test-session"
 
     def test_save_load_session(self, tmp_path: Path) -> None:
@@ -188,14 +189,15 @@ class TestReplay:
         )
 
         recorder = SessionRecorder("test-123")
-        recorder.start_recording()
+        recorder.start()
         recorder.record_tool_call("test_tool", {"arg": "val"})
-        session = recorder.stop_recording()
+        recorder.stop()
+        session = recorder.finalize()
 
         path = save_replay_session(tmp_path, session)
         loaded = load_replay_session(path)
         assert loaded.session_id == "test-123"
-        assert len(loaded.actions) == 1
+        assert len(loaded.steps) == 1
 
 
 class TestKeybindings:

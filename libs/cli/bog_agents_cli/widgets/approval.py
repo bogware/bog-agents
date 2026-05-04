@@ -69,6 +69,10 @@ class ApprovalMenu(Container):
         Binding("a", "select_auto", "Auto-approve", show=False),
         Binding("3", "select_reject", "Reject", show=False),
         Binding("n", "select_reject", "Reject", show=False),
+        # Esc rejects the pending request — matches the help text shown
+        # below the option list and gives the user a no-commitment escape
+        # hatch from the modal approval menu.
+        Binding("escape", "select_reject", "Reject", show=False),
         Binding("e", "toggle_expand", "Expand command", show=False),
     ]
 

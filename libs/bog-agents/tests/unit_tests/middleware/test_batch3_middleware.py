@@ -8,6 +8,8 @@ Tests for features: #7 (Code Review), #11 (Financial Data), #13 (Regulatory Aler
 
 from __future__ import annotations
 
+from typing import Any, ClassVar
+
 
 class TestCodeReviewMiddleware:
     """Tests for CodeReviewMiddleware (#7)."""
@@ -561,6 +563,87 @@ class TestRBACMiddleware:
 
         store = RBACStore()
         assert store.is_allowed("any_tool") is True
+
+    def test_modify_request_strips_denied_tools(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.rbac import RBACMiddleware
+
+        mw = RBACMiddleware()
+        mw.store.define_role(name="reader", allowed_tools=["read_*"], denied_tools=["delete_*"])
+        mw.store.set_active("reader")
+
+        captured: dict[str, object] = {}
+
+        class FakeRequest:
+            tools: ClassVar[list] = [
+                SimpleNamespace(name="read_file"),
+                SimpleNamespace(name="delete_file"),
+                SimpleNamespace(name="write_file"),
+            ]
+            system_message = None
+
+            def override(self, **kwargs: object) -> Any:
+                captured.update(kwargs)
+                return self
+
+        modified = mw.modify_request(FakeRequest())  # type: ignore[arg-type]
+        names = {getattr(t, "name", None) for t in captured["tools"]}  # type: ignore[union-attr]
+        # read_file is allowed; delete_file is denied; write_file lacks an allow match.
+        # RBAC admin tools are also implicitly always allowed but aren't in this fake request.
+        assert "read_file" in names
+        assert "delete_file" not in names
+        assert "write_file" not in names
+        assert modified is not None
+
+    def test_modify_request_preserves_admin_tools(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.rbac import RBACMiddleware
+
+        mw = RBACMiddleware()
+        mw.store.define_role(name="locked", allowed_tools=[])  # nothing allowed
+        mw.store.set_active("locked")
+
+        captured: dict[str, object] = {}
+
+        class FakeRequest:
+            tools: ClassVar[list] = [
+                SimpleNamespace(name="define_role"),
+                SimpleNamespace(name="set_active_role"),
+                SimpleNamespace(name="forbidden_tool"),
+            ]
+            system_message = None
+
+            def override(self, **kwargs: object) -> Any:
+                captured.update(kwargs)
+                return self
+
+        mw.modify_request(FakeRequest())  # type: ignore[arg-type]
+        names = {getattr(t, "name", None) for t in captured["tools"]}  # type: ignore[union-attr]
+        assert "define_role" in names
+        assert "set_active_role" in names
+        assert "forbidden_tool" not in names
+
+    def test_modify_request_no_active_role_passes_through(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents.middleware.rbac import RBACMiddleware
+
+        mw = RBACMiddleware()
+        captured: dict[str, object] = {}
+
+        class FakeRequest:
+            tools: ClassVar[list] = [SimpleNamespace(name="anything")]
+            system_message = None
+
+            def override(self, **kwargs: object) -> Any:
+                captured.update(kwargs)
+                return self
+
+        mw.modify_request(FakeRequest())  # type: ignore[arg-type]
+        # Without an active role, tools must not be stripped.
+        assert "tools" not in captured
 
 
 class TestFactCheckMiddleware:

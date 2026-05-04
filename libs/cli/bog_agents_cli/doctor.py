@@ -351,6 +351,31 @@ def run_doctor() -> str:
     else:
         checks.append(("MCP config", "SKIP", "No .mcp.json in current directory"))
 
+    # 9b. MCP trust state — does the project's MCP config currently match a
+    # trusted fingerprint? Surface this so users know whether stdio servers
+    # would be approved on next launch or if they'll see a prompt.
+    if mcp_config.exists():
+        try:
+            from bog_agents_cli.mcp_trust import (
+                compute_config_fingerprint,
+                is_project_mcp_trusted,
+            )
+
+            project_root = str(Path.cwd().resolve())
+            fingerprint = compute_config_fingerprint([mcp_config])
+            if is_project_mcp_trusted(project_root, fingerprint):
+                checks.append(("MCP trust", "OK", "Trusted (fingerprint matches)"))
+            else:
+                checks.append(
+                    (
+                        "MCP trust",
+                        "WARN",
+                        "Untrusted — stdio servers will require approval on launch",
+                    )
+                )
+        except Exception as e:  # diagnostic command must not crash
+            checks.append(("MCP trust", "WARN", f"Could not evaluate trust: {e}"))
+
     # Format output
     lines = ["## Bog Agents Health Check\n"]
 

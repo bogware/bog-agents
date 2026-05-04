@@ -58,7 +58,7 @@ class TestInitialPromptOnMount:
         submitted: list[str] = []
 
         # Must be async to match _handle_user_message's signature
-        async def capture(msg: str) -> None:  # noqa: RUF029
+        async def capture(msg: str) -> None:
             submitted.append(msg)
 
         app._handle_user_message = capture  # type: ignore[assignment]
@@ -1319,8 +1319,14 @@ class TestTraceCommand:
 class TestCommandSurfaceEnhancements:
     """Tests for added slash command handlers."""
 
-    async def test_resume_uses_most_recent_other_thread(self) -> None:
-        """`/resume` should switch to the latest thread that is not current."""
+    async def test_resume_last_uses_most_recent_other_thread(self) -> None:
+        """`/resume last` should auto-jump to the latest thread that is not current.
+
+        Bare ``/resume`` now opens the interactive picker — see
+        ``test_resume_opens_thread_selector``. The auto-jump shortcut
+        moved to the explicit ``/resume last`` (or ``latest`` /
+        ``recent``) keyword for users who want a one-keystroke jump.
+        """
         app = BogAgentsApp()
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -1341,10 +1347,24 @@ class TestCommandSurfaceEnhancements:
                     app, "_resume_thread", new_callable=AsyncMock
                 ) as mock_resume,
             ):
-                await app._handle_command("/resume")
+                await app._handle_command("/resume last")
                 await pilot.pause()
 
             mock_resume.assert_awaited_once_with("thread-other")
+
+    async def test_resume_opens_thread_selector(self) -> None:
+        """Bare `/resume` should open the interactive thread selector."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app, "_show_thread_selector", new_callable=AsyncMock
+            ) as mock_picker:
+                await app._handle_command("/resume")
+                await pilot.pause()
+
+            mock_picker.assert_awaited_once()
 
     async def test_session_command_shows_session_details(self) -> None:
         """`/session` should render a compact session summary."""
@@ -1739,51 +1759,42 @@ class TestCommandSurfaceEnhancements:
             process.terminate.assert_called_once()
 
     async def test_record_and_replay_commands_round_trip(self) -> None:
-        """`/record` and `/replay run` should capture and reuse replay sessions."""
+        """`/record` and `/replay run` should capture and reuse replay sessions.
+
+        The new flow attaches a live SessionRecorder to the recording state
+        and feeds it from ``_mount_message``. We exercise that path by
+        mounting a real UserMessage between start and stop.
+        """
+        from bog_agents_cli.replay import ReplaySession, ReplayStep
+        from bog_agents_cli.widgets.messages import UserMessage as _UserMsg
+
         app = BogAgentsApp(thread_id="thread-123")
-        replay_session = SimpleNamespace(
+        replay_session = ReplaySession(
             session_id="replay-abc123",
             name="bugfix-flow",
             recorded_at=1_700_000_000.0,
             description="Recorded from thread thread-123",
-            actions=[
-                SimpleNamespace(
-                    step=1,
-                    action_type="user_message",
-                    content="Investigate the bug",
-                    tool_name="",
-                )
-            ],
+            steps=[ReplayStep(kind="user_message", content="Investigate the bug")],
         )
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with (
-                patch(
-                    "bog_agents_cli.sessions.export_thread",
-                    new=AsyncMock(
-                        side_effect=[
-                            {"transcript": []},
-                            {
-                                "transcript": [
-                                    {"role": "human", "content": "Investigate the bug"},
-                                    {"role": "ai", "content": "I will inspect it."},
-                                ]
-                            },
-                        ]
-                    ),
-                ),
-                patch(
-                    "bog_agents_cli.replay.save_replay_session",
-                    return_value=app_module.Path(
-                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.json"
-                    ),
+            with patch(
+                "bog_agents_cli.replay.save_replay_session",
+                return_value=app_module.Path(
+                    "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
                 ),
             ):
                 await app._handle_command("/record start bugfix-flow")
                 await pilot.pause()
+                # Drive a real user message through the live capture path.
+                await app._mount_message(_UserMsg("Investigate the bug"))
+                await pilot.pause()
                 await app._handle_command("/record stop")
                 await pilot.pause()
+
+            # Live recorder should have captured at least one step.
+            assert app._recording_state is None  # cleared after stop
 
             with (
                 patch(
@@ -1801,7 +1812,7 @@ class TestCommandSurfaceEnhancements:
             assert mock_send.await_args is not None
             assert "# Replay: bugfix-flow" in mock_send.await_args.args[0]
             app_msgs = app.query(AppMessage)
-            assert any("Saved replay session" in str(w._content) for w in app_msgs)
+            assert any("Saved replay" in str(w._content) for w in app_msgs)
 
     async def test_agent_command_spawn_uses_background_manager(self) -> None:
         """`/agent spawn` should submit work to the background manager."""
@@ -2612,9 +2623,10 @@ class TestCommandSurfaceEnhancements:
     def test_handler_registry_covers_supported_commands(self) -> None:
         """Every supported command and alias should have a handler mapping."""
         from bog_agents_cli.command_registry import get_registered_command_names
+        from bog_agents_cli.commands import COMMAND_HANDLER_MAP
 
         supported_names = set(get_registered_command_names(include_aliases=True))
-        handler_names = set(BogAgentsApp._COMMAND_HANDLER_NAMES)
+        handler_names = set(COMMAND_HANDLER_MAP)
         assert supported_names <= handler_names
 
 

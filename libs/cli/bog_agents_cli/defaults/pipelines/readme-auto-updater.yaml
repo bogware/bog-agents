@@ -1,14 +1,23 @@
 # README / Wiki Auto-Updater Pipeline
-# Triggered manually (/pipeline run readme-auto-updater) or on schedule
-# Scans the codebase and updates README.md + any wiki files
+#
+# Default state: MANUAL-ONLY.  Run with:
+#     /pipeline run readme-auto-updater
+#
+# To auto-fire on file edits, uncomment the ``watch:`` block at the
+# bottom of this file. To run on a schedule, set ``schedule:`` to a
+# 5-field cron expression (e.g. "0 9 * * 1" = Mon 9am).
+#
+# We deliberately ship NO triggers in the default — a seeded pipeline
+# that auto-fires on every save would surprise the user after install.
 
 name: readme-auto-updater
-description: Automatically update README.md and wiki documentation based on current codebase state
-schedule: ""  # Set to e.g. "0 9 * * 1" for Monday 9am
-watch:
-  patterns: ["*.py", "pyproject.toml", "*.md"]
-  debounce_seconds: 300.0
-  ignore_patterns: ["README.md", "**/test_*.py", "**/__pycache__/**"]
+description: Update README.md and wiki documentation based on current codebase state
+schedule: ""  # cron expression, or empty for manual-only
+# Watch block intentionally omitted by default — uncomment to opt in:
+# watch:
+#   patterns: ["*.py", "pyproject.toml", "*.md"]
+#   debounce_seconds: 300.0
+#   ignore_patterns: ["README.md", "**/test_*.py", "**/__pycache__/**"]
 
 steps:
   - label: Scan codebase structure

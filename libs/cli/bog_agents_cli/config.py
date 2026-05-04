@@ -92,13 +92,30 @@ if _bog_agents_project:
     # Override LANGSMITH_PROJECT for agent traces
     os.environ["LANGSMITH_PROJECT"] = _bog_agents_project
 
+
+def child_process_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build an environment dict suitable for spawning user shell commands.
+
+    Restores the user's original ``LANGSMITH_PROJECT`` (so traces produced by
+    user-launched shells don't pollute the bog-agents project) and applies any
+    caller-supplied overrides.
+    """
+    env = dict(os.environ)
+    if _original_langsmith_project is not None:
+        env["LANGSMITH_PROJECT"] = _original_langsmith_project
+    elif _bog_agents_project and env.get("LANGSMITH_PROJECT") == _bog_agents_project:
+        env.pop("LANGSMITH_PROJECT", None)
+    if extra:
+        env.update(extra)
+    return env
+
+
 from bog_agents_cli.model_config import (  # noqa: E402
     PROVIDER_API_KEY_ENV,
     ModelConfig,
     ModelConfigError,
     ModelSpec,
     get_available_models,
-    has_provider_credentials,
 )
 from bog_agents_cli.project_utils import (  # noqa: E402
     find_project_agent_md as _find_project_agent_md,
@@ -119,17 +136,17 @@ DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
-    "primary": "#34d399",
-    "primary_dev": "#fb923c",
-    "dim": "#94a3b8",
-    "user": "#f8fafc",
-    "agent": "#6ee7b7",
-    "thinking": "#67e8f9",
-    "tool": "#fbbf24",
-    "mode_shell": "#fb923c",
-    "mode_command": "#38bdf8",
+    "primary": "#7aa888",  # matte moss — primary brand color
+    "primary_dev": "#b89968",  # muted ochre — flags editable / dev installs
+    "dim": "#6f8478",  # lichen mute — muted secondary text
+    "user": "#c8d4ca",  # fogged grey-green — user-facing text
+    "agent": "#9cc4a7",  # moss highlight — agent text emphasis
+    "thinking": "#6a9b9b",  # muted teal — model "thinking" state
+    "tool": "#b89968",  # muted ochre — tool-call accents
+    "mode_shell": "#a07358",  # peat ember — shell-mode prefix
+    "mode_command": "#7aa888",  # matte moss — command-mode prefix
 }
-"""App color scheme."""
+"""App color scheme — matte swamp palette. Muted, low-saturation."""
 
 MODE_PREFIXES: dict[str, str] = {
     "shell": "!",
@@ -303,6 +320,26 @@ def _is_editable_install() -> bool:
 def _detect_charset_mode() -> CharsetMode:
     """Auto-detect terminal charset capabilities.
 
+    Modern Windows Terminal / pwsh / VS Code terminals all render unicode
+    correctly even when ``sys.stdout.encoding`` reports the legacy
+    ``cp1252`` (the encoding tag and the actual glyph rendering are
+    decoupled — Windows Terminal renders the bytes fine). Pre-0.8.0 the
+    auto-detect biased toward ASCII any time encoding wasn't ``utf-*``,
+    which silently downgraded most Windows users to the boring ASCII
+    banner.
+
+    The new policy is **default to UNICODE** unless we positively detect
+    a known-broken legacy console:
+
+    1. Explicit ``UI_CHARSET_MODE`` env var always wins.
+    2. UTF-* in ``sys.stdout.encoding`` or LANG/LC_ALL → UNICODE.
+    3. Windows console codepages 437 / 850 / 866 (true legacy DOS
+       prompts) → ASCII.
+    4. Otherwise → UNICODE.
+
+    Users on a genuine legacy console can opt back into ASCII via
+    ``UI_CHARSET_MODE=ascii``.
+
     Returns:
         The detected CharsetMode based on environment and terminal encoding.
     """
@@ -312,14 +349,24 @@ def _detect_charset_mode() -> CharsetMode:
     if env_mode == "ascii":
         return CharsetMode.ASCII
 
-    # Auto: check stdout encoding and LANG
+    # Auto: positive UTF-* detection.
     encoding = getattr(sys.stdout, "encoding", "") or ""
-    if "utf" in encoding.lower():
+    encoding_lower = encoding.lower()
+    if "utf" in encoding_lower:
         return CharsetMode.UNICODE
     lang = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
     if "utf" in lang.lower():
         return CharsetMode.UNICODE
-    return CharsetMode.ASCII
+
+    # Negative detection: known legacy DOS / OEM codepages that genuinely
+    # don't render box-drawing or shaded glyphs correctly. ``cp1252``
+    # (Windows ANSI) is INTENTIONALLY not in this list — modern Windows
+    # consoles render unicode fine over it.
+    if encoding_lower in {"cp437", "cp850", "cp866", "ibm437", "ibm850", "ibm866"}:
+        return CharsetMode.ASCII
+
+    # Default — modern terminal, render the cool banner.
+    return CharsetMode.UNICODE
 
 
 def get_glyphs() -> Glyphs:
@@ -357,24 +404,41 @@ def newline_shortcut() -> str:
 
 # Text art banners (Unicode and ASCII variants)
 
+# Banner art — V4 "rune-bordered tablet" design.
+#
+# Two heavy block-letter wordmarks (BOG / AGENTS) framed by a long
+# horizontal rune rail at top and bottom, anchored at each end by an
+# Othala rune (ᛟ) — the manuscript-tablet feel. No left/right rails so
+# the wordmark breathes; the rails fade into deep peat tones via the
+# welcome.py gradient while the letters land on the brighter
+# matte-moss midline.
+#
+# Every line right-pads to a fixed width so the gradient renders evenly
+# regardless of viewport. ◆/◇ marks beside the BOG wordmark are
+# negative-space ornaments (Ultima virtue sigils).
 _UNICODE_BANNER = f"""\
 
-   ██████╗  ██████╗  ██████╗
-   ██╔══██╗██╔═══██╗██╔════╝       ◆ ◇ ◆
-   ██████╔╝██║   ██║██║  ███╗     ◇ ◆ ◇ ◆
-   ██╔══██╗██║   ██║██║   ██║      ◆ ◇ ◆
-   ██████╔╝╚██████╔╝╚██████╔╝       ◇ ◆
-   ╚═════╝  ╚═════╝  ╚═════╝
+   ᛟ═══════════════════════════════════════════════════════════ᛟ
 
-    █████╗  ██████╗ ███████╗███╗   ██╗████████╗███████╗
-   ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██╔════╝
-   ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ███████╗
-   ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ╚════██║
-   ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████║
-   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
+   ██████╗   ██████╗   ██████╗
+   ██╔══██╗ ██╔═══██╗ ██╔════╝       ◇  ◆  ◇
+   ██████╔╝ ██║   ██║ ██║  ███╗     ◆  ◇  ◆  ◇
+   ██╔══██╗ ██║   ██║ ██║   ██║      ◇  ◆  ◇
+   ██████╔╝ ╚██████╔╝ ╚██████╔╝       ◆  ◇
+   ╚═════╝   ╚═════╝   ╚═════╝
 
-   ▸ pass through in harmony ─── v{__version__}\
+    █████╗   ██████╗  ███████╗ ███╗   ██╗ ████████╗ ███████╗
+   ██╔══██╗ ██╔════╝  ██╔════╝ ████╗  ██║ ╚══██╔══╝ ██╔════╝
+   ███████║ ██║  ███╗ █████╗   ██╔██╗ ██║    ██║    ███████╗
+   ██╔══██║ ██║   ██║ ██╔══╝   ██║╚██╗██║    ██║    ╚════██║
+   ██║  ██║ ╚██████╔╝ ███████╗ ██║ ╚████║    ██║    ███████║
+   ╚═╝  ╚═╝  ╚═════╝  ╚══════╝ ╚═╝  ╚═══╝    ╚═╝    ╚══════╝
+
+   ᛟ═══════════════════════════════════════════════════════════ᛟ
+
+      ≈  pass through in harmony  ≈  v{__version__}\
 """
+
 _ASCII_BANNER = f"""\
 
    ____   ___   ____
@@ -1483,18 +1547,12 @@ def _get_default_model_spec() -> str:
     )
 
     provider_checks = (
-        ("anthropic", lambda: has_provider_credentials("anthropic") is True),
-        ("openai", lambda: has_provider_credentials("openai") is True),
-        (
-            "bedrock_converse",
-            lambda: has_provider_credentials("bedrock_converse") is True,
-        ),
-        ("google_genai", lambda: has_provider_credentials("google_genai") is True),
-        (
-            "google_vertexai",
-            lambda: has_provider_credentials("google_vertexai") is True,
-        ),
-        ("nvidia", lambda: has_provider_credentials("nvidia") is True),
+        ("anthropic", lambda: settings.has_anthropic),
+        ("openai", lambda: settings.has_openai),
+        ("bedrock_converse", lambda: settings.has_bedrock),
+        ("google_genai", lambda: settings.has_google),
+        ("google_vertexai", lambda: settings.has_vertex_ai),
+        ("nvidia", lambda: settings.has_nvidia),
     )
     for provider, is_available in provider_checks:
         if not is_available():

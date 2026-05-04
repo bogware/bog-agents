@@ -289,7 +289,11 @@ class SlashCommandController:
                         # Scale into the fuzzy tier (below 25, above 0)
                         scaled = min(fs / 100.0, _MIN_SLASH_FUZZY_SCORE - 1)
                         all_scored.append((scaled, cmd, desc))
-            all_scored.sort(key=lambda x: -x[0])
+            # Tie-break by command-name length (shorter wins) so a short
+            # exact prefix like ``/help`` ranks above a longer one like
+            # ``/health`` when the user types ``/he``. Final tie-break is
+            # alphabetical for stable output.
+            all_scored.sort(key=lambda x: (-x[0], len(x[1]), x[1]))
             suggestions = [(cmd, desc) for _, cmd, desc in all_scored[:MAX_SUGGESTIONS]]
 
         if suggestions:

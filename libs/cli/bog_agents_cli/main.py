@@ -535,11 +535,41 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--always-ask",
+        action="store_true",
+        help=(
+            "Paranoid mode: every tool call requires explicit approval, "
+            "EVEN if --auto-approve is set or a shell command is on the "
+            "allow-list. Use for high-stakes sessions where you want to "
+            "inspect each action before it runs. Toggle at runtime via "
+            "/always-ask."
+        ),
+    )
+
+    parser.add_argument(
+        "--auto",
+        dest="auto_mode",
+        action="store_true",
+        default=False,
+        help=(
+            "Smart auto-approve: auto-run tool calls that pass the rule engine; "
+            "ask only for risky operations. Haiku evaluates uncertain shell "
+            "commands. Overridden by --always-ask. Configure rules in "
+            ".bog-agents/settings.json."
+        ),
+    )
+
+    parser.add_argument(
         "--sandbox",
-        choices=["none", "modal", "daytona", "runloop", "langsmith"],
+        choices=["none", "docker", "modal", "daytona", "runloop", "langsmith"],
         default="none",
         metavar="TYPE",
-        help="Remote sandbox for code execution (default: none - local only)",
+        help=(
+            "Sandbox for code execution (default: none — local only). "
+            "``docker`` runs commands inside a local container; the others "
+            "are remote providers requiring credentials. Tune the docker "
+            "image with BOG_DOCKER_IMAGE (default python:3.11-slim)."
+        ),
     )
 
     parser.add_argument(
@@ -644,6 +674,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run diagnostics to check environment, dependencies, and configuration",
     )
+    parser.add_argument(
+        "--doctor-deep",
+        action="store_true",
+        help=(
+            "Like --doctor but also probes external dependencies (network, "
+            "git, file write, MCP, model availability) and prints a one-page "
+            "health summary. May take a few seconds."
+        ),
+    )
 
     parser.add_argument(
         "-v",
@@ -664,6 +703,8 @@ async def run_textual_cli_async(
     assistant_id: str,
     *,
     auto_approve: bool = False,
+    always_ask: bool = False,
+    auto_mode: bool = False,
     auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
@@ -685,6 +726,11 @@ async def run_textual_cli_async(
     Args:
         assistant_id: Agent identifier for memory storage
         auto_approve: Whether to auto-approve tool usage
+        always_ask: Paranoid mode — every tool call requires approval,
+            overriding auto-approve and the shell allow-list.
+        auto_mode: Smart auto-approval — tool calls are evaluated by the rule
+            engine; only risky ones surface an approval dialog. Overridden by
+            ``always_ask``.
         auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
@@ -765,6 +811,8 @@ async def run_textual_cli_async(
             assistant_id=assistant_id,
             backend=None,
             auto_approve=auto_approve,
+            always_ask=always_ask,
+            auto_mode=auto_mode,
             auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
@@ -1106,6 +1154,14 @@ def _check_mcp_project_trust(*, trust_flag: bool = False) -> bool | None:
         prompt_console.print(f'  [bold]"{name}"[/bold]:  {cmd} {args_str}')
     prompt_console.print()
 
+    # In non-interactive contexts (cron, CI, daemon, redirected stdin) never
+    # block on input(): default to deny so the host process cannot hang.
+    if not sys.stdin.isatty():
+        prompt_console.print(
+            "[dim]stdin is not a TTY — denying project MCP servers (set BOG_AGENTS_MCP_TRUST=1 to override).[/dim]"
+        )
+        return False
+
     try:
         answer = input("Allow? [y/N]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -1207,6 +1263,17 @@ def cli_main() -> None:
     # own cleanup, which is bypassed on hard exits.
     _install_terminal_restore_handlers()
 
+    # Install the panic-dump excepthook so any uncaught exception in
+    # subsequent setup (or inside the Textual app) lands a redacted
+    # crash report at ``~/.bog-agents/crash/<ts>.log``. Idempotent.
+    try:
+        from bog_agents_cli._panic import install_panic_handler
+
+        install_panic_handler()
+    except Exception:
+        # Never let panic-handler installation itself prevent startup.
+        logger.warning("panic handler install failed", exc_info=True)
+
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1254,6 +1321,16 @@ def cli_main() -> None:
         from rich.console import Console as _DoctorConsole
 
         _run_doctor(_DoctorConsole())
+        sys.exit(0)
+
+    # --doctor-deep fast path: like --doctor but probes external deps too.
+    if len(sys.argv) == 2 and sys.argv[1] == "--doctor-deep":
+        from rich.console import Console as _DoctorConsole
+
+        from bog_agents_cli.doctor_deep import run_deep_doctor
+
+        console = _DoctorConsole()
+        console.print(run_deep_doctor(), markup=False)
         sys.exit(0)
 
     # ACP/serve modes do not require Textual, so skip UI dependency checks.
@@ -1429,6 +1506,11 @@ def cli_main() -> None:
         # variables for prompts, inline pipeline steps for pipelines.
         prompt_name = getattr(args, "prompt_name", None)
         pipeline_name = getattr(args, "pipeline_name", None)
+        if getattr(args, "prompt_vars", None) and not prompt_name:
+            sys.stderr.write(
+                "Warning: --prompt-vars has no effect without --prompt.\n",
+            )
+            sys.stderr.flush()
         if prompt_name and pipeline_name:
             sys.stderr.write(
                 "Error: --prompt and --pipeline are mutually exclusive.\n",
@@ -1825,6 +1907,7 @@ def cli_main() -> None:
                     auto_commit=getattr(args, "auto_commit", False),
                     resume_thread_id=resume_thread_id,
                     auto_approve=getattr(args, "auto_approve", False),
+                    always_ask=getattr(args, "always_ask", False),
                 )
             )
             sys.exit(exit_code)
@@ -1916,6 +1999,8 @@ def cli_main() -> None:
                     run_textual_cli_async(
                         assistant_id=args.agent,
                         auto_approve=args.auto_approve,
+                        always_ask=getattr(args, "always_ask", False),
+                        auto_mode=getattr(args, "auto_mode", False),
                         auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,

@@ -909,7 +909,7 @@ class TestNonInteractivePrompt:
         assert kwargs["interactive"] is False
 
 
-async def _async_iter(items: list[object]) -> AsyncIterator[object]:  # noqa: RUF029
+async def _async_iter(items: list[object]) -> AsyncIterator[object]:
     """Create an async iterator from a list for testing."""
     for item in items:
         yield item

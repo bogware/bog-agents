@@ -123,9 +123,18 @@ def show_help() -> None:
         "  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)"
     )
     console.print(
+        "  --always-ask               Paranoid mode: every tool call requires approval (overrides --auto-approve)"
+    )
+    console.print(
+        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (Haiku eval)"
+    )
+    console.print(
         "  --auto-commit              Auto-commit git changes after each agent turn"
     )
     console.print("  --doctor                   Diagnose your environment")
+    console.print(
+        "  --doctor-deep              Doctor + probe network/git/MCP/providers"
+    )
     console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")
     console.print()

@@ -79,6 +79,50 @@ class _TimestampClickMixin:
         _show_timestamp_toast(self)  # type: ignore[arg-type]
 
 
+def _safe_render_markup(message: str) -> Text:
+    """Parse ``message`` as Rich markup if it clearly contains styled spans.
+
+    Rich's ``Text.from_markup`` is permissive at parse time but raises
+    ``MissingStyle`` at *render* time on tokens like ``[target-branch]``
+    that look like style tags but don't resolve. We can't undo that
+    failure once it lands in a widget, so we filter at construct time
+    instead:
+
+    1. If the string contains no ``[`` at all, render it as plain text
+       with the default dim-italic style.
+    2. If the string has brackets but NO closing tag (``[/``), render
+       it literally — almost certainly the brackets are just content
+       (a file path, a list-of-strings repr, etc.), not markup.
+    3. Otherwise try ``Text.from_markup`` and catch any error from a
+       defensive validation render. On failure, fall back to literal.
+
+    Returns:
+        A Rich :class:`Text` ready to mount.
+    """  # noqa: DOC501 — intentionally swallowed via except below
+    if "[" not in message:
+        return Text(message, style="dim italic")
+    if "[/" not in message:
+        # Brackets but no closing tag — treat as literal content.
+        return Text(message, style="dim italic")
+    try:
+        text = Text.from_markup(message)
+        # Force a stringify pass so that any invalid style names raise
+        # NOW (synchronously, here) rather than during widget render.
+        # ``Text.__str__`` doesn't trigger the style lookup; the easiest
+        # validating call is to walk the spans and parse each style.
+        from rich.style import Style as _Style
+
+        for span in text.spans:
+            try:
+                _Style.parse(str(span.style))
+            except Exception as exc:  # ColorParseError / StyleSyntaxError
+                msg = f"invalid markup style {span.style!r}: {exc}"
+                raise ValueError(msg) from None
+    except Exception:
+        return Text(message, style="dim italic")
+    return text
+
+
 def _mode_color(mode: str | None) -> str:
     """Return the color string for a mode, falling back to primary.
 
@@ -151,8 +195,8 @@ class UserMessage(_TimestampClickMixin, Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #0d1723;
-        border-left: wide #34d399;
+        background: #0d1410;
+        border-left: wide #7aa888;
     }
     """
 
@@ -211,11 +255,11 @@ class UserMessage(_TimestampClickMixin, Static):
 
             # The regex only matches tokens starting with / or @
             if token.startswith("/") and start == 0:
-                # /command at start - yellow/gold
-                text.append(token, style="bold #fbbf24")
+                # /command at start — muted ochre
+                text.append(token, style="bold #b89968")
             elif token.startswith("@"):
-                # @file mention - green
-                text.append(token, style="bold #10b981")
+                # @file mention — matte moss
+                text.append(token, style="bold #7aa888")
             last_end = end
 
         # Add remaining text after last match
@@ -236,9 +280,9 @@ class QueuedUserMessage(Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #0a121c;
-        border-left: wide #64748b;
-        opacity: 0.72;
+        background: #0d1410;
+        border-left: wide #3a5a48;
+        opacity: 0.55;
     }
     """
 
@@ -288,8 +332,8 @@ class AssistantMessage(_TimestampClickMixin, Vertical):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #08111b;
-        border-left: wide #1e293b;
+        background: #060a07;
+        border-left: wide #557a63;
     }
 
     AssistantMessage Markdown {
@@ -396,18 +440,18 @@ class ToolCallMessage(Vertical):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #09111a;
-        border-left: wide #223246;
+        background: #04070500;
+        border-left: wide #243828;
     }
 
     ToolCallMessage .tool-header {
         height: auto;
-        color: #fbbf24;
+        color: #b89968;
         text-style: bold;
     }
 
     ToolCallMessage .tool-args {
-        color: #94a3b8;
+        color: #6f8478;
         margin-left: 3;
     }
 
@@ -416,19 +460,19 @@ class ToolCallMessage(Vertical):
     }
 
     ToolCallMessage .tool-status.pending {
-        color: #fbbf24;
+        color: #b89968;
     }
 
     ToolCallMessage .tool-status.success {
-        color: #34d399;
+        color: #7aa888;
     }
 
     ToolCallMessage .tool-status.error {
-        color: #fb7185;
+        color: #b86a78;
     }
 
     ToolCallMessage .tool-status.rejected {
-        color: #f59e0b;
+        color: #a07358;
     }
 
     ToolCallMessage .tool-output {
@@ -445,11 +489,11 @@ class ToolCallMessage(Vertical):
 
     ToolCallMessage .tool-output-hint {
         margin-left: 0;
-        color: #94a3b8;
+        color: #6f8478;
     }
 
     ToolCallMessage:hover {
-        border-left: wide #38bdf8;
+        border-left: wide #7aa888;
     }
     """
 
@@ -1414,14 +1458,21 @@ class AppMessage(Static):
 
         Args:
             message: The system message as a string or pre-styled Rich Text.
+                String inputs are parsed as Rich markup so callers can use
+                ``[bold]``/``[cyan]``/``[dim]``/etc. inline styles, but
+                only when the string contains an explicit closing tag
+                (``[/...]``). Strings without closing tags are rendered
+                literally so file-paths, list-of-strings outputs, and
+                other content with stray ``[`` characters are not
+                misinterpreted as styled spans.
             **kwargs: Additional arguments passed to parent
         """
-        # Store raw content for serialization
+        # Store raw content for serialization.
         self._content = message
-        # Use Text object to safely render message without markup parsing
-        content = (
-            message if isinstance(message, Text) else Text(message, style="dim italic")
-        )
+        if isinstance(message, Text):
+            content: Text = message
+        else:
+            content = _safe_render_markup(message)
         super().__init__(content, **kwargs)
 
     def on_click(self, event: Click) -> None:

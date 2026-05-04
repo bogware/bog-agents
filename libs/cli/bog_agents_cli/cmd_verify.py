@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import subprocess  # noqa: S404
 import sys
@@ -234,9 +235,25 @@ def _run_check(name: str, command: str, *, cwd: Path, timeout: int) -> CheckResu
 
     start = time.monotonic()
     try:
-        proc = subprocess.run(  # noqa: S602
-            command,
-            shell=True,
+        argv = shlex.split(command, posix=sys.platform != "win32")
+        if not argv:
+            return CheckResult(
+                name=name,
+                command=command,
+                exit_code=0,
+                duration_seconds=0.0,
+                output="",
+                skipped_reason="empty command",
+            )
+        # On Windows, commands like `npm`, `npx`, `yarn` are .cmd wrappers that
+        # subprocess cannot find without shell=True. Resolve via shutil.which
+        # so we keep shell=False (safer) while still finding .cmd/.bat wrappers.
+        if sys.platform == "win32":
+            resolved = shutil.which(argv[0])
+            if resolved:
+                argv[0] = resolved
+        proc = subprocess.run(  # noqa: S603
+            argv,
             cwd=str(cwd),
             capture_output=True,
             timeout=timeout,
@@ -408,9 +425,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     override = _override_script(root)
     if override is not None:
-        cmd = (
-            f'bash "{override}"' if override.suffix == ".sh" else f'cmd /c "{override}"'
-        )
+        # Pass the script path through shlex.quote so _run_check (which now
+        # uses argv form, no shell=True) splits it back into a clean list.
+        if override.suffix == ".sh":
+            cmd = f"bash {shlex.quote(str(override))}"
+        else:
+            cmd = f"cmd /c {shlex.quote(str(override))}"
         result = _run_check("custom", cmd, cwd=root, timeout=timeout)
         results = [result]
         profile = ProjectProfile(
@@ -474,9 +494,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
         else:
             results.append(_run_check("tests", profile.test, cwd=root, timeout=timeout))
 
+    no_output = bool(getattr(args, "no_output", False))
     summary = _format_summary(profile, results, override)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(summary, encoding="utf-8")
+    if not no_output:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(summary, encoding="utf-8")
 
     if output_format == "json":
         _emit_json_report(profile, results, output_path)
@@ -533,6 +555,12 @@ def setup_verify_parser(
         "--skip-test",
         action="store_true",
         help="Don't run the auto-detected test command",
+    )
+    p.add_argument(
+        "--no-output",
+        action="store_true",
+        default=False,
+        help="Skip writing verification_summary.md (results still printed to console)",
     )
     p.add_argument(
         "--json",

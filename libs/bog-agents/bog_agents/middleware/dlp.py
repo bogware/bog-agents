@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated
@@ -125,6 +126,10 @@ class DLPLog:
     """Log of all DLP events in a session."""
 
     events: list[DLPEvent] = field(default_factory=list)
+    # Guards ``events.append`` so concurrent middleware turns can't tear
+    # the list. Held only during append; readers may iterate the list
+    # without holding it (Python list iteration is atomic).
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def total_detections(self) -> int:
@@ -270,35 +275,67 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
     def _process_messages(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
         """Scan and optionally redact messages.
 
+        In ``redact`` mode the message content is rewritten in place so that
+        sensitive data never reaches the underlying model.
+
         Args:
             request: Model request.
 
         Returns:
-            Possibly modified request.
+            Possibly modified request (mutated in place).
         """
+        redact = self._mode == "redact"
         for i, msg in enumerate(request.messages):
             content = getattr(msg, "content", "")
-            if not isinstance(content, str):
-                continue
-            results = _scan_text(content, self._patterns)
-            for pattern, count in results:
-                self.log.events.append(
-                    DLPEvent(
-                        pattern_name=pattern.name,
-                        category=pattern.category,
-                        action=self._mode,
-                        message_index=i,
-                        count=count,
-                    )
-                )
-                if self._mode == "warn":
-                    logger.warning(
-                        "DLP: %s detected %d occurrence(s) of %s in message %d",
+            if isinstance(content, str):
+                results = _scan_text(content, self._patterns)
+                if not results:
+                    continue
+                with self.log._lock:
+                    for pattern, count in results:
+                        self.log.events.append(
+                            DLPEvent(
+                                pattern_name=pattern.name,
+                                category=pattern.category,
+                                action=self._mode,
+                                message_index=i,
+                                count=count,
+                            )
+                        )
+                    logger.log(
+                        logging.WARNING if self._mode == "warn" else logging.INFO,
+                        "DLP: %s detected %d occurrence(s) of %s in message %d (mode=%s)",
                         pattern.name,
                         count,
                         pattern.category,
                         i,
+                        self._mode,
                     )
+                if redact:
+                    msg.content = _redact_text(content, self._patterns)
+            elif isinstance(content, list):
+                # Multimodal content: redact text parts in place.
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text = part.get("text", "")
+                        if not isinstance(text, str):
+                            continue
+                        results = _scan_text(text, self._patterns)
+                        if not results:
+                            continue
+                        with self.log._lock:
+                            for pattern, count in results:
+                                self.log.events.append(
+                                    DLPEvent(
+                                        pattern_name=pattern.name,
+                                        category=pattern.category,
+                                        action=self._mode,
+                                        message_index=i,
+                                        count=count,
+                                    )
+                                )
+                        if redact:
+                            part["text"] = _redact_text(text, self._patterns)
         return request
 
     def wrap_model_call(

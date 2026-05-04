@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -416,7 +415,295 @@ _REGISTRY: dict[str, RegistryEntry] = {
         ),
         source="community",
     ),
+    "aws": RegistryEntry(
+        id="aws",
+        display_name="AWS",
+        description="AWS account access — list resources, query CloudWatch, manage S3/IAM/EC2 via boto3",
+        category="infra",
+        transport="stdio",
+        command="uvx",
+        args=["awslabs.aws-api-mcp-server@latest"],
+        optional_env=["AWS_PROFILE", "AWS_REGION"],
+        vars_hints={
+            "AWS_PROFILE": "Named profile from ~/.aws/credentials (default: 'default')",
+            "AWS_REGION": "Default AWS region (e.g. us-east-1)",
+        },
+        install_notes=(
+            "Authenticates via the local AWS credentials chain (env vars, ~/.aws/credentials, "
+            "IAM role). Run `aws configure` once before using. Read-only by default — see "
+            "the awslabs README for write-mode and least-privilege IAM examples."
+        ),
+        source="vendor",
+    ),
+    "datadog": RegistryEntry(
+        id="datadog",
+        display_name="Datadog",
+        description="Datadog metrics, logs, monitors, and dashboards — search APM traces and incidents",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@datadog/mcp-server"],
+        required_env=["DD_API_KEY", "DD_APP_KEY"],
+        optional_env=["DD_SITE"],
+        vars_hints={
+            "DD_API_KEY": "Datadog API key (Organization Settings → API Keys)",
+            "DD_APP_KEY": "Datadog Application key (Organization Settings → Application Keys)",
+            "DD_SITE": "Datadog site (datadoghq.com, datadoghq.eu, us3.datadoghq.com)",
+        },
+        install_notes=(
+            "Create an API key + Application key in Datadog org settings. The default site "
+            "is datadoghq.com — set DD_SITE if you're on EU or US3."
+        ),
+        source="vendor",
+    ),
+    "kubernetes": RegistryEntry(
+        id="kubernetes",
+        display_name="Kubernetes",
+        description="Kubernetes cluster ops — kubectl-style get/describe/logs/events for pods, services, deployments",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "mcp-server-kubernetes"],
+        optional_env=["KUBECONFIG"],
+        vars_hints={"KUBECONFIG": "Path to kubeconfig (default: ~/.kube/config)"},
+        install_notes=(
+            "Uses the local kubeconfig — point KUBECONFIG at the right cluster context. "
+            "Read-only operations by default; do NOT enable write tools on prod clusters."
+        ),
+        source="community",
+    ),
+    "confluence": RegistryEntry(
+        id="confluence",
+        display_name="Confluence",
+        description="Search and read Atlassian Confluence pages, spaces, and comments",
+        category="productivity",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-atlassian-confluence"],
+        required_env=[
+            "CONFLUENCE_BASE_URL",
+            "CONFLUENCE_API_TOKEN",
+            "CONFLUENCE_EMAIL",
+        ],
+        vars_hints={
+            "CONFLUENCE_BASE_URL": "https://your-domain.atlassian.net/wiki",
+            "CONFLUENCE_API_TOKEN": "Atlassian API token (id.atlassian.com/manage-profile/security/api-tokens)",
+            "CONFLUENCE_EMAIL": "Email associated with the API token",
+        },
+        install_notes=(
+            "Same API-token flow as Jira — issue one token at id.atlassian.com and "
+            "share it across both servers."
+        ),
+        source="community",
+    ),
+    "stripe": RegistryEntry(
+        id="stripe",
+        display_name="Stripe",
+        description="Stripe customer / charge / subscription / invoice lookups (test or live mode)",
+        category="business",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@stripe/mcp-server"],
+        required_env=["STRIPE_SECRET_KEY"],
+        vars_hints={
+            "STRIPE_SECRET_KEY": "sk_test_... or sk_live_... — use TEST keys when developing",
+        },
+        install_notes=(
+            "Use a TEST key (sk_test_...) for development; live keys grant full account "
+            "access. Read-only by default; the agent will not create charges or refunds."
+        ),
+        source="vendor",
+    ),
+    "cloudflare": RegistryEntry(
+        id="cloudflare",
+        display_name="Cloudflare",
+        description="Cloudflare zones, DNS, Workers, KV, R2 — read-only by default",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@cloudflare/mcp-server-cloudflare"],
+        required_env=["CLOUDFLARE_API_TOKEN"],
+        vars_hints={
+            "CLOUDFLARE_API_TOKEN": "Scoped API token (dash.cloudflare.com → My Profile → API Tokens)",
+        },
+        install_notes=(
+            "Create a scoped token with the minimum permissions you need (Zone.Read, "
+            "Workers Scripts:Read, etc.). Avoid the 'Global API Key'."
+        ),
+        source="vendor",
+    ),
+    "mongodb": RegistryEntry(
+        id="mongodb",
+        display_name="MongoDB",
+        description="MongoDB collection queries, schema introspection, and aggregation pipelines",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "mcp-mongo-server"],
+        required_env=["MONGODB_URI"],
+        vars_hints={
+            "MONGODB_URI": "mongodb://user:pass@host:port/db (or mongodb+srv://... for Atlas)",
+        },
+        install_notes=(
+            "Point at a read-only replica when possible. The server exposes find / "
+            "aggregate / collection-stats; create / update / delete are gated."
+        ),
+        source="community",
+    ),
+    "redis": RegistryEntry(
+        id="redis",
+        display_name="Redis",
+        description="Redis key / hash / stream / pub-sub inspection (read-only by default)",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-redis"],
+        required_env=["REDIS_URL"],
+        vars_hints={
+            "REDIS_URL": "redis://[user:pass@]host:port[/db] or rediss:// for TLS",
+        },
+        install_notes=(
+            "Use a read replica for production. The default toolset is read-only; "
+            "enable write tools only against scratch / staging instances."
+        ),
+        source="official",
+    ),
+    "bigquery": RegistryEntry(
+        id="bigquery",
+        display_name="Google BigQuery",
+        description="Run BigQuery SQL, list datasets / tables / columns, schema lookups",
+        category="database",
+        transport="stdio",
+        command="uvx",
+        args=["mcp-server-bigquery"],
+        required_env=["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        vars_hints={
+            "GOOGLE_APPLICATION_CREDENTIALS": "Path to GCP service-account JSON key",
+            "GOOGLE_CLOUD_PROJECT": "GCP project id (e.g. my-data-warehouse)",
+        },
+        install_notes=(
+            "Service-account key needs roles/bigquery.dataViewer and roles/bigquery.jobUser. "
+            "Avoid roles/bigquery.dataEditor unless you intend to allow writes."
+        ),
+        source="community",
+    ),
+    "snowflake": RegistryEntry(
+        id="snowflake",
+        display_name="Snowflake",
+        description="Snowflake SQL, warehouse / database / schema introspection",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@snowflake/mcp-server"],
+        required_env=["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD"],
+        optional_env=["SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_ROLE"],
+        vars_hints={
+            "SNOWFLAKE_ACCOUNT": "Account locator (e.g. xy12345.us-east-1)",
+            "SNOWFLAKE_USER": "Service / read-only username",
+            "SNOWFLAKE_PASSWORD": "Password — prefer SAML / key-pair auth in prod",
+        },
+        install_notes=(
+            "Use a read-only role (e.g. ANALYST_RO) and dedicated warehouse — the agent "
+            "can run arbitrary SQL within whatever role it authenticates as."
+        ),
+        source="vendor",
+    ),
+    "google-drive": RegistryEntry(
+        id="google-drive",
+        display_name="Google Drive",
+        description="Search and read Google Drive files (Docs, Sheets, PDFs)",
+        category="productivity",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-gdrive"],
+        required_env=["GDRIVE_CREDENTIALS_PATH"],
+        vars_hints={
+            "GDRIVE_CREDENTIALS_PATH": "Path to OAuth2 client_secret JSON",
+        },
+        install_notes=(
+            "Run an OAuth2 dance once on first use. The server caches a refresh token; "
+            "scope is drive.readonly by default."
+        ),
+        source="official",
+    ),
+    "discord": RegistryEntry(
+        id="discord",
+        display_name="Discord",
+        description="Read Discord channel messages, list guilds and members; post messages with explicit confirmation",
+        category="communication",
+        transport="stdio",
+        command="npx",
+        args=["-y", "discord-mcp"],
+        required_env=["DISCORD_BOT_TOKEN"],
+        vars_hints={
+            "DISCORD_BOT_TOKEN": "Bot token from discord.com/developers/applications",
+        },
+        install_notes=(
+            "Invite the bot with the minimum required intents (Read Messages, optionally "
+            "Send Messages). Never use a user token."
+        ),
+        source="community",
+    ),
+    "hubspot": RegistryEntry(
+        id="hubspot",
+        display_name="HubSpot",
+        description="HubSpot CRM contacts / companies / deals / tickets (read-mostly)",
+        category="business",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@hubspot/mcp-server"],
+        required_env=["HUBSPOT_PRIVATE_APP_TOKEN"],
+        vars_hints={
+            "HUBSPOT_PRIVATE_APP_TOKEN": "Private app access token (HubSpot → Settings → Private Apps)",
+        },
+        install_notes=(
+            "Create a Private App with the scopes you actually need. Avoid a 'super-admin' "
+            "token — least-privilege scopes are honored by the server."
+        ),
+        source="vendor",
+    ),
+    "supabase": RegistryEntry(
+        id="supabase",
+        display_name="Supabase",
+        description="Supabase database, auth users, and storage bucket queries",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@supabase/mcp-server"],
+        required_env=["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
+        vars_hints={
+            "SUPABASE_URL": "https://your-project.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "Service-role key (NOT anon) — keep this secret",
+        },
+        install_notes=(
+            "The service-role key bypasses RLS — keep it only in your local vault, "
+            "never commit it. Use the anon key for read-only public-data scenarios."
+        ),
+        source="vendor",
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Curated featured set — surfaced by ``/mcp featured``.
+# ---------------------------------------------------------------------------
+
+FEATURED_IDS: tuple[str, ...] = (
+    "github",
+    "jira",
+    "linear",
+    "slack",
+    "postgres",
+    "aws",
+    "azure-devops",
+    "terraform",
+    "datadog",
+    "kubernetes",
+    "sentry",
+    "notion",
+)
+"""Curated quick-pick list for ``/mcp featured`` — the integrations a typical
+developer reaches for first. Order is intentional (most common first)."""
 
 
 # ---------------------------------------------------------------------------
@@ -593,13 +880,16 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY003,TRY004,TRY301,EM102
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-    ) as exc:
+    except Exception as exc:
+        # Documented contract: ANY failure returns ``{}`` so callers
+        # always have the local registry as a safe fallback. The
+        # previous explicit tuple — ``(URLError, TimeoutError, OSError,
+        # JSONDecodeError, ValueError)`` — missed third-party blockers
+        # that don't inherit from those (e.g. ``pytest-socket``'s
+        # ``SocketBlockedError`` extends ``Exception`` directly). A
+        # broad catch is the right shape here: the function is the
+        # outermost network boundary, never re-raises, and logs what
+        # happened at DEBUG.
         logger.debug("Could not fetch MCP remote catalog: %s", exc)
         if _CACHE_PATH.exists():
             try:

@@ -91,8 +91,8 @@ class FilesystemBackend(BackendProtocol):
 
                 Defaults to the current working directory.
 
-                - When `virtual_mode=False` (default): Only affects relative path resolution.
-                - When `virtual_mode=True`: Acts as a virtual root for filesystem operations.
+                - When `virtual_mode=True` (default): Acts as a virtual root for filesystem operations.
+                - When `virtual_mode=False`: Only affects relative path resolution. Deprecated.
 
             virtual_mode: Enable virtual path mode.
 

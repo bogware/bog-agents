@@ -1,0 +1,18 @@
+{
+  "auto_mode": {
+    "enabled": false,
+    "haiku_eval": {
+      "enabled": true,
+      "model": "claude-haiku-4-5-20251001",
+      "for_shell_commands": true,
+      "for_destructive_ops": true
+    },
+    "preflight_clarification": true,
+    "shell_ask_patterns": [],
+    "shell_allow_patterns": [
+      "^uv\\s+run\\s+.*pytest",
+      "^uv\\s+run\\s+.*ruff",
+      "^make\\s+(test|lint|format|check)"
+    ]
+  }
+}
