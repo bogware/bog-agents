@@ -26,9 +26,10 @@ classifiers = [
     "Topic :: Terminals",
 ]
 dependencies = [
-    # Framework — pin major-minor (0.8.x). The CLI tracks the SDK closely
-    # and uses internal APIs; relax this only after confirming compat.
-    "bog-agents>=0.8.0,<0.9.0",
+    # Framework — accept any 0.x release of the SDK. The CLI tracks the
+    # SDK closely; tighten back to a major-minor pin if a future SDK
+    # release breaks compat.
+    "bog-agents>=0.7.0,<1.0.0",
     "langchain>=1.2.10,<2.0.0",
     "langgraph>=1.1.2,<2.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
