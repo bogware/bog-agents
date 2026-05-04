@@ -151,6 +151,7 @@ def _run_shell_sync(
             shell=True,
             cwd=cwd or None,
             env=env,
+            stdin=subprocess.DEVNULL,  # interactive prompts get EOF, never hang
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             creationflags=creationflags,

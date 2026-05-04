@@ -366,6 +366,14 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 # dies and the agent always sees the actual command output.
                 encoding="utf-8",
                 errors="replace",
+                # Redirect stdin from /dev/null so commands that expect
+                # interactive input (e.g. Windows ``date`` / ``time``
+                # which prompt for a new value, ``apt install`` / ``npm
+                # init`` / ``git rebase -i`` / ``read``) fail fast with
+                # an EOF rather than hanging the agent forever waiting
+                # on a TTY that no one is sitting at. The agent can
+                # always retry with a non-interactive flag.
+                stdin=subprocess.DEVNULL,
                 timeout=effective_timeout,
                 env=self._env,
                 cwd=str(self.cwd),  # Use the root_dir from FilesystemBackend
