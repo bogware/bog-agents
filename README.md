@@ -1,361 +1,243 @@
 # Bog Agents
 
-**v0.7.0** — Production-ready AI agent framework built on LangGraph.
+> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
 
-Bog Agents gives you three things:
+**v0.8.0** — a production-ready AI agent framework built on LangGraph,
+deliberately calm by design.
 
-- `bog-agents`: a Python SDK for building agentic workflows on LangGraph
-- `bog-agents-cli`: a terminal-first coding agent for day-to-day engineering work
-- `bog-agents-daemon`: an ambient agent daemon — run agents on schedules, file-change triggers, webhooks, and git pushes
+Three packages, one philosophy:
 
-Out of the box: file tools, shell execution, thread history, model switching, vault-backed API key management, parallel worktree agents, MCP integration, background work, codebase indexing, interactive PR review, and a practical human-in-the-loop approval model.
+- **[`bog-agents`](libs/bog-agents)** — the Python SDK. `create_agent()` returns a
+  compiled LangGraph agent with file tools, a shell, sub-agents, plan mode,
+  retry-with-backoff, and 80+ composable middlewares.
+- **[`bog-agents-cli`](libs/cli)** — a coding agent that lives in your terminal.
+  80+ slash commands, any LLM, persistent memory, MCP marketplace, `/peat`
+  personal scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`,
+  in-memory secrets vault, matte-swamp / neon-green TUI.
+- **[`bog-agents-daemon`](libs/daemon)** — the patient watcher. Runs your
+  agents on cron / file-change / webhook / git-push triggers; survives
+  reboots; reports back via Slack / email / GitHub / file / webhook.
 
-Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT licensed.
-
----
-
-## Why Bog Agents
-
-- **Production-minded SDK** — start with a compiled LangGraph graph; extend with composable middleware instead of rebuilding primitives for every project
-- **Parallel agent architecture** — spawn multiple sub-agents in isolated git worktrees, detect merge conflicts pre-flight, synthesize results automatically
-- **Serious CLI** — interactive Textual TUI, non-interactive automation, `/checkpoint` resume, `/explain` deep-dives, `/pr review` for GitHub and Azure DevOps
-- **Vault-first secrets** — API keys stored in an encrypted vault (`/vars set`), injected into the environment at startup so every provider, MCP server, and LangSmith tracing connection just works
-- **Model flexibility** — any LangChain-compatible tool-calling model: Anthropic, OpenAI, Ollama, Bedrock, Google, Mistral, Groq, xAI, and more
+Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT.
 
 ---
 
-## Quick Install
+## Philosophy
 
-### Daemon (ambient background agent service)
+Most agent frameworks make you assemble the kit. We don't. Bog Agents starts
+you with a working agent — and lets you peel away or bolt on layers as you
+understand what you actually need.
+
+- **Patient by default.** Failures retry with bounded backoff. Hung commands
+  time out. Provider hiccups don't kill the run. Crashes drop a redacted
+  panic dump for easy bug reports.
+- **Opinionated where it matters.** Secure-by-default backends. A
+  memory-only secrets vault that never touches disk. Structured event
+  logging at every chokepoint. Tokens written atomically with `0o600`
+  before the rename — no world-readable race window.
+- **No ceremony.** `pipx install bog-agents-cli && bog-agents` and you have
+  a working agent in under a minute. `pip install bog-agents` and one
+  function call gets you a compiled agent.
+- **Composable.** 80+ middlewares snap on or off. Subagents nest.
+  Backends swap. The framework gets out of your way.
+
+The bog is calm, deep, and unhurried. So is the agent.
+
+---
+
+## Quick install
+
+### CLI (most users start here)
+
+```bash
+# pipx is recommended — isolated install, clean PATH
+pipx install bog-agents-cli
+
+# or with uv (fastest)
+uv tool install bog-agents-cli
+
+# or plain pip
+pip install bog-agents-cli
+```
+
+Provider extras:
+
+```bash
+pip install 'bog-agents-cli[anthropic]'        # Claude
+pip install 'bog-agents-cli[openai]'           # GPT
+pip install 'bog-agents-cli[all-providers]'    # everything
+```
+
+Then run:
+
+```bash
+bog-agents --doctor-deep      # one-page health summary
+bog-agents                    # interactive TUI
+bog-agents -p "explain this module" < src/agent.py   # one-shot
+```
+
+### Daemon (ambient runner)
 
 ```bash
 pip install bog-agents-daemon
-
-# Start the daemon (binds to localhost:7391)
-bog-agents-daemon
-
-# Or manage it from the CLI
-bog-agents daemon start
-bog-agents daemon status
-bog-agents daemon jobs
-
-# Install as a system service (auto-detects systemd/launchd)
-bog-agents daemon install
+bog-agents-daemon run --port 7878
 ```
 
-See the [daemon README](libs/daemon/README.md) for trigger types, output targets, REST API reference, and security notes.
+See the [daemon README](libs/daemon/README.md) for systemd / Windows-task /
+launchd installation, REST API, trigger types, and output targets.
 
-### CLI (recommended)
-
-```bash
-# Anthropic (Claude)
-pip install 'bog-agents-cli[anthropic]'
-
-# OpenAI
-pip install 'bog-agents-cli[openai]'
-
-# All providers
-pip install 'bog-agents-cli[all-providers]'
-```
-
-With `uv` (faster):
-
-```bash
-uv tool install 'bog-agents-cli[anthropic]'
-```
-
-### SDK only
+### SDK only (for embedding agents in your own app)
 
 ```bash
 pip install bog-agents
 ```
 
----
-
-## Run Locally
-
-### Standard (Anthropic / OpenAI)
-
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."   # or OPENAI_API_KEY
-
-# Start the interactive TUI
-bog-agents
-
-# Or store the key in the vault so you never set it again
-bog-agents
-# then inside: /vars set ANTHROPIC_API_KEY sk-ant-...
-```
-
-### With Ollama (local models, no API key needed)
-
-```bash
-# 1. Install Ollama — https://ollama.ai
-brew install ollama          # macOS
-# or: curl -fsSL https://ollama.ai/install.sh | sh
-
-# 2. Pull a model
-ollama pull llama3.2          # 3B, fast
-ollama pull qwen2.5-coder     # excellent for coding tasks
-ollama pull mistral-nemo      # good balance
-
-# 3. Run Bog Agents with that model
-pip install 'bog-agents-cli[ollama]'
-bog-agents -M ollama:llama3.2
-
-# Or set it as the permanent default
-bog-agents
-# then inside: /model set ollama:llama3.2
-```
-
-Ollama runs entirely locally — no API keys, no usage costs, no data leaves your machine.
-
----
-
-## Run From Source
-
-Requirements: Python 3.11+, [uv](https://docs.astral.sh/uv/)
-
-```bash
-git clone https://github.com/bogware/bog-agents.git
-cd bog-agents
-
-# Install CLI dependencies
-cd libs/cli
-uv sync
-
-# Run the CLI
-uv run bog-agents
-
-# With a specific model
-uv run bog-agents -M anthropic:claude-sonnet-4-6
-uv run bog-agents -M ollama:llama3.2
-
-# Verify environment
-uv run bog-agents --doctor
-```
-
----
-
-## SDK Quick Start
-
 ```python
 from bog_agents import create_agent
 
-# Basic agent
-agent = create_agent(
-    model="anthropic:claude-sonnet-4-6",
-    enable_git_tools=True,
-    enable_cost_tracking=True,
-)
-
-result = agent.invoke(
-    {"messages": [{"role": "user", "content": "Summarize the testing strategy."}]},
-    config={"configurable": {"thread_id": "demo-thread"}},
-)
-
-# Parallel worktree agent (spawn sub-agents in isolated git branches)
-agent = create_agent(
-    model="anthropic:claude-sonnet-4-6",
-    enable_parallel_worktree=True,   # ParallelWorktreeMiddleware with default factory
-    enable_result_synthesis=True,    # auto-synthesize results when tasks complete
-)
-# Agent can now use spawn_parallel_tasks, await_tasks_complete, synthesize_parallel_results tools
+agent = create_agent(model="anthropic:claude-sonnet-4-6")
+result = await agent.ainvoke({"messages": [{"role": "user", "content": "hi"}]})
 ```
 
-`create_agent()` returns a compiled LangGraph graph — streaming, checkpointers, Studio, and remote execution all work without wrapping.
+See the [SDK README](libs/bog-agents/README.md) for backends, middlewares,
+and the full provider matrix.
 
 ---
 
-## CLI Reference
+## What's new in 0.8.0
 
-### Interactive session
+A genuine flagship release. Five top-line capabilities and a hundred small
+refinements.
 
-```bash
-bog-agents                          # start TUI
-bog-agents -M claude-sonnet-4-6    # pick model
-bog-agents -M ollama:llama3.2      # local model
-bog-agents -r                       # resume last thread
-bog-agents -r <thread-id>           # resume specific thread
-```
+### `/peat` — your personal assistant
 
-### Non-interactive / automation
-
-```bash
-bog-agents -n "Summarize repo status"
-bog-agents -p "Explain this module" < path/to/file.py
-bog-agents -n "List TODOs" --json
-bog-agents -n "Run tests and explain failures" --shell-allow-list recommended
-bog-agents -n "Fix failing tests and commit" --shell-allow-list all
-```
-
-### Slash commands (inside TUI)
-
-| Command | What it does |
-|---------|--------------|
-| `/help` | Search commands by keyword |
-| `/model` | Switch model or set default |
-| `/checkpoint save <name>` | Save a named session checkpoint |
-| `/checkpoint load <name>` | Restore a checkpoint |
-| `/explain <symbol or file>` | Deep-dive explanation with call sites |
-| `/index build` | Build TF-IDF codebase knowledge index |
-| `/index search <query>` | Search the index |
-| `/pr review <number>` | Fetch and review a GitHub/Azure DevOps PR diff |
-| `/test run [file]` | Auto-detect framework and run tests |
-| `/benchmark run [suite]` | Run evaluation suites |
-| `/agent panel` | Live parallel agent status dashboard |
-| `/agent spawn --worktree <prompt>` | Spawn a sub-agent in an isolated git worktree |
-| `/team sync` | Git-based shared memory sync (pull/push/both) |
-| `/undo restore <path>` | Git-backed safe file restore |
-| `/vars set KEY value` | Store API key in encrypted vault |
-| `/langsmith set-key <key>` | Enable LangSmith tracing |
-| `/mcp` | Browse and manage MCP servers |
-| `/skills` | Show loaded skills and search paths |
-| `/plan` | Toggle read-only plan mode |
-| `/review` | Structured code review |
-| `/resume` | Resume a previous thread |
-| `/compact` | Summarize context to reduce token usage |
-| `/doctor` | Environment diagnostics |
-
-Type `/` in the TUI to search all commands with fuzzy matching.
-
----
-
-## Parallel Agent Architecture
-
-Bog Agents has first-class support for spawning multiple sub-agents that work in parallel and merging their results.
-
-```python
-# Enable parallel worktrees + result synthesis in one line
-agent = create_agent(
-    model="anthropic:claude-sonnet-4-6",
-    enable_parallel_worktree=True,
-    enable_result_synthesis=True,
-)
-```
-
-The agent gains these tools automatically:
-
-| Tool | What it does |
-|------|-------------|
-| `spawn_parallel_tasks` | Launch N tasks in isolated git worktrees concurrently |
-| `worktree_status` | Check status of all running tasks |
-| `merge_task_results` | Merge completed branches with conflict detection |
-| `await_tasks_complete` | Wait for tasks to finish (async, with timeout) |
-| `synthesize_parallel_results` | Build a structured synthesis prompt for the agent |
-| `gather_parallel_results` | Collect + format all task outputs |
-
-**Smart merge strategies** — when merging parallel branches back, choose from:
-- `prefer_source` — source branch wins on conflicts (`-X theirs`)
-- `prefer_target` — main branch wins (`-X ours`)
-- `sequential` — detect conflicts and retry tasks one-by-one
-- `manual` — surface conflicts for human review (default)
-
-Trivial whitespace-only conflicts are auto-resolved regardless of strategy.
-
----
-
-## Vault / API Key Management
-
-Store API keys once; every session uses them automatically.
-
-```bash
-# In the TUI
-/vars set ANTHROPIC_API_KEY sk-ant-...
-/vars set OPENAI_API_KEY sk-...
-/vars set LANGSMITH_API_KEY lsv2_...
-
-# Or use provider-specific helpers
-/langsmith set-key lsv2_...
-```
-
-Keys stored in the vault are injected into `os.environ` at startup. Downstream libraries (LangChain, LangSmith, Daytona, etc.) pick them up transparently. Environment variables set in the shell always take precedence over vault values.
-
-Supported keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `COHERE_API_KEY`, `NVIDIA_API_KEY`, `FIREWORKS_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, `TAVILY_API_KEY`, `LANGSMITH_API_KEY`, `DAYTONA_API_KEY`.
-
----
-
-## Monorepo Structure
+A long-lived in-process sub-agent with a hand-crafted persona. Schedules
+recurring jobs (cron, `@every`, `@once`), runs deep research with a
+five-phase plan, builds personalized digests from your `/qa` results and
+`/replay` recordings.
 
 ```text
-libs/
-├── bog-agents/      # Core SDK — create_agent(), middleware, backends       [v0.7.0, stable]
-├── cli/             # Terminal UI — Textual TUI, slash commands, vault       [v0.7.0, stable]
-├── daemon/          # Ambient agent daemon — REST API, scheduler, triggers   [v0.7.0, beta]
-├── acp/             # Agent Context Protocol (Zed editor integration)        [v0.0.4, alpha]
-├── harbor/          # Evaluation / benchmark framework                       [v0.0.1, alpha]
-├── vscode-extension/# VS Code extension                                      [v0.1.0, alpha]
-└── partners/        # Sandbox integrations (Daytona, Modal, Runloop, QuickJS)[v0.0.4, alpha]
+/peat schedule "0 9 * * 1-5 | summarize yesterday's QA results"
+/peat research "vector databases" --focus pricing,perf
+/peat digest --days 7
+/peat metrics
 ```
 
+### `/qa` — adaptive QA harness
+
+Acceptance-criteria-driven QA plans. Ingest from Jira (via your MCP Jira
+tool), file, JSON, or stdin. Hybrid step model — agent / shell / http /
+mcp — with verdicts (`exit_code`, `status`, `contains`, `regex`,
+`json_path`). Outputs as Markdown, JSON, stdout, or Jira comment.
+
+### `/record` + `/replay` — sessions you can edit and re-run
+
+`/record` captures user prompts, AI responses, and tool calls live.
+`/record stop` finalizes to a YAML file with auto-detected variables
+(Jira IDs, repo URLs, file paths) replaced by `${var}` placeholders.
+`/replay run` prompts for any unfilled variables and dispatches to the
+agent.
+
+### Vault + Vars
+
+Typed variable system shared by `/replay` and `/qa`: `string`, `secret`,
+`enum`, `int`, `bool`. Secrets live only in process memory; nothing
+persists to disk. Optional read-only OS-keychain bridge.
+
+### MCP marketplace, expanded
+
+35+ curated servers across 9 categories: github, jira, gitlab, slack,
+postgres, mongodb, redis, bigquery, snowflake, supabase, aws, azure-devops,
+terraform, cloudflare, stripe, hubspot, notion, confluence, google-drive,
+discord, kubernetes, datadog, sentry, and more.
+
+```text
+/mcp marketplace          # browse the catalog
+/mcp install jira         # install from the catalog
+/mcp add my-tool ...      # custom server
+```
+
+### Plus, under the hood
+
+- **`ProviderRetryMiddleware`** — bounded exponential backoff with jitter
+  on transient provider errors. Never retries tool calls.
+- **`virtual_mode=True` is now the default** for `FilesystemBackend` and
+  `LocalShellBackend`. Path traversal blocked unless explicitly opted out
+  via `BOG_AGENTS_FS_UNSANDBOXED=1`.
+- **Subprocess `stdin=/dev/null`** — interactive commands like Windows
+  `date` get an immediate EOF instead of hanging the agent forever.
+- **Panic dumps** — uncaught exceptions land at
+  `~/.bog-agents/crash/<ts>.log` with redacted host info, versions,
+  traceback, and recent metrics. Attach the file when you open an issue.
+- **Structured event logging** at every chokepoint, ready for shippers
+  (Splunk, Loki, journald). Stable event names, prefixed `evt_*` fields.
+- **Mouse-tracking escape-sequence swallower** so moving the mouse over
+  the terminal during a long agent run no longer leaks `[<35;16;41M`
+  garbage into your input box.
+- **`--doctor-deep`** — runtime probes of every external dependency
+  (Python, dirs writable, settings parseable, git, provider envs, network
+  reachability, MCP config, recent crashes) in under a second.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full 0.8.0 entry.
+
 ---
 
-## Models and Providers
+## Repository layout
 
-| Provider | Example model string |
-|----------|---------------------|
-| Anthropic | `anthropic:claude-sonnet-4-6` |
-| Anthropic Opus | `anthropic:claude-opus-4-7` |
-| OpenAI | `openai:gpt-4o` |
-| Ollama (local) | `ollama:llama3.2`, `ollama:qwen2.5-coder` |
-| Google | `google_genai:gemini-2.5-pro` |
-| Groq | `groq:llama-3.3-70b-versatile` |
-| Mistral | `mistral:mistral-large-latest` |
-| Bedrock | `bedrock_converse:anthropic.claude-sonnet-4-6` |
-| xAI | `xai:grok-2` |
-| OpenRouter | `openrouter:meta-llama/llama-3` |
+| Path | What |
+|---|---|
+| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, 80+ middlewares, pluggable backends. |
+| `libs/cli/` | The terminal CLI. Textual TUI, slash commands, MCP marketplace. |
+| `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook triggers, REST API. |
+| `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |
+| `libs/harbor/` | Evaluation / benchmark harness (Terminal Bench 2.0). |
+| `libs/partners/` | Sandbox provider integrations (Daytona, Modal, RunLoop, QuickJS). |
+| `libs/vscode-extension/` | VS Code integration. |
 
-Use `--doctor` or `/doctor` when provider setup does not behave as expected.
+Each package has its own `pyproject.toml`, `Makefile`, and version. SDK / CLI /
+daemon are released together; the rest tag independently.
 
 ---
 
-## Remote Execution and MCP
+## Working from source
 
 ```bash
-# Sandbox-backed sessions
-bog-agents --sandbox modal
-bog-agents --sandbox daytona
-bog-agents --sandbox runloop
+git clone https://github.com/bogware/bog-agents
+cd bog-agents
 
-# MCP configuration
-bog-agents --mcp-config ./mcp.json
-bog-agents --trust-project-mcp
-
-# HTTP server mode
-bog-agents --serve
-bog-agents --serve --serve-host 0.0.0.0 --serve-port 9000
-
-# ACP server (Zed editor integration)
-bog-agents --acp
+# Install + run the CLI from source
+cd libs/cli
+uv sync --reinstall
+uv run bog-agents
 ```
 
----
-
-## Development
+Each package has the same Makefile targets:
 
 ```bash
-# Lint all packages
-make lint
-
-# Format all packages
-make format
-
-# Package-level tests
-cd libs/bog-agents && uv run --group test pytest tests/unit_tests/ -q
-cd libs/cli        && uv run --group test pytest tests/unit_tests/ -q
-cd libs/daemon     && uv run --group test pytest tests/ -q
+make test        # unit tests, no network
+make lint        # ruff check + ruff format --diff + ty
+make format      # ruff fix + ruff format
 ```
 
-Contributor guidance: `AGENTS.md` (agent-specific), `CONTRIBUTING.md` (human contributors).
+CI runs `make lint` + `make test` per package on every PR. See
+`.github/workflows/ci.yml`.
 
 ---
 
-## Links
+## Documentation
 
-- [CLI package README](libs/cli/README.md)
-- [Daemon README](libs/daemon/README.md)
-- [Contributing](CONTRIBUTING.md)
-- [Publishing](PUBLISHING.md)
-- [Security Policy](SECURITY.md)
-- [LangGraph docs](https://github.com/langchain-ai/langgraph)
+- **Per-package READMEs**: [SDK](libs/bog-agents/README.md) ·
+  [CLI](libs/cli/README.md) · [Daemon](libs/daemon/README.md)
+- **Architecture** — [`CLAUDE.md`](CLAUDE.md)
+- **Changelog** — [`CHANGELOG.md`](CHANGELOG.md)
+- **Issues** — <https://github.com/bogware/bog-agents/issues>
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+---
+
+*Pass through in harmony.*

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bog-agents-cli"
 version = "0.8.0"
-description = "A coding agent in your terminal. 50+ commands, any LLM provider, persistent memory, git workflow, code review, plan mode, remote sandboxes, and CI/CD automation. One install, no code required."
+description = "Bog Agents CLI — your coding agent in the terminal, patient as still water. 80+ slash commands, any LLM provider (Anthropic, OpenAI, Bedrock, Google, Ollama and more), persistent memory, plan mode, /qa acceptance-criteria harness, /peat personal scheduler, /record + /replay, in-memory secrets vault, MCP marketplace with 35+ servers, deep doctor, panic dumps, and a matte swamp/neon-green TUI. One install, no code required. Pass through in harmony."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "bogware", email = "support@bogware.com" }]
