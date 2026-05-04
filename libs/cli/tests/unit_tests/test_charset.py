@@ -197,15 +197,24 @@ class TestDetectCharsetMode:
         assert mode == CharsetMode.UNICODE
 
     @patch.dict("os.environ", {"LANG": "C", "LC_ALL": ""}, clear=False)
-    def test_auto_mode_with_c_locale_falls_back_to_ascii(self) -> None:
-        """Test auto mode falls back to ASCII with C locale."""
-        # Remove UI_CHARSET_MODE if set
+    def test_auto_mode_with_c_locale_picks_unicode(self) -> None:
+        """A C/POSIX locale + ascii stdout should still pick UNICODE.
+
+        Pre-0.8.0 this fell back to ASCII because the auto-detect biased
+        toward ASCII whenever encoding wasn't UTF-*. Modern Windows
+        Terminal / pwsh report ``cp1252``; modern Linux terminals report
+        ``ascii`` under a C locale even though they render unicode
+        block-drawing fine. The new policy reserves the ASCII fallback
+        for genuinely-broken legacy DOS codepages (cp437 / cp850 /
+        cp866). See ``test_legacy_dos_codepages_use_ascii`` in
+        ``test_charset_detect.py``.
+        """
         with patch.dict("os.environ", {"UI_CHARSET_MODE": "auto"}, clear=False):
             mock_stdout = Mock()
             mock_stdout.encoding = "ascii"
             with patch.object(sys, "stdout", mock_stdout):
                 mode = _detect_charset_mode()
-        assert mode == CharsetMode.ASCII
+        assert mode == CharsetMode.UNICODE
 
     def test_auto_mode_with_utf_stdout_encoding(self) -> None:
         """Test auto mode detects UTF from stdout encoding."""

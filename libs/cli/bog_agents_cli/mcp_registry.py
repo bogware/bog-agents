@@ -27,7 +27,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -881,13 +880,16 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY003,TRY004,TRY301,EM102
-    except (
-        urllib.error.URLError,
-        TimeoutError,
-        OSError,
-        json.JSONDecodeError,
-        ValueError,
-    ) as exc:
+    except Exception as exc:
+        # Documented contract: ANY failure returns ``{}`` so callers
+        # always have the local registry as a safe fallback. The
+        # previous explicit tuple — ``(URLError, TimeoutError, OSError,
+        # JSONDecodeError, ValueError)`` — missed third-party blockers
+        # that don't inherit from those (e.g. ``pytest-socket``'s
+        # ``SocketBlockedError`` extends ``Exception`` directly). A
+        # broad catch is the right shape here: the function is the
+        # outermost network boundary, never re-raises, and logs what
+        # happened at DEBUG.
         logger.debug("Could not fetch MCP remote catalog: %s", exc)
         if _CACHE_PATH.exists():
             try:

@@ -62,11 +62,16 @@ class TestBuildBannerThreadLink:
         widget = _make_banner(thread_id="12345")
         banner = widget._build_banner(project_url=None)
 
-        assert "Thread: 12345" in banner.plain
+        # 0.8.0 changed the Thread badge to a padded cartouche
+        # (`` Thread : <id>``). The presence checks still work; just
+        # match the new shape via the ``Thread`` keyword and the id
+        # span lookup separately.
+        assert "Thread" in banner.plain
+        assert "12345" in banner.plain
 
-        # Verify no link style on the thread portion
-        thread_start = banner.plain.index("Thread: 12345")
-        thread_end = thread_start + len("Thread: 12345")
+        # Verify no link style on the thread id itself
+        thread_start = banner.plain.index("12345")
+        thread_end = thread_start + len("12345")
         links = _extract_links(banner, thread_start, thread_end)
         assert not links, "Thread ID should not have a link when project_url is None"
 
@@ -76,7 +81,8 @@ class TestBuildBannerThreadLink:
         widget = _make_banner(thread_id="99999")
         banner = widget._build_banner(project_url=project_url)
 
-        assert "Thread: 99999" in banner.plain
+        assert "Thread" in banner.plain
+        assert "99999" in banner.plain
 
         # Find a span with a link on the thread ID text
         thread_id_start = banner.plain.index("99999")
@@ -120,7 +126,8 @@ class TestBuildBannerThreadLink:
         banner = widget._build_banner(project_url=project_url)
 
         assert "my-project" in banner.plain
-        assert "Thread: 77777" in banner.plain
+        assert "Thread" in banner.plain
+        assert "77777" in banner.plain
 
         thread_id_start = banner.plain.index("77777")
         thread_id_end = thread_id_start + len("77777")
@@ -135,14 +142,17 @@ class TestUpdateThreadId:
     def test_update_thread_id_changes_internal_state(self) -> None:
         """After `update_thread_id`, `_build_banner` should reflect the new ID."""
         widget = _make_banner(thread_id="old_id")
-        assert "Thread: old_id" in widget._build_banner().plain
+        initial_plain = widget._build_banner().plain
+        assert "Thread" in initial_plain
+        assert "old_id" in initial_plain
 
         # Patch Static.update to avoid needing an active Textual app context
         with patch.object(widget, "update"):
             widget.update_thread_id("new_id")
 
         banner = widget._build_banner()
-        assert "Thread: new_id" in banner.plain
+        assert "Thread" in banner.plain
+        assert "new_id" in banner.plain
         assert "old_id" not in banner.plain
 
     def test_update_thread_id_preserves_project_url(self) -> None:
@@ -157,7 +167,8 @@ class TestUpdateThreadId:
         # Verify update_thread_id passed the correct banner to Static.update
         mock_update.assert_called_once()
         banner = mock_update.call_args[0][0]
-        assert "Thread: new_id" in banner.plain
+        assert "Thread" in banner.plain
+        assert "new_id" in banner.plain
         thread_start = banner.plain.index("new_id")
         thread_end = thread_start + len("new_id")
         links = _extract_links(banner, thread_start, thread_end)
