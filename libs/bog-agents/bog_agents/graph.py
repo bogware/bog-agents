@@ -86,12 +86,15 @@ For longer tasks, provide brief progress updates at reasonable intervals — a c
 def get_default_model() -> ChatAnthropic:
     """Get the default model for bog-agents agents.
 
+    Routes through `resolve_model` so the long-running read timeout from
+    `BOG_AGENTS_MODEL_READ_TIMEOUT` (default 3600s) is applied. A bare
+    `ChatAnthropic(...)` would inherit the SDK's stock 600s default and
+    cut off long thinking/streaming turns mid-stream.
+
     Returns:
         `ChatAnthropic` instance configured with Claude Sonnet 4.6.
     """
-    return ChatAnthropic(
-        model_name="claude-sonnet-4-6",
-    )
+    return cast(ChatAnthropic, resolve_model("anthropic:claude-sonnet-4-6"))
 
 
 def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> None:

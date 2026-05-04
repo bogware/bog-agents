@@ -31,8 +31,8 @@ class TestResolveModel:
             mock.return_value = MagicMock(spec=BaseChatModel)
             result = resolve_model("openai:gpt-5")
 
-        # OpenAI also gets the long read timeout (3600s default).
-        mock.assert_called_once_with("openai:gpt-5", use_responses_api=True, timeout=3600.0)
+        # OpenAI also gets the long read timeout (7200s default).
+        mock.assert_called_once_with("openai:gpt-5", use_responses_api=True, timeout=7200.0)
         assert result is mock.return_value
 
     def test_non_openai_string(self) -> None:
@@ -41,7 +41,7 @@ class TestResolveModel:
             result = resolve_model("anthropic:claude-sonnet-4-6")
 
         # Anthropic is forwarded with `timeout=` so long turns don't get cut off.
-        mock.assert_called_once_with("anthropic:claude-sonnet-4-6", timeout=3600.0)
+        mock.assert_called_once_with("anthropic:claude-sonnet-4-6", timeout=7200.0)
         assert result is mock.return_value
 
     def test_timeout_env_override_applied(self, monkeypatch: object) -> None:

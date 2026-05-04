@@ -1053,27 +1053,10 @@ class BogAgentsApp(App):
             logger.warning("peat scheduler failed to start", exc_info=True)
             self._peat_scheduler = None
 
-        # Warn about missing optional tools (advisory only — never block startup)
-        try:
-            from bog_agents_cli.main import (
-                check_optional_tools,
-                format_tool_warning_tui,
-            )
-        except ImportError:
-            logger.warning(
-                "Could not import optional tools checker; skipping tool warnings",
-                exc_info=True,
-            )
-        else:
-            try:
-                for tool in check_optional_tools():
-                    self.notify(
-                        format_tool_warning_tui(tool),
-                        severity="warning",
-                        timeout=15,
-                    )
-            except Exception:
-                logger.debug("Failed to check for optional tools", exc_info=True)
+        # Optional-tool warnings (e.g. missing ripgrep) used to fire here but
+        # were too noisy on every TUI start. The grep tool falls back to a
+        # pure-Python search transparently. Users who actually want the prompt
+        # can still call ``check_optional_tools()`` directly.
 
         # Auto-submit initial prompt if provided via -m flag.
         # This check must come first because _lc_thread_id and _agent are

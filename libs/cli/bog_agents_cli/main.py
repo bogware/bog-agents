@@ -1337,6 +1337,20 @@ def cli_main() -> None:
     if "--acp" not in sys.argv[1:] and "--serve" not in sys.argv[1:]:
         check_cli_dependencies()
 
+    # Translate the user's ``[timeouts]`` settings into env vars before any
+    # SDK code reads them. Existing env values win, so a shell override
+    # (``BOG_AGENTS_MODEL_READ_TIMEOUT=300 bog ...``) still takes precedence
+    # over what's in settings.json.
+    try:
+        from bog_agents_cli.timeouts import apply_to_env as _apply_timeout_env
+
+        project_root = Path.cwd() if (Path.cwd() / ".bog-agents").is_dir() else None
+        _apply_timeout_env(project_root=project_root)
+    except Exception:
+        # Misconfigured timeouts must never block startup. Log and continue
+        # with whatever defaults the SDK and remote_client provide.
+        logger.warning("timeouts: failed to apply settings cascade", exc_info=True)
+
     from bog_agents_cli.config import console, settings
 
     try:
@@ -1755,24 +1769,10 @@ def cli_main() -> None:
                 # No subcommand provided, show threads help screen
                 show_threads_help()
         elif args.non_interactive_message:
-            # Check for optional tools before running agent (stderr so
-            # --quiet piped output stays clean)
-            try:
-                from rich.console import Console as _Console
-            except ImportError:
-                logger.warning(
-                    "Could not import rich.console; skipping tool warnings",
-                    exc_info=True,
-                )
-            else:
-                try:
-                    warn_console = _Console(stderr=True)
-                    for tool in check_optional_tools():
-                        warn_console.print(
-                            f"[yellow]Warning:[/yellow] {format_tool_warning_cli(tool)}"
-                        )
-                except Exception:
-                    logger.debug("Failed to check for optional tools", exc_info=True)
+            # Optional-tool warnings (e.g. missing ripgrep) used to fire here
+            # but were too noisy. The grep tool falls back to a pure-Python
+            # search transparently; users who want the prompt can still call
+            # ``check_optional_tools()`` directly.
             # Non-interactive mode - execute single task and exit
             from bog_agents_cli.non_interactive import run_non_interactive
 

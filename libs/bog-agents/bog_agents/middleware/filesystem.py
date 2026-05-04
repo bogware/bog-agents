@@ -460,7 +460,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
         system_prompt: str | None = None,
         custom_tool_descriptions: dict[str, str] | None = None,
         tool_token_limit_before_evict: int | None = 20000,
-        max_execute_timeout: int = 3600,
+        max_execute_timeout: int = 7200,
         artifacts_root: str | None = None,
     ) -> None:
         """Initialize the filesystem middleware.
@@ -477,7 +477,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 offloaded. When omitted, composite backends may provide their
                 own `artifacts_root`, otherwise `/large_tool_results` is used.
 
-                Defaults to 3600 seconds (1 hour). Any per-command timeout
+                Defaults to 7200 seconds (2 hours). Any per-command timeout
                 exceeding this value will be rejected with an error message.
 
         Raises:

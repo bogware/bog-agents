@@ -603,7 +603,7 @@ class TestRemoteAgentInit:
             mock_cls.assert_called_once()
 
     def test_extended_read_timeout_applied_to_clients(self) -> None:
-        """Default 1800s read timeout is configured on the underlying httpx clients.
+        """Default 7200s read timeout is configured on the underlying httpx clients.
 
         The langgraph_sdk default is 300s; we extend it so /review-style turns
         don't get killed mid-stream by the default deadline.
@@ -619,7 +619,7 @@ class TestRemoteAgentInit:
                 _, kwargs = mock.call_args
                 timeout = kwargs.get("timeout")
                 assert timeout is not None
-                assert timeout.read == 1800.0
+                assert timeout.read == 7200.0
 
     def test_read_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """BOG_AGENTS_REMOTE_READ_TIMEOUT overrides the default."""
@@ -655,11 +655,11 @@ class TestRemoteAgentWithConfig:
 
 
 class TestRemoteAgentTransientRetry:
-    """Pre-first-event retry on ReadTimeoutError / transient SSE errors.
+    """Retry semantics for transient SSE errors.
 
-    Once events have flowed, retrying is unsafe; the stream must propagate.
-    Before first event, we re-issue the call up to `_PRE_FIRST_EVENT_RETRIES`
-    times since the server hasn't begun mutating thread state.
+    Two retry budgets: pre-first-event (fully safe — server hasn't
+    committed any state yet) and mid-stream (resilience — server checkpoint
+    replay may emit a few duplicate events but the UI dedupes by message ID).
     """
 
     @pytest.mark.asyncio
@@ -688,12 +688,54 @@ class TestRemoteAgentTransientRetry:
         assert events == [((), "updates", {"ok": True})]
 
     @pytest.mark.asyncio
-    async def test_does_not_retry_after_first_event_emitted(self) -> None:
+    async def test_mid_stream_transient_error_triggers_retry(self) -> None:
+        """Stream that dies *after* events flowed should still retry.
+
+        The langgraph server persists state checkpoint-by-checkpoint, so
+        re-calling astream resumes from the last committed checkpoint. The
+        UI dedupes by message ID so duplicate events from the resumed
+        stream are harmless.
+        """
         from bog_agents_cli import remote_client as rc
 
+        attempts: list[int] = []
+
         async def _gen(*_a: Any, **_kw: Any):  # async generator
-            yield ((), "updates", {"started": True})
-            msg = "ReadTimeoutError partway through"
+            attempts.append(1)
+            if len(attempts) == 1:
+                yield ((), "updates", {"first": True})
+                msg = "ReadTimeoutError partway through"
+                raise TimeoutError(msg)
+            yield ((), "updates", {"resumed": True})
+
+        config = {"configurable": {"thread_id": _TEST_THREAD_ID}}
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        mock_graph = MagicMock()
+        mock_graph.astream = _gen
+        agent._graph = mock_graph
+
+        with patch.object(rc.asyncio, "sleep", AsyncMock()):
+            events = [chunk async for chunk in agent.astream({}, config=config)]
+
+        # First (failed) stream + retry stream were both consumed.
+        assert len(attempts) == 2
+        # Both events surface to the caller; UI handles dedup.
+        assert events == [
+            ((), "updates", {"first": True}),
+            ((), "updates", {"resumed": True}),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_retry_budget_exhausted_propagates(self) -> None:
+        """When mid-stream retries run out, the last error propagates."""
+        from bog_agents_cli import remote_client as rc
+
+        attempts: list[int] = []
+
+        async def _gen(*_a: Any, **_kw: Any):  # async generator
+            attempts.append(1)
+            yield ((), "updates", {"n": len(attempts)})
+            msg = "ReadTimeoutError keeps blowing up"
             raise TimeoutError(msg)
 
         config = {"configurable": {"thread_id": _TEST_THREAD_ID}}
@@ -708,6 +750,9 @@ class TestRemoteAgentTransientRetry:
         ):
             async for _ in agent.astream({}, config=config):
                 pass
+
+        # Initial attempt + _MID_STREAM_RETRIES retries.
+        assert len(attempts) == 1 + rc._MID_STREAM_RETRIES
 
     @pytest.mark.asyncio
     async def test_non_transient_error_propagates_immediately(self) -> None:
