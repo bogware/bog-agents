@@ -136,17 +136,17 @@ DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
-    "primary": "#34d399",
-    "primary_dev": "#fb923c",
-    "dim": "#94a3b8",
-    "user": "#f8fafc",
-    "agent": "#6ee7b7",
-    "thinking": "#67e8f9",
-    "tool": "#fbbf24",
-    "mode_shell": "#fb923c",
-    "mode_command": "#38bdf8",
+    "primary": "#66ff99",       # marsh-light neon green — primary brand color
+    "primary_dev": "#ffc857",   # firefly amber — flags editable / dev installs
+    "dim": "#6b8a78",           # lichen — muted secondary text
+    "user": "#d4e6d8",          # mist-grey — user-facing text on dark bg
+    "agent": "#8effb3",         # bright firefly green — agent text emphasis
+    "thinking": "#4dd0c5",      # swamp-gas teal — model "thinking" state
+    "tool": "#ffc857",          # firefly amber — tool-call accents
+    "mode_shell": "#ffa055",    # warm ember — shell-mode prefix
+    "mode_command": "#66ff99",  # neon green — command-mode prefix
 }
-"""App color scheme."""
+"""App color scheme — bog / swamp / neon-green palette."""
 
 MODE_PREFIXES: dict[str, str] = {
     "shell": "!",

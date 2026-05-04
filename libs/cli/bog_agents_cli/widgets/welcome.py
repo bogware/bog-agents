@@ -156,7 +156,7 @@ class WelcomeBanner(Static):
                 "LangSmith",
                 style=Style(
                     bold=True,
-                    color="#08131c",
+                    color="#050a07",
                     bgcolor=COLORS["thinking"],
                 ),
             )
@@ -184,7 +184,7 @@ class WelcomeBanner(Static):
                         "Thread",
                         Style(
                             bold=True,
-                            color="#08131c",
+                            color="#050a07",
                             bgcolor=COLORS["primary"],
                         ),
                     ),
@@ -198,7 +198,7 @@ class WelcomeBanner(Static):
                     "Thread",
                     style=Style(
                         bold=True,
-                        color="#08131c",
+                        color="#050a07",
                         bgcolor=COLORS["primary"],
                     ),
                 )
@@ -209,7 +209,7 @@ class WelcomeBanner(Static):
                 "MCP",
                 style=Style(
                     bold=True,
-                    color="#08131c",
+                    color="#050a07",
                     bgcolor=COLORS["tool"],
                 ),
             )

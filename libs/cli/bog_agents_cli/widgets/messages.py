@@ -79,6 +79,50 @@ class _TimestampClickMixin:
         _show_timestamp_toast(self)  # type: ignore[arg-type]
 
 
+def _safe_render_markup(message: str) -> Text:
+    """Parse ``message`` as Rich markup if it clearly contains styled spans.
+
+    Rich's ``Text.from_markup`` is permissive at parse time but raises
+    ``MissingStyle`` at *render* time on tokens like ``[target-branch]``
+    that look like style tags but don't resolve. We can't undo that
+    failure once it lands in a widget, so we filter at construct time
+    instead:
+
+    1. If the string contains no ``[`` at all, render it as plain text
+       with the default dim-italic style.
+    2. If the string has brackets but NO closing tag (``[/``), render
+       it literally — almost certainly the brackets are just content
+       (a file path, a list-of-strings repr, etc.), not markup.
+    3. Otherwise try ``Text.from_markup`` and catch any error from a
+       defensive validation render. On failure, fall back to literal.
+
+    Returns:
+        A Rich :class:`Text` ready to mount.
+    """  # noqa: DOC501 — intentionally swallowed via except below
+    if "[" not in message:
+        return Text(message, style="dim italic")
+    if "[/" not in message:
+        # Brackets but no closing tag — treat as literal content.
+        return Text(message, style="dim italic")
+    try:
+        text = Text.from_markup(message)
+        # Force a stringify pass so that any invalid style names raise
+        # NOW (synchronously, here) rather than during widget render.
+        # ``Text.__str__`` doesn't trigger the style lookup; the easiest
+        # validating call is to walk the spans and parse each style.
+        from rich.style import Style as _Style
+
+        for span in text.spans:
+            try:
+                _Style.parse(str(span.style))
+            except Exception as exc:  # ColorParseError / StyleSyntaxError
+                msg = f"invalid markup style {span.style!r}: {exc}"
+                raise ValueError(msg) from None
+    except Exception:
+        return Text(message, style="dim italic")
+    return text
+
+
 def _mode_color(mode: str | None) -> str:
     """Return the color string for a mode, falling back to primary.
 
@@ -1414,14 +1458,21 @@ class AppMessage(Static):
 
         Args:
             message: The system message as a string or pre-styled Rich Text.
+                String inputs are parsed as Rich markup so callers can use
+                ``[bold]``/``[cyan]``/``[dim]``/etc. inline styles, but
+                only when the string contains an explicit closing tag
+                (``[/...]``). Strings without closing tags are rendered
+                literally so file-paths, list-of-strings outputs, and
+                other content with stray ``[`` characters are not
+                misinterpreted as styled spans.
             **kwargs: Additional arguments passed to parent
         """
-        # Store raw content for serialization
+        # Store raw content for serialization.
         self._content = message
-        # Use Text object to safely render message without markup parsing
-        content = (
-            message if isinstance(message, Text) else Text(message, style="dim italic")
-        )
+        if isinstance(message, Text):
+            content: Text = message
+        else:
+            content = _safe_render_markup(message)
         super().__init__(content, **kwargs)
 
     def on_click(self, event: Click) -> None:
