@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class ReplayStep:
     """A single recorded action.
 
@@ -135,20 +135,30 @@ class SessionRecorder:
         self._recording = False
         logger.info("recording stopped: %s (%d steps)", self._session.session_id, len(self._session.steps))
 
+    def _bounded(self) -> bool:
+        """Return True if the session is at its step cap (drop the next event)."""
+        from bog_agents_cli._constants import REPLAY_MAX_STEPS
+
+        return len(self._session.steps) >= REPLAY_MAX_STEPS
+
     def record_user_message(self, content: str) -> None:
-        if not self._recording or not content:
+        if not self._recording or not content or self._bounded():
             return
         self._session.steps.append(ReplayStep(kind="user_message", content=content))
 
     def record_ai_message(self, content: str) -> None:
-        if not self._recording or not content:
+        if not self._recording or not content or self._bounded():
             return
         # Cap AI messages — they tend to be long and we mainly need them as
         # a narrative reference for the user when editing the recording.
-        self._session.steps.append(ReplayStep(kind="ai_message", content=content[:2000]))
+        from bog_agents_cli._constants import REPLAY_AI_MESSAGE_MAX_BYTES
+
+        self._session.steps.append(
+            ReplayStep(kind="ai_message", content=content[:REPLAY_AI_MESSAGE_MAX_BYTES])
+        )
 
     def record_tool_call(self, tool: str, args: dict[str, Any], result: str = "") -> None:
-        if not self._recording or not tool:
+        if not self._recording or not tool or self._bounded():
             return
         self._session.steps.append(
             ReplayStep(

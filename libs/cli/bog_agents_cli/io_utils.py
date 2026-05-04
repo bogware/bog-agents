@@ -40,6 +40,11 @@ def atomic_write_text(
             tmp.chmod(mode)
         tmp.replace(path)
     except BaseException:
+        # ``except BaseException`` is intentional: we want to clean up
+        # the temp file on KeyboardInterrupt and SystemExit too,
+        # otherwise an interrupted write leaves a stray ``.tmp`` next to
+        # the real file. The bare ``raise`` re-raises the original
+        # exception so callers see what went wrong.
         try:
             tmp.unlink(missing_ok=True)
         except OSError:

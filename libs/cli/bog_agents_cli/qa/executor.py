@@ -59,7 +59,7 @@ Args:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class StepResult:
     """Outcome of a single step's execution."""
 
@@ -78,7 +78,7 @@ class StepResult:
         return asdict(self)
 
 
-@dataclass
+@dataclass(slots=True)
 class ACOutcome:
     """Aggregate verdict for one AC across all steps that targeted it."""
 

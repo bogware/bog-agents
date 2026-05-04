@@ -207,17 +207,31 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
     Returns:
         Merged AutoModeSettings.
     """
-    settings = AutoModeSettings()
-    settings = _apply_settings_file(settings, Path.home() / ".bog-agents" / "settings.json")
-    if project_root is not None:
-        settings = _apply_settings_file(settings, project_root / ".bog-agents" / "settings.json")
-    return settings
+    from bog_agents_cli._settings_cascade import load_layered_section
+
+    return load_layered_section(
+        section="auto_mode",
+        initial=AutoModeSettings(),
+        merge=lambda current, override: current.merge_dict(override),
+        project_root=project_root,
+    )
 
 
+# Kept for back-compat with tests that monkey-patched the old internal
+# helper. New code uses ``load_layered_section`` directly.
 _SETTINGS_MAX_BYTES = 1 * 1024 * 1024  # 1 MB — guard against absurdly large files
 
 
 def _apply_settings_file(base: AutoModeSettings, path: Path) -> AutoModeSettings:
+    """Legacy single-file applier kept for test compatibility.
+
+    Production callers go through :func:`load_auto_mode_settings`, which
+    now delegates to ``_settings_cascade.load_layered_section``. This
+    shim remains so the existing
+    ``TestApplySettingsFile`` test class keeps exercising the same
+    file-level behaviour (oversized cap, malformed JSON, missing
+    section).
+    """
     if not path.is_file():
         return base
     try:

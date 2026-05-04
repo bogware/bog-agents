@@ -48,7 +48,7 @@ class StepKind(StrEnum):
     """Call a configured MCP tool by name with explicit args."""
 
 
-@dataclass
+@dataclass(slots=True)
 class StepVerdict:
     """Pass/fail rules for a step.
 

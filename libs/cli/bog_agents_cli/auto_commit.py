@@ -188,17 +188,19 @@ def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     Raises:
         subprocess.CalledProcessError: If the command exits with non-zero status.
     """
-    # 30 s should comfortably cover any reasonable git operation (add,
-    # commit, status). Beyond that a misbehaving hook or a hung lockfile
-    # is more likely than a slow disk; we'd rather propagate a timeout
-    # than hang the CLI.
+    # See ``_constants.GIT_WRITE_TIMEOUT_S`` for the rationale on the
+    # 30s budget — long enough to forgive a slow disk + pre-commit hook,
+    # short enough that a hung lockfile fails loud rather than hanging
+    # the CLI.
+    from bog_agents_cli._constants import GIT_WRITE_TIMEOUT_S
+
     result = subprocess.run(  # noqa: S603
         cmd,
         cwd=str(cwd),
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=GIT_WRITE_TIMEOUT_S,
     )
     if result.returncode != 0:
         error_output = result.stderr.strip() or result.stdout.strip()

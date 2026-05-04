@@ -120,6 +120,7 @@ from bog_agents.middleware.plan_mode import PlanModeMiddleware
 from bog_agents.middleware.plugin_system import PluginSystemMiddleware
 from bog_agents.middleware.portfolio_analysis import PortfolioAnalysisMiddleware
 from bog_agents.middleware.pr_management import PRManagementMiddleware
+from bog_agents.middleware.provider_retry import ProviderRetryMiddleware
 from bog_agents.middleware.rbac import RBACMiddleware
 from bog_agents.middleware.reasoning_chain import ReasoningChainMiddleware
 from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
@@ -230,6 +231,7 @@ __all__ = [
     "PlanModeMiddleware",
     "PluginSystemMiddleware",
     "PortfolioAnalysisMiddleware",
+    "ProviderRetryMiddleware",
     "RBACMiddleware",
     "ReasoningChainMiddleware",
     "RegulatoryAlertsMiddleware",

@@ -143,14 +143,28 @@ def append_inbox(config_dir: Path, entry: dict) -> None:
         except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             logger.warning("peat inbox: resetting corrupt %s: %s", path, exc)
             items = []
-    items.append(entry)
-    # Cap inbox size so a runaway scheduler can't fill the user's disk.
-    if len(items) > 500:
-        items = items[-500:]
-    # Atomic write so a Ctrl-C / power-cut mid-write leaves the previous
-    # inbox intact rather than truncating to nothing or partial JSON.
+    from bog_agents_cli._constants import (
+        PEAT_INBOX_ENTRY_MAX_BYTES,
+        PEAT_INBOX_MAX_ENTRIES,
+    )
     from bog_agents_cli.io_utils import atomic_write_text
 
+    # Per-entry cap. A misbehaving job could try to write a multi-MB
+    # ``summary`` field; truncate it so the inbox can't grow unboundedly
+    # in length OR per-entry size.
+    safe_entry = dict(entry)
+    summary = str(safe_entry.get("summary") or "")
+    if len(summary.encode("utf-8")) > PEAT_INBOX_ENTRY_MAX_BYTES:
+        truncated = summary.encode("utf-8")[: PEAT_INBOX_ENTRY_MAX_BYTES - 20].decode(
+            "utf-8", errors="ignore"
+        )
+        safe_entry["summary"] = truncated + " …[truncated]"
+    items.append(safe_entry)
+    # Cap inbox count so a runaway scheduler can't fill the user's disk.
+    if len(items) > PEAT_INBOX_MAX_ENTRIES:
+        items = items[-PEAT_INBOX_MAX_ENTRIES:]
+    # Atomic write so a Ctrl-C / power-cut mid-write leaves the previous
+    # inbox intact rather than truncating to nothing or partial JSON.
     atomic_write_text(path, json.dumps(items, indent=2))
 
 
@@ -205,14 +219,19 @@ class PeatScheduler:
         config_dir: Path,
         *,
         runner: RunnerFn,
-        tick_interval_s: float = 30.0,
+        tick_interval_s: float | None = None,
     ) -> None:
+        from bog_agents_cli._constants import DEFAULT_SCHEDULER_TICK_S
+
         self._config_dir = config_dir
         self._runner = runner
         # Cap tick floor at 0.05s so tests can drive the scheduler quickly
         # while still preventing a busy-loop. In production callers pass
-        # the default 30s.
-        self._tick = max(0.05, tick_interval_s)
+        # ``DEFAULT_SCHEDULER_TICK_S`` (30s).
+        self._tick = max(
+            0.05,
+            tick_interval_s if tick_interval_s is not None else DEFAULT_SCHEDULER_TICK_S,
+        )
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
         self._inflight: dict[str, asyncio.Task] = {}
@@ -305,6 +324,13 @@ class PeatScheduler:
                     save_job(self._config_dir, job)
 
     async def _fire(self, job: PeatJob) -> None:
+        from bog_agents_cli._observability import (
+            EVT_PEAT_JOB_END,
+            EVT_PEAT_JOB_FIRE,
+            log_event,
+        )
+
+        log_event(EVT_PEAT_JOB_FIRE, label=job.job_id, name=job.name, schedule=job.schedule)
         started = time.time()
         try:
             run = await asyncio.wait_for(self._runner(job), timeout=job.timeout_s)
@@ -329,6 +355,13 @@ class PeatScheduler:
             )
         finally:
             self._inflight.pop(job.job_id, None)
+
+        log_event(
+            EVT_PEAT_JOB_END,
+            label=job.job_id,
+            status=run.status,
+            duration_ms=int(run.duration_s * 1000),
+        )
 
         # Update job state.
         job.last_fired_at = run.started_at

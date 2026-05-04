@@ -279,7 +279,9 @@ ignore-var-parameters = true
     "ANN202",   # Missing return type annotation — not needed in tests
     "ARG001",   # Unused arg — common in stub callbacks for ask/prompt tests
     "ARG002",   # Unused method argument — fixture params (e.g. tmp_path) may be unused in some tests
+    "PT012",    # pytest.raises with multiple statements — fine in test scaffolding
     "RUF029",   # Async function w/o await — required to satisfy async callback signatures
+    "TRY301",   # `raise` inside try — fine in tests that exercise excepthook flows
     "F841",     # Local variable assigned but unused — common in test setup
     "PT011",    # pytest.raises match= not required in tests — intent is clear from test name
     "SIM117",   # Nested with statements — readability in complex test setups
@@ -336,6 +338,30 @@ ignore-var-parameters = true
     "D105",     # Missing docstring on dunder methods
     "DOC501",   # ValueError documented at module level
     "TRY004",   # ValueError used for shape/parse mismatches
+]
+# Refinement modules added in 0.8.x — small dataclass holders, structured
+# logging emitter, panic dump, deep doctor. None of these need the full
+# docstring/typing rigor we apply elsewhere.
+"bog_agents_cli/_observability.py" = [
+    "ANN401",   # Any in **fields — by design (caller-supplied structured fields)
+    "BLE001",   # Bare ``except Exception`` — required because timer is a stdlib pattern
+    "PLR2004",  # Magic value used in slicing (the 80-char repr cap)
+    "TRY401",   # Redundant exception object included in logger.exception
+]
+"bog_agents_cli/_panic.py" = [
+    "ANN401",   # Any in extra fields — caller-supplied
+    "BLE001",   # Bare ``except Exception`` — required: panic handler must never raise
+    "PERF203",  # try/except inside loop — necessary for fault isolation
+    "S110",     # Silent exception — explicitly justified (panic handler resilience)
+    "TRY300",   # else block — readability preference
+]
+"bog_agents_cli/doctor_deep.py" = [
+    "BLE001",   # Bare ``except Exception`` — probes intentionally cannot raise
+    "D101",     # Missing docstring on Probe dataclass — fields are self-explanatory
+    "PERF203",  # try/except in probe loop — fault-isolation pattern
+    "S404",     # subprocess imported — probes use it for git --version
+    "TRY300",   # else block — readability preference
+    "TRY401",   # logger.exception in probe — intentional
 ]
 # Peat: prompt-builder package + schedulers + dataclass IO. Same shape as
 # the QA harness — short helper methods don't need duplicate docstrings.

@@ -121,6 +121,15 @@ class SessionVault:
             self._store[key] = value
         else:
             self._store[key] = SecretStr(value)
+        # Emit a structured log line — NEVER log the value, only that an
+        # entry was written and how it got there. ``key`` itself is the
+        # var name (e.g. ``"github_token"``), not the secret.
+        try:
+            from bog_agents_cli._observability import EVT_VAULT_WRITE, log_event
+
+            log_event(EVT_VAULT_WRITE, label=key)
+        except Exception:  # pragma: no cover — observability never blocks vault ops
+            logger.debug("observability emitter unavailable", exc_info=True)
 
     def get(self, key: str) -> SecretStr | None:
         """Return the secret for ``key``, or None if not present.
@@ -137,6 +146,7 @@ class SessionVault:
         """
         cached = self._store.get(key)
         if cached is not None:
+            self._emit_read(key, source="memory")
             return cached
         if self.allow_keyring:
             cleartext = self._read_keyring(key)
@@ -144,8 +154,19 @@ class SessionVault:
                 wrapped = SecretStr(cleartext)
                 # Cache so we don't hit the keychain repeatedly during a run.
                 self._store[key] = wrapped
+                self._emit_read(key, source="keyring")
                 return wrapped
+        self._emit_read(key, source="miss")
         return None
+
+    @staticmethod
+    def _emit_read(key: str, *, source: str) -> None:
+        try:
+            from bog_agents_cli._observability import EVT_VAULT_READ, log_event
+
+            log_event(EVT_VAULT_READ, label=key, source=source)
+        except Exception:  # pragma: no cover — observability never blocks vault ops
+            logger.debug("observability emitter unavailable", exc_info=True)
 
     def has(self, key: str) -> bool:
         """Return True if ``key`` is currently in the in-memory store.

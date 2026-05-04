@@ -4504,6 +4504,7 @@ class BogAgentsApp(App):
                     "  /peat inbox [clear]\n"
                     "  /peat research <topic> [--focus a,b,c]\n"
                     "  /peat digest [--days N]\n"
+                    "  /peat metrics                        # in-process counters this session\n"
                     "  /peat config show|reset\n\n"
                     "Schedule formats:\n"
                     "  '0 9 * * 1-5'   (cron, 5 fields)\n"
@@ -4711,6 +4712,44 @@ class BogAgentsApp(App):
             prompt = build_digest_prompt(persona, inputs=inputs, config_dir=config_dir)
             await self._mount_message(AppMessage(f"Building {days}-day digest..."))
             await self._send_prompt_to_agent(prompt)
+            return
+
+        if first == "metrics":
+            from bog_agents_cli._observability import get_metrics_snapshot
+
+            snapshot = get_metrics_snapshot()
+            counters = snapshot.get("counters") or {}
+            last_seen = snapshot.get("last_seen") or {}
+            if not counters:
+                await self._mount_message(
+                    AppMessage("No metrics recorded yet this session.")
+                )
+                return
+            from datetime import datetime
+
+            lines = ["Peat metrics — this CLI session", ""]
+            for event in sorted(counters):
+                labels = counters[event]
+                total = sum(labels.values())
+                last_ts = last_seen.get(event)
+                ago = ""
+                if last_ts:
+                    delta = max(0, int(time.time() - last_ts))
+                    if delta < 60:
+                        ago = f"  (last: {delta}s ago)"
+                    elif delta < 3600:
+                        ago = f"  (last: {delta // 60}m ago)"
+                    else:
+                        ago = f"  (last: {datetime.fromtimestamp(last_ts, tz=UTC).strftime('%Y-%m-%d %H:%M UTC')})"
+                lines.append(f"  {event}: {total}{ago}")
+                # Show top 3 label dimensions if there are any non-empty
+                # labels. Most events use the empty-string label.
+                non_empty = {k: v for k, v in labels.items() if k}
+                if non_empty:
+                    top = sorted(non_empty.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                    for label, count in top:
+                        lines.append(f"      {label}: {count}")
+            await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if first == "config":

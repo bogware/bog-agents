@@ -674,6 +674,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run diagnostics to check environment, dependencies, and configuration",
     )
+    parser.add_argument(
+        "--doctor-deep",
+        action="store_true",
+        help=(
+            "Like --doctor but also probes external dependencies (network, "
+            "git, file write, MCP, model availability) and prints a one-page "
+            "health summary. May take a few seconds."
+        ),
+    )
 
     parser.add_argument(
         "-v",
@@ -1254,6 +1263,17 @@ def cli_main() -> None:
     # own cleanup, which is bypassed on hard exits.
     _install_terminal_restore_handlers()
 
+    # Install the panic-dump excepthook so any uncaught exception in
+    # subsequent setup (or inside the Textual app) lands a redacted
+    # crash report at ``~/.bog-agents/crash/<ts>.log``. Idempotent.
+    try:
+        from bog_agents_cli._panic import install_panic_handler
+
+        install_panic_handler()
+    except Exception:
+        # Never let panic-handler installation itself prevent startup.
+        logger.warning("panic handler install failed", exc_info=True)
+
     # Fix for gRPC fork issue on macOS
     # https://github.com/grpc/grpc/issues/37642
     if sys.platform == "darwin":
@@ -1301,6 +1321,16 @@ def cli_main() -> None:
         from rich.console import Console as _DoctorConsole
 
         _run_doctor(_DoctorConsole())
+        sys.exit(0)
+
+    # --doctor-deep fast path: like --doctor but probes external deps too.
+    if len(sys.argv) == 2 and sys.argv[1] == "--doctor-deep":
+        from rich.console import Console as _DoctorConsole
+
+        from bog_agents_cli.doctor_deep import run_deep_doctor
+
+        console = _DoctorConsole()
+        console.print(run_deep_doctor(), markup=False)
         sys.exit(0)
 
     # ACP/serve modes do not require Textual, so skip UI dependency checks.

@@ -189,12 +189,14 @@ def load_persona(project_root: Path | None = None) -> PeatPersona:
         Resolved :class:`PeatPersona`. On any I/O or parse error the affected
         layer is skipped with a warning and the cascade continues.
     """
-    persona = _copy(DEFAULT_PEAT_PERSONA)
-    user_path = Path.home() / ".bog-agents" / "settings.json"
-    persona = _apply(persona, user_path)
-    if project_root is not None:
-        persona = _apply(persona, project_root / ".bog-agents" / "settings.json")
-    return persona
+    from bog_agents_cli._settings_cascade import load_layered_section
+
+    return load_layered_section(
+        section="peat",
+        initial=_copy(DEFAULT_PEAT_PERSONA),
+        merge=_merge,
+        project_root=project_root,
+    )
 
 
 def _copy(p: PeatPersona) -> PeatPersona:

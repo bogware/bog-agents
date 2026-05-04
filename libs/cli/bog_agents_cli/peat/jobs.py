@@ -101,7 +101,7 @@ class PeatJob:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class PeatJobRun:
     """A single execution of a job — captures its output and verdict."""
 
