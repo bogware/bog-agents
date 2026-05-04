@@ -70,6 +70,21 @@ Used to extract numeric IDs from placeholder tokens so the tracker can prune
 stale entries and compute the next available ID.
 """
 
+PASTED_TEXT_PLACEHOLDER_PATTERN = re.compile(
+    r"\[Pasted #(?P<id>\d+)(?:: (?P<lines>\d+) lines?)?\]"
+)
+"""Pattern for large-paste placeholders, e.g. ``[Pasted #1: 450 lines]``.
+
+The lines suffix is optional so older surviving tokens (or copy-pastes of the
+placeholder by the user) still match. The id is required.
+"""
+
+PASTED_TEXT_LINE_THRESHOLD = 5
+"""Pastes with more than this many lines get replaced by a placeholder."""
+
+PASTED_TEXT_CHAR_THRESHOLD = 800
+"""Pastes longer than this character count get replaced by a placeholder."""
+
 _UNICODE_SPACE_EQUIVALENTS = str.maketrans(
     {
         "\u00a0": " ",  # NO-BREAK SPACE
@@ -267,6 +282,90 @@ class MediaTracker:
             if match is not None:
                 max_id = max(max_id, int(match.group("id")))
         return max_id + 1 if max_id else fallback_count + 1
+
+
+class PastedTextTracker:
+    """Track large pasted text blocks so they can be folded into placeholders.
+
+    When a paste exceeds ``PASTED_TEXT_LINE_THRESHOLD`` lines or
+    ``PASTED_TEXT_CHAR_THRESHOLD`` characters, the visual input gets a token
+    like ``[Pasted #1: 450 lines]`` while this tracker holds the full content.
+    At submit time the placeholder is expanded back into the full text so the
+    model still sees everything.
+
+    Mirrors the ``MediaTracker`` pattern used for image/video pastes.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty paste tracker."""
+        self._blocks: dict[int, str] = {}
+        self._next_id: int = 1
+
+    @staticmethod
+    def should_fold(text: str) -> bool:
+        """Return True when ``text`` is large enough to warrant a placeholder."""
+        if len(text) >= PASTED_TEXT_CHAR_THRESHOLD:
+            return True
+        return text.count("\n") >= PASTED_TEXT_LINE_THRESHOLD
+
+    def add(self, text: str) -> str:
+        """Store ``text`` and return its placeholder token.
+
+        Args:
+            text: Full pasted content.
+
+        Returns:
+            Placeholder string like ``[Pasted #1: 450 lines]``.
+        """
+        block_id = self._next_id
+        self._next_id += 1
+        self._blocks[block_id] = text
+        line_count = text.count("\n") + 1
+        suffix = "line" if line_count == 1 else "lines"
+        return f"[Pasted #{block_id}: {line_count} {suffix}]"
+
+    def expand(self, text: str) -> str:
+        """Replace any placeholder tokens in ``text`` with their stored content.
+
+        Tokens whose id is unknown are left as-is (e.g. user typed a similar
+        bracketed string by hand). Empty tracker returns ``text`` unchanged.
+        """
+        if not self._blocks:
+            return text
+
+        def _sub(match: re.Match[str]) -> str:
+            block_id = int(match.group("id"))
+            return self._blocks.get(block_id, match.group(0))
+
+        return PASTED_TEXT_PLACEHOLDER_PATTERN.sub(_sub, text)
+
+    def sync_to_text(self, text: str) -> None:
+        """Drop stored blocks whose placeholder no longer appears in ``text``.
+
+        Mirrors ``MediaTracker.sync_to_text``: when the user deletes the
+        placeholder from the input box, the underlying content is no longer
+        needed and shouldn't silently leak into a later submission.
+        """
+        live_ids = {
+            int(m.group("id")) for m in PASTED_TEXT_PLACEHOLDER_PATTERN.finditer(text)
+        }
+        if not live_ids:
+            self.clear()
+            return
+        self._blocks = {
+            bid: data for bid, data in self._blocks.items() if bid in live_ids
+        }
+        if not self._blocks:
+            self._next_id = 1
+
+    def clear(self) -> None:
+        """Reset the tracker to an empty state."""
+        self._blocks.clear()
+        self._next_id = 1
+
+    def __len__(self) -> int:
+        """Number of currently-tracked paste blocks."""
+        return len(self._blocks)
 
 
 def parse_file_mentions(text: str) -> tuple[str, list[Path]]:

@@ -24,8 +24,11 @@ configure_debug_logging(logger)
 # Default read timeout for the langgraph SDK's underlying httpx client.
 # The SDK default is 300s, which is too tight for /review-style turns that
 # can fan out to many tool calls and span 5-20 minutes of model work.
-# Override with BOG_AGENTS_REMOTE_READ_TIMEOUT (seconds, or "none" to disable).
-_DEFAULT_READ_TIMEOUT_SECS: float = 1800.0
+# Aligned with ``BOG_AGENTS_MODEL_READ_TIMEOUT`` default (3600s) so the SSE
+# deadline never fires before the underlying model call has had its full
+# budget. Override with ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or
+# ``none``/``0`` to disable).
+_DEFAULT_READ_TIMEOUT_SECS: float = 3600.0
 
 # Number of times to re-issue an astream() call when the SSE stream raises a
 # transient error *before any events have flowed*. Once events have been

@@ -104,7 +104,11 @@ if TYPE_CHECKING:
     from textual.events import Click
     from textual.timer import Timer
 
-    from bog_agents_cli.input import MediaTracker, ParsedPastedPathPayload
+    from bog_agents_cli.input import (
+        MediaTracker,
+        ParsedPastedPathPayload,
+        PastedTextTracker,
+    )
 
 
 class CompletionOption(Static):
@@ -378,6 +382,10 @@ class ChatTextArea(TextArea):
         self._paste_burst_timer: Timer | None = None
         # See _BACKSLASH_ENTER_GAP_SECONDS for context.
         self._backslash_pending_time: float | None = None
+        # Large pastes get folded into a ``[Pasted #N: 450 lines]`` placeholder
+        # so they don't drown the input box. Full content is expanded back in
+        # at submit time. Lazy-imported to avoid pulling input.py at startup.
+        self._pasted_text_tracker: PastedTextTracker | None = None
 
     def set_app_focus(self, *, has_focus: bool) -> None:
         """Set whether the app should show the cursor as active.
@@ -730,6 +738,78 @@ class ChatTextArea(TextArea):
                     return start, end
         return None
 
+    def _ensure_paste_tracker(self) -> PastedTextTracker:
+        """Lazily build the pasted-text tracker."""
+        if self._pasted_text_tracker is None:
+            from bog_agents_cli.input import PastedTextTracker
+
+            self._pasted_text_tracker = PastedTextTracker()
+        return self._pasted_text_tracker
+
+    def _maybe_fold_large_paste(self, text: str) -> bool:
+        """Insert a placeholder instead of ``text`` when it's large.
+
+        Returns:
+            ``True`` if the paste was folded (and inserted as a placeholder),
+            ``False`` if it was small enough to insert verbatim.
+        """
+        from bog_agents_cli.input import PastedTextTracker
+
+        if not PastedTextTracker.should_fold(text):
+            return False
+        tracker = self._ensure_paste_tracker()
+        placeholder = tracker.add(text)
+        self.insert(placeholder)
+        return True
+
+    def expand_pasted_blocks(self, text: str) -> str:
+        """Expand ``[Pasted #N]`` tokens in ``text`` to their full content."""
+        if self._pasted_text_tracker is None:
+            return text
+        return self._pasted_text_tracker.expand(text)
+
+    def sync_pasted_blocks_to_text(self) -> None:
+        """Prune stored pastes whose placeholder no longer appears in input."""
+        if self._pasted_text_tracker is None:
+            return
+        self._pasted_text_tracker.sync_to_text(self.text)
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        """Treat right-click on the input as a paste-from-clipboard.
+
+        Textual captures terminal mouse events when the app is running, which
+        defeats the terminal emulator's native right-click-pastes-clipboard
+        behaviour. We restore that affordance manually: when the user
+        right-clicks inside the chat input, read the system clipboard and
+        run the paste through the same path bracketed-paste would take
+        (sanitization + large-paste folding).
+
+        Button numbers: 1 = left, 2 = middle, 3 = right. We also check for
+        attribute presence so we don't crash on terminals that emit only
+        partial mouse events.
+        """
+        button = getattr(event, "button", None)
+        if button != 3:
+            return
+        try:
+            from bog_agents_cli.clipboard import read_clipboard_text
+        except ImportError:
+            return
+        try:
+            text = read_clipboard_text()
+        except Exception:
+            logger.debug("right-click paste: clipboard read failed", exc_info=True)
+            return
+        if not text:
+            return
+        event.prevent_default()
+        event.stop()
+        sanitized = _strip_terminal_escapes(text)
+        if not sanitized:
+            return
+        if not self._maybe_fold_large_paste(sanitized):
+            self.insert(sanitized)
+
     async def _on_paste(self, event: events.Paste) -> None:
         r"""Handle paste events and detect dragged file paths.
 
@@ -739,6 +819,11 @@ class ChatTextArea(TextArea):
         capture during streaming. Without this filter the user sees raw
         SGR strings appear in the input box if they move the mouse over
         the terminal while the agent is working.
+
+        Large pastes (>=5 lines or >=800 chars that are NOT file-drop
+        payloads) are folded into a ``[Pasted #N: K lines]`` placeholder so
+        the input box stays readable. Full content is restored at submit time
+        via ``expand_pasted_blocks``.
         """
         self._backslash_pending_time = None
         if self._paste_burst_buffer:
@@ -751,7 +836,7 @@ class ChatTextArea(TextArea):
             # sanitized text ourselves.
             event.prevent_default()
             event.stop()
-            if sanitized:
+            if sanitized and not self._maybe_fold_large_paste(sanitized):
                 self.insert(sanitized)
             return
 
@@ -762,6 +847,9 @@ class ChatTextArea(TextArea):
             # Don't call super() here — Textual's MRO dispatch already calls
             # TextArea._on_paste after this handler returns. Calling super()
             # would insert the text a second time, duplicating the paste.
+            if self._maybe_fold_large_paste(event.text):
+                event.prevent_default()
+                event.stop()
             return
 
         event.prevent_default()
@@ -774,6 +862,8 @@ class ChatTextArea(TextArea):
         self._paste_burst_last_char_time = None
         self._cancel_paste_burst_timer()
         self._backslash_pending_time = None
+        if self._pasted_text_tracker is not None:
+            self._pasted_text_tracker.clear()
         self._navigating_history = True
         self.text = text
         # Move cursor to end
@@ -790,6 +880,8 @@ class ChatTextArea(TextArea):
         self._paste_burst_last_char_time = None
         self._cancel_paste_burst_timer()
         self._backslash_pending_time = None
+        if self._pasted_text_tracker is not None:
+            self._pasted_text_tracker.clear()
         self.text = ""
         self.move_cursor((0, 0))
 
@@ -995,6 +1087,8 @@ class ChatInput(Vertical):
         """Detect input mode and update completions."""
         text = event.text_area.text
         self._sync_media_tracker_to_text(text)
+        if self._text_area is not None:
+            self._text_area.sync_pasted_blocks_to_text()
 
         # History handlers explicitly decide mode and stripped display text.
         # Skip mode detection here so recalled entries don't inherit stale mode.
@@ -1231,6 +1325,11 @@ class ChatInput(Vertical):
 
         if self._completion_manager:
             self._completion_manager.reset()
+
+        # Expand any [Pasted #N] placeholders back to their full content
+        # before the value flows out to the agent / history.
+        if self._text_area is not None:
+            value = self._text_area.expand_pasted_blocks(value)
 
         value = self._replace_submitted_paths_with_images(value)
 

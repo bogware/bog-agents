@@ -603,7 +603,7 @@ class TestRemoteAgentInit:
             mock_cls.assert_called_once()
 
     def test_extended_read_timeout_applied_to_clients(self) -> None:
-        """Default 1800s read timeout is configured on the underlying httpx clients.
+        """Default 3600s read timeout is configured on the underlying httpx clients.
 
         The langgraph_sdk default is 300s; we extend it so /review-style turns
         don't get killed mid-stream by the default deadline.
@@ -619,7 +619,7 @@ class TestRemoteAgentInit:
                 _, kwargs = mock.call_args
                 timeout = kwargs.get("timeout")
                 assert timeout is not None
-                assert timeout.read == 1800.0
+                assert timeout.read == 3600.0
 
     def test_read_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """BOG_AGENTS_REMOTE_READ_TIMEOUT overrides the default."""
