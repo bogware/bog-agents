@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.1...bog-agents==0.8.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* **cli,sdk:** kill ReadTimeouts on long turns + paste UX + ripgrep noise ([#65](https://github.com/bogware/bog-agents/issues/65)) ([b8f3498](https://github.com/bogware/bog-agents/commit/b8f349869dc0d6395a43a7edebdfe02385ede5c6))
+
 ## [0.8.1](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.0...bog-agents==0.8.1) (2026-05-04)
 
 
