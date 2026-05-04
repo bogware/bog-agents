@@ -105,6 +105,27 @@ def write_panic_dump(
     return path
 
 
+def _safe_version(module_name: str) -> str:
+    """Look up ``__version__`` from ``module_name`` and fall back to ``"unknown"``.
+
+    Wrapping the import in a helper widens the return type to plain
+    ``str`` — without it, the type-checker infers the imported literal
+    (e.g. ``Literal["0.8.0"]``) and rejects the ``"unknown"`` fallback
+    in a sibling branch. We never want the panic dump itself to fail
+    just because version metadata is missing or unreadable.
+    """
+    try:
+        import importlib
+
+        module = importlib.import_module(module_name)
+        version = getattr(module, "__version__", None)
+        if isinstance(version, str) and version:
+            return version
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _build_payload(exc: BaseException, *, extra: dict[str, Any]) -> dict[str, Any]:
     """Gather the dict of fields that go into the dump."""
     # Late import to avoid a hard dep cycle (observability also uses logging).
@@ -115,15 +136,13 @@ def _build_payload(exc: BaseException, *, extra: dict[str, Any]) -> dict[str, An
     except Exception:
         metrics = {}
 
-    try:
-        from bog_agents_cli._version import __version__ as cli_version
-    except Exception:
-        cli_version = "unknown"
-
-    try:
-        from bog_agents._version import __version__ as sdk_version
-    except Exception:
-        sdk_version = "unknown"
+    # ``ty`` infers the imported ``__version__`` as a ``Literal["0.8.0"]``
+    # (because the source declares a literal string). Reassigning
+    # ``"unknown"`` in the except branch then conflicts with that
+    # inferred literal type. Wrapping each lookup in a helper widens the
+    # return type to ``str`` for both branches.
+    cli_version = _safe_version("bog_agents_cli._version")
+    sdk_version = _safe_version("bog_agents._version")
 
     tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
