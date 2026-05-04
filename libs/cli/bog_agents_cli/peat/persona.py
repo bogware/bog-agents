@@ -114,17 +114,21 @@ class PeatPersona:
         )
 
         if self.sign_off:
-            parts.extend([
-                "",
-                "## Sign-off",
-                "",
-                f"When you produce written artifacts (digests, research reports, "
-                f"long replies the user will reference later), end them with: "
-                f"`{self.sign_off}`.",
-            ])
+            parts.extend(
+                [
+                    "",
+                    "## Sign-off",
+                    "",
+                    f"When you produce written artifacts (digests, research reports, "
+                    f"long replies the user will reference later), end them with: "
+                    f"`{self.sign_off}`.",
+                ]
+            )
 
         if self.system_prompt_extra:
-            parts.extend(["", "## Additional instructions", "", self.system_prompt_extra])
+            parts.extend(
+                ["", "## Additional instructions", "", self.system_prompt_extra]
+            )
 
         return "\n".join(parts).strip() + "\n"
 
@@ -166,11 +170,7 @@ DEFAULT_PEAT_PERSONA = PeatPersona(
 # Format string for inbox notifications written to disk while the CLI is
 # closed. Kept minimal so jobs that fire unattended produce something the
 # user can scan in 5 seconds when they come back.
-INBOX_FORMAT = (
-    "[{when}] {job_name}\n"
-    "  status: {status}\n"
-    "  {summary}\n"
-)
+INBOX_FORMAT = "[{when}] {job_name}\n  status: {status}\n  {summary}\n"
 
 
 # ---------------------------------------------------------------------------
@@ -270,5 +270,7 @@ def _merge(base: PeatPersona, overrides: dict[str, Any]) -> PeatPersona:
         desires=_list_field("desires", base.desires),
         restrictions=_list_field("restrictions", base.restrictions),
         sign_off=str(overrides.get("sign_off", base.sign_off)),
-        system_prompt_extra=str(overrides.get("system_prompt_extra", base.system_prompt_extra)),
+        system_prompt_extra=str(
+            overrides.get("system_prompt_extra", base.system_prompt_extra)
+        ),
     )

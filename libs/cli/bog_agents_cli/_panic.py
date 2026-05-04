@@ -39,10 +39,10 @@ _REDACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Anthropic / OpenAI / generic bearer-token shapes.
     (re.compile(r"(sk-[A-Za-z0-9_-]{16,})"), "***"),
     (re.compile(r"(xoxb-[A-Za-z0-9-]{10,})"), "***"),  # Slack bot tokens
-    (re.compile(r"(ghp_[A-Za-z0-9]{20,})"), "***"),    # GitHub PATs
+    (re.compile(r"(ghp_[A-Za-z0-9]{20,})"), "***"),  # GitHub PATs
     (re.compile(r"(github_pat_[A-Za-z0-9_]{20,})"), "***"),
-    (re.compile(r"(AKIA[A-Z0-9]{16})"), "***"),        # AWS access key id
-    (re.compile(r"(eyJ[A-Za-z0-9_-]{10,})"), "***"),   # JWTs
+    (re.compile(r"(AKIA[A-Z0-9]{16})"), "***"),  # AWS access key id
+    (re.compile(r"(eyJ[A-Za-z0-9_-]{10,})"), "***"),  # JWTs
     # Generic key=value redactions for known sensitive env-var names.
     (
         re.compile(

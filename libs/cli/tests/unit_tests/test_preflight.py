@@ -56,7 +56,10 @@ class TestRunPreflightQa:
     async def test_collects_answers(self, settings):
         with (
             patch("bog_agents_cli.preflight.sys.stdin") as mock_stdin,
-            patch("bog_agents_cli.preflight.asyncio.to_thread", return_value="the login bug"),
+            patch(
+                "bog_agents_cli.preflight.asyncio.to_thread",
+                return_value="the login bug",
+            ),
         ):
             mock_stdin.isatty.return_value = True
             out = await run_preflight_qa("fix everything", settings=settings)
@@ -68,7 +71,9 @@ class TestRunPreflightQa:
         # questions without crashing the run.
         with (
             patch("bog_agents_cli.preflight.sys.stdin") as mock_stdin,
-            patch("bog_agents_cli.preflight.asyncio.wait_for", side_effect=TimeoutError),
+            patch(
+                "bog_agents_cli.preflight.asyncio.wait_for", side_effect=TimeoutError
+            ),
         ):
             mock_stdin.isatty.return_value = True
             out = await run_preflight_qa("fix everything", settings=settings)

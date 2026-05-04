@@ -74,7 +74,10 @@ class TestLogEvent:
 
 class TestTimer:
     def test_emits_duration_on_exit(self, caplog: pytest.LogCaptureFixture):
-        with caplog.at_level(logging.INFO, logger="bog_agents_cli.events"), timer("test.op"):
+        with (
+            caplog.at_level(logging.INFO, logger="bog_agents_cli.events"),
+            timer("test.op"),
+        ):
             time.sleep(0.01)
         rec = next(r for r in caplog.records if "test.op.end" in r.getMessage())
         assert rec.evt_status == "ok"
@@ -90,7 +93,10 @@ class TestTimer:
         assert rec.evt_error_type == "RuntimeError"
 
     def test_caller_can_set_status_explicitly(self, caplog: pytest.LogCaptureFixture):
-        with caplog.at_level(logging.INFO, logger="bog_agents_cli.events"), timer("test.partial") as t:
+        with (
+            caplog.at_level(logging.INFO, logger="bog_agents_cli.events"),
+            timer("test.partial") as t,
+        ):
             t.fields["status"] = "partial"
             t.fields["count"] = 3
         rec = next(r for r in caplog.records if "test.partial.end" in r.getMessage())

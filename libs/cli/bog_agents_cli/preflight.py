@@ -64,12 +64,17 @@ async def run_preflight_qa(
     for i, question in enumerate(questions, 1):
         print(f"  {i}. {question}", flush=True)  # noqa: T201
         try:
-            answer = (await asyncio.wait_for(asyncio.to_thread(input, "     → "), timeout=30)).strip()
+            answer = (
+                await asyncio.wait_for(asyncio.to_thread(input, "     → "), timeout=30)
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             print("\n[Skipping remaining questions]", flush=True)  # noqa: T201
             break
         except TimeoutError:
-            print("\n[Pre-flight timed out — proceeding without further clarification]", flush=True)  # noqa: T201
+            print(  # noqa: T201
+                "\n[Pre-flight timed out — proceeding without further clarification]",
+                flush=True,
+            )
             break
         if answer:
             answers.append(f"Q: {question}\nA: {answer}")

@@ -78,12 +78,16 @@ class TestPersona:
     def test_load_persona_user_override_extends(self, tmp_path: Path):
         bog_dir = tmp_path / ".bog-agents"
         bog_dir.mkdir()
-        (bog_dir / "settings.json").write_text(json.dumps({
-            "peat": {
-                "name": "Sage",
-                "goals": ["new goal"],
-            }
-        }))
+        (bog_dir / "settings.json").write_text(
+            json.dumps(
+                {
+                    "peat": {
+                        "name": "Sage",
+                        "goals": ["new goal"],
+                    }
+                }
+            )
+        )
         with patch.object(Path, "home", return_value=tmp_path):
             p = load_persona()
         assert p.name == "Sage"
@@ -94,12 +98,16 @@ class TestPersona:
     def test_load_persona_replace_flag(self, tmp_path: Path):
         bog_dir = tmp_path / ".bog-agents"
         bog_dir.mkdir()
-        (bog_dir / "settings.json").write_text(json.dumps({
-            "peat": {
-                "goals": ["only goal"],
-                "replace_goals": True,
-            }
-        }))
+        (bog_dir / "settings.json").write_text(
+            json.dumps(
+                {
+                    "peat": {
+                        "goals": ["only goal"],
+                        "replace_goals": True,
+                    }
+                }
+            )
+        )
         with patch.object(Path, "home", return_value=tmp_path):
             p = load_persona()
         assert p.goals == ["only goal"]
@@ -107,13 +115,17 @@ class TestPersona:
     def test_load_persona_global_replace(self, tmp_path: Path):
         bog_dir = tmp_path / ".bog-agents"
         bog_dir.mkdir()
-        (bog_dir / "settings.json").write_text(json.dumps({
-            "peat": {
-                "goals": ["g"],
-                "style": ["s"],
-                "replace": True,
-            }
-        }))
+        (bog_dir / "settings.json").write_text(
+            json.dumps(
+                {
+                    "peat": {
+                        "goals": ["g"],
+                        "style": ["s"],
+                        "replace": True,
+                    }
+                }
+            )
+        )
         with patch.object(Path, "home", return_value=tmp_path):
             p = load_persona()
         assert p.goals == ["g"]
@@ -123,14 +135,14 @@ class TestPersona:
         user_home = tmp_path / "home"
         user_home.mkdir()
         (user_home / ".bog-agents").mkdir()
-        (user_home / ".bog-agents" / "settings.json").write_text(json.dumps({
-            "peat": {"goals": ["user-goal"]}
-        }))
+        (user_home / ".bog-agents" / "settings.json").write_text(
+            json.dumps({"peat": {"goals": ["user-goal"]}})
+        )
         project = tmp_path / "proj"
         (project / ".bog-agents").mkdir(parents=True)
-        (project / ".bog-agents" / "settings.json").write_text(json.dumps({
-            "peat": {"goals": ["project-goal"]}
-        }))
+        (project / ".bog-agents" / "settings.json").write_text(
+            json.dumps({"peat": {"goals": ["project-goal"]}})
+        )
         with patch.object(Path, "home", return_value=user_home):
             p = load_persona(project_root=project)
         assert "user-goal" in p.goals
@@ -160,7 +172,9 @@ class TestPersona:
 
 class TestJobs:
     def test_save_and_load(self, tmp_path: Path):
-        job = PeatJob(job_id="test-1", name="hello", prompt="do x", schedule="@every 5m")
+        job = PeatJob(
+            job_id="test-1", name="hello", prompt="do x", schedule="@every 5m"
+        )
         path = save_job(tmp_path, job)
         assert path.suffix == ".yaml"
         loaded = load_job(path)
@@ -243,6 +257,7 @@ class TestSchedule:
     def test_once_iso8601_future(self):
         future = time.time() + 3600
         from datetime import datetime, timezone
+
         iso = datetime.fromtimestamp(future, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         nxt = next_fire_time(f"@once @ {iso}")
         assert nxt is not None
@@ -251,6 +266,7 @@ class TestSchedule:
     def test_once_iso8601_past_returns_none(self):
         past = time.time() - 3600
         from datetime import datetime, timezone
+
         iso = datetime.fromtimestamp(past, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         assert next_fire_time(f"@once @ {iso}") is None
 
@@ -506,7 +522,14 @@ class TestPromptBuilders:
         assert "{x: 1}" in out
 
     def test_scheduled_tool_allowlist_excludes_shell(self):
-        for shell_tool in ("execute", "run_command", "shell", "bash", "delete_file", "remove_directory"):
+        for shell_tool in (
+            "execute",
+            "run_command",
+            "shell",
+            "bash",
+            "delete_file",
+            "remove_directory",
+        ):
             assert shell_tool not in SCHEDULED_TOOL_ALLOWLIST
 
     def test_scheduled_tool_allowlist_includes_reads(self):
@@ -639,6 +662,7 @@ class TestDigest:
         # Force its mtime to 30 days ago.
         old_time = time.time() - 30 * 86400
         import os
+
         os.utime(old, (old_time, old_time))
         out = collect_digest_inputs(tmp_path, days=7)
         # Excluded by the window.
@@ -660,7 +684,9 @@ class TestDigest:
             "inbox": [{"job_id": "x"}],
             "days": 7,
         }
-        out = build_digest_prompt(DEFAULT_PEAT_PERSONA, inputs=inputs, config_dir=tmp_path)
+        out = build_digest_prompt(
+            DEFAULT_PEAT_PERSONA, inputs=inputs, config_dir=tmp_path
+        )
         assert "Personal digest" in out
         assert "QA run artifacts" in out
         assert "/p/r.md" in out

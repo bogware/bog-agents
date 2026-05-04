@@ -110,9 +110,7 @@ def _apply_one(
         logger.warning("settings: failed to parse %s: %s", path, exc)
         return current
     if not isinstance(data, dict):
-        logger.warning(
-            "settings: top-level of %s is not an object — skipping", path
-        )
+        logger.warning("settings: top-level of %s is not an object — skipping", path)
         return current
     raw_section = data.get(section)
     if not isinstance(raw_section, dict) or not raw_section:

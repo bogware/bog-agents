@@ -58,7 +58,9 @@ class _Registry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._counters: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self._counters: dict[str, dict[str, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
         self._first_seen: dict[str, float] = {}
         self._last_seen: dict[str, float] = {}
 
@@ -143,7 +145,9 @@ EVT_REPLAY_RECORD_STOP = "replay.record.stop"
 EVT_REPLAY_RUN = "replay.run"
 
 
-def log_event(event: str, *, label: str = "", level: int = logging.INFO, **fields: Any) -> None:
+def log_event(
+    event: str, *, label: str = "", level: int = logging.INFO, **fields: Any
+) -> None:
     """Emit a structured event.
 
     Args:
@@ -170,7 +174,11 @@ def _format_fields(fields: dict[str, Any]) -> str:
     parts: list[str] = []
     for k, v in fields.items():
         # Avoid logging large objects; cap each value's repr to 80 chars.
-        rendered = repr(v) if not isinstance(v, (str, int, float, bool, type(None))) else str(v)
+        rendered = (
+            repr(v)
+            if not isinstance(v, (str, int, float, bool, type(None)))
+            else str(v)
+        )
         if len(rendered) > 80:
             rendered = rendered[:77] + "..."
         parts.append(f"{k}={rendered}")
@@ -208,7 +216,12 @@ class timer:  # noqa: N801 — lowercase is intentional, used as a context manag
         self._start = time.monotonic()
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, _tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        _tb: object,
+    ) -> None:
         elapsed_ms = int((time.monotonic() - self._start) * 1000)
         if exc_type is not None and "status" not in self.fields:
             self.fields["status"] = "error"

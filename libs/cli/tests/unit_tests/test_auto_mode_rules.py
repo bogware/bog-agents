@@ -20,7 +20,6 @@ from bog_agents_cli.auto_mode import (
     load_auto_mode_settings,
 )
 
-
 # ---------------------------------------------------------------------------
 # AutoModeRuleEngine — safe tools
 # ---------------------------------------------------------------------------
@@ -30,10 +29,22 @@ class TestRuleEngineSafeTools:
     def _engine(self) -> AutoModeRuleEngine:
         return AutoModeRuleEngine(AutoModeSettings())
 
-    @pytest.mark.parametrize("tool_name", [
-        "read_file", "read_many_files", "glob", "grep", "list_directory",
-        "get_file_info", "search_files", "git_status", "git_log", "git_diff", "git_show",
-    ])
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "read_file",
+            "read_many_files",
+            "glob",
+            "grep",
+            "list_directory",
+            "get_file_info",
+            "search_files",
+            "git_status",
+            "git_log",
+            "git_diff",
+            "git_show",
+        ],
+    )
     def test_safe_tools_are_allowed(self, tool_name: str) -> None:
         engine = self._engine()
         verdict = engine.evaluate(tool_name, {})
@@ -66,9 +77,15 @@ class TestRuleEngineRiskyTools:
     def _engine(self) -> AutoModeRuleEngine:
         return AutoModeRuleEngine(AutoModeSettings())
 
-    @pytest.mark.parametrize("tool_name", [
-        "delete_file", "remove_directory", "git_push", "git_reset",
-    ])
+    @pytest.mark.parametrize(
+        "tool_name",
+        [
+            "delete_file",
+            "remove_directory",
+            "git_push",
+            "git_reset",
+        ],
+    )
     def test_risky_tools_ask(self, tool_name: str) -> None:
         engine = self._engine()
         verdict = engine.evaluate(tool_name, {})
@@ -88,89 +105,116 @@ class TestShellAskPatterns:
     def _eval(self, cmd: str) -> RuleVerdict:
         return self._engine().evaluate("bash", {"command": cmd})
 
-    @pytest.mark.parametrize("cmd", [
-        "rm -rf /tmp/dir",
-        "rm file.txt",
-        "rm",
-        "rmdir old_folder",
-        "del file.txt",
-        "rd /s /q folder",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "rm -rf /tmp/dir",
+            "rm file.txt",
+            "rm",
+            "rmdir old_folder",
+            "del file.txt",
+            "rd /s /q folder",
+        ],
+    )
     def test_file_deletion_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "git push --force origin main",
-        "git push -f",
-        "git reset --hard HEAD~1",
-        "git clean -fd",
-        "git checkout .",
-        "git rebase main",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git push --force origin main",
+            "git push -f",
+            "git reset --hard HEAD~1",
+            "git clean -fd",
+            "git checkout .",
+            "git rebase main",
+        ],
+    )
     def test_git_destructive_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "DROP TABLE users",
-        "TRUNCATE logs",
-        "dropdb mydb",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "DROP TABLE users",
+            "TRUNCATE logs",
+            "dropdb mydb",
+        ],
+    )
     def test_database_destructive_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        'curl -X POST https://api.example.com/data -d "{}"',
-        "curl --data payload.json https://api.example.com",
-        "wget --post-data=foo http://example.com",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            'curl -X POST https://api.example.com/data -d "{}"',
+            "curl --data payload.json https://api.example.com",
+            "wget --post-data=foo http://example.com",
+        ],
+    )
     def test_network_writes_trigger_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "kill 1234",
-        "killall python",
-        "pkill -f myapp",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "kill 1234",
+            "killall python",
+            "pkill -f myapp",
+        ],
+    )
     def test_process_kill_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "docker rm my_container",
-        "docker rmi my_image",
-        "docker prune",
-        "docker system prune",
-        "podman rm my_container",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "docker rm my_container",
+            "docker rmi my_image",
+            "docker prune",
+            "docker system prune",
+            "podman rm my_container",
+        ],
+    )
     def test_container_cleanup_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "dd if=/dev/zero of=/dev/sda",
-        "dd bs=512 count=1 if=/dev/urandom of=/dev/sdb",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "dd if=/dev/zero of=/dev/sda",
+            "dd bs=512 count=1 if=/dev/urandom of=/dev/sdb",
+        ],
+    )
     def test_raw_disk_write_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "aws s3 rm s3://my-bucket/key",
-        "gsutil rm -r gs://my-bucket/",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "aws s3 rm s3://my-bucket/key",
+            "gsutil rm -r gs://my-bucket/",
+        ],
+    )
     def test_cloud_deletion_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "pip uninstall requests",
-        "npm uninstall lodash",
-        "uv remove requests",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "pip uninstall requests",
+            "npm uninstall lodash",
+            "uv remove requests",
+        ],
+    )
     def test_package_removal_triggers_ask(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
@@ -197,58 +241,70 @@ class TestShellAllowPatterns:
     def _eval(self, cmd: str) -> RuleVerdict:
         return self._engine().evaluate("bash", {"command": cmd})
 
-    @pytest.mark.parametrize("cmd", [
-        "cat README.md",
-        "head -20 file.py",
-        "tail -f app.log",
-        "grep -rn TODO src/",
-        "rg 'def foo' .",
-        "find . -name '*.py'",
-        "ls -la",
-        "dir",
-        "wc -l src/*.py",
-        "diff file_a.py file_b.py",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "cat README.md",
+            "head -20 file.py",
+            "tail -f app.log",
+            "grep -rn TODO src/",
+            "rg 'def foo' .",
+            "find . -name '*.py'",
+            "ls -la",
+            "dir",
+            "wc -l src/*.py",
+            "diff file_a.py file_b.py",
+        ],
+    )
     def test_file_reading_is_allowed(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ALLOW, f"Expected ALLOW for: {cmd!r}"
         assert v.rule_source == "allow_list"
 
-    @pytest.mark.parametrize("cmd", [
-        "git status",
-        "git log --oneline -10",
-        "git diff HEAD",
-        "git show abc123",
-        "git branch -a",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git status",
+            "git log --oneline -10",
+            "git diff HEAD",
+            "git show abc123",
+            "git branch -a",
+        ],
+    )
     def test_git_read_is_allowed(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ALLOW, f"Expected ALLOW for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "npm test",
-        "npm run test",
-        "npm run typecheck",
-        "pytest",
-        "python -m pytest",
-        "uv run pytest",
-        "cargo test",
-        "go test ./...",
-        "vitest",
-        "jest",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "npm test",
+            "npm run test",
+            "npm run typecheck",
+            "pytest",
+            "python -m pytest",
+            "uv run pytest",
+            "cargo test",
+            "go test ./...",
+            "vitest",
+            "jest",
+        ],
+    )
     def test_test_runners_are_allowed(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ALLOW, f"Expected ALLOW for: {cmd!r}"
 
-    @pytest.mark.parametrize("cmd", [
-        "tsc --noEmit",
-        "mypy src/",
-        "ruff check .",
-        "ruff format --check .",
-        "ty check bog_agents",
-        "pyright",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "tsc --noEmit",
+            "mypy src/",
+            "ruff check .",
+            "ruff format --check .",
+            "ty check bog_agents",
+            "pyright",
+        ],
+    )
     def test_type_checkers_are_allowed(self, cmd: str) -> None:
         v = self._eval(cmd)
         assert v.decision == AutoDecision.ALLOW, f"Expected ALLOW for: {cmd!r}"
@@ -452,7 +508,9 @@ class TestDetectAmbiguities:
 class TestHaikuRiskEval:
     async def test_safe_tool_returns_not_risky(self) -> None:
         mock_msg = MagicMock()
-        mock_msg.content = [MagicMock(text='{"risky": false, "reason": "reading a file"}')]
+        mock_msg.content = [
+            MagicMock(text='{"risky": false, "reason": "reading a file"}')
+        ]
         with patch("anthropic.AsyncAnthropic") as mock_cls:
             mock_client = AsyncMock()
             mock_cls.return_value = mock_client
@@ -463,19 +521,25 @@ class TestHaikuRiskEval:
 
     async def test_risky_tool_returns_risky(self) -> None:
         mock_msg = MagicMock()
-        mock_msg.content = [MagicMock(text='{"risky": true, "reason": "deletes files"}')]
+        mock_msg.content = [
+            MagicMock(text='{"risky": true, "reason": "deletes files"}')
+        ]
         with patch("anthropic.AsyncAnthropic") as mock_cls:
             mock_client = AsyncMock()
             mock_cls.return_value = mock_client
             mock_client.messages.create = AsyncMock(return_value=mock_msg)
-            is_risky, reason = await haiku_risk_eval("delete_file", {"path": "/etc/passwd"})
+            is_risky, _reason = await haiku_risk_eval(
+                "delete_file", {"path": "/etc/passwd"}
+            )
         assert is_risky is True
 
     async def test_api_failure_returns_risky(self) -> None:
         with patch("anthropic.AsyncAnthropic") as mock_cls:
             mock_client = AsyncMock()
             mock_cls.return_value = mock_client
-            mock_client.messages.create = AsyncMock(side_effect=Exception("network error"))
+            mock_client.messages.create = AsyncMock(
+                side_effect=Exception("network error")
+            )
             is_risky, reason = await haiku_risk_eval("some_tool", {})
         # Fail-closed: API unavailable should be treated as risky
         assert is_risky is True
@@ -494,6 +558,7 @@ class TestHaikuRiskEval:
 
     async def test_anthropic_not_installed_returns_allow(self) -> None:
         import sys
+
         with patch.dict(sys.modules, {"anthropic": None}):
             is_risky, reason = await haiku_risk_eval("some_tool", {})
         assert is_risky is False

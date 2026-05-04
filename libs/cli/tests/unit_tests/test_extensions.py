@@ -27,7 +27,9 @@ from bog_agents_cli.extensions import (
 )
 
 
-def _write_extension_source(tmp_path: Path, name: str, version: str = "0.1.0", **extra: object) -> Path:
+def _write_extension_source(
+    tmp_path: Path, name: str, version: str = "0.1.0", **extra: object
+) -> Path:
     """Create a minimal extension source directory and return its path."""
     src = tmp_path / f"src-{name}"
     src.mkdir(parents=True, exist_ok=True)

@@ -136,14 +136,14 @@ DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
-    "primary": "#7aa888",       # matte moss — primary brand color
-    "primary_dev": "#b89968",   # muted ochre — flags editable / dev installs
-    "dim": "#6f8478",           # lichen mute — muted secondary text
-    "user": "#c8d4ca",          # fogged grey-green — user-facing text
-    "agent": "#9cc4a7",         # moss highlight — agent text emphasis
-    "thinking": "#6a9b9b",      # muted teal — model "thinking" state
-    "tool": "#b89968",          # muted ochre — tool-call accents
-    "mode_shell": "#a07358",    # peat ember — shell-mode prefix
+    "primary": "#7aa888",  # matte moss — primary brand color
+    "primary_dev": "#b89968",  # muted ochre — flags editable / dev installs
+    "dim": "#6f8478",  # lichen mute — muted secondary text
+    "user": "#c8d4ca",  # fogged grey-green — user-facing text
+    "agent": "#9cc4a7",  # moss highlight — agent text emphasis
+    "thinking": "#6a9b9b",  # muted teal — model "thinking" state
+    "tool": "#b89968",  # muted ochre — tool-call accents
+    "mode_shell": "#a07358",  # peat ember — shell-mode prefix
     "mode_command": "#7aa888",  # matte moss — command-mode prefix
 }
 """App color scheme — matte swamp palette. Muted, low-saturation."""
@@ -404,61 +404,56 @@ def newline_shortcut() -> str:
 
 # Text art banners (Unicode and ASCII variants)
 
-# Banner art — modeled on Ultima Online's heavy-serif title font and
-# illuminated-manuscript frame. The wordmark is the focus: tall block
-# capitals with explicit top/bottom serif rails (the long ▄▄▄ and ▀▀▀
-# bands above and below the letters are the serifs of the whole
-# wordmark, not decoration). Floral fleurons (❦) sit on the corners,
-# and a thin double-rule frames the whole composition like a
-# manuscript chapter heading.
+# Banner art — V4 "rune-bordered tablet" design.
 #
-# Width is fixed at 64 interior columns + 2 frame columns = 66 total.
-# Every line in the unicode banner ends at the same column so the
-# right-side rail is straight regardless of viewport width.
+# Two heavy block-letter wordmarks (BOG / AGENTS) framed by a long
+# horizontal rune rail at top and bottom, anchored at each end by an
+# Othala rune (ᛟ) — the manuscript-tablet feel. No left/right rails so
+# the wordmark breathes; the rails fade into deep peat tones via the
+# welcome.py gradient while the letters land on the brighter
+# matte-moss midline.
+#
+# Every line right-pads to a fixed width so the gradient renders evenly
+# regardless of viewport. ◆/◇ marks beside the BOG wordmark are
+# negative-space ornaments (Ultima virtue sigils).
 _UNICODE_BANNER = f"""\
 
-  ╔══════════════════ ❦ ══════════════════ ❦ ══════════════════╗
-  ║                                                            ║
-  ║              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                   ║
-  ║                                                            ║
-  ║              ████▄▖    ▗████▖    ▗████▖                    ║
-  ║              █   ▐▌    ▐▌  ▐▌    ▐▌                        ║
-  ║              ████▘     ▐▌  ▐▌    ▐▌  ▄██                   ║
-  ║              █   ▐▌    ▐▌  ▐▌    ▐▌   ▐▌                   ║
-  ║              ████▘     ▝████▘    ▝████▘                    ║
-  ║                                                            ║
-  ║              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                   ║
-  ║                                                            ║
-  ║         A  ·  G  ·  E  ·  N  ·  T  ·  S                   ║
-  ║                                                            ║
-  ║              ◆   pass through in harmony   ◆               ║
-  ║                                                            ║
-  ║                       v{__version__:<24}    ║
-  ║                                                            ║
-  ╚══════════════════ ❦ ══════════════════ ❦ ══════════════════╝\
+   ᛟ═══════════════════════════════════════════════════════════ᛟ
+
+   ██████╗   ██████╗   ██████╗
+   ██╔══██╗ ██╔═══██╗ ██╔════╝       ◇  ◆  ◇
+   ██████╔╝ ██║   ██║ ██║  ███╗     ◆  ◇  ◆  ◇
+   ██╔══██╗ ██║   ██║ ██║   ██║      ◇  ◆  ◇
+   ██████╔╝ ╚██████╔╝ ╚██████╔╝       ◆  ◇
+   ╚═════╝   ╚═════╝   ╚═════╝
+
+    █████╗   ██████╗  ███████╗ ███╗   ██╗ ████████╗ ███████╗
+   ██╔══██╗ ██╔════╝  ██╔════╝ ████╗  ██║ ╚══██╔══╝ ██╔════╝
+   ███████║ ██║  ███╗ █████╗   ██╔██╗ ██║    ██║    ███████╗
+   ██╔══██║ ██║   ██║ ██╔══╝   ██║╚██╗██║    ██║    ╚════██║
+   ██║  ██║ ╚██████╔╝ ███████╗ ██║ ╚████║    ██║    ███████║
+   ╚═╝  ╚═╝  ╚═════╝  ╚══════╝ ╚═╝  ╚═══╝    ╚═╝    ╚══════╝
+
+   ᛟ═══════════════════════════════════════════════════════════ᛟ
+
+      ≈  pass through in harmony  ≈  v{__version__}\
 """
 
 _ASCII_BANNER = f"""\
 
-  +================== * ================== * ==================+
-  |                                                            |
-  |              -------------------------                     |
-  |                                                            |
-  |              BBBB     OOOO     GGGG                        |
-  |              B   B   O    O   G                            |
-  |              BBBB    O    O   G  GG                        |
-  |              B   B   O    O   G   G                        |
-  |              BBBB     OOOO     GGGG                        |
-  |                                                            |
-  |              -------------------------                     |
-  |                                                            |
-  |          A . G . E . N . T . S                             |
-  |                                                            |
-  |              <>  pass through in harmony  <>               |
-  |                                                            |
-  |                       v{__version__:<24}    |
-  |                                                            |
-  +================== * ================== * ==================+\
+   ____   ___   ____
+  | __ ) / _ \\ / ___|       * + *
+  |  _ \\| | | | |  _       + * + *
+  | |_) | |_| | |_| |       * + *
+  |____/ \\___/ \\____|          +
+
+      _    ____  _____ _   _ _____ ____
+     / \\  / ___|| ____| \\ | |_   _/ ___|
+    / _ \\| |  _ |  _| |  \\| | | | \\___ \\
+   / ___ \\ |_| || |___| |\\  | | |  ___) |
+  /_/   \\_\\____||_____|_| \\_| |_| |____/
+
+  > pass through in harmony --- v{__version__}\
 """
 
 

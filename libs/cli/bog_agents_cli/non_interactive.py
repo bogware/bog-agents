@@ -1227,7 +1227,14 @@ async def run_non_interactive(
             or (is_remote and "internal error" in err_str)
         )
         is_connection_error = (
-            err_name in ("ConnectError", "ConnectTimeout", "ReadTimeout", "ConnectionRefusedError", "ClientConnectorError")
+            err_name
+            in (
+                "ConnectError",
+                "ConnectTimeout",
+                "ReadTimeout",
+                "ConnectionRefusedError",
+                "ClientConnectorError",
+            )
             or "connection refused" in err_str
             or "connection reset" in err_str
             or "name or service not known" in err_str

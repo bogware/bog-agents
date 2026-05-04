@@ -21,7 +21,11 @@ from bog_agents_cli.config import CharsetMode, _detect_charset_mode
 
 def _no_lang_env() -> dict[str, str]:
     """Env without LANG/LC_ALL/UI_CHARSET_MODE so the encoding path is exercised."""
-    return {k: v for k, v in os.environ.items() if k not in {"LANG", "LC_ALL", "UI_CHARSET_MODE"}}
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"LANG", "LC_ALL", "UI_CHARSET_MODE"}
+    }
 
 
 class _FakeStdout:  # noqa: B903 — explicit class clarifies intent in tests
@@ -94,6 +98,7 @@ def test_unknown_encoding_defaults_to_unicode():
 
 def test_missing_encoding_attribute_defaults_to_unicode():
     """A stdout that doesn't have ``.encoding`` shouldn't crash and shouldn't downgrade."""
+
     class _NoEncoding:
         pass
 

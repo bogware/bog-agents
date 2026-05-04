@@ -230,7 +230,9 @@ class PeatScheduler:
         # ``DEFAULT_SCHEDULER_TICK_S`` (30s).
         self._tick = max(
             0.05,
-            tick_interval_s if tick_interval_s is not None else DEFAULT_SCHEDULER_TICK_S,
+            tick_interval_s
+            if tick_interval_s is not None
+            else DEFAULT_SCHEDULER_TICK_S,
         )
         self._task: asyncio.Task | None = None
         self._stopping = asyncio.Event()
@@ -303,7 +305,9 @@ class PeatScheduler:
                 continue
             # Job is due.
             if not job.concurrent and job.job_id in self._inflight:
-                logger.debug("peat: skipping fire of %s — previous still running", job.job_id)
+                logger.debug(
+                    "peat: skipping fire of %s — previous still running", job.job_id
+                )
                 continue
             self._inflight[job.job_id] = asyncio.create_task(
                 self._fire(job), name=f"peat-job-{job.job_id}"
@@ -330,7 +334,9 @@ class PeatScheduler:
             log_event,
         )
 
-        log_event(EVT_PEAT_JOB_FIRE, label=job.job_id, name=job.name, schedule=job.schedule)
+        log_event(
+            EVT_PEAT_JOB_FIRE, label=job.job_id, name=job.name, schedule=job.schedule
+        )
         started = time.time()
         try:
             run = await asyncio.wait_for(self._runner(job), timeout=job.timeout_s)
@@ -373,7 +379,9 @@ class PeatScheduler:
         # Auto-disable on too many failures (when the user asked for it).
         if job.on_failure == "disable" and job.consecutive_failures >= 3:
             job.enabled = False
-            logger.warning("peat: auto-disabled job %s after 3 consecutive failures", job.job_id)
+            logger.warning(
+                "peat: auto-disabled job %s after 3 consecutive failures", job.job_id
+            )
         # Compute next fire (if recurring).
         nxt = next_fire_time(job.schedule, after=time.time())
         job.next_fire_at = nxt or 0.0
@@ -384,7 +392,9 @@ class PeatScheduler:
             append_inbox(
                 self._config_dir,
                 {
-                    "when": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(run.started_at)),
+                    "when": time.strftime(
+                        "%Y-%m-%d %H:%M:%S UTC", time.gmtime(run.started_at)
+                    ),
                     "job_id": job.job_id,
                     "job_name": job.name or job.job_id,
                     "status": run.status,
@@ -393,7 +403,12 @@ class PeatScheduler:
                     "duration_s": round(run.duration_s, 2),
                 },
             )
-        logger.info("peat job %s fired: status=%s in %.1fs", job.job_id, run.status, run.duration_s)
+        logger.info(
+            "peat job %s fired: status=%s in %.1fs",
+            job.job_id,
+            run.status,
+            run.duration_s,
+        )
 
 
 __all__ = [

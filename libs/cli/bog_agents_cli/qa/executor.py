@@ -123,7 +123,9 @@ class ExecutionResult:
 # ---------------------------------------------------------------------------
 
 
-def _run_shell_sync(rendered_run: str, cwd: str, env: dict[str, str] | None, timeout_s: int) -> tuple[int, str, str]:
+def _run_shell_sync(
+    rendered_run: str, cwd: str, env: dict[str, str] | None, timeout_s: int
+) -> tuple[int, str, str]:
     """Synchronous shell runner — wrapped in an executor by the async caller.
 
     Two Windows-specific footguns we work around here:
@@ -239,7 +241,7 @@ async def _run_shell_step(step: QAStep, bundle: VarBundle) -> StepResult:
             started_at=started,
             duration_s=duration,
             passed=False,
-            reason=f"failed to launch: {error[len('launch_error: '):]}",
+            reason=f"failed to launch: {error[len('launch_error: ') :]}",
             error=error,
         )
     # Default expectation: exit_code 0 unless verdict overrides.
@@ -296,7 +298,9 @@ async def _run_http_step(step: QAStep, bundle: VarBundle) -> StepResult:
         # HTTP step doesn't make sense to time-bound under 1s in practice.
         loop = asyncio.get_running_loop()
         resp = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: urllib.request.urlopen(req, timeout=step.timeout_s)),
+            loop.run_in_executor(
+                None, lambda: urllib.request.urlopen(req, timeout=step.timeout_s)
+            ),
             timeout=step.timeout_s + 5,
         )
         try:
@@ -339,7 +343,9 @@ async def _run_http_step(step: QAStep, bundle: VarBundle) -> StepResult:
         except json.JSONDecodeError:
             json_data = None
     verdict = step.verdict if not step.verdict.is_empty() else StepVerdict(status=200)
-    passed, reason = verdict.evaluate(status=status, body=body_text, json_data=json_data)
+    passed, reason = verdict.evaluate(
+        status=status, body=body_text, json_data=json_data
+    )
     return StepResult(
         step_id=step.id,
         kind=step.kind.value,

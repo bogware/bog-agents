@@ -160,7 +160,9 @@ def _probe_provider_envs() -> Probe:
             continue
         present.append(var)
         if expected_prefix and not val.startswith(expected_prefix):
-            issues.append(f"{var} does not start with expected prefix {expected_prefix!r}")
+            issues.append(
+                f"{var} does not start with expected prefix {expected_prefix!r}"
+            )
         if len(val) < 12:
             issues.append(f"{var} is unusually short ({len(val)} chars)")
     if not present:
@@ -209,7 +211,9 @@ def _tcp_probe(name: str, host: str, port: int) -> Probe:
 def _probe_mcp_config() -> Probe:
     cfg = Path.home() / ".bog-agents" / ".mcp.json"
     if not cfg.is_file():
-        return Probe(name="mcp-config", status="ok", detail="no MCP config (none required)")
+        return Probe(
+            name="mcp-config", status="ok", detail="no MCP config (none required)"
+        )
     try:
         from bog_agents_cli.mcp_config_manager import load_user_mcp_config
 
@@ -235,7 +239,11 @@ def _probe_mcp_config() -> Probe:
             status="warn",
             detail=f"{len(servers)} server(s); issues: " + "; ".join(missing),
         )
-    return Probe(name="mcp-config", status="ok", detail=f"{len(servers)} server(s) — all commands resolve")
+    return Probe(
+        name="mcp-config",
+        status="ok",
+        detail=f"{len(servers)} server(s) — all commands resolve",
+    )
 
 
 def _probe_settings_files() -> Probe:
@@ -259,7 +267,9 @@ def _probe_settings_files() -> Probe:
     if issues:
         return Probe(name="settings", status="fail", detail="; ".join(issues))
     if not found:
-        return Probe(name="settings", status="ok", detail="no settings files (defaults active)")
+        return Probe(
+            name="settings", status="ok", detail="no settings files (defaults active)"
+        )
     return Probe(name="settings", status="ok", detail=f"loaded: {', '.join(found)}")
 
 
@@ -309,9 +319,14 @@ def _format_report(probes: list[Probe], *, total_ms: int) -> str:
         lines.append(f"  {glyph} {name} {p.detail}")
         counts[p.status] = counts.get(p.status, 0) + 1
     lines.append("=" * 60)
-    summary = ", ".join(
-        f"{label}={counts[label]}" for label in ("ok", "warn", "fail") if counts[label]
-    ) or "no checks run"
+    summary = (
+        ", ".join(
+            f"{label}={counts[label]}"
+            for label in ("ok", "warn", "fail")
+            if counts[label]
+        )
+        or "no checks run"
+    )
     lines.append(f"  {summary}  ({total_ms}ms)")
     if counts.get("fail", 0) > 0:
         lines.append("")

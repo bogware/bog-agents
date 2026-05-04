@@ -58,7 +58,9 @@ class AcceptanceCriterion:
         return out
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any], *, fallback_id: str = "AC?") -> AcceptanceCriterion:
+    def from_dict(
+        cls, d: dict[str, Any], *, fallback_id: str = "AC?"
+    ) -> AcceptanceCriterion:
         return cls(
             id=str(d.get("id") or fallback_id),
             text=str(d.get("text", "")).strip(),
@@ -168,7 +170,9 @@ def parse_ac_from_json(raw: str, *, source: str = "json") -> list[AcceptanceCrit
     out: list[AcceptanceCriterion] = []
     for i, item in enumerate(data, 1):
         if isinstance(item, str):
-            out.append(AcceptanceCriterion(id=f"AC{i}", text=item.strip(), source=source))
+            out.append(
+                AcceptanceCriterion(id=f"AC{i}", text=item.strip(), source=source)
+            )
         elif isinstance(item, dict):
             out.append(AcceptanceCriterion.from_dict(item, fallback_id=f"AC{i}"))
             if not out[-1].source:
@@ -220,7 +224,9 @@ def load_acceptance_criteria(
         # Heuristic: if it looks like a path and the file exists, read it.
         candidate = Path(from_json)
         if candidate.is_file():
-            return parse_ac_from_json(candidate.read_text(encoding="utf-8"), source=f"file:{candidate}")
+            return parse_ac_from_json(
+                candidate.read_text(encoding="utf-8"), source=f"file:{candidate}"
+            )
         return parse_ac_from_json(from_json, source="json")
 
     if from_file:

@@ -94,7 +94,9 @@ class TestWritePanicDump:
         text = path.read_text(encoding="utf-8")
         assert "abc-123" in text
 
-    def test_returns_none_on_io_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_returns_none_on_io_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         # Force the dir creation to fail.
         bogus_dir = tmp_path / "nope"
         bogus_dir.write_text("i'm a file, not a dir")
@@ -126,7 +128,9 @@ class TestWritePanicDump:
 
 
 class TestInstallPanicHandler:
-    def test_keyboard_interrupt_does_not_dump(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_keyboard_interrupt_does_not_dump(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         import sys
 
         original_hook = sys.excepthook

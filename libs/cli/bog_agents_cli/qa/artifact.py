@@ -64,7 +64,9 @@ def emit_artifact(
     raise ValueError(msg)
 
 
-def _write(out_dir: Path, plan: QAPlan, result: ExecutionResult, ext: str, text: str) -> Path:
+def _write(
+    out_dir: Path, plan: QAPlan, result: ExecutionResult, ext: str, text: str
+) -> Path:
     plan_dir = out_dir / plan.plan_id
     plan_dir.mkdir(parents=True, exist_ok=True)
     path = plan_dir / f"{result.run_id}.{ext}"
@@ -86,9 +88,13 @@ def _render_markdown(plan: QAPlan, result: ExecutionResult) -> str:
     parts.append("")
     parts.append(f"- **Plan:** `{plan.plan_id}`")
     parts.append(f"- **Run:** `{result.run_id}`")
-    parts.append(f"- **Started:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(result.started_at))}")
+    parts.append(
+        f"- **Started:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(result.started_at))}"
+    )
     parts.append(f"- **Duration:** {result.duration_s:.2f}s")
-    parts.append(f"- **Overall verdict:** {_VERDICT_GLYPH.get(result.overall_verdict, '?')} **{result.overall_verdict.upper()}**")
+    parts.append(
+        f"- **Overall verdict:** {_VERDICT_GLYPH.get(result.overall_verdict, '?')} **{result.overall_verdict.upper()}**"
+    )
     if result.aborted:
         parts.append("- **Aborted:** yes (a step with `on_fail: abort` failed)")
     parts.append("")

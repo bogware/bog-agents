@@ -583,7 +583,7 @@ class TestRBACMiddleware:
             ]
             system_message = None
 
-            def override(self, **kwargs: object) -> Any:  # noqa: ANN401
+            def override(self, **kwargs: object) -> Any:
                 captured.update(kwargs)
                 return self
 
@@ -615,7 +615,7 @@ class TestRBACMiddleware:
             ]
             system_message = None
 
-            def override(self, **kwargs: object) -> Any:  # noqa: ANN401
+            def override(self, **kwargs: object) -> Any:
                 captured.update(kwargs)
                 return self
 
@@ -637,7 +637,7 @@ class TestRBACMiddleware:
             tools: ClassVar[list] = [SimpleNamespace(name="anything")]
             system_message = None
 
-            def override(self, **kwargs: object) -> Any:  # noqa: ANN401
+            def override(self, **kwargs: object) -> Any:
                 captured.update(kwargs)
                 return self
 

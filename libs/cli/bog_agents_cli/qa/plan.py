@@ -146,7 +146,11 @@ class StepVerdict:
             ``(passed, reason)``. ``passed=True`` means all rules satisfied.
         """
         # Exit code.
-        if self.exit_code is not None and exit_code is not None and exit_code != self.exit_code:
+        if (
+            self.exit_code is not None
+            and exit_code is not None
+            and exit_code != self.exit_code
+        ):
             return False, f"exit_code {exit_code} ≠ expected {self.exit_code}"
         # Status.
         if self.status is not None and status is not None:
@@ -195,19 +199,19 @@ class QAStep:
     description: str = ""
     ac: list[str] = field(default_factory=list)
     # Kind-specific fields. Only the relevant ones are populated.
-    prompt: str = ""             # AGENT
-    run: str = ""                # SHELL
-    cwd: str = ""                # SHELL
+    prompt: str = ""  # AGENT
+    run: str = ""  # SHELL
+    cwd: str = ""  # SHELL
     env: dict[str, str] = field(default_factory=dict)  # SHELL
-    timeout_s: int = 60          # SHELL / HTTP / MCP
-    method: str = "GET"          # HTTP
-    url: str = ""                # HTTP
+    timeout_s: int = 60  # SHELL / HTTP / MCP
+    method: str = "GET"  # HTTP
+    url: str = ""  # HTTP
     headers: dict[str, str] = field(default_factory=dict)  # HTTP
-    body: str = ""               # HTTP
-    tool: str = ""               # MCP
-    args: dict[str, Any] = field(default_factory=dict)     # MCP
+    body: str = ""  # HTTP
+    tool: str = ""  # MCP
+    args: dict[str, Any] = field(default_factory=dict)  # MCP
     verdict: StepVerdict = field(default_factory=StepVerdict)
-    on_fail: str = "continue"    # "continue" | "abort"
+    on_fail: str = "continue"  # "continue" | "abort"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> QAStep:

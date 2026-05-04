@@ -481,7 +481,11 @@ _REGISTRY: dict[str, RegistryEntry] = {
         transport="stdio",
         command="npx",
         args=["-y", "@modelcontextprotocol/server-atlassian-confluence"],
-        required_env=["CONFLUENCE_BASE_URL", "CONFLUENCE_API_TOKEN", "CONFLUENCE_EMAIL"],
+        required_env=[
+            "CONFLUENCE_BASE_URL",
+            "CONFLUENCE_API_TOKEN",
+            "CONFLUENCE_EMAIL",
+        ],
         vars_hints={
             "CONFLUENCE_BASE_URL": "https://your-domain.atlassian.net/wiki",
             "CONFLUENCE_API_TOKEN": "Atlassian API token (id.atlassian.com/manage-profile/security/api-tokens)",

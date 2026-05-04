@@ -12,7 +12,9 @@ from bog_agents_cli.cmd_verify import cmd_verify
 
 
 class TestVerifyNoOutput:
-    def _make_args(self, tmp_path: Path, *, no_output: bool = False) -> argparse.Namespace:
+    def _make_args(
+        self, tmp_path: Path, *, no_output: bool = False
+    ) -> argparse.Namespace:
         return argparse.Namespace(
             cwd=str(tmp_path),
             output="",
@@ -36,7 +38,10 @@ class TestVerifyNoOutput:
         args = self._make_args(tmp_path, no_output=True)
         mock_profile = self._patch_profile()
         with (
-            patch("bog_agents_cli.cmd_verify.detect_project_profile", return_value=mock_profile),
+            patch(
+                "bog_agents_cli.cmd_verify.detect_project_profile",
+                return_value=mock_profile,
+            ),
             patch("bog_agents_cli.cmd_verify._run_check") as mock_run,
             patch("bog_agents_cli.cmd_verify._emit_text_report"),
             patch("bog_agents_cli.cmd_verify._format_summary", return_value="summary"),
@@ -51,10 +56,16 @@ class TestVerifyNoOutput:
         args = self._make_args(tmp_path, no_output=False)
         mock_profile = self._patch_profile()
         with (
-            patch("bog_agents_cli.cmd_verify.detect_project_profile", return_value=mock_profile),
+            patch(
+                "bog_agents_cli.cmd_verify.detect_project_profile",
+                return_value=mock_profile,
+            ),
             patch("bog_agents_cli.cmd_verify._run_check") as mock_run,
             patch("bog_agents_cli.cmd_verify._emit_text_report"),
-            patch("bog_agents_cli.cmd_verify._format_summary", return_value="summary content"),
+            patch(
+                "bog_agents_cli.cmd_verify._format_summary",
+                return_value="summary content",
+            ),
         ):
             mock_run.return_value = MagicMock(exit_code=0, name="typecheck")
             result = cmd_verify(args)

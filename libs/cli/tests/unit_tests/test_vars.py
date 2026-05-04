@@ -60,7 +60,14 @@ class TestVarSpec:
             s.coerce("staging")
 
     def test_to_dict_round_trip(self):
-        s = VarSpec(name="x", type="enum", choices=["a", "b"], description="d", default="a", required=False)
+        s = VarSpec(
+            name="x",
+            type="enum",
+            choices=["a", "b"],
+            description="d",
+            default="a",
+            required=False,
+        )
         d = s.to_dict()
         s2 = VarSpec.from_dict("x", d)
         assert s2.choices == ["a", "b"]
@@ -272,7 +279,10 @@ class TestAutoVariabilize:
     def test_extracted_vars_round_trip_through_bundle(self):
         text, vars_map = auto_variabilize("Get details for JIRA-134 please")
         b = VarBundle.from_dict(
-            {name: {"type": "string", "default": val} for name, val in vars_map.items()},
+            {
+                name: {"type": "string", "default": val}
+                for name, val in vars_map.items()
+            },
             vault=SessionVault(),
         )
         assert b.substitute(text) == "Get details for JIRA-134 please"

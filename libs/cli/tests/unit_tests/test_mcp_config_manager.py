@@ -63,7 +63,9 @@ class TestServerCRUD:
         assert mcm.server_exists("alpha")
         assert mcm.get_server("alpha") == {"command": "x"}
 
-    def test_add_server_collision_without_overwrite_returns_false(self, isolated_config: Path):
+    def test_add_server_collision_without_overwrite_returns_false(
+        self, isolated_config: Path
+    ):
         mcm.add_server("alpha", {"command": "x"})
         assert mcm.add_server("alpha", {"command": "y"}) is False
         assert mcm.get_server("alpha") == {"command": "x"}

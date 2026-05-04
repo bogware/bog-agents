@@ -173,7 +173,9 @@ class TestPlanIO:
 
     def test_save_includes_header(self, tmp_path: Path):
         save_plan(tmp_path, self._plan())
-        text = (tmp_path / ".bog-agents" / "qa-plans" / "qa-test.yaml").read_text(encoding="utf-8")
+        text = (tmp_path / ".bog-agents" / "qa-plans" / "qa-test.yaml").read_text(
+            encoding="utf-8"
+        )
         assert text.startswith("#")
 
     def test_round_trip_through_dict(self):
@@ -203,7 +205,9 @@ class TestPlanIO:
 
     def test_unknown_step_kind_raises(self, tmp_path: Path):
         path = tmp_path / "bad.yaml"
-        path.write_text(yaml.safe_dump({"plan_id": "x", "steps": [{"id": "s1", "kind": "weird"}]}))
+        path.write_text(
+            yaml.safe_dump({"plan_id": "x", "steps": [{"id": "s1", "kind": "weird"}]})
+        )
         with pytest.raises(ValueError, match="unknown step kind"):
             load_plan(path)
 
@@ -232,7 +236,9 @@ class TestStepVerdict:
         assert not bad
 
     def test_not_contains(self):
-        bad, reason = StepVerdict(not_contains=["error"]).evaluate(body="all good error here")
+        bad, reason = StepVerdict(not_contains=["error"]).evaluate(
+            body="all good error here"
+        )
         assert not bad
         assert "forbidden" in reason
 
@@ -254,11 +260,15 @@ class TestStepVerdict:
         assert not bad
 
     def test_json_path_present(self):
-        ok, _ = StepVerdict(json_path="data.id").evaluate(body="", json_data={"data": {"id": 1}})
+        ok, _ = StepVerdict(json_path="data.id").evaluate(
+            body="", json_data={"data": {"id": 1}}
+        )
         assert ok
 
     def test_json_path_missing(self):
-        bad, _ = StepVerdict(json_path="data.id").evaluate(body="", json_data={"data": {}})
+        bad, _ = StepVerdict(json_path="data.id").evaluate(
+            body="", json_data={"data": {}}
+        )
         assert not bad
 
 
@@ -280,7 +290,7 @@ class TestExecutor:
                     id="s1",
                     kind=StepKind.SHELL,
                     ac=["AC1"],
-                    run='python -c "print(\'hello\')"',
+                    run="python -c \"print('hello')\"",
                     verdict=StepVerdict(exit_code=0, contains=["hello"]),
                 )
             ],
@@ -336,7 +346,7 @@ class TestExecutor:
                     id="s1",
                     kind=StepKind.SHELL,
                     ac=["AC1"],
-                    run='python -c "print(\'hi ${phrase}\')"',
+                    run="python -c \"print('hi ${phrase}')\"",
                     verdict=StepVerdict(contains=["hi world"]),
                 )
             ],
@@ -371,7 +381,9 @@ class TestExecutor:
         plan = QAPlan(
             plan_id="p1",
             acceptance_criteria=[AcceptanceCriterion(id="AC1", text="x")],
-            steps=[QAStep(id="s1", kind=StepKind.AGENT, ac=["AC1"], prompt="test ${x}")],
+            steps=[
+                QAStep(id="s1", kind=StepKind.AGENT, ac=["AC1"], prompt="test ${x}")
+            ],
             vars_spec={"x": {"type": "string", "default": "y"}},
         )
         b = VarBundle.from_dict(plan.vars_spec, vault=SessionVault())
@@ -394,7 +406,12 @@ class TestExecutor:
                     run='python -c "import sys; sys.exit(1)"',
                     on_fail="abort",
                 ),
-                QAStep(id="s2", kind=StepKind.SHELL, ac=["AC2"], run='python -c "print(\'never\')"'),
+                QAStep(
+                    id="s2",
+                    kind=StepKind.SHELL,
+                    ac=["AC2"],
+                    run="python -c \"print('never')\"",
+                ),
             ],
         )
         result = await execute_plan(plan, self._bundle())
@@ -423,8 +440,12 @@ class TestACOutcomes:
             ],
         )
         results = [
-            StepResult(step_id="s1", kind="shell", started_at=0, duration_s=0, passed=True),
-            StepResult(step_id="s2", kind="shell", started_at=0, duration_s=0, passed=True),
+            StepResult(
+                step_id="s1", kind="shell", started_at=0, duration_s=0, passed=True
+            ),
+            StepResult(
+                step_id="s2", kind="shell", started_at=0, duration_s=0, passed=True
+            ),
         ]
         outcomes = _aggregate_ac_outcomes(plan, results)
         assert outcomes[0].verdict == "pass"
@@ -439,8 +460,17 @@ class TestACOutcomes:
             ],
         )
         results = [
-            StepResult(step_id="s1", kind="shell", started_at=0, duration_s=0, passed=True),
-            StepResult(step_id="s2", kind="shell", started_at=0, duration_s=0, passed=False, reason="x"),
+            StepResult(
+                step_id="s1", kind="shell", started_at=0, duration_s=0, passed=True
+            ),
+            StepResult(
+                step_id="s2",
+                kind="shell",
+                started_at=0,
+                duration_s=0,
+                passed=False,
+                reason="x",
+            ),
         ]
         outcomes = _aggregate_ac_outcomes(plan, results)
         assert outcomes[0].verdict == "fail"

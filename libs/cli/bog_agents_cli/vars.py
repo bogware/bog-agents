@@ -7,10 +7,12 @@ Secrets are never serialized; they live only in the in-memory
 
 Typical lifecycle::
 
-    bundle = VarBundle.from_dict({
-        "jira_ticket": {"type": "string", "default": "JIRA-134"},
-        "api_key":     {"type": "secret"},
-    })
+    bundle = VarBundle.from_dict(
+        {
+            "jira_ticket": {"type": "string", "default": "JIRA-134"},
+            "api_key": {"type": "secret"},
+        }
+    )
     # Some values come from CLI: --var jira_ticket=JIRA-200
     bundle.set("jira_ticket", "JIRA-200")
     # Resolve any missing values (prompts user via supplied callback for
@@ -146,7 +148,9 @@ class VarBundle:
     vault: SessionVault = field(default_factory=get_default_vault)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any] | None, *, vault: SessionVault | None = None) -> VarBundle:
+    def from_dict(
+        cls, raw: dict[str, Any] | None, *, vault: SessionVault | None = None
+    ) -> VarBundle:
         """Build a bundle from a YAML/JSON dict.
 
         ``raw`` maps var name → spec dict (or empty/None for an empty bundle).
@@ -323,11 +327,21 @@ _AUTO_VAR_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # GitHub repo: only when context makes it unambiguous — preceded by
     # ``github.com/``, ``git@github.com:``, or suffixed with ``.git``. Plain
     # ``a/b`` slugs are far too easy to false-match against file paths.
-    ("github_repo", re.compile(r"(?:github\.com[/:]|\bgit@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?=\.git\b|\b)")),
+    (
+        "github_repo",
+        re.compile(
+            r"(?:github\.com[/:]|\bgit@github\.com:)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?=\.git\b|\b)"
+        ),
+    ),
     # Plain URL.
     ("url", re.compile(r"\b(https?://[^\s<>\"']+)")),
     # UUID.
-    ("uuid", re.compile(r"\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b")),
+    (
+        "uuid",
+        re.compile(
+            r"\b([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b"
+        ),
+    ),
 )
 
 
@@ -371,7 +385,11 @@ def auto_variabilize(text: str) -> tuple[str, dict[str, str]]:
                 var_name = seen_literals[literal]
             else:
                 idx += 1
-                var_name = base_name if idx == 1 and base_name not in vars_map else f"{base_name}_{idx}"
+                var_name = (
+                    base_name
+                    if idx == 1 and base_name not in vars_map
+                    else f"{base_name}_{idx}"
+                )
                 # Bump idx until we find a free name.
                 while var_name in vars_map:
                     idx += 1

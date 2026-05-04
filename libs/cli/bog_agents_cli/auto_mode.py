@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Decision types
 # ---------------------------------------------------------------------------
 
+
 class AutoDecision(Enum):
     """Whether a tool call should be auto-approved or shown to the user."""
 
@@ -36,7 +37,9 @@ class RuleVerdict:
 
     decision: AutoDecision
     reason: str
-    rule_source: str  # "safe_tools", "risky_tools", "allow_list", "ask_list", "haiku", "default"
+    rule_source: (
+        str  # "safe_tools", "risky_tools", "allow_list", "ask_list", "haiku", "default"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -46,18 +49,29 @@ class RuleVerdict:
 # Shell commands that always trigger ASK
 _DEFAULT_SHELL_ASK_PATTERNS: tuple[str, ...] = (
     # Deletions
-    r"\brm\s", r"\brm$", r"\brmdir\b", r"\bdel\b", r"\brd\b",
+    r"\brm\s",
+    r"\brm$",
+    r"\brmdir\b",
+    r"\bdel\b",
+    r"\brd\b",
     # Git destructive
-    r"git\s+push\s+.*--force", r"git\s+push\s+-f\b",
-    r"git\s+reset\s+--hard", r"git\s+clean\s+",
-    r"git\s+checkout\s+\.", r"git\s+rebase\b",
+    r"git\s+push\s+.*--force",
+    r"git\s+push\s+-f\b",
+    r"git\s+reset\s+--hard",
+    r"git\s+clean\s+",
+    r"git\s+checkout\s+\.",
+    r"git\s+rebase\b",
     # Database
-    r"\bDROP\s+TABLE\b", r"\bTRUNCATE\b", r"\bdropdb\b",
+    r"\bDROP\s+TABLE\b",
+    r"\bTRUNCATE\b",
+    r"\bdropdb\b",
     # Network writes
     r"\bcurl\b.+(-X\s*(POST|PUT|DELETE|PATCH)|--data|-d\s)",
     r"\bwget\b.+--post",
     # Process kill
-    r"\bkill\b", r"\bkillall\b", r"\bpkill\b",
+    r"\bkill\b",
+    r"\bkillall\b",
+    r"\bpkill\b",
     # Move with path separators (potentially destructive overwrite)
     r"\bmv\b.+[/\\]",
     # Overwrite redirects — single > but NOT >> (append)
@@ -82,47 +96,101 @@ _DEFAULT_SHELL_ASK_PATTERNS: tuple[str, ...] = (
 # Shell commands that are always safe to auto-approve
 _DEFAULT_SHELL_ALLOW_PATTERNS: tuple[str, ...] = (
     # File reading
-    r"^cat\b", r"^head\b", r"^tail\b", r"^grep\b", r"^rg\b",
-    r"^find\b", r"^ls\b", r"^dir\b", r"^wc\b", r"^diff\b",
+    r"^cat\b",
+    r"^head\b",
+    r"^tail\b",
+    r"^grep\b",
+    r"^rg\b",
+    r"^find\b",
+    r"^ls\b",
+    r"^dir\b",
+    r"^wc\b",
+    r"^diff\b",
     r"^sed\b.+-n\b",  # sed read-only with -n
     # Git read-only
     r"^git\s+(status|log|diff|show|branch|tag|remote|ls-files|describe|shortlog|cat-file|for-each-ref)\b",
     # Test runs (not install)
     r"^npm\s+(test|run\s+test|run\s+typecheck|run\s+lint|run\s+check)\b",
     r"^(pytest|python\s+-m\s+pytest|uv\s+run\s+.*pytest)\b",
-    r"^cargo\s+test\b", r"^go\s+test\b",
-    r"^vitest\b", r"^jest\b",
+    r"^cargo\s+test\b",
+    r"^go\s+test\b",
+    r"^vitest\b",
+    r"^jest\b",
     # Type checking / linting
-    r"^tsc\b", r"^mypy\b", r"^ruff\s+(check|format\s+--check)\b",
-    r"^ty\s+check\b", r"^pyright\b",
+    r"^tsc\b",
+    r"^mypy\b",
+    r"^ruff\s+(check|format\s+--check)\b",
+    r"^ty\s+check\b",
+    r"^pyright\b",
     # Path utilities
-    r"^pwd\b", r"^which\b", r"^echo\b",
-    r"^uname\b", r"^hostname\b",
+    r"^pwd\b",
+    r"^which\b",
+    r"^echo\b",
+    r"^uname\b",
+    r"^hostname\b",
 )
 
 # Tool names always safe to auto-approve
-_SAFE_TOOL_NAMES: frozenset[str] = frozenset({
-    "read_file", "read_many_files", "glob", "grep", "list_directory",
-    "get_file_info", "search_files",
-    "git_status", "git_log", "git_diff", "git_show",
-})
+_SAFE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "read_many_files",
+        "glob",
+        "grep",
+        "list_directory",
+        "get_file_info",
+        "search_files",
+        "git_status",
+        "git_log",
+        "git_diff",
+        "git_show",
+    }
+)
 
 # Tool names that always trigger ask
-_RISKY_TOOL_NAMES: frozenset[str] = frozenset({
-    "delete_file", "remove_directory",
-    "git_push", "git_reset",
-})
+_RISKY_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "delete_file",
+        "remove_directory",
+        "git_push",
+        "git_reset",
+    }
+)
 
 # Patterns that suggest an ambiguous prompt needing pre-flight Q&A
 _AMBIGUITY_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"\b(everything|all files?|all code|all of it)\b", "scope is very broad — which specific files or components?"),
-    (r"\b(some|a few|various|certain)\b", "vague quantity — be specific about what exactly"),
-    (r"\b(fix it|fix this|fix that)\b", "unclear what 'it' refers to — which bug, file, or feature?"),
-    (r"\b(make it better|improve|optimize|clean up)\b", "open-ended goal — what specific improvement is needed?"),
-    (r"\b(refactor|restructure|reorganize)\b", "broad change — which files/modules and what target structure?"),
-    (r"\b(then|after that|and also|and then|finally)\b", "multi-step task — please confirm the steps in order"),
-    (r"\b(deploy|publish|release|push to prod)\b", "deployment action — confirm the target environment"),
-    (r"\b(delete|remove|drop|wipe|clear)\b", "destructive action — confirm exactly what to delete"),
+    (
+        r"\b(everything|all files?|all code|all of it)\b",
+        "scope is very broad — which specific files or components?",
+    ),
+    (
+        r"\b(some|a few|various|certain)\b",
+        "vague quantity — be specific about what exactly",
+    ),
+    (
+        r"\b(fix it|fix this|fix that)\b",
+        "unclear what 'it' refers to — which bug, file, or feature?",
+    ),
+    (
+        r"\b(make it better|improve|optimize|clean up)\b",
+        "open-ended goal — what specific improvement is needed?",
+    ),
+    (
+        r"\b(refactor|restructure|reorganize)\b",
+        "broad change — which files/modules and what target structure?",
+    ),
+    (
+        r"\b(then|after that|and also|and then|finally)\b",
+        "multi-step task — please confirm the steps in order",
+    ),
+    (
+        r"\b(deploy|publish|release|push to prod)\b",
+        "deployment action — confirm the target environment",
+    ),
+    (
+        r"\b(delete|remove|drop|wipe|clear)\b",
+        "destructive action — confirm exactly what to delete",
+    ),
 )
 
 
@@ -130,9 +198,11 @@ _AMBIGUITY_PATTERNS: tuple[tuple[str, str], ...] = (
 # Settings model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class HaikuEvalConfig:
     """Configuration for the Haiku risk evaluator."""
+
     enabled: bool = True
     model: str = "claude-haiku-4-5-20251001"
     fallback_model: str = "claude-haiku-4-5"
@@ -154,6 +224,7 @@ class HaikuEvalConfig:
 @dataclass
 class AutoModeSettings:
     """Full auto-mode configuration (merged from cascade)."""
+
     enabled: bool = False
     # Extra patterns (merged with defaults, not replacing them)
     extra_shell_ask_patterns: list[str] = field(default_factory=list)
@@ -177,18 +248,30 @@ class AutoModeSettings:
         def _coerce_str_list(key: str, fallback: list[str]) -> list[str]:
             val = d.get(key, fallback)
             if not isinstance(val, list):
-                logger.warning("auto_mode setting '%s' must be a list, got %s — ignoring", key, type(val).__name__)
+                logger.warning(
+                    "auto_mode setting '%s' must be a list, got %s — ignoring",
+                    key,
+                    type(val).__name__,
+                )
                 return fallback
             return [str(item) for item in val]
 
         return AutoModeSettings(
             enabled=bool(d.get("enabled", self.enabled)),
-            extra_shell_ask_patterns=_coerce_str_list("shell_ask_patterns", self.extra_shell_ask_patterns),
-            extra_shell_allow_patterns=_coerce_str_list("shell_allow_patterns", self.extra_shell_allow_patterns),
+            extra_shell_ask_patterns=_coerce_str_list(
+                "shell_ask_patterns", self.extra_shell_ask_patterns
+            ),
+            extra_shell_allow_patterns=_coerce_str_list(
+                "shell_allow_patterns", self.extra_shell_allow_patterns
+            ),
             extra_safe_tools=_coerce_str_list("safe_tools", self.extra_safe_tools),
             extra_risky_tools=_coerce_str_list("risky_tools", self.extra_risky_tools),
-            haiku_eval=HaikuEvalConfig.from_dict(haiku_raw) if haiku_raw else self.haiku_eval,
-            preflight_clarification=bool(d.get("preflight_clarification", self.preflight_clarification)),
+            haiku_eval=HaikuEvalConfig.from_dict(haiku_raw)
+            if haiku_raw
+            else self.haiku_eval,
+            preflight_clarification=bool(
+                d.get("preflight_clarification", self.preflight_clarification)
+            ),
         )
 
 
@@ -257,13 +340,16 @@ def _apply_settings_file(base: AutoModeSettings, path: Path) -> AutoModeSettings
 # Rule engine
 # ---------------------------------------------------------------------------
 
+
 class AutoModeRuleEngine:
     """Evaluate tool calls against configured rules to decide allow vs ask."""
 
     def __init__(self, settings: AutoModeSettings) -> None:
         self._settings = settings
         all_ask = list(_DEFAULT_SHELL_ASK_PATTERNS) + settings.extra_shell_ask_patterns
-        all_allow = list(_DEFAULT_SHELL_ALLOW_PATTERNS) + settings.extra_shell_allow_patterns
+        all_allow = (
+            list(_DEFAULT_SHELL_ALLOW_PATTERNS) + settings.extra_shell_allow_patterns
+        )
         self._ask_re = [re.compile(p, re.IGNORECASE) for p in all_ask]
         self._allow_re = [re.compile(p, re.IGNORECASE) for p in all_allow]
         self._safe_tools = _SAFE_TOOL_NAMES | frozenset(settings.extra_safe_tools)
@@ -280,10 +366,14 @@ class AutoModeRuleEngine:
             RuleVerdict with decision, reason, and rule_source.
         """
         if tool_name in self._safe_tools:
-            return RuleVerdict(AutoDecision.ALLOW, f"safe tool: {tool_name}", "safe_tools")
+            return RuleVerdict(
+                AutoDecision.ALLOW, f"safe tool: {tool_name}", "safe_tools"
+            )
 
         if tool_name in self._risky_tools:
-            return RuleVerdict(AutoDecision.ASK, f"risky tool: {tool_name}", "risky_tools")
+            return RuleVerdict(
+                AutoDecision.ASK, f"risky tool: {tool_name}", "risky_tools"
+            )
 
         if tool_name in ("execute", "run_command", "shell", "bash"):
             cmd = str(tool_args.get("command", tool_args.get("cmd", "")))
@@ -302,18 +392,27 @@ class AutoModeRuleEngine:
         # even though `echo` is also in the allow-list.
         for rx in self._ask_re:
             if rx.search(cmd):
-                return RuleVerdict(AutoDecision.ASK, f"ask: {rx.pattern[:50]}", "ask_list")
+                return RuleVerdict(
+                    AutoDecision.ASK, f"ask: {rx.pattern[:50]}", "ask_list"
+                )
         # Allow-list (fast path for known-safe commands with no destructive pattern)
         for rx in self._allow_re:
             if rx.search(cmd):
-                return RuleVerdict(AutoDecision.ALLOW, f"allow: {rx.pattern[:50]}", "allow_list")
+                return RuleVerdict(
+                    AutoDecision.ALLOW, f"allow: {rx.pattern[:50]}", "allow_list"
+                )
         # Falls through to Haiku (caller decides)
-        return RuleVerdict(AutoDecision.ALLOW, "no shell pattern matched — may escalate to haiku", "default")
+        return RuleVerdict(
+            AutoDecision.ALLOW,
+            "no shell pattern matched — may escalate to haiku",
+            "default",
+        )
 
 
 # ---------------------------------------------------------------------------
 # Haiku risk evaluator
 # ---------------------------------------------------------------------------
+
 
 async def haiku_risk_eval(
     tool_name: str,
@@ -390,17 +489,34 @@ async def haiku_risk_eval(
                         data = json.loads(inner.group(0))
                     except json.JSONDecodeError:
                         return True, "haiku eval: malformed JSON — treating as risky"
-                return bool(data.get("risky", False)), str(data.get("reason", "haiku eval"))
+                return bool(data.get("risky", False)), str(
+                    data.get("reason", "haiku eval")
+                )
             return True, "haiku eval: inconclusive — treating as risky"
         except anthropic.NotFoundError:
             if attempt_model != models_to_try[-1]:
-                logger.warning("haiku_risk_eval: model %r not found, retrying with fallback %r", attempt_model, models_to_try[-1])
+                logger.warning(
+                    "haiku_risk_eval: model %r not found, retrying with fallback %r",
+                    attempt_model,
+                    models_to_try[-1],
+                )
                 continue
-            logger.warning("haiku_risk_eval: fallback model %r also not found — treating as risky", attempt_model)
-            return True, f"haiku eval: model not found ({attempt_model}) — treating as risky"
+            logger.warning(
+                "haiku_risk_eval: fallback model %r also not found — treating as risky",
+                attempt_model,
+            )
+            return (
+                True,
+                f"haiku eval: model not found ({attempt_model}) — treating as risky",
+            )
         except Exception as exc:
-            logger.warning("haiku_risk_eval error (treating as risky for safety): %s", exc)
-            return True, f"haiku eval: API unavailable — treating as risky ({exc.__class__.__name__})"
+            logger.warning(
+                "haiku_risk_eval error (treating as risky for safety): %s", exc
+            )
+            return (
+                True,
+                f"haiku eval: API unavailable — treating as risky ({exc.__class__.__name__})",
+            )
     return True, "haiku eval: inconclusive — treating as risky"
 
 
@@ -419,6 +535,7 @@ def _format_tool_repr(tool_name: str, tool_args: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # Pre-flight ambiguity detection
 # ---------------------------------------------------------------------------
+
 
 def detect_ambiguities(prompt: str) -> list[str]:
     """Return clarifying questions for an ambiguous prompt (heuristic, no API).
@@ -496,9 +613,15 @@ async def haiku_preflight_check(
             return []
         except anthropic.NotFoundError:
             if attempt_model != models_to_try[-1]:
-                logger.warning("haiku_preflight_check: model %r not found, retrying with fallback %r", attempt_model, models_to_try[-1])
+                logger.warning(
+                    "haiku_preflight_check: model %r not found, retrying with fallback %r",
+                    attempt_model,
+                    models_to_try[-1],
+                )
                 continue
-            logger.debug("haiku_preflight_check: fallback model %r also not found", attempt_model)
+            logger.debug(
+                "haiku_preflight_check: fallback model %r also not found", attempt_model
+            )
         except Exception as exc:
             logger.debug("haiku_preflight_check error: %s", exc)
     return []

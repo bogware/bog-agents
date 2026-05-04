@@ -133,7 +133,11 @@ class SessionRecorder:
 
     def stop(self) -> None:
         self._recording = False
-        logger.info("recording stopped: %s (%d steps)", self._session.session_id, len(self._session.steps))
+        logger.info(
+            "recording stopped: %s (%d steps)",
+            self._session.session_id,
+            len(self._session.steps),
+        )
 
     def _bounded(self) -> bool:
         """Return True if the session is at its step cap (drop the next event)."""
@@ -157,7 +161,9 @@ class SessionRecorder:
             ReplayStep(kind="ai_message", content=content[:REPLAY_AI_MESSAGE_MAX_BYTES])
         )
 
-    def record_tool_call(self, tool: str, args: dict[str, Any], result: str = "") -> None:
+    def record_tool_call(
+        self, tool: str, args: dict[str, Any], result: str = ""
+    ) -> None:
         if not self._recording or not tool or self._bounded():
             return
         self._session.steps.append(
@@ -211,7 +217,9 @@ class SessionRecorder:
         return self._session
 
 
-def _shared_variabilize(text: str, global_vars: dict[str, str]) -> tuple[str, dict[str, str]]:
+def _shared_variabilize(
+    text: str, global_vars: dict[str, str]
+) -> tuple[str, dict[str, str]]:
     """Variabilize ``text`` while sharing the placeholder map across calls.
 
     Args:
@@ -344,7 +352,9 @@ def save_replay_session(config_dir: Path, session: ReplaySession) -> Path:
     text = "# bog-agents recorded session — edit freely.\n"
     text += "# 'vars' is a typed declaration; values resolve at replay time.\n"
     text += "# Use ${var_name} placeholders inside content/args to inject values.\n\n"
-    text += yaml.safe_dump(session_to_dict(session), sort_keys=False, allow_unicode=True)
+    text += yaml.safe_dump(
+        session_to_dict(session), sort_keys=False, allow_unicode=True
+    )
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -367,7 +377,9 @@ def load_replay_session(file_path: Path) -> ReplaySession:
     else:
         # Sniff: does it start with `{`? Treat as JSON.
         stripped = raw.lstrip()
-        data = json.loads(raw) if stripped.startswith("{") else (yaml.safe_load(raw) or {})
+        data = (
+            json.loads(raw) if stripped.startswith("{") else (yaml.safe_load(raw) or {})
+        )
     if not isinstance(data, dict):
         msg = f"recording {file_path} did not parse to a dict"
         raise ValueError(msg)
@@ -390,7 +402,13 @@ def list_replay_sessions(config_dir: Path) -> list[ReplaySession]:
             continue
         try:
             sessions.append(load_replay_session(path))
-        except (yaml.YAMLError, json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
+        except (
+            yaml.YAMLError,
+            json.JSONDecodeError,
+            OSError,
+            ValueError,
+            KeyError,
+        ) as exc:
             logger.warning("skipping unparseable recording %s: %s", path, exc)
     sessions.sort(key=lambda s: s.recorded_at, reverse=True)
     return sessions
@@ -452,7 +470,9 @@ def build_replay_prompt(session: ReplaySession, bundle: VarBundle) -> str:
         for name in bundle.specs:
             spec = bundle.specs[name]
             if spec.type == "secret":
-                lines.append(f"- `{name}`: <secret> (use it directly when a tool needs it)")
+                lines.append(
+                    f"- `{name}`: <secret> (use it directly when a tool needs it)"
+                )
             else:
                 value = bundle.get(name)
                 lines.append(f"- `{name}`: {value!r}")

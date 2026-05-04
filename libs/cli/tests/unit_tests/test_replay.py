@@ -241,7 +241,9 @@ class TestBuildReplayPrompt:
         s = ReplaySession(
             session_id="x",
             vars_spec={"repo": {"type": "string", "default": "myorg/myrepo"}},
-            steps=[ReplayStep(kind="tool_call", tool="open_pr", args={"repo": "${repo}"})],
+            steps=[
+                ReplayStep(kind="tool_call", tool="open_pr", args={"repo": "${repo}"})
+            ],
         )
         out = build_replay_prompt(s, b)
         assert "myorg/myrepo" in out

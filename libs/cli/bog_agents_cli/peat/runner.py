@@ -84,7 +84,9 @@ def build_interactive_prompt(persona: PeatPersona, user_message: str) -> str:
     return f"{persona.to_system_prompt()}\n\n## Current request\n\n{user_message.strip()}\n"
 
 
-def build_scheduled_prompt(persona: PeatPersona, job: PeatJob, run_id: str, run_dir: Path) -> str:
+def build_scheduled_prompt(
+    persona: PeatPersona, job: PeatJob, run_id: str, run_dir: Path
+) -> str:
     """Render the prompt a scheduled job runs against.
 
     The prompt explicitly enumerates the scheduled-tool restrictions

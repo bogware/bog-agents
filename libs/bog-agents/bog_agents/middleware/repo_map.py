@@ -325,10 +325,10 @@ class RepoMapCache:
         entry = self._entries.get(rel_path)
         return entry is not None and entry.mtime_hash == mtime_hash
 
-    def set(self, sym: FileSymbols) -> None:  # noqa: D102
+    def set(self, sym: FileSymbols) -> None:
         self._entries[sym.path] = sym
 
-    def get(self, rel_path: str) -> FileSymbols | None:  # noqa: D102
+    def get(self, rel_path: str) -> FileSymbols | None:
         return self._entries.get(rel_path)
 
     def remove_stale(self, current_paths: set[str]) -> None:
@@ -337,7 +337,7 @@ class RepoMapCache:
         for p in stale:
             del self._entries[p]
 
-    def all_symbols(self) -> list[FileSymbols]:  # noqa: D102
+    def all_symbols(self) -> list[FileSymbols]:
         return list(self._entries.values())
 
 
@@ -567,7 +567,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
         self._tools = self._build_tools()
 
     @property
-    def tools(self) -> list[BaseTool]:  # noqa: D102
+    def tools(self) -> list[BaseTool]:
         return self._tools
 
     def _get_repo_map(self, *, force: bool = False) -> str:
@@ -627,7 +627,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
             )
         ]
 
-    def wrap_model_call(  # noqa: D102
+    def wrap_model_call(
         self,
         request: ModelRequest,
         call_next: Callable[[ModelRequest], ModelResponse],
@@ -636,7 +636,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
         request = append_to_system_message(request, f"\n\n## Repository Map\n\n{repo_map}")
         return call_next(request)
 
-    async def awrap_model_call(  # noqa: D102
+    async def awrap_model_call(
         self,
         request: ModelRequest,
         call_next: Callable[[ModelRequest], Awaitable[ModelResponse]],

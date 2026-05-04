@@ -997,7 +997,7 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             runtime: ToolRuntime[None, FilesystemState],
             # ASYNC109 - timeout is a semantic parameter forwarded to the
             # backend's implementation, not an asyncio.timeout() contract.
-            timeout: Annotated[  # noqa: ASYNC109
+            timeout: Annotated[
                 int | None,
                 "Optional timeout in seconds for this command. Overrides the default timeout. Use 0 for no-timeout execution on backends that support it.",
             ] = None,

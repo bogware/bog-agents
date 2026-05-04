@@ -233,9 +233,9 @@ def _make_agent(
     agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
     mock_graph = MagicMock()
 
-    async def fake_astream(  # noqa: RUF029
-        input: Any,  # noqa: A002, ANN401, ARG001
-        **kwargs: Any,  # noqa: ARG001
+    async def fake_astream(
+        input: Any,  # noqa: A002, ANN401
+        **kwargs: Any,
     ) -> Any:  # noqa: ANN401
         for ev in events:
             yield ev
@@ -668,7 +668,7 @@ class TestRemoteAgentTransientRetry:
 
         calls: list[int] = []
 
-        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+        async def _gen(*_a: Any, **_kw: Any):  # async generator
             calls.append(1)
             if len(calls) == 1:
                 msg = "ReadTimeoutError mid-handshake"
@@ -691,7 +691,7 @@ class TestRemoteAgentTransientRetry:
     async def test_does_not_retry_after_first_event_emitted(self) -> None:
         from bog_agents_cli import remote_client as rc
 
-        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+        async def _gen(*_a: Any, **_kw: Any):  # async generator
             yield ((), "updates", {"started": True})
             msg = "ReadTimeoutError partway through"
             raise TimeoutError(msg)
@@ -713,7 +713,7 @@ class TestRemoteAgentTransientRetry:
     async def test_non_transient_error_propagates_immediately(self) -> None:
         from bog_agents_cli import remote_client as rc
 
-        async def _gen(*_a: Any, **_kw: Any):  # noqa: RUF029  # async generator
+        async def _gen(*_a: Any, **_kw: Any):  # async generator
             msg = "bad input"
             raise ValueError(msg)
             yield  # pragma: no cover  # makes this a generator

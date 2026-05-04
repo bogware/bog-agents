@@ -91,7 +91,7 @@ def _compute_delay(
     max_s: float,
 ) -> float:
     """Exponential backoff with full jitter, bounded by ``max_s``."""
-    raw = initial_s * (factor ** attempt)
+    raw = initial_s * (factor**attempt)
     capped = min(raw, max_s)
     # Full jitter: pick a uniform value in [0, capped]. This avoids
     # synchronized retry storms across multiple concurrent agents.

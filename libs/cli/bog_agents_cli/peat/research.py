@@ -51,7 +51,9 @@ def build_research_prompt(
     """
     output_dir = config_dir / "peat" / "research"
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_slug = "".join(c for c in topic.lower() if c.isalnum() or c in "-_")[:60] or "topic"
+    safe_slug = (
+        "".join(c for c in topic.lower() if c.isalnum() or c in "-_")[:60] or "topic"
+    )
     stamp = time.strftime("%Y%m%d", time.gmtime())
     output_path = output_dir / f"{stamp}-{safe_slug}.md"
 
@@ -59,7 +61,11 @@ def build_research_prompt(
     if focus:
         focus_items = [f.strip() for f in focus.split(",") if f.strip()]
         if focus_items:
-            focus_block = "\n## Focus angles\n\n" + "\n".join(f"- {f}" for f in focus_items) + "\n"
+            focus_block = (
+                "\n## Focus angles\n\n"
+                + "\n".join(f"- {f}" for f in focus_items)
+                + "\n"
+            )
 
     return (
         f"{persona.to_system_prompt()}\n"
@@ -149,7 +155,10 @@ def collect_digest_inputs(
     replays_dir = config_dir / "replays"
     if replays_dir.exists():
         for p in replays_dir.iterdir():
-            if p.suffix.lower() in (".yaml", ".yml", ".json") and p.stat().st_mtime >= cutoff:
+            if (
+                p.suffix.lower() in (".yaml", ".yml", ".json")
+                and p.stat().st_mtime >= cutoff
+            ):
                 out["replays"].append({"path": str(p), "mtime": p.stat().st_mtime})
 
     # Research artifacts already produced.
@@ -175,7 +184,10 @@ def collect_digest_inputs(
         plans_dir = project_root / ".bog-agents" / "qa-plans"
         if plans_dir.exists():
             for p in plans_dir.iterdir():
-                if p.suffix.lower() in (".yaml", ".yml") and p.stat().st_mtime >= cutoff:
+                if (
+                    p.suffix.lower() in (".yaml", ".yml")
+                    and p.stat().st_mtime >= cutoff
+                ):
                     out["qa_plans"].append({"path": str(p), "mtime": p.stat().st_mtime})
         results_root = project_root / ".bog-agents" / "qa-results"
         if results_root.exists():
@@ -183,7 +195,10 @@ def collect_digest_inputs(
                 if not plan_dir.is_dir():
                     continue
                 for run_file in plan_dir.iterdir():
-                    if run_file.suffix.lower() in (".md", ".json") and run_file.stat().st_mtime >= cutoff:
+                    if (
+                        run_file.suffix.lower() in (".md", ".json")
+                        and run_file.stat().st_mtime >= cutoff
+                    ):
                         out["qa_results"].append(
                             {
                                 "plan_id": plan_dir.name,

@@ -55,7 +55,7 @@ async def test_run_race_passes_system_prompt_when_set() -> None:
         response = MagicMock()
         response.content = "x"
 
-        async def ainvoke(messages: list[object]) -> object:  # noqa: RUF029  # async generator
+        async def ainvoke(messages: list[object]) -> object:  # async generator
             captured.append(list(messages))
             return response
 

@@ -19,9 +19,7 @@ from bog_agents_cli.auto_commit import (
     run_auto_commit,
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None, reason="git not installed"
-)
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 
 def _git(cwd: Path, *args: str) -> None:

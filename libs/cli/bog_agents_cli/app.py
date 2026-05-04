@@ -4197,7 +4197,9 @@ class BogAgentsApp(App):
         try:
             tokens = shlex.split(raw_arg)
         except ValueError as exc:
-            await self._mount_message(AppMessage(f"Could not parse /qa arguments: {exc}"))
+            await self._mount_message(
+                AppMessage(f"Could not parse /qa arguments: {exc}")
+            )
             return
         action = tokens[0].lower() if tokens else "list"
 
@@ -4236,7 +4238,7 @@ class BogAgentsApp(App):
                         "  [bold #66ff99]/qa new --from-file path/to/ac.md[/bold #66ff99]\n"
                         "      [dim]Reads bullets / numbered list / Gherkin from a file.[/dim]\n"
                         "\n"
-                        "  [bold #66ff99]/qa new --from-json '[\"AC1 text\", \"AC2 text\"]'[/bold #66ff99]\n"
+                        '  [bold #66ff99]/qa new --from-json \'["AC1 text", "AC2 text"]\'[/bold #66ff99]\n'
                         "      [dim]Inline JSON or path to a JSON file.[/dim]\n"
                         "\n"
                         "Plans live at [cyan].bog-agents/qa-plans/<id>.yaml[/cyan] — edit them by hand to refine "
@@ -4353,7 +4355,9 @@ class BogAgentsApp(App):
                     "k6, vitest, etc.) make sense.\n"
                 )
                 await self._mount_message(
-                    AppMessage(f"Fetching {from_jira} from Jira and drafting QA plan...")
+                    AppMessage(
+                        f"Fetching {from_jira} from Jira and drafting QA plan..."
+                    )
                 )
                 await self._send_prompt_to_agent(prompt)
                 return
@@ -4398,7 +4402,11 @@ class BogAgentsApp(App):
 
         if action == "run":
             if len(tokens) < 2:
-                await self._mount_message(AppMessage("Usage: /qa run <plan_id> [--var k=v ...] [--output FMT]"))
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: /qa run <plan_id> [--var k=v ...] [--output FMT]"
+                    )
+                )
                 return
             cli_overrides: dict[str, str] = {}
             output_fmt: str | None = None
@@ -4412,7 +4420,7 @@ class BogAgentsApp(App):
                         cli_overrides[k.strip()] = v
                     i += 2
                 elif t.startswith("--var="):
-                    pair = t[len("--var="):]
+                    pair = t[len("--var=") :]
                     if "=" in pair:
                         k, _, v = pair.partition("=")
                         cli_overrides[k.strip()] = v
@@ -4421,7 +4429,7 @@ class BogAgentsApp(App):
                     output_fmt = tokens[i + 1]
                     i += 2
                 elif t.startswith("--output="):
-                    output_fmt = t[len("--output="):]
+                    output_fmt = t[len("--output=") :]
                     i += 1
                 else:
                     i += 1
@@ -4450,13 +4458,21 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"QA cancelled: {exc}"))
                 return
 
-            await self._mount_message(AppMessage(f"Running QA plan `{plan.name or plan.plan_id}`..."))
+            await self._mount_message(
+                AppMessage(f"Running QA plan `{plan.name or plan.plan_id}`...")
+            )
             result = await execute_plan(plan, bundle)
             results_dir = project_root / ".bog-agents" / "qa-results"
             text, artifact_path = await asyncio.to_thread(
-                emit_artifact, plan, result, fmt=plan.artifact_format, out_dir=results_dir
+                emit_artifact,
+                plan,
+                result,
+                fmt=plan.artifact_format,
+                out_dir=results_dir,
             )
-            verdict_glyph = {"pass": "✅", "fail": "❌", "inconclusive": "⚠️"}.get(result.overall_verdict, "?")
+            verdict_glyph = {"pass": "✅", "fail": "❌", "inconclusive": "⚠️"}.get(
+                result.overall_verdict, "?"
+            )
             summary = (
                 f"{verdict_glyph} QA verdict: **{result.overall_verdict.upper()}** "
                 f"({len(result.step_results)} step(s), {result.duration_s:.1f}s)\n"
@@ -4469,7 +4485,9 @@ class BogAgentsApp(App):
             return
 
         await self._mount_message(
-            AppMessage("Usage: /qa list | /qa show <id> | /qa new [...] | /qa run <id> [--var k=v] [--output FMT]")
+            AppMessage(
+                "Usage: /qa list | /qa show <id> | /qa new [...] | /qa run <id> [--var k=v] [--output FMT]"
+            )
         )
 
     async def _handle_peat_command(self, command: str) -> None:
@@ -4586,7 +4604,9 @@ class BogAgentsApp(App):
             schedule_str = schedule_part.strip().strip('"').strip("'")
             task_str = task_part.strip()
             if not schedule_str or not task_str:
-                await self._mount_message(AppMessage("Both schedule and task are required."))
+                await self._mount_message(
+                    AppMessage("Both schedule and task are required.")
+                )
                 return
             nxt = next_fire_time(schedule_str)
             if nxt is None:
@@ -4634,7 +4654,9 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage("\n".join(lines)))
                 return
             if len(tokens) < 3:
-                await self._mount_message(AppMessage("Usage: /peat jobs <show|enable|disable|delete> <id>"))
+                await self._mount_message(
+                    AppMessage("Usage: /peat jobs <show|enable|disable|delete> <id>")
+                )
                 return
             target = tokens[2]
             path = await asyncio.to_thread(find_job, config_dir, target)
@@ -4665,7 +4687,9 @@ class BogAgentsApp(App):
                         job.next_fire_at = nxt
                 await asyncio.to_thread(save_job, config_dir, job)
                 await self._mount_message(
-                    AppMessage(f"Job `{job.job_id}` is now {'enabled' if job.enabled else 'disabled'}.")
+                    AppMessage(
+                        f"Job `{job.job_id}` is now {'enabled' if job.enabled else 'disabled'}."
+                    )
                 )
                 return
             if sub == "delete":
@@ -4675,7 +4699,9 @@ class BogAgentsApp(App):
                 else:
                     await self._mount_message(AppMessage(f"Deleted {deleted}"))
                 return
-            await self._mount_message(AppMessage("Usage: /peat jobs <list|show|enable|disable|delete> [<id>]"))
+            await self._mount_message(
+                AppMessage("Usage: /peat jobs <list|show|enable|disable|delete> [<id>]")
+            )
             return
 
         if first == "run":
@@ -4689,8 +4715,12 @@ class BogAgentsApp(App):
             job = await asyncio.to_thread(load_job, path)
             # Fire interactively — re-use the chat path so the user can see
             # output in the live transcript instead of via the inbox.
-            prompt = build_interactive_prompt(persona, f"Run this saved task now:\n\n{job.prompt}")
-            await self._mount_message(AppMessage(f"Running job `{job.job_id}` interactively..."))
+            prompt = build_interactive_prompt(
+                persona, f"Run this saved task now:\n\n{job.prompt}"
+            )
+            await self._mount_message(
+                AppMessage(f"Running job `{job.job_id}` interactively...")
+            )
             await self._send_prompt_to_agent(prompt)
             return
 
@@ -4716,7 +4746,9 @@ class BogAgentsApp(App):
 
         if first == "research":
             if len(tokens) < 2:
-                await self._mount_message(AppMessage("Usage: /peat research <topic> [--focus a,b,c]"))
+                await self._mount_message(
+                    AppMessage("Usage: /peat research <topic> [--focus a,b,c]")
+                )
                 return
             # Extract --focus
             focus = ""
@@ -4735,9 +4767,13 @@ class BogAgentsApp(App):
                     i += 1
             topic = " ".join(topic_parts).strip()
             if not topic:
-                await self._mount_message(AppMessage("Usage: /peat research <topic> [--focus a,b,c]"))
+                await self._mount_message(
+                    AppMessage("Usage: /peat research <topic> [--focus a,b,c]")
+                )
                 return
-            prompt = build_research_prompt(persona, topic=topic, focus=focus, config_dir=config_dir)
+            prompt = build_research_prompt(
+                persona, topic=topic, focus=focus, config_dir=config_dir
+            )
             await self._mount_message(AppMessage(f"Researching `{topic}`..."))
             await self._send_prompt_to_agent(prompt)
             return
@@ -4751,14 +4787,18 @@ class BogAgentsApp(App):
                     try:
                         days = max(1, int(tokens[i + 1]))
                     except ValueError:
-                        await self._mount_message(AppMessage("--days requires an integer"))
+                        await self._mount_message(
+                            AppMessage("--days requires an integer")
+                        )
                         return
                     i += 2
                 elif t.startswith("--days="):
                     try:
                         days = max(1, int(t[len("--days=") :]))
                     except ValueError:
-                        await self._mount_message(AppMessage("--days requires an integer"))
+                        await self._mount_message(
+                            AppMessage("--days requires an integer")
+                        )
                         return
                     i += 1
                 else:
@@ -4803,7 +4843,9 @@ class BogAgentsApp(App):
                 # labels. Most events use the empty-string label.
                 non_empty = {k: v for k, v in labels.items() if k}
                 if non_empty:
-                    top = sorted(non_empty.items(), key=lambda kv: kv[1], reverse=True)[:3]
+                    top = sorted(non_empty.items(), key=lambda kv: kv[1], reverse=True)[
+                        :3
+                    ]
                     for label, count in top:
                         lines.append(f"      {label}: {count}")
             await self._mount_message(AppMessage("\n".join(lines)))
@@ -5024,7 +5066,9 @@ class BogAgentsApp(App):
                 )
             )
         else:
-            await self._mount_message(AppMessage("Auto mode OFF. Returning to interactive approval."))
+            await self._mount_message(
+                AppMessage("Auto mode OFF. Returning to interactive approval.")
+            )
 
     async def _handle_standing_orders_command(self, command: str) -> None:
         """``/standing-orders`` — curated daemon-job catalog.
@@ -6535,9 +6579,7 @@ class BogAgentsApp(App):
                     )
 
             await self._mount_message(
-                AppMessage(
-                    f"[Peat] Firing scheduled job `{job.name or job.job_id}`..."
-                )
+                AppMessage(f"[Peat] Firing scheduled job `{job.name or job.job_id}`...")
             )
 
             # Attach a transient recorder so we can harvest the AI text
@@ -6585,13 +6627,21 @@ class BogAgentsApp(App):
             # Persist the artifact.
             try:
                 if text:
-                    body = text + ("\n\n" + persona.sign_off + "\n" if persona.sign_off else "\n")
-                    await asyncio.to_thread(output_path.write_text, body, encoding="utf-8")
+                    body = text + (
+                        "\n\n" + persona.sign_off + "\n" if persona.sign_off else "\n"
+                    )
+                    await asyncio.to_thread(
+                        output_path.write_text, body, encoding="utf-8"
+                    )
                 else:
                     body = "(no agent output produced)\n"
-                    await asyncio.to_thread(output_path.write_text, body, encoding="utf-8")
+                    await asyncio.to_thread(
+                        output_path.write_text, body, encoding="utf-8"
+                    )
             except OSError as exc:
-                logger.warning("peat: failed to write run artifact %s: %s", output_path, exc)
+                logger.warning(
+                    "peat: failed to write run artifact %s: %s", output_path, exc
+                )
 
             summary_line = ""
             for chunk in ai_chunks:
