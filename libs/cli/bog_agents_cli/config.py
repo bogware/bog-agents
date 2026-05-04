@@ -404,42 +404,61 @@ def newline_shortcut() -> str:
 
 # Text art banners (Unicode and ASCII variants)
 
+# Banner art — modeled on Ultima Online's heavy-serif title font and
+# illuminated-manuscript frame. The wordmark is the focus: tall block
+# capitals with explicit top/bottom serif rails (the long ▄▄▄ and ▀▀▀
+# bands above and below the letters are the serifs of the whole
+# wordmark, not decoration). Floral fleurons (❦) sit on the corners,
+# and a thin double-rule frames the whole composition like a
+# manuscript chapter heading.
+#
+# Width is fixed at 64 interior columns + 2 frame columns = 66 total.
+# Every line in the unicode banner ends at the same column so the
+# right-side rail is straight regardless of viewport width.
 _UNICODE_BANNER = f"""\
 
-      ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
-     ⌠         ·  ✦                ❀                       ·    ⌡
-     ⌠       ❀     ☘                   ✧            ❁            ⌡
-     ⌠              ▄▖▗▄▖    ▄▄    ▄▄▖              ·  ❀         ⌡
-     ⌠              ▐▌  ▐▌  ▟▘▝▙   ▐▌                            ⌡
-     ⌠              ▐▙▄▟▘  ▐▌  ▐▌  ▐▙▄                ☘     ❀    ⌡
-     ⌠              ▐▌  ▐▌  ▐▌  ▐▌  ▐▌                          ⌡
-     ⌠              ▐▙▄▟▘   ▝▙▄▟▘   ▐▙▄▟▘    ❁                  ⌡
-     ⌠                                                          ⌡
-     ⌠     ▄▄    ▄▄▖   ▄▄▄  ▗▖   ▗▖ ▄▄▄▄▖ ▄▄▄                   ⌡
-     ⌠    ▟▘▝▙   ▐▌  ▐▌▐▌ ▝▙ ▐▙▖  ▐▌   ▐▌  ▐▘                    ⌡
-     ⌠   ▐▙▄▟▘   ▐▌▟▘ ▐▙▄▟▘ ▐▌▝▖ ▐▌   ▐▌  ▝▀▙                    ⌡
-     ⌠   ▐▌  ▐▌  ▐▌  ▐▌▐▌   ▐▌ ▝▙▐▌   ▐▌  ▄▖▝▙                  ⌡
-     ⌠   ▐▌  ▐▌   ▝▀▘  ▐▌    ▐▌  ▝▘   ▐▌   ▝▀▘                   ⌡
-     ⌠                                                            ⌡
-     ⌠     ╌╌╌╌╌  pass through in harmony  ╌╌╌╌╌                  ⌡
-     ⌠              v{__version__:<10}                             ⌡
-      ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\
+  ╔══════════════════ ❦ ══════════════════ ❦ ══════════════════╗
+  ║                                                            ║
+  ║              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                   ║
+  ║                                                            ║
+  ║              ████▄▖    ▗████▖    ▗████▖                    ║
+  ║              █   ▐▌    ▐▌  ▐▌    ▐▌                        ║
+  ║              ████▘     ▐▌  ▐▌    ▐▌  ▄██                   ║
+  ║              █   ▐▌    ▐▌  ▐▌    ▐▌   ▐▌                   ║
+  ║              ████▘     ▝████▘    ▝████▘                    ║
+  ║                                                            ║
+  ║              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                   ║
+  ║                                                            ║
+  ║         A  ·  G  ·  E  ·  N  ·  T  ·  S                   ║
+  ║                                                            ║
+  ║              ◆   pass through in harmony   ◆               ║
+  ║                                                            ║
+  ║                       v{__version__:<24}    ║
+  ║                                                            ║
+  ╚══════════════════ ❦ ══════════════════ ❦ ══════════════════╝\
 """
+
 _ASCII_BANNER = f"""\
 
-   ____   ___   ____
-  | __ ) / _ \\ / ___|       * + *
-  |  _ \\| | | | |  _       + * + *
-  | |_) | |_| | |_| |       * + *
-  |____/ \\___/ \\____|          +
-
-      _    ____  _____ _   _ _____ ____
-     / \\  / ___|| ____| \\ | |_   _/ ___|
-    / _ \\| |  _ |  _| |  \\| | | | \\___ \\
-   / ___ \\ |_| || |___| |\\  | | |  ___) |
-  /_/   \\_\\____||_____|_| \\_| |_| |____/
-
-  > pass through in harmony --- v{__version__}\
+  +================== * ================== * ==================+
+  |                                                            |
+  |              -------------------------                     |
+  |                                                            |
+  |              BBBB     OOOO     GGGG                        |
+  |              B   B   O    O   G                            |
+  |              BBBB    O    O   G  GG                        |
+  |              B   B   O    O   G   G                        |
+  |              BBBB     OOOO     GGGG                        |
+  |                                                            |
+  |              -------------------------                     |
+  |                                                            |
+  |          A . G . E . N . T . S                             |
+  |                                                            |
+  |              <>  pass through in harmony  <>               |
+  |                                                            |
+  |                       v{__version__:<24}    |
+  |                                                            |
+  +================== * ================== * ==================+\
 """
 
 
