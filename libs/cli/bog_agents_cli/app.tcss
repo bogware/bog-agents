@@ -1,48 +1,48 @@
 /* Bog Agents CLI Textual Stylesheet
  *
- * Theme: BOG / SWAMP / NEON-GREEN
+ * Theme: MATTE SWAMP — muted, low-saturation bog tones.
  *
- * The visual system evokes a dark, mossy bog at night — deep peat-bottom
- * blacks under inky-water surfaces, lit by a neon-green glow. Warnings
- * are firefly-amber, errors a poisonous coral. Highlights are a brighter
- * "marsh-light" green so primary actions catch the eye against the
- * murk.
+ * Mood: a still pool under heavy canopy at dusk. Everything is
+ * desaturated and matte. No neon glow, no candy colors. The brightest
+ * thing on screen is a soft moss-light, not a retina-burning highlight.
+ * Warnings whisper with a muted ochre rather than a sandy yellow;
+ * errors are a faded heather-rust rather than a hot coral.
  *
  * Palette:
- *   $background      peat-bottom black           #050a07
- *   $surface         bog water                   #0a1410
- *   $surface-lighten-1  shallow water            #122218
- *   $surface-darken-1   deepest pool             #03070500
- *   $primary         marsh-light neon green      #66ff99
- *   $primary-lighten-1  bright firefly green     #8effb3
- *   $primary-lighten-2  pale moonlit moss        #b8ffd0
- *   $secondary       swamp-gas teal              #4dd0c5
- *   $text            mist-grey                   #d4e6d8
- *   $text-muted      lichen                      #6b8a78
- *   $warning         firefly amber               #ffc857
- *   $error           toxic coral                 #ff5577
+ *   $background          peat-bottom black     #060a07
+ *   $surface             still bog water       #0d1410
+ *   $surface-lighten-1   shallow water         #16201a
+ *   $primary             matte moss            #7aa888
+ *   $primary-lighten-1   moss highlight        #9cc4a7
+ *   $primary-lighten-2   pale lichen           #c1d8c8
+ *   $primary-darken-1    deep moss             #557a63
+ *   $primary-darken-2    bog-iron              #3a5a48
+ *   $highlight           selection moss        #1f3328
+ *   $highlight-soft      hover veil            #16271d
+ *   $secondary           muted teal            #6a9b9b
+ *   $text                fogged grey-green     #c8d4ca
+ *   $text-muted          lichen mute           #6f8478
+ *   $warning             muted ochre           #b89968
+ *   $error               heather rust          #b86a78
  */
-$primary: #66ff99;
-$primary-lighten-1: #8effb3;
-$primary-lighten-2: #b8ffd0;
-$primary-darken-1: #4ad97f;
-$primary-darken-2: #2db864;
-/* Selection / hover highlight — deeper marsh, NOT neon. Used as
- * background where bright text sits on top; the neon ``$primary``
- * is reserved for foreground accents and thin borders. */
-$highlight: #1a4028;
-$highlight-soft: #122e1c;
-$secondary: #4dd0c5;
-$background: #050a07;
-$surface: #0a1410;
-$surface-lighten-1: #122218;
-$surface-darken-1: #030705;
-$boundary: #1f3a28;
-$text: #d4e6d8;
-$text-muted: #6b8a78;
-$success: #66ff99;
-$warning: #ffc857;
-$error: #ff5577;
+$primary: #7aa888;
+$primary-lighten-1: #9cc4a7;
+$primary-lighten-2: #c1d8c8;
+$primary-darken-1: #557a63;
+$primary-darken-2: #3a5a48;
+$highlight: #1f3328;
+$highlight-soft: #16271d;
+$secondary: #6a9b9b;
+$background: #060a07;
+$surface: #0d1410;
+$surface-lighten-1: #16201a;
+$surface-darken-1: #040705;
+$boundary: #243828;
+$text: #c8d4ca;
+$text-muted: #6f8478;
+$success: #7aa888;
+$warning: #b89968;
+$error: #b86a78;
 
 /* Define layers for z-ordering */
 Screen {
@@ -83,15 +83,14 @@ Screen {
     padding-bottom: 1;
 }
 
-/* Bottom app container - holds ChatInput. The thin neon-green divider at
- * the top is the visual cue that you've crossed from "transcript" into
- * "input" territory. */
+/* Bottom app container — holds ChatInput. A thin matte-moss divider
+ * marks the transition from transcript to input territory. */
 #bottom-app-container {
     height: auto;
     margin-top: 0;
     padding: 1 2 1 2;
     background: $background;
-    border-top: solid $primary-darken-2;
+    border-top: solid $boundary;
 }
 
 /* Input area */
@@ -178,15 +177,15 @@ Screen {
 
 .diff-removed {
     height: auto;
-    color: #ff9eaa;
-    background: #2a0810;
+    color: #c89098;
+    background: #1a0e10;
     padding: 0 1;
 }
 
 .diff-added {
     height: auto;
-    color: #b8ffd0;
-    background: #08200f;
+    color: #9cc4a7;
+    background: #0e1a12;
     padding: 0 1;
 }
 

@@ -136,17 +136,17 @@ DOCS_URL = "https://github.com/bogware/bog-agents/tree/main/libs/cli"
 """URL for bog-agents-cli documentation."""
 
 COLORS = {
-    "primary": "#66ff99",       # marsh-light neon green — primary brand color
-    "primary_dev": "#ffc857",   # firefly amber — flags editable / dev installs
-    "dim": "#6b8a78",           # lichen — muted secondary text
-    "user": "#d4e6d8",          # mist-grey — user-facing text on dark bg
-    "agent": "#8effb3",         # bright firefly green — agent text emphasis
-    "thinking": "#4dd0c5",      # swamp-gas teal — model "thinking" state
-    "tool": "#ffc857",          # firefly amber — tool-call accents
-    "mode_shell": "#ffa055",    # warm ember — shell-mode prefix
-    "mode_command": "#66ff99",  # neon green — command-mode prefix
+    "primary": "#7aa888",       # matte moss — primary brand color
+    "primary_dev": "#b89968",   # muted ochre — flags editable / dev installs
+    "dim": "#6f8478",           # lichen mute — muted secondary text
+    "user": "#c8d4ca",          # fogged grey-green — user-facing text
+    "agent": "#9cc4a7",         # moss highlight — agent text emphasis
+    "thinking": "#6a9b9b",      # muted teal — model "thinking" state
+    "tool": "#b89968",          # muted ochre — tool-call accents
+    "mode_shell": "#a07358",    # peat ember — shell-mode prefix
+    "mode_command": "#7aa888",  # matte moss — command-mode prefix
 }
-"""App color scheme — bog / swamp / neon-green palette."""
+"""App color scheme — matte swamp palette. Muted, low-saturation."""
 
 MODE_PREFIXES: dict[str, str] = {
     "shell": "!",
@@ -406,21 +406,24 @@ def newline_shortcut() -> str:
 
 _UNICODE_BANNER = f"""\
 
-  ╔═══════════════════════════════════════════════════════════════╗
-  ║   ░▒▓█  ▄▄▄▄    ▄▄▄▄    ▄▄▄▄                                 ║
-  ║   ▓▒░   ██▀▀█▄ ██▀▀▀██ ██▀▀▀                ✧  ·  ✦          ║
-  ║   ░▒▓   ██▄▄██ ██   ██ ██▄▄ ▄▄▄          ·  ✦   ·  ✧         ║
-  ║         ██▀▀█▄ ██   ██ ██  ▀██               ✦  ·  ·  ✦      ║
-  ║         ██▄▄▀▀ ▀█████▀ ▀████▀▀          ─────────────────    ║
-  ║                                                               ║
-  ║   █████  ██████  ████ ██  ██ ████████ ████                    ║
-  ║   ██  ██ ██      ██   ███ ██    ██    ██                      ║
-  ║   ██████ ██  ███ ███▓ ██████    ██    ████                    ║
-  ║   ██  ██ ██   ██ ██   ██ ███    ██       ██                   ║
-  ║   ██  ██  █████  ████ ██  ██    ██    ████                    ║
-  ║                                                               ║
-  ║   ▸ swamp-light · neon-thought · v{__version__:<14}           ║
-  ╚═══════════════════════════════════════════════════════════════╝\
+      ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+     ⌠         ·  ✦                ❀                       ·    ⌡
+     ⌠       ❀     ☘                   ✧            ❁            ⌡
+     ⌠              ▄▖▗▄▖    ▄▄    ▄▄▖              ·  ❀         ⌡
+     ⌠              ▐▌  ▐▌  ▟▘▝▙   ▐▌                            ⌡
+     ⌠              ▐▙▄▟▘  ▐▌  ▐▌  ▐▙▄                ☘     ❀    ⌡
+     ⌠              ▐▌  ▐▌  ▐▌  ▐▌  ▐▌                          ⌡
+     ⌠              ▐▙▄▟▘   ▝▙▄▟▘   ▐▙▄▟▘    ❁                  ⌡
+     ⌠                                                          ⌡
+     ⌠     ▄▄    ▄▄▖   ▄▄▄  ▗▖   ▗▖ ▄▄▄▄▖ ▄▄▄                   ⌡
+     ⌠    ▟▘▝▙   ▐▌  ▐▌▐▌ ▝▙ ▐▙▖  ▐▌   ▐▌  ▐▘                    ⌡
+     ⌠   ▐▙▄▟▘   ▐▌▟▘ ▐▙▄▟▘ ▐▌▝▖ ▐▌   ▐▌  ▝▀▙                    ⌡
+     ⌠   ▐▌  ▐▌  ▐▌  ▐▌▐▌   ▐▌ ▝▙▐▌   ▐▌  ▄▖▝▙                  ⌡
+     ⌠   ▐▌  ▐▌   ▝▀▘  ▐▌    ▐▌  ▝▘   ▐▌   ▝▀▘                   ⌡
+     ⌠                                                            ⌡
+     ⌠     ╌╌╌╌╌  pass through in harmony  ╌╌╌╌╌                  ⌡
+     ⌠              v{__version__:<10}                             ⌡
+      ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\
 """
 _ASCII_BANNER = f"""\
 

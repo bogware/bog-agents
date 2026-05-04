@@ -140,35 +140,45 @@ class WelcomeBanner(Static):
             Rich Text object containing the formatted banner.
         """
         banner = Text()
-        # Bog/swamp gradient: cycle through deep-moss → neon → bright →
-        # neon → deep-moss line by line so the logo glows from its
-        # midline like marsh-light. Editable installs flip to a
-        # firefly-amber gradient so devs can tell at a glance they're
-        # running local code.
+        # Matte swamp gradient: walks deep peat → moss → moss-highlight
+        # → moss → deep peat line by line so the logo gently glows from
+        # its midline like dappled canopy light. NO neon — every stop
+        # is a desaturated bog tone. Editable installs flip to a muted
+        # ochre gradient so devs can tell at a glance they're running
+        # local code.
         if _is_editable_install():
             gradient_colors = [
-                "#7a4a08",  # deepest amber
-                "#b8731a",
-                "#ffc857",  # firefly amber midline
-                "#ffd97f",
-                "#ffc857",
-                "#b8731a",
-                "#7a4a08",
+                "#3a2c14",  # deepest peat-amber
+                "#5e4622",
+                "#7e6334",
+                "#b89968",  # muted-ochre midline
+                "#7e6334",
+                "#5e4622",
+                "#3a2c14",
             ]
         else:
             gradient_colors = [
-                "#0f3320",  # peat green
-                "#1a4028",
-                "#2db864",  # bright moss
-                "#66ff99",  # marsh-light midline
-                "#2db864",
-                "#1a4028",
-                "#0f3320",
+                "#1f3328",  # selection moss (deep peat)
+                "#3a5a48",  # bog-iron
+                "#557a63",  # deep moss
+                "#7aa888",  # matte-moss midline
+                "#557a63",
+                "#3a5a48",
+                "#1f3328",
             ]
         raw_banner = get_banner()
         banner_lines = raw_banner.split("\n")
-        for i, line in enumerate(banner_lines):
-            color = gradient_colors[i % len(gradient_colors)]
+        # Center the gradient on the visible content lines (skip leading
+        # blank line so the brightest stop lands on the wordmark, not
+        # whitespace).
+        nonblank_idx = 0
+        for line in banner_lines:
+            if line.strip():
+                color_idx = nonblank_idx % len(gradient_colors)
+                nonblank_idx += 1
+            else:
+                color_idx = 0
+            color = gradient_colors[color_idx]
             banner.append(line + "\n", style=Style(bold=True, color=color))
         banner.append(
             "Terminal engineering cockpit for code, context, and execution.\n",
@@ -181,7 +191,7 @@ class WelcomeBanner(Static):
                 style=Style(
                     bold=True,
                     color=COLORS["thinking"],
-                    bgcolor="#0a2826",  # deep teal cartouche
+                    bgcolor="#142020",  # matte teal cartouche
                 ),
             )
             banner.append(" tracing: ", style=Style(color=COLORS["dim"]))
@@ -209,7 +219,7 @@ class WelcomeBanner(Static):
                         Style(
                             bold=True,
                             color=COLORS["primary"],
-                            bgcolor="#0a2814",  # deep moss cartouche
+                            bgcolor="#152018",  # matte moss cartouche
                         ),
                     ),
                     (": ", "dim"),
@@ -223,7 +233,7 @@ class WelcomeBanner(Static):
                     style=Style(
                         bold=True,
                         color=COLORS["primary"],
-                        bgcolor="#0a2814",
+                        bgcolor="#152018",
                     ),
                 )
                 banner.append(f": {self._cli_thread_id}\n", style="dim")
@@ -234,7 +244,7 @@ class WelcomeBanner(Static):
                 style=Style(
                     bold=True,
                     color=COLORS["tool"],
-                    bgcolor="#2a1f08",  # deep amber cartouche
+                    bgcolor="#1f1810",  # matte ochre cartouche
                 ),
             )
             banner.append(" ready: ", style=Style(color=COLORS["dim"]))
