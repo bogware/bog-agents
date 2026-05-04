@@ -126,10 +126,14 @@ def read_clipboard_text() -> str | None:
 def copy_selection_to_clipboard(app: App) -> bool:
     """Copy selected text from app widgets to clipboard.
 
-    This queries all widgets for their text_selection and copies
-    any selected text to the system clipboard.
+    Queries all widgets for their ``text_selection`` and copies any
+    selected text to the system clipboard. Emits *exactly one*
+    notification on success — earlier versions could fire one per
+    clipboard method tried (one good preview + several near-empty
+    ones if a method partially succeeded).
     """
-    selected_texts = []
+    selected_texts: list[str] = []
+    seen: set[str] = set()
 
     for widget in app.query("*"):
         if not hasattr(widget, "text_selection") or not widget.text_selection:
@@ -155,13 +159,33 @@ def copy_selection_to_clipboard(app: App) -> bool:
             continue
 
         selected_text, _ = result
-        if selected_text.strip():
+        # Normalise + dedupe. Nested widgets often report the same
+        # selection on both the leaf and its container; without this we
+        # ended up with duplicate copies in the combined text and a
+        # confusing preview that mixed whitespace with content.
+        normalised = selected_text.strip()
+        if normalised and normalised not in seen:
+            seen.add(normalised)
             selected_texts.append(selected_text)
 
     if not selected_texts:
         return False
 
     combined_text = "\n".join(selected_texts)
+
+    # Build the preview ONCE so the notification text is deterministic.
+    # If the preview ends up looking empty (whitespace-only after glyph
+    # substitution), fall back to a count-based message instead of a
+    # blank-looking quoted string.
+    raw_preview = _shorten_preview(selected_texts).strip()
+    if raw_preview:
+        notify_message = f'"{raw_preview}" copied'
+    else:
+        notify_message = (
+            f"Copied {len(combined_text)} character(s)"
+            if len(selected_texts) == 1
+            else f"Copied {len(selected_texts)} selections"
+        )
 
     # Try multiple clipboard methods
     # Prefer pyperclip/app clipboard first (works reliably on local machines)
@@ -183,17 +207,12 @@ def copy_selection_to_clipboard(app: App) -> bool:
     if os.name != "nt":
         copy_methods.append(_copy_osc52)
 
+    last_error: Exception | None = None
     for copy_fn in copy_methods:
         try:
             copy_fn(combined_text)
-            # Use markup=False to prevent copied text from being parsed as Rich markup
-            app.notify(
-                f'"{_shorten_preview(selected_texts)}" copied',
-                severity="information",
-                timeout=2,
-                markup=False,
-            )
         except (OSError, RuntimeError, TypeError) as e:
+            last_error = e
             logger.debug(
                 "Clipboard copy method %s failed: %s",
                 getattr(copy_fn, "__name__", repr(copy_fn)),
@@ -201,12 +220,28 @@ def copy_selection_to_clipboard(app: App) -> bool:
                 exc_info=True,
             )
             continue
-        else:
-            return True
+        # Copy succeeded — fire ONE notification and bail out before any
+        # subsequent method is tried. Earlier versions emitted notify
+        # inside the try block, which made it possible (and was reported
+        # in the wild) to see a "good" notification followed by 2-3
+        # near-empty ones when extra methods accidentally re-fired.
+        try:
+            app.notify(
+                notify_message,
+                severity="information",
+                timeout=2,
+                markup=False,
+            )
+        except Exception:
+            # The clipboard write already succeeded — don't undo that
+            # if the notify call itself blew up for some reason.
+            logger.debug("clipboard notify failed", exc_info=True)
+        return True
 
-    # If all methods fail, still notify but warn
+    # If all methods fail, still notify but warn.
     app.notify(
-        "Failed to copy - no clipboard method available",
+        "Failed to copy - no clipboard method available"
+        + (f" (last error: {last_error.__class__.__name__})" if last_error else ""),
         severity="warning",
         timeout=3,
     )

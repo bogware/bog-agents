@@ -1319,8 +1319,14 @@ class TestTraceCommand:
 class TestCommandSurfaceEnhancements:
     """Tests for added slash command handlers."""
 
-    async def test_resume_uses_most_recent_other_thread(self) -> None:
-        """`/resume` should switch to the latest thread that is not current."""
+    async def test_resume_last_uses_most_recent_other_thread(self) -> None:
+        """`/resume last` should auto-jump to the latest thread that is not current.
+
+        Bare ``/resume`` now opens the interactive picker — see
+        ``test_resume_opens_thread_selector``. The auto-jump shortcut
+        moved to the explicit ``/resume last`` (or ``latest`` /
+        ``recent``) keyword for users who want a one-keystroke jump.
+        """
         app = BogAgentsApp()
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -1341,10 +1347,24 @@ class TestCommandSurfaceEnhancements:
                     app, "_resume_thread", new_callable=AsyncMock
                 ) as mock_resume,
             ):
-                await app._handle_command("/resume")
+                await app._handle_command("/resume last")
                 await pilot.pause()
 
             mock_resume.assert_awaited_once_with("thread-other")
+
+    async def test_resume_opens_thread_selector(self) -> None:
+        """Bare `/resume` should open the interactive thread selector."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app, "_show_thread_selector", new_callable=AsyncMock
+            ) as mock_picker:
+                await app._handle_command("/resume")
+                await pilot.pause()
+
+            mock_picker.assert_awaited_once()
 
     async def test_session_command_shows_session_details(self) -> None:
         """`/session` should render a compact session summary."""

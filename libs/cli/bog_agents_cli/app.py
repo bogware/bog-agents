@@ -2902,15 +2902,15 @@ class BogAgentsApp(App):
         """Handle /mcp — MCP server marketplace and management.
 
         Usage:
-          /mcp                       — show active servers (viewer)
+          /mcp                       — open the live viewer (configured servers + tools)
+          /mcp marketplace           — browse the full catalog (24+ servers, all categories)
           /mcp featured              — curated quick-pick list (jira, github, aws…)
           /mcp list                  — list configured servers in ~/.bog-agents/.mcp.json
-          /mcp catalog               — browse the full registry
-          /mcp search <query>        — search registry by keyword
-          /mcp install <id>          — install a server from the registry
+          /mcp search <query>        — search the catalog by keyword
+          /mcp install <id>          — install a server from the catalog
           /mcp add <name> <cmd> ...  — add a custom stdio server
           /mcp remove <name>         — remove a server from user config
-          /mcp info <id>             — show registry entry details
+          /mcp info <id>             — show catalog entry details
           /mcp trust                 — manage project stdio server trust
           /mcp help                  — show this help
 
@@ -2974,27 +2974,37 @@ class BogAgentsApp(App):
             )
             await self._mount_message(AppMessage("\n".join(lines)))
 
-        # ---- catalog ----
-        elif subcommand == "catalog":
+        # ---- catalog / marketplace / store / browse (aliases) ----
+        elif subcommand in {"catalog", "marketplace", "store", "browse", "all"}:
             entries = list_entries()
             categories = list_categories()
-            lines = [f"[bold]MCP Server Catalog[/bold] — {len(entries)} servers\n"]
+            lines = [
+                f"[bold #66ff99]MCP Marketplace[/bold #66ff99] — "
+                f"[bold]{len(entries)}[/bold] servers across "
+                f"[bold]{len(categories)}[/bold] categories\n"
+            ]
             for cat in categories:
                 cat_entries = [e for e in entries if e.category == cat]
-                lines.append(f"\n[bold yellow]{cat.upper()}[/bold yellow]")
+                if not cat_entries:
+                    continue
+                lines.append(
+                    f"\n[bold #ffd166]{cat.upper()}[/bold #ffd166] "
+                    f"[dim]({len(cat_entries)})[/dim]"
+                )
                 for e in cat_entries:
                     src_tag = (
                         f"[dim][{e.source}][/dim]" if e.source != "official" else ""
                     )
                     lines.append(
-                        f"  [cyan]{e.id:<22}[/cyan] {e.display_name:<20} {src_tag}\n"
+                        f"  [bold #66ff99]{e.id:<22}[/bold #66ff99] "
+                        f"{e.display_name:<24} {src_tag}\n"
                         f"    [dim]{e.description}[/dim]"
                     )
             lines.append(
-                "\n[dim]Install with [bold]/mcp install <id>[/bold] · "
-                "Details with [bold]/mcp info <id>[/bold] · "
-                "Search with [bold]/mcp search <query>[/bold] · "
-                "Quick picks with [bold]/mcp featured[/bold][/dim]"
+                "\n[dim]Install with [bold]/mcp install <id>[/bold]  ·  "
+                "Details with [bold]/mcp info <id>[/bold]  ·  "
+                "Search with [bold]/mcp search <query>[/bold]  ·  "
+                "Don't see what you need?  [bold]/mcp add <name> <command> <args...>[/bold] adds any custom stdio server.[/dim]"
             )
             await self._mount_message(AppMessage("\n".join(lines)))
 
@@ -4208,14 +4218,49 @@ class BogAgentsApp(App):
         if action in {"", "list"}:
             plans = await asyncio.to_thread(list_plans, project_root)
             if not plans:
-                await self._mount_message(AppMessage("No QA plans saved in this project yet."))
+                # Empty state — instead of a dead end, walk the user through
+                # the three ways to author their first plan. The CLI is the
+                # *only* surface for creating QA plans (no separate UI), so
+                # we have to make the path obvious.
+                await self._mount_message(
+                    AppMessage(
+                        "[bold #66ff99]/qa[/bold #66ff99] — Acceptance-Criteria QA Harness\n"
+                        "\n"
+                        "[dim]No plans saved in this project yet — let's make one.[/dim]\n"
+                        "\n"
+                        "[bold]Author a new plan ([italic]pick whichever source you have[/italic]):[/bold]\n"
+                        "\n"
+                        "  [bold #66ff99]/qa new --from-jira PROJ-123[/bold #66ff99]\n"
+                        "      [dim]Pulls AC from a Jira ticket via your MCP Jira tool.[/dim]\n"
+                        "\n"
+                        "  [bold #66ff99]/qa new --from-file path/to/ac.md[/bold #66ff99]\n"
+                        "      [dim]Reads bullets / numbered list / Gherkin from a file.[/dim]\n"
+                        "\n"
+                        "  [bold #66ff99]/qa new --from-json '[\"AC1 text\", \"AC2 text\"]'[/bold #66ff99]\n"
+                        "      [dim]Inline JSON or path to a JSON file.[/dim]\n"
+                        "\n"
+                        "Plans live at [cyan].bog-agents/qa-plans/<id>.yaml[/cyan] — edit them by hand to refine "
+                        "steps, verdicts, or vars.\n"
+                        "\n"
+                        "[dim]Once you have a plan:[/dim]\n"
+                        "  [bold]/qa show <id>[/bold]    — preview the plan\n"
+                        "  [bold]/qa run <id>[/bold]      — execute it (markdown / json / jira-comment artifact)\n"
+                        "\n"
+                        "[dim]Full reference:[/dim] [bold]/qa help[/bold]"
+                    )
+                )
                 return
-            lines = ["QA plans:"]
+            lines = ["[bold #66ff99]QA plans in this project[/bold #66ff99]\n"]
             for plan in plans:
                 lines.append(
-                    f"  {plan.name or plan.plan_id} ({plan.plan_id}) — "
+                    f"  [bold]{plan.name or plan.plan_id}[/bold] [dim]({plan.plan_id})[/dim] — "
                     f"{len(plan.acceptance_criteria)} AC, {len(plan.steps)} step(s)"
                 )
+            lines.append(
+                "\n[dim]Run a plan with [bold]/qa run <id>[/bold] · "
+                "show details with [bold]/qa show <id>[/bold] · "
+                "author another with [bold]/qa new[/bold][/dim]"
+            )
             await self._mount_message(AppMessage("\n".join(lines)))
             return
 
@@ -4225,7 +4270,13 @@ class BogAgentsApp(App):
                 return
             path = await asyncio.to_thread(find_plan, project_root, tokens[1])
             if path is None:
-                await self._mount_message(AppMessage(f"No plan matched '{tokens[1]}'."))
+                await self._mount_message(
+                    AppMessage(
+                        f"No plan matched '{tokens[1]}'. "
+                        "Run [bold]/qa list[/bold] to see saved plans, or "
+                        "[bold]/qa new[/bold] to create one."
+                    )
+                )
                 return
             plan = await asyncio.to_thread(load_plan, path)
             lines = [
@@ -4376,7 +4427,13 @@ class BogAgentsApp(App):
                     i += 1
             path = await asyncio.to_thread(find_plan, project_root, tokens[1])
             if path is None:
-                await self._mount_message(AppMessage(f"No plan matched '{tokens[1]}'."))
+                await self._mount_message(
+                    AppMessage(
+                        f"No plan matched '{tokens[1]}'. "
+                        "Run [bold]/qa list[/bold] to see saved plans, or "
+                        "[bold]/qa new[/bold] to create one."
+                    )
+                )
                 return
             plan = await asyncio.to_thread(load_plan, path)
             if output_fmt:
@@ -5865,11 +5922,17 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/resume") :].strip()
         lowered = raw_arg.lower()
 
-        if lowered in {"list", "browse"}:
+        # Bare ``/resume`` (and the explicit list/browse forms) opens the
+        # interactive thread-selector modal so the user can pick from
+        # recent threads with previews. The old "auto-jump-to-the-most-
+        # recent-other-thread" behaviour is preserved under the explicit
+        # ``/resume last`` (or ``latest`` / ``recent``) keyword for
+        # users who want a one-keystroke jump.
+        if not raw_arg or lowered in {"list", "browse"}:
             await self._show_thread_selector()
             return
 
-        if not raw_arg or lowered in {"last", "latest", "recent"}:
+        if lowered in {"last", "latest", "recent"}:
             from bog_agents_cli.sessions import list_threads
 
             current_thread = (

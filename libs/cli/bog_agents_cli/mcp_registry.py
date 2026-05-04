@@ -473,6 +473,211 @@ _REGISTRY: dict[str, RegistryEntry] = {
         ),
         source="community",
     ),
+    "confluence": RegistryEntry(
+        id="confluence",
+        display_name="Confluence",
+        description="Search and read Atlassian Confluence pages, spaces, and comments",
+        category="productivity",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-atlassian-confluence"],
+        required_env=["CONFLUENCE_BASE_URL", "CONFLUENCE_API_TOKEN", "CONFLUENCE_EMAIL"],
+        vars_hints={
+            "CONFLUENCE_BASE_URL": "https://your-domain.atlassian.net/wiki",
+            "CONFLUENCE_API_TOKEN": "Atlassian API token (id.atlassian.com/manage-profile/security/api-tokens)",
+            "CONFLUENCE_EMAIL": "Email associated with the API token",
+        },
+        install_notes=(
+            "Same API-token flow as Jira — issue one token at id.atlassian.com and "
+            "share it across both servers."
+        ),
+        source="community",
+    ),
+    "stripe": RegistryEntry(
+        id="stripe",
+        display_name="Stripe",
+        description="Stripe customer / charge / subscription / invoice lookups (test or live mode)",
+        category="business",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@stripe/mcp-server"],
+        required_env=["STRIPE_SECRET_KEY"],
+        vars_hints={
+            "STRIPE_SECRET_KEY": "sk_test_... or sk_live_... — use TEST keys when developing",
+        },
+        install_notes=(
+            "Use a TEST key (sk_test_...) for development; live keys grant full account "
+            "access. Read-only by default; the agent will not create charges or refunds."
+        ),
+        source="vendor",
+    ),
+    "cloudflare": RegistryEntry(
+        id="cloudflare",
+        display_name="Cloudflare",
+        description="Cloudflare zones, DNS, Workers, KV, R2 — read-only by default",
+        category="infra",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@cloudflare/mcp-server-cloudflare"],
+        required_env=["CLOUDFLARE_API_TOKEN"],
+        vars_hints={
+            "CLOUDFLARE_API_TOKEN": "Scoped API token (dash.cloudflare.com → My Profile → API Tokens)",
+        },
+        install_notes=(
+            "Create a scoped token with the minimum permissions you need (Zone.Read, "
+            "Workers Scripts:Read, etc.). Avoid the 'Global API Key'."
+        ),
+        source="vendor",
+    ),
+    "mongodb": RegistryEntry(
+        id="mongodb",
+        display_name="MongoDB",
+        description="MongoDB collection queries, schema introspection, and aggregation pipelines",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "mcp-mongo-server"],
+        required_env=["MONGODB_URI"],
+        vars_hints={
+            "MONGODB_URI": "mongodb://user:pass@host:port/db (or mongodb+srv://... for Atlas)",
+        },
+        install_notes=(
+            "Point at a read-only replica when possible. The server exposes find / "
+            "aggregate / collection-stats; create / update / delete are gated."
+        ),
+        source="community",
+    ),
+    "redis": RegistryEntry(
+        id="redis",
+        display_name="Redis",
+        description="Redis key / hash / stream / pub-sub inspection (read-only by default)",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-redis"],
+        required_env=["REDIS_URL"],
+        vars_hints={
+            "REDIS_URL": "redis://[user:pass@]host:port[/db] or rediss:// for TLS",
+        },
+        install_notes=(
+            "Use a read replica for production. The default toolset is read-only; "
+            "enable write tools only against scratch / staging instances."
+        ),
+        source="official",
+    ),
+    "bigquery": RegistryEntry(
+        id="bigquery",
+        display_name="Google BigQuery",
+        description="Run BigQuery SQL, list datasets / tables / columns, schema lookups",
+        category="database",
+        transport="stdio",
+        command="uvx",
+        args=["mcp-server-bigquery"],
+        required_env=["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        vars_hints={
+            "GOOGLE_APPLICATION_CREDENTIALS": "Path to GCP service-account JSON key",
+            "GOOGLE_CLOUD_PROJECT": "GCP project id (e.g. my-data-warehouse)",
+        },
+        install_notes=(
+            "Service-account key needs roles/bigquery.dataViewer and roles/bigquery.jobUser. "
+            "Avoid roles/bigquery.dataEditor unless you intend to allow writes."
+        ),
+        source="community",
+    ),
+    "snowflake": RegistryEntry(
+        id="snowflake",
+        display_name="Snowflake",
+        description="Snowflake SQL, warehouse / database / schema introspection",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@snowflake/mcp-server"],
+        required_env=["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD"],
+        optional_env=["SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE", "SNOWFLAKE_ROLE"],
+        vars_hints={
+            "SNOWFLAKE_ACCOUNT": "Account locator (e.g. xy12345.us-east-1)",
+            "SNOWFLAKE_USER": "Service / read-only username",
+            "SNOWFLAKE_PASSWORD": "Password — prefer SAML / key-pair auth in prod",
+        },
+        install_notes=(
+            "Use a read-only role (e.g. ANALYST_RO) and dedicated warehouse — the agent "
+            "can run arbitrary SQL within whatever role it authenticates as."
+        ),
+        source="vendor",
+    ),
+    "google-drive": RegistryEntry(
+        id="google-drive",
+        display_name="Google Drive",
+        description="Search and read Google Drive files (Docs, Sheets, PDFs)",
+        category="productivity",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-gdrive"],
+        required_env=["GDRIVE_CREDENTIALS_PATH"],
+        vars_hints={
+            "GDRIVE_CREDENTIALS_PATH": "Path to OAuth2 client_secret JSON",
+        },
+        install_notes=(
+            "Run an OAuth2 dance once on first use. The server caches a refresh token; "
+            "scope is drive.readonly by default."
+        ),
+        source="official",
+    ),
+    "discord": RegistryEntry(
+        id="discord",
+        display_name="Discord",
+        description="Read Discord channel messages, list guilds and members; post messages with explicit confirmation",
+        category="communication",
+        transport="stdio",
+        command="npx",
+        args=["-y", "discord-mcp"],
+        required_env=["DISCORD_BOT_TOKEN"],
+        vars_hints={
+            "DISCORD_BOT_TOKEN": "Bot token from discord.com/developers/applications",
+        },
+        install_notes=(
+            "Invite the bot with the minimum required intents (Read Messages, optionally "
+            "Send Messages). Never use a user token."
+        ),
+        source="community",
+    ),
+    "hubspot": RegistryEntry(
+        id="hubspot",
+        display_name="HubSpot",
+        description="HubSpot CRM contacts / companies / deals / tickets (read-mostly)",
+        category="business",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@hubspot/mcp-server"],
+        required_env=["HUBSPOT_PRIVATE_APP_TOKEN"],
+        vars_hints={
+            "HUBSPOT_PRIVATE_APP_TOKEN": "Private app access token (HubSpot → Settings → Private Apps)",
+        },
+        install_notes=(
+            "Create a Private App with the scopes you actually need. Avoid a 'super-admin' "
+            "token — least-privilege scopes are honored by the server."
+        ),
+        source="vendor",
+    ),
+    "supabase": RegistryEntry(
+        id="supabase",
+        display_name="Supabase",
+        description="Supabase database, auth users, and storage bucket queries",
+        category="database",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@supabase/mcp-server"],
+        required_env=["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"],
+        vars_hints={
+            "SUPABASE_URL": "https://your-project.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "Service-role key (NOT anon) — keep this secret",
+        },
+        install_notes=(
+            "The service-role key bypasses RLS — keep it only in your local vault, "
+            "never commit it. Use the anon key for read-only public-data scenarios."
+        ),
+        source="vendor",
+    ),
 }
 
 

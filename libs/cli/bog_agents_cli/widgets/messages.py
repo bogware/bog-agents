@@ -151,8 +151,8 @@ class UserMessage(_TimestampClickMixin, Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #0d1723;
-        border-left: wide #34d399;
+        background: #0a1410;
+        border-left: wide #66ff99;
     }
     """
 
@@ -211,11 +211,11 @@ class UserMessage(_TimestampClickMixin, Static):
 
             # The regex only matches tokens starting with / or @
             if token.startswith("/") and start == 0:
-                # /command at start - yellow/gold
-                text.append(token, style="bold #fbbf24")
+                # /command at start — firefly amber
+                text.append(token, style="bold #ffc857")
             elif token.startswith("@"):
-                # @file mention - green
-                text.append(token, style="bold #10b981")
+                # @file mention — neon-green
+                text.append(token, style="bold #66ff99")
             last_end = end
 
         # Add remaining text after last match
@@ -236,9 +236,9 @@ class QueuedUserMessage(Static):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #0a121c;
-        border-left: wide #64748b;
-        opacity: 0.72;
+        background: #0a1410;
+        border-left: wide #4a6655;
+        opacity: 0.65;
     }
     """
 
@@ -288,8 +288,8 @@ class AssistantMessage(_TimestampClickMixin, Vertical):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #08111b;
-        border-left: wide #1e293b;
+        background: #050a07;
+        border-left: wide #2db864;
     }
 
     AssistantMessage Markdown {
@@ -396,18 +396,18 @@ class ToolCallMessage(Vertical):
         height: auto;
         padding: 0 1;
         margin: 1 0 0 0;
-        background: #09111a;
-        border-left: wide #223246;
+        background: #030705;
+        border-left: wide #1f3a28;
     }
 
     ToolCallMessage .tool-header {
         height: auto;
-        color: #fbbf24;
+        color: #ffc857;
         text-style: bold;
     }
 
     ToolCallMessage .tool-args {
-        color: #94a3b8;
+        color: #6b8a78;
         margin-left: 3;
     }
 
@@ -416,19 +416,19 @@ class ToolCallMessage(Vertical):
     }
 
     ToolCallMessage .tool-status.pending {
-        color: #fbbf24;
+        color: #ffc857;
     }
 
     ToolCallMessage .tool-status.success {
-        color: #34d399;
+        color: #66ff99;
     }
 
     ToolCallMessage .tool-status.error {
-        color: #fb7185;
+        color: #ff5577;
     }
 
     ToolCallMessage .tool-status.rejected {
-        color: #f59e0b;
+        color: #ffa055;
     }
 
     ToolCallMessage .tool-output {
@@ -445,11 +445,11 @@ class ToolCallMessage(Vertical):
 
     ToolCallMessage .tool-output-hint {
         margin-left: 0;
-        color: #94a3b8;
+        color: #6b8a78;
     }
 
     ToolCallMessage:hover {
-        border-left: wide #38bdf8;
+        border-left: wide #66ff99;
     }
     """
 
