@@ -33,6 +33,12 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "bg task async",
             "agent",
             available=True,
+            subcommands=(
+                ("list", "Show all background tasks"),
+                ("status", "Show detail for a task (usage: /background status <id>)"),
+                ("cancel", "Cancel a running task (usage: /background cancel <id>)"),
+                ("cleanup", "Remove finished tasks from the table"),
+            ),
         ),
         handler_method="_dispatch_background_command",
     ),
@@ -73,6 +79,13 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "ambient daemon templates standing orders catalog flagship",
             "agent",
             available=True,
+            subcommands=(
+                ("list", "Show all available templates"),
+                (
+                    "install",
+                    "Install a template (usage: /standing-orders install <id>)",
+                ),
+            ),
         ),
         handler_method="_handle_standing_orders_command",
     ),

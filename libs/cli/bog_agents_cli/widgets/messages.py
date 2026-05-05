@@ -119,6 +119,16 @@ def _safe_render_markup(message: str) -> Text:
                 msg = f"invalid markup style {span.style!r}: {exc}"
                 raise ValueError(msg) from None
     except Exception:
+        # Log the failure loudly. The literal-fallback was masking real
+        # bugs (e.g. ``[vendor]`` being treated as a style name and
+        # whole-message markup silently dying). When we hit this we want
+        # the next dev pass to *see* the offending markup, not chase a
+        # mysteriously plain message in the TUI.
+        logger.warning(
+            "rich markup parse failed; rendering literally. First 200 chars: %r",
+            message[:200],
+            exc_info=True,
+        )
         return Text(message, style="dim italic")
     return text
 

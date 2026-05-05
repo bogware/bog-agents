@@ -13,6 +13,8 @@ from bog_agents_cli.widgets.autocomplete import (
     FuzzyFileController,
     MultiCompletionManager,
     SlashCommandController,
+    SlashSubcommandController,
+    _build_subcommand_index,
     _fuzzy_score,
     _fuzzy_search,
     _is_dotpath,
@@ -318,6 +320,94 @@ class TestSlashCommandController:
         controller.reset()
         # Second reset should be a no-op (suggestions already empty)
         controller.reset()
+
+
+class TestSlashSubcommandController:
+    """Tests for the new subcommand-completion controller."""
+
+    @pytest.fixture
+    def mock_view(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def index(self):
+        return {
+            "/mcp": [
+                ("marketplace", "Browse the catalog"),
+                ("list", "List configured servers"),
+                ("install", "Install a server"),
+                ("info", "Show entry details"),
+            ],
+            "/threads": [
+                ("list", "List threads"),
+                ("delete", "Delete a thread"),
+            ],
+        }
+
+    @pytest.fixture
+    def controller(self, mock_view, index):
+        return SlashSubcommandController(mock_view, subcommands_by_command=index)
+
+    def test_can_handle_only_after_space_for_known_command(self, controller):
+        # Before space → no
+        assert controller.can_handle("/mcp", 4) is False
+        # Right at space → no (cursor still at command name boundary)
+        assert controller.can_handle("/mcp ", 4) is False
+        # In subcommand token → yes
+        assert controller.can_handle("/mcp ", 5) is True
+        assert controller.can_handle("/mcp m", 6) is True
+        assert controller.can_handle("/mcp marketplace", 16) is True
+        # Unknown command (no subcommands declared) → no
+        assert controller.can_handle("/quit subarg", 12) is False
+        # Past first arg (chained args) → no
+        assert controller.can_handle("/mcp install jira", 17) is False
+
+    def test_suggestions_filter_by_prefix(self, controller, mock_view):
+        controller.on_text_changed("/mcp m", 6)
+        mock_view.render_completion_suggestions.assert_called()
+        suggestions = mock_view.render_completion_suggestions.call_args[0][0]
+        names = [s for s, _ in suggestions]
+        # ``marketplace`` is a prefix match, ``install``/``info`` aren't.
+        assert "marketplace" in names
+        assert "install" not in names
+
+    def test_no_prefix_lists_all_subcommands(self, controller, mock_view):
+        controller.on_text_changed("/mcp ", 5)
+        mock_view.render_completion_suggestions.assert_called()
+        suggestions = mock_view.render_completion_suggestions.call_args[0][0]
+        names = {s for s, _ in suggestions}
+        assert names == {"marketplace", "list", "install", "info"}
+
+    def test_apply_replaces_only_subcommand_token(self, controller, mock_view):
+        """Critical: applying a completion must NOT touch the command name."""
+        controller.on_text_changed("/mcp m", 6)
+        # Highest-scored suggestion at index 0 is ``marketplace``.
+        result = controller._apply_selected_completion()
+        assert result is True
+        # Replacement range is the subcommand token only — span starts
+        # AFTER the slash command + space (5..6 in this case).
+        mock_view.replace_completion_range.assert_called_once()
+        start, end, replacement = mock_view.replace_completion_range.call_args[0]
+        assert (start, end) == (5, 6)
+        assert replacement == "marketplace"
+
+    def test_unknown_command_yields_no_suggestions(self, controller, mock_view):
+        controller.on_text_changed("/nonexistent foo", 16)
+        mock_view.render_completion_suggestions.assert_not_called()
+
+    def test_real_registry_index_includes_mcp(self):
+        """Sanity: the live registry actually populates ``/mcp`` subcommands."""
+        index = _build_subcommand_index()
+        assert "/mcp" in index
+        names = {n for n, _ in index["/mcp"]}
+        assert {"marketplace", "list", "install", "info"} <= names
+
+    def test_enter_returns_submit_when_completion_applied(self, controller):
+        from textual import events
+
+        controller.on_text_changed("/mcp m", 6)
+        result = controller.on_key(events.Key(key="enter", character=None), "/mcp m", 6)
+        assert result == CompletionResult.SUBMIT
 
 
 class TestSlashSubcommandRegression:

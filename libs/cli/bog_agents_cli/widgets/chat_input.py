@@ -32,6 +32,7 @@ from bog_agents_cli.widgets.autocomplete import (
     FuzzyFileController,
     MultiCompletionManager,
     SlashCommandController,
+    SlashSubcommandController,
 )
 from bog_agents_cli.widgets.history import HistoryManager
 
@@ -1074,8 +1075,15 @@ class ChatInput(Vertical):
         # Both controllers implement the CompletionController protocol but have
         # different concrete types; the list-item warning is a false positive.
         self._completion_view = _CompletionViewAdapter(self)
+        # Order matters: ``MultiCompletionManager`` picks the first
+        # controller whose ``can_handle`` returns True. The slash *name*
+        # controller activates only before the first space; the
+        # *subcommand* controller activates only after it. They are
+        # mutually exclusive, but the manager checks in order so list
+        # the more-specific (subcommand) controller first.
         self._completion_manager = MultiCompletionManager(
             [
+                SlashSubcommandController(self._completion_view),
                 SlashCommandController(SLASH_COMMANDS, self._completion_view),
                 FuzzyFileController(self._completion_view, cwd=self._cwd),
             ]  # type: ignore[list-item]  # Controller types are compatible at runtime
