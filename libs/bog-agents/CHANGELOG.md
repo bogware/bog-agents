@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.2...bog-agents==0.8.3) (2026-05-05)
+
+
+* **bog-agents:** Synchronize bog-agents-monorepo versions
+
 ## [0.8.2](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.1...bog-agents==0.8.2) (2026-05-04)
 
 
