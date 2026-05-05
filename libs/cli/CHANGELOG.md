@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.2...bog-agents-cli==0.8.3) (2026-05-05)
+
+
+### Bug Fixes
+
+* **cli:** slash subcommands — dispatch + autocomplete + markup rendering ([#67](https://github.com/bogware/bog-agents/issues/67)) ([9a819ce](https://github.com/bogware/bog-agents/commit/9a819ce2ab08df1913302ba4e80b09d7ea497005))
+
 ## [0.8.2](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.1...bog-agents-cli==0.8.2) (2026-05-04)
 
 
