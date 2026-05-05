@@ -2975,8 +2975,13 @@ class BogAgentsApp(App):
                     f"[dim]({len(cat_entries)})[/dim]"
                 )
                 for e in cat_entries:
+                    # Escape the brackets around ``e.source`` so Rich's markup
+                    # parser doesn't treat e.g. ``[vendor]`` as a style tag and
+                    # bail out with ``unable to parse 'vendor' as color`` —
+                    # which silently falls the whole message back to literal
+                    # rendering and shows raw ``[bold ...]`` to the user.
                     src_tag = (
-                        f"[dim][{e.source}][/dim]" if e.source != "official" else ""
+                        f"[dim]\\[{e.source}][/dim]" if e.source != "official" else ""
                     )
                     lines.append(
                         f"  [bold #66ff99]{e.id:<22}[/bold #66ff99] "
@@ -3041,7 +3046,10 @@ class BogAgentsApp(App):
                 return
             lines = [f"[bold]Search results for[/bold] [cyan]{rest!r}[/cyan]\n"]
             for e in results:
-                src_tag = f" [dim][{e.source}][/dim]" if e.source != "official" else ""
+                # Escape literal brackets — see /mcp marketplace handler.
+                src_tag = (
+                    f" [dim]\\[{e.source}][/dim]" if e.source != "official" else ""
+                )
                 lines.append(
                     f"  [cyan]{e.id}[/cyan] — {e.display_name}{src_tag}\n"
                     f"    [dim]{e.description}[/dim]"
@@ -5072,7 +5080,8 @@ class BogAgentsApp(App):
         if not rest or rest in ("list", "ls"):
             lines = ["[bold]Standing Orders[/bold] — curated daemon-job templates\n"]
             for order in CATALOG:
-                tag_text = " ".join(f"[dim][{t}][/dim]" for t in order.tags)
+                # Escape literal brackets — see /mcp marketplace handler.
+                tag_text = " ".join(f"[dim]\\[{t}][/dim]" for t in order.tags)
                 lines.append(
                     f"  [cyan]{order.id:<22}[/cyan] {order.title}\n"
                     f"    [dim]{order.summary}[/dim]"
@@ -5576,7 +5585,8 @@ class BogAgentsApp(App):
             lines = ["[bold]Recipes[/bold] — curated YAML pipeline templates\n"]
             for r in CATALOG:
                 marker = " [green]✓ installed[/green]" if is_installed(r.id) else ""
-                tag_text = " ".join(f"[dim][{t}][/dim]" for t in r.tags)
+                # Escape literal brackets — see /mcp marketplace handler.
+                tag_text = " ".join(f"[dim]\\[{t}][/dim]" for t in r.tags)
                 lines.append(
                     f"  [cyan]{r.id:<22}[/cyan] {r.title}{marker}\n"
                     f"    [dim]{r.summary}[/dim]"

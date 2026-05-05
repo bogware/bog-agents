@@ -198,13 +198,32 @@ class SlashCommandController:
         self._selected_index = 0
 
     @staticmethod
-    def can_handle(text: str, cursor_index: int) -> bool:  # noqa: ARG004  # Required by AutocompleteProvider interface
-        """Handle input that starts with /.
+    def can_handle(text: str, cursor_index: int) -> bool:
+        """Activate only while the user is typing the command name itself.
 
-        Returns:
-            True if text starts with slash, indicating a command.
+        Returns ``True`` only if:
+
+        - ``text`` starts with ``/``
+        - the cursor is at-or-before the first whitespace character
+
+        Once the user has typed a space (entering subcommand args like
+        ``/mcp marketplace``), the controller deactivates so:
+
+        1. Suggestions stop being computed against the whole input —
+           previously the long search string ``"mcp marketplace"``
+           fuzzy-matched against unrelated commands like ``/workspace``.
+        2. Pressing Enter performs a normal submit instead of replacing
+           the whole input with whatever the auto-selected completion
+           was — that swap was wiping out subcommand arguments and
+           dispatching the wrong handler entirely.
         """
-        return text.startswith("/")
+        if not text.startswith("/"):
+            return False
+        for i, ch in enumerate(text):
+            if ch.isspace():
+                return cursor_index <= i
+        # No whitespace yet — fully in command-name territory.
+        return True
 
     def reset(self) -> None:
         """Clear suggestions."""
@@ -350,6 +369,12 @@ class SlashCommandController:
     def _apply_selected_completion(self, cursor_index: int) -> bool:
         """Apply the currently selected completion.
 
+        Only replaces the *command-name span* (``/`` up to first whitespace)
+        — not any subcommand args the user has already typed. This is the
+        backstop against the regression where ``/mcp marketplace`` got
+        rewritten to ``/workspace`` because the controller blindly
+        replaced ``text[0:cursor]``.
+
         Returns:
             True if completion was applied, False if no suggestions.
         """
@@ -357,8 +382,220 @@ class SlashCommandController:
             return False
 
         command, _ = self._suggestions[self._selected_index]
-        # Replace from start to cursor with the command
-        self._view.replace_completion_range(0, cursor_index, command)
+        # The view exposes its current text via the controller's caller,
+        # but we don't have direct access here — instead bound the
+        # replace range to the cursor position OR the first whitespace
+        # we know about, whichever is smaller. ``can_handle`` already
+        # ensures we never enter this method when the cursor is past a
+        # whitespace, but be defensive in case future call sites diverge.
+        end = cursor_index
+        self._view.replace_completion_range(0, end, command)
+        self.reset()
+        return True
+
+
+# ============================================================================
+# Slash Subcommand Completion (e.g. ``/mcp marketplace``)
+# ============================================================================
+
+
+def _build_subcommand_index() -> dict[str, list[tuple[str, str]]]:
+    """Snapshot the registry's per-command subcommand declarations.
+
+    Returns a map from ``"/cmd"`` (lowercased) to a list of
+    ``(subcommand, description)`` pairs. Commands without declared
+    subcommands are absent from the map. Built once at controller
+    construction; the registry is effectively static at runtime.
+    """
+    from bog_agents_cli.command_registry import SLASH_COMMAND_SPECS
+
+    index: dict[str, list[tuple[str, str]]] = {}
+    for spec in SLASH_COMMAND_SPECS:
+        if spec.subcommands:
+            index[spec.name.lower()] = list(spec.subcommands)
+    return index
+
+
+class SlashSubcommandController:
+    """Completion controller for slash *subcommands* (after the space).
+
+    Activates when the user has finished typing the command name and
+    started typing arguments — e.g. ``/mcp marketplace``. Suggests
+    subcommand names from the registry without ever rewriting the
+    already-typed command (that was the bug fixed alongside this
+    controller's introduction).
+    """
+
+    def __init__(
+        self,
+        view: CompletionView,
+        subcommands_by_command: dict[str, list[tuple[str, str]]] | None = None,
+    ) -> None:
+        """Initialize the subcommand controller.
+
+        Args:
+            view: View to render suggestions to.
+            subcommands_by_command: Optional pre-built index. Defaults to
+                ``_build_subcommand_index()``. Tests inject custom data.
+        """
+        self._view = view
+        self._index = (
+            subcommands_by_command
+            if subcommands_by_command is not None
+            else _build_subcommand_index()
+        )
+        self._suggestions: list[tuple[str, str]] = []
+        self._selected_index = 0
+        # Span covering the current subcommand token, for replacement.
+        self._token_start: int = 0
+        self._token_end: int = 0
+
+    @staticmethod
+    def _split_command_and_token(
+        text: str, cursor_index: int
+    ) -> tuple[str, int, int, str] | None:
+        """Locate the slash command and the subcommand token under the cursor.
+
+        Returns ``(command, token_start, token_end, prefix)`` or ``None`` if
+        the input isn't in subcommand-completion territory.
+        """
+        if not text.startswith("/"):
+            return None
+        # First whitespace marks the end of the command name.
+        space_idx = -1
+        for i, ch in enumerate(text):
+            if ch.isspace():
+                space_idx = i
+                break
+        if space_idx < 0 or cursor_index <= space_idx:
+            return None  # still typing the command name
+        command = text[:space_idx].lower()
+        # Find the token under the cursor (whitespace-delimited).
+        token_start = space_idx + 1
+        # Skip any leading runs of whitespace after the command.
+        while token_start < cursor_index and text[token_start].isspace():
+            token_start += 1
+        # Cursor must be within the FIRST argument token — once a second
+        # token is being typed, we're past the subcommand and shouldn't
+        # be offering subcommand suggestions any more.
+        # Find token end: from token_start, advance until whitespace.
+        token_end = token_start
+        while token_end < len(text) and not text[token_end].isspace():
+            token_end += 1
+        # If the cursor is past the end of the first token (i.e. user
+        # has typed a second space + more args), don't activate.
+        if cursor_index > token_end:
+            return None
+        prefix = text[token_start:cursor_index].lower()
+        return command, token_start, token_end, prefix
+
+    def can_handle(self, text: str, cursor_index: int) -> bool:
+        """Activate when the cursor is inside the first arg of a known command.
+
+        ``/mcp marketplace`` with cursor in the ``marketplace`` token returns
+        True if ``/mcp`` declared subcommands. Returns False once the user
+        types a second argument (``/mcp install jira`` past ``install``)
+        because subcommand completion is not for chained args.
+        """
+        parsed = self._split_command_and_token(text, cursor_index)
+        if parsed is None:
+            return False
+        command, *_ = parsed
+        return command in self._index
+
+    def reset(self) -> None:
+        """Clear suggestions."""
+        if self._suggestions:
+            self._suggestions.clear()
+            self._selected_index = 0
+            self._view.clear_completion_suggestions()
+
+    def on_text_changed(self, text: str, cursor_index: int) -> None:
+        """Refresh subcommand suggestions for the token under the cursor."""
+        parsed = self._split_command_and_token(text, cursor_index)
+        if parsed is None:
+            self.reset()
+            return
+        command, token_start, token_end, prefix = parsed
+        candidates = self._index.get(command)
+        if not candidates:
+            self.reset()
+            return
+
+        # Score: prefix-match wins, then substring, then alphabetical
+        # tie-break. Subcommand sets are tiny (<15) so a simple sort is
+        # fine — no need for the SequenceMatcher path.
+        scored: list[tuple[int, str, str]] = []
+        for sub_name, sub_desc in candidates:
+            name_lc = sub_name.lower()
+            if not prefix:
+                scored.append((1, sub_name, sub_desc))
+            elif name_lc.startswith(prefix):
+                scored.append((3, sub_name, sub_desc))
+            elif prefix in name_lc:
+                scored.append((2, sub_name, sub_desc))
+            # No fuzzy fallback — tight subcommand sets shouldn't surface
+            # surprise matches.
+        if not scored:
+            self.reset()
+            return
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        self._suggestions = [(s, d) for _, s, d in scored[:MAX_SUGGESTIONS]]
+        self._selected_index = 0
+        self._token_start = token_start
+        self._token_end = token_end
+        self._view.render_completion_suggestions(
+            self._suggestions, self._selected_index
+        )
+
+    def on_key(
+        self, event: events.Key, _text: str, _cursor_index: int
+    ) -> CompletionResult:
+        """Handle nav + apply keys identically to the slash-name controller."""
+        if not self._suggestions:
+            return CompletionResult.IGNORED
+        match event.key:
+            case "tab":
+                if self._apply_selected_completion():
+                    return CompletionResult.HANDLED
+                return CompletionResult.IGNORED
+            case "enter":
+                if self._apply_selected_completion():
+                    return CompletionResult.SUBMIT
+                return CompletionResult.HANDLED
+            case "down":
+                self._move_selection(1)
+                return CompletionResult.HANDLED
+            case "up":
+                self._move_selection(-1)
+                return CompletionResult.HANDLED
+            case "escape":
+                self.reset()
+                return CompletionResult.HANDLED
+            case _:
+                return CompletionResult.IGNORED
+
+    def _move_selection(self, delta: int) -> None:
+        if not self._suggestions:
+            return
+        count = len(self._suggestions)
+        self._selected_index = (self._selected_index + delta) % count
+        self._view.render_completion_suggestions(
+            self._suggestions, self._selected_index
+        )
+
+    def _apply_selected_completion(self) -> bool:
+        """Replace ONLY the subcommand token with the selected suggestion.
+
+        Critical: do NOT replace from index 0. The user's command name
+        and any other context must survive untouched.
+        """
+        if not self._suggestions:
+            return False
+        sub_name, _ = self._suggestions[self._selected_index]
+        self._view.replace_completion_range(
+            self._token_start, self._token_end, sub_name
+        )
         self.reset()
         return True
 

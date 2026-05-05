@@ -82,6 +82,37 @@ class TestAppMessageMarkupSafety:
         msg = AppMessage(content)
         assert msg is not None
 
+    def test_escaped_brackets_inside_markup_render_correctly(self) -> None:
+        r"""``[dim]\\[vendor][/dim]`` must NOT trip the markup parser.
+
+        Regression: the ``/mcp marketplace`` handler used to emit
+        ``[dim][vendor][/dim]`` (no escape), which Rich treated as the
+        ``[dim]`` style + a ``[vendor]`` style tag. ``vendor`` failed
+        ``Color.parse`` at validation time and the entire message fell
+        back to literal rendering — users saw raw markup like
+        ``[bold #66ff99]MCP Marketplace[/bold #66ff99]`` in the TUI.
+
+        The fix: producers escape the brackets (``\\[vendor]``). This
+        test pins the contract that an escaped-bracket payload renders
+        as styled text, not as a literal markup string.
+        """
+        from bog_agents_cli.widgets.messages import _safe_render_markup
+
+        msg = (
+            "[bold #66ff99]MCP Marketplace[/bold #66ff99] — "
+            "[dim]\\[vendor][/dim] [dim]\\[community][/dim]"
+        )
+        text = _safe_render_markup(msg)
+        # No literal style tags survive in the plain output.
+        assert "[bold #66ff99]" not in text.plain
+        assert "[/bold #66ff99]" not in text.plain
+        # The escaped brackets render as literal text, including the
+        # square brackets around ``vendor`` and ``community``.
+        assert "[vendor]" in text.plain
+        assert "[community]" in text.plain
+        # We got real spans, not just a single literal-fallback span.
+        assert len(text.spans) >= 3
+
 
 class TestSummarizationMessage:
     """Tests for summarization notification widget."""

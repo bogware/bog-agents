@@ -73,6 +73,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "assistant peat schedule cron job research digest inbox personal",
             "quality",
             available=True,
+            subcommands=(
+                (
+                    "schedule",
+                    'Add a recurring/one-shot job (usage: /peat schedule "<cron> | <task>")',
+                ),
+                ("list", "List saved jobs"),
+                ("run", "Fire a saved job now (usage: /peat run <job_id>)"),
+                ("inbox", "Show recent digest results"),
+                ("research", "Run a one-off research task"),
+            ),
         ),
         handler_method="_handle_peat_command",
     ),

@@ -37,6 +37,12 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "continue history sessions",
             "info",
             available=True,
+            subcommands=(
+                ("list", "List recent threads"),
+                ("delete", "Delete a thread (usage: /threads delete <id>)"),
+                ("resume", "Resume a specific thread (usage: /threads resume <id>)"),
+                ("search", "Search thread history (usage: /threads search <query>)"),
+            ),
         ),
         handler_method="_handle_threads_command",
     ),
