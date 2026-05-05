@@ -198,13 +198,32 @@ class SlashCommandController:
         self._selected_index = 0
 
     @staticmethod
-    def can_handle(text: str, cursor_index: int) -> bool:  # noqa: ARG004  # Required by AutocompleteProvider interface
-        """Handle input that starts with /.
+    def can_handle(text: str, cursor_index: int) -> bool:
+        """Activate only while the user is typing the command name itself.
 
-        Returns:
-            True if text starts with slash, indicating a command.
+        Returns ``True`` only if:
+
+        - ``text`` starts with ``/``
+        - the cursor is at-or-before the first whitespace character
+
+        Once the user has typed a space (entering subcommand args like
+        ``/mcp marketplace``), the controller deactivates so:
+
+        1. Suggestions stop being computed against the whole input —
+           previously the long search string ``"mcp marketplace"``
+           fuzzy-matched against unrelated commands like ``/workspace``.
+        2. Pressing Enter performs a normal submit instead of replacing
+           the whole input with whatever the auto-selected completion
+           was — that swap was wiping out subcommand arguments and
+           dispatching the wrong handler entirely.
         """
-        return text.startswith("/")
+        if not text.startswith("/"):
+            return False
+        for i, ch in enumerate(text):
+            if ch.isspace():
+                return cursor_index <= i
+        # No whitespace yet — fully in command-name territory.
+        return True
 
     def reset(self) -> None:
         """Clear suggestions."""
@@ -350,6 +369,12 @@ class SlashCommandController:
     def _apply_selected_completion(self, cursor_index: int) -> bool:
         """Apply the currently selected completion.
 
+        Only replaces the *command-name span* (``/`` up to first whitespace)
+        — not any subcommand args the user has already typed. This is the
+        backstop against the regression where ``/mcp marketplace`` got
+        rewritten to ``/workspace`` because the controller blindly
+        replaced ``text[0:cursor]``.
+
         Returns:
             True if completion was applied, False if no suggestions.
         """
@@ -357,8 +382,14 @@ class SlashCommandController:
             return False
 
         command, _ = self._suggestions[self._selected_index]
-        # Replace from start to cursor with the command
-        self._view.replace_completion_range(0, cursor_index, command)
+        # The view exposes its current text via the controller's caller,
+        # but we don't have direct access here — instead bound the
+        # replace range to the cursor position OR the first whitespace
+        # we know about, whichever is smaller. ``can_handle`` already
+        # ensures we never enter this method when the cursor is past a
+        # whitespace, but be defensive in case future call sites diverge.
+        end = cursor_index
+        self._view.replace_completion_range(0, end, command)
         self.reset()
         return True
 

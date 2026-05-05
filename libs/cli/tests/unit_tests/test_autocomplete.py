@@ -9,6 +9,7 @@ from bog_agents_cli.widgets.autocomplete import (
     MAX_SUGGESTIONS,
     SLASH_COMMANDS,
     CompletionController,
+    CompletionResult,
     FuzzyFileController,
     MultiCompletionManager,
     SlashCommandController,
@@ -317,6 +318,82 @@ class TestSlashCommandController:
         controller.reset()
         # Second reset should be a no-op (suggestions already empty)
         controller.reset()
+
+
+class TestSlashSubcommandRegression:
+    """Regression tests for the ``/mcp marketplace → /workspace`` bug.
+
+    The slash completion controller used to remain active after the user
+    typed a space, scoring the WHOLE post-``/`` string against commands
+    and ranking unrelated matches first. Pressing Enter then replaced
+    ``text[0:cursor]`` with the (wrong) suggestion, wiping out the
+    subcommand args and dispatching the wrong handler entirely.
+    """
+
+    @pytest.fixture
+    def mock_view(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def controller(self, mock_view):
+        return SlashCommandController(SLASH_COMMANDS, mock_view)
+
+    def test_can_handle_disengages_after_space(self, controller):
+        """Once a space is typed, the controller must deactivate.
+
+        ``/mcp marketplace`` with the cursor at end (16) is in arg-typing
+        territory; the slash controller should NOT claim ownership.
+        """
+        assert controller.can_handle("/mcp", 4) is True
+        # Right at the space — still acceptable (cursor before/at the boundary)
+        assert controller.can_handle("/mcp ", 4) is True
+        # Cursor moved past the space → arg territory → disengage
+        assert controller.can_handle("/mcp ", 5) is False
+        assert controller.can_handle("/mcp marketplace", 16) is False
+        assert controller.can_handle("/peat run", 9) is False
+        assert controller.can_handle("/threads list", 13) is False
+
+    def test_no_suggestions_after_space(self, controller, mock_view):
+        """Suggestions should clear once the user starts typing args.
+
+        Without this fix, ``"mcp marketplace"`` was being scored as a
+        single fuzzy query against every command name in the registry,
+        producing absurd top matches.
+        """
+        # First trigger suggestions on the bare command
+        controller.on_text_changed("/mcp", 4)
+        mock_view.render_completion_suggestions.assert_called()
+        mock_view.reset_mock()
+
+        # Now the user types a space + subcommand — controller must
+        # fall silent (no new render call; reset clears any previous).
+        controller.on_text_changed("/mcp marketplace", 16)
+        mock_view.render_completion_suggestions.assert_not_called()
+
+    def test_enter_does_not_replace_subcommand_args(self, controller):
+        """Enter on ``/mcp marketplace`` must NOT trigger a completion swap.
+
+        With ``can_handle`` returning False once a space is typed, the
+        ``MultiCompletionManager`` will deactivate this controller and
+        the slash controller's ``on_key`` will never fire — Enter then
+        falls through to the normal submit path.
+
+        We verify the pre-condition directly: even if ``on_key`` were
+        called with no active suggestions, it must return ``IGNORED``,
+        not ``SUBMIT``.
+        """
+        from textual import events
+
+        # No suggestions populated (mirrors the post-``can_handle=False``
+        # state where ``on_text_changed`` cleared everything).
+        assert not controller._suggestions
+
+        result = controller.on_key(
+            events.Key(key="enter", character=None),
+            "/mcp marketplace",
+            16,
+        )
+        assert result == CompletionResult.IGNORED
 
 
 class TestScoreCommand:
