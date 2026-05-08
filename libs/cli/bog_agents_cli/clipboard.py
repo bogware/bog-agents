@@ -11,8 +11,6 @@ import subprocess  # noqa: S404  # native clipboard helpers require subprocess
 import sys
 from typing import TYPE_CHECKING
 
-from bog_agents_cli.config import get_glyphs
-
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -76,19 +74,6 @@ def _read_command_output(command: list[str]) -> str:
         creationflags=_subprocess_creationflags(),
     )
     return result.stdout
-
-
-def _shorten_preview(texts: list[str]) -> str:
-    """Shorten text for notification preview.
-
-    Returns:
-        Shortened preview text suitable for notification display.
-    """
-    glyphs = get_glyphs()
-    dense_text = glyphs.newline.join(texts).replace("\n", glyphs.newline)
-    if len(dense_text) > _PREVIEW_MAX_LENGTH:
-        return f"{dense_text[: _PREVIEW_MAX_LENGTH - 1]}{glyphs.ellipsis}"
-    return dense_text
 
 
 def read_clipboard_text() -> str | None:
@@ -173,19 +158,20 @@ def copy_selection_to_clipboard(app: App) -> bool:
 
     combined_text = "\n".join(selected_texts)
 
-    # Build the preview ONCE so the notification text is deterministic.
-    # If the preview ends up looking empty (whitespace-only after glyph
-    # substitution), fall back to a count-based message instead of a
-    # blank-looking quoted string.
-    raw_preview = _shorten_preview(selected_texts).strip()
-    if raw_preview:
-        notify_message = f'"{raw_preview}" copied'
+    # Compose a *short* notification. The previous version echoed the
+    # first 40 chars of the actual content (``"some text..." copied``)
+    # which collided visually with the click-to-show-timestamp toast
+    # (``May 5, 2:45 PM``) — users reported seeing both at once and
+    # finding it noisy. Now we just say "Copied N chars" (or
+    # "[Copied text truncated] copied!" for the multi-selection case)
+    # and let the timestamp toast carry the date when relevant.
+    char_count = len(combined_text)
+    if len(selected_texts) > 1:
+        notify_message = f"Copied {len(selected_texts)} selections ({char_count} chars)"
+    elif char_count > _PREVIEW_MAX_LENGTH:
+        notify_message = f"[Copied text truncated] copied! ({char_count} chars)"
     else:
-        notify_message = (
-            f"Copied {len(combined_text)} character(s)"
-            if len(selected_texts) == 1
-            else f"Copied {len(selected_texts)} selections"
-        )
+        notify_message = f"Copied! ({char_count} chars)"
 
     # Try multiple clipboard methods
     # Prefer pyperclip/app clipboard first (works reliably on local machines)

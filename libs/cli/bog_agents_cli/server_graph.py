@@ -41,16 +41,21 @@ def _build_tools(
     called during module-level graph construction (before the server's async
     event loop is available).
 
+    **MCP failures are non-fatal.** A single broken server config used to
+    crash the entire LangGraph dev server, leaving the user unable to run
+    bog-agents at all and unable to fix the bad config from inside the
+    agent (because the agent never starts). We now log the failure
+    loudly, store it on the module so the CLI can surface it to the
+    user, and bring up the agent with empty MCP tools. The user can
+    then run `/mcp list` and `/mcp remove <name>` to fix the bad
+    config.
+
     Args:
         config: Deserialized server configuration.
         project_context: Resolved project context for MCP discovery.
 
     Returns:
         Tuple of `(tools, mcp_server_info)`.
-
-    Raises:
-        FileNotFoundError: If the MCP config file is not found.
-        RuntimeError: If MCP tool loading fails.
     """
     from bog_agents_cli.config import settings
     from bog_agents_cli.tools import fetch_url, http_request, web_search
@@ -74,20 +79,77 @@ def _build_tools(
                     project_context=project_context,
                 )
             )
-        except FileNotFoundError:
-            logger.exception("MCP config file not found: %s", config.mcp_config_path)
-            raise
-        except RuntimeError:
-            logger.exception(
-                "Failed to load MCP tools (config: %s)", config.mcp_config_path
+        except FileNotFoundError as exc:
+            # Explicit ``--mcp-config <path>`` pointed at a missing file.
+            # Used to ``raise`` and crash the server. Now logged and stored
+            # so the CLI can show the user a meaningful error in chat.
+            logger.error(  # noqa: TRY400  # context already in record_mcp_load_failure
+                "MCP config file not found: %s", config.mcp_config_path
             )
-            raise
+            _record_mcp_load_failure(
+                f"MCP config file not found: {exc}. "
+                f"Fix or remove the path and restart, or use `/mcp` "
+                f"from inside the agent to manage configurations."
+            )
+            mcp_tools, mcp_server_info = [], []
+        except RuntimeError as exc:
+            # ``_validate_server_config`` rejected an entry, or a stdio
+            # server failed to spawn. The agent stays up; the user
+            # reads the error and uses ``/mcp remove <name>``.
+            logger.error(  # noqa: TRY400  # context already in record_mcp_load_failure
+                "Failed to load MCP tools (config: %s): %s",
+                config.mcp_config_path,
+                exc,
+            )
+            _record_mcp_load_failure(
+                f"Failed to load MCP tools: {exc}. "
+                f"Use `/mcp list` to inspect configured servers and "
+                f"`/mcp remove <name>` to drop a broken one."
+            )
+            mcp_tools, mcp_server_info = [], []
+        except (
+            Exception
+        ) as exc:  # last-resort fallback for any unexpected error during MCP setup
+            # Belt-and-suspenders: any other surprise (network blip on
+            # an HTTP MCP server during the spawn handshake, an MCP
+            # client library bug, etc.) used to take down the whole
+            # server. Same fallback path: log, record, continue without
+            # MCP.
+            logger.exception(
+                "Unexpected error loading MCP tools (config: %s)",
+                config.mcp_config_path,
+            )
+            _record_mcp_load_failure(
+                f"Unexpected error loading MCP tools: "
+                f"{type(exc).__name__}: {exc}. "
+                f"Agent started without MCP. See logs for traceback."
+            )
+            mcp_tools, mcp_server_info = [], []
 
         tools.extend(mcp_tools)
         if mcp_tools:
             logger.info("Loaded %d MCP tool(s)", len(mcp_tools))
 
     return tools, mcp_server_info
+
+
+# Module-level slot for the CLI to read after server startup. When MCP
+# loading fails, the message is stored here so the CLI process can
+# surface it to the user via ``_mount_message`` instead of dying
+# silently. The value is also written to ``DA_SERVER_MCP_ERROR`` for
+# the rare case where the CLI and server live in different processes
+# and need to communicate via env var.
+_MCP_LOAD_FAILURE: str | None = None
+
+
+def _record_mcp_load_failure(message: str) -> None:
+    """Persist an MCP load failure for the CLI to surface."""
+    global _MCP_LOAD_FAILURE  # noqa: PLW0603
+    _MCP_LOAD_FAILURE = message
+    # Also write to the env var so out-of-process readers can see it.
+    import os as _os
+
+    _os.environ["DA_SERVER_MCP_ERROR"] = message
 
 
 def make_graph() -> Any:  # noqa: ANN401
@@ -195,8 +257,27 @@ try:
     graph = make_graph()
 except Exception as exc:
     logger.critical("Failed to initialize server graph", exc_info=True)
-    print(  # noqa: T201  # stderr fallback — logger may not reach parent process
-        f"Failed to initialize server graph: {exc}\n{traceback.format_exc()}",
-        file=sys.stderr,
+    # Print a *prominent* banner to stderr so the user can see the real
+    # cause without scrolling past LangGraph's own boilerplate. The
+    # outer Server failed to start: code 3 message in the parent
+    # process truncates a lot of context, so we emit our own
+    # well-marked block here.
+    msg = (
+        "\n"
+        "================================================================\n"
+        "BOG AGENTS SERVER FAILED TO INITIALIZE\n"
+        "================================================================\n"
+        f"Cause:    {type(exc).__name__}: {exc}\n"
+        "----------------------------------------------------------------\n"
+        f"{traceback.format_exc()}"
+        "----------------------------------------------------------------\n"
+        "Common causes and recovery:\n"
+        "  - Bad MCP config: edit ~/.bog-agents/.mcp.json or run\n"
+        "    `bog-agents --no-mcp` to start without MCP, then `/mcp remove <name>`.\n"
+        "  - Missing API key: set ANTHROPIC_API_KEY (or run `/settings`).\n"
+        "  - Sandbox provider not installed: pip install the missing extra,\n"
+        "    or run `bog-agents --sandbox-type none`.\n"
+        "================================================================\n"
     )
+    print(msg, file=sys.stderr)  # noqa: T201  # stderr fallback — logger may not reach parent process
     sys.exit(1)

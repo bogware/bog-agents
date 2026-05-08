@@ -344,17 +344,53 @@ def run_doctor() -> str:
         else:
             checks.append((f"Env: {env_var}", "SKIP", "Not set"))
 
-    # 9. MCP config
-    mcp_config = Path.cwd() / ".mcp.json"
-    if mcp_config.exists():
-        checks.append(("MCP config", "OK", str(mcp_config)))
-    else:
-        checks.append(("MCP config", "SKIP", "No .mcp.json in current directory"))
+    # 9. MCP config — discover ALL standard locations, not just cwd.
+    # The previous version only checked ``Path.cwd() / ".mcp.json"`` and
+    # reported SKIP when the user's actual config lived under
+    # ``~/.bog-agents/.mcp.json`` (the default location written by
+    # ``/mcp add``) or ``<project>/.bog-agents/.mcp.json``. Use the
+    # same discovery the server uses so doctor and runtime stay in sync.
+    discovered_configs: list[Path] = []
+    try:
+        from bog_agents_cli.mcp_tools import discover_mcp_configs
 
-    # 9b. MCP trust state — does the project's MCP config currently match a
-    # trusted fingerprint? Surface this so users know whether stdio servers
-    # would be approved on next launch or if they'll see a prompt.
-    if mcp_config.exists():
+        discovered_configs = discover_mcp_configs()
+    except Exception as e:  # diagnostic command must not crash
+        checks.append(
+            ("MCP config", "WARN", f"Discovery failed: {type(e).__name__}: {e}")
+        )
+
+    if discovered_configs:
+        # ``discover_mcp_configs`` returns lowest-to-highest precedence.
+        # Show all of them so the user can confirm which files actually
+        # contribute. First entry gets the OK row; the rest are INFO.
+        checks.append(("MCP config", "OK", str(discovered_configs[0])))
+        for extra in discovered_configs[1:]:
+            checks.append(("MCP config (also)", "INFO", str(extra)))
+    elif not any(name == "MCP config" for name, _, _ in checks):
+        checks.append(
+            (
+                "MCP config",
+                "SKIP",
+                "No .mcp.json found in standard locations "
+                "(~/.bog-agents/.mcp.json, <project>/.bog-agents/.mcp.json, "
+                "or <project>/.mcp.json)",
+            )
+        )
+
+    # 9b. MCP trust state — only evaluated for project-level configs (the
+    # ones that need stdio approval). User-level configs at
+    # ~/.bog-agents/.mcp.json are always trusted by design.
+    user_root = (Path.home() / ".bog-agents").resolve()
+
+    def _is_user_level(p: Path) -> bool:
+        try:
+            return p.resolve().is_relative_to(user_root)
+        except (OSError, ValueError):
+            return False
+
+    project_configs = [p for p in discovered_configs if not _is_user_level(p)]
+    if project_configs:
         try:
             from bog_agents_cli.mcp_trust import (
                 compute_config_fingerprint,
@@ -362,7 +398,7 @@ def run_doctor() -> str:
             )
 
             project_root = str(Path.cwd().resolve())
-            fingerprint = compute_config_fingerprint([mcp_config])
+            fingerprint = compute_config_fingerprint(project_configs)
             if is_project_mcp_trusted(project_root, fingerprint):
                 checks.append(("MCP trust", "OK", "Trusted (fingerprint matches)"))
             else:
