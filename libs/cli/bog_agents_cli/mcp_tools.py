@@ -427,13 +427,25 @@ async def _load_tools_from_config(
         error_msg = f"Failed to initialize MCP client: {e}"
         raise RuntimeError(error_msg) from e
 
+    # ``mcp.client.stdio.stdio_client`` defaults its ``errlog`` parameter
+    # to ``sys.stderr``, which on Windows is fed straight into
+    # ``subprocess.Popen`` → ``msvcrt.get_osfhandle(stderr.fileno())``.
+    # When the parent process's stderr lacks a usable OS handle (Python
+    # 3.13 Windows quirks, terminal wrappers that pipe stderr, certain
+    # TUI environments) the spawn dies with ``OSError: [Errno 9] Bad
+    # file descriptor`` before the MCP server even runs. We swap in a
+    # log file on disk for the spawn window so the subprocess inherits
+    # a guaranteed-valid fd.
+    from bog_agents_cli._subprocess_stderr import safe_subprocess_stderr
+
     try:
         all_tools: list[BaseTool] = []
         server_infos: list[MCPServerInfo] = []
         for server_name, server_config in config["mcpServers"].items():
-            session = await manager.exit_stack.enter_async_context(
-                client.session(server_name)
-            )
+            with safe_subprocess_stderr():
+                session = await manager.exit_stack.enter_async_context(
+                    client.session(server_name)
+                )
             tools = await load_mcp_tools(
                 session, server_name=server_name, tool_name_prefix=True
             )
@@ -450,13 +462,31 @@ async def _load_tools_from_config(
             )
     except Exception as e:
         await manager.cleanup()
+        # Surface stderr-handle diagnostic info in the error message
+        # when the failure looks like the EBADF symptom — saves a
+        # round-trip when the user reports the bug.
+        from bog_agents_cli._subprocess_stderr import diagnostic_info
+
+        hint = ""
+        err_str = str(e).lower()
+        if "bad file descriptor" in err_str or "errno 9" in err_str:
+            info = diagnostic_info()
+            hint = (
+                f"\n\nDiagnostic: stderr_usable={info['stderr_usable']}, "
+                f"stderr_class={info['stderr_class']}, "
+                f"platform={info['platform']}. "
+                f"MCP stderr log: {info['log_path']}\n"
+                "If you're seeing this on Windows, try running "
+                "bog-agents from a fresh terminal (not a wrapped/piped one)."
+            )
+
         error_msg = (
             f"Failed to load tools from MCP server '{server_name}': {e}\n"
             "For stdio servers: Check that the command and args are correct,"
             " and that the MCP server is installed"
             " (e.g., run 'npx -y <package>' manually to test).\n"
             "For sse/http servers: Check that the URL is correct"
-            " and the server is running."
+            " and the server is running." + hint
         )
         raise RuntimeError(error_msg) from e
 

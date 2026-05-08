@@ -3535,6 +3535,36 @@ class BogAgentsApp(App):
         report = await asyncio.to_thread(run_doctor)
         await self._mount_message(AppMessage(report))
 
+    async def _handle_bedrock_command(self, command: str) -> None:
+        """Run the Bedrock connection probe from inside the TUI.
+
+        Surfaces credentials, region, list-models, and tiny-inference
+        steps with a per-step pass/fail. Useful when a model switch
+        like ``/model bedrock_converse:...`` has just failed and the
+        user wants a structured diagnosis instead of a one-line
+        ``RuntimeError`` from the welcome banner.
+        """
+        from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
+
+        await self._mount_message(UserMessage(command))
+
+        # Optional: ``/bedrock test <model_id>`` lets the user pin the
+        # inference probe to a specific model id. Bare ``/bedrock`` or
+        # ``/bedrock test`` runs steps 1-5 (no inference).
+        raw_arg = command.strip()[len("/bedrock") :].strip()
+        # Drop a leading ``test`` / ``status`` keyword so users can write
+        # either ``/bedrock test`` or ``/bedrock test <model-id>``.
+        for prefix in ("test", "status"):
+            if raw_arg.lower().startswith(prefix):
+                raw_arg = raw_arg[len(prefix) :].strip()
+                break
+        model_id = raw_arg or None
+        # Probe runs synchronously (boto3 is sync); offload to a thread
+        # so the TUI's event loop stays responsive.
+        steps = await asyncio.to_thread(probe_bedrock, model_id, None)
+        report = render_probe_report(steps)
+        await self._mount_message(AppMessage(report))
+
     async def _handle_review_command(self, command: str) -> None:
         """Generate a structured code-review prompt and send it to the agent."""
         from bog_agents_cli.review_command import (
