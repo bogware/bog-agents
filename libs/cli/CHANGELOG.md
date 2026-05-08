@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.3...bog-agents-cli==0.8.4) (2026-05-08)
+
+
+### Bug Fixes
+
+* **cli:** server-graph crash on bad MCP config + doctor MCP discovery + copy notify clutter ([#70](https://github.com/bogware/bog-agents/issues/70)) ([463db87](https://github.com/bogware/bog-agents/commit/463db87b04cb24275e73926b1bf64fa863df1091))
+
 ## [0.8.3](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.2...bog-agents-cli==0.8.3) (2026-05-05)
 
 
