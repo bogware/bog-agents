@@ -185,6 +185,30 @@ async def asafe_subprocess_stderr() -> Any:  # noqa: ANN401, RUF029  # async con
         yield
 
 
+def tail_mcp_stderr_log(max_bytes: int = 2000) -> str:
+    """Return the last ``max_bytes`` of the MCP stderr log, or empty string.
+
+    Best-effort: returns ``""`` if the log doesn't exist, can't be
+    read, or is empty. Caller can splice the result into an error
+    message inline so users see the MCP child's actual stderr without
+    chasing a separate log file.
+
+    Synchronous; callers in async contexts should wrap with
+    ``asyncio.to_thread`` to avoid blocking the event loop on a slow
+    disk.
+    """
+    path = _ensure_log_path()
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return ""
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(max(0, path.stat().st_size - max_bytes))
+            return fh.read().strip()
+    except OSError:
+        logger.debug("Could not tail mcp-stderr log", exc_info=True)
+        return ""
+
+
 def diagnostic_info() -> dict[str, Any]:
     """Return a snapshot of the stderr state — useful for ``doctor``.
 
@@ -211,4 +235,5 @@ __all__ = [
     "asafe_subprocess_stderr",
     "diagnostic_info",
     "safe_subprocess_stderr",
+    "tail_mcp_stderr_log",
 ]

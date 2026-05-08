@@ -505,6 +505,39 @@ class TestGetMCPTools:
         # Clean up
         await manager.cleanup()
 
+    async def test_cleanup_resets_client_to_none(self) -> None:
+        """``cleanup()`` must null out ``client`` after teardown.
+
+        Stale references must not be able to access a half-initialized
+        MCP transport. This is the defense-in-depth fix for the user-reported
+        ``ClosedResourceError`` cascade: when MCP load fails partway
+        and downstream code holds a reference to the manager, probing
+        ``manager.client`` after cleanup must NOT touch closed transports.
+        """
+        manager = MCPSessionManager()
+        manager.client = MagicMock()  # simulate a partially-initialized client
+        await manager.cleanup()
+        assert manager.client is None
+
+    async def test_cleanup_swallows_exit_stack_errors(self) -> None:
+        """``cleanup()`` survives an exit_stack that raises during aclose.
+
+        anyio sometimes raises ``ClosedResourceError`` from inside
+        ``aclose()`` when an underlying resource was already torn down
+        by the failed spawn. We should still finish cleanup (and reset
+        ``client``) so callers don't get a secondary error masking the
+        original failure.
+        """
+        manager = MCPSessionManager()
+        manager.client = MagicMock()
+        # Force aclose to raise — cleanup must NOT propagate.
+        manager.exit_stack = MagicMock()
+        manager.exit_stack.aclose = AsyncMock(side_effect=RuntimeError("boom"))
+        await manager.cleanup()
+        # Even with the error, client was reset.
+        assert manager.client is None
+        manager.exit_stack.aclose.assert_awaited_once()
+
     @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
     async def test_get_mcp_tools_server_spawn_failure(
         self, mock_client_class: MagicMock, write_config: Callable[..., str]

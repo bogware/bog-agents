@@ -18,6 +18,7 @@ from bog_agents_cli._subprocess_stderr import (
     _stderr_handle_is_usable,
     diagnostic_info,
     safe_subprocess_stderr,
+    tail_mcp_stderr_log,
 )
 
 
@@ -103,6 +104,56 @@ class TestSafeSubprocessStderr:
             raise RuntimeError(boom_msg)
 
         assert sys.stderr is original
+
+
+class TestTailMcpStderrLog:
+    """The tail helper is used by the failure-message paths."""
+
+    def test_returns_empty_when_log_missing(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Don't create the log file.
+        assert tail_mcp_stderr_log() == ""
+
+    def test_returns_empty_for_empty_log(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        log_dir = tmp_path / ".bog-agents" / "logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / "mcp-stderr.log").write_text("")
+        assert tail_mcp_stderr_log() == ""
+
+    def test_returns_last_n_bytes(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        log_dir = tmp_path / ".bog-agents" / "logs"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "mcp-stderr.log"
+        log.write_text("first line\nsecond line\nthird line\n", encoding="utf-8")
+        # max_bytes large — full content (stripped of trailing whitespace)
+        assert tail_mcp_stderr_log(1000).endswith("third line")
+        # max_bytes small — only the tail
+        small = tail_mcp_stderr_log(15)
+        assert "third" in small or "line" in small
+
+    def test_does_not_raise_on_unreadable_log(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """OSError during read returns ``""`` instead of propagating."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        log_dir = tmp_path / ".bog-agents" / "logs"
+        log_dir.mkdir(parents=True)
+        # Create the file then make .open() raise via monkeypatch.
+        log = log_dir / "mcp-stderr.log"
+        log.write_text("content")
+        original_open = Path.open
+
+        oserror_msg = "simulated I/O failure"
+
+        def _raise(self_, *a, **kw):
+            if self_ == log:
+                raise OSError(oserror_msg)  # test fixture
+            return original_open(self_, *a, **kw)
+
+        monkeypatch.setattr(Path, "open", _raise)
+        assert tail_mcp_stderr_log() == ""
 
 
 class TestDiagnosticInfo:

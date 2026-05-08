@@ -357,8 +357,28 @@ class MCPSessionManager:
         self.exit_stack = AsyncExitStack()
 
     async def cleanup(self) -> None:
-        """Clean up all managed sessions and close connections."""
-        await self.exit_stack.aclose()
+        """Tear down all managed sessions and close connections.
+
+        Best-effort: swallows errors raised during teardown so the
+        original failure (if any) reaches the caller intact. Also
+        resets ``self.client`` to ``None`` so a partially-initialized
+        client whose anyio task group is in a closed state cannot be
+        used by callers that hold a stale reference to this manager.
+        Without that reset, the agent's tool registry could probe a
+        broken client and surface a confusing
+        ``ClosedResourceError: An internal error occurred`` mid-stream
+        instead of the actual MCP failure.
+        """
+        try:
+            await self.exit_stack.aclose()
+        except Exception:  # cleanup must never re-raise
+            logger.warning(
+                "MCP session manager exit_stack cleanup raised; "
+                "continuing with client=None",
+                exc_info=True,
+            )
+        finally:
+            self.client = None
 
 
 async def _load_tools_from_config(
@@ -462,22 +482,52 @@ async def _load_tools_from_config(
             )
     except Exception as e:
         await manager.cleanup()
-        # Surface stderr-handle diagnostic info in the error message
-        # when the failure looks like the EBADF symptom — saves a
-        # round-trip when the user reports the bug.
-        from bog_agents_cli._subprocess_stderr import diagnostic_info
+        from bog_agents_cli._subprocess_stderr import (
+            diagnostic_info,
+            tail_mcp_stderr_log,
+        )
 
         hint = ""
         err_str = str(e).lower()
+        # Tail the MCP stderr log when present — when the child process
+        # exited with a usable error message (most common cause of
+        # downstream ClosedResourceError when the parent tries to read
+        # after the child died), the log tail saves the user from
+        # running ``npx ...`` manually to reproduce.
+        log_tail = tail_mcp_stderr_log(4000)
+        if log_tail:
+            hint += (
+                "\n\nMCP server stderr "
+                f"(tail of {diagnostic_info()['log_path']}):\n"
+                f"----\n{log_tail[-2000:]}\n----"
+            )
+
         if "bad file descriptor" in err_str or "errno 9" in err_str:
             info = diagnostic_info()
-            hint = (
+            hint += (
                 f"\n\nDiagnostic: stderr_usable={info['stderr_usable']}, "
                 f"stderr_class={info['stderr_class']}, "
                 f"platform={info['platform']}. "
                 f"MCP stderr log: {info['log_path']}\n"
                 "If you're seeing this on Windows, try running "
                 "bog-agents from a fresh terminal (not a wrapped/piped one)."
+            )
+
+        # ``ClosedResourceError`` from anyio means the MCP child closed
+        # its pipe before the handshake completed. Almost always the
+        # child crashed on startup (bad config, missing creds, wrong
+        # binary). Point the user at the stderr log we just tailed.
+        if "closedresourceerror" in err_str or "closed resource" in err_str:
+            hint += (
+                "\n\nClosedResourceError suggests the MCP child process "
+                "exited before the handshake completed. Common causes:\n"
+                "  - Missing credentials/config the server expects "
+                "(e.g. JIRA_URL, GITHUB_TOKEN).\n"
+                "  - The command/binary isn't installed (e.g. ``uvx`` or "
+                "``npx`` not on PATH).\n"
+                "  - The server crashed on a config validation error.\n"
+                "Run the command manually with the same args to see the "
+                "actual error, or check the stderr tail above."
             )
 
         error_msg = (
