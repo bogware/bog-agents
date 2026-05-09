@@ -106,6 +106,81 @@ class TestSafeSubprocessStderr:
         assert sys.stderr is original
 
 
+class TestMcpStdioDefaultErrlogPatch:
+    """The default-errlog patch is critical when MCP loads inside Textual.
+
+    ``mcp.client.stdio.stdio_client`` has ``errlog: TextIO = sys.stderr``
+    in its signature. Python evaluates that default ONCE at function
+    definition (i.e. module import). When MCP is lazy-imported inside
+    a running Textual TUI, ``sys.stderr`` is already a ``_PrintCapture``
+    wrapper with no usable OS fd, and that broken wrapper becomes the
+    permanent default. ``langchain_mcp_adapters`` calls
+    ``stdio_client(server_params)`` without an explicit ``errlog``, so
+    every spawn uses the broken default and fails with EBADF on
+    Windows. Swapping ``sys.stderr`` globally does NOT fix this — we
+    must mutate ``__defaults__`` directly.
+    """
+
+    def test_patch_replaces_then_restores_defaults(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The patch swaps in our safe file then restores on exit.
+
+        In the with-block the MCP default points at our log file;
+        outside the block, the original default is restored.
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "bog_agents_cli._subprocess_stderr._stderr_handle_is_usable",
+            lambda: False,
+        )
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+
+        # Build a fake mcp.client.stdio module so the test doesn't depend
+        # on the real package being importable.
+        import types
+
+        fake_module = types.ModuleType("mcp.client.stdio")
+        fake_stderr = io.StringIO()  # stand-in for the original captured default
+
+        async def fake_stdio_client(server, errlog=fake_stderr):
+            return None
+
+        fake_module.stdio_client = fake_stdio_client
+        monkeypatch.setitem(sys.modules, "mcp", types.ModuleType("mcp"))
+        monkeypatch.setitem(sys.modules, "mcp.client", types.ModuleType("mcp.client"))
+        monkeypatch.setitem(sys.modules, "mcp.client.stdio", fake_module)
+
+        # Sanity: original default points at the (broken) StringIO stand-in.
+        assert fake_stdio_client.__defaults__ == (fake_stderr,)
+
+        with safe_subprocess_stderr():
+            # Inside the block, the default must be a real file.
+            patched = fake_stdio_client.__defaults__[0]
+            assert patched is not fake_stderr
+            assert hasattr(patched, "fileno")
+            assert patched.fileno() >= 0
+
+        # Outside the block, the original default is restored.
+        assert fake_stdio_client.__defaults__ == (fake_stderr,)
+
+    def test_patch_skipped_when_mcp_not_importable(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """Missing mcp package must NOT crash the context manager."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "bog_agents_cli._subprocess_stderr._stderr_handle_is_usable",
+            lambda: False,
+        )
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+        monkeypatch.setitem(sys.modules, "mcp.client.stdio", None)
+
+        # Should not raise — patch is best-effort.
+        with safe_subprocess_stderr():
+            pass
+
+
 class TestTailMcpStderrLog:
     """The tail helper is used by the failure-message paths."""
 

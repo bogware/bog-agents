@@ -120,6 +120,48 @@ def _open_safe_stderr() -> IO[str]:
     return path.open("a", encoding="utf-8", buffering=1, errors="replace")
 
 
+def _patch_mcp_stdio_default_errlog(safe_file: IO[str]) -> tuple[Any, Any] | None:
+    """Override ``mcp.client.stdio.stdio_client``'s default ``errlog``.
+
+    The MCP library defines its stdio entry point as::
+
+        async def stdio_client(server, errlog: TextIO = sys.stderr): ...
+
+    Python evaluates ``= sys.stderr`` **once at function definition time**
+    (i.e. when ``mcp.client.stdio`` is first imported). When the import
+    happens *inside* a running Textual app, ``sys.stderr`` is already the
+    ``_PrintCapture`` wrapper that has no usable OS fd on Windows. The
+    default ``errlog`` is then frozen to that broken wrapper for the rest
+    of the process — and ``langchain_mcp_adapters`` calls
+    ``stdio_client(server_params)`` without ``errlog``, so the broken
+    default is used. Swapping ``sys.stderr`` globally (the obvious fix)
+    does NOT update the already-captured default.
+
+    The fix is to mutate ``stdio_client.__defaults__`` in place. Returns
+    a (module, original_defaults) tuple the caller restores on exit.
+    Returns ``None`` if the patch couldn't be applied — caller should
+    proceed unmodified.
+    """
+    try:
+        import mcp.client.stdio as _mcp_stdio
+    except ImportError:
+        return None
+    fn = getattr(_mcp_stdio, "stdio_client", None)
+    if fn is None or not hasattr(fn, "__defaults__"):
+        return None
+    original = fn.__defaults__
+    if original is None or len(original) != 1:
+        # Defensive: MCP's signature could change between versions.
+        # Skip the patch rather than silently break callers.
+        logger.debug(
+            "mcp.client.stdio.stdio_client.__defaults__ shape unexpected: %r",
+            original,
+        )
+        return None
+    fn.__defaults__ = (safe_file,)
+    return (fn, original)
+
+
 @contextlib.contextmanager
 def safe_subprocess_stderr() -> Generator[None, None, None]:
     """Ensure ``sys.stderr`` has a valid OS fd for the duration of the block.
@@ -130,8 +172,11 @@ def safe_subprocess_stderr() -> Generator[None, None, None]:
             subprocess.run(["my-tool"])  # inherits a valid stderr
 
     No-op when ``sys.stderr`` is already usable. When it isn't, redirects
-    to ``~/.bog-agents/logs/mcp-stderr.log`` for the block, then restores
-    the original ``sys.stderr``.
+    to ``~/.bog-agents/logs/mcp-stderr.log`` for the block AND patches
+    ``mcp.client.stdio.stdio_client``'s default ``errlog`` to point at
+    the same file (see :func:`_patch_mcp_stdio_default_errlog` for why
+    that's necessary). Both the global swap and the MCP-default patch
+    are restored when the block exits.
     """
     if _stderr_handle_is_usable():
         yield
@@ -159,10 +204,22 @@ def safe_subprocess_stderr() -> Generator[None, None, None]:
             return
 
     sys.stderr = log_file
+    # Override MCP's default errlog so calls that omit ``errlog=`` use
+    # our safe file rather than the captured-at-import broken wrapper.
+    mcp_patch = _patch_mcp_stdio_default_errlog(log_file)
     try:
         yield
     finally:
         sys.stderr = original
+        if mcp_patch is not None:
+            fn, original_defaults = mcp_patch
+            try:
+                fn.__defaults__ = original_defaults
+            except Exception:  # restoration must not raise
+                logger.warning(
+                    "Could not restore mcp.client.stdio.stdio_client defaults",
+                    exc_info=True,
+                )
         try:
             log_file.close()
         except OSError:
