@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import Mock, patch
 
+import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
@@ -528,6 +529,133 @@ class TestGetSystemPromptPlaceholderValidation:
         import re
 
         assert not re.findall(r"\{[a-z_]+\}", prompt)
+
+
+class TestCreateCliAgentFsSandboxToggle:
+    """Regression: ``BOG_AGENTS_FS_UNSANDBOXED`` must work in shell mode too.
+
+    Previously the env var only flipped ``virtual_mode`` for the
+    no-shell branch (``FilesystemBackend``). Shell-mode users hit
+    ``ValueError: Path: X outside root directory: Y`` the moment the
+    agent reached above its cwd, with no documented escape hatch.
+    """
+
+    def _common_settings(self, tmp_path: Path) -> Mock:
+        mock_settings = Mock()
+        mock_settings.ensure_agent_dir.return_value = tmp_path / "agent"
+        mock_settings.ensure_user_skills_dir.return_value = tmp_path / "skills"
+        mock_settings.get_project_skills_dir.return_value = None
+        mock_settings.get_built_in_skills_dir.return_value = (
+            Settings.get_built_in_skills_dir()
+        )
+        mock_settings.get_user_agent_md_path.return_value = (
+            tmp_path / "agent" / "AGENTS.md"
+        )
+        mock_settings.get_project_agent_md_path.return_value = []
+        mock_settings.get_user_agents_dir.return_value = tmp_path / "agents"
+        mock_settings.get_project_agents_dir.return_value = None
+        mock_settings.model_name = None
+        mock_settings.model_provider = None
+        mock_settings.model_context_limit = None
+        mock_settings.project_root = None
+        return mock_settings
+
+    def _build(
+        self, *, enable_shell: bool, env: dict[str, str], tmp_path: Path
+    ) -> tuple[Mock, Mock]:
+        """Construct the agent with the given env, return (LocalShellBackend, FilesystemBackend) mocks."""
+        (tmp_path / "agent").mkdir(exist_ok=True)
+        (tmp_path / "skills").mkdir(exist_ok=True)
+
+        mock_settings = self._common_settings(tmp_path)
+        mock_agent = Mock()
+        mock_agent.with_config.return_value = mock_agent
+        fake_model = _make_fake_chat_model()
+
+        with (
+            patch.dict("os.environ", env, clear=False),
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("bog_agents_cli.agent.SkillsMiddleware"),
+            patch("bog_agents_cli.agent.MemoryMiddleware"),
+            patch("bog_agents_cli.agent.LocalShellBackend") as mock_shell,
+            patch("bog_agents_cli.agent.FilesystemBackend") as mock_fs,
+            patch("bog_agents_cli.agent.create_agent", return_value=mock_agent),
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
+            patch("bog_agents_cli.agent.get_system_prompt", return_value=""),
+        ):
+            create_cli_agent(
+                model="fake-model",
+                assistant_id="test",
+                enable_memory=False,
+                enable_skills=False,
+                enable_shell=enable_shell,
+                interactive=False,
+            )
+        return mock_shell, mock_fs
+
+    def test_shell_mode_default_is_sandboxed(self, tmp_path: Path) -> None:
+        """Without the env var, LocalShellBackend gets virtual_mode=True."""
+        mock_shell, _ = self._build(enable_shell=True, env={}, tmp_path=tmp_path)
+        # The first positional/kwarg call to LocalShellBackend.
+        assert mock_shell.called
+        _, kwargs = mock_shell.call_args
+        assert kwargs.get("virtual_mode") is True
+
+    def test_shell_mode_env_var_disables_sandbox(self, tmp_path: Path) -> None:
+        """``BOG_AGENTS_FS_UNSANDBOXED=1`` flips virtual_mode for shell mode."""
+        mock_shell, _ = self._build(
+            enable_shell=True,
+            env={"BOG_AGENTS_FS_UNSANDBOXED": "1"},
+            tmp_path=tmp_path,
+        )
+        assert mock_shell.called
+        _, kwargs = mock_shell.call_args
+        assert kwargs.get("virtual_mode") is False
+
+    def test_no_shell_mode_default_is_sandboxed(self, tmp_path: Path) -> None:
+        """Without the env var, FilesystemBackend gets virtual_mode=True."""
+        _, mock_fs = self._build(enable_shell=False, env={}, tmp_path=tmp_path)
+        # FilesystemBackend may be patched multiple times across the
+        # call (memory loader, skills loader); we just need to verify
+        # at least one call uses virtual_mode=True.
+        assert any(
+            call.kwargs.get("virtual_mode") is True
+            for call in mock_fs.call_args_list
+            if "root_dir" in call.kwargs  # main backend, not the helpers
+        )
+
+    def test_no_shell_mode_env_var_disables_sandbox(self, tmp_path: Path) -> None:
+        """``BOG_AGENTS_FS_UNSANDBOXED=1`` flips virtual_mode for no-shell mode."""
+        _, mock_fs = self._build(
+            enable_shell=False,
+            env={"BOG_AGENTS_FS_UNSANDBOXED": "1"},
+            tmp_path=tmp_path,
+        )
+        # The main FS backend (the one with root_dir) should now be
+        # virtual_mode=False.
+        main_calls = [
+            call for call in mock_fs.call_args_list if "root_dir" in call.kwargs
+        ]
+        assert main_calls
+        assert main_calls[0].kwargs.get("virtual_mode") is False
+
+    @pytest.mark.parametrize("flag", ["true", "yes", "TRUE", "Yes"])
+    def test_env_var_accepts_various_truthy_values(
+        self, flag: str, tmp_path: Path
+    ) -> None:
+        """The env var parser accepts ``1``, ``true``, ``yes`` (case-insensitive)."""
+        mock_shell, _ = self._build(
+            enable_shell=True,
+            env={"BOG_AGENTS_FS_UNSANDBOXED": flag},
+            tmp_path=tmp_path,
+        )
+        _, kwargs = mock_shell.call_args
+        assert kwargs.get("virtual_mode") is False, (
+            f"flag={flag!r} should disable sandbox"
+        )
 
 
 class TestCreateCliAgentInteractiveForwarding:

@@ -856,6 +856,30 @@ def create_cli_agent(
     if sandbox is None:
         # ========== LOCAL MODE ==========
         root_dir = effective_cwd if effective_cwd is not None else Path.cwd()
+
+        # 0.8.0+ default: filesystem virtual_mode = True. Tools are
+        # confined to ``root_dir``; absolute paths outside root and
+        # ``..`` traversal are blocked. The old unrestricted behaviour
+        # is opt-in via ``BOG_AGENTS_FS_UNSANDBOXED=1`` (cross-repo
+        # refactors, reading ``~/.aws/credentials`` for an explicit IaC
+        # task, working from a subdir of the repo root).
+        #
+        # Previously this env var was honoured ONLY in the no-shell
+        # branch — shell-mode users had no escape hatch and would hit
+        # ``ValueError: Path:X outside root directory`` the moment the
+        # agent reached above its cwd. Now it gates both branches.
+        unsandboxed = os.environ.get(
+            "BOG_AGENTS_FS_UNSANDBOXED", ""
+        ).strip().lower() in ("1", "true", "yes")
+        if unsandboxed:
+            logger.warning(
+                "BOG_AGENTS_FS_UNSANDBOXED is set — agent filesystem "
+                "tools may read/write outside %s. Use only when you "
+                "intentionally want cross-repo or system-wide file "
+                "access.",
+                root_dir,
+            )
+
         if enable_shell:
             # Create environment for shell commands
             # Restore user's original LANGSMITH_PROJECT so their code traces separately
@@ -865,35 +889,17 @@ def create_cli_agent(
 
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
-            # on the execute tool natively.
+            # on the execute tool natively. Honour the same
+            # ``virtual_mode`` toggle as the no-shell branch.
             backend = LocalShellBackend(
                 root_dir=root_dir,
                 inherit_env=True,
                 env=shell_env,
+                virtual_mode=not unsandboxed,
             )
         else:
-            # No shell access - use plain FilesystemBackend.
-            #
-            # 0.8.0: default is ``virtual_mode=True`` (secure-by-default).
-            # The agent's ``read_file`` / ``write_file`` / ``edit_file``
-            # tools are now confined to ``root_dir``; absolute paths and
-            # ``..`` traversal are blocked. Power users who need the old
-            # unrestricted behavior (e.g. cross-repo refactors, reading
-            # ~/.aws/credentials for an explicit IaC task) can opt back
-            # in via the ``BOG_AGENTS_FS_UNSANDBOXED=1`` env var.
-            unsandboxed = os.environ.get("BOG_AGENTS_FS_UNSANDBOXED", "").strip() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if unsandboxed:
-                logger.warning(
-                    "BOG_AGENTS_FS_UNSANDBOXED is set — agent filesystem "
-                    "tools may read/write outside %s. Use only when you "
-                    "intentionally want cross-repo or system-wide file "
-                    "access.",
-                    root_dir,
-                )
+            # No shell access - use plain FilesystemBackend with the
+            # same virtual_mode policy as the shell branch.
             backend = FilesystemBackend(
                 root_dir=root_dir,
                 virtual_mode=not unsandboxed,
