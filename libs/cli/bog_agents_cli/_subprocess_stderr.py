@@ -315,6 +315,75 @@ def safe_subprocess_stderr() -> Generator[None, None, None]:
             logger.debug("Could not close mcp-stderr log", exc_info=True)
 
 
+# Module-level slot for the permanently-installed safe stderr file.
+# Held forever (process lifetime) so MCP's per-call subprocess spawns
+# always inherit a valid fd. ``None`` = installer was a no-op (stderr
+# already usable, or already installed).
+_INSTALLED_SAFE_STDERR: IO[str] | None = None
+_INSTALL_DONE: bool = False
+
+
+def install_safe_subprocess_stderr_default() -> bool:
+    """Permanently override MCP's default ``errlog`` for the process.
+
+    Idempotent. Returns ``True`` when an override was applied (or was
+    already in place from a prior call), ``False`` when the current
+    ``sys.stderr`` is already usable for subprocess inheritance and no
+    override was needed.
+
+    Why this exists alongside :func:`safe_subprocess_stderr`:
+    ----------------------------------------------------------
+
+    The context-manager version restores the original ``errlog``
+    defaults on exit. That works when the MCP subprocess is spawned
+    *inside* the with-block (the original load-time pattern with
+    persistent sessions). It does NOT work for **per-call sessions** —
+    the pattern we now use, where the subprocess is spawned each time
+    the agent invokes an MCP tool. Those spawns happen deep inside
+    LangGraph's tool execution, far from any context manager we
+    control. Without a permanent install, every per-call spawn would
+    use the broken default.
+
+    The fix is unbalanced by design: we open a log file once, hold it
+    for the process lifetime, and patch the MCP defaults to point at
+    it. The original ``sys.stderr`` was the broken one — there is
+    nothing to "restore" to.
+    """
+    global _INSTALLED_SAFE_STDERR, _INSTALL_DONE  # noqa: PLW0603
+
+    if _INSTALL_DONE:
+        return _INSTALLED_SAFE_STDERR is not None
+
+    if _stderr_handle_is_usable():
+        # Nothing to do — subprocess inheritance will work as-is.
+        _INSTALL_DONE = True
+        return False
+
+    try:
+        log_file = _open_safe_stderr()
+    except OSError:
+        logger.warning(
+            "Could not open MCP stderr log for permanent install; "
+            "MCP spawns may fail with EBADF on Windows",
+            exc_info=True,
+        )
+        _INSTALL_DONE = True
+        return False
+
+    # Patch MCP defaults *permanently* — we deliberately discard the
+    # restore tuple. ``log_file`` is held in the module slot so it is
+    # not GC'd for the process lifetime.
+    _patch_mcp_stdio_default_errlog(log_file)
+    _INSTALLED_SAFE_STDERR = log_file
+    _INSTALL_DONE = True
+    logger.info(
+        "Installed permanent safe stderr override for MCP subprocess spawns "
+        "(log: %s)",
+        _ensure_log_path(),
+    )
+    return True
+
+
 @contextlib.asynccontextmanager
 async def asafe_subprocess_stderr() -> Any:  # noqa: ANN401, RUF029  # async context manager wrapper around the sync version; runtime-typed yield
     """Async variant of :func:`safe_subprocess_stderr`.
@@ -380,6 +449,7 @@ def diagnostic_info() -> dict[str, Any]:
 __all__ = [
     "asafe_subprocess_stderr",
     "diagnostic_info",
+    "install_safe_subprocess_stderr_default",
     "safe_subprocess_stderr",
     "tail_mcp_stderr_log",
 ]

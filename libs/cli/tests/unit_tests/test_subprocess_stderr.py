@@ -14,9 +14,11 @@ from pathlib import Path
 
 import pytest
 
+from bog_agents_cli import _subprocess_stderr as _stderr_mod
 from bog_agents_cli._subprocess_stderr import (
     _stderr_handle_is_usable,
     diagnostic_info,
+    install_safe_subprocess_stderr_default,
     safe_subprocess_stderr,
     tail_mcp_stderr_log,
 )
@@ -277,6 +279,45 @@ class TestTailMcpStderrLog:
 
         monkeypatch.setattr(Path, "open", _raise)
         assert tail_mcp_stderr_log() == ""
+
+
+class TestInstallSafeSubprocessStderrDefault:
+    """``install_safe_subprocess_stderr_default`` is permanent and idempotent."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_install_state(self, monkeypatch) -> None:
+        """Reset the module's install latch so each test starts fresh."""
+        monkeypatch.setattr(_stderr_mod, "_INSTALLED_SAFE_STDERR", None)
+        monkeypatch.setattr(_stderr_mod, "_INSTALL_DONE", False)
+
+    def test_no_op_when_stderr_already_usable(self, monkeypatch) -> None:
+        """When stderr is fine, installer reports no override applied."""
+        monkeypatch.setattr(_stderr_mod, "_stderr_handle_is_usable", lambda: True)
+        assert install_safe_subprocess_stderr_default() is False
+        # Subsequent calls still report False without re-running.
+        assert install_safe_subprocess_stderr_default() is False
+        assert _stderr_mod._INSTALLED_SAFE_STDERR is None
+
+    def test_installs_override_when_stderr_broken(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """When stderr is broken, the log file is opened and held."""
+        monkeypatch.setattr(_stderr_mod, "_stderr_handle_is_usable", lambda: False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert install_safe_subprocess_stderr_default() is True
+        held = _stderr_mod._INSTALLED_SAFE_STDERR
+        assert held is not None
+        assert not held.closed  # held open for process lifetime
+
+    def test_idempotent(self, monkeypatch, tmp_path: Path) -> None:
+        """Calling twice doesn't reopen the log or re-patch defaults."""
+        monkeypatch.setattr(_stderr_mod, "_stderr_handle_is_usable", lambda: False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        install_safe_subprocess_stderr_default()
+        first = _stderr_mod._INSTALLED_SAFE_STDERR
+        # Second call: should NOT replace the file handle.
+        install_safe_subprocess_stderr_default()
+        assert _stderr_mod._INSTALLED_SAFE_STDERR is first
 
 
 class TestDiagnosticInfo:

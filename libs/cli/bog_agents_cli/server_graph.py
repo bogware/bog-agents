@@ -79,6 +79,13 @@ def _build_tools(
                     project_context=project_context,
                 )
             )
+            # ``resolve_and_load_mcp_tools`` returns connection-bound
+            # tools (per-call sessions), so there is no session manager
+            # whose lifetime needs anchoring here. Each tool call spawns
+            # a fresh stdio subprocess from the live loop, which is the
+            # only design that survives ``asyncio.run`` closing the
+            # build-time loop. See ``mcp_tools._load_tools_from_config``
+            # for the rationale.
         except FileNotFoundError as exc:
             # Explicit ``--mcp-config <path>`` pointed at a missing file.
             # Used to ``raise`` and crash the server. Now logged and stored

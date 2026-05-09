@@ -436,7 +436,11 @@ async def _load_tools_from_config(
                 transport="stdio",
             )
 
-    # Create session manager to track persistent sessions
+    # Session manager retained as a no-op handle for API compatibility
+    # (callers expect a 3-tuple). Tools returned below are
+    # *connection-bound* (per-call sessions), so there is no persistent
+    # session whose lifetime needs managing — the manager's ``cleanup``
+    # is effectively a no-op now.
     manager = MCPSessionManager()
 
     try:
@@ -453,21 +457,38 @@ async def _load_tools_from_config(
     # When the parent process's stderr lacks a usable OS handle (Python
     # 3.13 Windows quirks, terminal wrappers that pipe stderr, certain
     # TUI environments) the spawn dies with ``OSError: [Errno 9] Bad
-    # file descriptor`` before the MCP server even runs. We swap in a
-    # log file on disk for the spawn window so the subprocess inherits
-    # a guaranteed-valid fd.
-    from bog_agents_cli._subprocess_stderr import safe_subprocess_stderr
+    # file descriptor`` before the MCP server even runs. We install a
+    # permanent override of MCP's default ``errlog`` here so EVERY spawn
+    # — the load-time one below AND the per-call ones triggered each
+    # time the agent invokes an MCP tool — inherits a valid fd. (The
+    # context-manager flavour was wrong for per-call sessions because
+    # the patch would be off when the agent's tool invocation actually
+    # spawns the subprocess.)
+    from bog_agents_cli._subprocess_stderr import (
+        install_safe_subprocess_stderr_default,
+    )
+
+    install_safe_subprocess_stderr_default()
 
     try:
         all_tools: list[BaseTool] = []
         server_infos: list[MCPServerInfo] = []
         for server_name, server_config in config["mcpServers"].items():
-            with safe_subprocess_stderr():
-                session = await manager.exit_stack.enter_async_context(
-                    client.session(server_name)
-                )
+            # Connection-bound tools: ``load_mcp_tools`` opens a one-shot
+            # session via the connection to list tool metadata, then
+            # returns tools that each open their OWN fresh session
+            # ``async with create_session(connection)`` per invocation.
+            # This is the only pattern that survives the build-time
+            # ``asyncio.run(...)`` loop closing — a session held on a
+            # closed loop turns every later tool call into an indefinite
+            # hang on a dead anyio task group, which is exactly the
+            # ``/init`` symptom we just chased.
+            connection = connections[server_name]
             tools = await load_mcp_tools(
-                session, server_name=server_name, tool_name_prefix=True
+                None,
+                connection=connection,
+                server_name=server_name,
+                tool_name_prefix=True,
             )
             all_tools.extend(tools)
             server_infos.append(

@@ -480,11 +480,21 @@ class TestGetMCPTools:
             "/tmp",
         ]
 
-        # Verify session was created and tools were loaded
-        mock_client.session.assert_called_once_with("filesystem")
-        mock_load_tools.assert_called_once_with(
-            mock_session, server_name="filesystem", tool_name_prefix=True
-        )
+        # Tools are connection-bound now (per-call sessions). The client
+        # is created so the manager has a handle for API compatibility,
+        # but ``client.session(...)`` is no longer entered at load time —
+        # ``load_mcp_tools`` is called with ``session=None`` and the
+        # connection dict, which causes each tool to open its own session
+        # per invocation. (This is the only pattern that survives the
+        # build-time ``asyncio.run`` loop closing — see _load_tools_from_config.)
+        mock_client.session.assert_not_called()
+        mock_load_tools.assert_called_once()
+        call_kwargs = mock_load_tools.call_args
+        assert call_kwargs.args[0] is None  # session
+        assert call_kwargs.kwargs["server_name"] == "filesystem"
+        assert call_kwargs.kwargs["tool_name_prefix"] is True
+        assert call_kwargs.kwargs["connection"]["command"] == "npx"
+        del mock_session  # no longer used in this assertion
         assert len(tools) == 2
         assert tools[0].name == "read_file"
         assert tools[1].name == "write_file"
@@ -703,11 +713,14 @@ class TestGetMCPTools:
         mock_client.session.side_effect = mock_session_cm
         mock_client_class.return_value = mock_client
 
-        # Mock load_mcp_tools to return different tools for each session
+        # Connection-bound: ``load_mcp_tools`` is now invoked with
+        # ``session=None`` once per server, distinguished by the
+        # ``server_name`` kwarg.
         def mock_load_side_effect(
-            session: AsyncMock, **_kwargs: object
+            session: AsyncMock | None, **kwargs: object
         ) -> list[MagicMock]:
-            if session == mock_session_fs:
+            del session
+            if kwargs.get("server_name") == "filesystem":
                 return mock_tools_fs
             return mock_tools_search
 
@@ -723,8 +736,14 @@ class TestGetMCPTools:
         assert "brave-search" in connections
         assert connections["brave-search"]["env"]["BRAVE_API_KEY"] == "test-key"
 
-        # Verify sessions were created for both servers
-        assert mock_client.session.call_count == 2
+        # No persistent sessions — tools spawn per call. Verify
+        # ``load_mcp_tools`` was invoked once per server with
+        # ``session=None``.
+        mock_client.session.assert_not_called()
+        assert mock_load_tools.call_count == 2
+        for call in mock_load_tools.call_args_list:
+            assert call.args[0] is None  # session
+            assert call.kwargs["connection"] is not None
 
         # Verify tools from all servers were returned
         assert len(tools) == 3
