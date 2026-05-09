@@ -43,11 +43,29 @@ from bog_agents_cli._settings_cascade import load_layered_section
 logger = logging.getLogger(__name__)
 
 
-# Defaults match the SDK's ``_DEFAULT_MODEL_READ_TIMEOUT_SECS`` and the CLI's
-# ``_DEFAULT_READ_TIMEOUT_SECS`` so this module is purely additive — applying
-# it to a fresh install changes no behaviour.
-_DEFAULT_MODEL_READ_SECS = 7200
-_DEFAULT_REMOTE_READ_SECS = 7200
+# Defaults.
+#
+# - ``model_read_seconds`` is the **per-chunk** read deadline for model
+#   HTTP streams. With Anthropic streaming, healthy responses send a
+#   chunk (or keepalive) within a few hundred milliseconds — a gap of
+#   minutes is a hung stream, not a slow model. The previous default
+#   was 7200s (2 hours), which made a hung stream effectively
+#   permanent: the user always killed the run before the timeout
+#   fired, leaving them with no actionable error. 600s (10 min) is
+#   well above any legitimate inter-chunk gap (extended thinking,
+#   high-effort responses) while still giving the user a visible
+#   ``ReadTimeout`` rather than an open-ended stall.
+#
+# - ``remote_read_seconds`` is the SSE deadline between the CLI and
+#   the langgraph dev server. Same reasoning, same value.
+#
+# - ``tool_seconds`` covers shell-tool execution. Long builds and
+#   test suites are legitimate; we keep this generous.
+#
+# Override any of these via env (``BOG_AGENTS_MODEL_READ_TIMEOUT=7200``
+# restores the previous behaviour) or per-project settings.json.
+_DEFAULT_MODEL_READ_SECS = 600
+_DEFAULT_REMOTE_READ_SECS = 600
 _DEFAULT_TOOL_SECS = 7200
 
 _MODEL_ENV = "BOG_AGENTS_MODEL_READ_TIMEOUT"

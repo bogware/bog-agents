@@ -25,12 +25,16 @@ configure_debug_logging(logger)
 # client. NB: httpx ``read`` is per-chunk, not total — a healthy SSE stream
 # that emits keepalives or token-streaming events stays alive indefinitely
 # under this deadline; only a *stall* longer than ``read`` fails. We pick
-# 2h so even a long-running tool call (build, test suite, slow MCP fetch)
-# that happens server-side between events doesn't trip the deadline.
-# Aligned with ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires
-# before the underlying model call has had its full budget. Override with
+# 600s (10 min): well above any legitimate inter-chunk gap (slow tool,
+# extended thinking) but tight enough that a hung stream surfaces as a
+# visible ``ReadTimeout`` rather than an open-ended stall. The previous
+# default of 7200s (2h) made a wedged subagent's model call effectively
+# permanent — the user always killed the run before the deadline fired,
+# leaving them with the cancel cascade as their only signal. Aligned with
+# ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires before the
+# underlying model call has had its full budget. Override with
 # ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or ``none``/``0`` to disable).
-_DEFAULT_READ_TIMEOUT_SECS: float = 7200.0
+_DEFAULT_READ_TIMEOUT_SECS: float = 600.0
 
 # Number of times to re-issue an astream() call when the SSE stream raises a
 # transient error *before any events have flowed*. The server has not yet

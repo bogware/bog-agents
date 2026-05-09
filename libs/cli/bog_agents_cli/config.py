@@ -2192,6 +2192,27 @@ def create_model(
         kwargs.update(extra_kwargs)
         logger.debug("Applied extra_kwargs: %s", list(extra_kwargs.keys()))
 
+    # ``BOG_AGENTS_DISABLE_MODEL_STREAMING=1`` forces the model into
+    # non-streaming mode. Streaming with Anthropic extended thinking
+    # has produced multi-minute silent stalls on Windows during
+    # subagent-driven HITL approval flows — the SSE stream stops
+    # delivering chunks and the agent waits indefinitely. Disabling
+    # streaming reverts to a single-request/single-response cycle that
+    # cannot exhibit the inter-chunk-stall failure mode. Costs: no
+    # token-by-token UI streaming; the user sees the response only
+    # after the full HTTP response arrives. For a hung session this
+    # is strictly better than a forever-spinner.
+    disable_streaming = os.environ.get(
+        "BOG_AGENTS_DISABLE_MODEL_STREAMING", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if disable_streaming:
+        kwargs["disable_streaming"] = True
+        logger.warning(
+            "BOG_AGENTS_DISABLE_MODEL_STREAMING is set — model calls will not "
+            "stream. Token-by-token UI updates are disabled. Unset to restore "
+            "default streaming behaviour."
+        )
+
     # Check if this provider uses a custom BaseChatModel class
     config = ModelConfig.load()
     class_path = config.get_class_path(provider) if provider else None
