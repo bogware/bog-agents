@@ -164,21 +164,35 @@ def _patch_mcp_stdio_default_errlog(
     """
     patches: list[tuple[Any, Any]] = []
     try:
+        import inspect
+
         import mcp.client.stdio as _mcp_stdio
     except ImportError:
         return patches
 
-    # Names whose default is exactly ``(sys.stderr,)`` — both the
-    # context-managed entry point and the platform helper. We resolve
-    # to ``__wrapped__`` first so the asynccontextmanager case lands
-    # on the real generator function rather than the no-op wrapper.
-    candidates: list[Any] = []
+    # Resolve the target functions, then walk the ``__wrapped__`` chain
+    # so decorated functions (asynccontextmanager) get patched at the
+    # layer where defaults actually live.
+    #
+    # The signatures we care about (paraphrased): both ``stdio_client``
+    # and ``_create_platform_compatible_process`` take an ``errlog``
+    # parameter defaulting to ``sys.stderr``. The exact param positions
+    # differ — that's why we use ``inspect.signature`` below.
+    #
+    # Note: ``stdio_client`` always passes ``errlog=`` explicitly to
+    # ``_create_platform_compatible_process``, so patching the latter's
+    # default is technically belt-and-suspenders. We do it anyway in
+    # case any future caller relies on the default.
+    #
+    # CRITICAL: we use parameter NAMES, not positional index. A previous
+    # version patched ``defaults[-1]`` which for
+    # ``_create_platform_compatible_process`` is the ``cwd`` slot
+    # (``None``) — silently corrupting ``cwd`` to a file pointer while
+    # leaving the actual ``errlog`` (broken stderr) unchanged.
     for name in ("stdio_client", "_create_platform_compatible_process"):
         fn = getattr(_mcp_stdio, name, None)
         if fn is None:
             continue
-        # Walk ``__wrapped__`` chain so decorated functions get patched
-        # at the layer where defaults actually live.
         target = fn
         while hasattr(target, "__wrapped__"):
             inner = target.__wrapped__
@@ -186,16 +200,48 @@ def _patch_mcp_stdio_default_errlog(
                 target = inner
             else:
                 break
-        candidates.append(target)
 
-    for target in candidates:
         defaults = getattr(target, "__defaults__", None)
         if not defaults:
             continue
-        # The errlog default is the LAST one in the tuple for both
-        # functions — we replace just it, leaving any future-added
-        # earlier defaults untouched.
-        new_defaults = (*defaults[:-1], safe_file)
+
+        # Build (param_name → defaults_index) using ``inspect`` so the
+        # patch tracks the actual ``errlog`` position regardless of
+        # signature changes between MCP versions.
+        try:
+            sig = inspect.signature(target)
+        except (TypeError, ValueError):
+            logger.debug("Could not inspect signature of %r", target)
+            continue
+        params_with_defaults = [
+            p
+            for p in sig.parameters.values()
+            if p.default is not inspect.Parameter.empty
+        ]
+        if len(params_with_defaults) != len(defaults):
+            # Signature mismatch (e.g. **kwargs in chain). Skip rather
+            # than guess.
+            logger.debug(
+                "Param/default count mismatch on %r: %d params, %d defaults",
+                target,
+                len(params_with_defaults),
+                len(defaults),
+            )
+            continue
+        try:
+            errlog_idx = next(
+                i for i, p in enumerate(params_with_defaults) if p.name == "errlog"
+            )
+        except StopIteration:
+            # Function doesn't have an ``errlog`` parameter — nothing
+            # to patch on this target.
+            continue
+
+        # Replace just the errlog slot, leaving every other default
+        # untouched.
+        new_defaults = tuple(
+            safe_file if i == errlog_idx else d for i, d in enumerate(defaults)
+        )
         try:
             patches.append((target, defaults))
             target.__defaults__ = new_defaults
