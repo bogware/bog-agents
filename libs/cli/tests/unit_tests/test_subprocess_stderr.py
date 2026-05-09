@@ -164,6 +164,54 @@ class TestMcpStdioDefaultErrlogPatch:
         # Outside the block, the original default is restored.
         assert fake_stdio_client.__defaults__ == (fake_stderr,)
 
+    def test_patch_unwraps_asynccontextmanager_decorated_functions(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The patch must walk the ``__wrapped__`` chain on decorated functions.
+
+        The real ``mcp.client.stdio.stdio_client`` is decorated with
+        ``@asynccontextmanager``, which wraps the async generator. The
+        wrapper's ``__defaults__`` is None — the real defaults live on
+        ``__wrapped__.__defaults__``. Patching the outer wrapper is a
+        silent no-op (which is the bug a previous patch attempt had).
+        """
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(
+            "bog_agents_cli._subprocess_stderr._stderr_handle_is_usable",
+            lambda: False,
+        )
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+
+        import types
+        from contextlib import asynccontextmanager
+
+        fake_stderr = io.StringIO()
+
+        @asynccontextmanager
+        async def fake_stdio_client(server, errlog=fake_stderr):
+            yield (server, errlog)
+
+        # Sanity: wrapper has no defaults; the inner function does.
+        assert fake_stdio_client.__defaults__ is None
+        assert fake_stdio_client.__wrapped__.__defaults__ == (fake_stderr,)
+
+        fake_module = types.ModuleType("mcp.client.stdio")
+        fake_module.stdio_client = fake_stdio_client
+        monkeypatch.setitem(sys.modules, "mcp", types.ModuleType("mcp"))
+        monkeypatch.setitem(sys.modules, "mcp.client", types.ModuleType("mcp.client"))
+        monkeypatch.setitem(sys.modules, "mcp.client.stdio", fake_module)
+
+        with safe_subprocess_stderr():
+            # The wrapper's ``__defaults__`` stays None (we don't touch it).
+            assert fake_stdio_client.__defaults__ is None
+            # The wrapped function's defaults now point at our log file.
+            patched = fake_stdio_client.__wrapped__.__defaults__[0]
+            assert patched is not fake_stderr
+            assert patched.fileno() >= 0
+
+        # Restored.
+        assert fake_stdio_client.__wrapped__.__defaults__ == (fake_stderr,)
+
     def test_patch_skipped_when_mcp_not_importable(
         self, monkeypatch, tmp_path: Path
     ) -> None:

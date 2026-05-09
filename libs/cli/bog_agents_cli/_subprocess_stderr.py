@@ -120,46 +120,91 @@ def _open_safe_stderr() -> IO[str]:
     return path.open("a", encoding="utf-8", buffering=1, errors="replace")
 
 
-def _patch_mcp_stdio_default_errlog(safe_file: IO[str]) -> tuple[Any, Any] | None:
-    """Override ``mcp.client.stdio.stdio_client``'s default ``errlog``.
+def _patch_mcp_stdio_default_errlog(
+    safe_file: IO[str],
+) -> list[tuple[Any, Any]]:
+    """Override ``mcp.client.stdio``'s captured-at-import ``errlog`` defaults.
 
-    The MCP library defines its stdio entry point as::
+    The MCP library defines its stdio entry points as::
 
+        @asynccontextmanager
         async def stdio_client(server, errlog: TextIO = sys.stderr): ...
 
-    Python evaluates ``= sys.stderr`` **once at function definition time**
-    (i.e. when ``mcp.client.stdio`` is first imported). When the import
-    happens *inside* a running Textual app, ``sys.stderr`` is already the
-    ``_PrintCapture`` wrapper that has no usable OS fd on Windows. The
-    default ``errlog`` is then frozen to that broken wrapper for the rest
-    of the process — and ``langchain_mcp_adapters`` calls
-    ``stdio_client(server_params)`` without ``errlog``, so the broken
-    default is used. Swapping ``sys.stderr`` globally (the obvious fix)
-    does NOT update the already-captured default.
+        async def _create_platform_compatible_process(
+            ..., errlog: TextIO = sys.stderr, ...
+        ): ...
 
-    The fix is to mutate ``stdio_client.__defaults__`` in place. Returns
-    a (module, original_defaults) tuple the caller restores on exit.
-    Returns ``None`` if the patch couldn't be applied — caller should
-    proceed unmodified.
+    Python evaluates ``= sys.stderr`` **once at function definition
+    time** (i.e. when ``mcp.client.stdio`` is first imported). When the
+    import happens *inside* a running Textual app, ``sys.stderr`` is
+    already the ``_PrintCapture`` wrapper that has no usable OS fd on
+    Windows. The default ``errlog`` is then frozen to that broken
+    wrapper for the rest of the process — ``langchain_mcp_adapters``
+    calls ``stdio_client(server_params)`` without ``errlog``, the
+    broken default is used, and the spawn dies with EBADF.
+
+    There are TWO subtleties:
+
+    1. ``@asynccontextmanager`` wraps the async generator. The
+       resulting ``stdio_client`` object's ``__defaults__`` is ``None``
+       (the wrapper takes ``*args, **kwds``). The real defaults live on
+       ``stdio_client.__wrapped__.__defaults__``. Patching only the
+       outer object is a silent no-op — that's what the previous
+       attempt did. We patch the inner function via ``__wrapped__``.
+
+    2. ``_create_platform_compatible_process`` has its OWN
+       ``errlog: TextIO = sys.stderr`` default. ``stdio_client``
+       passes ``errlog=`` explicitly to it, but if any future caller
+       relies on its default we still want it correct. Patch both.
+
+    Returns a list of ``(target_function, original_defaults)`` pairs
+    so the caller restores them all on exit. Empty list when MCP isn't
+    importable or signatures don't match the expected shape — caller
+    proceeds unmodified.
     """
+    patches: list[tuple[Any, Any]] = []
     try:
         import mcp.client.stdio as _mcp_stdio
     except ImportError:
-        return None
-    fn = getattr(_mcp_stdio, "stdio_client", None)
-    if fn is None or not hasattr(fn, "__defaults__"):
-        return None
-    original = fn.__defaults__
-    if original is None or len(original) != 1:
-        # Defensive: MCP's signature could change between versions.
-        # Skip the patch rather than silently break callers.
-        logger.debug(
-            "mcp.client.stdio.stdio_client.__defaults__ shape unexpected: %r",
-            original,
-        )
-        return None
-    fn.__defaults__ = (safe_file,)
-    return (fn, original)
+        return patches
+
+    # Names whose default is exactly ``(sys.stderr,)`` — both the
+    # context-managed entry point and the platform helper. We resolve
+    # to ``__wrapped__`` first so the asynccontextmanager case lands
+    # on the real generator function rather than the no-op wrapper.
+    candidates: list[Any] = []
+    for name in ("stdio_client", "_create_platform_compatible_process"):
+        fn = getattr(_mcp_stdio, name, None)
+        if fn is None:
+            continue
+        # Walk ``__wrapped__`` chain so decorated functions get patched
+        # at the layer where defaults actually live.
+        target = fn
+        while hasattr(target, "__wrapped__"):
+            inner = target.__wrapped__
+            if hasattr(inner, "__defaults__"):
+                target = inner
+            else:
+                break
+        candidates.append(target)
+
+    for target in candidates:
+        defaults = getattr(target, "__defaults__", None)
+        if not defaults:
+            continue
+        # The errlog default is the LAST one in the tuple for both
+        # functions — we replace just it, leaving any future-added
+        # earlier defaults untouched.
+        new_defaults = (*defaults[:-1], safe_file)
+        try:
+            patches.append((target, defaults))
+            target.__defaults__ = new_defaults
+        except (AttributeError, TypeError):
+            # Some objects (e.g. C-implemented) reject __defaults__
+            # mutation. Skip rather than fail the whole spawn.
+            logger.debug("Could not patch __defaults__ on %r", target, exc_info=True)
+            patches.pop()
+    return patches
 
 
 @contextlib.contextmanager
@@ -206,19 +251,17 @@ def safe_subprocess_stderr() -> Generator[None, None, None]:
     sys.stderr = log_file
     # Override MCP's default errlog so calls that omit ``errlog=`` use
     # our safe file rather than the captured-at-import broken wrapper.
-    mcp_patch = _patch_mcp_stdio_default_errlog(log_file)
+    mcp_patches = _patch_mcp_stdio_default_errlog(log_file)
     try:
         yield
     finally:
         sys.stderr = original
-        if mcp_patch is not None:
-            fn, original_defaults = mcp_patch
+        for target, original_defaults in mcp_patches:
             try:
-                fn.__defaults__ = original_defaults
+                target.__defaults__ = original_defaults
             except Exception:  # restoration must not raise
                 logger.warning(
-                    "Could not restore mcp.client.stdio.stdio_client defaults",
-                    exc_info=True,
+                    "Could not restore __defaults__ on %r", target, exc_info=True
                 )
         try:
             log_file.close()
