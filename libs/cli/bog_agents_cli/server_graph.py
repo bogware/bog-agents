@@ -13,8 +13,12 @@ ensures the two sides stay in sync.
 from __future__ import annotations
 
 import atexit
+import faulthandler
 import logging
+import os
 import sys
+import threading
+import time
 import traceback
 from typing import Any
 
@@ -22,6 +26,109 @@ from bog_agents_cli._server_config import ServerConfig
 from bog_agents_cli.project_utils import ProjectContext, get_server_project_context
 
 logger = logging.getLogger(__name__)
+
+
+def _install_stall_diagnostics() -> None:
+    """Install faulthandler + a periodic activity heartbeat.
+
+    Two layers of diagnostics that activate immediately at module
+    import (i.e. when ``langgraph dev`` first loads ``server_graph``):
+
+    1. ``faulthandler.enable()`` — installs handlers so a hard crash
+       (segfault, abort) dumps Python stacks to stderr (which is the
+       server log file). Free and harmless when nothing crashes.
+
+    2. A daemon thread that, every ``BOG_AGENTS_STALL_DUMP_SECS`` (default
+       45) seconds, dumps **all live thread stacks** to the server log
+       *if* no log activity has been observed in that window. This is
+       the change that actually surfaces a stall: when the agent gets
+       wedged inside a middleware ``wrap_model_call`` and produces no
+       further langgraph events, the heartbeat fires and the user
+       (and us) get the exact Python frame that's blocked.
+
+    Disable by setting ``BOG_AGENTS_STALL_DUMP_SECS=0``. The threshold
+    can be raised on slow networks where 45s of model latency is normal.
+    """
+    try:
+        faulthandler.enable()
+    except (RuntimeError, ValueError):
+        # Some embedding scenarios reject faulthandler.enable(); the
+        # heartbeat below still works so we keep going.
+        logger.debug("faulthandler.enable() failed", exc_info=True)
+
+    raw = os.environ.get("BOG_AGENTS_STALL_DUMP_SECS", "45").strip()
+    try:
+        interval = float(raw)
+    except ValueError:
+        interval = 45.0
+    if interval <= 0:
+        return
+
+    # Activity tracking: install a logging Handler that updates a
+    # shared timestamp on every emitted record. The watchdog thread
+    # checks: if more than ``interval`` seconds have passed since the
+    # last log emission AND we haven't already dumped recently, dump
+    # all thread stacks. This converts a silent stall into an
+    # actionable stack trace in the server log without spamming during
+    # normal slow operations (model calls that emit logs at the start
+    # and end won't trigger).
+    last_activity = [time.monotonic()]
+    last_dump = [0.0]
+
+    class _ActivityProbe(logging.Handler):
+        def emit(self, _record: logging.LogRecord) -> None:  # noqa: PLR6301
+            last_activity[0] = time.monotonic()
+
+    probe = _ActivityProbe(level=logging.DEBUG)
+    logging.getLogger().addHandler(probe)
+
+    # Sleep granularity. We re-check every ``interval/3`` seconds so a
+    # stall is detected within ~1.3x the configured interval at worst.
+    poll = max(1.0, interval / 3.0)
+
+    def _heartbeat_loop() -> None:
+        while True:
+            try:
+                time.sleep(poll)
+            except BaseException:  # noqa: S112  # daemon must never die on signal during shutdown
+                continue
+            now = time.monotonic()
+            quiet_for = now - last_activity[0]
+            since_last_dump = now - last_dump[0]
+            if quiet_for < interval:
+                continue
+            # Throttle: don't dump more often than every ``interval``
+            # seconds even if the stall persists.
+            if since_last_dump < interval:
+                continue
+            try:
+                logger.warning(
+                    "stall-watchdog: no log activity for %.0fs (>= %.0fs threshold); "
+                    "dumping all thread stacks for diagnosis",
+                    quiet_for,
+                    interval,
+                )
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            except Exception:  # diagnostics must never crash the server
+                logger.exception("stall-watchdog: dump_traceback failed")
+            last_dump[0] = now
+
+    t = threading.Thread(
+        target=_heartbeat_loop,
+        name="bog-agents-stall-watchdog",
+        daemon=True,
+    )
+    t.start()
+    logger.info(
+        "Stall watchdog armed (interval=%.0fs). Set BOG_AGENTS_STALL_DUMP_SECS=0 "
+        "to disable.",
+        interval,
+    )
+
+
+# Install diagnostics at module import — before the graph is built, so
+# even a hang during ``make_graph()`` itself produces a stack dump.
+_install_stall_diagnostics()
 
 # Module-level sandbox state kept alive for the server process lifetime.
 _sandbox_cm: Any = None
