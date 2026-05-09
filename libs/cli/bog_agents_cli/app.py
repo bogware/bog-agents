@@ -3535,6 +3535,36 @@ class BogAgentsApp(App):
         report = await asyncio.to_thread(run_doctor)
         await self._mount_message(AppMessage(report))
 
+    async def _handle_bedrock_command(self, command: str) -> None:
+        """Run the Bedrock connection probe from inside the TUI.
+
+        Surfaces credentials, region, list-models, and tiny-inference
+        steps with a per-step pass/fail. Useful when a model switch
+        like ``/model bedrock_converse:...`` has just failed and the
+        user wants a structured diagnosis instead of a one-line
+        ``RuntimeError`` from the welcome banner.
+        """
+        from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
+
+        await self._mount_message(UserMessage(command))
+
+        # Optional: ``/bedrock test <model_id>`` lets the user pin the
+        # inference probe to a specific model id. Bare ``/bedrock`` or
+        # ``/bedrock test`` runs steps 1-5 (no inference).
+        raw_arg = command.strip()[len("/bedrock") :].strip()
+        # Drop a leading ``test`` / ``status`` keyword so users can write
+        # either ``/bedrock test`` or ``/bedrock test <model-id>``.
+        for prefix in ("test", "status"):
+            if raw_arg.lower().startswith(prefix):
+                raw_arg = raw_arg[len(prefix) :].strip()
+                break
+        model_id = raw_arg or None
+        # Probe runs synchronously (boto3 is sync); offload to a thread
+        # so the TUI's event loop stays responsive.
+        steps = await asyncio.to_thread(probe_bedrock, model_id, None)
+        report = render_probe_report(steps)
+        await self._mount_message(AppMessage(report))
+
     async def _handle_review_command(self, command: str) -> None:
         """Generate a structured code-review prompt and send it to the agent."""
         from bog_agents_cli.review_command import (
@@ -12334,6 +12364,15 @@ class BogAgentsApp(App):
             is_read_timeout = (
                 err_name == "RemoteException" and "readtimeouterror" in err_str
             ) or "readtimeout" in err_name.lower()
+            # ClosedResourceError from anyio means an MCP child process
+            # exited prematurely (most common cause: missing config /
+            # credentials the MCP server expected, or the spawn itself
+            # failed with the Windows EBADF symptom). The langgraph SSE
+            # forwarder hides this as a generic "internal error" — we
+            # recognise it here and give the user a real recovery path.
+            is_closed_resource = (
+                err_name == "RemoteException" and "closedresourceerror" in err_str
+            )
             if is_tool_capability_error:
                 await self._mount_message(
                     ErrorMessage(
@@ -12366,6 +12405,41 @@ class BogAgentsApp(App):
                         "  - `/settings` to configure providers and fallbacks\n"
                         "  - `/model` to switch to a different provider\n"
                         "  - For AWS Bedrock: run `aws sso login` to refresh credentials"
+                    )
+                )
+            elif is_closed_resource:
+                # Pull the tail of the MCP stderr log so the user sees the
+                # real cause inline. Off-load to a thread to keep the
+                # async event loop responsive even if the log read is slow.
+                from bog_agents_cli._subprocess_stderr import (
+                    tail_mcp_stderr_log,
+                )
+
+                content = await asyncio.to_thread(tail_mcp_stderr_log, 2000)
+                tail = (
+                    f"\n\nLast MCP child stderr:\n----\n{content[-1500:]}\n----"
+                    if content
+                    else ""
+                )
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Agent error: {e}\n\n"
+                        "ClosedResourceError almost always means an MCP "
+                        "server child process exited before its handshake "
+                        "completed. Common causes:\n"
+                        "  - Missing credentials/config the server expects "
+                        "(JIRA_URL, GITHUB_TOKEN, allowed-paths arg, etc.)\n"
+                        "  - Required CLI not installed (`uvx`/`npx` not on "
+                        "PATH, or the MCP package wasn't published)\n"
+                        "  - On Windows: the EBADF stderr-handle bug — fixed "
+                        "in 0.8.5+; if you're on an older version, upgrade.\n\n"
+                        "Recovery:\n"
+                        "  - `/mcp list` to see configured servers\n"
+                        "  - `/mcp remove <name>` to drop a broken one and "
+                        "send another message to continue\n"
+                        "  - Try the failing command directly in a shell "
+                        "(e.g. `npx -y @modelcontextprotocol/server-filesystem .`) "
+                        "to see the real error" + tail
                     )
                 )
             else:

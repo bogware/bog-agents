@@ -2302,6 +2302,29 @@ def create_model_with_fallback(
         primary_error = e
         resolved_spec = model_spec or "(auto-detected)"
         logger.warning("Primary model %s failed: %s", resolved_spec, e)
+        # Bedrock-aware: when the failed primary is a bedrock model,
+        # categorize the error and emit a high-visibility banner so the
+        # user sees an actionable message instead of a one-line warning
+        # that gets lost in startup chatter. The banner goes to both
+        # stderr (visible during fallback) and the rich console (visible
+        # in the TUI welcome chrome).
+        spec_lower = (model_spec or "").lower()
+        if spec_lower.startswith(("bedrock:", "bedrock_converse:")):
+            try:
+                from bog_agents_cli._bedrock import categorize_bedrock_error
+
+                err = categorize_bedrock_error(e)
+                # ``console`` is the module-level rich Console — emit
+                # both a coloured banner and a plain stderr block so the
+                # error is visible whether or not rich is rendering.
+                console.print(f"[red]{err.banner()}[/red]")
+                logger.exception(
+                    "Bedrock failure: kind=%s aws_code=%s",
+                    err.kind.value,
+                    err.aws_error_code,
+                )
+            except Exception:  # diagnostic helper must never crash
+                logger.debug("bedrock error categorization failed", exc_info=True)
 
     # Try fallbacks from config
     config = ModelConfig.load()
