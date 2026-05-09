@@ -28,6 +28,69 @@ from bog_agents_cli.project_utils import ProjectContext, get_server_project_cont
 logger = logging.getLogger(__name__)
 
 
+def _dump_asyncio_tasks(stream: Any) -> None:  # noqa: ANN401  # any text-stream-like
+    """Dump every live ``asyncio.Task`` and its suspended frame.
+
+    This is the diagnostic that ``faulthandler.dump_traceback`` cannot
+    produce. ``faulthandler`` only sees Python THREAD frames, so a
+    coroutine that is suspended on ``await foo()`` is invisible — its
+    state lives inside an ``asyncio.Task`` object, not on any thread's
+    stack. To find them we walk ``gc.get_objects()`` (which includes
+    every live Python object including ``Task`` instances on every
+    event loop in any thread) and call ``task.get_stack()`` /
+    ``task.get_coro()``.
+
+    ``gc.get_objects()`` is slow (full heap walk) but we only invoke
+    it on a confirmed stall, so the cost is irrelevant. It's safe to
+    call from any thread without holding any locks.
+    """
+    import asyncio
+    import gc
+
+    try:
+        tasks = [obj for obj in gc.get_objects() if isinstance(obj, asyncio.Task)]
+    except Exception as exc:
+        print(f"\n[stall-watchdog] gc.get_objects() failed: {exc}", file=stream)
+        return
+
+    print(
+        f"\n=== asyncio.Task dump: {len(tasks)} live tasks ===",
+        file=stream,
+    )
+    for i, task in enumerate(tasks):
+        try:
+            coro = task.get_coro()
+            qualname = getattr(coro, "__qualname__", repr(coro))
+            done = task.done()
+            cancelled = task.cancelled() if done else False
+            print(
+                f"\n--- Task #{i}: {qualname} "
+                f"(done={done}, cancelled={cancelled}) ---",
+                file=stream,
+            )
+            # ``get_stack()`` returns frames where the task is currently
+            # suspended (or the running frame if it's not suspended).
+            # On a wedged ``await`` the deepest frame is exactly the
+            # line we need. The list goes outermost → innermost, so we
+            # print in reverse to match a normal "most recent call last"
+            # traceback.
+            frames = task.get_stack(limit=30)
+            if not frames:
+                print("  (no frames — task complete or never started)", file=stream)
+                continue
+            for frame in frames:
+                filename = frame.f_code.co_filename
+                lineno = frame.f_lineno
+                funcname = frame.f_code.co_name
+                print(
+                    f'  File "{filename}", line {lineno}, in {funcname}',
+                    file=stream,
+                )
+        except Exception as exc:
+            print(f"  (failed to format task: {exc})", file=stream)
+    stream.flush()
+
+
 def _install_stall_diagnostics() -> None:
     """Install faulthandler + a periodic activity heartbeat.
 
@@ -120,11 +183,12 @@ def _install_stall_diagnostics() -> None:
             try:
                 logger.warning(
                     "stall-watchdog: no log activity for %.0fs (>= %.0fs threshold); "
-                    "dumping all thread stacks for diagnosis",
+                    "dumping all thread stacks AND asyncio tasks for diagnosis",
                     quiet_for,
                     interval,
                 )
                 faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                _dump_asyncio_tasks(sys.stderr)
             except Exception:  # diagnostics must never crash the server
                 logger.exception("stall-watchdog: dump_traceback failed")
             last_dump[0] = now
