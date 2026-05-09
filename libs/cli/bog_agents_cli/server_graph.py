@@ -65,18 +65,34 @@ def _install_stall_diagnostics() -> None:
         return
 
     # Activity tracking: install a logging Handler that updates a
-    # shared timestamp on every emitted record. The watchdog thread
-    # checks: if more than ``interval`` seconds have passed since the
-    # last log emission AND we haven't already dumped recently, dump
-    # all thread stacks. This converts a silent stall into an
-    # actionable stack trace in the server log without spamming during
-    # normal slow operations (model calls that emit logs at the start
-    # and end won't trigger).
+    # shared timestamp on every emitted record — but ONLY for records
+    # from loggers that signal real graph progress. Without this
+    # filter, periodic background noise (``langgraph_runtime_inmem``
+    # emits "Queue stats" / "Worker stats" every ~60s) keeps resetting
+    # the timestamp, so a wedged run that stays silent except for that
+    # background noise would NEVER trigger the watchdog. The
+    # ``LocalContextMiddleware -> [silence] -> killed`` symptom we just
+    # chased is exactly this case.
+    #
+    # The allow-rule is "ignore loggers we know are periodic
+    # noise". Anything else (bog_agents_cli, httpx, langgraph_api.worker,
+    # langchain, etc.) is treated as a real-progress signal.
+    noise_logger_prefixes = (
+        "langgraph_runtime_inmem.queue",   # "Queue stats", "Worker stats"
+        "langgraph_runtime_inmem._persistence",  # flush loop
+        "langgraph_api.cron_scheduler",     # cron tick
+        "langgraph_api.metadata",           # metadata refresh loop
+    )
+
     last_activity = [time.monotonic()]
     last_dump = [0.0]
 
     class _ActivityProbe(logging.Handler):
-        def emit(self, _record: logging.LogRecord) -> None:  # noqa: PLR6301
+        def emit(self, record: logging.LogRecord) -> None:  # noqa: PLR6301
+            name = record.name or ""
+            for prefix in noise_logger_prefixes:
+                if name.startswith(prefix):
+                    return
             last_activity[0] = time.monotonic()
 
     probe = _ActivityProbe(level=logging.DEBUG)
