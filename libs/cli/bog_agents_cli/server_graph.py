@@ -330,12 +330,81 @@ def _install_anthropic_httpx_per_loop_fix() -> None:
         )
 
 
+def _install_anthropic_async_client_per_call() -> None:
+    """Defeat ``ChatAnthropic._async_client``'s ``@cached_property``.
+
+    Layer 2 of the per-loop httpx fix. The lru_cache patch
+    (``_install_anthropic_httpx_per_loop_fix``) made the underlying
+    httpx clients distinct per call, but ``ChatAnthropic._async_client``
+    is a ``functools.cached_property`` — once initialised on an
+    instance, the *same* ``anthropic.AsyncClient`` (and the same anyio
+    primitives inside it) is returned for every subsequent access.
+
+    Since the CLI creates exactly one ``ChatAnthropic`` instance at
+    graph-build time, that instance's ``_async_client`` cache is
+    populated by whichever event loop FIRST invokes the model. If
+    ``langgraph_runtime_inmem`` rotates loops per run (i.e. when
+    ``BG_JOB_ISOLATED_LOOPS=true``, which we now disable in
+    ``_build_server_env``), the second run hits the cached client
+    whose primitives belong to a closed loop — every ``await``
+    deadlocks. The asyncio task dump pins this as
+    ``_agenerate_with_cache`` suspended on ``async_generator_asend``
+    with no httpx HTTP log line for the wedged run.
+
+    Replacing ``cached_property`` with a plain ``property`` makes
+    ``_async_client`` recompute per access. Trade-off: each model
+    call constructs a fresh ``AsyncAnthropic`` (and a fresh
+    ``httpx.AsyncClient`` underneath, thanks to the lru_cache patch).
+    Cost: ~tens of ms per call. Worth it for correctness across
+    event-loop rotations and for any future change that re-introduces
+    loop rotation (e.g. a new langgraph runtime).
+
+    This is layer 2 in defence-in-depth: layer 1 is
+    ``BG_JOB_ISOLATED_LOOPS=false`` in ``server._build_server_env``.
+    """
+    try:
+        import functools
+
+        from langchain_anthropic.chat_models import ChatAnthropic
+    except ImportError:
+        logger.debug("langchain_anthropic.chat_models not importable; skipping")
+        return
+
+    for attr in ("_async_client", "_client"):
+        descriptor = ChatAnthropic.__dict__.get(attr)
+        if descriptor is None:
+            continue
+        if not isinstance(descriptor, functools.cached_property):
+            # Already patched, or upstream changed the descriptor type
+            # — leave it alone rather than guess.
+            logger.debug(
+                "ChatAnthropic.%s is %s, not cached_property; skipping",
+                attr,
+                type(descriptor).__name__,
+            )
+            continue
+        # cached_property exposes the underlying function as ``.func``.
+        func = descriptor.func
+        # ``property(func)`` creates a fresh descriptor that calls
+        # ``func`` every access — no per-instance cache.
+        setattr(ChatAnthropic, attr, property(func))
+        logger.info(
+            "ChatAnthropic.%s replaced (cached_property → property) "
+            "for per-loop safety",
+            attr,
+        )
+
+
 # Install diagnostics at module import — before the graph is built, so
 # even a hang during ``make_graph()`` itself produces a stack dump.
 _install_stall_diagnostics()
 # Install BEFORE any model is created so the patch applies to every
-# ``ChatAnthropic`` constructed by ``make_graph()`` and below.
+# ``ChatAnthropic`` constructed by ``make_graph()`` and below. Order
+# matters: the lru_cache fix patches the FACTORY; the
+# cached_property fix patches the CONSUMER. Both are needed because
+# the original code caches at TWO layers.
 _install_anthropic_httpx_per_loop_fix()
+_install_anthropic_async_client_per_call()
 
 # Module-level sandbox state kept alive for the server process lifetime.
 _sandbox_cm: Any = None

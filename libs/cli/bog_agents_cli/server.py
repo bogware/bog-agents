@@ -295,7 +295,29 @@ def _build_server_env() -> dict[str, str]:
     # versions only respected LANGGRAPH_ALLOW_BLOCKING, newer versions
     # require BG_JOB_ISOLATED_LOOPS for full coverage of the worker loop.
     env["LANGGRAPH_ALLOW_BLOCKING"] = "true"
-    env["BG_JOB_ISOLATED_LOOPS"] = "true"
+    # ``BG_JOB_ISOLATED_LOOPS`` was previously ``"true"`` to give each
+    # background run its own asyncio loop — useful in multi-user
+    # production where one run's blocking call shouldn't stall others.
+    # In our single-user dev server it's actively harmful: the
+    # ``ChatAnthropic`` instance is created ONCE at graph build (in the
+    # main loop) and lazily initialises an ``AsyncAnthropic`` whose
+    # underlying anyio primitives bind to whichever loop first uses it.
+    # When run #2 dispatches to a fresh isolated loop, the cached
+    # ``AsyncAnthropic`` (cached via ``@cached_property`` on the
+    # instance) is reused but its primitives belong to run #1's
+    # now-closed loop — every ``await`` deadlocks. The asyncio task
+    # dump shows this as ``_agenerate_with_cache`` suspended on
+    # ``async_generator_asend`` that never produces a chunk and no
+    # httpx ``HTTP Request: POST .../v1/messages`` log line for the
+    # wedged run.
+    #
+    # Setting this to ``"false"`` (the langgraph_runtime_inmem default
+    # without the explicit override) keeps all background runs on a
+    # single shared event loop. Trade-off: a blocking call in one run
+    # *can* tie up other runs, but there's typically only one active
+    # run at a time in interactive CLI usage. Correctness > theoretical
+    # concurrency we don't actually exploit.
+    env["BG_JOB_ISOLATED_LOOPS"] = "false"
     for key in (
         "LANGGRAPH_AUTH",
         "LANGGRAPH_CLOUD_LICENSE_KEY",

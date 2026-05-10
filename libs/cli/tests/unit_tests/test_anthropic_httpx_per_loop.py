@@ -175,6 +175,75 @@ class TestPatchShapeRegression:
         assert _example.__wrapped__() == 1
 
 
+class TestChatAnthropicCachedPropertyDefeated:
+    """Layer 2 of the per-loop fix: ``ChatAnthropic._async_client`` no longer cached.
+
+    The lru_cache patch (layer 1) makes the underlying httpx client
+    factories return fresh clients per call. But that's not enough on
+    its own — ``ChatAnthropic`` wraps the http client in an
+    ``AsyncAnthropic`` and exposes it as ``_async_client``, which is
+    decorated ``@functools.cached_property``. Once initialised on an
+    instance, the SAME ``AsyncAnthropic`` is returned for every
+    subsequent access — and its anyio primitives are bound to whichever
+    loop first accessed it. Layer 2 replaces the cached_property with
+    a plain property so each access recomputes.
+
+    These tests verify both descriptors (``_async_client`` and
+    ``_client``) are swapped from cached_property to property by
+    ``server_graph._install_anthropic_async_client_per_call``.
+    """
+
+    def test_async_client_is_property_not_cached_property(self) -> None:
+        import functools  # noqa: PLC0415
+
+        import bog_agents_cli.server_graph  # noqa: F401, PLC0415  # triggers patch
+        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+
+        descriptor = ChatAnthropic.__dict__["_async_client"]
+        assert isinstance(descriptor, property), (
+            f"expected plain property; got {type(descriptor).__name__}. "
+            "If this fails, ChatAnthropic._async_client is still a "
+            "cached_property and the per-call fresh-AsyncAnthropic guarantee "
+            "is broken — multi-loop runs WILL deadlock."
+        )
+        assert not isinstance(descriptor, functools.cached_property)
+
+    def test_sync_client_is_property_not_cached_property(self) -> None:
+        import functools  # noqa: PLC0415
+
+        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
+        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+
+        descriptor = ChatAnthropic.__dict__["_client"]
+        assert isinstance(descriptor, property)
+        assert not isinstance(descriptor, functools.cached_property)
+
+    def test_distinct_async_client_per_access(self) -> None:
+        """Two consecutive ``model._async_client`` accesses → distinct objects.
+
+        This is the load-bearing assertion for the multi-loop bug.
+        With cached_property still in place, both accesses return the
+        same ``AsyncAnthropic`` whose anyio primitives are bound to
+        the first-use loop — and run #2 (in a new loop) deadlocks.
+        After the patch each access constructs a fresh
+        ``AsyncAnthropic`` whose primitives are local to the *current*
+        loop.
+        """
+        import os  # noqa: PLC0415
+
+        os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test")
+        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
+        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+
+        m = ChatAnthropic(model="claude-sonnet-4-6")
+        c1 = m._async_client
+        c2 = m._async_client
+        assert c1 is not c2, (
+            "ChatAnthropic._async_client returned the same instance twice — "
+            "cached_property has crept back in or the patch failed silently"
+        )
+
+
 class TestEachIsolatedLoopGetsFreshClient:
     """End-to-end shape: distinct httpx clients across distinct loops.
 
