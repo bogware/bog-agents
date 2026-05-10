@@ -29,6 +29,25 @@ _HEALTH_POLL_INTERVAL = 0.3
 _HEALTH_TIMEOUT = 60
 _SHUTDOWN_TIMEOUT = 5
 
+# Cap server log at 5 MB. When exceeded we truncate-on-open. The
+# server log captures the langgraph dev subprocess's stdout+stderr,
+# which is where every tool execution, model call, and exception
+# inside the graph surfaces. This is the file you tail when the agent
+# stalls.
+_SERVER_LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _resolve_server_log_path(port: int) -> Path:
+    """Return the per-port server log path under ``~/.bog-agents/logs``.
+
+    A predictable path (rather than a random temp file) so the user can
+    ``tail -f`` it the moment a stall is suspected. One file per port
+    keeps concurrent CLI invocations from clobbering each other's logs.
+    """
+    log_dir = Path.home() / ".bog-agents" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"server-{port}.log"
+
 
 def _port_in_use(host: str, port: int) -> bool:
     """Check if a port is already in use.
@@ -276,7 +295,29 @@ def _build_server_env() -> dict[str, str]:
     # versions only respected LANGGRAPH_ALLOW_BLOCKING, newer versions
     # require BG_JOB_ISOLATED_LOOPS for full coverage of the worker loop.
     env["LANGGRAPH_ALLOW_BLOCKING"] = "true"
-    env["BG_JOB_ISOLATED_LOOPS"] = "true"
+    # ``BG_JOB_ISOLATED_LOOPS`` was previously ``"true"`` to give each
+    # background run its own asyncio loop — useful in multi-user
+    # production where one run's blocking call shouldn't stall others.
+    # In our single-user dev server it's actively harmful: the
+    # ``ChatAnthropic`` instance is created ONCE at graph build (in the
+    # main loop) and lazily initialises an ``AsyncAnthropic`` whose
+    # underlying anyio primitives bind to whichever loop first uses it.
+    # When run #2 dispatches to a fresh isolated loop, the cached
+    # ``AsyncAnthropic`` (cached via ``@cached_property`` on the
+    # instance) is reused but its primitives belong to run #1's
+    # now-closed loop — every ``await`` deadlocks. The asyncio task
+    # dump shows this as ``_agenerate_with_cache`` suspended on
+    # ``async_generator_asend`` that never produces a chunk and no
+    # httpx ``HTTP Request: POST .../v1/messages`` log line for the
+    # wedged run.
+    #
+    # Setting this to ``"false"`` (the langgraph_runtime_inmem default
+    # without the explicit override) keeps all background runs on a
+    # single shared event loop. Trade-off: a blocking call in one run
+    # *can* tie up other runs, but there's typically only one active
+    # run at a time in interactive CLI usage. Correctness > theoretical
+    # concurrency we don't actually exploit.
+    env["BG_JOB_ISOLATED_LOOPS"] = "false"
     for key in (
         "LANGGRAPH_AUTH",
         "LANGGRAPH_CLOUD_LICENSE_KEY",
@@ -327,7 +368,9 @@ class ServerProcess:
         self._owns_config_dir = owns_config_dir
         self._process: subprocess.Popen | None = None
         self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._log_file: tempfile.NamedTemporaryFile | None = None  # type: ignore[type-arg]
+        # File handle for the server log. Open during ``start()`` and
+        # closed in ``stop()``. Path resolved by ``_resolve_server_log_path``.
+        self._log_file: Any = None
         self._env_overrides: dict[str, str] = {}
 
     @property
@@ -359,6 +402,43 @@ class ServerProcess:
                 self._log_file.name,
                 exc_info=True,
             )
+            return ""
+
+    def log_path(self) -> Path | None:
+        """Return the server log file path, or `None` if not started.
+
+        Used by callers (e.g. ``remote_client``) that want to surface
+        the path in user-facing error messages so the user can
+        ``tail -f`` it directly.
+        """
+        if self._log_file is None:
+            return None
+        try:
+            return Path(self._log_file.name)
+        except (AttributeError, OSError):
+            return None
+
+    def tail_log(self, max_bytes: int = 4000) -> str:
+        """Return the last `max_bytes` of the server log, or empty string.
+
+        Best-effort: returns ``""`` if the log doesn't exist, can't be
+        read, or is empty. Intended for inline embedding in user-facing
+        error messages so a stalled run shows the actual server-side
+        activity tail without forcing the user to chase a separate
+        file path.
+        """
+        if self._log_file is None:
+            return ""
+        try:
+            self._log_file.flush()
+            path = Path(self._log_file.name)
+            if not path.exists() or path.stat().st_size == 0:
+                return ""
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(max(0, path.stat().st_size - max_bytes))
+                return fh.read().strip()
+        except OSError:
+            logger.debug("Could not tail server log", exc_info=True)
             return ""
 
     async def start(
@@ -401,13 +481,30 @@ class ServerProcess:
         cmd = _build_server_cmd(config_path, host=self.host, port=self.port)
         env = _build_server_env()
 
-        logger.info("Starting langgraph dev server: %s", " ".join(cmd))
-        self._log_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
-            prefix="bog_agents_server_log_",
-            suffix=".txt",
-            delete=False,
-            mode="w",
-            encoding="utf-8",
+        # Server log to a predictable, user-discoverable path under
+        # ~/.bog-agents/logs/server-<port>.log. Previously we used an
+        # anonymous tempfile, which made post-mortem debugging
+        # impossible — when the agent stalled, the user couldn't find
+        # the file with the actual server-side stack. We truncate at
+        # 5 MB so it doesn't grow unbounded across long-running
+        # sessions.
+        log_path = _resolve_server_log_path(self.port)
+        try:
+            if log_path.exists() and log_path.stat().st_size > _SERVER_LOG_MAX_BYTES:
+                log_path.unlink()
+        except OSError:
+            logger.debug(
+                "Could not truncate %s; appending instead", log_path, exc_info=True
+            )
+        # Mode "w" truncates on open per server start so logs from a
+        # prior crashed run don't bleed into the next one.
+        self._log_file = log_path.open(  # closed in stop()
+            "w", encoding="utf-8", buffering=1, errors="replace"
+        )
+        # CRITICAL visibility: announce the log path so the user can
+        # ``tail -f`` it the instant they suspect a stall.
+        logger.info(
+            "Starting langgraph dev server (log: %s): %s", log_path, " ".join(cmd)
         )
         self._process = subprocess.Popen(  # noqa: S603, ASYNC220
             cmd,
@@ -462,11 +559,15 @@ class ServerProcess:
         self._process = None
 
         if self._log_file is not None:
+            # Close the handle but DO NOT delete the file. Server logs
+            # are the primary diagnostic when a stall is suspected, and
+            # the user can't tail a file that's been unlinked. Size is
+            # capped at ``_SERVER_LOG_MAX_BYTES`` on next ``start()`` so
+            # the file can't grow without bound across long sessions.
             try:
                 self._log_file.close()
-                Path(self._log_file.name).unlink()
             except OSError:
-                logger.debug("Failed to clean up log file", exc_info=True)
+                logger.debug("Failed to close server log handle", exc_info=True)
             self._log_file = None
 
     def stop(self) -> None:

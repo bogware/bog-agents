@@ -1831,6 +1831,24 @@ def _get_provider_kwargs(
     if provider == "openrouter":
         _apply_openrouter_defaults(result)
 
+    if provider == "anthropic":
+        # Anthropic SDK defaults: ``timeout=None`` (no overall request
+        # deadline) and ``max_retries=2``. These were chosen for batch
+        # workloads but they're hostile to interactive use:
+        #
+        # - No request timeout → a wedged stream sits there until the
+        #   per-chunk read timeout fires (still 600s, far too long when
+        #   the user is staring at a spinner).
+        # - max_retries=2 → if the first request hangs and finally
+        #   times out, the SDK silently retries TWICE before failing,
+        #   tripling the user-visible delay.
+        #
+        # We pin a 300s overall deadline and disable retries so a hung
+        # call surfaces in 5 minutes, not 30+. ``BOG_AGENTS_*`` overrides
+        # win (they're applied in ``extra_kwargs`` AFTER this block).
+        result.setdefault("timeout", 300.0)
+        result.setdefault("max_retries", 0)
+
     if provider in ("bedrock", "bedrock_converse") and "region_name" not in result:
         # Bedrock SDK requires a region. boto3's default-region resolution can
         # be surprising on Windows shells where ~/.aws/config isn't read by
@@ -2192,6 +2210,27 @@ def create_model(
         kwargs.update(extra_kwargs)
         logger.debug("Applied extra_kwargs: %s", list(extra_kwargs.keys()))
 
+    # ``BOG_AGENTS_DISABLE_MODEL_STREAMING=1`` forces the model into
+    # non-streaming mode. Streaming with Anthropic extended thinking
+    # has produced multi-minute silent stalls on Windows during
+    # subagent-driven HITL approval flows — the SSE stream stops
+    # delivering chunks and the agent waits indefinitely. Disabling
+    # streaming reverts to a single-request/single-response cycle that
+    # cannot exhibit the inter-chunk-stall failure mode. Costs: no
+    # token-by-token UI streaming; the user sees the response only
+    # after the full HTTP response arrives. For a hung session this
+    # is strictly better than a forever-spinner.
+    disable_streaming = os.environ.get(
+        "BOG_AGENTS_DISABLE_MODEL_STREAMING", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if disable_streaming:
+        kwargs["disable_streaming"] = True
+        logger.warning(
+            "BOG_AGENTS_DISABLE_MODEL_STREAMING is set — model calls will not "
+            "stream. Token-by-token UI updates are disabled. Unset to restore "
+            "default streaming behaviour."
+        )
+
     # Check if this provider uses a custom BaseChatModel class
     config = ModelConfig.load()
     class_path = config.get_class_path(provider) if provider else None
@@ -2302,6 +2341,29 @@ def create_model_with_fallback(
         primary_error = e
         resolved_spec = model_spec or "(auto-detected)"
         logger.warning("Primary model %s failed: %s", resolved_spec, e)
+        # Bedrock-aware: when the failed primary is a bedrock model,
+        # categorize the error and emit a high-visibility banner so the
+        # user sees an actionable message instead of a one-line warning
+        # that gets lost in startup chatter. The banner goes to both
+        # stderr (visible during fallback) and the rich console (visible
+        # in the TUI welcome chrome).
+        spec_lower = (model_spec or "").lower()
+        if spec_lower.startswith(("bedrock:", "bedrock_converse:")):
+            try:
+                from bog_agents_cli._bedrock import categorize_bedrock_error
+
+                err = categorize_bedrock_error(e)
+                # ``console`` is the module-level rich Console — emit
+                # both a coloured banner and a plain stderr block so the
+                # error is visible whether or not rich is rendering.
+                console.print(f"[red]{err.banner()}[/red]")
+                logger.exception(
+                    "Bedrock failure: kind=%s aws_code=%s",
+                    err.kind.value,
+                    err.aws_error_code,
+                )
+            except Exception:  # diagnostic helper must never crash
+                logger.debug("bedrock error categorization failed", exc_info=True)
 
     # Try fallbacks from config
     config = ModelConfig.load()

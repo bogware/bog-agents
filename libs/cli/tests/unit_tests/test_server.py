@@ -171,20 +171,16 @@ class TestServerProcess:
     async def test_start_cleans_up_partial_state_on_health_failure(
         self, tmp_path: Path
     ) -> None:
-        """Failed startup should stop the process and remove owned resources."""
+        """Failed startup should stop the process and close (not delete) the log."""
         config_dir = tmp_path / "runtime"
         config_dir.mkdir()
         (config_dir / "langgraph.json").write_text("{}")
 
-        log_path = tmp_path / "server.log"
-        log_path.write_text("booting")
+        log_path = tmp_path / "server-2025.log"
 
         process = MagicMock()
         process.pid = 1234
         process.poll.return_value = None
-
-        log_file = MagicMock()
-        log_file.name = str(log_path)
 
         server = ServerProcess(config_dir=config_dir, owns_config_dir=True)
 
@@ -196,9 +192,12 @@ class TestServerProcess:
             # Linux CI, so we patch it explicitly instead of relying on
             # _port_in_use=False to short-circuit the call.
             patch("bog_agents_cli.server._find_free_port", return_value=2025),
+            # Server log moved from tempfile to a predictable path under
+            # ~/.bog-agents/logs. We redirect the resolver to tmp_path so
+            # the test doesn't write to the user's home dir.
             patch(
-                "bog_agents_cli.server.tempfile.NamedTemporaryFile",
-                return_value=log_file,
+                "bog_agents_cli.server._resolve_server_log_path",
+                return_value=log_path,
             ),
             patch("bog_agents_cli.server.subprocess.Popen", return_value=process),
             patch(
@@ -211,11 +210,14 @@ class TestServerProcess:
 
         process.terminate.assert_called_once()
         process.wait.assert_called_once()
-        log_file.close.assert_called_once()
         assert server._process is None
         assert server._log_file is None
         assert not config_dir.exists()
-        assert not log_path.exists()
+        # 0.8.5: log file is intentionally NOT deleted on stop. The log
+        # is the primary diagnostic for stalls, so unlinking it would
+        # make post-mortem debugging impossible. Size is capped at
+        # _SERVER_LOG_MAX_BYTES on the next start().
+        assert log_path.exists()
 
     async def test_update_env_and_restart(self, tmp_path: Path) -> None:
         """update_env stages overrides that restart() applies."""
@@ -223,15 +225,11 @@ class TestServerProcess:
         config_dir.mkdir()
         (config_dir / "langgraph.json").write_text("{}")
 
-        log_path = tmp_path / "server.log"
-        log_path.write_text("")
+        log_path = tmp_path / "server-2025.log"
 
         process = MagicMock()
         process.pid = 1234
         process.poll.return_value = None
-
-        log_file = MagicMock()
-        log_file.name = str(log_path)
 
         server = ServerProcess(config_dir=config_dir, owns_config_dir=False)
 
@@ -240,9 +238,11 @@ class TestServerProcess:
             # See test_start_cleans_up_partial_state_on_health_failure for
             # why we patch _find_free_port too (0.7.3 #33 fix).
             patch("bog_agents_cli.server._find_free_port", return_value=2025),
+            # Per-port server log path (replaces the old tempfile-based
+            # approach). Redirected to tmp_path so the test stays hermetic.
             patch(
-                "bog_agents_cli.server.tempfile.NamedTemporaryFile",
-                return_value=log_file,
+                "bog_agents_cli.server._resolve_server_log_path",
+                return_value=log_path,
             ),
             patch("bog_agents_cli.server.subprocess.Popen", return_value=process),
             patch(

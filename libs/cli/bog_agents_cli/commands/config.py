@@ -28,6 +28,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/bedrock",
+            "Probe AWS Bedrock connectivity — credentials, region, model access, inference",
+            "aws connection test diagnostic credentials region",
+            "config",
+            available=True,
+            subcommands=(
+                ("test", "Run the Bedrock connection probe"),
+                ("status", "Same as `test` — quick view of credentials + region"),
+            ),
+        ),
+        handler_method="_handle_bedrock_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/doctor",
             "Run health check diagnostics for the local CLI environment",
             "check status",

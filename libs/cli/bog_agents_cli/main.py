@@ -329,6 +329,27 @@ def parse_args() -> argparse.Namespace:
 
     setup_call_parser(subparsers)
 
+    # Bedrock connection probe — credentials, region, model access,
+    # tiny inference. Self-contained: doesn't load the agent.
+    bedrock_parser = subparsers.add_parser(
+        "test-bedrock",
+        help="Probe AWS Bedrock connectivity (credentials, region, models, inference)",
+    )
+    bedrock_parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Bedrock model id to test inference against, e.g. "
+            "anthropic.claude-sonnet-4-20250514-v1:0. When omitted, "
+            "steps 1-5 (credentials, region, list models) still run."
+        ),
+    )
+    bedrock_parser.add_argument(
+        "--region",
+        default=None,
+        help="AWS region override (defaults to AWS_REGION env / profile config)",
+    )
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -1740,6 +1761,13 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_call import cmd_call
 
             sys.exit(cmd_call(args))
+        elif args.command == "test-bedrock":
+            from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
+
+            steps = probe_bedrock(model_id=args.model, region=args.region)
+            print(render_probe_report(steps))  # noqa: T201  # CLI subcommand output
+            # Exit non-zero if any step failed so CI / scripts can branch.
+            sys.exit(0 if all(s.ok for s in steps) else 1)
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,

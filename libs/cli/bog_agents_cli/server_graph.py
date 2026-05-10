@@ -13,8 +13,12 @@ ensures the two sides stay in sync.
 from __future__ import annotations
 
 import atexit
+import faulthandler
 import logging
+import os
 import sys
+import threading
+import time
 import traceback
 from typing import Any
 
@@ -22,6 +26,384 @@ from bog_agents_cli._server_config import ServerConfig
 from bog_agents_cli.project_utils import ProjectContext, get_server_project_context
 
 logger = logging.getLogger(__name__)
+
+
+def _dump_asyncio_tasks(stream: Any) -> None:  # noqa: ANN401  # any text-stream-like
+    """Dump every live ``asyncio.Task`` and its suspended frame.
+
+    This is the diagnostic that ``faulthandler.dump_traceback`` cannot
+    produce. ``faulthandler`` only sees Python THREAD frames, so a
+    coroutine that is suspended on ``await foo()`` is invisible — its
+    state lives inside an ``asyncio.Task`` object, not on any thread's
+    stack. To find them we walk ``gc.get_objects()`` (which includes
+    every live Python object including ``Task`` instances on every
+    event loop in any thread) and call ``task.get_stack()`` /
+    ``task.get_coro()``.
+
+    ``gc.get_objects()`` is slow (full heap walk) but we only invoke
+    it on a confirmed stall, so the cost is irrelevant. It's safe to
+    call from any thread without holding any locks.
+    """
+    import asyncio
+    import gc
+
+    try:
+        tasks = [obj for obj in gc.get_objects() if isinstance(obj, asyncio.Task)]
+    except Exception as exc:
+        print(f"\n[stall-watchdog] gc.get_objects() failed: {exc}", file=stream)
+        return
+
+    print(
+        f"\n=== asyncio.Task dump: {len(tasks)} live tasks ===",
+        file=stream,
+    )
+    for i, task in enumerate(tasks):
+        try:
+            coro = task.get_coro()
+            qualname = getattr(coro, "__qualname__", repr(coro))
+            done = task.done()
+            cancelled = task.cancelled() if done else False
+            print(
+                f"\n--- Task #{i}: {qualname} (done={done}, cancelled={cancelled}) ---",
+                file=stream,
+            )
+            # ``get_stack()`` returns frames where the task is currently
+            # suspended. For suspended tasks this is typically a single
+            # frame (the await point) — to see DEEPER (what the task is
+            # actually awaiting on, e.g. an httpx response or asyncio
+            # Future), we walk the ``cr_await`` chain from the
+            # coroutine itself. Each suspended coroutine has
+            # ``cr_await`` pointing at the awaitable it's blocked on,
+            # which can be another coroutine (recurse), an
+            # ``asyncio.Future``, an ``asyncio.Task``, or a low-level
+            # primitive. Walking this chain reveals the true bottom of
+            # the await stack.
+            frames = task.get_stack(limit=30)
+            if frames:
+                for frame in frames:
+                    filename = frame.f_code.co_filename
+                    lineno = frame.f_lineno
+                    funcname = frame.f_code.co_name
+                    print(
+                        f'  File "{filename}", line {lineno}, in {funcname}',
+                        file=stream,
+                    )
+            else:
+                print("  (no frames — task complete or never started)", file=stream)
+            # Walk the cr_await chain (depth-limited).
+            current = coro
+            seen: set[int] = set()
+            depth = 0
+            max_depth = 20
+            while depth < max_depth:
+                cid = id(current)
+                if cid in seen:
+                    print("  ... (cycle detected)", file=stream)
+                    break
+                seen.add(cid)
+                awaiting = getattr(current, "cr_await", None)
+                if awaiting is None:
+                    awaiting = getattr(current, "ag_await", None)
+                if awaiting is None:
+                    break
+                # Inspect the awaitable.
+                if hasattr(awaiting, "cr_frame") or hasattr(awaiting, "ag_frame"):
+                    qn = getattr(awaiting, "__qualname__", repr(awaiting))
+                    fr = getattr(awaiting, "cr_frame", None) or getattr(
+                        awaiting, "ag_frame", None
+                    )
+                    if fr is not None:
+                        filename = fr.f_code.co_filename
+                        lineno = fr.f_lineno
+                        funcname = fr.f_code.co_name
+                        print(
+                            f"  → awaiting {qn} at {filename}:{lineno} ({funcname})",
+                            file=stream,
+                        )
+                    else:
+                        print(f"  → awaiting {qn} (no frame)", file=stream)
+                    current = awaiting
+                    depth += 1
+                else:
+                    print(
+                        f"  → awaiting {type(awaiting).__name__}: {awaiting!r}",
+                        file=stream,
+                    )
+                    break
+        except Exception as exc:
+            print(f"  (failed to format task: {exc})", file=stream)
+    stream.flush()
+
+
+def _install_stall_diagnostics() -> None:
+    """Install faulthandler + a periodic activity heartbeat.
+
+    Two layers of diagnostics that activate immediately at module
+    import (i.e. when ``langgraph dev`` first loads ``server_graph``):
+
+    1. ``faulthandler.enable()`` — installs handlers so a hard crash
+       (segfault, abort) dumps Python stacks to stderr (which is the
+       server log file). Free and harmless when nothing crashes.
+
+    2. A daemon thread that, every ``BOG_AGENTS_STALL_DUMP_SECS`` (default
+       45) seconds, dumps **all live thread stacks** to the server log
+       *if* no log activity has been observed in that window. This is
+       the change that actually surfaces a stall: when the agent gets
+       wedged inside a middleware ``wrap_model_call`` and produces no
+       further langgraph events, the heartbeat fires and the user
+       (and us) get the exact Python frame that's blocked.
+
+    Disable by setting ``BOG_AGENTS_STALL_DUMP_SECS=0``. The threshold
+    can be raised on slow networks where 45s of model latency is normal.
+    """
+    try:
+        faulthandler.enable()
+    except (RuntimeError, ValueError):
+        # Some embedding scenarios reject faulthandler.enable(); the
+        # heartbeat below still works so we keep going.
+        logger.debug("faulthandler.enable() failed", exc_info=True)
+
+    raw = os.environ.get("BOG_AGENTS_STALL_DUMP_SECS", "45").strip()
+    try:
+        interval = float(raw)
+    except ValueError:
+        interval = 45.0
+    if interval <= 0:
+        return
+
+    # Activity tracking: install a logging Handler that updates a
+    # shared timestamp on every emitted record — but ONLY for records
+    # from loggers that signal real graph progress. Without this
+    # filter, periodic background noise (``langgraph_runtime_inmem``
+    # emits "Queue stats" / "Worker stats" every ~60s) keeps resetting
+    # the timestamp, so a wedged run that stays silent except for that
+    # background noise would NEVER trigger the watchdog. The
+    # ``LocalContextMiddleware -> [silence] -> killed`` symptom we just
+    # chased is exactly this case.
+    #
+    # The allow-rule is "ignore loggers we know are periodic
+    # noise". Anything else (bog_agents_cli, httpx, langgraph_api.worker,
+    # langchain, etc.) is treated as a real-progress signal.
+    noise_logger_prefixes = (
+        "langgraph_runtime_inmem.queue",  # "Queue stats", "Worker stats"
+        "langgraph_runtime_inmem._persistence",  # flush loop
+        "langgraph_api.cron_scheduler",  # cron tick
+        "langgraph_api.metadata",  # metadata refresh loop
+    )
+
+    last_activity = [time.monotonic()]
+    last_dump = [0.0]
+
+    class _ActivityProbe(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:  # noqa: PLR6301
+            name = record.name or ""
+            for prefix in noise_logger_prefixes:
+                if name.startswith(prefix):
+                    return
+            last_activity[0] = time.monotonic()
+
+    probe = _ActivityProbe(level=logging.DEBUG)
+    logging.getLogger().addHandler(probe)
+
+    # Sleep granularity. We re-check every ``interval/3`` seconds so a
+    # stall is detected within ~1.3x the configured interval at worst.
+    poll = max(1.0, interval / 3.0)
+
+    def _heartbeat_loop() -> None:
+        while True:
+            try:
+                time.sleep(poll)
+            except BaseException:  # noqa: S112  # daemon must never die on signal during shutdown
+                continue
+            now = time.monotonic()
+            quiet_for = now - last_activity[0]
+            since_last_dump = now - last_dump[0]
+            if quiet_for < interval:
+                continue
+            # Throttle: don't dump more often than every ``interval``
+            # seconds even if the stall persists.
+            if since_last_dump < interval:
+                continue
+            try:
+                logger.warning(
+                    "stall-watchdog: no log activity for %.0fs (>= %.0fs threshold); "
+                    "dumping all thread stacks AND asyncio tasks for diagnosis",
+                    quiet_for,
+                    interval,
+                )
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                _dump_asyncio_tasks(sys.stderr)
+            except Exception:  # diagnostics must never crash the server
+                logger.exception("stall-watchdog: dump_traceback failed")
+            last_dump[0] = now
+
+    t = threading.Thread(
+        target=_heartbeat_loop,
+        name="bog-agents-stall-watchdog",
+        daemon=True,
+    )
+    t.start()
+    logger.info(
+        "Stall watchdog armed (interval=%.0fs). Set BOG_AGENTS_STALL_DUMP_SECS=0 "
+        "to disable.",
+        interval,
+    )
+
+
+def _install_anthropic_httpx_per_loop_fix() -> None:
+    """Bypass ``langchain_anthropic._client_utils``'s ``@lru_cache``.
+
+    Root cause of the reliable Windows ``/review`` / ``/audit`` stall —
+    rediscovered after multiple iterations of stack dumps that all
+    pointed at ``BaseChatModel._agenerate_with_cache:2010`` awaiting an
+    ``async_generator_asend`` that never produces a chunk:
+
+    ``langchain_anthropic/_client_utils.py:67`` decorates
+    ``_get_default_async_httpx_client`` with ``@lru_cache``. ONE
+    ``httpx.AsyncClient`` is therefore shared across every
+    ``ChatAnthropic`` instance and, critically, across every event
+    loop in the process. ``langgraph_runtime_inmem`` runs each
+    background run in an **isolated event loop**
+    (``BG_JOB_ISOLATED_LOOPS=true``, also visible in the server log
+    as ``Starting queue with isolated loops``). The shared httpx
+    client's internal anyio synchronisation primitives (locks, task
+    groups, the connection pool's per-connection futures) are bound
+    to whichever loop *first* used the client. Later runs in
+    different loops eventually hit a code path where they ``await``
+    one of those primitives — and the await never returns, because
+    the loop that owns the primitive has been closed.
+
+    Symptom: the model HTTP call wedges before httpx logs the request
+    line, Task #0 sits forever at ``async_generator_asend``, and
+    nothing else reveals where the actual block is. The pattern is
+    "first N runs succeed, then one — typically after a HITL approval
+    resume that creates a fresh isolated loop — hangs indefinitely".
+
+    Fix: replace the module-level ``_get_default_async_httpx_client``
+    (and sync counterpart) with a wrapper that calls the underlying
+    factory **directly**, bypassing ``lru_cache``. Each
+    ``ChatAnthropic`` instance now gets its own httpx client whose
+    primitives are local to its own caller's loop. This trades the
+    one-client-per-process optimisation for correctness on Windows —
+    the right trade for an interactive CLI where each agent run is a
+    discrete, short-lived event-loop scope.
+
+    Idempotent and best-effort: if the langchain-anthropic internals
+    move around between versions, we log and skip rather than crash.
+    """
+    try:
+        import langchain_anthropic._client_utils as _cu  # noqa: PLC2701  # patching upstream private module is the whole point
+    except ImportError:
+        logger.debug("langchain_anthropic not importable; httpx fix skipped")
+        return
+
+    for name in ("_get_default_async_httpx_client", "_get_default_httpx_client"):
+        cached = getattr(_cu, name, None)
+        if cached is None:
+            continue
+        # ``lru_cache`` exposes the underlying function via ``__wrapped__``.
+        # If it's missing, this isn't an lru_cache — leave it alone.
+        underlying = getattr(cached, "__wrapped__", None)
+        if underlying is None:
+            logger.debug(
+                "Anthropic httpx fix: %s is not an lru_cache wrapper "
+                "(type=%s); skipping",
+                name,
+                type(cached).__name__,
+            )
+            continue
+
+        def _make_fresh(orig: Any) -> Any:  # noqa: ANN401
+            def _fresh(**kwargs: Any) -> Any:  # noqa: ANN401
+                return orig(**kwargs)
+
+            _fresh.__name__ = f"{orig.__name__}_per_loop"
+            _fresh.__doc__ = orig.__doc__
+            return _fresh
+
+        setattr(_cu, name, _make_fresh(underlying))
+        logger.info(
+            "Anthropic httpx fix: replaced cached %s with per-call factory "
+            "(per-loop httpx clients to avoid event-loop binding deadlocks)",
+            name,
+        )
+
+
+def _install_anthropic_async_client_per_call() -> None:
+    """Defeat ``ChatAnthropic._async_client``'s ``@cached_property``.
+
+    Layer 2 of the per-loop httpx fix. The lru_cache patch
+    (``_install_anthropic_httpx_per_loop_fix``) made the underlying
+    httpx clients distinct per call, but ``ChatAnthropic._async_client``
+    is a ``functools.cached_property`` — once initialised on an
+    instance, the *same* ``anthropic.AsyncClient`` (and the same anyio
+    primitives inside it) is returned for every subsequent access.
+
+    Since the CLI creates exactly one ``ChatAnthropic`` instance at
+    graph-build time, that instance's ``_async_client`` cache is
+    populated by whichever event loop FIRST invokes the model. If
+    ``langgraph_runtime_inmem`` rotates loops per run (i.e. when
+    ``BG_JOB_ISOLATED_LOOPS=true``, which we now disable in
+    ``_build_server_env``), the second run hits the cached client
+    whose primitives belong to a closed loop — every ``await``
+    deadlocks. The asyncio task dump pins this as
+    ``_agenerate_with_cache`` suspended on ``async_generator_asend``
+    with no httpx HTTP log line for the wedged run.
+
+    Replacing ``cached_property`` with a plain ``property`` makes
+    ``_async_client`` recompute per access. Trade-off: each model
+    call constructs a fresh ``AsyncAnthropic`` (and a fresh
+    ``httpx.AsyncClient`` underneath, thanks to the lru_cache patch).
+    Cost: ~tens of ms per call. Worth it for correctness across
+    event-loop rotations and for any future change that re-introduces
+    loop rotation (e.g. a new langgraph runtime).
+
+    This is layer 2 in defence-in-depth: layer 1 is
+    ``BG_JOB_ISOLATED_LOOPS=false`` in ``server._build_server_env``.
+    """
+    try:
+        import functools
+
+        from langchain_anthropic.chat_models import ChatAnthropic
+    except ImportError:
+        logger.debug("langchain_anthropic.chat_models not importable; skipping")
+        return
+
+    for attr in ("_async_client", "_client"):
+        descriptor = ChatAnthropic.__dict__.get(attr)
+        if descriptor is None:
+            continue
+        if not isinstance(descriptor, functools.cached_property):
+            # Already patched, or upstream changed the descriptor type
+            # — leave it alone rather than guess.
+            logger.debug(
+                "ChatAnthropic.%s is %s, not cached_property; skipping",
+                attr,
+                type(descriptor).__name__,
+            )
+            continue
+        # cached_property exposes the underlying function as ``.func``.
+        func = descriptor.func
+        # ``property(func)`` creates a fresh descriptor that calls
+        # ``func`` every access — no per-instance cache.
+        setattr(ChatAnthropic, attr, property(func))
+        logger.info(
+            "ChatAnthropic.%s replaced (cached_property → property) "
+            "for per-loop safety",
+            attr,
+        )
+
+
+# Install diagnostics at module import — before the graph is built, so
+# even a hang during ``make_graph()`` itself produces a stack dump.
+_install_stall_diagnostics()
+# Install BEFORE any model is created so the patch applies to every
+# ``ChatAnthropic`` constructed by ``make_graph()`` and below. Order
+# matters: the lru_cache fix patches the FACTORY; the
+# cached_property fix patches the CONSUMER. Both are needed because
+# the original code caches at TWO layers.
+_install_anthropic_httpx_per_loop_fix()
+_install_anthropic_async_client_per_call()
 
 # Module-level sandbox state kept alive for the server process lifetime.
 _sandbox_cm: Any = None
@@ -79,6 +461,13 @@ def _build_tools(
                     project_context=project_context,
                 )
             )
+            # ``resolve_and_load_mcp_tools`` returns connection-bound
+            # tools (per-call sessions), so there is no session manager
+            # whose lifetime needs anchoring here. Each tool call spawns
+            # a fresh stdio subprocess from the live loop, which is the
+            # only design that survives ``asyncio.run`` closing the
+            # build-time loop. See ``mcp_tools._load_tools_from_config``
+            # for the rationale.
         except FileNotFoundError as exc:
             # Explicit ``--mcp-config <path>`` pointed at a missing file.
             # Used to ``raise`` and crash the server. Now logged and stored

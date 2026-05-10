@@ -163,13 +163,30 @@ class FilesystemBackend(BackendProtocol):
         if self.virtual_mode:
             vpath = key if key.startswith("/") else "/" + key
             if ".." in vpath or vpath.startswith("~"):
-                msg = "Path traversal not allowed"
+                # Keep the exact prefix ``"Path traversal not allowed"`` so
+                # existing pytest.raises(match=...) assertions continue to
+                # work; append the actionable hint after the colon.
+                msg = (
+                    "Path traversal not allowed in virtual_mode "
+                    "(.. or ~). Set BOG_AGENTS_FS_UNSANDBOXED=1 to "
+                    "disable this check, or invoke bog-agents from a "
+                    "parent directory that contains the paths you need."
+                )
                 raise ValueError(msg)
             full = (self.cwd / vpath.lstrip("/")).resolve()
             try:
                 full.relative_to(self.cwd)
             except ValueError:
-                msg = f"Path:{full} outside root directory: {self.cwd}"
+                msg = (
+                    f"Path: {full} is outside the agent's root directory: "
+                    f"{self.cwd}. The filesystem sandbox only permits paths "
+                    f"under root_dir. Options:\n"
+                    f"  1. Set env var BOG_AGENTS_FS_UNSANDBOXED=1 to "
+                    f"disable the sandbox (cross-repo / system-wide access).\n"
+                    f"  2. Restart bog-agents from a parent directory that "
+                    f"contains both root and the target path.\n"
+                    f"  3. Use a path relative to {self.cwd}."
+                )
                 raise ValueError(msg) from None
             return full
 

@@ -25,12 +25,16 @@ configure_debug_logging(logger)
 # client. NB: httpx ``read`` is per-chunk, not total — a healthy SSE stream
 # that emits keepalives or token-streaming events stays alive indefinitely
 # under this deadline; only a *stall* longer than ``read`` fails. We pick
-# 2h so even a long-running tool call (build, test suite, slow MCP fetch)
-# that happens server-side between events doesn't trip the deadline.
-# Aligned with ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires
-# before the underlying model call has had its full budget. Override with
+# 600s (10 min): well above any legitimate inter-chunk gap (slow tool,
+# extended thinking) but tight enough that a hung stream surfaces as a
+# visible ``ReadTimeout`` rather than an open-ended stall. The previous
+# default of 7200s (2h) made a wedged subagent's model call effectively
+# permanent — the user always killed the run before the deadline fired,
+# leaving them with the cancel cascade as their only signal. Aligned with
+# ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires before the
+# underlying model call has had its full budget. Override with
 # ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or ``none``/``0`` to disable).
-_DEFAULT_READ_TIMEOUT_SECS: float = 7200.0
+_DEFAULT_READ_TIMEOUT_SECS: float = 600.0
 
 # Number of times to re-issue an astream() call when the SSE stream raises a
 # transient error *before any events have flowed*. The server has not yet
@@ -102,6 +106,40 @@ def _is_transient_stream_error(exc: BaseException) -> bool:
     """
     haystack = f"{type(exc).__name__} {exc!s}".lower()
     return any(marker in haystack for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+def _server_log_hint(url: str) -> str:
+    """Return a short, user-friendly hint pointing at the server log file.
+
+    Given the RemoteAgent's URL, derive the per-port server log path
+    (matches ``server._resolve_server_log_path``) and append the last
+    ~1500 bytes of activity so the warning that surfaces in
+    ``bog_agents.log`` is self-contained — no need for the user to
+    chase a separate file path. Best-effort: returns an empty string
+    if the port can't be parsed or the log can't be read.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        port = parsed.port
+        if port is None:
+            return ""
+        from pathlib import Path as _Path
+
+        log_path = _Path.home() / ".bog-agents" / "logs" / f"server-{port}.log"
+        if not log_path.exists() or log_path.stat().st_size == 0:
+            return f"\nServer log: {log_path} (empty)"
+        max_bytes = 1500
+        with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(max(0, log_path.stat().st_size - max_bytes))
+            tail = fh.read().strip()
+        return (
+            f"\nServer log: {log_path}\n"
+            f"---- last {len(tail)} bytes of server log ----\n{tail}\n----"
+        )
+    except Exception:  # best-effort hint; never raise
+        return ""
 
 
 def _require_thread_id(config: dict[str, Any] | None) -> str:
@@ -281,6 +319,19 @@ class RemoteAgent:
                 break
             except Exception as exc:
                 if not _is_transient_stream_error(exc):
+                    # Non-retryable error (includes user-cancel via
+                    # CancelledError). Capture the server-side log tail
+                    # BEFORE re-raising so the warning that downstream
+                    # callers log via ``aupdate_state`` is preceded by
+                    # the actual graph-side activity at the moment of
+                    # the abort. Without this, a stalled run looks like
+                    # an opaque CancelledError with no breadcrumb.
+                    logger.warning(
+                        "astream aborted with %s after %d events.%s",
+                        type(exc).__name__,
+                        events_emitted,
+                        _server_log_hint(self._url),
+                    )
                     raise
 
                 # Two retry budgets: pre-first-event (fully safe — server
@@ -440,7 +491,10 @@ class RemoteAgent:
             await graph.aupdate_state(_prepare_config(config), values)
         except Exception:
             logger.warning(
-                "Failed to update state for thread %s", thread_id, exc_info=True
+                "Failed to update state for thread %s%s",
+                thread_id,
+                _server_log_hint(self._url),
+                exc_info=True,
             )
             raise
 

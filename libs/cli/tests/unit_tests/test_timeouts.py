@@ -20,17 +20,20 @@ if TYPE_CHECKING:
 class TestTimeoutSettingsMerge:
     """Direct merge_dict semantics on a single layer."""
 
-    def test_defaults_match_two_hour_baseline(self) -> None:
+    def test_defaults_match_baseline(self) -> None:
+        # 0.8.5: model/remote read defaults dropped from 7200s (2h) to
+        # 600s (10 min) so a hung stream surfaces as ReadTimeout in
+        # bounded time. Tool remains 7200s for long builds/tests.
         settings = TimeoutSettings()
-        assert settings.model_read_seconds == 7200
-        assert settings.remote_read_seconds == 7200
+        assert settings.model_read_seconds == 600
+        assert settings.remote_read_seconds == 600
         assert settings.tool_seconds == 7200
 
     def test_int_override_replaces_default(self) -> None:
-        settings = TimeoutSettings().merge_dict({"model_read_seconds": 600})
-        assert settings.model_read_seconds == 600
+        settings = TimeoutSettings().merge_dict({"model_read_seconds": 300})
+        assert settings.model_read_seconds == 300
         # other fields unchanged
-        assert settings.remote_read_seconds == 7200
+        assert settings.remote_read_seconds == 600
 
     def test_zero_disables_timeout(self) -> None:
         settings = TimeoutSettings().merge_dict({"tool_seconds": 0})
@@ -50,9 +53,9 @@ class TestTimeoutSettingsMerge:
 
     def test_unknown_key_ignored(self) -> None:
         settings = TimeoutSettings().merge_dict(
-            {"model_read_seconds": 600, "future_key": 999}
+            {"model_read_seconds": 300, "future_key": 999}
         )
-        assert settings.model_read_seconds == 600
+        assert settings.model_read_seconds == 300
 
     def test_bool_value_keeps_default(self) -> None:
         # ``"tool_seconds": false`` should not be silently treated as 0.
@@ -61,7 +64,7 @@ class TestTimeoutSettingsMerge:
 
     def test_garbage_string_keeps_default(self) -> None:
         settings = TimeoutSettings().merge_dict({"model_read_seconds": "abc"})
-        assert settings.model_read_seconds == 7200
+        assert settings.model_read_seconds == 600
 
 
 class TestLoadCascade:
@@ -84,7 +87,7 @@ class TestLoadCascade:
         settings = load_timeout_settings()
         assert settings.model_read_seconds == 1234
         # Defaults preserved for unset fields.
-        assert settings.remote_read_seconds == 7200
+        assert settings.remote_read_seconds == 600
 
     def test_project_overrides_user(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

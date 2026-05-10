@@ -745,12 +745,39 @@ def create_cli_agent(
     # code-reviewer, test-author, and language-specific specialists from
     # the package's bundled_agents/ tree. User and project subagents
     # override on name conflict.
+    #
+    # ``BOG_AGENTS_DISABLE_SUBAGENTS=1`` skips subagent loading entirely.
+    # The parent agent then has no ``task`` tool and cannot invoke
+    # subagents — every step runs at the parent level. This is the
+    # workaround for a reliable deadlock where a subagent's
+    # HumanInTheLoop interrupt fires inside the parent's pregel
+    # invocation, the user approves, and the subagent's resumed model
+    # call stalls indefinitely (no httpx request ever leaves the
+    # process — it's stuck in the wrap_model_call middleware chain
+    # after a HITL resume). Until that root cause is fixed in the
+    # framework, this env var lets ``/review`` and similar
+    # subagent-heavy commands complete by running the work in the
+    # parent agent's context.
+    subagents_disabled = os.environ.get(
+        "BOG_AGENTS_DISABLE_SUBAGENTS", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if subagents_disabled:
+        logger.warning(
+            "BOG_AGENTS_DISABLE_SUBAGENTS=1 — skipping all subagent loading. "
+            "Parent agent has no `task` tool; subagent-routed commands "
+            "(/review, etc.) will execute directly in the parent context."
+        )
     project_root_for_bundled = effective_cwd if effective_cwd is not None else None
-    for subagent_meta in list_subagents(
-        user_agents_dir=user_agents_dir,
-        project_agents_dir=project_agents_dir,
-        project_root=project_root_for_bundled,
-    ):
+    subagent_iter = (
+        []
+        if subagents_disabled
+        else list_subagents(
+            user_agents_dir=user_agents_dir,
+            project_agents_dir=project_agents_dir,
+            project_root=project_root_for_bundled,
+        )
+    )
+    for subagent_meta in subagent_iter:
         subagent: SubAgent = {
             "name": subagent_meta["name"],
             "description": subagent_meta["description"],
@@ -856,6 +883,30 @@ def create_cli_agent(
     if sandbox is None:
         # ========== LOCAL MODE ==========
         root_dir = effective_cwd if effective_cwd is not None else Path.cwd()
+
+        # 0.8.0+ default: filesystem virtual_mode = True. Tools are
+        # confined to ``root_dir``; absolute paths outside root and
+        # ``..`` traversal are blocked. The old unrestricted behaviour
+        # is opt-in via ``BOG_AGENTS_FS_UNSANDBOXED=1`` (cross-repo
+        # refactors, reading ``~/.aws/credentials`` for an explicit IaC
+        # task, working from a subdir of the repo root).
+        #
+        # Previously this env var was honoured ONLY in the no-shell
+        # branch — shell-mode users had no escape hatch and would hit
+        # ``ValueError: Path:X outside root directory`` the moment the
+        # agent reached above its cwd. Now it gates both branches.
+        unsandboxed = os.environ.get(
+            "BOG_AGENTS_FS_UNSANDBOXED", ""
+        ).strip().lower() in ("1", "true", "yes")
+        if unsandboxed:
+            logger.warning(
+                "BOG_AGENTS_FS_UNSANDBOXED is set — agent filesystem "
+                "tools may read/write outside %s. Use only when you "
+                "intentionally want cross-repo or system-wide file "
+                "access.",
+                root_dir,
+            )
+
         if enable_shell:
             # Create environment for shell commands
             # Restore user's original LANGSMITH_PROJECT so their code traces separately
@@ -865,35 +916,17 @@ def create_cli_agent(
 
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
-            # on the execute tool natively.
+            # on the execute tool natively. Honour the same
+            # ``virtual_mode`` toggle as the no-shell branch.
             backend = LocalShellBackend(
                 root_dir=root_dir,
                 inherit_env=True,
                 env=shell_env,
+                virtual_mode=not unsandboxed,
             )
         else:
-            # No shell access - use plain FilesystemBackend.
-            #
-            # 0.8.0: default is ``virtual_mode=True`` (secure-by-default).
-            # The agent's ``read_file`` / ``write_file`` / ``edit_file``
-            # tools are now confined to ``root_dir``; absolute paths and
-            # ``..`` traversal are blocked. Power users who need the old
-            # unrestricted behavior (e.g. cross-repo refactors, reading
-            # ~/.aws/credentials for an explicit IaC task) can opt back
-            # in via the ``BOG_AGENTS_FS_UNSANDBOXED=1`` env var.
-            unsandboxed = os.environ.get("BOG_AGENTS_FS_UNSANDBOXED", "").strip() in (
-                "1",
-                "true",
-                "yes",
-            )
-            if unsandboxed:
-                logger.warning(
-                    "BOG_AGENTS_FS_UNSANDBOXED is set — agent filesystem "
-                    "tools may read/write outside %s. Use only when you "
-                    "intentionally want cross-repo or system-wide file "
-                    "access.",
-                    root_dir,
-                )
+            # No shell access - use plain FilesystemBackend with the
+            # same virtual_mode policy as the shell branch.
             backend = FilesystemBackend(
                 root_dir=root_dir,
                 virtual_mode=not unsandboxed,

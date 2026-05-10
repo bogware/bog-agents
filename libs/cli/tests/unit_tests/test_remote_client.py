@@ -603,10 +603,15 @@ class TestRemoteAgentInit:
             mock_cls.assert_called_once()
 
     def test_extended_read_timeout_applied_to_clients(self) -> None:
-        """Default 7200s read timeout is configured on the underlying httpx clients.
+        """Default 600s read timeout is configured on the underlying httpx clients.
 
-        The langgraph_sdk default is 300s; we extend it so /review-style turns
-        don't get killed mid-stream by the default deadline.
+        0.8.5: the default dropped from 7200s (2h) to 600s (10 min). A
+        2-hour per-chunk read deadline made hung Anthropic streams
+        effectively permanent — the user always killed the run before
+        the timeout fired, leaving them with the cancel cascade as the
+        only signal. 600s is well above any legitimate inter-chunk gap
+        (extended thinking, slow tool) but tight enough to surface a
+        real ``ReadTimeout`` to the user.
         """
         agent = RemoteAgent(url="http://localhost:8123")
         with (
@@ -619,7 +624,7 @@ class TestRemoteAgentInit:
                 _, kwargs = mock.call_args
                 timeout = kwargs.get("timeout")
                 assert timeout is not None
-                assert timeout.read == 7200.0
+                assert timeout.read == 600.0
 
     def test_read_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """BOG_AGENTS_REMOTE_READ_TIMEOUT overrides the default."""
