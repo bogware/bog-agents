@@ -244,7 +244,11 @@ class TestChatAnthropicCachedPropertyDefeated:
 
         import bog_agents_cli.server_graph
 
-        m = ChatAnthropic(model="claude-sonnet-4-6")
+        # ``ChatAnthropic`` declares the field as ``model_name`` and accepts
+        # ``model=`` at runtime via Pydantic alias, but ``ty`` sees only the
+        # declared field name and rejects ``model=`` as missing required arg.
+        # Use the declared name to satisfy both runtime and type checker.
+        m = ChatAnthropic(model_name="claude-sonnet-4-6")  # type: ignore[call-arg]
         c1 = m._async_client
         c2 = m._async_client
         assert c1 is not c2, (
