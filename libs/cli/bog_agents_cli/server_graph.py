@@ -251,9 +251,91 @@ def _install_stall_diagnostics() -> None:
     )
 
 
+def _install_anthropic_httpx_per_loop_fix() -> None:
+    """Bypass ``langchain_anthropic._client_utils``'s ``@lru_cache``.
+
+    Root cause of the reliable Windows ``/review`` / ``/audit`` stall —
+    rediscovered after multiple iterations of stack dumps that all
+    pointed at ``BaseChatModel._agenerate_with_cache:2010`` awaiting an
+    ``async_generator_asend`` that never produces a chunk:
+
+    ``langchain_anthropic/_client_utils.py:67`` decorates
+    ``_get_default_async_httpx_client`` with ``@lru_cache``. ONE
+    ``httpx.AsyncClient`` is therefore shared across every
+    ``ChatAnthropic`` instance and, critically, across every event
+    loop in the process. ``langgraph_runtime_inmem`` runs each
+    background run in an **isolated event loop**
+    (``BG_JOB_ISOLATED_LOOPS=true``, also visible in the server log
+    as ``Starting queue with isolated loops``). The shared httpx
+    client's internal anyio synchronisation primitives (locks, task
+    groups, the connection pool's per-connection futures) are bound
+    to whichever loop *first* used the client. Later runs in
+    different loops eventually hit a code path where they ``await``
+    one of those primitives — and the await never returns, because
+    the loop that owns the primitive has been closed.
+
+    Symptom: the model HTTP call wedges before httpx logs the request
+    line, Task #0 sits forever at ``async_generator_asend``, and
+    nothing else reveals where the actual block is. The pattern is
+    "first N runs succeed, then one — typically after a HITL approval
+    resume that creates a fresh isolated loop — hangs indefinitely".
+
+    Fix: replace the module-level ``_get_default_async_httpx_client``
+    (and sync counterpart) with a wrapper that calls the underlying
+    factory **directly**, bypassing ``lru_cache``. Each
+    ``ChatAnthropic`` instance now gets its own httpx client whose
+    primitives are local to its own caller's loop. This trades the
+    one-client-per-process optimisation for correctness on Windows —
+    the right trade for an interactive CLI where each agent run is a
+    discrete, short-lived event-loop scope.
+
+    Idempotent and best-effort: if the langchain-anthropic internals
+    move around between versions, we log and skip rather than crash.
+    """
+    try:
+        import langchain_anthropic._client_utils as _cu  # noqa: PLC2701  # patching upstream private module is the whole point
+    except ImportError:
+        logger.debug("langchain_anthropic not importable; httpx fix skipped")
+        return
+
+    for name in ("_get_default_async_httpx_client", "_get_default_httpx_client"):
+        cached = getattr(_cu, name, None)
+        if cached is None:
+            continue
+        # ``lru_cache`` exposes the underlying function via ``__wrapped__``.
+        # If it's missing, this isn't an lru_cache — leave it alone.
+        underlying = getattr(cached, "__wrapped__", None)
+        if underlying is None:
+            logger.debug(
+                "Anthropic httpx fix: %s is not an lru_cache wrapper "
+                "(type=%s); skipping",
+                name,
+                type(cached).__name__,
+            )
+            continue
+
+        def _make_fresh(orig: Any) -> Any:  # noqa: ANN401
+            def _fresh(**kwargs: Any) -> Any:  # noqa: ANN401
+                return orig(**kwargs)
+
+            _fresh.__name__ = f"{orig.__name__}_per_loop"
+            _fresh.__doc__ = orig.__doc__
+            return _fresh
+
+        setattr(_cu, name, _make_fresh(underlying))
+        logger.info(
+            "Anthropic httpx fix: replaced cached %s with per-call factory "
+            "(per-loop httpx clients to avoid event-loop binding deadlocks)",
+            name,
+        )
+
+
 # Install diagnostics at module import — before the graph is built, so
 # even a hang during ``make_graph()`` itself produces a stack dump.
 _install_stall_diagnostics()
+# Install BEFORE any model is created so the patch applies to every
+# ``ChatAnthropic`` constructed by ``make_graph()`` and below.
+_install_anthropic_httpx_per_loop_fix()
 
 # Module-level sandbox state kept alive for the server process lifetime.
 _sandbox_cm: Any = None
