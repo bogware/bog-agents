@@ -1831,6 +1831,24 @@ def _get_provider_kwargs(
     if provider == "openrouter":
         _apply_openrouter_defaults(result)
 
+    if provider == "anthropic":
+        # Anthropic SDK defaults: ``timeout=None`` (no overall request
+        # deadline) and ``max_retries=2``. These were chosen for batch
+        # workloads but they're hostile to interactive use:
+        #
+        # - No request timeout → a wedged stream sits there until the
+        #   per-chunk read timeout fires (still 600s, far too long when
+        #   the user is staring at a spinner).
+        # - max_retries=2 → if the first request hangs and finally
+        #   times out, the SDK silently retries TWICE before failing,
+        #   tripling the user-visible delay.
+        #
+        # We pin a 300s overall deadline and disable retries so a hung
+        # call surfaces in 5 minutes, not 30+. ``BOG_AGENTS_*`` overrides
+        # win (they're applied in ``extra_kwargs`` AFTER this block).
+        result.setdefault("timeout", 300.0)
+        result.setdefault("max_retries", 0)
+
     if provider in ("bedrock", "bedrock_converse") and "region_name" not in result:
         # Bedrock SDK requires a region. boto3's default-region resolution can
         # be surprising on Windows shells where ~/.aws/config isn't read by

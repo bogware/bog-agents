@@ -1220,9 +1220,15 @@ api_key_env = "FIREWORKS_API_KEY"
         assert kwargs == {}
 
     def test_unconfigured_providers_return_empty(self) -> None:
-        """Providers without config return empty kwargs."""
+        """Providers without config return empty kwargs (or built-in defaults).
+
+        0.8.5: Anthropic gets ``timeout=300`` and ``max_retries=0`` baked in
+        as built-in defaults so a hung model call surfaces in 5 minutes
+        instead of 30+ (Anthropic SDK defaults to no timeout + 2 retries,
+        which compounds hangs). All other providers still return empty.
+        """
         kwargs = _get_provider_kwargs("anthropic")
-        assert kwargs == {}
+        assert kwargs == {"timeout": 300.0, "max_retries": 0}
 
         kwargs = _get_provider_kwargs("google_genai")
         assert kwargs == {}

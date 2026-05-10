@@ -745,12 +745,39 @@ def create_cli_agent(
     # code-reviewer, test-author, and language-specific specialists from
     # the package's bundled_agents/ tree. User and project subagents
     # override on name conflict.
+    #
+    # ``BOG_AGENTS_DISABLE_SUBAGENTS=1`` skips subagent loading entirely.
+    # The parent agent then has no ``task`` tool and cannot invoke
+    # subagents — every step runs at the parent level. This is the
+    # workaround for a reliable deadlock where a subagent's
+    # HumanInTheLoop interrupt fires inside the parent's pregel
+    # invocation, the user approves, and the subagent's resumed model
+    # call stalls indefinitely (no httpx request ever leaves the
+    # process — it's stuck in the wrap_model_call middleware chain
+    # after a HITL resume). Until that root cause is fixed in the
+    # framework, this env var lets ``/review`` and similar
+    # subagent-heavy commands complete by running the work in the
+    # parent agent's context.
+    subagents_disabled = os.environ.get(
+        "BOG_AGENTS_DISABLE_SUBAGENTS", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if subagents_disabled:
+        logger.warning(
+            "BOG_AGENTS_DISABLE_SUBAGENTS=1 — skipping all subagent loading. "
+            "Parent agent has no `task` tool; subagent-routed commands "
+            "(/review, etc.) will execute directly in the parent context."
+        )
     project_root_for_bundled = effective_cwd if effective_cwd is not None else None
-    for subagent_meta in list_subagents(
-        user_agents_dir=user_agents_dir,
-        project_agents_dir=project_agents_dir,
-        project_root=project_root_for_bundled,
-    ):
+    subagent_iter = (
+        []
+        if subagents_disabled
+        else list_subagents(
+            user_agents_dir=user_agents_dir,
+            project_agents_dir=project_agents_dir,
+            project_root=project_root_for_bundled,
+        )
+    )
+    for subagent_meta in subagent_iter:
         subagent: SubAgent = {
             "name": subagent_meta["name"],
             "description": subagent_meta["description"],
