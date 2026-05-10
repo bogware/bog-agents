@@ -69,23 +69,68 @@ def _dump_asyncio_tasks(stream: Any) -> None:  # noqa: ANN401  # any text-stream
                 file=stream,
             )
             # ``get_stack()`` returns frames where the task is currently
-            # suspended (or the running frame if it's not suspended).
-            # On a wedged ``await`` the deepest frame is exactly the
-            # line we need. The list goes outermost → innermost, so we
-            # print in reverse to match a normal "most recent call last"
-            # traceback.
+            # suspended. For suspended tasks this is typically a single
+            # frame (the await point) — to see DEEPER (what the task is
+            # actually awaiting on, e.g. an httpx response or asyncio
+            # Future), we walk the ``cr_await`` chain from the
+            # coroutine itself. Each suspended coroutine has
+            # ``cr_await`` pointing at the awaitable it's blocked on,
+            # which can be another coroutine (recurse), an
+            # ``asyncio.Future``, an ``asyncio.Task``, or a low-level
+            # primitive. Walking this chain reveals the true bottom of
+            # the await stack.
             frames = task.get_stack(limit=30)
-            if not frames:
+            if frames:
+                for frame in frames:
+                    filename = frame.f_code.co_filename
+                    lineno = frame.f_lineno
+                    funcname = frame.f_code.co_name
+                    print(
+                        f'  File "{filename}", line {lineno}, in {funcname}',
+                        file=stream,
+                    )
+            else:
                 print("  (no frames — task complete or never started)", file=stream)
-                continue
-            for frame in frames:
-                filename = frame.f_code.co_filename
-                lineno = frame.f_lineno
-                funcname = frame.f_code.co_name
-                print(
-                    f'  File "{filename}", line {lineno}, in {funcname}',
-                    file=stream,
-                )
+            # Walk the cr_await chain (depth-limited).
+            current = coro
+            seen: set[int] = set()
+            depth = 0
+            max_depth = 20
+            while depth < max_depth:
+                cid = id(current)
+                if cid in seen:
+                    print("  ... (cycle detected)", file=stream)
+                    break
+                seen.add(cid)
+                awaiting = getattr(current, "cr_await", None)
+                if awaiting is None:
+                    awaiting = getattr(current, "ag_await", None)
+                if awaiting is None:
+                    break
+                # Inspect the awaitable.
+                if hasattr(awaiting, "cr_frame") or hasattr(awaiting, "ag_frame"):
+                    qn = getattr(awaiting, "__qualname__", repr(awaiting))
+                    fr = getattr(awaiting, "cr_frame", None) or getattr(
+                        awaiting, "ag_frame", None
+                    )
+                    if fr is not None:
+                        filename = fr.f_code.co_filename
+                        lineno = fr.f_lineno
+                        funcname = fr.f_code.co_name
+                        print(
+                            f"  → awaiting {qn} at {filename}:{lineno} ({funcname})",
+                            file=stream,
+                        )
+                    else:
+                        print(f"  → awaiting {qn} (no frame)", file=stream)
+                    current = awaiting
+                    depth += 1
+                else:
+                    print(
+                        f"  → awaiting {type(awaiting).__name__}: {awaiting!r}",
+                        file=stream,
+                    )
+                    break
         except Exception as exc:
             print(f"  (failed to format task: {exc})", file=stream)
     stream.flush()
