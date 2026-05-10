@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.4...bog-agents-cli==0.8.5) (2026-05-10)
+
+
+### Bug Fixes
+
+* unsandboxed fs shell mode ([#73](https://github.com/bogware/bog-agents/issues/73)) ([40526cb](https://github.com/bogware/bog-agents/commit/40526cb69f708a866b16e5abc2ed39cf046f2714))
+
 ## [0.8.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.3...bog-agents-cli==0.8.4) (2026-05-08)
 
 
