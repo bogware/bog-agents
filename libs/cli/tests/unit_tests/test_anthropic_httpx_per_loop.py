@@ -29,9 +29,11 @@ Manual repro (requires ``ANTHROPIC_API_KEY``)::
 
     chat = ChatAnthropic(model="claude-sonnet-4-6")
 
+
     async def call(i):
         r = await chat.ainvoke(f"say {i}")
         print(i, r.content[:30])
+
 
     # Without the fix this hangs around iteration 3-5 on Windows.
     for i in range(10):
@@ -61,8 +63,9 @@ class TestAnthropicHttpxPerLoopFix:
         """
         # Import lazily to keep this test self-contained: importing
         # server_graph triggers the install hook.
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415  # import has side-effects we're verifying
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import langchain_anthropic._client_utils as cu
+
+        import bog_agents_cli.server_graph  # import has side-effects we're verifying
 
         async_factory = cu._get_default_async_httpx_client
         # The original was an lru_cache wrapper. After the install,
@@ -82,8 +85,9 @@ class TestAnthropicHttpxPerLoopFix:
 
     def test_sync_factory_also_replaced(self) -> None:
         """The sync counterpart is patched too (it has the same bug shape)."""
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import langchain_anthropic._client_utils as cu
+
+        import bog_agents_cli.server_graph
 
         sync_factory = cu._get_default_httpx_client
         assert not hasattr(sync_factory, "cache_info")
@@ -98,13 +102,13 @@ class TestAnthropicHttpxPerLoopFix:
         re-call (e.g. someone calls ``_install_anthropic_httpx_per_loop_fix``
         explicitly) must not crash or break the patch.
         """
-        from bog_agents_cli import server_graph  # noqa: PLC0415
+        from bog_agents_cli import server_graph
 
         # First call already happened at module import. Run again.
         server_graph._install_anthropic_httpx_per_loop_fix()
         server_graph._install_anthropic_httpx_per_loop_fix()
         # And the patch is still in place.
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import langchain_anthropic._client_utils as cu
 
         assert not hasattr(cu._get_default_async_httpx_client, "cache_info")
 
@@ -116,8 +120,9 @@ class TestAnthropicHttpxPerLoopFix:
         method (so it's a real httpx-compatible async client, not a
         stub).
         """
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import langchain_anthropic._client_utils as cu
+
+        import bog_agents_cli.server_graph
 
         client = cu._get_default_async_httpx_client(base_url=None)
         # Real httpx async clients expose ``aclose``.
@@ -140,15 +145,16 @@ class TestPatchShapeRegression:
         # We do this by inspecting the source to find ``@lru_cache`` —
         # importing the module would already be patched if any other
         # test ran server_graph first.
-        import inspect  # noqa: PLC0415
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import inspect
+
+        import langchain_anthropic._client_utils as cu
 
         source = inspect.getsource(cu)
         # If the upstream removes @lru_cache we want a heads-up. This
         # is not a hard failure — just a signal that the patch may no
         # longer be needed.
         if "@lru_cache" not in source:
-            import warnings  # noqa: PLC0415
+            import warnings
 
             warnings.warn(
                 "langchain_anthropic._client_utils no longer uses "
@@ -194,10 +200,11 @@ class TestChatAnthropicCachedPropertyDefeated:
     """
 
     def test_async_client_is_property_not_cached_property(self) -> None:
-        import functools  # noqa: PLC0415
+        import functools
 
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415  # triggers patch
-        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+        from langchain_anthropic.chat_models import ChatAnthropic
+
+        import bog_agents_cli.server_graph  # triggers patch
 
         descriptor = ChatAnthropic.__dict__["_async_client"]
         assert isinstance(descriptor, property), (
@@ -209,10 +216,11 @@ class TestChatAnthropicCachedPropertyDefeated:
         assert not isinstance(descriptor, functools.cached_property)
 
     def test_sync_client_is_property_not_cached_property(self) -> None:
-        import functools  # noqa: PLC0415
+        import functools
 
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
-        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+        from langchain_anthropic.chat_models import ChatAnthropic
+
+        import bog_agents_cli.server_graph
 
         descriptor = ChatAnthropic.__dict__["_client"]
         assert isinstance(descriptor, property)
@@ -229,11 +237,12 @@ class TestChatAnthropicCachedPropertyDefeated:
         ``AsyncAnthropic`` whose primitives are local to the *current*
         loop.
         """
-        import os  # noqa: PLC0415
+        import os
 
         os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test")
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415
-        from langchain_anthropic.chat_models import ChatAnthropic  # noqa: PLC0415
+        from langchain_anthropic.chat_models import ChatAnthropic
+
+        import bog_agents_cli.server_graph
 
         m = ChatAnthropic(model="claude-sonnet-4-6")
         c1 = m._async_client
@@ -270,10 +279,11 @@ class TestEachIsolatedLoopGetsFreshClient:
         the FIRST loop. After the patch, each call gets a fresh
         client local to its own loop.
         """
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
-        import bog_agents_cli.server_graph  # noqa: F401, PLC0415  # triggers patch
-        import langchain_anthropic._client_utils as cu  # noqa: PLC0415, PLC2701
+        import langchain_anthropic._client_utils as cu
+
+        import bog_agents_cli.server_graph  # triggers patch
 
         clients: list[object] = []
 

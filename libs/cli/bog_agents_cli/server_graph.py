@@ -64,8 +64,7 @@ def _dump_asyncio_tasks(stream: Any) -> None:  # noqa: ANN401  # any text-stream
             done = task.done()
             cancelled = task.cancelled() if done else False
             print(
-                f"\n--- Task #{i}: {qualname} "
-                f"(done={done}, cancelled={cancelled}) ---",
+                f"\n--- Task #{i}: {qualname} (done={done}, cancelled={cancelled}) ---",
                 file=stream,
             )
             # ``get_stack()`` returns frames where the task is currently
@@ -186,10 +185,10 @@ def _install_stall_diagnostics() -> None:
     # noise". Anything else (bog_agents_cli, httpx, langgraph_api.worker,
     # langchain, etc.) is treated as a real-progress signal.
     noise_logger_prefixes = (
-        "langgraph_runtime_inmem.queue",   # "Queue stats", "Worker stats"
+        "langgraph_runtime_inmem.queue",  # "Queue stats", "Worker stats"
         "langgraph_runtime_inmem._persistence",  # flush loop
-        "langgraph_api.cron_scheduler",     # cron tick
-        "langgraph_api.metadata",           # metadata refresh loop
+        "langgraph_api.cron_scheduler",  # cron tick
+        "langgraph_api.metadata",  # metadata refresh loop
     )
 
     last_activity = [time.monotonic()]

@@ -377,8 +377,7 @@ def install_safe_subprocess_stderr_default() -> bool:
     _INSTALLED_SAFE_STDERR = log_file
     _INSTALL_DONE = True
     logger.info(
-        "Installed permanent safe stderr override for MCP subprocess spawns "
-        "(log: %s)",
+        "Installed permanent safe stderr override for MCP subprocess spawns (log: %s)",
         _ensure_log_path(),
     )
     return True
