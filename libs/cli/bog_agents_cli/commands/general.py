@@ -208,6 +208,140 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_think_command",
     ),
+    # ---- Creative & exploration ---------------------------------------
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/imagine",
+            "Spawn N parallel subagents, each takes a different angle on the prompt",
+            "parallel approaches variations explore ideate brainstorm options angles",
+            "general",
+            available=True,
+            subcommands=(
+                ("[N]", "Number of approaches to explore (default 3, max 6)"),
+                ("[prompt]", "The problem to explore (defaults to last user message)"),
+            ),
+        ),
+        handler_method="_handle_imagine_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/devil",
+            "Critique the last assistant message with an adversarial second pass",
+            "critique adversarial devils-advocate review challenge counter",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_devil_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/squad",
+            "Multi-persona dialogue — security/perf/clarity personas debate code or design",
+            "personas team review debate dialogue multi-agent",
+            "general",
+            available=True,
+            subcommands=(
+                ("review [target]", "Round-robin review of code/file/last-message"),
+                ("list", "List configured personas (~/.bog-agents/squad.toml)"),
+                ("init", "Create the default squad.toml with Alice/Bob/Carol"),
+            ),
+        ),
+        handler_method="_handle_squad_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/dream",
+            "Overnight ideation — daemon-driven exploration of TODOs and open issues",
+            "ambient ideation overnight todos issues background nightly explore",
+            "general",
+            available=True,
+            subcommands=(
+                ("run", "Trigger a dream pass now (manual)"),
+                ("config", "Show or edit the dream configuration"),
+                ("list", "List recent dream files in ~/.bog-agents/dreams/"),
+                ("install", "Install a daemon job that runs dreams nightly"),
+            ),
+        ),
+        handler_method="_handle_dream_command",
+    ),
+    # ---- Productivity helpers -----------------------------------------
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/scratch",
+            "Ephemeral git worktrees with isolated venvs for safe experiments",
+            "worktree experiment sandbox disposable ephemeral isolation",
+            "general",
+            available=True,
+            subcommands=(
+                ("new [label]", "Create a new scratch worktree"),
+                ("list", "List active scratches"),
+                ("enter <id>", "Switch the active working directory to a scratch"),
+                ("drop <id>", "Delete a scratch worktree + venv"),
+                ("drop --all", "Delete every scratch (asks for confirmation)"),
+            ),
+        ),
+        handler_method="_handle_scratch_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/proxy",
+            "Promote any shell command to an agent tool without writing an MCP server",
+            "tool register shell command wrap mcp custom",
+            "general",
+            available=True,
+            subcommands=(
+                ("add", "Register a new shell-command tool"),
+                ("list", "List registered proxy tools"),
+                ("remove <name>", "Unregister a proxy tool"),
+                ("show <name>", "Show the full definition of a proxy tool"),
+            ),
+        ),
+        handler_method="_handle_proxy_command",
+    ),
+    # ---- SDLC unlocks --------------------------------------------------
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/release-train",
+            "Generate release notes, migration guide, and deprecation table from a tag",
+            "release notes changelog migration deprecation upgrade-guide tag",
+            "general",
+            available=True,
+            subcommands=(
+                ("[tag]", "Generate notes for a specific tag (defaults to latest)"),
+                ("[from]..[to]", "Generate notes for a range (e.g. v0.8.5..v0.8.6)"),
+            ),
+        ),
+        handler_method="_handle_release_train_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/whisper",
+            "Passive observation — agent watches file edits + git for a window, then synthesises",
+            "passive observe watch background ambient synthesis",
+            "general",
+            available=True,
+            subcommands=(
+                ("start [minutes]", "Begin watching (default 30 minutes)"),
+                ("stop", "Stop watching and emit the report"),
+                ("status", "Show whisper state + current event count"),
+                ("report", "Re-emit the last report"),
+            ),
+        ),
+        handler_method="_handle_whisper_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/handoff",
+            "Compile a handoff doc in the next dev's voice — what was tried, what's pending",
+            "handoff context transfer summary teammate next-dev async remote",
+            "general",
+            available=True,
+            subcommands=(
+                ("[author]", "Name of the next dev (used as voice — optional)"),
+            ),
+        ),
+        handler_method="_handle_handoff_command",
+    ),
     SlashCommand(
         spec=SlashCommandSpec(
             "/version",

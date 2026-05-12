@@ -758,12 +758,29 @@ def create_cli_agent(
 
         model = _create_model(model).model
 
-    tools = tools or []
+    tools = list(tools or [])
     effective_cwd = (
         Path(cwd)
         if cwd is not None
         else (project_context.user_cwd if project_context is not None else None)
     )
+
+    # User-defined proxy tools — shell-command templates registered via
+    # ``/proxy add``. They live in ``~/.bog-agents/proxies.toml`` and are
+    # materialised as LangChain StructuredTools at build time. Failure
+    # to load any one tool is logged but never blocks agent creation.
+    try:
+        from bog_agents_cli.proxy_tools import build_proxy_tools
+
+        proxy_tools = build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        if proxy_tools:
+            tools.extend(proxy_tools)
+            logger.info(
+                "Loaded %d proxy tools from ~/.bog-agents/proxies.toml",
+                len(proxy_tools),
+            )
+    except Exception:
+        logger.warning("Failed to build proxy tools; skipping", exc_info=True)
 
     # Setup agent directory for persistent memory (if enabled)
     if enable_memory or enable_skills:

@@ -9873,6 +9873,216 @@ class BogAgentsApp(App):
             )
         )
 
+    # ---- New "killer-features" handlers ----------------------------------
+    # The implementations live in dedicated modules in bog_agents_cli/ so
+    # each feature is testable without the TUI; this handler is a thin
+    # adapter that mounts user-visible messages around the call.
+
+    async def _handle_handoff_command(self, command: str) -> None:
+        """``/handoff [author]`` — compile a context-transfer document.
+
+        Captures the current session's conversation, recent git activity,
+        and modified files, then asks the active model to write a brief
+        in the next dev's voice. Saves to
+        ``~/.bog-agents/handoffs/<timestamp>-<branch>.md`` and renders
+        the body in chat.
+        """
+        from bog_agents_cli.handoff import run_handoff
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        author = command.strip()[len(prefix) :].strip()
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /handoff while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Compiling handoff")
+        try:
+            result = await run_handoff(self, author_voice=author)
+        except Exception as exc:
+            logger.exception("/handoff failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
+            return
+        await self._set_spinner("")
+
+        await self._mount_message(
+            AppMessage(
+                f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
+                f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                f"{result.content}"
+            )
+        )
+
+    async def _handle_release_train_command(self, command: str) -> None:
+        """``/release-train [tag | from..to]`` — generate release notes + migration guide.
+
+        Reads ``git log <prev>..<tag>``, classifies commits by
+        Conventional-Commit type, optionally enriches with PR titles
+        via ``gh``, and asks the model to render user-facing notes,
+        a breaking-changes table, deprecations, and an upgrade guide.
+        Saves to ``~/.bog-agents/release-notes/<range>.md``.
+        """
+        from bog_agents_cli.release_train import run_release_train
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /release-train while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Building release notes")
+        try:
+            result = await run_release_train(self, raw_arg)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/release-train: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/release-train failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/release-train failed: {exc}"))
+            return
+        await self._set_spinner("")
+
+        await self._mount_message(
+            AppMessage(
+                f"[bold]Release notes for[/bold] [cyan]{result.tag_range}[/cyan] "
+                f"saved to [cyan]{result.path}[/cyan] "
+                f"([dim]{len(result.commits)} commits, "
+                f"{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                f"{result.content}"
+            )
+        )
+
+    async def _handle_imagine_command(self, command: str) -> None:
+        """``/imagine [N] [prompt]`` — spawn N parallel angles on the same problem."""
+        from bog_agents_cli.imagine import run_imagine
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /imagine while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Imagining approaches in parallel")
+        try:
+            result = await run_imagine(self, raw_arg)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/imagine failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
+            return
+        await self._set_spinner("")
+        await self._mount_message(AppMessage(result.render()))
+
+    async def _handle_devil_command(self, command: str) -> None:
+        """``/devil`` — critique the last assistant message adversarially."""
+        from bog_agents_cli.devil import run_devil
+
+        await self._mount_message(UserMessage(command))
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /devil while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Summoning devil's advocate")
+        try:
+            result = await run_devil(self)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/devil: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/devil failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
+            return
+        await self._set_spinner("")
+        await self._mount_message(AppMessage(result.render()))
+
+    async def _handle_squad_command(self, command: str) -> None:
+        """``/squad`` — multi-persona dialogue review."""
+        from bog_agents_cli.squad import handle_squad_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_squad_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/squad failed")
+            await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+
+    async def _handle_dream_command(self, command: str) -> None:
+        """``/dream`` — overnight ideation, daemon-backed."""
+        from bog_agents_cli.dream import handle_dream_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_dream_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/dream failed")
+            await self._mount_message(ErrorMessage(f"/dream failed: {exc}"))
+
+    async def _handle_scratch_command(self, command: str) -> None:
+        """``/scratch`` — disposable git worktrees with isolated venvs."""
+        from bog_agents_cli.scratch import handle_scratch_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_scratch_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/scratch failed")
+            await self._mount_message(ErrorMessage(f"/scratch failed: {exc}"))
+
+    async def _handle_proxy_command(self, command: str) -> None:
+        """``/proxy`` — register shell commands as agent tools."""
+        from bog_agents_cli.proxy_tools import handle_proxy_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_proxy_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/proxy failed")
+            await self._mount_message(ErrorMessage(f"/proxy failed: {exc}"))
+
+    async def _handle_whisper_command(self, command: str) -> None:
+        """``/whisper`` — passive observation mode (file edits + git tail)."""
+        from bog_agents_cli.whisper import handle_whisper_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_whisper_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/whisper failed")
+            await self._mount_message(ErrorMessage(f"/whisper failed: {exc}"))
+
     async def _handle_rules_command(self, command: str) -> None:
         """Handle `/rules` project rules management.
 
