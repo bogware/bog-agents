@@ -105,15 +105,21 @@ class TestAdaptiveContext:
     def test_detect_known_model(self):
         from bog_agents.middleware.adaptive_context import detect_context_window
 
+        # ``detect_context_window`` now consults installed provider
+        # profiles first; upstream values may differ slightly from the
+        # curated fallback (e.g. Google reports 1,048,576 = 1024*1024
+        # for gemini-2.5-pro, not the round 1 000 000 we cached). Pin
+        # the floors that matter for the tiering logic rather than the
+        # exact figures upstream is free to revise.
         assert detect_context_window("claude-sonnet-4-6") == 200_000
         assert detect_context_window("gpt-4o") == 128_000
-        assert detect_context_window("gemini-2.5-pro") == 1_000_000
+        assert detect_context_window("gemini-2.5-pro") >= 1_000_000
 
     def test_detect_with_provider_prefix(self):
         from bog_agents.middleware.adaptive_context import detect_context_window
 
         assert detect_context_window("anthropic:claude-sonnet-4-6") == 200_000
-        assert detect_context_window("google_genai:gemini-2.5-pro") == 1_000_000
+        assert detect_context_window("google_genai:gemini-2.5-pro") >= 1_000_000
 
     def test_unknown_model_uses_default(self):
         from bog_agents.middleware.adaptive_context import detect_context_window

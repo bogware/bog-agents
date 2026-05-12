@@ -49,16 +49,26 @@ _MODEL_COSTS: dict[str, tuple[float, float]] = {
     "deepseek-v3": (0.27, 1.10),
 }
 
-# Default context window sizes
+# Default context window sizes.
+#
+# Curated fallback only — :func:`_resolve_context_window` consults the
+# installed LangChain provider package's ``_PROFILES`` first via
+# :func:`bog_agents.middleware.adaptive_context.detect_context_window`,
+# so new 1M+ models do not require an entry here. Keep the table
+# short and update only when a model is missing upstream.
 _CONTEXT_WINDOWS: dict[str, int] = {
+    # Anthropic — 1M tier with Opus 4.7
+    "claude-opus-4-7": 1_000_000,
     "claude-sonnet-4-6": 200_000,
     "claude-opus-4-6": 200_000,
     "claude-haiku-4-5": 200_000,
+    # OpenAI
     "gpt-5": 1_000_000,
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
     "o3": 200_000,
     "o4-mini": 200_000,
+    # Google
     "gemini-2.5-pro": 1_000_000,
     "gemini-3-flash": 1_000_000,
     "gemini-3-pro": 1_000_000,
@@ -149,8 +159,23 @@ class CostTracker:
 
     @property
     def context_window_size(self) -> int:
-        """Get the context window size for the current model."""
-        return _CONTEXT_WINDOWS.get(self.model_name, 200_000)
+        """Get the context window size for the current model.
+
+        Routes through :func:`adaptive_context.detect_context_window`
+        so live LangChain provider profiles win over the curated
+        fallback. Without this routing, ``cost_tracker`` would silently
+        cap a 1M-context model at the legacy 200K default and the
+        in-session budget bar would lie about how much headroom is
+        left.
+        """
+        from bog_agents.middleware.adaptive_context import detect_context_window
+
+        # Pass our own dict as a last-resort hint by raising the
+        # default to whatever the curated table has for this model
+        # name, so callers still get the curated value when the
+        # provider package isn't installed.
+        fallback = _CONTEXT_WINDOWS.get(self.model_name, 200_000)
+        return detect_context_window(self.model_name, default=fallback)
 
     def record_usage(
         self,

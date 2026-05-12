@@ -210,8 +210,23 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
 
 
 async def _run_shell_step(step: QAStep, bundle: VarBundle) -> StepResult:
-    """Run a shell step. Captures stdout+stderr, applies verdict rules."""
-    rendered_run = bundle.substitute(step.run)
+    """Run a ``shell`` step. Captures stdout+stderr, applies verdict rules.
+
+    Shell injection defence: the user-authored ``step.run`` is intentionally
+    executed with ``shell=True`` so plan authors can use pipes, redirects,
+    and glob expansion — shell semantics for the *template* are preserved.
+    Variable values, however, may come from less-trusted sources (env
+    vars, CLI flags, prompts, recorded sessions); a value like
+    ``"; rm -rf $HOME ;"`` must not escape its argument and run as a
+    separate command. Passing ``shell_quote=True`` to
+    :meth:`VarBundle.substitute` neutralises that by wrapping every
+    interpolated ``${var}`` with the platform-appropriate quoter
+    (``shlex.quote`` on POSIX, the cmd.exe-aware quoter in
+    :mod:`bog_agents_cli.vars`).
+    """
+    rendered_run = bundle.substitute(step.run, shell_quote=True)
+    # ``env`` values are dict entries, never reach the shell parser — no
+    # quoting needed there.
     rendered_env = bundle.substitute(step.env) if step.env else {}
     rendered_env = bundle.vault.render(rendered_env)
     started = time.time()

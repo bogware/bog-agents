@@ -751,10 +751,23 @@ def create_app(
         # instead. We still accept a daemon-token request — that's how the
         # in-process CLI test harness fires webhooks — but we no longer
         # *require* it, which would have made external use impossible.
-        # If a trigger configures a webhook_secret, the X-Hub-Signature-256
-        # check below is the sole guard. If neither auth is presented and
-        # the trigger has no secret, we treat the webhook as a public
-        # entry point (as documented).
+        #
+        # Security contract — fail closed
+        # -------------------------------
+        # 1. If a valid daemon token is presented, the request is trusted
+        #    and the HMAC check is skipped (CLI test path).
+        # 2. If no token is presented AND the trigger has a non-empty
+        #    ``webhook_secret``, the X-Hub-Signature-256 HMAC check is
+        #    the sole guard; mismatch → trigger is silently skipped.
+        # 3. If no token is presented AND the trigger has an empty
+        #    ``webhook_secret``, the request is REJECTED for that trigger
+        #    (a warning is logged for the operator). Empty secret means
+        #    "misconfigured trigger", not "public endpoint" — the latter
+        #    is too easy to misconfigure into an open RCE.
+        # An earlier version of this comment block claimed empty secrets
+        # were "public entry points"; that was always aspirational and
+        # never matched the rejection logic below. See
+        # tests/unit_tests/test_webhook_auth.py for the pinned behaviour.
         provided_token = request.headers.get("X-Daemon-Token", "")
         is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token)
         raw_body = await request.body()

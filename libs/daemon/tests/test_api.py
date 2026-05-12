@@ -319,3 +319,136 @@ class TestWebhooks:
 
         assert resp.status_code == 200
         assert job.job_id in resp.json()["triggered"]
+
+
+# ---------------------------------------------------------------------------
+# Webhook auth — fail-closed security contract
+# ---------------------------------------------------------------------------
+
+
+class TestWebhookFailClosed:
+    """Pin the safe-by-default behaviour the audit (PRINCIPAL_REVIEW §2.3) checks.
+
+    Historically the header docstring above the webhook handler said
+    "empty secret = public entry point" — that was aspirational text
+    that never matched the rejection logic in the handler. These
+    tests pin the actual fail-closed behaviour so neither the comment
+    NOR the code can drift back to admitting unauthenticated
+    callers when ``webhook_secret`` is empty.
+    """
+
+    def _make_webhook_job(
+        self,
+        *,
+        secret: str | None,
+        path: str = "/hooks/external",
+    ) -> AmbientJob:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="external-hook", prompt="ack")
+        job.triggers = [
+            TriggerConfig(
+                type=TriggerType.WEBHOOK,
+                webhook_path=path,
+                webhook_secret=secret,
+            )
+        ]
+        upsert_job(job)
+        return job
+
+    def test_empty_secret_rejects_unauthenticated_request(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        """Empty secret + no token → trigger MUST NOT fire."""
+        job = self._make_webhook_job(secret="")
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            # No X-Daemon-Token header, no X-Hub-Signature-256 header.
+            resp = client.post("/webhooks/hooks/external", json={"event": "x"})
+
+        assert resp.status_code == 200, "endpoint always returns 200 for valid path"
+        # The triggered list MUST NOT include this job — empty secret
+        # means misconfigured, not public.
+        assert job.job_id not in resp.json()["triggered"], (
+            "Empty webhook_secret without an authenticated daemon token "
+            "MUST NOT fire the job. See PRINCIPAL_REVIEW.md §2.3 and the "
+            "fail-closed comment block above receive_webhook()."
+        )
+
+    def test_none_secret_rejects_unauthenticated_request(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        """`secret=None` is treated identically to empty secret — also rejected."""
+        job = self._make_webhook_job(secret=None)
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post("/webhooks/hooks/external", json={"event": "x"})
+
+        assert resp.status_code == 200
+        assert job.job_id not in resp.json()["triggered"]
+
+    def test_empty_secret_still_rejects_with_wrong_token(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        """Bogus X-Daemon-Token must not unlock an empty-secret trigger."""
+        job = self._make_webhook_job(secret="")
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/hooks/external",
+                json={"event": "x"},
+                headers={"X-Daemon-Token": "wrong-token"},
+            )
+
+        assert resp.status_code == 200
+        assert job.job_id not in resp.json()["triggered"]
+
+    def test_valid_token_bypasses_empty_secret_rejection(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """The CLI test path: valid daemon token DOES fire even with empty secret.
+
+        This is intentional — the local CLI test harness needs to fire
+        webhooks against its own daemon without configuring HMAC.
+        """
+        job = self._make_webhook_job(secret="")
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/hooks/external",
+                json={"event": "x"},
+                headers=auth,
+            )
+
+        assert resp.status_code == 200
+        assert job.job_id in resp.json()["triggered"]
+
+    def test_valid_signature_fires_without_token(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        """Configured secret + matching HMAC → trigger fires (no daemon token)."""
+        import hashlib
+        import hmac
+        import json
+
+        secret = "shared-deploy-secret"
+        job = self._make_webhook_job(secret=secret)
+        payload = json.dumps({"event": "x"}).encode("utf-8")
+        signature = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/hooks/external",
+                content=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": signature,
+                },
+            )
+
+        assert resp.status_code == 200
+        assert job.job_id in resp.json()["triggered"]
+
+    def test_mismatched_signature_does_not_fire(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        """Configured secret + wrong HMAC → trigger MUST NOT fire."""
+        job = self._make_webhook_job(secret="shared-deploy-secret")
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/hooks/external",
+                json={"event": "x"},
+                headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+            )
+
+        assert resp.status_code == 200
+        assert job.job_id not in resp.json()["triggered"]
