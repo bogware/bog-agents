@@ -36,11 +36,6 @@ from bog_agents_cli.provider_catalog import (
 
 logger = logging.getLogger(__name__)
 
-# Debounce window (seconds) between the user's last keystroke and the
-# filter pass. 80ms feels instant on a typical TUI and folds bursts of
-# fast typing into a single filter call.
-_FILTER_DEBOUNCE_SECONDS = 0.08
-
 
 class ModelOption(Static):
     """A clickable model option in the selector."""
@@ -294,7 +289,6 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         # build-order. Initially equals `_option_widgets` (all visible).
         self._visible_widgets: list[ModelOption] = []
         self._filter_text = ""
-        self._filter_timer: Any = None
         self._smoketest_running = False
         self._current_spec: str | None = None
         if current_model and current_provider:
@@ -384,29 +378,21 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         filter_input.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Filter models as user types — debounced to coalesce keystroke bursts.
+        """Filter models as user types.
 
-        Avoids the O(N) DOM rebuild that earlier versions of this picker
-        triggered per keystroke. Two changes work together:
-
-        1. ``set_timer`` defers the actual filter pass by
-           ``_FILTER_DEBOUNCE_SECONDS`` so fast typing yields a single
-           filter pass per pause instead of one-per-key.
-        2. ``_apply_filter`` flips ``.display`` on existing widgets
-           rather than removing/remounting them. The widget set built
-           at mount stays put for the life of the screen.
+        Runs synchronously because ``_apply_filter`` is O(N) over the
+        in-memory widget set and only flips ``.display`` on each option
+        — there is no DOM rebuild and no Rich re-render of unchanged
+        widgets, so a per-keystroke pass is cheap. Earlier versions
+        debounced this via ``set_timer`` to coalesce the expensive full
+        rebuild; removing the rebuild also removed the need to defer.
+        Running synchronously matters for the test pilot — assertions
+        on ``_selected_index`` after ``pilot.press`` see the filtered
+        state without waiting for a timer tick (CI flake on Python 3.12
+        where the default ``pilot.pause`` window beat the timer).
         """
         self._filter_text = event.value
-        # Cancel any pending filter timer so we don't run a stale value
-        # right after a fresh keystroke.
-        if self._filter_timer is not None:
-            try:
-                self._filter_timer.stop()
-            except Exception:
-                logger.debug("Failed to stop pending filter timer", exc_info=True)
-        self._filter_timer = self.set_timer(
-            _FILTER_DEBOUNCE_SECONDS, self._apply_filter
-        )
+        self._apply_filter()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter key when filter input is focused.
