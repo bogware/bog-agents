@@ -181,6 +181,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/refresh-models",
+            "Re-scan installed providers and rebuild the model catalog",
+            "models providers catalog refresh ollama bedrock anthropic openai",
+            "config",
+            available=True,
+        ),
+        handler_method="_handle_refresh_models_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/reload",
             "Reload config from environment variables and `.env`",
             "refresh",
@@ -188,6 +198,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
         ),
         handler_method="_handle_reload_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/smoketest",
+            "Test model+provider connectivity — credentials, network, tiny inference call",
+            "test ping verify smoke connection auth inference thinking bedrock",
+            "config",
+            available=True,
+            subcommands=(
+                ("[provider:model]", "Test a specific model spec (defaults to active)"),
+                ("--thinking", "Also exercise extended-thinking parameter support"),
+            ),
+        ),
+        handler_method="_handle_smoketest_command",
     ),
     SlashCommand(
         spec=SlashCommandSpec(

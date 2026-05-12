@@ -26,10 +26,20 @@ from bog_agents_cli.model_config import (
     get_available_models,
     get_model_profiles,
     has_provider_credentials,
+    refresh_available_models,
     save_default_model,
+)
+from bog_agents_cli.provider_catalog import (
+    ModelDisplay,
+    derive_model_display,
 )
 
 logger = logging.getLogger(__name__)
+
+# Debounce window (seconds) between the user's last keystroke and the
+# filter pass. 80ms feels instant on a typical TUI and folds bursts of
+# fast typing into a single filter call.
+_FILTER_DEBOUNCE_SECONDS = 0.08
 
 
 class ModelOption(Static):
@@ -43,6 +53,8 @@ class ModelOption(Static):
         index: int,
         *,
         has_creds: bool | None = True,
+        display: ModelDisplay | None = None,
+        search_blob: str = "",
         classes: str = "",
     ) -> None:
         """Initialize a model option.
@@ -54,6 +66,12 @@ class ModelOption(Static):
             index: The index of this option in the filtered list.
             has_creds: Whether the provider has valid credentials. True if
                 confirmed, False if missing, None if unknown.
+            display: Derived display metadata (display_name, family,
+                supports_thinking). When None, the picker treats the
+                option as legacy with no human-readable label.
+            search_blob: Pre-computed lower-cased text the picker fuzzy-
+                matches against. Includes the spec, display_name, family,
+                and vendor so the user can find a model by any of them.
             classes: CSS classes for styling.
         """
         super().__init__(label, classes=classes)
@@ -61,6 +79,8 @@ class ModelOption(Static):
         self.provider = provider
         self.index = index
         self.has_creds = has_creds
+        self.model_display = display
+        self.search_blob = search_blob or model_spec.lower()
 
     class Clicked(Message):
         """Message sent when a model option is clicked."""
@@ -88,6 +108,19 @@ class ModelOption(Static):
         self.post_message(self.Clicked(self.model_spec, self.provider, self.index))
 
 
+class ProviderHeader(Static):
+    """A provider-section header in the model picker.
+
+    Subclasses ``Static`` only to attach the provider id as an attribute,
+    so the filter pass can hide headers whose section has no visible
+    options without parsing Rich markup.
+    """
+
+    def __init__(self, *args: Any, provider: str, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.provider = provider
+
+
 class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
     """Full-screen modal for model selection.
 
@@ -107,6 +140,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         Binding("pagedown", "page_down", "Page down", show=False, priority=True),
         Binding("enter", "select", "Select", show=False, priority=True),
         Binding("ctrl+s", "set_default", "Set default", show=False, priority=True),
+        Binding("ctrl+r", "refresh_catalog", "Refresh", show=False, priority=True),
+        Binding("ctrl+t", "smoketest", "Smoketest", show=False, priority=True),
         Binding("escape", "cancel", "Cancel", show=False, priority=True),
     ]
 
@@ -217,22 +252,60 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         super().__init__()
         self._current_model = current_model
         self._current_provider = current_provider
+        self._cli_profile_override = cli_profile_override
 
-        # Build list from dynamically discovered models (falls back to defaults)
+        # Build list from dynamically discovered models (falls back to defaults).
         self._all_models: list[tuple[str, str]] = []
         for provider, models in get_available_models().items():
             for model in models:
                 model_spec = f"{provider}:{model}"
                 self._all_models.append((model_spec, provider))
 
+        # Derive display metadata once per model so the filter loop can
+        # search across spec + display name + family without re-deriving
+        # on every keystroke.
+        self._displays: dict[str, ModelDisplay] = {
+            spec: derive_model_display(provider, spec.split(":", 1)[1])
+            for spec, provider in self._all_models
+        }
+
+        # The "search blob" is the lower-cased text the fuzzy matcher
+        # compares against. Pre-computing it once avoids string ops per
+        # keystroke per model.
+        self._search_blobs: dict[str, str] = {
+            spec: " ".join(
+                (
+                    spec.lower(),
+                    self._displays[spec].display_name.lower(),
+                    self._displays[spec].family,
+                    self._displays[spec].vendor,
+                    self._displays[spec].provider_display.lower(),
+                )
+            )
+            for spec, _ in self._all_models
+        }
+
         self._filtered_models: list[tuple[str, str]] = list(self._all_models)
         self._selected_index = self._find_current_model_index()
         self._options_container: Container | None = None
         self._option_widgets: list[ModelOption] = []
+        # `_visible_widgets` is kept in sync with `_filtered_models` so
+        # `_move_selection` can index by score-order position rather than
+        # build-order. Initially equals `_option_widgets` (all visible).
+        self._visible_widgets: list[ModelOption] = []
         self._filter_text = ""
+        self._filter_timer: Any = None
+        self._smoketest_running = False
         self._current_spec: str | None = None
         if current_model and current_provider:
             self._current_spec = f"{current_provider}:{current_model}"
+
+        # Pre-resolve credentials once per provider so neither the
+        # initial build nor selection-move recomputes them.
+        providers_in_list = {p for _, p in self._all_models}
+        self._creds: dict[str, bool | None] = {
+            p: has_provider_credentials(p) for p in providers_in_list
+        }
 
         config = ModelConfig.load()
         self._default_spec: str | None = config.default_model
@@ -290,7 +363,9 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             help_text = (
                 f"{glyphs.arrow_up}/{glyphs.arrow_down} navigate"
                 f" {glyphs.bullet} Enter select"
-                f" {glyphs.bullet} Ctrl+S set default"
+                f" {glyphs.bullet} Ctrl+S default"
+                f" {glyphs.bullet} Ctrl+T test"
+                f" {glyphs.bullet} Ctrl+R refresh"
                 f" {glyphs.bullet} Esc cancel"
             )
             yield Static(help_text, classes="model-selector-help")
@@ -301,7 +376,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             container = self.query_one(Vertical)
             container.styles.border = ("ascii", "green")
 
-        await self._update_display()
+        await self._build_widget_set()
         self._update_footer()
 
         # Focus the filter input
@@ -309,14 +384,29 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         filter_input.focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Filter models as user types.
+        """Filter models as user types — debounced to coalesce keystroke bursts.
 
-        Args:
-            event: The input changed event.
+        Avoids the O(N) DOM rebuild that earlier versions of this picker
+        triggered per keystroke. Two changes work together:
+
+        1. ``set_timer`` defers the actual filter pass by
+           ``_FILTER_DEBOUNCE_SECONDS`` so fast typing yields a single
+           filter pass per pause instead of one-per-key.
+        2. ``_apply_filter`` flips ``.display`` on existing widgets
+           rather than removing/remounting them. The widget set built
+           at mount stays put for the life of the screen.
         """
         self._filter_text = event.value
-        self._update_filtered_list()
-        self.call_after_refresh(self._update_display)
+        # Cancel any pending filter timer so we don't run a stale value
+        # right after a fresh keystroke.
+        if self._filter_timer is not None:
+            try:
+                self._filter_timer.stop()
+            except Exception:
+                logger.debug("Failed to stop pending filter timer", exc_info=True)
+        self._filter_timer = self.set_timer(
+            _FILTER_DEBOUNCE_SECONDS, self._apply_filter
+        )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter key when filter input is focused.
@@ -339,7 +429,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
     def _update_filtered_list(self) -> None:
         """Update the filtered models based on search text using fuzzy matching.
 
-        Results are sorted by match score (best first).
+        Results are sorted by match score (best first). Search blobs are
+        pre-computed in ``__init__`` so this only does the score loop.
         """
         query = self._filter_text.strip()
         if not query:
@@ -353,7 +444,8 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             matchers = [Matcher(token, case_sensitive=False) for token in tokens]
             scored: list[tuple[float, str, str]] = []
             for spec, provider in self._all_models:
-                scores = [m.match(spec) for m in matchers]
+                blob = self._search_blobs.get(spec, spec.lower())
+                scores = [m.match(blob) for m in matchers]
                 if all(s > 0 for s in scores):
                     scored.append((min(scores), spec, provider))
         except Exception:
@@ -372,12 +464,12 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         ]
         self._selected_index = 0
 
-    async def _update_display(self) -> None:
-        """Render the model list grouped by provider.
+    async def _build_widget_set(self) -> None:
+        """Build the full set of ``ModelOption`` widgets once.
 
-        Performs a full DOM rebuild (removes all children, re-mounts).
-        Arrow-key navigation uses `_move_selection` instead to avoid
-        the cost of a full rebuild.
+        Called on initial mount and on Ctrl+R refresh. Subsequent filter
+        changes flip ``.display`` on existing widgets instead of rebuilding
+        — see :meth:`_apply_filter`.
         """
         if not self._options_container:
             return
@@ -385,65 +477,45 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         await self._options_container.remove_children()
         self._option_widgets = []
 
-        if not self._filtered_models:
-            no_matches = Static("[dim]No matching models[/dim]")
-            await self._options_container.mount(no_matches)
+        if not self._all_models:
+            no_models = Static("[dim]No models discovered[/dim]")
+            await self._options_container.mount(no_models)
             self._update_footer()
             return
 
         # Group by provider, preserving insertion order so models from the
         # same provider cluster together in the visual list.
         by_provider: dict[str, list[tuple[str, str]]] = {}
-        for model_spec, provider in self._filtered_models:
+        for model_spec, provider in self._all_models:
             by_provider.setdefault(provider, []).append((model_spec, provider))
-
-        # Rebuild _filtered_models to match the provider-grouped display
-        # order. Without this, _filtered_models stays in score-sorted order
-        # while _option_widgets follow provider-grouped order, causing
-        # _update_footer to look up the wrong model for the highlighted
-        # index.
-        grouped_order: list[tuple[str, str]] = []
-        for entries in by_provider.values():
-            grouped_order.extend(entries)
-
-        # Remap selected_index so the same model stays highlighted.
-        old_spec = self._filtered_models[self._selected_index][0]
-        self._filtered_models = grouped_order
-        self._selected_index = next(
-            (i for i, (s, _) in enumerate(grouped_order) if s == old_spec),
-            0,
-        )
 
         glyphs = get_glyphs()
         flat_index = 0
-        selected_widget: ModelOption | None = None
+        current_spec = self._current_spec
 
-        # Build current model spec for comparison
-        current_spec = None
-        if self._current_model and self._current_provider:
-            current_spec = f"{self._current_provider}:{self._current_model}"
-
-        # Resolve credentials upfront so the widget-building loop
-        # stays focused on layout
-        creds = {p: has_provider_credentials(p) for p in by_provider}
-
-        # Collect all widgets first, then batch-mount once to avoid
-        # individual DOM mutations per widget
+        # Batch-mount all widgets in a single mount call to avoid
+        # individual DOM mutations per widget.
         all_widgets: list[Static] = []
 
         for provider, model_entries in by_provider.items():
-            # Provider header with credential indicator
-            has_creds = creds[provider]
+            has_creds = self._creds.get(provider)
             if has_creds is True:
                 cred_indicator = glyphs.checkmark
             elif has_creds is False:
                 cred_indicator = f"{glyphs.warning} missing credentials"
             else:
                 cred_indicator = f"{glyphs.question} credentials unknown"
+            provider_display = (
+                self._displays[model_entries[0][0]].provider_display
+                if model_entries
+                else provider
+            )
             all_widgets.append(
-                Static(
-                    f"[bold]{provider}[/bold] [dim]{cred_indicator}[/dim]",
+                ProviderHeader(
+                    f"[bold]{provider_display}[/bold] [dim]({provider}) "
+                    f"{cred_indicator}[/dim]",
                     classes="model-provider-header",
+                    provider=provider,
                 )
             )
 
@@ -464,6 +536,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
                     has_creds=has_creds,
                     is_default=model_spec == self._default_spec,
                     status=self._get_model_status(model_spec),
+                    display=self._displays.get(model_spec),
                 )
                 widget = ModelOption(
                     label=label,
@@ -471,27 +544,100 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
                     provider=provider,
                     index=flat_index,
                     has_creds=has_creds,
+                    display=self._displays.get(model_spec),
+                    search_blob=self._search_blobs.get(model_spec, ""),
                     classes=classes,
                 )
                 all_widgets.append(widget)
                 self._option_widgets.append(widget)
 
-                if is_selected:
-                    selected_widget = widget
-
                 flat_index += 1
 
         await self._options_container.mount(*all_widgets)
 
-        # Scroll the selected item into view without animation so the list
-        # appears already scrolled to the current model on first paint.
-        if selected_widget:
-            if self._selected_index == 0:
-                # First item: scroll to top so header is visible
-                scroll_container = self.query_one(".model-list", VerticalScroll)
-                scroll_container.scroll_home(animate=False)
+        # Reset filtered list to "all" so _apply_filter doesn't think
+        # nothing matches before the first keystroke.
+        self._filtered_models = list(self._all_models)
+        self._visible_widgets = list(self._option_widgets)
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Filter the existing widget set in-place based on ``_filter_text``.
+
+        Hot path: runs on every keystroke (after the debounce). Performance
+        depends on this being O(N) over widgets with no DOM mutation
+        beyond toggling ``.display`` on each option.
+        """
+        # Score / order the candidates.
+        self._update_filtered_list()
+        matched_specs = {spec for spec, _ in self._filtered_models}
+
+        spec_to_widget: dict[str, ModelOption] = {
+            w.model_spec: w for w in self._option_widgets
+        }
+
+        # Rebuild _visible_widgets in score order so navigation keys
+        # follow the user's filter ranking.
+        self._visible_widgets = [
+            spec_to_widget[spec]
+            for spec, _ in self._filtered_models
+            if spec in spec_to_widget
+        ]
+
+        # Toggle widget visibility. Track per-provider counts so we can
+        # hide headers whose group has no visible options.
+        visible_options_per_provider: dict[str, int] = {}
+        for widget in self._option_widgets:
+            visible = widget.model_spec in matched_specs
+            widget.display = visible
+            if visible:
+                visible_options_per_provider[widget.provider] = (
+                    visible_options_per_provider.get(widget.provider, 0) + 1
+                )
+
+        # Hide provider headers whose group has no visible options.
+        if self._options_container is not None:
+            for header in self._options_container.query(ProviderHeader):
+                header.display = (
+                    visible_options_per_provider.get(header.provider, 0) > 0
+                )
+
+        if not self._filtered_models:
+            self._selected_index = 0
+            self._update_footer()
+            return
+
+        # _update_filtered_list set _selected_index to 0 when a filter is
+        # active. Clamp just in case the caller poked it.
+        if self._selected_index >= len(self._filtered_models):
+            self._selected_index = 0
+        target_spec = self._filtered_models[self._selected_index][0]
+
+        # Re-paint visible widgets' selection styling.
+        for w in self._visible_widgets:
+            is_selected = w.model_spec == target_spec
+            is_current = w.model_spec == self._current_spec
+            if is_selected:
+                w.add_class("model-option-selected")
             else:
-                selected_widget.scroll_visible(animate=False)
+                w.remove_class("model-option-selected")
+            w.update(
+                self._format_option_label(
+                    w.model_spec,
+                    selected=is_selected,
+                    current=is_current,
+                    has_creds=w.has_creds,
+                    is_default=w.model_spec == self._default_spec,
+                    status=self._get_model_status(w.model_spec),
+                    display=w.model_display,
+                )
+            )
+
+        if target_spec in spec_to_widget:
+            try:
+                spec_to_widget[target_spec].scroll_visible(animate=False)
+            except Exception:
+                logger.debug("scroll_visible failed", exc_info=True)
 
         self._update_footer()
 
@@ -504,6 +650,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         has_creds: bool | None,
         is_default: bool = False,
         status: str | None = None,
+        display: ModelDisplay | None = None,
     ) -> str:
         """Build the display label for a model option.
 
@@ -516,18 +663,29 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             status: Model status from profile (e.g., `'deprecated'`,
                 `'beta'`, `'alpha'`). `'deprecated'` renders in red;
                 other non-None values render in yellow.
+            display: Derived display metadata (display_name + thinking
+                support). When provided, the label leads with the
+                human-readable name and dims the raw spec.
 
         Returns:
             Rich-markup label string.
         """
         glyphs = get_glyphs()
         cursor = f"{glyphs.cursor} " if selected else "  "
+
+        # Primary text: human-readable display name when available,
+        # otherwise fall back to the raw spec.
+        primary = display.display_name if display else model_spec
         if not has_creds:
-            spec_text = f"[yellow]{model_spec}[/yellow]"
+            primary_text = f"[yellow]{primary}[/yellow]"
         elif is_default:
-            spec_text = f"[cyan]{model_spec}[/cyan]"
+            primary_text = f"[cyan]{primary}[/cyan]"
         else:
-            spec_text = model_spec
+            primary_text = primary
+
+        # Always include the raw spec so power users can read the API id.
+        spec_hint = f"  [dim]{model_spec}[/dim]" if display else ""
+
         suffix = " [dim](current)[/dim]" if current else ""
         default_suffix = " [cyan](default)[/cyan]" if is_default else ""
         if status == "deprecated":
@@ -536,7 +694,15 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             status_suffix = f" [yellow]({status})[/yellow]"
         else:
             status_suffix = ""
-        return f"{cursor}{spec_text}{suffix}{default_suffix}{status_suffix}"
+        thinking_suffix = (
+            " [magenta]✨ thinking[/magenta]"
+            if display and display.supports_thinking
+            else ""
+        )
+        return (
+            f"{cursor}{primary_text}{spec_hint}{suffix}"
+            f"{default_suffix}{status_suffix}{thinking_suffix}"
+        )
 
     @staticmethod
     def _format_footer(
@@ -670,16 +836,16 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         Args:
             delta: Number of positions to move (-1 for up, +1 for down).
         """
-        if not self._filtered_models or not self._option_widgets:
+        if not self._filtered_models or not self._visible_widgets:
             return
 
-        count = len(self._filtered_models)
-        old_index = self._selected_index
+        count = len(self._visible_widgets)
+        old_index = self._selected_index % count
         new_index = (old_index + delta) % count
         self._selected_index = new_index
 
         # Update the previously selected widget
-        old_widget = self._option_widgets[old_index]
+        old_widget = self._visible_widgets[old_index]
         old_widget.remove_class("model-option-selected")
         old_widget.update(
             self._format_option_label(
@@ -689,11 +855,12 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
                 has_creds=old_widget.has_creds,
                 is_default=old_widget.model_spec == self._default_spec,
                 status=self._get_model_status(old_widget.model_spec),
+                display=old_widget.model_display,
             )
         )
 
         # Update the newly selected widget
-        new_widget = self._option_widgets[new_index]
+        new_widget = self._visible_widgets[new_index]
         new_widget.add_class("model-option-selected")
         new_widget.update(
             self._format_option_label(
@@ -703,6 +870,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
                 has_creds=new_widget.has_creds,
                 is_default=new_widget.model_spec == self._default_spec,
                 status=self._get_model_status(new_widget.model_spec),
+                display=new_widget.model_display,
             )
         )
 
@@ -839,7 +1007,7 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
             # Already default — clear it
             if await asyncio.to_thread(clear_default_model):
                 self._default_spec = None
-                self.call_after_refresh(self._update_display)
+                self.call_after_refresh(self._apply_filter)
                 help_widget.update("[bold]Default cleared[/bold]")
                 self.set_timer(3.0, self._restore_help_text)
             else:
@@ -859,12 +1027,93 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         glyphs = get_glyphs()
         help_text = (
             f"{glyphs.arrow_up}/{glyphs.arrow_down} navigate"
-            f" {glyphs.bullet} Enter select + set as default"
-            f" {glyphs.bullet} Ctrl+S toggle default"
+            f" {glyphs.bullet} Enter select"
+            f" {glyphs.bullet} Ctrl+S default"
+            f" {glyphs.bullet} Ctrl+T test"
+            f" {glyphs.bullet} Ctrl+R refresh"
             f" {glyphs.bullet} Esc cancel"
         )
         help_widget = self.query_one(".model-selector-help", Static)
         help_widget.update(help_text)
+
+    async def action_refresh_catalog(self) -> None:
+        """Reload the model catalog from upstream profiles + cache.
+
+        Clears the in-memory caches, re-derives the list, rebuilds the
+        widget set in place. Useful after installing a new provider
+        package or after the user adds a custom model to config.toml.
+        """
+        import asyncio
+
+        help_widget = self.query_one(".model-selector-help", Static)
+        help_widget.update("[bold]Refreshing model catalog…[/bold]")
+        try:
+            await asyncio.to_thread(refresh_available_models)
+            # Rebuild internal model list + display metadata.
+            self._all_models = []
+            for provider, models in get_available_models().items():
+                for model in models:
+                    spec = f"{provider}:{model}"
+                    self._all_models.append((spec, provider))
+            self._displays = {
+                spec: derive_model_display(provider, spec.split(":", 1)[1])
+                for spec, provider in self._all_models
+            }
+            self._search_blobs = {
+                spec: " ".join(
+                    (
+                        spec.lower(),
+                        self._displays[spec].display_name.lower(),
+                        self._displays[spec].family,
+                        self._displays[spec].vendor,
+                        self._displays[spec].provider_display.lower(),
+                    )
+                )
+                for spec, _ in self._all_models
+            }
+            providers_in_list = {p for _, p in self._all_models}
+            self._creds = {p: has_provider_credentials(p) for p in providers_in_list}
+            self._profiles = get_model_profiles(cli_override=self._cli_profile_override)
+            self._selected_index = self._find_current_model_index()
+            await self._build_widget_set()
+            help_widget.update(
+                f"[bold]Catalog refreshed — {len(self._all_models)} models[/bold]"
+            )
+        except Exception:
+            logger.warning("Failed to refresh model catalog", exc_info=True)
+            help_widget.update("[bold red]Refresh failed — see logs[/bold red]")
+        self.set_timer(3.0, self._restore_help_text)
+
+    async def action_smoketest(self) -> None:
+        """Run a quick connectivity test against the highlighted model.
+
+        Opens a ``SmoketestResult`` modal with credentials / inference /
+        thinking steps. Disabled while another smoketest is in flight to
+        avoid stacking duplicate calls.
+        """
+        import asyncio
+
+        if self._smoketest_running:
+            return
+        if not self._filtered_models:
+            return
+        model_spec, _provider = self._filtered_models[self._selected_index]
+
+        help_widget = self.query_one(".model-selector-help", Static)
+        help_widget.update(f"[bold]Smoketest {model_spec}…[/bold] (Ctrl+T to re-run)")
+        self._smoketest_running = True
+        try:
+            # Lazy import — keeps the cold-start cost of opening the picker low.
+            from bog_agents_cli.smoketest import smoketest_model
+
+            result = await asyncio.to_thread(smoketest_model, model_spec)
+            help_widget.update(result.summary_markup())
+        except Exception as exc:
+            logger.warning("Smoketest failed for %s", model_spec, exc_info=True)
+            help_widget.update(f"[bold red]Smoketest crashed: {exc}[/bold red]")
+        finally:
+            self._smoketest_running = False
+        self.set_timer(8.0, self._restore_help_text)
 
     def action_cancel(self) -> None:
         """Cancel the selection."""

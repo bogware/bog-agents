@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import shutil
 import subprocess  # noqa: S404
+import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import urlopen
+
+logger = logging.getLogger(__name__)
 
 OPENAI_DETECTION_EXACT: frozenset[str] = frozenset(
     {
@@ -108,21 +115,38 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
         ),
         # bedrock_converse is the modern wrapper; recommends the same IDs.
         "bedrock_converse": (
+            # Cross-region inference profile IDs (preferred — higher quota,
+            # on-demand throughput is being deprecated for newer Anthropic models).
             "us.anthropic.claude-opus-4-7",
-            "anthropic.claude-opus-4-7",
+            "eu.anthropic.claude-opus-4-7",
+            "apac.anthropic.claude-opus-4-7",
             "us.anthropic.claude-sonnet-4-6",
-            "anthropic.claude-sonnet-4-6",
+            "eu.anthropic.claude-sonnet-4-6",
+            "apac.anthropic.claude-sonnet-4-6",
             "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
             "us.anthropic.claude-opus-4-6-v1",
-            "anthropic.claude-opus-4-6-v1",
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us.anthropic.claude-opus-4-1-20250805-v1:0",
+            # Base IDs (work in single-region calls without an inference profile).
+            "anthropic.claude-opus-4-7",
+            "anthropic.claude-sonnet-4-6",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
             "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            # Amazon Nova
             "us.amazon.nova-premier-v1:0",
             "us.amazon.nova-pro-v1:0",
             "us.amazon.nova-lite-v1:0",
+            "us.amazon.nova-micro-v1:0",
+            # Meta / Mistral / DeepSeek
             "us.meta.llama4-maverick-17b-instruct-v1:0",
+            "us.meta.llama4-scout-17b-instruct-v1:0",
+            "us.meta.llama3-3-70b-instruct-v1:0",
             "us.mistral.mistral-large-3-2411-v1:0",
+            "us.mistral.pixtral-large-2502-v1:0",
+            "us.deepseek.deepseek-r1-v1:0",
         ),
         "google_genai": (
             # Live IDs from ai.google.dev/gemini-api/docs/models
@@ -390,3 +414,395 @@ def get_supplemental_model_profiles(provider: str) -> Mapping[str, dict[str, Any
 def get_profile_overrides(provider: str) -> Mapping[str, dict[str, Any]]:
     """Return curated profile overrides for an installed provider profile set."""
     return PROFILE_OVERRIDES.get(provider, MappingProxyType({}))
+
+
+# ---------------------------------------------------------------------------
+# Display-name derivation
+# ---------------------------------------------------------------------------
+
+_PROVIDER_DISPLAY_NAMES: Mapping[str, str] = MappingProxyType(
+    {
+        "anthropic": "Anthropic",
+        "azure_openai": "Azure OpenAI",
+        "baseten": "Baseten",
+        "bedrock": "AWS Bedrock",
+        "bedrock_converse": "AWS Bedrock",
+        "cohere": "Cohere",
+        "deepseek": "DeepSeek",
+        "fireworks": "Fireworks",
+        "google_genai": "Google Gemini",
+        "google_vertexai": "Google Vertex AI",
+        "groq": "Groq",
+        "huggingface": "Hugging Face",
+        "ibm": "IBM watsonx",
+        "litellm": "LiteLLM",
+        "mistralai": "Mistral",
+        "nvidia": "NVIDIA NIM",
+        "ollama": "Ollama (local)",
+        "openai": "OpenAI",
+        "openrouter": "OpenRouter",
+        "perplexity": "Perplexity",
+        "together": "Together",
+        "xai": "xAI",
+    }
+)
+
+
+def get_provider_display_name(provider: str) -> str:
+    """Return a human-readable label for a provider id (e.g. 'AWS Bedrock').
+
+    Falls back to a title-cased version of the raw id when the provider
+    isn't in the curated mapping.
+    """
+    if provider in _PROVIDER_DISPLAY_NAMES:
+        return _PROVIDER_DISPLAY_NAMES[provider]
+    return provider.replace("_", " ").title()
+
+
+@dataclass(frozen=True)
+class ModelDisplay:
+    """Derived display metadata for a `provider:model` spec.
+
+    Attributes:
+        spec: The original `provider:model` string (preserved verbatim).
+        display_name: Human-readable label (e.g. 'Claude Sonnet 4.6').
+        provider_display: Provider label (e.g. 'AWS Bedrock').
+        family: Coarse family tag for grouping ('claude', 'gemini', 'gpt',
+            'nova', 'llama', 'mistral', 'ollama', or '' if unknown).
+        vendor: Origin vendor when distinct from the API provider — e.g.
+            Bedrock-hosted Anthropic models have vendor='anthropic',
+            provider='bedrock_converse'.
+        supports_thinking: True if the model is known to support native
+            extended-thinking / reasoning APIs.
+        is_inference_profile: True for Bedrock cross-region inference
+            profile IDs (`us.*`, `eu.*`, `apac.*`, ...).
+    """
+
+    spec: str
+    display_name: str
+    provider_display: str
+    family: str
+    vendor: str
+    supports_thinking: bool
+    is_inference_profile: bool
+
+
+_CLAUDE_NAME_RE = re.compile(
+    r"claude[-_.]?(opus|sonnet|haiku)[-_.]?(\d+)(?:[-_.](\d+))?",
+    re.IGNORECASE,
+)
+_GEMINI_NAME_RE = re.compile(r"gemini[-_.]?(\d+)(?:[-_.](\d+))?", re.IGNORECASE)
+_GPT_NAME_RE = re.compile(r"gpt[-_.]?(\d+)(?:[-_.](\d+))?", re.IGNORECASE)
+_NOVA_NAME_RE = re.compile(r"nova[-_.]?(\w+)", re.IGNORECASE)
+_LLAMA_NAME_RE = re.compile(r"llama[-_.]?(\d+)(?:[-_.](\d+))?", re.IGNORECASE)
+
+
+def _strip_bedrock_prefix(model_id: str) -> tuple[str, str, bool]:
+    """Split a Bedrock model id into (region_prefix, bare_id, is_profile).
+
+    Returns:
+        (region, bare, is_profile) — region is '' when not a cross-region
+        profile id, is_profile True when the id has a `us.` / `eu.` /
+        `apac.` / etc. prefix.
+    """
+    lower = model_id.lower()
+    for region in BEDROCK_REGION_PREFIXES:
+        if lower.startswith(region):
+            return (region.rstrip("."), model_id[len(region) :], True)
+    return ("", model_id, False)
+
+
+def _detect_family_and_vendor(model_name: str) -> tuple[str, str]:
+    """Return (family, vendor) for a bare model name.
+
+    Vendor is the upstream maker (anthropic/openai/google/meta/mistral/
+    amazon/deepseek). Family is a finer grouping suitable for the picker.
+    """
+    name = model_name.lower()
+    # Bedrock vendor prefixes encode the vendor explicitly.
+    for vendor_prefix in BEDROCK_VENDOR_PREFIXES:
+        if name.startswith(vendor_prefix):
+            vendor = vendor_prefix.rstrip(".")
+            # Sub-family hint from the remainder.
+            tail = name[len(vendor_prefix) :]
+            if "claude" in tail:
+                return ("claude", vendor)
+            if "nova" in tail:
+                return ("nova", vendor)
+            if "llama" in tail:
+                return ("llama", vendor)
+            if "mistral" in tail or "pixtral" in tail:
+                return ("mistral", vendor)
+            if "deepseek" in tail:
+                return ("deepseek", vendor)
+            return (vendor, vendor)
+    if "claude" in name:
+        return ("claude", "anthropic")
+    if name.startswith(("gemini", "models/gemini")):
+        return ("gemini", "google")
+    if name.startswith(("gpt-", "chatgpt", "codex-")):
+        return ("gpt", "openai")
+    if name.startswith(("o1", "o3", "o4")):
+        return ("o-series", "openai")
+    if "nova" in name:
+        return ("nova", "amazon")
+    if "llama" in name:
+        return ("llama", "meta")
+    if "mistral" in name or "pixtral" in name:
+        return ("mistral", "mistral")
+    if "deepseek" in name:
+        return ("deepseek", "deepseek")
+    if "qwen" in name:
+        return ("qwen", "alibaba")
+    if "nemotron" in name:
+        return ("nemotron", "nvidia")
+    return ("", "")
+
+
+def supports_native_thinking(model_name: str) -> bool:
+    """Return whether a bare model name supports native extended-thinking APIs.
+
+    Mirrors the detection in ``bog_agents.middleware.thinking`` so the CLI
+    can show a 'thinking-capable' marker without importing the SDK middleware.
+    """
+    name = model_name.lower()
+    if "claude-3-7" in name or "claude-3.7" in name:
+        return True
+    if "claude-sonnet-4" in name or "claude-opus-4" in name or "claude-haiku-4" in name:
+        return True
+    if "gemini-2.5" in name or "gemini-2-5" in name:
+        return True
+    if "gemini-3" in name:
+        return True
+    # OpenAI o-series reasoning models.
+    return name.startswith(("o1", "o3", "o4"))
+
+
+def _humanize_claude(bare: str) -> str:
+    """Render a Claude bare model id as 'Claude Sonnet 4.6'."""
+    m = _CLAUDE_NAME_RE.search(bare)
+    if not m:
+        return bare
+    variant = m.group(1).capitalize()
+    major = m.group(2)
+    minor = m.group(3)
+    label = f"Claude {variant} {major}"
+    if minor:
+        label += f".{minor}"
+    return label
+
+
+def _humanize_gemini(bare: str) -> str:
+    """Render a Gemini bare id as 'Gemini 2.5 Pro'."""
+    m = _GEMINI_NAME_RE.search(bare)
+    if not m:
+        return bare
+    major, minor = m.group(1), m.group(2)
+    version = f"{major}.{minor}" if minor else major
+    tail = bare[m.end() :].lstrip("-_.")
+    # Common qualifiers
+    qual = ""
+    lower_tail = tail.lower()
+    for k, v in (("pro", "Pro"), ("flash-lite", "Flash Lite"), ("flash", "Flash")):
+        if k in lower_tail:
+            qual = v
+            break
+    if "preview" in lower_tail:
+        qual = f"{qual} Preview".strip()
+    return f"Gemini {version}{(' ' + qual) if qual else ''}".strip()
+
+
+def _humanize_gpt(bare: str) -> str:
+    """Render an OpenAI GPT bare id as 'GPT-5.4 Mini'."""
+    m = _GPT_NAME_RE.search(bare)
+    if not m:
+        return bare
+    major, minor = m.group(1), m.group(2)
+    version = f"{major}.{minor}" if minor else major
+    tail = bare[m.end() :].lstrip("-_.")
+    qual = ""
+    if tail:
+        if "mini" in tail.lower():
+            qual = "Mini"
+        elif "nano" in tail.lower():
+            qual = "Nano"
+        elif "codex" in tail.lower():
+            qual = "Codex"
+    return f"GPT-{version}{(' ' + qual) if qual else ''}".strip()
+
+
+def derive_model_display(provider: str, model_name: str) -> ModelDisplay:
+    """Derive a `ModelDisplay` for a single `provider:model` pair.
+
+    Pure function — no I/O, safe to call in a tight UI loop.
+
+    Args:
+        provider: Provider id (e.g. 'anthropic', 'bedrock_converse').
+        model_name: The raw model id as it appears in API calls.
+
+    Returns:
+        ModelDisplay with human-readable display_name, family, vendor,
+        and capability flags.
+    """
+    spec = f"{provider}:{model_name}"
+    provider_display = get_provider_display_name(provider)
+
+    # Bedrock special-cases: strip region prefix and vendor prefix.
+    is_profile = False
+    bare = model_name
+    if provider in ("bedrock", "bedrock_converse"):
+        _region, after_region, is_profile = _strip_bedrock_prefix(model_name)
+        # Strip vendor prefix too for the display name.
+        for vendor_prefix in BEDROCK_VENDOR_PREFIXES:
+            if after_region.lower().startswith(vendor_prefix):
+                bare = after_region[len(vendor_prefix) :]
+                break
+        else:
+            bare = after_region
+
+    family, vendor = _detect_family_and_vendor(model_name)
+
+    if family == "claude":
+        display = _humanize_claude(bare)
+    elif family == "gemini":
+        display = _humanize_gemini(bare)
+    elif family in ("gpt", "o-series"):
+        if family == "o-series":
+            # 'o1-mini' -> 'OpenAI o1 Mini'
+            parts = bare.split("-")
+            head = parts[0]
+            tail = " ".join(p.capitalize() for p in parts[1:]) if len(parts) > 1 else ""
+            display = f"OpenAI {head}{(' ' + tail) if tail else ''}".strip()
+        else:
+            display = _humanize_gpt(bare)
+    elif family == "nova":
+        m = _NOVA_NAME_RE.search(bare)
+        tier = m.group(1).capitalize() if m else bare
+        display = f"Nova {tier}"
+    elif family == "llama":
+        m = _LLAMA_NAME_RE.search(bare)
+        if m:
+            major, minor = m.group(1), m.group(2)
+            version = f"{major}.{minor}" if minor else major
+            display = f"Llama {version}"
+        else:
+            display = bare
+    elif family == "mistral":
+        display = bare.split(":", 1)[0].replace("-", " ").title()
+    elif family == "deepseek":
+        display = bare.replace("-", " ").title()
+    else:
+        # Last-resort: title-case the bare name (helps Ollama / unknown).
+        display = bare.replace("-", " ").replace("_", " ").title() or model_name
+
+    if is_profile:
+        # Tag inference-profile-prefixed Bedrock entries so the picker
+        # shows them distinctly from plain regional model ids.
+        region, _, _ = _strip_bedrock_prefix(model_name)
+        display = f"{display} (Bedrock {region.upper()})"
+
+    return ModelDisplay(
+        spec=spec,
+        display_name=display,
+        provider_display=provider_display,
+        family=family,
+        vendor=vendor,
+        supports_thinking=supports_native_thinking(model_name),
+        is_inference_profile=is_profile,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cached model catalog (disk persistence for fast cold-start)
+# ---------------------------------------------------------------------------
+
+# Default cache file lives next to user config. Importable as a function so
+# tests can monkey-patch ``Path.home`` without polluting module-level state.
+_CACHE_FILENAME = "models.cache.json"
+_CACHE_FORMAT_VERSION = 1
+_CACHE_TTL_SECONDS = 7 * 24 * 3600  # one week — refreshable on demand
+
+
+def _default_cache_path() -> Path:
+    """Return the canonical path to the on-disk model catalog cache."""
+    return Path.home() / ".bog-agents" / _CACHE_FILENAME
+
+
+def load_cached_catalog(
+    *, path: Path | None = None
+) -> Mapping[str, tuple[str, ...]] | None:
+    """Load the persisted model catalog if present and not expired.
+
+    Args:
+        path: Override the default cache location (tests).
+
+    Returns:
+        A ``{provider: (model, ...)}`` mapping when a fresh cache is on
+        disk; ``None`` when there is no cache, the file is malformed, or
+        the entry is older than ``_CACHE_TTL_SECONDS``.
+    """
+    cache_path = path or _default_cache_path()
+    try:
+        with cache_path.open(encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("version") != _CACHE_FORMAT_VERSION:
+        return None
+    ts = payload.get("ts")
+    if not isinstance(ts, (int, float)):
+        return None
+    if time.time() - ts > _CACHE_TTL_SECONDS:
+        return None
+
+    providers = payload.get("providers")
+    if not isinstance(providers, dict):
+        return None
+    result: dict[str, tuple[str, ...]] = {}
+    for provider, models in providers.items():
+        if not isinstance(provider, str) or not isinstance(models, list):
+            continue
+        names = tuple(str(m) for m in models if isinstance(m, str))
+        if names:
+            result[provider] = names
+    return result or None
+
+
+def save_cached_catalog(
+    catalog: Mapping[str, Sequence[str]], *, path: Path | None = None
+) -> bool:
+    """Persist ``catalog`` to the on-disk cache. Returns success."""
+    cache_path = path or _default_cache_path()
+    payload: dict[str, Any] = {
+        "version": _CACHE_FORMAT_VERSION,
+        "ts": time.time(),
+        "providers": {p: list(models) for p, models in catalog.items()},
+    }
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic write: write to tmp then rename so a crash mid-write
+        # never leaves a half-written cache file.
+        tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=True)
+        tmp.replace(cache_path)
+    except OSError:
+        logger.debug("Failed to persist model catalog cache", exc_info=True)
+        return False
+    return True
+
+
+def clear_cached_catalog(*, path: Path | None = None) -> bool:
+    """Delete the on-disk cache. Returns whether a file was removed."""
+    cache_path = path or _default_cache_path()
+    try:
+        cache_path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        logger.debug("Failed to delete model catalog cache", exc_info=True)
+        return False
+    return True

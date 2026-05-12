@@ -3451,6 +3451,104 @@ class BogAgentsApp(App):
         report += "\nModel config caches cleared."
         await self._mount_message(AppMessage(report))
 
+    async def _handle_refresh_models_command(self, command: str) -> None:
+        """Re-scan installed providers and rebuild the model catalog cache.
+
+        Reads the live state of every installed langchain provider package
+        (and the local Ollama daemon, if running), persists the result to
+        ``~/.bog-agents/models.cache.json``, and reports the per-provider
+        counts. Picker views opened afterwards see the fresh list.
+        """
+        from bog_agents_cli.model_config import refresh_available_models
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage("Refreshing model catalog…"))
+        try:
+            catalog = await asyncio.to_thread(refresh_available_models)
+        except Exception as exc:
+            logger.exception("refresh-models failed")
+            await self._mount_message(
+                ErrorMessage(f"Failed to refresh model catalog: {exc}")
+            )
+            return
+
+        total = sum(len(models) for models in catalog.values())
+        lines = [
+            f"[bold]Catalog refreshed — {total} models across "
+            f"{len(catalog)} providers[/bold]\n"
+        ]
+        for provider in sorted(catalog):
+            lines.append(f"  • {provider}: {len(catalog[provider])}")
+        await self._mount_message(AppMessage("\n".join(lines)))
+
+    async def _handle_smoketest_command(self, command: str) -> None:
+        """Smoke-test a model+provider combo for connectivity and inference.
+
+        Usage:
+            /smoketest                       — test the active model
+            /smoketest provider:model        — test a specific spec
+            /smoketest --thinking            — test with extended thinking
+            /smoketest provider:model --thinking
+
+        Bedrock specs delegate to the existing ``probe_bedrock`` reporter.
+        Other providers create the model and send one short prompt with a
+        16-token budget and a 30s timeout. All known failure shapes
+        (auth, network, quota, model-not-found) yield an actionable hint.
+        """
+        from bog_agents_cli.smoketest import smoketest_model
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/smoketest") :].strip()
+
+        thinking = False
+        if "--thinking" in raw_arg:
+            thinking = True
+            raw_arg = raw_arg.replace("--thinking", "").strip()
+
+        spec = raw_arg
+        if not spec:
+            provider = getattr(settings, "model_provider", "") or ""
+            model_name = getattr(settings, "model_name", "") or ""
+            if provider and model_name:
+                spec = f"{provider}:{model_name}"
+            elif model_name:
+                spec = model_name
+        if not spec:
+            from bog_agents_cli.model_config import ModelConfig
+
+            config = ModelConfig.load()
+            spec = config.default_model or ""
+
+        if not spec:
+            await self._mount_message(
+                ErrorMessage(
+                    "No model specified and no active model — pass a "
+                    "provider:model spec (e.g. /smoketest anthropic:claude-haiku-4-5)"
+                )
+            )
+            return
+
+        thinking_note = " (with thinking)" if thinking else ""
+        await self._mount_message(
+            AppMessage(f"Smoke-testing [bold]{spec}[/bold]{thinking_note}…")
+        )
+
+        try:
+            result = await asyncio.to_thread(smoketest_model, spec, thinking=thinking)
+        except Exception as exc:
+            logger.exception("smoketest crashed")
+            await self._mount_message(
+                ErrorMessage(f"Smoketest crashed for {spec}: {exc}")
+            )
+            return
+
+        if result.ok:
+            await self._mount_message(
+                AppMessage(f"[green]{result.report_text()}[/green]")
+            )
+        else:
+            await self._mount_message(AppMessage(f"[red]{result.report_text()}[/red]"))
+
     async def _handle_repomap_command(self, command: str) -> None:
         """Show or refresh the semantic repository map."""
         from bog_agents_cli.repo_map_display import (
@@ -9704,12 +9802,26 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/think") :].strip().lower()
 
         if not raw_arg or raw_arg == "status":
+            from bog_agents_cli.provider_catalog import supports_native_thinking
+
             state = "enabled" if mw.is_enabled else "disabled"
+            active_model = getattr(settings, "model_name", "") or ""
+            native = supports_native_thinking(active_model) if active_model else False
+            support_line = f"Model {active_model!r}: " + (
+                "[green]native thinking supported[/green]"
+                if native
+                else "[yellow]native thinking not supported — "
+                "falls back to chain-of-thought prompt injection[/yellow]"
+            )
             await self._mount_message(
                 AppMessage(
                     f"Extended thinking: {state}\n"
-                    f"Budget tokens: {mw.budget_tokens:,}\n\n"
-                    "Usage: /think on | /think off | /think toggle | /think budget <N>"
+                    f"Budget tokens: {mw.budget_tokens:,}\n"
+                    f"{support_line}\n\n"
+                    "Usage: /think on | /think off | /think toggle | "
+                    "/think budget <N>\n"
+                    "Persist via [bold]thinking_enabled = true[/bold] under "
+                    "the provider's [params] in ~/.bog-agents/config.toml."
                 )
             )
             return

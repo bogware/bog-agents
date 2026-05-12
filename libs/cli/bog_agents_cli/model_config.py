@@ -24,10 +24,13 @@ if TYPE_CHECKING:
 
 from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.provider_catalog import (
+    clear_cached_catalog,
     clear_provider_catalog_caches,
     get_local_ollama_models,
     get_profile_overrides as get_curated_profile_overrides,
     get_supplemental_model_profiles,
+    load_cached_catalog,
+    save_cached_catalog,
 )
 
 logger = logging.getLogger(__name__)
@@ -563,7 +566,48 @@ def get_available_models() -> dict[str, list[str]]:
                 existing.add(model_name)
 
     _available_models_cache = available
+    # Persist a snapshot to disk so the next cold start can paint the
+    # picker instantly while a background refresh runs. Best-effort —
+    # a failed save (read-only dir, etc.) is just a missed optimization.
+    try:
+        save_cached_catalog(available)
+    except Exception:
+        logger.debug("Failed to persist model catalog cache", exc_info=True)
     return available
+
+
+def refresh_available_models() -> dict[str, list[str]]:
+    """Force a re-scan of installed provider packages and live Ollama list.
+
+    Clears the in-memory cache plus any provider-catalog caches (so the
+    Ollama HTTP probe re-runs) and re-derives the model list. The fresh
+    list is also persisted to ``~/.bog-agents/models.cache.json`` for
+    the next cold start.
+
+    Returns:
+        The refreshed ``{provider: [model, ...]}`` catalog.
+    """
+    global _available_models_cache  # noqa: PLW0603
+    _available_models_cache = None
+    clear_provider_catalog_caches()
+    try:
+        clear_cached_catalog()
+    except Exception:
+        logger.debug("Failed to delete model catalog cache", exc_info=True)
+    return get_available_models()
+
+
+def get_cached_available_models() -> dict[str, list[str]] | None:
+    """Return the disk-cached catalog (if present) without a live scan.
+
+    Useful at cold-start: the CLI can paint the picker from the cached
+    snapshot in microseconds, then call ``refresh_available_models()``
+    in the background to update.
+    """
+    cached = load_cached_catalog()
+    if cached is None:
+        return None
+    return {provider: list(models) for provider, models in cached.items()}
 
 
 def _build_entry(

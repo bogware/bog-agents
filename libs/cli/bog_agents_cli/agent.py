@@ -56,6 +56,68 @@ from bog_agents_cli.unicode_security import (
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_thinking_config() -> tuple[bool, int]:
+    """Determine the initial state of the extended-thinking middleware.
+
+    Resolution order (highest priority first):
+
+    1. ``BOG_AGENTS_THINKING`` env var (``1``/``true``/``yes`` = on,
+       anything else = off) — handy for one-off sessions without
+       editing config.toml.
+    2. ``[models.providers.<provider>].params.thinking_enabled`` in
+       ``~/.bog-agents/config.toml`` — per-provider opt-in.
+    3. Default ``False``.
+
+    The budget follows the same hierarchy via
+    ``BOG_AGENTS_THINKING_BUDGET`` / ``thinking_budget_tokens``, with
+    a default of 8 000 tokens.
+
+    Returns:
+        ``(enabled, budget_tokens)``.
+    """
+    env_enable = os.environ.get("BOG_AGENTS_THINKING", "").strip().lower()
+    env_budget_raw = os.environ.get("BOG_AGENTS_THINKING_BUDGET", "").strip()
+
+    enabled = env_enable in ("1", "true", "yes", "on")
+    budget = 8_000
+    if env_budget_raw:
+        try:
+            budget = max(1_000, int(env_budget_raw))
+        except ValueError:
+            logger.warning(
+                "Invalid BOG_AGENTS_THINKING_BUDGET=%r; ignoring", env_budget_raw
+            )
+
+    if env_enable:
+        # Env var wins — no need to consult config.toml.
+        return enabled, budget
+
+    # Fall back to config.toml. Read only the active provider's params
+    # to avoid leaking unrelated providers' settings into the session.
+    provider = (settings.model_provider or "").strip()
+    if not provider:
+        return enabled, budget
+    try:
+        from bog_agents_cli.model_config import ModelConfig
+
+        cfg = ModelConfig.load()
+    except (OSError, ValueError):
+        return enabled, budget
+    provider_cfg = cfg.providers.get(provider) or {}
+    params = provider_cfg.get("params") if isinstance(provider_cfg, dict) else {}
+    if not isinstance(params, dict):
+        return enabled, budget
+
+    cfg_enable = params.get("thinking_enabled")
+    if isinstance(cfg_enable, bool):
+        enabled = cfg_enable
+    cfg_budget = params.get("thinking_budget_tokens")
+    if isinstance(cfg_budget, int) and cfg_budget >= 1_000:
+        budget = cfg_budget
+    return enabled, budget
+
+
 DEFAULT_AGENT_NAME = "agent"
 """The default agent name used when no `-a` flag is provided."""
 
@@ -1066,6 +1128,28 @@ def create_cli_agent(
                 auto_test=auto_test,
             )
         )
+
+    # Extended-thinking middleware — defaults to disabled but always
+    # attached so `/think on` works mid-session without a restart. When
+    # the user sets ``thinking_enabled = true`` in the provider's
+    # ``params`` block (or exports ``BOG_AGENTS_THINKING=1``), it
+    # auto-enables for thinking-capable models. The middleware itself
+    # is a no-op for models that don't support native thinking — it
+    # simply forwards the request unchanged when ``enabled=False``.
+    try:
+        from bog_agents.middleware.thinking import ThinkingMiddleware
+
+        thinking_enabled_default, thinking_budget = _resolve_thinking_config()
+        agent_middleware.append(
+            ThinkingMiddleware(
+                enabled=thinking_enabled_default,
+                budget_tokens=thinking_budget,
+            )
+        )
+        if thinking_enabled_default:
+            logger.info("ThinkingMiddleware auto-enabled (budget=%d)", thinking_budget)
+    except ImportError:
+        logger.debug("ThinkingMiddleware not importable; skipping")
 
     # Worktree isolation middleware (Feature #1)
     if sandbox is None and enable_git_tools:

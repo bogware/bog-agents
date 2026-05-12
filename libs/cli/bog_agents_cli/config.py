@@ -1819,6 +1819,12 @@ def _get_provider_kwargs(
     """
     config = ModelConfig.load()
     result: dict[str, Any] = config.get_kwargs(provider, model_name=model_name)
+    # ``thinking_enabled`` / ``thinking_budget_tokens`` configure the
+    # ThinkingMiddleware, not the underlying chat model — strip them
+    # here so ``init_chat_model`` doesn't reject them as unknown kwargs.
+    # The middleware reads them directly from config.toml on its own.
+    for middleware_key in ("thinking_enabled", "thinking_budget_tokens"):
+        result.pop(middleware_key, None)
     base_url = config.get_base_url(provider)
     if base_url:
         result["base_url"] = base_url
