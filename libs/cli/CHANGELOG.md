@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.5...bog-agents-cli==0.8.6) (2026-05-12)
+
+
+### Features
+
+* **cli:** refine model/provider system — display names, lag fix, smoketest, thinking, bedrock inference profiles ([#76](https://github.com/bogware/bog-agents/issues/76)) ([28d005d](https://github.com/bogware/bog-agents/commit/28d005dc4786c1251d27636f7086d298cd048a5a))
+
+
+### Bug Fixes
+
+* **cli:** drop filter debounce in model picker — fixes CI flake on Python 3.12 ([#78](https://github.com/bogware/bog-agents/issues/78)) ([09063f3](https://github.com/bogware/bog-agents/commit/09063f38aed97948b49451e4cfe5ebe9db1fd9bc))
+
 ## [0.8.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.4...bog-agents-cli==0.8.5) (2026-05-10)
 
 
