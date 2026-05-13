@@ -10185,11 +10185,12 @@ class BogAgentsApp(App):
         )
 
     async def _handle_laws_command(self, command: str) -> None:
-        """``/laws [audit|init|list]`` — manage two-tier behavioural rules."""
+        """``/laws [audit|init|list|violations]`` — manage rules + view recent violations."""
         from bog_agents_cli.dreamscape.config import load_dreamscape_config
         from bog_agents_cli.dreamscape.dashboard import (
             init_laws_templates,
             render_laws_audit,
+            render_recent_violations,
         )
         from bog_agents_cli.dreamscape.laws import load_rules
 
@@ -10259,12 +10260,32 @@ class BogAgentsApp(App):
             await self._mount_message(AppMessage(body))
             return
 
+        if head in ("violations", "recent"):
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            limit = 20
+            arg = rest.strip()
+            if arg:
+                try:
+                    limit = max(1, min(200, int(arg)))
+                except ValueError:
+                    pass
+            try:
+                body = render_recent_violations(agent_id, limit=limit)
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/laws violations failed: {exc}")
+                )
+                return
+            await self._mount_message(AppMessage(body))
+            return
+
         await self._mount_message(
             AppMessage(
                 "Usage:\n"
                 "  /laws audit <text>   Dry-run rules against a sample\n"
                 "  /laws init           Write starter laws.md + constitution.md\n"
-                "  /laws list           Show currently loaded rules"
+                "  /laws list           Show currently loaded rules\n"
+                "  /laws violations [N] Show the last N recorded violations (default 20)"
             )
         )
 

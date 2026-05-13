@@ -176,6 +176,18 @@ class DreamsConfig:
     """How much each completed dream bumps the agent's ``imagination``
     trait. Capped at 100.0 by the lifecycle store."""
 
+    max_dreams_per_day: int = 100
+    """Upper bound on dreams fired per agent per rolling 24h window.
+
+    The scheduler's rate-limit window (one dream per dormancy period)
+    already keeps steady-state spend tiny — at production defaults
+    (``dormancy_after_seconds=1800``, ``dreaming_after_dormant_seconds=600``)
+    you get roughly one dream every 30-40 minutes, capping the day at
+    ~36 dreams. The ``max_dreams_per_day`` knob is a *defensive* cap
+    against misconfiguration — e.g. someone setting ``poll_seconds=1``
+    and forgetting to bound dormancy. Set to 0 to disable the cap
+    (not recommended for unattended runs)."""
+
 
 @dataclass
 class ImaginationConfig:

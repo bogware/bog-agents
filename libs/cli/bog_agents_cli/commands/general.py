@@ -402,6 +402,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("audit <text>", "Dry-run the rules against a sample"),
                 ("init", "Write starter laws.md + constitution.md (project-local)"),
                 ("list", "Show currently loaded Laws + Constitution"),
+                ("violations [N]", "Show the last N recorded violations (default 20)"),
             ),
         ),
         handler_method="_handle_laws_command",

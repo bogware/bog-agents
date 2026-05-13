@@ -293,6 +293,21 @@ async def maybe_dream(
     if not dream_eligible(snap, lifecycle_cfg):
         return None
 
+    # Defensive daily cap — bounds the worst case if the scheduler is
+    # misconfigured (e.g. poll_seconds=1, dormancy_after_seconds=1).
+    # Steady-state production hits this only via misconfiguration.
+    if (
+        dreams_cfg.max_dreams_per_day > 0
+        and _dreams_in_last_24h(agent_id) >= dreams_cfg.max_dreams_per_day
+    ):
+        logger.info(
+            "maybe_dream: daily cap reached for %s (%d/%d in last 24h); skipping",
+            agent_id,
+            _dreams_in_last_24h(agent_id),
+            dreams_cfg.max_dreams_per_day,
+        )
+        return None
+
     # Mark the snapshot as DREAMING so concurrent calls don't double-fire.
     snap.state = LifecycleState.DREAMING.value
     save_snapshot(snap, enabled=lifecycle_cfg.persist_state_to_disk)
@@ -326,6 +341,33 @@ def list_agent_dreams(agent_id: str, *, limit: int = 20) -> list[Path]:
     if not dreams_dir.exists():
         return []
     return sorted(dreams_dir.glob("*.md"), reverse=True)[:limit]
+
+
+def _dreams_in_last_24h(agent_id: str) -> int:
+    """Count dream files written in the last 24 hours for this agent.
+
+    Used by ``maybe_dream`` as the defensive cap against
+    misconfiguration. Reads only the directory listing — does not open
+    any dream files — so the cost stays O(N_files) on a per-agent
+    directory that's typically < 100 entries.
+    """
+    import time as _time
+
+    dreams_dir = agent_state_dir(agent_id) / "dreams"
+    if not dreams_dir.exists():
+        return 0
+    cutoff = _time.time() - 86_400.0
+    count = 0
+    try:
+        for entry in dreams_dir.glob("*.md"):
+            try:
+                if entry.stat().st_mtime >= cutoff:
+                    count += 1
+            except OSError:
+                continue
+    except OSError:
+        return 0
+    return count
 
 
 def sample_dream_excerpts(

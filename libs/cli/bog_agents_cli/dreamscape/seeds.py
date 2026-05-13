@@ -6,10 +6,12 @@ or "computing-history" gives the model a non-codebase axis to play
 along, which yields more vivid (and useful) imagery than asking it to
 free-associate on the same TODO it's been staring at.
 
-The library is hand-curated and intentionally short — five categories,
-five seeds each. Quality > quantity; we want every snippet to read
-well aloud. New categories or seeds can be added by appending to
-``_SEEDS`` — no other module changes needed.
+The library is hand-curated. Five categories, ten seeds each
+(50 total — doubled from the original 25 after Phase 1 flagged
+title repetition risk above ~30 dreams). Quality > quantity; we
+want every snippet to read well aloud. New categories or seeds can
+be added by appending to ``_SEEDS`` — no other module changes
+needed.
 """
 
 from __future__ import annotations
@@ -29,6 +31,11 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "Bioluminescent plankton glowing in the bow-wave of a fishing boat near midnight.",
         "Spider silk that is stronger per gram than steel, spun in absolute silence.",
         "The slow march of glaciers — moving rivers of ice that remember every winter.",
+        "The Australian lyrebird mimicking chainsaws, car alarms, and the click of camera shutters.",
+        "A mycorrhizal fungal network connecting old-growth trees underground, trading sugars for minerals.",
+        "Arctic terns flying pole to pole each year, accumulating two lifetimes of sunlight.",
+        "An octopus solving a screw-top jar by watching another octopus do it first.",
+        "The bristlecone pines of the White Mountains — five thousand years still standing in stone-thin air.",
     ),
     "space": (
         "The radio-silence of Pluto's New Horizons probe drifting outward, still transmitting.",
@@ -36,6 +43,11 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "A black hole in M87 the size of our solar system, casting a shadow we photographed.",
         "Voyager 1 entering interstellar space carrying a golden record we will never see again.",
         "The CMB — a faint hum from when the universe first became transparent.",
+        "The Hubble Deep Field — ten thousand galaxies in a patch of sky the size of a sand grain at arm's length.",
+        "Cassini's final dive into Saturn's atmosphere, transmitting until the heat shield failed.",
+        "16 Psyche — an asteroid made almost entirely of nickel-iron, the exposed core of a dead planet.",
+        "The Carrington event of 1859 — a solar storm that set telegraph wires on fire as far south as Cuba.",
+        "A radio echo from a supernova whose light we can still trace through interstellar gas a thousand years later.",
     ),
     "history": (
         "Ada Lovelace describing engines that would compose music a century before they existed.",
@@ -43,6 +55,11 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "An eight-year-old Mozart writing a symphony in 1764 in a room he no longer remembers.",
         "Antikythera — bronze gears the size of a fist that tracked the sky two thousand years ago.",
         "A Roman aqueduct still running, still flowing, no one alive who built it.",
+        "Edith Clarke designing graphical calculators for power grids in the 1920s, before women could vote.",
+        "The Voynich manuscript — a 600-year-old book in an alphabet that no one has ever read.",
+        "Herostratus burning down the temple of Artemis specifically so future generations would remember his name.",
+        "Pythagoras forbidding his students to speak in his presence for five full years before they could ask a question.",
+        "Hatshepsut, who ruled Egypt as Pharaoh and had her successors spell her in the masculine on every wall.",
     ),
     "myth": (
         "Sigurd, who learned the speech of birds after tasting a dragon's heart.",
@@ -50,6 +67,11 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "The Welsh story of Taliesin reborn from a transformation through hare, fish, bird, grain.",
         "Bifröst — a bridge of rainbow that will burn when the wolf comes.",
         "Mímir's well, whose water grants wisdom in exchange for one of your eyes.",
+        "Tezcatlipoca, the smoking mirror that shows what you are unwilling to see.",
+        "Coyote stealing fire from the fire-people and carrying it home in his fur, burning his back forever.",
+        "The selkie who hides her sealskin in the rafters and returns to the sea twenty years later.",
+        "Inanna's descent — passing through seven gates, surrendering one ornament at each, arriving naked at the underworld.",
+        "The roc, whose wings darkened deserts and whose talons carried elephants to its young.",
     ),
     "computing-history": (
         "Margaret Hamilton hand-writing the rope memory of Apollo 11 in a Cambridge lab.",
@@ -57,6 +79,11 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "Doug Engelbart demoing the mouse, hyperlinks, and video calls in a single 1968 hour.",
         "Smalltalk-72 children at PARC programming a graphical world before Apple existed.",
         "Knuth interrupting all work on TAOCP to spend ten years writing TeX, so it would render right.",
+        "Vint Cerf and Bob Kahn sketching the TCP/IP packet header on a hotel napkin in San Francisco.",
+        "Grace Hopper preserving an actual moth in the Mark II log book under the entry 'first actual case of bug being found'.",
+        "The TX-0 at MIT in 1956, programmed by undergrads through the night via paper tape because nobody else wanted the machine.",
+        "Mel Kaye writing the unreadable real-time assembly of the Royal McBee LGP-30, single-stepping through interrupts on a drum.",
+        "Ken Thompson and Dennis Ritchie inventing Unix on a cast-off PDP-7 because nobody would let them use the new machine.",
     ),
 }
 

@@ -114,6 +114,25 @@ def render_agent_state(
             "[dim]No dreams yet — agent has not been dormant long enough.[/dim]"
         )
 
+    # Surface recent Constitution violations so the soft-logging feature
+    # is no longer write-only. Cap at 3 in the dashboard view; the
+    # `/laws violations` slash command shows more.
+    try:
+        from bog_agents_cli.dreamscape.violations import load_recent_violations
+
+        recent_v = load_recent_violations(agent_id, limit=3, kind="constitution")
+    except Exception:
+        recent_v = []
+    if recent_v:
+        lines.append("")
+        lines.append("[bold]Recent Constitution violations[/bold]")
+        for entry in recent_v:
+            age = max(0, time.time() - entry.timestamp)
+            phrases = ", ".join(entry.phrases[:3])
+            if len(entry.phrases) > 3:
+                phrases += f", +{len(entry.phrases) - 3} more"
+            lines.append(f"  [dim]{_pretty_age(age)} ago[/dim]  {phrases}")
+
     if config.master_enabled and config.shared_memory.enabled:
         try:
             backend = build_backend(config.shared_memory)
@@ -388,6 +407,56 @@ def init_laws_templates(*, overwrite: bool = False) -> list[Path]:
     """Write starter Laws + Constitution files. Returns the paths."""
     cfg = load_dreamscape_config()
     return write_default_templates(cfg.laws, overwrite=overwrite)
+
+
+def render_recent_violations(agent_id: str = "default", *, limit: int = 20) -> str:
+    """Render the recent Constitution + Law violation log for ``/laws violations``.
+
+    Reads ``~/.bog-agents/agents/<agent_id>/violations.jsonl`` and prints
+    newest first. Surfaces the soft-logging feature that was previously
+    write-only.
+
+    Args:
+        agent_id: Per-agent identifier (matches the snapshot directory).
+        limit: Maximum number of entries to render (default 20).
+
+    Returns:
+        Rich-markup text ready for the TUI/console.
+    """
+    from bog_agents_cli.dreamscape.violations import load_recent_violations
+
+    entries = load_recent_violations(agent_id, limit=limit)
+    if not entries:
+        return (
+            "[bold]Recent rule violations[/bold]\n"
+            "\n"
+            "[dim]No violations recorded for agent "
+            f"[bold]{agent_id}[/bold]. The recorder writes to "
+            "~/.bog-agents/agents/<agent_id>/violations.jsonl when "
+            "[bold]LawsMiddleware[/bold] is active and a soft "
+            "Constitution rule matches.[/dim]"
+        )
+    constitution_count = sum(1 for e in entries if e.kind == "constitution")
+    law_count = sum(1 for e in entries if e.kind == "law")
+    lines: list[str] = [
+        f"[bold]Recent rule violations — {agent_id}[/bold]",
+        "",
+        f"  Constitution (soft, logged): {constitution_count}",
+        f"  Laws (hard, rejected):       {law_count}",
+        "",
+        "[bold]Latest entries (newest first):[/bold]",
+    ]
+    now = time.time()
+    for entry in entries:
+        age = max(0, now - entry.timestamp)
+        kind_label = (
+            "[yellow]constitution[/yellow]"
+            if entry.kind == "constitution"
+            else "[red]law[/red]"
+        )
+        phrases = ", ".join(entry.phrases)
+        lines.append(f"  [dim]{_pretty_age(age)} ago[/dim]  {kind_label}  {phrases}")
+    return "\n".join(lines)
 
 
 # Re-exports — keep the templates importable without depending on the

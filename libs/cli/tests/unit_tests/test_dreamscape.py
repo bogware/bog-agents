@@ -702,6 +702,36 @@ class TestDreamSeeds:
         picks = pick_seeds(["totally-fake-category"], count=3)
         assert picks == []
 
+    def test_library_size_meets_phase_1_recommendation(self) -> None:
+        """Pin the seed library size to the Phase 1 recommendation.
+
+        Phase 1 flagged doubling to 50 seeds (10/category) once dreams
+        cross ~30 cycles. This test pins the floor so future edits
+        don't accidentally regress the library below that bar.
+        """
+        from bog_agents_cli.dreamscape.seeds import _SEEDS, list_categories
+
+        assert len(list_categories()) >= 5
+        total = sum(len(v) for v in _SEEDS.values())
+        assert total >= 50, f"seed library has {total} entries; need >= 50"
+        for cat, entries in _SEEDS.items():
+            assert len(entries) >= 10, (
+                f"category {cat!r} has {len(entries)} entries; need >= 10"
+            )
+
+    def test_library_entries_are_unique_within_category(self) -> None:
+        """Each category's snippets are distinct.
+
+        Guards against a trivial copy-paste duplication in the
+        hand-curated library.
+        """
+        from bog_agents_cli.dreamscape.seeds import _SEEDS
+
+        for cat, entries in _SEEDS.items():
+            assert len(set(entries)) == len(entries), (
+                f"category {cat!r} contains duplicate snippets"
+            )
+
 
 class TestDreamExcerptSampling:
     def test_sample_returns_excerpts_from_per_agent_log(
@@ -1049,6 +1079,253 @@ class TestDreamscapeRunner:
 
 
 # ---------------------------------------------------------------------------
+# Daily cap on dreams (defensive against misconfiguration)
+# ---------------------------------------------------------------------------
+
+
+class TestDreamsPerDayCap:
+    """Cover the daily-cap defense.
+
+    The ``max_dreams_per_day`` knob bounds worst-case spend when the
+    scheduler is misconfigured (e.g. poll=1s, dormancy=1s). At
+    production defaults this knob is never hit — steady-state
+    production produces ~36 dreams/day. The test exercises the cap by
+    setting it very low.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    def _make_dream_files(
+        self, agent_id: str, n: int, *, age_seconds: float = 0.0
+    ) -> None:
+        import time as _time
+
+        from bog_agents_cli.dreamscape.lifecycle import agent_state_dir
+
+        dreams_dir = agent_state_dir(agent_id) / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        now = _time.time()
+        for i in range(n):
+            ts_us = int((now - age_seconds) * 1_000_000) - i * 100
+            path = dreams_dir / f"{ts_us:020d}-fixture-{i}.md"
+            path.write_text(f"### dream {i}\n\nbody {i}\n", encoding="utf-8")
+
+    def test_dreams_in_last_24h_counts_fresh_files(self) -> None:
+        from bog_agents_cli.dreamscape.dream_engine import _dreams_in_last_24h
+
+        self._make_dream_files("alpha", 7)
+        assert _dreams_in_last_24h("alpha") == 7
+
+    def test_dreams_in_last_24h_ignores_old_files(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Files older than 24h must not count toward the daily cap."""
+        import os
+        import time as _time
+
+        from bog_agents_cli.dreamscape.dream_engine import _dreams_in_last_24h
+        from bog_agents_cli.dreamscape.lifecycle import agent_state_dir
+
+        self._make_dream_files("beta", 3)
+        # Backdate every file to 25 hours ago.
+        cutoff_mtime = _time.time() - 25 * 3600.0
+        dreams_dir = agent_state_dir("beta") / "dreams"
+        for path in dreams_dir.glob("*.md"):
+            os.utime(path, (cutoff_mtime, cutoff_mtime))
+        assert _dreams_in_last_24h("beta") == 0
+
+    async def test_maybe_dream_respects_cap_at_zero_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``max_dreams_per_day=0`` disables the cap entirely."""
+        import time as _time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import DreamsConfig, LifecycleConfig
+        from bog_agents_cli.dreamscape.dream_engine import maybe_dream
+
+        self._make_dream_files("gamma", 50)  # plenty
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="gamma", last_activity_at=_time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="### t\n\nbody\n\n**Waking thought:**\nx")
+
+        dreams_cfg = DreamsConfig(
+            auto_on_dormancy=True,
+            max_dreams_per_day=0,  # disabled
+            imagination_trait_increment=0.01,
+        )
+        lc_cfg = LifecycleConfig(
+            enabled=True, dormancy_after_seconds=10, dreaming_after_dormant_seconds=1
+        )
+        artifact = await maybe_dream(
+            agent_id="gamma",
+            model=_Stub(),  # type: ignore[arg-type]
+            dreams_cfg=dreams_cfg,
+            lifecycle_cfg=lc_cfg,
+        )
+        assert artifact is not None  # cap disabled; new dream fires
+
+    async def test_maybe_dream_skips_once_cap_reached(self) -> None:
+        """When ``_dreams_in_last_24h >= cap``, ``maybe_dream`` returns None."""
+        import time as _time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import DreamsConfig, LifecycleConfig
+        from bog_agents_cli.dreamscape.dream_engine import maybe_dream
+
+        self._make_dream_files("delta", 5)  # 5 dreams already today
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="delta", last_activity_at=_time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="### t\n\nbody\n\n**Waking thought:**\nx")
+
+        dreams_cfg = DreamsConfig(
+            auto_on_dormancy=True,
+            max_dreams_per_day=5,  # already at the cap
+        )
+        lc_cfg = LifecycleConfig(
+            enabled=True, dormancy_after_seconds=10, dreaming_after_dormant_seconds=1
+        )
+        artifact = await maybe_dream(
+            agent_id="delta",
+            model=_Stub(),  # type: ignore[arg-type]
+            dreams_cfg=dreams_cfg,
+            lifecycle_cfg=lc_cfg,
+        )
+        assert artifact is None
+
+
+# ---------------------------------------------------------------------------
+# Constitution violations log (surfacing soft logging)
+# ---------------------------------------------------------------------------
+
+
+class TestConstitutionViolationsLog:
+    """Cover the file-backed violation recorder + reader.
+
+    Tests ``bog_agents_cli/dreamscape/violations.py`` and the
+    ``/laws violations`` slash command's rendering. Until this work
+    landed, the Constitution soft-logging path only went through
+    Python's logger — operators had no way to see what had
+    triggered.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    def test_record_then_load_round_trips(self) -> None:
+        from bog_agents_cli.dreamscape.violations import (
+            load_recent_violations,
+            record_violation,
+        )
+
+        assert record_violation("alpha", "constitution", ["force-push"]) is True
+        entries = load_recent_violations("alpha")
+        assert len(entries) == 1
+        assert entries[0].kind == "constitution"
+        assert entries[0].phrases == ["force-push"]
+        assert entries[0].timestamp > 0
+
+    def test_record_returns_false_on_empty_phrases(self) -> None:
+        from bog_agents_cli.dreamscape.violations import record_violation
+
+        assert record_violation("alpha", "constitution", []) is False
+
+    def test_record_returns_false_on_invalid_kind(self) -> None:
+        from bog_agents_cli.dreamscape.violations import record_violation
+
+        assert record_violation("alpha", "rumor", ["x"]) is False
+
+    def test_load_returns_newest_first(self) -> None:
+        import time as _time
+
+        from bog_agents_cli.dreamscape.violations import (
+            load_recent_violations,
+            record_violation,
+        )
+
+        record_violation("beta", "constitution", ["older"])
+        # Force a measurable timestamp gap.
+        _time.sleep(0.01)
+        record_violation("beta", "constitution", ["newer"])
+
+        entries = load_recent_violations("beta")
+        assert len(entries) == 2
+        assert entries[0].phrases == ["newer"]
+        assert entries[1].phrases == ["older"]
+
+    def test_load_filters_by_kind(self) -> None:
+        from bog_agents_cli.dreamscape.violations import (
+            load_recent_violations,
+            record_violation,
+        )
+
+        record_violation("gamma", "constitution", ["a"])
+        record_violation("gamma", "law", ["b"])
+        record_violation("gamma", "constitution", ["c"])
+
+        only_const = load_recent_violations("gamma", kind="constitution")
+        only_law = load_recent_violations("gamma", kind="law")
+        assert {e.phrases[0] for e in only_const} == {"a", "c"}
+        assert [e.phrases[0] for e in only_law] == ["b"]
+
+    def test_make_violation_recorder_is_a_safe_callback(self) -> None:
+        from bog_agents_cli.dreamscape.violations import (
+            load_recent_violations,
+            make_violation_recorder,
+        )
+
+        recorder = make_violation_recorder("delta")
+        recorder("constitution", ["x", "y"])
+        # Invalid kind should be silently swallowed.
+        recorder("rumor", ["z"])
+        entries = load_recent_violations("delta")
+        assert len(entries) == 1
+        assert entries[0].phrases == ["x", "y"]
+
+    def test_load_recent_with_no_file_returns_empty(self) -> None:
+        from bog_agents_cli.dreamscape.violations import load_recent_violations
+
+        assert load_recent_violations("never-recorded") == []
+
+    def test_render_recent_violations_handles_empty_state(self) -> None:
+        from bog_agents_cli.dreamscape.dashboard import render_recent_violations
+
+        body = render_recent_violations("nobody")
+        assert "Recent rule violations" in body
+        assert "No violations recorded" in body
+
+    def test_render_recent_violations_shows_entries(self) -> None:
+        from bog_agents_cli.dreamscape.dashboard import render_recent_violations
+        from bog_agents_cli.dreamscape.violations import record_violation
+
+        record_violation("epsilon", "constitution", ["force-push"])
+        record_violation("epsilon", "law", ["rm -rf /"])
+
+        body = render_recent_violations("epsilon")
+        assert "Constitution (soft, logged): 1" in body
+        assert "Laws (hard, rejected):       1" in body
+        assert "force-push" in body
+        assert "rm -rf /" in body
+
+
+# ---------------------------------------------------------------------------
 # Phase 8 — trends.md generator
 # ---------------------------------------------------------------------------
 
@@ -1078,7 +1355,9 @@ class TestDreamscapeTrendsBuilder:
         # The script lives outside the package; import it by file path.
         # parents[0]=unit_tests, [1]=tests, [2]=cli, [3]=libs, [4]=repo root.
         script_path = (
-            Path(__file__).resolve().parents[4] / "scripts" / "build_dreamscape_trends.py"
+            Path(__file__).resolve().parents[4]
+            / "scripts"
+            / "build_dreamscape_trends.py"
         )
         if not script_path.exists():
             pytest.skip(f"build script not found at {script_path}")
@@ -1123,7 +1402,9 @@ class TestDreamscapeTrendsBuilder:
         ):
             assert heading in md, f"missing section: {heading}"
 
-    def test_check_mode_passes_when_file_is_fresh(self, builder, tmp_path: Path) -> None:
+    def test_check_mode_passes_when_file_is_fresh(
+        self, builder, tmp_path: Path
+    ) -> None:
         """`--check` exits 0 when the on-disk file matches the rendered one."""
         summaries = builder.load_phase_summaries()
         rendered = builder.render_markdown(summaries)
@@ -1144,7 +1425,10 @@ class TestDreamscapeTrendsBuilder:
             "total_cost_usd_estimate": 0.014,
             "total_llm_calls": 12,
             "scenarios": [
-                {"name": "dream-cycle", "metrics": {"dreams_generated": 5, "approx_cost_usd": 0.004}},
+                {
+                    "name": "dream-cycle",
+                    "metrics": {"dreams_generated": 5, "approx_cost_usd": 0.004},
+                },
                 {"name": "imagination-ab", "metrics": {"approx_cost_usd": 0.003}},
             ],
         }

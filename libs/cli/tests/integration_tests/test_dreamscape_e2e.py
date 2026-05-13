@@ -38,9 +38,7 @@ _OREGON_TRAIL_AVAILABLE = _OREGON_TRAIL.exists()
 
 
 @pytest.fixture
-def isolated_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[Path]:
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point ``Path.home()`` at the test's tmp dir + clear dreamscape cache."""
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
     monkeypatch.delenv("BOG_AGENTS_DREAMSCAPE", raising=False)

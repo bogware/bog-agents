@@ -254,8 +254,14 @@ def _attach_dreamscape_middleware(
     if cfg.laws.enabled:
         try:
             from bog_agents_cli.dreamscape.laws import LawsMiddleware
+            from bog_agents_cli.dreamscape.violations import make_violation_recorder
 
-            middleware_list.append(LawsMiddleware(cfg=cfg.laws))
+            middleware_list.append(
+                LawsMiddleware(
+                    cfg=cfg.laws,
+                    violation_recorder=make_violation_recorder(safe_id),
+                )
+            )
             logger.info(
                 "dreamscape: laws middleware attached (reject_on_violation=%s)",
                 cfg.laws.reject_on_violation,
