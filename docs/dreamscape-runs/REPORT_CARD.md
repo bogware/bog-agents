@@ -488,3 +488,42 @@ different problems, the system clears the outcome gate. Until
 then, the grade is **B+ with a clear path to A**.
 
 — Reviewer
+
+---
+
+## Postscript — Phase 10 update (2026-05-13)
+
+The Phase 10 controlled effectiveness experiment was run. **Honest
+result: control beat treatment 6 of 7 times (86%) on
+technical-debugging questions, judged blind by Sonnet 4.6.** Full
+data in `phase-010-2026-05-13.{json,md}`.
+
+This is a *clarifying negative result*, not a retraction. It updates
+specific cells in the report card:
+
+| Was | Now |
+|---|---|
+| *"Real-world impact (validated)" — C+ on N=1 + behavioral A/B* | **D+** on controlled experiment (1/7 wins, 14%) |
+| *"Real-world useful-ness for coding" — B-* | **C** for technical debugging; UNTESTED for creative/design tasks |
+| *Overall grade B+ with a clear path to A* | **B (clear-eyed)** — engineering still A; defaults stay off; treatment-on is not the right default |
+| *Tier 2 rec: "tune `min_imagination_trait` downward if effects are positive"* | **Reversed.** Don't lower. Phase 10 actively defends the conservative threshold. |
+
+The other report-card recommendations still hold and have all
+shipped (R1 constitution log surfacing, R2 seed library doubling to
+50, R3 daily dream cap). The engineering work stands.
+
+The thesis isn't dead — it's *narrower than hoped*. Imagination
+injection appears to help on creative/design questions (Phase 1
+Oregon Trail Turn 2, N=1 qualitative) and hurt on
+technical-debugging questions (Phase 10, N=7 controlled). The
+right next experiment is testing the design-prompt class
+directly. Until then, ship the engineering, keep the defaults off,
+document the trade-off honestly.
+
+**Final grade: B (clear-eyed).** Not the A I hoped for going in,
+not the C the negative result might suggest at first glance. The
+work was worth doing — including the experiment that produced
+this number. The honest grade is more useful than the optimistic
+one.
+
+— Reviewer (after Phase 10)

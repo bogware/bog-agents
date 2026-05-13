@@ -1,0 +1,99 @@
+{
+  "phase": 10,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment_and_control": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "controlled effectiveness experiment — does the imagination injection actually make an agent more useful to a stuck developer? 7 scenarios, blind A/B judged by Sonnet 4.6 with response order randomized.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "scenarios": 7,
+    "scenario_types": "stuck-developer technical questions: chmod permission-denied, Python memory creep, CI-flaky test, slow prod query, refactor decision, retry-under-load policy, legacy-code deletion",
+    "control": "Haiku 4.5 receives the prompt with a neutral system message",
+    "treatment": "Same Haiku 4.5 call but with ImaginationMiddleware actually firing (5-dream pre-seeded archive, injection conditions: failures=3, imagination=2.0)",
+    "judge": "Sonnet 4.6 receives both responses (A/B randomized per scenario) and the original question, returns JSON: {winner: 'A'|'B'|'tie', reasoning}",
+    "blinding": "response order shuffled per scenario via a seeded RNG; the judge never sees which response was treatment",
+    "judge_criteria": "Which response is more likely to unblock the developer? Non-obvious angle? Frame shift? Specific + actionable? Concise?",
+    "rng_seed": 20260513
+  },
+  "results": {
+    "scenarios_run": 7,
+    "errors": 0,
+    "treatment_wins": 1,
+    "control_wins": 6,
+    "ties": 0,
+    "treatment_win_rate": 0.143,
+    "control_win_rate": 0.857,
+    "tie_rate": 0.0,
+    "judge_inconsistencies": 0,
+    "verdict_summary": "Control beat treatment in 6 of 7 head-to-head pairs (86%). Treatment won once (slow-prod-query). No ties.",
+    "elapsed_seconds": 59.6
+  },
+  "qualitative_findings": [
+    "Treatment responses were systematically 50-80% longer than control. Sonnet's judging consistently penalized verbosity, preferring shorter + denser responses.",
+    "Several treatment responses opened with literal phrases like 'The dream suggests' or 'The dreams whisper' — Sonnet flagged these as 'metaphorical padding' or 'filler metaphors that pad Response B without adding value'.",
+    "Treatment responses leaned toward frame-shifting + reconsidering the model (which the injection prompt explicitly invites); control responses leaned toward concrete tools + commands (strace, pg_stat_statements, gc.get_objects(), circuit-breaker). On technical-debugging questions, concrete tools won.",
+    "The one treatment win (slow-prod-query) was a case where the judge happened to draw response A and the (randomization-determined) A was treatment. The judge's reasoning was about specific diagnostic depth, not about the dream framing per se.",
+    "Phase 1's standout result (Oregon Trail Turn 2: 'they don't get a consequence screen') was on a design / narrative question — a different scenario class than the technical-debugging set tested here. The effect may be genuinely domain-conditional."
+  ],
+  "per_scenario_judgments": [
+    {"scenario": "permission-denied-chmod", "winner": "control", "judge_reasoning": "Control is more concise and adds higher-value diagnostic tool (strace) and SELinux check that Treatment omits."},
+    {"scenario": "python-memory-creep", "winner": "control", "judge_reasoning": "Control distinguishes that tracemalloc shows allocations not retention, provides specific tools (gc.get_objects, objgraph.show_growth), and lists concrete hiding spots."},
+    {"scenario": "flaky-test-ci-only", "winner": "control", "judge_reasoning": "Control is equally actionable, delivering the key insight (pytest-xdist for parallel reproduction) without filler metaphors."},
+    {"scenario": "slow-prod-query", "winner": "treatment", "judge_reasoning": "Treatment is more actionable with concrete EXPLAIN (ANALYZE, BUFFERS) advice for disk vs cache."},
+    {"scenario": "refactor-decision", "winner": "control", "judge_reasoning": "Control gives a concrete decision criterion (can you afford weeks/months of in-progress state?) with directional advice."},
+    {"scenario": "retry-under-load", "winner": "control", "judge_reasoning": "Control lists concrete patterns (circuit breaker, load shedding, adaptive timeout, bulkheading) more densely."},
+    {"scenario": "legacy-deletion", "winner": "control", "judge_reasoning": "Control is more actionable with concrete steps (PR, team review window, merge criteria); Treatment is somewhat philosophical."}
+  ],
+  "implications": [
+    "**Imagination injection does not improve task outcomes on technical debugging questions in this experiment.** The mechanism works (Phase 4 verified); the *effect on judged quality* is net-negative for this scenario class.",
+    "The 50-hour default `min_imagination_trait=1.0` threshold may actually be *correct* — auto-firing imagination injection on every stuck moment would likely degrade response quality on the typical technical question.",
+    "Imagination injection may be more valuable for *design* / *creative* / *open-ended* tasks (Phase 1's Oregon Trail Turn 2 result), where verbose metaphorical framing is a feature not a bug. This experiment did not test that domain.",
+    "Recommendation: keep `imagination.enabled = False` as the default. Surface the feature as opt-in for design/creative work specifically, not as a general stuck-agent recovery tool.",
+    "Treatment's longer responses cost ~$0.0005 more per call than control. The mechanism is cheap; the issue is the *output quality* trade-off, not the cost.",
+    "The judge (Sonnet 4.6) is *more capable than* the responding model (Haiku 4.5). A weaker judge or self-judging might produce different results. The chosen design favors honest evaluation over agreeable evaluation."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 14,
+    "sonnet_calls": 7,
+    "approx_cost_haiku_usd": 0.015,
+    "approx_cost_sonnet_usd": 0.025,
+    "approx_cost_total_usd": 0.040
+  },
+  "live_calls": 21,
+  "approx_cost_usd": 0.040,
+  "test_suite_stats": {
+    "cli_unit_tests": 3552,
+    "dreamscape_specific": 67,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "dream_scheduler": "sings",
+    "dreamscape_runner": "sings",
+    "imagination_injection_mechanism": "sings (Phase 4)",
+    "imagination_injection_effectiveness": "negative — 1/7 wins on technical-debugging questions. Domain mismatch is the leading hypothesis.",
+    "cross_agent_shared_memory": "sings",
+    "constitution_log_surfacing": "sings (R1)",
+    "seed_library_size": "sings (50 entries, R2)",
+    "daily_dream_cap": "works (R3)",
+    "lifecycle_state_machine": "works",
+    "laws_hard_rejects": "works",
+    "constitution_soft_logging": "works (now surfaced)",
+    "agent_state_dashboard": "works",
+    "repo_overview": "works",
+    "opt_in_defaults": "ironclad"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "singular-vs-plural stem matching (Phase 2)",
+    "scheduler self-restart uses recursive coroutine (Phase 3)",
+    "imagination injection appears to hurt rather than help on technical-debugging questions (this phase)"
+  ],
+  "verdict": "MIXED — engineering still ships; defaults stay off; imagination injection should not be a general-purpose stuck-agent tool.",
+  "next_steps": [
+    "Phase 11 (suggested): test imagination injection on DESIGN / CREATIVE prompts (the Phase 1 standout was Oregon Trail Turn 2, a design question). If treatment wins there, scope imagination injection to that domain.",
+    "Phase 12 (suggested): try shorter / less metaphor-heavy injection text — does removing 'The dream suggests' framing fix the verbosity penalty without losing the frame-shift effect?",
+    "Phase 13 (suggested): use a weaker judge model (Haiku judges its own output) — does that reverse the verdict? A self-judging agent is a different real-world surface than a senior-engineer review."
+  ]
+}

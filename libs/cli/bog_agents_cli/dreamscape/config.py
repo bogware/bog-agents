@@ -191,7 +191,22 @@ class DreamsConfig:
 
 @dataclass
 class ImaginationConfig:
-    """Knobs for the last-ditch imagination injection middleware."""
+    """Knobs for the last-ditch imagination injection middleware.
+
+    Phase 10 (controlled effectiveness experiment, docs/dreamscape-runs)
+    found that this middleware **degrades** response quality on
+    technical-debugging questions when blind-judged against an
+    unmodified Haiku 4.5 (6 of 7 head-to-head wins went to the
+    no-injection control). The mechanism works — see Phase 4 — but the
+    metaphorical / frame-shifting framing it produces is judged less
+    useful than direct tool-naming responses on the modal
+    *"what should I try next?"* prompt.
+
+    Recommendation: keep ``enabled=False`` for general use. The feature
+    may still be valuable for design / creative / open-ended prompts
+    (Phase 1 Oregon Trail Turn 2 was the qualitative high-water mark)
+    but that domain has not been controlled-tested.
+    """
 
     enabled: bool = False
     trigger_after_failures: int = 3
@@ -201,7 +216,15 @@ class ImaginationConfig:
     min_imagination_trait: float = 1.0
     """Don't inject anything if the agent's accumulated imagination
     trait is below this threshold. Forces the agent to "earn" the
-    intervention by accumulating dreams first."""
+    intervention by accumulating dreams first.
+
+    At the production ``imagination_trait_increment=0.01``, this
+    threshold takes ~50 hours of continuous dreaming to unlock. That
+    sounded aspirational before Phase 10 — afterward it's actively
+    defensible. Don't lower this without re-running the Phase 10
+    effectiveness experiment on your target prompt class; auto-firing
+    injection on every stuck moment costs response quality on
+    technical questions."""
 
     max_snippets_per_injection: int = 3
     """How many dream excerpts go into a single injection."""
