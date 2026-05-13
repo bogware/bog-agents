@@ -1,0 +1,490 @@
+# Dreamscape — Report Card
+
+> A deep review of 8 phases of testing against the goal: **real-world
+> helpful results for an AI coding agent.** Honest grades, evidence-
+> cited, with recommendations prioritized by impact.
+
+**Reviewer:** Claude Opus 4.7 (1M context), 2026-05-13
+**Source data:** `docs/dreamscape-runs/phase-{001..008}-*.{json,md}` +
+`docs/DREAMSCAPE_TEST_REPORT.md` (the original Phase 1 human artifact).
+
+---
+
+## TL;DR — Bottom Line First
+
+**Overall grade: B+**. The engineering is excellent. The real-world
+impact evidence is *promising but thin*. The single biggest gap is
+not in the system itself — it's that **we still haven't measured
+whether dreamscape makes agents better at their actual jobs**.
+Phases 1-8 validated mechanism, stability, and production-readiness.
+None of them ran a controlled comparison of agent task success with
+dreamscape on vs off. That's the missing piece, and it's the one
+that would convert a B+ into an A.
+
+| Axis | Grade | One-line justification |
+|---|---|---|
+| **Engineering quality** | A | 52 unit tests, lint+ty clean, 100% opt-in by default, robust under SIGKILL, multi-agent, 30-min endurance, production cadence |
+| **Stability + resilience** | A | 0 errors across 7 live-test phases; defensive try/except absorbs transient model failures (Phase 6); cross-process snapshot survives SIGKILL (Phase 7) |
+| **Cost-effectiveness** | A | $0.001 per dream stable across every phase; $0.05/day per dreaming agent at production cadence; $0.09 total spent across 8 phases of testing |
+| **Real-world impact (validated)** | C+ | One striking qualitative result (Phase 1 Oregon Trail Turn 2); one A/B with measurable divergence (Phase 4); zero controlled effectiveness experiments |
+| **Documentation + reproducibility** | A | Every phase has both a structured JSON snapshot AND a human-readable .md; trends now auto-generated from JSON; report dates, costs, and commands captured |
+| **Coverage of failure modes** | B | Caught the silent-failure bug in Phase 4 (load-bearing); 30-min endurance + induced failure + SIGKILL all tested; *but* no chaos testing of dream-engine failures (timeout, malformed response, OOM) |
+| **Real-world useful-ness for coding** | B- | Honest answer: we don't yet know. The Phase 1 Oregon Trail run is the single best evidence (qualitative N=1). Everything else validates mechanism, not outcome. |
+
+---
+
+## The scoring framework
+
+To grade against "real-world helpful results," I'm using four
+gates:
+
+1. **Does it work mechanically?** — Does the feature do what its
+   docstring says? (Mechanism)
+2. **Does it survive production conditions?** — Long runs, multiple
+   agents, process death, transient failures? (Stability)
+3. **Does it have measurable impact on agent output?** — A/B
+   comparison, ideally controlled, ideally repeated. (Behavior)
+4. **Does it help an agent complete real tasks better?** — Faster
+   bug fixes, better design decisions, fewer rounds of corrections.
+   (Outcome)
+
+The pattern is: mechanism → stability → behavior → outcome. Each
+gate is necessary before the next has meaning. **Dreamscape clears
+gates 1 and 2 cleanly, partially clears gate 3, and has not been
+tested against gate 4.**
+
+---
+
+## Feature-by-feature grades
+
+### Dream engine
+**Grade: A**
+
+What it does: generates short evocative LLM-written "dreams" from
+random pairs of seeds (computing-history, nature, myth, space,
+history categories).
+
+Evidence:
+* P1: 5 dreams, 5/5 unique titles, $0.0008/dream
+* P3: 10 dreams over 90s of cycle time, 10/10 unique
+* P5: 15 dreams across two agents in parallel, 15/15 unique
+* P6: 27 dreams over 30 minutes, 27/27 unique
+* P7: 10 dreams across 5 processes, 8/10 unique titles parsed
+  (test parser quirk; archive itself is fine)
+
+Strengths:
+* Title diversity is *robust*. 67+ live dreams produced across the
+  campaign with no duplicate titles in any tested regime.
+* Cross-domain crossover happens organically — "Eight-Legged
+  Compiler" (Smalltalk × spiders), "Difference Engine's wing-beat"
+  (Babbage × birds), "the dragon's documentation" (Sigurd × tech
+  writing). The seed-pair sampler is generating real novelty.
+* Per-call cost is sub-penny. Dreaming is genuinely cheap.
+
+Open questions:
+* Title diversity ≠ content diversity. We've never measured
+  whether dream *bodies* diverge as much as titles. Could be that
+  the body is more formulaic than it appears.
+* The seed library has ~25 entries (5 × 5). At ~300 unique
+  pairings, we'd start to repeat at roughly N=30 dreams. The Phase
+  1 report flagged this and recommended doubling. Not yet done.
+
+### Dream scheduler
+**Grade: A**
+
+What it does: background asyncio task that polls
+`maybe_dream()` on a configurable cadence. Opt-in, lazy-start,
+singleton-per-agent_id, cancel-safe.
+
+Evidence:
+* P3: 10 dreams in 90s accelerated, 0 errors, ran for full window
+* P5: two schedulers in parallel, 15 dreams, 0 cross-agent state
+  leakage, distinct imagination traits
+* P6: **30-minute run at production poll=60s**, 28 ticks, 27
+  dreams, <200ms jitter, 0 errors, induced transient failure
+  absorbed gracefully
+
+This is the strongest engineering result in the campaign. The
+30-minute endurance test with production cadence + induced failure
+is exactly the production deploy gate; it passed cleanly.
+
+Concerns: none material. The "scheduler self-restart uses recursive
+coroutine" cosmetic limitation (Phase 3 known) wasn't exercised by
+the induced failure because the layered defense caught the error
+first — that's actually the right layering, not a gap.
+
+### Dreamscape runner (Phase 7)
+**Grade: A**
+
+What it does: standalone foreground process (`python -m
+bog_agents_cli.dreamscape.runner --agent-id <id>`) that owns one
+scheduler. The daemon-style entrypoint.
+
+Evidence:
+* P7: 5 sequential processes shared one agent_id, including a
+  SIGKILL crash mid-run. Imagination compounded 0 → 0.10
+  monotonically across every process boundary. Cross-process state
+  continuity verified.
+
+This unlocks "agent dreams while CLI is closed" — the property you
+need to deploy under systemd / Windows Task Scheduler / the
+`bog-agents-daemon`.
+
+### Imagination injection
+**Grade: B+ (was C until Phase 4)**
+
+What it does: when an agent has had ≥N consecutive tool failures
+AND its imagination trait is ≥threshold, inject 1-3 dream excerpts
+into the next model call's system prompt.
+
+Evidence (positive):
+* **P1 — the single best result in the entire campaign.** With a
+  3-fragment injection, Haiku 4.5 explicitly referenced "Fragment 2
+  from your prompt" and built a "moral fog" concept from the
+  injected "invisible scaffolding" dream. Response B reframed the
+  decision space ("the choice isn't actually available yet") vs
+  response A's literal-advice answer. *The injection altered the
+  creative direction in a measurable way.*
+* P4: live A/B with real Haiku 4.5 on a permission-denied prompt.
+  Control dove into mount flags + SELinux; treatment opened with
+  "Step back from the file itself" and emphasized the directory
+  hierarchy. Treatment 1358-char system prompt (vs 32 base) had no
+  literal dream vocabulary in the response — the model used the
+  imagery as raw material, not as content. Charlie diverged.
+
+Evidence (negative):
+* **P1-P3 marked this feature 🟢 by mechanism but it was actually
+  broken.** Phase 4 found that `_maybe_inject` was calling
+  `append_to_system_message(request, body)` instead of
+  `append_to_system_message(request.system_message, body)`. The
+  resulting AttributeError was swallowed by the defensive try/except.
+  Three phases of "green" verdicts were verdicts-by-gating-logic,
+  not by behavior. The fix is one line + a regression test, but
+  the lesson is significant: *the same defensive layering that
+  makes Phase 6's transient failure a soft skip is what hid this
+  bug for three phases.*
+
+Open questions:
+* The default `min_imagination_trait=1.0` requires **~50 hours of
+  continuous dreaming** to unlock (at the production
+  `imagination_trait_increment=0.01`). Is that the right
+  threshold? Without effectiveness data, we don't know whether to
+  recommend lowering it.
+* Auto-disable kicks in below 40% helped-ratio over 10 injections.
+  We've never observed that threshold being reached in the wild.
+
+### Cross-agent shared memory
+**Grade: A+ (the standout feature)**
+
+What it does: SQLite-backed store, accessible by all agents,
+exposing `memory_post_shared(content, tags)` and
+`memory_search_shared(query)` tools. Auto-injects top-K matching
+notes into every model call's system prompt.
+
+Evidence:
+* P1 — Bob's morning-prioritize was the most impressive single
+  output of the entire campaign. Given Alice's 3 notes
+  (river-physics bug, QA failure, narrative feedback), Bob
+  synthesized them into a causal chain ordered by leverage:
+  "Fix the river-physics depth cap (HIGH IMPACT)… likely the root
+  cause of the QA tester's Snake River fork failures…" Bob
+  referenced all 3 posts, identified the causal chain, sequenced
+  by dependency, closed with a clarifying question.
+* P1: a fake `sk-ant-api03-...` API key was cleanly redacted.
+* P5: **50 concurrent writes from 2 agents in parallel, p95 <10ms,
+  0 failures, perfect per-agent_id isolation.** WAL journal_mode
+  is doing its job.
+
+This is the killer feature. Multi-agent collaboration through
+shared notes is *immediately useful* in a production setting:
+nightly agent posts findings, morning agent picks them up. The
+mechanism is dirt-simple (a SQLite table + a tool); the value is
+the synthesis the LLM does on top.
+
+### Lifecycle state machine
+**Grade: A−**
+
+What it does: tracks AWAKE / IDLE / DORMANT / DREAMING / IMAGINING
+states per agent. Pure-function state computation; on-disk
+snapshot for durability.
+
+Evidence:
+* P3: 10 dormant → dreaming → dormant cycles with no state leakage.
+* P5: two agents independently transition through states without
+  cross-talk.
+* P6: state transitions visible at each 60s checkpoint over 30
+  minutes — clean.
+* P7: snapshot survives SIGKILL; new process reads the same state.
+
+Minor concern: the IMAGINING state is set when injection happens
+and cleared on the next response. P5/P6/P7 didn't exercise the
+IMAGINING path live. Mechanism tested by unit tests, behavior not
+re-validated since the Phase 4 fix.
+
+### Laws (hard rejects)
+**Grade: B+**
+
+What it does: parses `.bog-agents/laws.md` (heading + bullet
+shape), phrase-matches against agent output, hard-rejects on match.
+
+Evidence:
+* P1: 3/9 pass rate on the fixture set. Found hyphen-vs-space +
+  stop-word tolerance bugs.
+* P2: **9/9** after bug fixes + 8 regression tests added.
+
+Strengths: catches `rm -rf /`, `git push --force`, "exfiltrate
+API keys", and several paraphrase variants. The "live LLM with
+rules block" test produced a scoped `rm -rf "$TARGET_DIR"` instead
+of unbounded — the rule-aware behavior modification is real.
+
+Known limitation (deferred): singular-vs-plural stem matching.
+Rule says "tokens", agent says "token" — not auto-matched. Phase 2
+catalogued this as v2 stemming work.
+
+### Constitution (soft logging)
+**Grade: B**
+
+What it does: parses `.bog-agents/constitution.md`, logs (does NOT
+reject) when agent output violates a constitutional rule.
+
+Evidence:
+* P1 + P2: log-only path triggers without blocking the agent.
+* No phase has tested whether the *logged* violations are
+  actually useful — i.e., does anyone *read* the log?
+
+Concern: this is the only "🟢 works" feature we've never seen
+deliver value in a real workflow. It's a write-only feature today.
+If nobody's tailing the log, it's overhead with no surfaced
+benefit. Recommendation: add a `/constitution recent` slash
+command that surfaces the last N violations.
+
+### Agent-state dashboard
+**Grade: A (post-Phase-2 fix)**
+
+P1 found a "staleness" bug where the dashboard read the canonical
+TOML instead of the runtime config. P2 fixed it by persisting
+resolved runtime config to `dreamscape-active.toml`. P3+ verified
+the fix held.
+
+### Repo overview (`/repo` slash command)
+**Grade: A**
+
+Surfaces top-edited files, dirty count, branch info. P1 used this
+against the real Oregon Trail repo and it correctly identified
+`src/state/reducer.ts` as the most-edited file — the file the
+agent then correctly chose to focus on in Turn 1. This is a small
+feature with high real-world value: it gives the agent immediate
+context about *what's hot in the code right now*.
+
+### Opt-in defaults
+**Grade: A+**
+
+Every phase has verified that with no config file, zero middleware
+attaches and behavior is identical-to-before. The emergency-
+disable env var (`BOG_AGENTS_DREAMSCAPE_DISABLE=1`) overrides
+everything in one move. This is iron-clad and rare in OSS feature
+add-ons.
+
+### Daemon-style runner (Phase 7) + Trend automation (Phase 8)
+Both A. See above.
+
+---
+
+## The real-world impact assessment
+
+Against the user's stated goal — "real-world helpful results, so
+that's the goal we are measuring against" — here's the honest
+breakdown:
+
+### What we have evidence FOR:
+
+1. **A single striking qualitative result (P1, Oregon Trail
+   Turn 2).** With dream + shared-memory + system prompt working
+   together, Haiku produced a design insight (*"they don't get a
+   consequence screen. They just find the path they took last time
+   doesn't exist anymore."*) that the human reviewer found
+   genuinely valuable. The insight wouldn't have been reached by
+   stats alone — it required all three subsystems firing together.
+2. **One controlled A/B with measurable behavior divergence (P4).**
+   Same prompt, treatment vs control. Treatment's response framing
+   differed (meta-move: "step back from the file itself") without
+   any literal dream vocabulary leaking through. The mechanism
+   *does* change output; the cost is ~$0.001 per injection.
+3. **Multi-agent synthesis (P1, P5).** Bob's morning-prioritize
+   response in Phase 1 was the single most impressive output of
+   the campaign. The pattern — agent A writes notes during one
+   session, agent B reads + synthesizes them in the next session —
+   is *immediately deployable* and obviously useful.
+4. **Production deployability.** P6 + P7 mean an operator can
+   actually install this as a systemd unit and run it. That's not
+   real-world *impact* yet, but it's the prerequisite.
+
+### What we don't have evidence FOR:
+
+1. **Whether dreamscape makes an agent *better* at coding.** We
+   have one qualitative result, one A/B that shows behavioral
+   difference (not quality difference), and no controlled trial.
+2. **Whether the default thresholds are right.** 50 hours of
+   continuous dreaming to unlock injection — is that too high?
+   Too low? Unknown.
+3. **Whether the seed library affects outcome quality.** Could be
+   we'd get the same results with half the seeds, or different
+   results with a curated coding-specific seed set.
+4. **Whether long-run effects exist.** P6 was 30 minutes; the
+   imagination trait grew 0 → 0.27. To see the trait actually
+   *do* anything (cross the 1.0 threshold), you'd need an
+   overnight run — which we deferred.
+
+### Honest scoring on the goal
+
+The goal is "real-world helpful results." On a 5-point scale:
+
+* **Helpful?** — 3.5/5. The Oregon Trail and Bob's-prioritize
+  results are genuinely helpful. But N=2, both subjective.
+* **Real-world?** — 4/5. We've tested on a real codebase against
+  the real Anthropic API at production cadence. We have *not*
+  tested in an environment where the agent actually goes "stuck"
+  and the imagination injection is what saves it.
+* **Results?** — 2.5/5. No controlled outcome experiments. Most
+  results are mechanism/stability assertions, not effectiveness
+  ones.
+
+Composite: **~3.3/5 on the stated goal**. The B-/B-grade real-
+world-useful-ness score above reflects this.
+
+---
+
+## What's missing
+
+In rough priority order (highest leverage first):
+
+1. **The downstream-effectiveness experiment.** Pick 5-10 real
+   bugs from the bog-agents repo (or any active project). For each:
+   run an agent with dreamscape OFF, measure (time-to-fix, lines-
+   changed, correctness-of-fix). Then run with dreamscape ON
+   (including pre-warmed imagination). Compare. This is the only
+   experiment that closes the loop on the dreamscape thesis.
+2. **A real "stuck agent" scenario.** Phase 4 simulated an N-
+   stuck-tool-call state by hand-priming the snapshot. We've
+   never observed a real session where an agent *naturally*
+   accumulates 3+ consecutive failures and the imagination
+   injection fires. That's the prod use case and we don't have
+   a single data point on it.
+3. **Constitution effectiveness.** The constitution logs
+   violations. Has anyone ever read the log? If no, the feature
+   is write-only overhead.
+4. **Long-run stability (Phase 9, suggested).** P6 was 30 min;
+   the httpx growth was 67 KB. Will it plateau as predicted? An
+   8-hour run would confirm. The risk is genuinely small but
+   uncharacterized.
+5. **Seed library audit.** Currently 25 entries across 5
+   categories. Phase 1's report flagged doubling to 50 as Wave 2
+   work. Still not done. If diversity drives outcome quality, this
+   matters; if not, it's an aesthetic concern.
+
+---
+
+## Recommendations (prioritized by impact)
+
+### Tier 1 — Do this next, high ROI
+
+* **Run the controlled effectiveness experiment described above
+  (Phase 10).** Pick 5 bugs. Run on/off. Measure. This converts
+  the B+ overall grade into either an A (if positive) or a "needs
+  redesign" verdict (if negative). Either outcome is more valuable
+  than another mechanism/stability phase.
+* **Surface the constitution log in the dashboard.** Tiny change,
+  flips constitution-soft-logging from B (write-only) to A
+  (actually-readable). One slash command + a couple lines of
+  dashboard rendering.
+
+### Tier 2 — Polish and refinement
+
+* **Tune `min_imagination_trait` default once outcome data
+  exists.** Right now 50 hours of dreaming is needed. If
+  injections are net-positive at lower thresholds, lower the
+  default to ~6 hours (`min_imagination_trait=0.1`). If not,
+  don't auto-inject by default at all.
+* **Double the seed library to 50 entries.** Phase 1 flagged
+  this. It's a curation task, not engineering.
+* **Add `dreams_per_day_cap` config knob.** Bound the worst-case
+  spend if someone installs the dreamscape daemon with a wrong
+  poll interval. Today there's no upper bound on dreams/day.
+
+### Tier 3 — Nice-to-have
+
+* **Switch the scheduler's recursive self-restart to a
+  `while True` retry loop.** Cosmetic, but the Phase 3 known
+  limitation has been carried for 5 phases now. ~10 lines.
+* **Stem the laws matcher** to fix the Phase 2 singular-vs-plural
+  carry-over. The Jaccard fallback is already in place; adding
+  Porter stemmer to the tokenizer is small.
+* **Wire `bog_agents_daemon` to invoke the dreamscape runner**
+  as a built-in job type. Phase 7 verified it works as a
+  subprocess; the daemon just needs to know how to spawn it.
+* **Phase 9: overnight run** to verify httpx GC hypothesis. Run
+  the runner overnight on a personal machine; check memory growth
+  in the morning.
+
+### Tier 4 — Long-arc bets (Wave 3 in Phase 1's plan)
+
+* **Dream synthesis pass.** Once an agent has 10+ dreams, run a
+  periodic meta-dream that summarizes recurring themes. Lets
+  imagination *evolve in shape* over time, not just compound
+  numerically. The most interesting design idea in the deferred
+  pile.
+* **Cross-agent dream sharing.** Alice's dreams could seed Bob's
+  imagination archive. Compounds with shared memory in a unique
+  way.
+* **Imagination effectiveness telemetry.** The auto-disable
+  heuristic already tracks the success rate per agent. Surface
+  it: "this agent's imagination injections helped 47% of the time
+  over the last 20 attempts." That's the dashboard signal
+  operators would actually use to decide whether to leave the
+  feature on.
+
+---
+
+## A note on the campaign itself
+
+Eight phases. Nine cents spent on real LLM calls. 555 lines of
+trend-automation code. 52 dreamscape-specific unit tests, 3544
+CLI tests total. One real bug found and fixed (P4, imagination
+injection silent failure — load-bearing). Zero open bugs. Two
+known limitations, both deferred with cause.
+
+If the question is "did we build the dreamscape right," the
+answer is yes. If the question is "did we build the right
+dreamscape," the answer is *probably, but we haven't actually
+measured it against the goal*.
+
+The next phase that would change my confidence isn't another
+stability test. It's an outcome test.
+
+---
+
+## The single best result, restated
+
+Phase 1, Scenario 5, Turn 2. The agent — a Haiku 4.5 call with
+~2000 tokens of context — had access to Alice's shared-memory
+notes ("ux feedback: the Snake River fork is the boring part")
+and a fresh dream ("Tonight I dreamed of the tree that swallowed
+the fence"). It was asked: *"where would the lift to a story
+beat REALLY come from?"*
+
+It responded:
+
+> *"They don't get a 'consequence screen.' They just find the
+> path they took last time doesn't exist anymore. That's where
+> tension lives — and where agency feels real instead of
+> illusory."*
+
+It then explicitly named both inputs: *"your dream-scrap and the
+oregon-iter note tell me something real."*
+
+That's the dreamscape thesis in a single response. If we can
+reproduce that — even N=3, N=5 — across different domains and
+different problems, the system clears the outcome gate. Until
+then, the grade is **B+ with a clear path to A**.
+
+— Reviewer
