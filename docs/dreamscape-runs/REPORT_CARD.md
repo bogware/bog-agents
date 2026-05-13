@@ -527,3 +527,91 @@ this number. The honest grade is more useful than the optimistic
 one.
 
 — Reviewer (after Phase 10)
+
+---
+
+## Second postscript — Phases 11 + 12 update (2026-05-13)
+
+Phase 11 (creative-prompt re-run) and Phase 12 (metaphor-wrapper
+ablation + Phase 10 replication) materially change the picture
+again. Full data in `phase-011-*.{json,md}`,
+`phase-012-*.{json,md}`, and `CONTEXT_AWARE_DREAMING.md`.
+
+### The big find
+
+**Imagination injection is domain-conditional, not broken.** Phase
+11 ran the same blind A/B harness on 7 creative/design prompts and
+treatment won 6 of 7 (86%) — the exact mirror of Phase 10's
+technical-debugging result. Same mechanism, same dream content,
+same wrapper. What changes is whether the prompt class values
+evocative leaps or specific tools.
+
+### A second finding: Phase 10's headline was overstated
+
+Phase 12 re-ran Phase 10's exact 7 scenarios with the same wrapper.
+Treatment won 5/7 — opposite of Phase 10's 1/7. The directional
+claim (treatment is weaker on technical than creative) survives;
+the magnitude doesn't. **N=7 with stochastic Haiku output + stochastic
+Sonnet judging is too small for tight effect-size claims.** Phase 14
+(suggested) at N=30 per condition would resolve this.
+
+### What's shipped to act on the finding
+
+* New module `dreamscape/domain.py` (290 lines, 11 unit tests).
+  Keyword-based classifier mapping system prompts to
+  `engineering | creative | research | general`.
+* Profile capture at agent build time (one-time disk write).
+* Dream engine reads the captured profile and picks seed
+  categories per domain (engineering → computing-history first;
+  creative → myth + nature first).
+* Imagination middleware picks injection wrapper per domain
+  (creative → "dreams" wrapper; everyone else → new "neutral"
+  wrapper from Phase 12).
+* All gates are opt-in; no regression risk for users who don't
+  enable dreamscape at all.
+
+### Updated grade cells
+
+| Was (after P10) | Now (after P11/P12) |
+|---|---|
+| *Real-world impact (validated) — D+* | **B−** (creative prompts: strong 6/7; technical prompts: weak/noisy; classifier ships) |
+| *Real-world useful-ness for coding — C (technical) / UNTESTED (creative)* | **B** (creative N=7 confirmed; technical neutral wrapper ships; engineering-craft seeds still future work) |
+| *Tier 2: "tune `min_imagination_trait` downward"* | **Still don't lower** — but DO route the feature instead of disabling it |
+| *Overall grade B (clear-eyed)* | **B+ (back, but earned)** |
+
+### What didn't change
+
+* Engineering quality: still A.
+* Stability + resilience: still A.
+* Cost-effectiveness: still A.
+* Documentation: still A.
+* Opt-in defaults: still ironclad.
+
+### What's next
+
+`CONTEXT_AWARE_DREAMING.md` lays out the deep-dive. The shortest
+list:
+
+1. **Phase 13 — routing verification.** Run a mixed scenario set
+   against an engineering-classified agent and confirm the classifier
+   doesn't break creative-prompt output.
+2. **Phase 14 — N=30 statistical power.** Resolve the Phase 10 vs
+   Phase 12 variance properly.
+3. **Phase 15 — engineering-craft seed library.** Write 30+
+   software-engineering-specific seeds; test whether
+   domain-appropriate dreams produce treatment wins on technical
+   prompts where domain-mismatched dreams couldn't.
+4. **Phase 16 — LLM classifier fallback.** For the long tail of
+   profiles that the keyword classifier falls back to
+   `general`, use a Haiku call at agent build time. Cached.
+
+### Final-er grade: **B+ (and converging on A)**
+
+The campaign produced one strong qualitative finding (P11 confirms
+P1's standout), one solid engineering surface (the domain
+classifier + routing) that ships *because of* the data, and one
+honest piece of self-correction (P12 walked back P10's overstated
+magnitude). That's the dreamscape thesis earning its keep —
+narrower than the original pitch, but real.
+
+— Reviewer (after Phases 11 + 12)

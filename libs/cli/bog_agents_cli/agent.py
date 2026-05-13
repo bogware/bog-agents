@@ -187,6 +187,7 @@ def _attach_dreamscape_middleware(
     *,
     cfg: Any,  # noqa: ANN401 — DreamscapeConfig is deferred-imported; typing leaks here
     agent_id: str,
+    system_prompt: str | None = None,
 ) -> None:
     """Append every enabled dreamscape middleware to ``middleware_list``.
 
@@ -202,8 +203,25 @@ def _attach_dreamscape_middleware(
             an import that runs even when the feature is off).
         agent_id: Per-agent identifier so on-disk state files end up
             in the right directory.
+        system_prompt: The agent's resolved system prompt. When
+            provided, captured via :func:`capture_agent_profile` so the
+            dream engine can classify the agent's working domain.
     """
     safe_id = agent_id or "default"
+
+    # Capture the agent's system prompt so the dream engine can
+    # classify the agent's working domain (engineering / creative /
+    # research / general) and steer seed selection accordingly. Phases
+    # 10-12 showed the effect of injected dreams is domain-conditional;
+    # this hook is the input to context-aware dreaming. Best-effort —
+    # disk failure here must not block agent creation.
+    if system_prompt:
+        try:
+            from bog_agents_cli.dreamscape.domain import capture_agent_profile
+
+            capture_agent_profile(safe_id, system_prompt)
+        except Exception:
+            logger.debug("dreamscape: agent-profile capture failed", exc_info=True)
 
     # Persist the resolved runtime config so the dashboard (/agent-state,
     # /dreamscape status) shows what's actually active instead of what
@@ -291,16 +309,33 @@ def _attach_dreamscape_middleware(
 
     if cfg.imagination.enabled:
         try:
+            from dataclasses import replace as dc_replace
+
+            from bog_agents_cli.dreamscape.domain import (
+                recommended_injection_style,
+                resolve_agent_domain,
+            )
             from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
 
+            # Context-aware injection style: engineering / research /
+            # general agents get the neutral wrapper (Phase 10 + 12
+            # showed the "Fragment from your dreams" framing is penalized
+            # on technical-debugging prompts); creative agents get the
+            # original dreams wrapper (Phase 11 showed it's a feature
+            # there, 6/7 treatment wins).
+            domain = resolve_agent_domain(safe_id)
+            preferred_style = recommended_injection_style(domain)
+            effective_cfg = dc_replace(cfg.imagination, injection_style=preferred_style)
             middleware_list.append(
-                ImaginationMiddleware(agent_id=safe_id, cfg=cfg.imagination)
+                ImaginationMiddleware(agent_id=safe_id, cfg=effective_cfg)
             )
             logger.info(
                 "dreamscape: imagination middleware attached "
-                "(trigger@%d failures, threshold=%.1f)",
+                "(trigger@%d failures, threshold=%.1f, domain=%s, style=%s)",
                 cfg.imagination.trigger_after_failures,
                 cfg.imagination.min_imagination_trait,
+                domain,
+                preferred_style,
             )
         except Exception:
             logger.warning(
@@ -1380,6 +1415,7 @@ def create_cli_agent(
                 agent_middleware,
                 cfg=dreamscape_cfg,
                 agent_id=assistant_id,
+                system_prompt=system_prompt,
             )
     except Exception:
         logger.warning("dreamscape middleware setup failed; skipping", exc_info=True)

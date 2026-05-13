@@ -218,9 +218,26 @@ async def generate_dream(
     import random
 
     rng = random.Random(rng_seed) if rng_seed is not None else None
-    chosen = seeds.pick_seeds(
-        cfg.seed_categories, count=cfg.max_seeds_per_dream, rng=rng
+    # Context-aware seed selection: if the host agent has a captured
+    # profile, classify its working domain and prefer that domain's
+    # seed categories. Falls back to ``cfg.seed_categories`` when no
+    # profile is on disk (matches v1 behavior). Phases 10-12 showed
+    # the effect of dream content is domain-conditional; this is the
+    # narrowest change that lets engineering agents dream less floridly
+    # without removing the creative library entirely.
+    from bog_agents_cli.dreamscape.domain import (
+        preferred_seed_categories,
+        resolve_agent_domain,
     )
+
+    domain = resolve_agent_domain(agent_id)
+    if domain != "general":
+        chosen_categories = preferred_seed_categories(
+            domain, available=seeds.list_categories()
+        )
+    else:
+        chosen_categories = cfg.seed_categories
+    chosen = seeds.pick_seeds(chosen_categories, count=cfg.max_seeds_per_dream, rng=rng)
     excerpts = _collect_memory_excerpts(agent_id)
     user_prompt = _format_dream_user_prompt(excerpts, chosen)
 

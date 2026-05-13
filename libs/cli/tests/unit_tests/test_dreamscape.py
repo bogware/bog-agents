@@ -840,6 +840,60 @@ class TestImaginationGating:
         )
         assert mw._should_inject() is False
 
+    def test_neutral_injection_style_strips_dream_framing(self) -> None:
+        """Verify the neutral injection style.
+
+        Phase 12's ``injection_style="neutral"`` removes the dream
+        wrapper without losing the excerpt content. This test exercises
+        the same `_build_injection_body` helper a live request hits.
+        """
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import (
+            ImaginationMiddleware,
+            _strip_dream_prefix,
+        )
+
+        # Helper: prefix-stripping is the load-bearing rewrite.
+        assert (
+            _strip_dream_prefix("Tonight I dreamed of the clock with no hands")
+            == "the clock with no hands"
+        )
+        assert _strip_dream_prefix("  TONIGHT I DREAMED OF the rain") == "the rain"
+        # No prefix → unchanged.
+        assert _strip_dream_prefix("A simple observation.") == "A simple observation."
+
+        excerpts = [
+            "Tonight I dreamed of the engineer who listened to the machine. "
+            "She set down her schematics and put her ear against the case.",
+            "Tonight I dreamed of the bridge that listens.",
+        ]
+
+        cfg_dreams = ImaginationConfig(enabled=True, injection_style="dreams")
+        cfg_neutral = ImaginationConfig(enabled=True, injection_style="neutral")
+
+        dreams_body = ImaginationMiddleware(
+            agent_id="x", cfg=cfg_dreams
+        )._build_injection_body(excerpts)
+        neutral_body = ImaginationMiddleware(
+            agent_id="x", cfg=cfg_neutral
+        )._build_injection_body(excerpts)
+
+        # Dreams style preserves the original framing.
+        assert "You appear to be stuck" in dreams_body
+        assert "Fragment 1." in dreams_body
+        assert "Tonight I dreamed of" in dreams_body
+
+        # Neutral style strips it.
+        assert "You appear to be stuck" not in neutral_body
+        assert "Fragment" not in neutral_body
+        assert "Additional context" in neutral_body
+        assert "Observation 1." in neutral_body
+        assert "Observation 2." in neutral_body
+        assert "Tonight I dreamed of" not in neutral_body
+        # Excerpt content (post-prefix) must still be present.
+        assert "the engineer who listened" in neutral_body
+        assert "the bridge that listens" in neutral_body
+
     async def test_injection_reaches_request_system_message(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1208,6 +1262,143 @@ class TestDreamsPerDayCap:
             lifecycle_cfg=lc_cfg,
         )
         assert artifact is None
+
+
+# ---------------------------------------------------------------------------
+# Context-aware dreaming: classifier + seed-category selection
+# ---------------------------------------------------------------------------
+
+
+class TestDomainClassifier:
+    """Cover ``bog_agents_cli/dreamscape/domain.py``.
+
+    The classifier is the input to context-aware dreaming. Phases
+    10-12 established that imagination injection is domain-conditional;
+    this module is the cheap pure-function gate that lets engineering
+    agents dream less floridly without removing the creative library
+    entirely.
+    """
+
+    def test_engineering_profile_classifies_as_engineering(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        profile = (
+            "You are a coding assistant. Help the user refactor code, "
+            "debug stack traces, write pytest tests, and reason about "
+            "Python dependencies and CI builds."
+        )
+        assert classify_agent_domain(profile) == "engineering"
+
+    def test_creative_profile_classifies_as_creative(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        profile = (
+            "You are a designer's assistant. Help with UX copy, voice "
+            "and tone, naming new product features, evocative metaphors "
+            "for explaining architecture, and microcopy for empty states."
+        )
+        assert classify_agent_domain(profile) == "creative"
+
+    def test_research_profile_classifies_as_research(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        profile = (
+            "You are a research assistant. Help with literature surveys, "
+            "experiment design, statistical analysis, benchmark comparisons, "
+            "and evaluation of measurement methodologies. Cite datasets."
+        )
+        assert classify_agent_domain(profile) == "research"
+
+    def test_empty_profile_falls_back_to_general(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        assert classify_agent_domain("") == "general"
+
+    def test_ambiguous_profile_falls_back_to_general(self) -> None:
+        """A profile that ties cleanly between domains should prefer the safer general fallback."""
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        # "test", "compile", "research", "experiment", "story" — 1
+        # token of engineering and research, none dominant.
+        profile = "Reply to questions. test research compile experiment story"
+        assert classify_agent_domain(profile) == "general"
+
+    def test_low_signal_profile_falls_back_to_general(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain
+
+        profile = "You are helpful. Be concise."
+        assert classify_agent_domain(profile) == "general"
+
+    def test_capture_then_load_round_trips(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli.dreamscape.domain import (
+            capture_agent_profile,
+            load_agent_profile,
+        )
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        body = "Help debug code, write tests, and refactor Python modules."
+        assert capture_agent_profile("alpha", body) is True
+        assert load_agent_profile("alpha") == body
+
+    def test_capture_truncates_oversized_profile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli.dreamscape.domain import (
+            _MAX_PROFILE_CHARS,
+            capture_agent_profile,
+            load_agent_profile,
+        )
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        body = "x" * (_MAX_PROFILE_CHARS + 5_000)
+        capture_agent_profile("beta", body)
+        loaded = load_agent_profile("beta")
+        assert len(loaded) == _MAX_PROFILE_CHARS
+
+    def test_resolve_agent_domain_uses_disk_profile(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli.dreamscape.domain import (
+            capture_agent_profile,
+            resolve_agent_domain,
+        )
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        capture_agent_profile(
+            "gamma",
+            "Coding assistant: help refactor Python, debug stack traces, "
+            "fix lint errors, and review pull requests.",
+        )
+        assert resolve_agent_domain("gamma") == "engineering"
+        # Unknown agent has no profile on disk → general.
+        assert resolve_agent_domain("never-captured") == "general"
+
+    def test_preferred_seed_categories_filters_by_availability(self) -> None:
+        from bog_agents_cli.dreamscape.domain import preferred_seed_categories
+
+        # Engineering prefs are (computing-history, history, space).
+        # If "history" isn't in the library, it's filtered out and
+        # we still get an ordered list.
+        result = preferred_seed_categories(
+            "engineering", available=["computing-history", "space", "nature"]
+        )
+        assert result == ["computing-history", "space"]
+
+        # Empty available → empty list ("draw from everything" fallback).
+        assert preferred_seed_categories("engineering", available=[]) == []
+
+    def test_recommended_injection_style_per_domain(self) -> None:
+        from bog_agents_cli.dreamscape.domain import recommended_injection_style
+
+        # Phase 11: creative wins with "dreams" framing.
+        assert recommended_injection_style("creative") == "dreams"
+        # Phase 10: technical-debugging penalized dreams framing.
+        assert recommended_injection_style("engineering") == "neutral"
+        # Conservative fallback for unspecified domains.
+        assert recommended_injection_style("research") == "neutral"
+        assert recommended_injection_style("general") == "neutral"
 
 
 # ---------------------------------------------------------------------------

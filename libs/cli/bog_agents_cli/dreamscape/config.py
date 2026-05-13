@@ -238,6 +238,24 @@ class ImaginationConfig:
     threshold, the middleware auto-disables itself until the next
     dream lands. Set to 0.0 to disable the kill-switch."""
 
+    injection_style: str = "dreams"
+    """How the injected snippets are framed in the system prompt.
+
+    Two values:
+
+    * ``"dreams"`` (default) — the historical framing. Header reads
+      *"You appear to be stuck. Here is some imagination."* and each
+      excerpt is labeled *"Fragment N."* with the original
+      *"Tonight I dreamed of …"* titles preserved. Works well on
+      creative / design prompts where evocative framing is a feature
+      (Phase 11: treatment 6/7).
+    * ``"neutral"`` — strips the dream framing. Header reads
+      *"## Additional context"*; excerpts are labeled simply
+      *"Observation N."* with the *"Tonight I dreamed of"* prefix
+      stripped from titles. Tested in Phase 12 to see whether the
+      injection's frame-shift effect survives the wrapper removal.
+    """
+
 
 @dataclass
 class DashboardConfig:

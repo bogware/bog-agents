@@ -56,6 +56,17 @@ _INJECTION_PREFACE = (
     "they spark nothing, ignore them and respond normally."
 )
 
+# Phase 12 alternative style. Strips the "dream" framing for use on
+# technical-debugging prompts where the metaphorical wrapper is judged
+# as padding. See `ImaginationConfig.injection_style="neutral"`.
+_NEUTRAL_INJECTION_HEADER = "## Additional context"
+_NEUTRAL_INJECTION_PREFACE = (
+    "Here are a few short, unrelated observations. They are not "
+    "instructions or factual context. Use them only if they help you "
+    "see the problem from a different angle; otherwise ignore them."
+)
+_DREAM_TITLE_PREFIX = "tonight i dreamed of "
+
 
 # No durable LangGraph state — failure counters live on disk.
 
@@ -149,6 +160,33 @@ class ImaginationMiddleware(AgentMiddleware):
                 return False
         return True
 
+    def _build_injection_body(self, excerpts: list[str]) -> str:
+        """Render the dream-excerpt block in the configured style.
+
+        Two styles supported via ``ImaginationConfig.injection_style``:
+
+        * ``"dreams"`` (default) — preserves the original "You appear
+          to be stuck / Fragment N" framing. Works on creative prompts
+          (Phase 11).
+        * ``"neutral"`` — strips the dream framing entirely. Header
+          becomes *"## Additional context"*; excerpts are labeled
+          *"Observation N."* and *"Tonight I dreamed of"* prefixes
+          are removed. Phase 12 ablation.
+        """
+        style = getattr(self._cfg, "injection_style", "dreams")
+        if style == "neutral":
+            body_parts = [_NEUTRAL_INJECTION_HEADER, "", _NEUTRAL_INJECTION_PREFACE, ""]
+            label = "Observation"
+            excerpts_to_use = [_strip_dream_prefix(e) for e in excerpts]
+        else:
+            body_parts = [_INJECTION_HEADER, "", _INJECTION_PREFACE, ""]
+            label = "Fragment"
+            excerpts_to_use = list(excerpts)
+        for i, excerpt in enumerate(excerpts_to_use, start=1):
+            body_parts.append(f"**{label} {i}.** {excerpt}")
+            body_parts.append("")
+        return "\n".join(body_parts)
+
     def _maybe_inject(self, request: ModelRequest) -> ModelRequest:
         try:
             if not self._should_inject():
@@ -159,11 +197,7 @@ class ImaginationMiddleware(AgentMiddleware):
             )
             if not excerpts:
                 return request
-            body_parts = [_INJECTION_HEADER, "", _INJECTION_PREFACE, ""]
-            for i, excerpt in enumerate(excerpts, start=1):
-                body_parts.append(f"**Fragment {i}.** {excerpt}")
-                body_parts.append("")
-            body = "\n".join(body_parts)
+            body = self._build_injection_body(excerpts)
 
             from bog_agents.middleware._utils import append_to_system_message
 
@@ -215,6 +249,21 @@ class ImaginationMiddleware(AgentMiddleware):
             save_snapshot(snap, enabled=True)
         except Exception:
             logger.exception("ImaginationMiddleware: outcome recording failed")
+
+
+def _strip_dream_prefix(excerpt: str) -> str:
+    """Strip a leading ``"Tonight I dreamed of "`` from a dream excerpt.
+
+    The dream engine writes titles with this literal prefix; the
+    *"neutral"* injection style removes it so the injected content
+    reads as plain observation rather than a dream report. Conservative
+    — only strips when the prefix is unambiguous and at the start.
+    """
+    stripped = excerpt.lstrip()
+    lower = stripped.lower()
+    if lower.startswith(_DREAM_TITLE_PREFIX):
+        return stripped[len(_DREAM_TITLE_PREFIX) :].lstrip()
+    return excerpt
 
 
 def _response_text(response: Any) -> str:
