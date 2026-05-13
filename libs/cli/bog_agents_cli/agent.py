@@ -182,6 +182,86 @@ def _build_dream_scheduler_factory(
     return factory
 
 
+# Phase 19 — module-level strong refs for fire-and-forget LLM-classifier
+# tasks. Without this set, the GC can reap the task before it
+# completes, dropping the classification + cache write.
+_LLM_CLASSIFIER_TASKS: set[Any] = set()
+
+
+def _schedule_llm_domain_classification(agent_id: str, system_prompt: str) -> None:
+    """Phase 19 — fire-and-forget LLM classification for the long tail.
+
+    The keyword classifier returned ``"general"`` for this agent's
+    system prompt — either the prompt is intentionally broad or its
+    vocabulary doesn't intersect the keyword dictionaries. Phase 19
+    builds an LLM-based fallback that runs once per agent build,
+    caches the result to disk, and is consulted by
+    :func:`resolve_agent_domain` on subsequent dream cycles.
+
+    The classification runs as a background asyncio task using a
+    cheap dream-model spec when one is configured. Failure here is
+    silent — the agent uses the keyword "general" classification
+    until the cache is populated.
+    """
+    try:
+        import asyncio
+
+        from bog_agents_cli.dreamscape import load_dreamscape_config
+        from bog_agents_cli.dreamscape.domain import (
+            _save_cached_llm_domain,
+            classify_agent_domain_llm_async,
+            llm_cache_path,
+        )
+
+        # Skip if already cached — avoids paying for repeat agent builds.
+        if llm_cache_path(agent_id).exists():
+            return
+
+        ds_cfg = load_dreamscape_config()
+        spec = (ds_cfg.dreams.model or "").strip()
+        if not spec:
+            from bog_agents_cli.config import settings as _settings
+
+            provider = (_settings.model_provider or "").strip()
+            model_name = (_settings.model_name or "").strip()
+            spec = f"{provider}:{model_name}" if provider and model_name else model_name
+        if not spec:
+            return
+
+        from bog_agents_cli.config import create_model
+
+        result = create_model(spec)
+
+        async def _do() -> None:
+            domain = await classify_agent_domain_llm_async(system_prompt, result.model)
+            if domain != "general":
+                _save_cached_llm_domain(agent_id, domain)
+                logger.info(
+                    "dreamscape: llm classifier cached %s for agent=%s",
+                    domain,
+                    agent_id,
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Fire-and-forget by design. The task may be GC'd before
+            # completion if the event loop tears down; that's fine —
+            # this is a best-effort enhancement, not a correctness
+            # path. Stored in a module-level set so the GC doesn't
+            # reap it during normal operation.
+            _LLM_CLASSIFIER_TASKS.add(loop.create_task(_do()))
+        except RuntimeError:
+            # No running event loop — the agent build is synchronous.
+            # Skip; the next async call from the agent will leave the
+            # keyword classification in place. (Real users always
+            # build agents inside an event loop.)
+            logger.debug(
+                "dreamscape: llm classifier deferred — no event loop at build time"
+            )
+    except Exception:
+        logger.debug("dreamscape: llm classifier scheduling failed", exc_info=True)
+
+
 def _attach_dreamscape_middleware(
     middleware_list: list[Any],
     *,
@@ -217,9 +297,18 @@ def _attach_dreamscape_middleware(
     # disk failure here must not block agent creation.
     if system_prompt:
         try:
-            from bog_agents_cli.dreamscape.domain import capture_agent_profile
+            from bog_agents_cli.dreamscape.domain import (
+                capture_agent_profile,
+                classify_agent_domain,
+            )
 
             capture_agent_profile(safe_id, system_prompt)
+            # Phase 19 — if the keyword classifier falls back to
+            # "general", schedule a background LLM classification.
+            # The result is cached to disk and consulted on next dream
+            # cycle. Best-effort: failure here logs and continues.
+            if classify_agent_domain(system_prompt) == "general":
+                _schedule_llm_domain_classification(safe_id, system_prompt)
         except Exception:
             logger.debug("dreamscape: agent-profile capture failed", exc_info=True)
 

@@ -463,7 +463,161 @@ def resolve_agent_domain(agent_id: str) -> Domain:
 
     Returns ``"general"`` if no profile is on disk yet — that matches
     the dreamscape's existing "fall back gracefully" pattern.
+
+    Phase 19 — also consults the LLM-classification cache on disk
+    (``agent_state_dir(agent_id) / "domain_llm.txt"``) when the
+    keyword classifier returns ``"general"``. The cache is populated
+    by :func:`classify_agent_domain_llm_async` at agent build time
+    for profiles whose keyword signal is too weak to commit to a
+    specific domain.
     """
     with suppress(Exception):
-        return classify_agent_domain(load_agent_profile(agent_id))
+        profile = load_agent_profile(agent_id)
+        keyword_result = classify_agent_domain(profile)
+        if keyword_result != "general":
+            return keyword_result
+        # Try the LLM-classifier cache as the fallback.
+        cached = _load_cached_llm_domain(agent_id)
+        if cached is not None:
+            return cached
+        return keyword_result
     return "general"
+
+
+# ---------------------------------------------------------------------------
+# Phase 19 — LLM classifier fallback
+# ---------------------------------------------------------------------------
+#
+# The keyword classifier is fast + deterministic, but it falls back
+# to ``"general"`` on profiles where no domain has a margin of >= 2
+# keyword hits over its nearest competitor. That fallback is the
+# safer failure mode (the seed library's uniform mode), but it
+# leaves a long tail of plausibly-classifiable profiles on the
+# table.
+#
+# Phase 19 adds an optional **LLM-based** classifier that only fires
+# on the long tail. One Haiku call at agent build time, cached to
+# disk, then read for free on every subsequent dream/injection
+# cycle. The cache means we pay roughly $0.001 per agent build, not
+# per dream.
+
+
+_LLM_CACHE_FILENAME = "domain_llm.txt"
+
+_LLM_CLASSIFIER_SYSTEM = (
+    "You classify an AI coding assistant's working domain from a short "
+    "system-prompt excerpt. Read the excerpt and pick exactly one label:"
+    "\n\n"
+    "* engineering — debugging, refactoring, writing tests, reasoning about "
+    "tools and runtime. Picks specific tool names; lists concrete commands."
+    "\n* creative — design, naming, error-message copy, voice and tone, "
+    "metaphor, microcopy, illustration. Picks evocative framings."
+    "\n* research — literature surveys, experiment design, statistical "
+    "analysis, benchmark comparisons. Picks measurement methodologies."
+    "\n* general — none of the above clearly dominates, or the profile is "
+    "intentionally broad."
+    "\n\nOutput STRICT JSON with no preamble:"
+    '\n{"domain": "engineering" | "creative" | "research" | "general", '
+    '"reasoning": "one short sentence"}'
+)
+
+
+def llm_cache_path(agent_id: str) -> Path:
+    """Return the on-disk path of the cached LLM-classifier verdict."""
+    return agent_state_dir(agent_id) / _LLM_CACHE_FILENAME
+
+
+def _load_cached_llm_domain(agent_id: str) -> Domain | None:
+    """Read the cached LLM classification. Returns None if absent or invalid."""
+    path = llm_cache_path(agent_id)
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if text in ("engineering", "creative", "research", "general"):
+        return text  # type: ignore[return-value]
+    return None
+
+
+def _save_cached_llm_domain(agent_id: str, domain: Domain) -> bool:
+    """Persist the LLM classification verdict so future dreams skip the LLM call."""
+    path = llm_cache_path(agent_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(domain, encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "dreamscape: llm-classification cache write failed (%s): %s",
+            agent_id,
+            exc,
+        )
+        return False
+    return True
+
+
+async def classify_agent_domain_llm_async(profile: str, model: object) -> Domain:
+    """Ask an LLM to classify the agent's domain.
+
+    Used only as a fallback when the keyword classifier returns
+    ``"general"`` — typically because the profile is intentionally
+    short or its vocabulary doesn't intersect the keyword
+    dictionaries. The classifier returns ``"general"`` itself when
+    the LLM's verdict isn't one of the known labels.
+
+    Args:
+        profile: The agent's system-prompt excerpt.
+        model: A LangChain ``BaseChatModel``. Pass ``Haiku 4.5`` or
+            any cheap-and-fast model; the classification is a single
+            short call.
+
+    Returns:
+        One of ``"engineering" | "creative" | "research" | "general"``.
+        Never raises.
+    """
+    if not profile or not profile.strip():
+        return "general"
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        resp = await model.ainvoke(  # type: ignore[attr-defined]
+            [
+                SystemMessage(content=_LLM_CLASSIFIER_SYSTEM),
+                HumanMessage(content=f"## Excerpt\n\n{profile[:_MAX_PROFILE_CHARS]}"),
+            ]
+        )
+    except Exception as exc:
+        logger.warning("dreamscape: llm classifier call failed: %s", exc)
+        return "general"
+
+    text = str(getattr(resp, "content", "")).strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+    text = text.strip()
+    import json as _json
+
+    try:
+        parsed = _json.loads(text)
+    except (_json.JSONDecodeError, ValueError):
+        return "general"
+    label = parsed.get("domain", "") if isinstance(parsed, dict) else ""
+    if label in ("engineering", "creative", "research", "general"):
+        return label  # type: ignore[return-value]
+    return "general"
+
+
+async def classify_with_fallback_async(profile: str, model: object) -> Domain:
+    """Keyword classifier first, LLM fallback only when keyword returns 'general'.
+
+    The shipped pattern: cheap-and-deterministic for the modal case,
+    one Haiku call for the long tail. Cache the LLM result with
+    :func:`_save_cached_llm_domain` so subsequent dream cycles skip
+    the call entirely.
+    """
+    keyword_result = classify_agent_domain(profile)
+    if keyword_result != "general":
+        return keyword_result
+    return await classify_agent_domain_llm_async(profile, model)

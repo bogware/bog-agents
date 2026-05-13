@@ -1435,6 +1435,182 @@ class TestDomainClassifier:
 
 
 # ---------------------------------------------------------------------------
+# Phase 19 — LLM classifier fallback
+# ---------------------------------------------------------------------------
+
+
+class TestLLMClassifierFallback:
+    """Cover the Phase 19 LLM-based domain classifier fallback.
+
+    The keyword classifier from Phase 11 returns ``"general"`` when
+    no domain has enough margin over its competitors. Phase 19 adds
+    an async LLM-based fallback that fires once per agent build,
+    caches to disk, and is consulted by ``resolve_agent_domain``.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    async def test_llm_classifier_parses_engineering_verdict(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(
+                    content='{"domain": "engineering", "reasoning": "stub"}'
+                )
+
+        result = await classify_agent_domain_llm_async("Short profile", _Stub())
+        assert result == "engineering"
+
+    async def test_llm_classifier_handles_code_fenced_json(self) -> None:
+        """Verify the parser strips markdown fences.
+
+        The LLM sometimes wraps JSON in code blocks; the parser must
+        peel them off before json.loads.
+        """
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(
+                    content='```json\n{"domain": "creative", "reasoning": "x"}\n```'
+                )
+
+        result = await classify_agent_domain_llm_async("any", _Stub())
+        assert result == "creative"
+
+    async def test_llm_classifier_returns_general_on_unparseable(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="I think it's engineering but I'm not sure.")
+
+        result = await classify_agent_domain_llm_async("any", _Stub())
+        assert result == "general"
+
+    async def test_llm_classifier_returns_general_on_empty_profile(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                msg = "should not be called on empty profile"
+                raise AssertionError(msg)
+
+        result = await classify_agent_domain_llm_async("", _Stub())
+        assert result == "general"
+
+    async def test_llm_classifier_returns_general_on_invalid_label(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content='{"domain": "wizardry"}')
+
+        result = await classify_agent_domain_llm_async("any", _Stub())
+        assert result == "general"
+
+    async def test_llm_classifier_returns_general_when_model_raises(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_agent_domain_llm_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                msg = "simulated provider outage"
+                raise RuntimeError(msg)
+
+        result = await classify_agent_domain_llm_async("any", _Stub())
+        assert result == "general"
+
+    async def test_fallback_skips_llm_when_keyword_classifies(self) -> None:
+        """Skip the LLM when the keyword classifier commits.
+
+        ``classify_with_fallback_async`` must NOT call the LLM when
+        the keyword classifier already commits to a domain.
+        """
+        from bog_agents_cli.dreamscape.domain import classify_with_fallback_async
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                msg = "LLM should not have been called"
+                raise AssertionError(msg)
+
+        # This profile has heavy engineering vocabulary — keyword
+        # classifier returns "engineering" without falling through.
+        profile = (
+            "You are a coding assistant. Help debug stack traces, write "
+            "pytest tests, refactor Python modules, and reason about "
+            "dependencies and CI builds."
+        )
+        result = await classify_with_fallback_async(profile, _Stub())
+        assert result == "engineering"
+
+    async def test_fallback_calls_llm_on_general_keyword_result(self) -> None:
+        """Verify the LLM IS called on low-signal profiles.
+
+        When the keyword classifier returns ``"general"``, the LLM
+        fallback fires.
+        """
+        from bog_agents_cli.dreamscape.domain import classify_with_fallback_async
+
+        class _Stub:
+            calls = 0
+
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                _Stub.calls += 1
+                return AIMessage(content='{"domain": "research"}')
+
+        # Very low-signal profile → keyword classifier returns "general".
+        result = await classify_with_fallback_async("Be helpful.", _Stub())
+        assert _Stub.calls == 1
+        assert result == "research"
+
+    def test_cache_round_trips_disk(self) -> None:
+        from bog_agents_cli.dreamscape.domain import (
+            _load_cached_llm_domain,
+            _save_cached_llm_domain,
+        )
+
+        assert _load_cached_llm_domain("never-cached") is None
+        assert _save_cached_llm_domain("agent-x", "engineering") is True
+        assert _load_cached_llm_domain("agent-x") == "engineering"
+
+    def test_resolve_agent_domain_consults_llm_cache_when_keyword_is_general(
+        self,
+    ) -> None:
+        """Cache hit wins over keyword fallback.
+
+        An agent with a low-signal profile but a populated LLM cache
+        should resolve to the cached domain.
+        """
+        from bog_agents_cli.dreamscape.domain import (
+            _save_cached_llm_domain,
+            capture_agent_profile,
+            resolve_agent_domain,
+        )
+
+        # Low-signal profile (would keyword-classify as general).
+        capture_agent_profile("hybrid-agent", "You are helpful. Be concise.")
+        # Pre-populate the cache as if a prior LLM call had landed.
+        _save_cached_llm_domain("hybrid-agent", "research")
+
+        # resolve_agent_domain should prefer the cache over the keyword
+        # fallback.
+        assert resolve_agent_domain("hybrid-agent") == "research"
+
+
+# ---------------------------------------------------------------------------
 # Phase 17 — per-prompt routing
 # ---------------------------------------------------------------------------
 

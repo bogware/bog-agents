@@ -1,0 +1,118 @@
+{
+  "phase": 22,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model": "claude-haiku-4-5",
+  "test_focus": "real-bug outcome experiment — does imagination injection make an agent fix bugs better? Objective pytest pass-rate measurement, NOT a judge-based preference comparison. This was the report card's biggest remaining gap: every prior phase used a Sonnet judge as a proxy for usefulness.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "n_trials_per_bug": 10,
+    "n_bugs_total": 10,
+    "n_bugs_per_run": 5,
+    "total_trials": 100,
+    "arms": [
+      "control — no injection",
+      "treatment — neutral wrapper + engineering-craft seeded archive, snapshot pre-primed to trigger injection"
+    ],
+    "metric": "pytest exit code (objective pass/fail per fix)",
+    "task_shape": "single-function Python bug — buggy code + failing pytest. Agent must respond with ONLY the corrected function in a Python code block. The harness extracts the code, applies the patch to a fresh module, runs pytest in a subprocess.",
+    "run_1_easy_bugs": [
+      "off-by-one-sum (range(n) vs range(1, n+1))",
+      "mutable-default-arg (items=[] shared across calls)",
+      "bool-string-comparison (parse_flag only matched 'True')",
+      "binary-search-boundary (< vs <= on the while)",
+      "list-mutation-during-iter (del items[i] inside enumerate)"
+    ],
+    "run_2_harder_bugs": [
+      "late-binding-closure ([lambda: i for i in range(n)])",
+      "generator-exhausted (re-iterating a generator after exhausting it)",
+      "dict-mutation-during-iter (del during for-loop over dict)",
+      "float-equality (a + b + c == 0.3 with floating-point)",
+      "recursion-depth (recursive sum_list hitting RecursionError on n=10000)"
+    ]
+  },
+  "results": {
+    "run_1_easy_bugs": {
+      "control_passed": 50,
+      "treatment_passed": 50,
+      "n_valid": 50,
+      "errors": 0,
+      "control_pass_rate": 1.0,
+      "treatment_pass_rate": 1.0,
+      "elapsed_seconds": {"llm": 12.2, "pytest": 167.0, "total": 179.2}
+    },
+    "run_2_harder_bugs": {
+      "control_passed": 50,
+      "treatment_passed": 50,
+      "n_valid": 50,
+      "errors": 0,
+      "control_pass_rate": 1.0,
+      "treatment_pass_rate": 1.0,
+      "elapsed_seconds": {"llm": 11.8, "pytest": 164.0, "total": 175.8}
+    },
+    "combined": {
+      "total_trials": 100,
+      "control_passed": 100,
+      "treatment_passed": 100,
+      "control_pass_rate": 1.0,
+      "treatment_pass_rate": 1.0,
+      "wilson_95_ci_per_arm": [0.963, 1.0],
+      "interpretation": "Both arms saturate at 100% on all 10 bugs. Imagination injection neither helps nor hurts at this task difficulty."
+    }
+  },
+  "per_bug_easy": [
+    {"bug": "off-by-one-sum", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "mutable-default-arg", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "bool-string-comparison", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "binary-search-boundary", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "list-mutation-during-iter", "control_passed": 10, "treatment_passed": 10}
+  ],
+  "per_bug_harder": [
+    {"bug": "late-binding-closure", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "generator-exhausted", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "dict-mutation-during-iter", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "float-equality", "control_passed": 10, "treatment_passed": 10},
+    {"bug": "recursion-depth", "control_passed": 10, "treatment_passed": 10}
+  ],
+  "implications": [
+    "**Null result, honestly reported.** Both control and treatment arms passed 100/100 trials on every bug. Imagination injection neither helps nor hurts on tasks the agent already handles.",
+    "**This is not a failure — it's a measurement.** The dreamscape's imagination-injection mechanism is GATED on `consecutive_tool_failures >= 3`. The mechanism is designed for the *stuck-agent* scenario. We forcibly bypassed the gate by pre-priming the snapshot; even with that bypass, injection didn't change outcomes on tasks where the agent doesn't get stuck.",
+    "**The CEILING EFFECT is itself the answer.** For well-isolated, well-tested single-function bug-fix tasks, Haiku 4.5 is competent enough to succeed regardless of dream content. The agent isn't stuck, so the mechanism designed to unstick it doesn't fire usefully — even when forced.",
+    "**The real measurement of injection's value lies elsewhere.** Tasks where Haiku ACTUALLY fails without injection — multi-file refactors, ambiguous design decisions, cross-codebase reasoning — are where the 'stuck' state is genuinely reached. Those tasks resist clean automated testing (no single pass/fail metric).",
+    "**Even the harder-bug run hit the ceiling.** I deliberately picked Python gotchas (late-binding closure, generator exhaustion, float equality, dict-mutation-during-iter, recursion depth) hoping for ~50-70% baseline pass rates. Haiku 4.5 nailed all 100/100. The model is meaningfully more capable than my bug fixtures.",
+    "**What we CAN'T conclude:** imagination injection has no value. We can only conclude that on *single-function bug-fix tasks of this difficulty*, it doesn't measurably help. The value the campaign has measured (79% creative-prompt win, 67% decision-shaped-prompt win, 57% technical-prompt break-even-or-better) holds; those were measured on a different surface (judge-preferences on open-ended responses, not pass/fail on objective tests).",
+    "**The judge-based preference signal IS the right signal for what dreamscape actually does.** Imagination injection produces meta-moves: 'step back from the file itself,' 'consider the directory hierarchy.' Those are reframes, not new facts. A pytest pass/fail measurement is BLIND to reframe quality — if the model gets the answer right with or without injection, the reframe doesn't change the bit. Judge-based preference measurement captures whether the response is MORE USEFUL, not just whether it's CORRECT.",
+    "**Future Phase 23 design:** if we want to measure injection's effect on bug-fix outcomes, we need bugs that genuinely defeat Haiku 4.5 ~50% of the time. That likely means multi-file bugs, harder Python idioms, or bugs where the failing test is ambiguous (multiple plausible fixes, only one of which makes the WHOLE test suite pass)."
+  ],
+  "cost_breakdown": {
+    "haiku_calls_run_1": 100,
+    "haiku_calls_run_2": 100,
+    "approx_cost_total_usd": 0.20
+  },
+  "live_calls": 200,
+  "approx_cost_usd": 0.20,
+  "test_suite_stats": {
+    "cli_unit_tests": 3583,
+    "dreamscape_specific": 98,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "real_bug_pass_rate_easy_bugs": "treatment indistinguishable from control (both 100%)",
+    "real_bug_pass_rate_harder_bugs": "treatment indistinguishable from control (both 100%)",
+    "ceiling_effect": "Haiku 4.5 is too competent at single-function bug fixes for this kind of A/B to discriminate — even on harder-bug fixtures",
+    "judge_based_preference_signal_still_valid": "Phase 14's 79% creative + Phase 16's 57% engineering win rates hold; they measure response USEFULNESS, not response CORRECTNESS — different question, different surface"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "The experiment's task class (single-function bug fix) doesn't exercise the stuck-agent scenario that imagination injection is designed for. We forced the injection to fire by pre-priming the snapshot, but the agent wasn't ACTUALLY stuck.",
+    "Selection bias in bug curation: I picked bugs that I (a senior dev) considered moderately tricky. Haiku 4.5's training data has seen vastly more of these idiomatic Python bugs than I underestimated.",
+    "Pass/fail is a blunt metric. A multi-criteria measurement (correctness + readability + edge-case-coverage) might surface differences hidden by binary pass/fail.",
+    "No latency or token-count comparison — the treatment responses might be slower or more verbose even when correct. Phase 14 already established this; Phase 22 didn't measure it."
+  ],
+  "verdict": "NULL RESULT — honestly reported. Imagination injection neither helps nor hurts on single-function bug-fix tasks at the difficulty Haiku 4.5 handles trivially. The campaign's prior judge-based findings (79% / 57% / 67% win rates by domain) still stand as the load-bearing effectiveness measurements; they capture a different (and arguably more important) property: response usefulness on open-ended questions where 'correct' is underdetermined.",
+  "next_steps": [
+    "Phase 23 (suggested): harder bug fixtures — multi-file refactors, ambiguous test specifications, or bugs requiring cross-codebase reasoning. Need a task class where Haiku 4.5 actually fails ~50% of the time without intervention.",
+    "Phase 24 (suggested): non-pass-fail outcome measures — code-review quality, parsimony of fix, edge-case coverage. A pass/fail pytest test is too coarse for the property dreamscape actually changes.",
+    "Phase 25 (suggested): real production deployment with telemetry. Track 'dreams fired' vs 'agent-task-success' over real user sessions. The judge-based measurement isn't a perfect proxy for real-world utility; production telemetry would close the gap."
+  ]
+}

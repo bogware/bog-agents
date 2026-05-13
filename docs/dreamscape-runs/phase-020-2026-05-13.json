@@ -1,0 +1,89 @@
+{
+  "phase": 20,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "N=30 confirmation of engineering-craft seeds > computing-history seeds on the two DECISION-shaped technical scenarios where the effect was strongest in Phase 15 (62.9% EC win, N=70) and Phase 16 (87% and 60% EC per-scenario at N=15).",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "n_trials_per_scenario": 30,
+    "scenarios": 2,
+    "total_trials": 60,
+    "scenario_selection": "legacy-deletion + refactor-decision — the two decision-shaped scenarios from Phase 14 (55% and 25% treatment-win baselines) where Phase 15+16 saw the strongest EC>CH effect",
+    "arms": [
+      "engineering-craft (EC) — 5-dream archive with day-to-day-craft texture (the bug live for six years, the feature flag from 2017)",
+      "computing-history (CH) — 5-dream archive with historical-figure texture (Hamilton, Knuth, Engelbart, Hopper, Thompson)"
+    ],
+    "judge_design": "Direct EC-vs-CH head-to-head. Both arms use the neutral wrapper. Response order randomized per trial.",
+    "rng_seed": 20260520,
+    "concurrency": "asyncio.Semaphore(8)"
+  },
+  "results": {
+    "total_elapsed_seconds": 63.8,
+    "aggregate": {
+      "ec_wins": 40,
+      "ch_wins": 18,
+      "ties": 2,
+      "n": 60,
+      "ec_win_rate": 0.667,
+      "wilson_95_ci": [0.541, 0.773],
+      "interpretation": "EC wins 66.7% of head-to-heads on decision-shaped scenarios at N=60. 95% CI [54.1%, 77.3%] EXCLUDES 50% — statistically significant content-routing effect."
+    }
+  },
+  "per_scenario": [
+    {
+      "scenario": "legacy-deletion",
+      "n": 30,
+      "ec_wins": 18, "ch_wins": 10, "ties": 2,
+      "ec_win_rate": 0.60,
+      "ci": [0.42, 0.75],
+      "comparison": "Phase 16 N=15: EC 87% [62%, 96%] — Phase 20 N=30: 60% [42%, 75%]. The Phase 16 magnitude regressed toward 60%; CIs heavily overlap. Both runs find EC>CH directionally."
+    },
+    {
+      "scenario": "refactor-decision",
+      "n": 30,
+      "ec_wins": 22, "ch_wins": 8, "ties": 0,
+      "ec_win_rate": 0.73,
+      "ci": [0.56, 0.86],
+      "comparison": "Phase 16 N=15: EC 60% [36%, 80%] — Phase 20 N=30: 73% [56%, 86%]. The effect strengthened with more data; CIs overlap but Phase 20 is tighter."
+    }
+  ],
+  "implications": [
+    "**EC > CH on decision-shaped scenarios is REAL.** At N=60 the lower CI bound is 54%, above 50%. Phase 15's 63% directional finding is confirmed at higher N.",
+    "**Phase 16's aggregate 'EC and CH are tied' result is explained by per-scenario heterogeneity.** When EC dominates on 2 scenarios (legacy-deletion, refactor-decision) and CH dominates on 2-3 others (slow-prod-query, retry-under-load, memory-creep), the aggregate is ~tied. The signal washes out in the average.",
+    "**Content routing is justified specifically for decision-shaped technical work.** An engineering agent answering 'which approach should I take?' or 'what's the right way to be sure?' benefits from engineering-craft seeds (the texture of 'I've seen this before — the system has hidden context') over historical-figure seeds.",
+    "**The shipping engineering preference order (engineering-craft FIRST) is now justified beyond Phase 15.** The first commit to use it (Phase 15 + later) had reasonable data; this phase confirms it with proper statistical power on the strongest-effect subset.",
+    "**Future content-routing per-prompt** (Phase 21 suggested) could surface the EC advantage on decision-shaped prompts while letting CH (or a broader mix) handle pure-debugging prompts. The Phase 16 per-scenario heterogeneity is the design rationale.",
+    "**Phase 15 magnitude (62.9%) lands within Phase 20's CI [54.1%, 77.3%].** The Phase 15 result was real, just at the noisier end."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 120,
+    "sonnet_calls": 60,
+    "approx_cost_total_usd": 0.40
+  },
+  "live_calls": 180,
+  "approx_cost_usd": 0.40,
+  "test_suite_stats": {
+    "cli_unit_tests": 3583,
+    "dreamscape_specific": 98,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "engineering_craft_seeds_beat_computing_history_on_decision_shaped": "sings — N=60, lower CI bound 54% (above 50%)",
+    "shipping_engineering_preference_order": "justified by data, not just intuition",
+    "per_scenario_heterogeneity_pattern": "confirmed — decision-shaped scenarios favor EC, debugging-shaped scenarios are closer or favor CH"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "Two scenarios is a small base for the 'decision-shaped class.' A future phase could expand to 4-5 decision-shaped scenarios.",
+    "The result is conditional on the neutral wrapper. We didn't re-test EC vs CH with the dreams wrapper at N=60.",
+    "The aggregate effect-size estimate (66.7%) is the average of scenario-level rates (60% and 73%). Real production with a different mix of decision-shaped prompts would have a different average."
+  ],
+  "verdict": "STATISTICALLY ROBUST WIN — engineering-craft seeds beat computing-history seeds on decision-shaped technical scenarios. The shipping content preferences are justified beyond noise.",
+  "next_steps": [
+    "Phase 21 (suggested): per-prompt CONTENT routing. Route the seed archive per-prompt based on classify_prompt_domain (decision vs. debugging) rather than per-agent. The per-scenario heterogeneity from Phase 16 + Phase 20 makes this the highest-leverage next refinement.",
+    "Phase 22 (running): real-bug outcome experiment.",
+    "Phase 24 (suggested): expand the 'decision-shaped' scenario class to 4-5 prompts and re-confirm the EC effect at N=30+ across all of them. The Phase 20 result is solid at N=60 but built on 2 scenario archetypes."
+  ]
+}

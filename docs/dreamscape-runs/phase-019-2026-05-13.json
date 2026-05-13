@@ -1,0 +1,75 @@
+{
+  "phase": 19,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "LLM-based domain classifier fallback for the long tail of profiles where the keyword classifier returns 'general'. Phase 17's validation surprise (the 'designing the retry policy' prompt mis-classifying as creative because of one keyword) flagged that keyword-only classification is too brittle on edge cases. Phase 19 ships an async Haiku call that runs once per agent build, caches the verdict to disk, and is consulted by resolve_agent_domain on every subsequent dream cycle.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation": {
+    "module_changes": [
+      "bog_agents_cli/dreamscape/domain.py — classify_agent_domain_llm_async(), classify_with_fallback_async(), llm_cache_path(), _save_cached_llm_domain(), _load_cached_llm_domain()",
+      "bog_agents_cli/agent.py — _schedule_llm_domain_classification() fires as a background asyncio.create_task at agent build time, but ONLY when the keyword classifier returns 'general'",
+      "Cache file: ~/.bog-agents/agents/<id>/domain_llm.txt"
+    ],
+    "design_principles": [
+      "Keyword classifier remains the primary — deterministic, free, instant",
+      "LLM classifier fires ONLY on the long tail (keyword returns 'general')",
+      "Once per agent build — the cache file prevents repeat charges",
+      "Best-effort: failure of the LLM call silently leaves keyword 'general' in place",
+      "resolve_agent_domain reads cache → falls back to keyword → falls back to 'general'"
+    ],
+    "tests_added": 10,
+    "tests_cover": [
+      "JSON parsing (with and without code fences)",
+      "Unparseable LLM responses fall back to 'general'",
+      "Empty profile short-circuits without calling the LLM",
+      "Invalid label values fall back to 'general'",
+      "Provider errors don't propagate",
+      "Fallback skips LLM when keyword commits",
+      "Fallback calls LLM when keyword returns 'general'",
+      "Cache round-trips through disk",
+      "resolve_agent_domain consults the LLM cache when keyword returns 'general'"
+    ]
+  },
+  "live_validation": {
+    "scenarios": 4,
+    "profiles_tested": [
+      "bog-agents CLI default system prompt (engineering-leaning but mixed)",
+      "narrative writer profile (no engineering vocab)",
+      "research assistant with mild engineering mentions",
+      "truly generic 'you are a helpful assistant'"
+    ],
+    "results": {
+      "ambiguous-cli-default": {"keyword": "engineering", "llm": "engineering", "agreement": true},
+      "narrative-writer": {"keyword": "creative", "llm": "creative", "agreement": true},
+      "research-assistant-with-code-mentions": {"keyword": "research", "llm": "research", "agreement": true},
+      "truly-generic": {"keyword": "general", "llm": "general", "agreement": true}
+    },
+    "interpretation": "The 4 sanity profiles all had enough signal for the keyword classifier to commit — none exercised the fallback path that's the Phase 19 main contribution. The validation confirms the LLM classifier returns coherent labels matching the keyword classifier when both agree, and conservatively returns 'general' on a truly generic prompt (doesn't hallucinate a domain). The fallback's real value is on profiles where the keyword falls through to 'general' AND a domain signal exists — that's the long tail a real production rollout would surface gradually.",
+    "approx_cost_usd": 0.003
+  },
+  "live_calls": 4,
+  "approx_cost_usd": 0.003,
+  "test_suite_stats": {
+    "cli_unit_tests": 3583,
+    "dreamscape_specific": 98,
+    "added_this_phase": 10
+  },
+  "feature_verdicts": {
+    "llm_classifier_mechanism": "sings — 10 unit tests pass, validation profiles classify coherently",
+    "llm_classifier_caching": "sings — cache round-trips disk, resolve_agent_domain consults it on the long tail",
+    "agent_py_integration": "sings — fires as background task, doesn't block agent creation, only runs when keyword classifier returns 'general'"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "The 4-profile validation didn't exercise the fallback path because all 4 had enough keyword signal. A production rollout will surface real long-tail profiles.",
+    "No A/B effect measurement — the question Phase 19 answers is 'do we have better domain labels available?', not 'do those labels change outcomes?'. That's a Phase 14-style effectiveness question that would need a separate run.",
+    "Per-build cost ~$0.001 per Haiku call. The cache makes this one-time per agent_id.",
+    "If the user's system prompt evolves (e.g. mid-session pivot), the cached label stays stale until they delete domain_llm.txt manually."
+  ],
+  "verdict": "READY TO MERGE — small surface, robust failure modes, gracefully handles the long tail without changing modal behavior.",
+  "next_steps": [
+    "Phase 20 (next): N=30 confirmation of EC vs CH on decision-shaped scenarios.",
+    "Phase 22 (after): real-bug outcome experiment — does imagination injection make an agent fix bugs faster/better?",
+    "Phase 23 (suggested): scrape a corpus of real agent profiles from production deployments and measure how often Phase 19's fallback fires + what labels it produces. The 4-profile validation here is a smoke test; the real distribution is in the wild."
+  ]
+}
