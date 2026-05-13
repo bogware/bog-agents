@@ -810,6 +810,101 @@ class TestImaginationGating:
         )
         assert mw._should_inject() is False
 
+    async def test_injection_reaches_request_system_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test for a Phase 4 silent-failure bug.
+
+        Prior to Phase 4, ``_maybe_inject`` passed the whole
+        ``ModelRequest`` to ``append_to_system_message`` (which expects a
+        ``SystemMessage``), so injection never landed and the failure was
+        silent. This test exercises the real injection path and asserts
+        the injection header reaches ``request.system_message``.
+        """
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+        # Seed a dream so sample_dream_excerpts has something to return.
+        dreams_dir = lc_mod.agent_state_dir("delta") / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        (dreams_dir / "00000000000001-test.md").write_text(
+            "---\ntitle: regression-fixture\n---\n\n### regression-fixture\n\n"
+            "A made-up dream excerpt for the test.\n",
+            encoding="utf-8",
+        )
+
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="delta",
+            imagination=5.0,
+            consecutive_tool_failures=5,
+        )
+        lc_mod.save_snapshot(snap)
+
+        mw = ImaginationMiddleware(
+            agent_id="delta",
+            cfg=ImaginationConfig(
+                enabled=True,
+                trigger_after_failures=3,
+                min_imagination_trait=1.0,
+                max_snippets_per_injection=1,
+            ),
+        )
+
+        class _StubModel:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="OK.")
+
+        request = ModelRequest(
+            model=_StubModel(),
+            system_message=SystemMessage(content="base prompt"),
+            messages=[HumanMessage(content="stuck")],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+
+        captured: list[str] = []
+
+        async def _call_next(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            content = sm.content if sm is not None else ""
+            if isinstance(content, str):
+                captured.append(content)
+            else:
+                # content_blocks form
+                parts: list[str] = []
+                for block in content:  # type: ignore[union-attr]
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(str(block.get("text", "")))
+                captured.append("\n".join(parts))
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(request, _call_next)  # type: ignore[arg-type]
+        assert captured, "call_next never observed the request"
+        full = captured[-1]
+        assert "You appear to be stuck" in full, (
+            "injection header missing — _maybe_inject failed to mutate "
+            f"request.system_message. Captured: {full!r}"
+        )
+        assert "base prompt" in full, "base system prompt should be preserved"
+
+        # Snapshot counter should have incremented.
+        after = lc_mod.load_snapshot("delta")
+        assert after.imagination_injections == 1
+        # AIMessage was non-error → helped++.
+        assert after.imagination_injections_helped == 1
+
 
 # ---------------------------------------------------------------------------
 # Slash-command wiring smoke test

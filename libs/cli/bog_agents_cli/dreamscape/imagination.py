@@ -167,7 +167,8 @@ class ImaginationMiddleware(AgentMiddleware):
 
             from bog_agents.middleware._utils import append_to_system_message
 
-            new_request = append_to_system_message(request, body)
+            new_system = append_to_system_message(request.system_message, body)
+            new_request = request.override(system_message=new_system)
 
             # Mark the snapshot so the outcome of the *next* response is
             # attributable to the injection.

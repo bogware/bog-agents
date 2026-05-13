@@ -1,0 +1,92 @@
+{
+  "phase": 4,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model": "claude-haiku-4-5",
+  "model_max_tokens_per_call": 300,
+  "test_focus": "imagination injection live test — first time the injection path was driven end-to-end against a real ModelRequest and a real Anthropic API call",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "test_target_repo": "isolated tmp_home (no real codebase needed for middleware test)",
+  "bug_found_and_fixed": {
+    "name": "imagination middleware never actually injected",
+    "severity": "high — feature was orphaned, no test caught it",
+    "root_cause": "imagination.py line 170 called append_to_system_message(request, body); the helper expects a SystemMessage and silently raised AttributeError because ModelRequest has no .content_blocks. The except: clause in _maybe_inject swallowed the exception, so the failure was invisible — _should_inject returned True, the snapshot counter never incremented, the system prompt was never mutated.",
+    "fix": "request.override(system_message=append_to_system_message(request.system_message, body))",
+    "regression_test_added": "TestImaginationGating::test_injection_reaches_request_system_message — drives the full _maybe_inject path and asserts the injection header lands in the request's system_message",
+    "why_phase_1_missed_this": "Phase 1 marked imagination 'sings' but only verified the gating logic (_should_inject) and the imagination-trait bump path. The actual injection path (_maybe_inject calling append_to_system_message) was never exercised by a test."
+  },
+  "sub_passes": {
+    "pass_1_mechanism": {
+      "name": "injection lands in request.system_message",
+      "injection_header_present": true,
+      "contains_dream_words": true,
+      "post_injection_system_prompt_chars": 1304,
+      "helped_counter_after_success_response": 1,
+      "result": "PASS"
+    },
+    "pass_3_error_response": {
+      "name": "error response does not bump helped counter",
+      "helped_delta": 0,
+      "consecutive_failures_after": 4,
+      "result": "PASS"
+    },
+    "pass_4_live_ab": {
+      "name": "control vs treatment with real Haiku 4.5",
+      "prompt": "I keep getting 'permission denied' on the same chmod step. I've tried sudo, I've tried checking the file owner, I've tried different paths. I'm stuck. What approach should I try next?",
+      "control": {
+        "elapsed_seconds": 2.29,
+        "char_len": 368,
+        "dream_word_hits": 0,
+        "first_sentence": "Try checking if the file system itself is mounted read-only (mount | grep ro) or if SELinux/AppArmor policies are blocking the operation..."
+      },
+      "treatment": {
+        "elapsed_seconds": 2.17,
+        "char_len": 402,
+        "dream_word_hits": 0,
+        "system_prompt_length": 1358,
+        "system_contains_injection_header": true,
+        "first_sentence": "Step back from the file itself: check if the *directory* containing it is readable/traversable (you need `x` permission on parent dirs to access anything inside them)..."
+      },
+      "qualitative_difference": "treatment's framing shifted — it opens with 'step back from the file itself' (a meta-move) and emphasizes the directory hierarchy rather than diving straight into mount flags. Suggests the dream-imagery 'see the shape differently' framing influenced the response without leaking literal dream vocabulary.",
+      "result": "PASS — treatment diverges from control without parroting dream content"
+    },
+    "pass_5_auto_disable": {
+      "name": "auto-disable kicks in when helped-ratio is too low",
+      "prep": "imagination_injections=10, imagination_injections_helped=2 -> 20% (below 40% floor)",
+      "counter_held": "10=10 (no increment after disable)",
+      "no_injection_in_prompt": true,
+      "result": "PASS"
+    }
+  },
+  "final_snapshot": {
+    "imagination_injections": 10,
+    "imagination_injections_helped": 2,
+    "imagination": 2.0,
+    "consecutive_failures": 0
+  },
+  "regression_test_added": 1,
+  "live_calls": 2,
+  "approx_cost_usd": 0.002,
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "dream_scheduler": "sings",
+    "imagination_injection": "sings (was BROKEN; fixed in this phase, now end-to-end verified)",
+    "cross_agent_shared_memory": "sings",
+    "lifecycle_state_machine": "works",
+    "laws_hard_rejects": "works",
+    "constitution_soft_logging": "works",
+    "agent_state_dashboard": "works",
+    "repo_overview": "works",
+    "opt_in_defaults": "ironclad"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "singular-vs-plural stem matching (carried from Phase 2)",
+    "scheduler self-restart on crash uses recursive coroutine (carried from Phase 3)"
+  ],
+  "verdict": "READY TO MERGE — and the bug we found is a load-bearing one that the prior phase verdicts missed.",
+  "next_steps": [
+    "Phase 5 (concurrent multi-agent) — independent of Phase 4, runnable in parallel.",
+    "Phase 6 (suggested): real multi-day cycle with production poll_seconds=60 + production dormancy_after_seconds=1800."
+  ]
+}
