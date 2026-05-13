@@ -37,6 +37,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _DREAMSCAPE_FILENAME = "dreamscape.toml"
+# The "active" file is written by ``agent.py`` at agent-build time and
+# reflects the resolved runtime config (file + env-var overlays). The
+# dashboard reads this when present so ``/agent-state`` and
+# ``/dreamscape status`` show the configuration the running agent is
+# *actually* using — not the on-disk file's contents which may differ
+# from the env-var-driven runtime resolution.
+_DREAMSCAPE_ACTIVE_FILENAME = "dreamscape-active.toml"
 _EMERGENCY_DISABLE_ENV = "BOG_AGENTS_DREAMSCAPE_DISABLE"
 _MASTER_ENABLE_ENV = "BOG_AGENTS_DREAMSCAPE"
 
@@ -263,8 +270,50 @@ DreamscapeFeatureConfig = (
 
 
 def dreamscape_config_path() -> Path:
-    """Canonical path to the dreamscape TOML."""
+    """Canonical path to the dreamscape TOML the user edits directly."""
     return Path.home() / ".bog-agents" / _DREAMSCAPE_FILENAME
+
+
+def dreamscape_active_path() -> Path:
+    """Path to the runtime-active TOML written by ``agent.py`` at build time.
+
+    The dashboard prefers this over the canonical file when present —
+    it shows what the *running* agent is using, not what's on disk.
+    Stale entries are tolerated (the on-disk file is the source of
+    truth at next agent build); the dashboard simply notes when the
+    active file is missing.
+    """
+    return Path.home() / ".bog-agents" / _DREAMSCAPE_ACTIVE_FILENAME
+
+
+def write_active_runtime_config(cfg: DreamscapeConfig) -> Path | None:
+    """Persist the resolved runtime config so the dashboard can read it.
+
+    Best-effort — disk failure logs and returns ``None``. Called once
+    per agent build from ``agent.py:_attach_dreamscape_middleware``.
+    """
+    try:
+        return save_dreamscape_config(cfg, path=dreamscape_active_path())
+    except OSError as exc:
+        logger.debug("dreamscape: could not persist active config: %s", exc)
+        return None
+
+
+def load_active_runtime_config() -> DreamscapeConfig | None:
+    """Return the runtime-active config if present and parseable.
+
+    Returns ``None`` when the active file doesn't exist or can't be
+    read. Callers should fall back to :func:`load_dreamscape_config`
+    in that case.
+    """
+    target = dreamscape_active_path()
+    if not target.exists():
+        return None
+    try:
+        return load_dreamscape_config(path=target, use_cache=False)
+    except Exception:
+        logger.debug("dreamscape: failed to read active config", exc_info=True)
+        return None
 
 
 # Module-level cache. Cleared by ``clear_cache`` (used in tests).

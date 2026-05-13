@@ -141,6 +141,19 @@ def _attach_dreamscape_middleware(
     """
     safe_id = agent_id or "default"
 
+    # Persist the resolved runtime config so the dashboard (/agent-state,
+    # /dreamscape status) shows what's actually active instead of what
+    # the canonical TOML says. Best-effort — disk failure logs and
+    # continues. Fixes the Phase-1 staleness bug where the dashboard
+    # reported ``master_enabled: False`` whenever the runtime was
+    # driven entirely by env-var overrides.
+    try:
+        from bog_agents_cli.dreamscape import write_active_runtime_config
+
+        write_active_runtime_config(cfg)
+    except Exception:
+        logger.debug("dreamscape: failed to persist active config", exc_info=True)
+
     if cfg.lifecycle.enabled:
         try:
             from bog_agents_cli.dreamscape.lifecycle import LifecycleMiddleware

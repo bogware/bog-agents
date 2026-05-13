@@ -24,7 +24,9 @@ from pathlib import Path
 
 from bog_agents_cli.dreamscape.config import (
     DreamscapeConfig,
+    dreamscape_active_path,
     dreamscape_config_path,
+    load_active_runtime_config,
     load_dreamscape_config,
     save_dreamscape_config,
 )
@@ -55,8 +57,15 @@ logger = logging.getLogger(__name__)
 def render_agent_state(
     agent_id: str = "default", *, cfg: DreamscapeConfig | None = None
 ) -> str:
-    """Render a Rich-markup overview of the current agent's state."""
-    config = cfg or load_dreamscape_config()
+    """Render a Rich-markup overview of the current agent's state.
+
+    Config resolution order: explicit ``cfg`` arg → runtime-active
+    config persisted by the last agent build → canonical TOML the user
+    edits → defaults. Reading from the active file (when present)
+    fixes the Phase-1 staleness bug where ``master_enabled`` was
+    reported as False whenever the runtime was env-var-driven.
+    """
+    config = cfg or load_active_runtime_config() or load_dreamscape_config()
     try:
         snap = load_snapshot(agent_id)
     except Exception:
@@ -269,13 +278,27 @@ def _git(args: list[str], cwd: str | None) -> str:
 
 
 def render_dreamscape_status() -> str:
-    """Render the full dreamscape config as a markdown table."""
-    cfg = load_dreamscape_config()
-    path = dreamscape_config_path()
-    exists = path.exists()
+    """Render the full dreamscape config as a markdown table.
+
+    Prefers the runtime-active config (written by ``agent.py`` at
+    build time) so the displayed master switch and per-feature flags
+    reflect what the running agent is *actually* using — not just the
+    user-editable canonical TOML which may be overridden by env vars.
+    """
+    active_cfg = load_active_runtime_config()
+    if active_cfg is not None:
+        cfg = active_cfg
+        source_path = dreamscape_active_path()
+        source_label = f"runtime-active ({source_path})"
+    else:
+        cfg = load_dreamscape_config()
+        source_path = dreamscape_config_path()
+        source_label = (
+            f"canonical ({source_path}, "
+            f"{'present' if source_path.exists() else '[dim]missing — defaults in effect[/dim]'})"
+        )
     lines = [
-        f"[bold]Dreamscape configuration[/bold] — [cyan]{path}[/cyan] "
-        f"({'present' if exists else '[dim]missing — defaults in effect[/dim]'})",
+        f"[bold]Dreamscape configuration[/bold] — [cyan]{source_label}[/cyan]",
         "",
         f"  Master switch: {'[green]ON[/green]' if cfg.master_enabled else '[dim]OFF[/dim]'}",
         "",

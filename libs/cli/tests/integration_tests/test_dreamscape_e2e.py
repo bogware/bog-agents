@@ -1,4 +1,4 @@
-"""End-to-end integration tests for the dreamscape feature set.
+r"""End-to-end integration tests for the dreamscape feature set.
 
 Drives every dreamscape surface through real I/O — disk-backed config,
 on-disk lifecycle snapshots, SQLite shared-memory, real dream-engine
@@ -26,10 +26,10 @@ import json
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 
 # Oregon Trail path is platform-specific to the user's machine; tests
 # that need it skip cleanly when the directory doesn't exist.
@@ -37,8 +37,10 @@ _OREGON_TRAIL = Path("E:/oregon-trail")
 _OREGON_TRAIL_AVAILABLE = _OREGON_TRAIL.exists()
 
 
-@pytest.fixture()
-def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+@pytest.fixture
+def isolated_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
     """Point ``Path.home()`` at the test's tmp dir + clear dreamscape cache."""
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
     monkeypatch.delenv("BOG_AGENTS_DREAMSCAPE", raising=False)
@@ -84,10 +86,10 @@ class TestDreamscapeDefaultsOff:
         self, isolated_home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from bog_agents_cli.dreamscape import (
+            config as ds_config,
             load_dreamscape_config,
             save_dreamscape_config,
         )
-        from bog_agents_cli.dreamscape import config as ds_config
 
         cfg = load_dreamscape_config()
         cfg.master_enabled = True
@@ -181,7 +183,9 @@ class TestLawsE2E:
             project_root=isolated_home,
         )
         assert result.violations  # at least one phrase triggered
-        assert any("rm -rf" in v for v in result.violations)
+        # Post-Phase-2 normalisation: phrases are stored as "rm rf"
+        # (hyphen → space) so stem-match instead of literal substring.
+        assert any("rm" in v and "rf" in v for v in result.violations)
 
     def test_audit_clean_sample(self, isolated_home: Path) -> None:
         from bog_agents_cli.dreamscape.config import LawsConfig
@@ -213,8 +217,14 @@ class TestSharedMemoryE2E:
         b1 = SQLiteSharedMemory(db_path)
         b2 = SQLiteSharedMemory(db_path)
 
-        b1.write(agent_id="alpha", content="found a hot loop in compute()", tags=["perf"])
-        b2.write(agent_id="beta", content="alpha was right; here's a fix sketch", tags=["perf", "fix"])
+        b1.write(
+            agent_id="alpha", content="found a hot loop in compute()", tags=["perf"]
+        )
+        b2.write(
+            agent_id="beta",
+            content="alpha was right; here's a fix sketch",
+            tags=["perf", "fix"],
+        )
 
         # Either backend sees both entries.
         from_alpha = b1.search("hot loop")
@@ -225,9 +235,7 @@ class TestSharedMemoryE2E:
         recent = b2.recent(limit=10)
         assert recent[0].agent_id == "beta"
 
-    def test_redaction_prevents_secret_persistence(
-        self, isolated_home: Path
-    ) -> None:
+    def test_redaction_prevents_secret_persistence(self, isolated_home: Path) -> None:
         from bog_agents_cli.dreamscape.shared_memory import redact_secrets
 
         patterns = [r"sk-ant-[A-Za-z0-9_-]{20,}"]
@@ -252,14 +260,13 @@ class TestSharedMemoryE2E:
                 backend.write(agent_id=agent_id, content=f"note-{i}", tags=[])
 
         threads = [
-            threading.Thread(target=write_burst, args=(f"agent-{n}",))
-            for n in range(3)
+            threading.Thread(target=write_burst, args=(f"agent-{n}",)) for n in range(3)
         ]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=15)
-        # All 60 writes (3 threads × 20 entries) survived.
+        # All 60 writes (3 threads * 20 entries) survived.
         with sqlite3.connect(db_path) as conn:
             count = conn.execute("SELECT COUNT(*) FROM shared_memory").fetchone()[0]
         assert count == 60
@@ -277,11 +284,15 @@ class _FakeChatModel:
         self._responses = list(responses)
         self.invocations: list[list] = []
 
-    async def ainvoke(self, messages, **_kwargs):  # noqa: ANN001
+    async def ainvoke(self, messages, **_kwargs):
         self.invocations.append(messages)
         from langchain_core.messages import AIMessage
 
-        reply = self._responses.pop(0) if self._responses else "(no more scripted responses)"
+        reply = (
+            self._responses.pop(0)
+            if self._responses
+            else "(no more scripted responses)"
+        )
         return AIMessage(content=reply)
 
 
@@ -318,9 +329,7 @@ class TestDreamEngineE2E:
         assert artifact.title  # title extracted from the ### heading
         assert len(model.invocations) == 1
 
-    def test_imagination_injection_with_real_dreams(
-        self, isolated_home: Path
-    ) -> None:
+    def test_imagination_injection_with_real_dreams(self, isolated_home: Path) -> None:
         from bog_agents_cli.dreamscape import lifecycle as lc_mod
         from bog_agents_cli.dreamscape.config import ImaginationConfig
         from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
@@ -362,7 +371,9 @@ class TestDreamEngineE2E:
 
         excerpts = sample_dream_excerpts("stuck-agent", count=2, rng_seed=99)
         assert len(excerpts) == 2
-        assert any("black hole" in e.lower() or "antikythera" in e.lower() for e in excerpts)
+        assert any(
+            "black hole" in e.lower() or "antikythera" in e.lower() for e in excerpts
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +517,9 @@ class TestRealLLMSmoke:
             model_name="claude-haiku-4-5", max_tokens=400, timeout=30.0
         )
         cfg = DreamsConfig(
-            auto_on_dormancy=True, max_seeds_per_dream=2, imagination_trait_increment=1.0
+            auto_on_dormancy=True,
+            max_seeds_per_dream=2,
+            imagination_trait_increment=1.0,
         )
         artifact = asyncio.run(
             generate_dream(model=model, agent_id="real-dreamer", cfg=cfg, rng_seed=7)

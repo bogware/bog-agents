@@ -92,6 +92,11 @@ _DANGEROUS_TOKEN_RE = re.compile(
     r"force[-\s]push|--no-verify|--force(?:-with-lease)?)\b",
     re.IGNORECASE,
 )
+# Pull comma-separated items out of parenthesised lists in rule text:
+# "(force-push, amend published commits)" → ["force-push", "amend published commits"].
+# Phase-1 testing showed the long composite phrase wouldn't substring-match
+# any natural paraphrase; splitting unlocks Jaccard layer too.
+_PAREN_LIST_RE = re.compile(r"\(([^()]{3,200})\)")
 
 
 def _extract_key_phrases(line: str) -> list[str]:
@@ -118,6 +123,11 @@ def _extract_key_phrases(line: str) -> list[str]:
     matches a rule's backtick-formatted ``\`rm -rf /\```.
     """
     raw = line.strip().lstrip("-*•").strip()
+    # Preserve commas through one extra pass so we can split verb-lists
+    # like "exfiltrate, log, or echo" into individual verbs BEFORE
+    # _normalize_for_match collapses commas to spaces. After this loop
+    # falls back to the regular normalised-text passes below.
+    raw_lower = raw.lower().lstrip("-*•").strip()
     text = _normalize_for_match(raw)
 
     phrases: list[str] = []
@@ -138,6 +148,18 @@ def _extract_key_phrases(line: str) -> list[str]:
     for m in _DANGEROUS_TOKEN_RE.finditer(text):
         _add(m.group(1))
 
+    # (2b) Comma-separated items inside parenthesised lists. A rule of
+    # the shape "Never silently rewrite git history (force-push, amend
+    # published commits)" produces two extra phrases: "force-push" and
+    # "amend published commits". Without this split the only candidate
+    # phrase is the whole "silently rewrite git history (...)" string,
+    # which no realistic agent output will substring-match.
+    for m in _PAREN_LIST_RE.finditer(raw):
+        items = [item.strip().rstrip(".,;:") for item in m.group(1).split(",")]
+        for item in items:
+            if len(item) >= 3:
+                _add(item)
+
     # (3) "Never X" / "must not Y" / "do not Z" tails.
     verb_patterns = (
         r"\bnever\s+(.{3,80})",
@@ -156,13 +178,71 @@ def _extract_key_phrases(line: str) -> list[str]:
                 words = tail.split()
                 if len(words) >= 2:
                     _add(" ".join(words[:4]))
+                # (3b) Split the tail on common conjunctions /
+                # connectors so a rule like "Never disable or bypass
+                # safety middlewares without explicit user consent"
+                # yields shorter sub-phrases ("disable", "bypass
+                # safety middlewares") that can match agent output
+                # that mentions only one half of the rule.
+                for raw_chunk in re.split(
+                    r"\s+(?:or|and|but|while|without|except)\s+", tail
+                ):
+                    chunk = raw_chunk.strip().rstrip(".,;:")
+                    if len(chunk) >= 3 and chunk != tail:
+                        _add(chunk)
+        # (3c) Run the same verb-tail extraction on the *comma-preserving*
+        # raw-lower form. Rules of shape "Never V1, V2, or V3 OBJ_LIST"
+        # collapse to a single space-separated string after normalisation
+        # — the comma-list information is lost. Re-running on the
+        # raw-lower text and splitting on commas + ``or`` yields the
+        # individual verbs as standalone candidates.
+        for m in re.finditer(pat, raw_lower):
+            raw_tail = m.group(1).strip().rstrip(".,;:")
+            for raw_chunk in re.split(
+                r"\s*,\s*|\s+(?:or|and|but|while|without|except)\s+",
+                raw_tail,
+            ):
+                chunk = raw_chunk.strip().rstrip(".,;:")
+                if len(chunk) >= 3:
+                    _add(chunk)
     return phrases
 
 
+_WHITESPACE_COLLAPSE_RE = re.compile(r"\s+")
+
+
 def _normalize_for_match(text: str) -> str:
-    """Lower-case + strip decorative chars (backticks, quotes) for matching."""
+    """Lower-case + canonicalise separators for forgiving substring matching.
+
+    Normalisation steps (in order):
+
+    1. Lower-case + strip leading bullet markers.
+    2. Strip decorative chars (``backticks``, ``"`` ``'``) that survive
+       markdown-style rule formatting.
+    3. Collapse hyphens and underscores to spaces — the rule text
+       "force-push" semantically equals the agent's output "force push",
+       and we want them to substring-match.
+    4. Collapse runs of whitespace to a single space — keeps the
+       substring search invariant under different spacing styles.
+
+    The third step is the fix for the e2e bug found in Phase 1 testing:
+    the default Laws template uses hyphenated forms like ``force-push``
+    while agent output naturally uses ``force push``; the literal
+    substring search missed the second form. After normalisation both
+    sides become ``force push`` and the match fires.
+    """
     cleaned = text.lower().strip().lstrip("-*•").strip()
-    return cleaned.replace("`", "").replace('"', "").replace("'", "")
+    cleaned = cleaned.replace("`", "").replace('"', "").replace("'", "")
+    cleaned = cleaned.replace("-", " ").replace("_", " ")
+    # Punctuation that's not semantically load-bearing: commas,
+    # periods, semicolons, colons. We replace with space so tokens
+    # like "keys," and "keys" both yield the bare word "keys" after
+    # the whitespace collapse below. Parentheses are intentionally
+    # NOT stripped here — they're already consumed by _PAREN_LIST_RE
+    # before _add() runs.
+    for ch in (",", ".", ";", ":", "!", "?"):
+        cleaned = cleaned.replace(ch, " ")
+    return _WHITESPACE_COLLAPSE_RE.sub(" ", cleaned).strip()
 
 
 def _read_rule_file(path: Path) -> list[Rule]:
@@ -404,16 +484,103 @@ def _response_text(response: Any) -> str:
     return str(content) if content is not None else ""
 
 
+# Small English stop-word set used by the paraphrase-tolerance fallback.
+# Intentionally short — we only want to neutralise the kind of filler
+# words that break literal substring matching ("amend the published
+# commits" vs "amend published commits"), not perform real NLP.
+_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "of",
+        "and",
+        "or",
+        "but",
+        "is",
+        "are",
+        "was",
+        "were",
+        "to",
+        "for",
+        "with",
+        "on",
+        "in",
+        "at",
+        "by",
+        "as",
+    }
+)
+
+# Minimum word-overlap ratio for the Jaccard fallback to fire. Tuned
+# empirically against Phase 1 test cases: 0.7 catches "amend the
+# published commits" matching "amend published commits" (overlap 3/4 =
+# 0.75) while rejecting unrelated three-word phrases.
+_JACCARD_THRESHOLD: float = 0.7
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Tokenise + drop stop-words for the Jaccard fallback."""
+    return {
+        tok
+        for tok in _WHITESPACE_COLLAPSE_RE.split(text)
+        if tok and tok not in _STOP_WORDS
+    }
+
+
+def _phrase_matches_haystack(
+    phrase: str, haystack: str, haystack_tokens: set[str]
+) -> bool:
+    """Return True when ``phrase`` is present in ``haystack``.
+
+    Matching is layered:
+
+    1. **Literal substring** on the normalised forms — fast and exact.
+    2. **Jaccard fallback** on content-word token sets — catches
+       paraphrases where the rule and the agent's output differ by a
+       stop-word ("amend the published commits" vs "amend published
+       commits"). Threshold ``_JACCARD_THRESHOLD = 0.7`` only fires
+       for phrases of meaningful length (3+ content tokens). A
+       secondary ``phrase_coverage >= 0.85`` clause catches the case
+       where the rule phrase is short but the agent's text is long
+       (the haystack contains many extra unrelated words around the
+       matched phrase).
+    """
+    if phrase in haystack:
+        return True
+    phrase_tokens = _content_tokens(phrase)
+    if len(phrase_tokens) < 3:
+        return False
+    intersection = phrase_tokens & haystack_tokens
+    union = phrase_tokens | haystack_tokens
+    if not union:
+        return False
+    jaccard = len(intersection) / len(union)
+    phrase_coverage = len(intersection) / len(phrase_tokens)
+    return jaccard >= _JACCARD_THRESHOLD or phrase_coverage >= 0.85
+
+
 def _violation_phrases(text: str, rules: list[Rule]) -> list[str]:
-    """Return the set of phrases that appear in ``text`` and match a rule."""
+    """Return the set of phrases that appear in ``text`` and match a rule.
+
+    See :func:`_phrase_matches_haystack` for the two-layer (literal +
+    Jaccard fallback) matching rationale. This wrapper just iterates
+    rules and deduplicates phrases that fired through either layer.
+    """
     if not text or not rules:
         return []
     haystack = _normalize_for_match(text)
+    haystack_tokens = _content_tokens(haystack)
     matched: list[str] = []
+    seen: set[str] = set()
+
     for rule in rules:
         for phrase in rule.key_phrases:
-            if phrase in haystack:
+            if phrase in seen:
+                continue
+            if _phrase_matches_haystack(phrase, haystack, haystack_tokens):
                 matched.append(phrase)
+                seen.add(phrase)
     return matched
 
 
@@ -470,15 +637,25 @@ class AuditResult:
 def audit_text(
     sample: str, cfg: LawsConfig, project_root: Path | None = None
 ) -> AuditResult:
-    """Dry-run the rules against ``sample`` — used by ``/laws audit``."""
+    """Dry-run the rules against ``sample`` — used by ``/laws audit``.
+
+    Routes the per-rule check through :func:`_phrase_matches_haystack`
+    so the audit surface gets the same hyphen-normalisation +
+    paraphrase tolerance as the runtime LawsMiddleware. Prior to the
+    Phase-2 bug fixes the audit did a bare substring search; agent
+    output that differed from the rule by a stop-word or a hyphen
+    would be reported as "no violation" even though the runtime path
+    would later flag it.
+    """
     rule_set = load_rules(cfg, project_root=project_root)
     all_rules = rule_set.laws + rule_set.constitution
     matched_phrases: list[str] = []
     matched_rules: list[Rule] = []
     haystack = _normalize_for_match(sample)
+    haystack_tokens = _content_tokens(haystack)
     for rule in all_rules:
         for phrase in rule.key_phrases:
-            if phrase in haystack:
+            if _phrase_matches_haystack(phrase, haystack, haystack_tokens):
                 matched_phrases.append(phrase)
                 matched_rules.append(rule)
                 break

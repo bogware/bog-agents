@@ -270,7 +270,12 @@ class TestLawsParser:
         from bog_agents_cli.dreamscape.laws import _extract_key_phrases
 
         phrases = _extract_key_phrases("Never run rm -rf / or recursive deletes")
-        assert any("rm -rf" in p for p in phrases)
+        # Post-Phase-2 the phrases are stored in normalised form
+        # (hyphens → spaces) so a plain ``rm -rf`` agent output also
+        # matches a backtick-quoted rule. The extracted phrase is now
+        # "rm rf" rather than "rm -rf"; pin both stems instead of the
+        # exact separator.
+        assert any("rm" in p and "rf" in p for p in phrases)
 
     def test_audit_catches_phrase_in_sample(self, tmp_path: Path) -> None:
         from bog_agents_cli.dreamscape.config import LawsConfig
@@ -285,7 +290,8 @@ class TestLawsParser:
             "I'm going to rm -rf / the workspace.", cfg, project_root=tmp_path
         )
         assert result.laws_found > 0
-        assert any("rm -rf" in v for v in result.violations)
+        # Same stem-check rationale as test_extract_phrases_from_never.
+        assert any("rm" in v and "rf" in v for v in result.violations)
 
     def test_audit_clean_sample_no_violations(self, tmp_path: Path) -> None:
         from bog_agents_cli.dreamscape.config import LawsConfig
@@ -302,6 +308,149 @@ class TestLawsParser:
             project_root=tmp_path,
         )
         assert result.violations == []
+
+
+class TestLawsPhase2BugFixes:
+    """Regression tests for the Phase-1-found bugs (1 & 2).
+
+    See ``docs/DREAMSCAPE_TEST_REPORT.md`` §3 for the original repro
+    cases. These pin the two bug fixes:
+
+    * **Bug 1** — hyphen-vs-space normalisation: rule "force-push"
+      must match agent output "force push".
+    * **Bug 2** — paraphrase tolerance via Jaccard fallback + comma /
+      conjunction splitting: rule "amend published commits" must
+      match "amend the published commits"; rule with verb-list +
+      object-list ("exfiltrate, log, or echo API keys, tokens, or
+      session cookies") must catch single-verb single-object
+      paraphrases ("exfiltrate API keys").
+    """
+
+    def _setup(self, tmp_path: Path):
+        from bog_agents_cli.dreamscape.config import LawsConfig
+        from bog_agents_cli.dreamscape.laws import write_default_templates
+
+        cfg = LawsConfig(
+            enabled=True,
+            laws_path=str(tmp_path / ".bog-agents/laws.md"),
+            constitution_path=str(tmp_path / ".bog-agents/constitution.md"),
+        )
+        write_default_templates(cfg, project_root=tmp_path, overwrite=True)
+        return cfg
+
+    def test_bug1_hyphen_force_push_matches_space_force_push(
+        self, tmp_path: Path
+    ) -> None:
+        from bog_agents_cli.dreamscape.laws import audit_text
+
+        cfg = self._setup(tmp_path)
+        result = audit_text("force push to main", cfg, project_root=tmp_path)
+        assert result.violations, "rule 'force-push' must match agent 'force push'"
+
+    def test_bug2_stop_word_tolerance(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape.laws import audit_text
+
+        cfg = self._setup(tmp_path)
+        result = audit_text("amend the published commits", cfg, project_root=tmp_path)
+        assert result.violations, (
+            "rule 'amend published commits' must match the paraphrase "
+            "with a 'the' inserted in the middle"
+        )
+
+    def test_bug2_verb_list_object_list_cross(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape.laws import audit_text
+
+        cfg = self._setup(tmp_path)
+        result = audit_text("exfiltrate API keys", cfg, project_root=tmp_path)
+        assert result.violations, (
+            "rule 'Never exfiltrate, log, or echo API keys, tokens, …' must "
+            "match a verb×object slice like 'exfiltrate API keys'"
+        )
+
+    def test_clean_text_still_passes(self, tmp_path: Path) -> None:
+        """The phrase extractor must not over-fire on benign text."""
+        from bog_agents_cli.dreamscape.laws import audit_text
+
+        cfg = self._setup(tmp_path)
+        for sample in (
+            "I am going to add a unit test for the helper.",
+            "Here is a clean refactor.",
+            "build a small feature flag",
+            "write a normal helper",
+        ):
+            result = audit_text(sample, cfg, project_root=tmp_path)
+            assert result.violations == [], (
+                f"benign sample triggered a violation: {sample!r} → {result.violations}"
+            )
+
+
+class TestDashboardRuntimeActiveConfig:
+    """Bug 3 — dashboard reads the runtime-active config, not just disk.
+
+    Phase-1 testing observed ``/agent-state`` reporting ``master_enabled:
+    False`` whenever the runtime was driven by env vars or
+    programmatically (no on-disk file). The fix persists the resolved
+    runtime config at agent build time so the dashboard can read what's
+    actually active.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        from bog_agents_cli.dreamscape import config as ds_config
+
+        ds_config.clear_cache()
+
+    def test_active_config_round_trip(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape import (
+            load_active_runtime_config,
+            load_dreamscape_config,
+            write_active_runtime_config,
+        )
+
+        cfg = load_dreamscape_config(use_cache=False)
+        cfg.master_enabled = True
+        cfg.lifecycle.enabled = True
+        path = write_active_runtime_config(cfg)
+        assert path is not None
+        assert path.exists()
+
+        loaded = load_active_runtime_config()
+        assert loaded is not None
+        assert loaded.master_enabled is True
+        assert loaded.lifecycle.enabled is True
+
+    def test_active_missing_returns_none(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape import load_active_runtime_config
+
+        assert load_active_runtime_config() is None
+
+    def test_render_status_prefers_active_over_canonical(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape import (
+            load_dreamscape_config,
+            save_dreamscape_config,
+            write_active_runtime_config,
+        )
+        from bog_agents_cli.dreamscape.dashboard import render_dreamscape_status
+
+        # Canonical: master OFF
+        canonical = load_dreamscape_config(use_cache=False)
+        canonical.master_enabled = False
+        save_dreamscape_config(canonical)
+
+        # Active: master ON (simulates runtime env-var override)
+        active = load_dreamscape_config(use_cache=False)
+        active.master_enabled = True
+        active.lifecycle.enabled = True
+        write_active_runtime_config(active)
+
+        from bog_agents_cli.dreamscape import config as ds_config
+
+        ds_config.clear_cache()
+        body = render_dreamscape_status()
+        # Dashboard must report ON because the active file overrides.
+        assert "[green]ON[/green]" in body or "ON" in body
+        assert "runtime-active" in body or "active" in body.lower()
 
 
 # ---------------------------------------------------------------------------

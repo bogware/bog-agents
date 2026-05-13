@@ -39,17 +39,23 @@ from __future__ import annotations
 from bog_agents_cli.dreamscape.config import (
     DreamscapeConfig,
     DreamscapeFeatureConfig,
+    dreamscape_active_path,
     dreamscape_config_path,
     is_emergency_disabled,
+    load_active_runtime_config,
     load_dreamscape_config,
     save_dreamscape_config,
+    write_active_runtime_config,
 )
 
 __all__ = [
     "DreamscapeConfig",
     "DreamscapeFeatureConfig",
+    "dreamscape_active_path",
     "dreamscape_config_path",
     "is_emergency_disabled",
+    "load_active_runtime_config",
     "load_dreamscape_config",
     "save_dreamscape_config",
+    "write_active_runtime_config",
 ]
