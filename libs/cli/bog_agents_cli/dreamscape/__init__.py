@@ -47,15 +47,27 @@ from bog_agents_cli.dreamscape.config import (
     save_dreamscape_config,
     write_active_runtime_config,
 )
+from bog_agents_cli.dreamscape.scheduler import (
+    DreamScheduler,
+    DreamSchedulerStats,
+    ensure_scheduler,
+    get_scheduler,
+    stop_all_schedulers,
+)
 
 __all__ = [
+    "DreamScheduler",
+    "DreamSchedulerStats",
     "DreamscapeConfig",
     "DreamscapeFeatureConfig",
     "dreamscape_active_path",
     "dreamscape_config_path",
+    "ensure_scheduler",
+    "get_scheduler",
     "is_emergency_disabled",
     "load_active_runtime_config",
     "load_dreamscape_config",
     "save_dreamscape_config",
+    "stop_all_schedulers",
     "write_active_runtime_config",
 ]

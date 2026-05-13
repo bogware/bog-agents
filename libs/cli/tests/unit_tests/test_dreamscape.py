@@ -384,6 +384,193 @@ class TestLawsPhase2BugFixes:
             )
 
 
+class TestDreamScheduler:
+    """Unit tests for the Phase-3 background scheduler.
+
+    Each test uses a fake model + the real ``maybe_dream`` orchestration
+    so we exercise the actual eligibility gate + persistence layer
+    rather than mocking the dream engine. The fake model returns
+    canned markdown so we don't hit the network.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        from bog_agents_cli.dreamscape import scheduler as sched_mod
+
+        sched_mod.clear_registry()
+
+    class _FakeModel:
+        """Tiny stub that returns one canned dream and counts calls."""
+
+        def __init__(self) -> None:
+            self.invocations = 0
+
+        async def ainvoke(self, messages, **_kw):
+            self.invocations += 1
+            from langchain_core.messages import AIMessage
+
+            return AIMessage(
+                content=(
+                    "### Tonight I dreamed of the polling clock\n\n"
+                    "A bell rang somewhere out of sight — slow, "
+                    "regular, untiring.\n\n"
+                    "**Waking thought:**\nThe rhythm itself is the message."
+                )
+            )
+
+    def _make_scheduler(self, tmp_path: Path, *, poll_seconds: float = 0.05):
+        import time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        agent_id = "scheduler-test"
+        # Make the agent already past dormancy + dreaming windows so
+        # the very first tick is eligible to fire.
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id=agent_id, last_activity_at=time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        model = self._FakeModel()
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=model,
+            dreams_cfg=DreamsConfig(
+                auto_on_dormancy=True,
+                max_seeds_per_dream=2,
+                imagination_trait_increment=1.5,
+            ),
+            lifecycle_cfg=LifecycleConfig(
+                enabled=True,
+                dormancy_after_seconds=2,
+                dreaming_after_dormant_seconds=1,
+            ),
+            poll_seconds=poll_seconds,
+        )
+        return scheduler, model, agent_id
+
+    async def test_start_stop_idempotent(self, tmp_path: Path) -> None:
+        scheduler, _model, _aid = self._make_scheduler(tmp_path)
+        scheduler.start()
+        scheduler.start()  # second call must not spawn a duplicate
+        assert scheduler.is_running
+        await scheduler.stop()
+        assert not scheduler.is_running
+
+    async def test_fires_at_least_one_dream(self, tmp_path: Path) -> None:
+        scheduler, _model, agent_id = self._make_scheduler(tmp_path, poll_seconds=0.05)
+        scheduler.start()
+        # Give the loop a beat to wake up + fire.
+        import asyncio
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+
+        for _ in range(20):  # up to 2s wall clock
+            await asyncio.sleep(0.1)
+            if scheduler.stats.dreams_fired >= 1:
+                break
+        await scheduler.stop()
+        assert scheduler.stats.dreams_fired >= 1, (
+            f"expected at least 1 dream, got stats: {scheduler.stats}"
+        )
+        # Imagination trait should have bumped on disk.
+        snap = lc_mod.load_snapshot(agent_id)
+        assert snap.imagination > 0
+        assert snap.total_dreams >= 1
+
+    async def test_rate_limits_consecutive_polls(self, tmp_path: Path) -> None:
+        """One dream per dreaming-window; subsequent ticks skip."""
+        import time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        # Long dreaming-window so rate-limiting clearly dominates.
+        agent_id = "rate-limit-test"
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id=agent_id, last_activity_at=time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(
+                auto_on_dormancy=True,
+                max_seeds_per_dream=2,
+                imagination_trait_increment=1.0,
+            ),
+            lifecycle_cfg=LifecycleConfig(
+                enabled=True,
+                dormancy_after_seconds=1,
+                dreaming_after_dormant_seconds=60,  # long rate-limit window
+            ),
+            poll_seconds=0.05,
+        )
+        scheduler.start()
+        import asyncio
+
+        await asyncio.sleep(1.5)
+        await scheduler.stop()
+        # 60-second dreaming window means at most ONE dream in 1.5s.
+        # Everything else should be ``skipped_ineligible``.
+        assert scheduler.stats.dreams_fired == 1, (
+            f"expected exactly 1 dream in rate-limited window, got "
+            f"{scheduler.stats.dreams_fired} (stats: {scheduler.stats})"
+        )
+        assert scheduler.stats.skipped_ineligible > 0
+
+    async def test_emergency_disable_skips_dreams(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        scheduler, _model, _agent = self._make_scheduler(tmp_path, poll_seconds=0.05)
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_DISABLE", "1")
+        scheduler.start()
+        import asyncio
+
+        await asyncio.sleep(0.5)
+        await scheduler.stop()
+        assert scheduler.stats.dreams_fired == 0
+        assert scheduler.stats.skipped_emergency_disable > 0
+
+    async def test_registry_singleton_per_agent(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import (
+            ensure_scheduler,
+            get_scheduler,
+        )
+
+        lc_mod.save_snapshot(lc_mod.LifecycleSnapshot(agent_id="dupe-test"))
+        model = self._FakeModel()
+        first = ensure_scheduler(
+            agent_id="dupe-test",
+            model=model,
+            dreams_cfg=DreamsConfig(),
+            lifecycle_cfg=LifecycleConfig(enabled=True),
+        )
+        second = ensure_scheduler(
+            agent_id="dupe-test",
+            model=model,
+            dreams_cfg=DreamsConfig(),
+            lifecycle_cfg=LifecycleConfig(enabled=True),
+        )
+        assert first is second
+        assert get_scheduler("dupe-test") is first
+
+
 class TestDashboardRuntimeActiveConfig:
     """Bug 3 — dashboard reads the runtime-active config, not just disk.
 

@@ -118,6 +118,70 @@ def _resolve_thinking_config() -> tuple[bool, int]:
     return enabled, budget
 
 
+def _build_dream_scheduler_factory(
+    *,
+    cfg: Any,  # noqa: ANN401 — DreamscapeConfig; typed Any to avoid eager import
+    agent_id: str,
+) -> Callable[[], Any] | None:
+    """Build a zero-arg factory that starts a DreamScheduler.
+
+    Returns ``None`` when prerequisites aren't met — typically because
+    no dream model can be resolved. The factory closure resolves the
+    model lazily (only when the lifecycle middleware first fires)
+    so we don't pay the model-construction cost during agent build.
+
+    Args:
+        cfg: A ``DreamscapeConfig`` (typed Any to avoid the cost of
+            an import that runs even when this feature is off).
+        agent_id: Stable identifier passed to the scheduler.
+
+    Returns:
+        A nullary callable, or ``None`` when scheduling can't be set up.
+    """
+
+    def factory() -> Any:  # noqa: ANN401 — returns a DreamScheduler, import deferred
+
+        # Imports deferred — these pull in langchain providers we
+        # don't want to load when dreamscape is disabled.
+        from bog_agents_cli.config import create_model
+
+        spec = (cfg.dreams.model or "").strip()
+        if not spec:
+            # Inherit the active model — read from CLI settings.
+            from bog_agents_cli.config import settings as _settings
+
+            provider = (_settings.model_provider or "").strip()
+            model_name = (_settings.model_name or "").strip()
+            spec = f"{provider}:{model_name}" if provider and model_name else model_name
+
+        if not spec:
+            logger.info("dreamscape: dream scheduler not started — no model resolved")
+            return None
+
+        try:
+            result = create_model(spec)
+        except Exception:
+            logger.warning(
+                "dreamscape: dream scheduler model creation failed (%s)",
+                spec,
+                exc_info=True,
+            )
+            return None
+
+        from bog_agents_cli.dreamscape.scheduler import ensure_scheduler
+
+        scheduler = ensure_scheduler(
+            agent_id=agent_id,
+            model=result.model,
+            dreams_cfg=cfg.dreams,
+            lifecycle_cfg=cfg.lifecycle,
+        )
+        scheduler.start()
+        return scheduler
+
+    return factory
+
+
 def _attach_dreamscape_middleware(
     middleware_list: list[Any],
     *,
@@ -158,10 +222,30 @@ def _attach_dreamscape_middleware(
         try:
             from bog_agents_cli.dreamscape.lifecycle import LifecycleMiddleware
 
-            middleware_list.append(
-                LifecycleMiddleware(agent_id=safe_id, cfg=cfg.lifecycle)
+            # When dream auto-on-dormancy is on, give the lifecycle
+            # middleware a factory that lazy-starts a DreamScheduler
+            # the first time it sees a real async model call. The
+            # factory closure captures the dream-model resolution +
+            # configs so the middleware itself stays decoupled from
+            # langchain/model loading.
+            dream_factory = (
+                _build_dream_scheduler_factory(cfg=cfg, agent_id=safe_id)
+                if cfg.dreams.auto_on_dormancy
+                else None
             )
-            logger.info("dreamscape: lifecycle middleware attached (agent=%s)", safe_id)
+            middleware_list.append(
+                LifecycleMiddleware(
+                    agent_id=safe_id,
+                    cfg=cfg.lifecycle,
+                    dream_scheduler_factory=dream_factory,
+                )
+            )
+            logger.info(
+                "dreamscape: lifecycle middleware attached "
+                "(agent=%s, dream_scheduler=%s)",
+                safe_id,
+                "yes" if dream_factory else "no",
+            )
         except Exception:
             logger.warning(
                 "dreamscape: lifecycle middleware failed to attach", exc_info=True

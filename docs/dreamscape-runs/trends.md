@@ -9,43 +9,45 @@ See `README.md` for the snapshot schema. Source data: the
 
 ## Pass-rate over time
 
-| Metric | Phase 1 (2026-05-12) | Phase 2 (2026-05-13) | Trend |
-|---|---|---|---|
-| **Laws phrase-match accuracy** | 3/9 (33%) | 9/9 (100%) | ⬆ +67pp (bug fixes) |
-| **Dream uniqueness (5-pass)** | 5/5 | 5/5 | → stable |
-| **Cross-agent post coverage** | 3/3 | 3/3 | → stable |
-| **Open bugs** | 4 | 0 | ⬇ -4 (all fixed) |
-| **Known limitations** | 0 (uncatalogued) | 1 (stem-matching) | new entry, deferred |
-| **Dreamscape unit tests** | 30 | 37 | ⬆ +7 (regression coverage) |
-| **CLI total unit tests** | 3522 | 3529 | ⬆ +7 |
+| Metric | Phase 1 (2026-05-12) | Phase 2 (2026-05-13) | Phase 3 (2026-05-13) | Trend |
+|---|---|---|---|---|
+| **Laws phrase-match accuracy** | 3/9 (33%) | 9/9 (100%) | 9/9 (100%) | ⬆ +67pp Phase 1→2, held |
+| **Dream uniqueness** | 5/5 (single batch) | 5/5 (single batch) | 10/10 (multi-cycle) | → stable, broader window confirms |
+| **Cross-agent post coverage** | 3/3 | 3/3 | n/a (not retested) | → stable |
+| **Open bugs** | 4 | 0 | 0 | held at 0 |
+| **Known limitations** | 0 (uncatalogued) | 1 (stem-matching) | 2 (+scheduler self-restart shape) | catalogued, deferred |
+| **Dreamscape unit tests** | 30 | 37 | 42 | ⬆ +5 (scheduler coverage) |
+| **CLI total unit tests** | 3522 | 3529 | 3534 | ⬆ +5 |
+| **Background scheduler dreams per 90s** | n/a | n/a | **10** | first live multi-cycle pass |
+| **Scheduler errors across 11 ticks** | n/a | n/a | **0** | clean |
 
 ## Performance over time
 
-| Metric | Phase 1 | Phase 2 | Trend |
-|---|---|---|---|
-| Avg seconds per dream (Haiku 4.5) | 6.4s | 6.1s | → ~stable (-5%) |
-| Total wall-clock per phase | 76s | 50s | ⬇ -34% (Phase 2 trimmed redundant calls) |
-| Total cost per phase | $0.014 | $0.010 | ⬇ -29% |
-| LLM calls per phase | 12 | 8 | ⬇ -33% |
+| Metric | Phase 1 | Phase 2 | Phase 3 | Trend |
+|---|---|---|---|---|
+| Avg seconds per dream (Haiku 4.5) | 6.4s | 6.1s | 8.4s in-cycle (~6s call + 2s dreaming-window gap) | → call cost stable; gap is by-design |
+| Total wall-clock per phase | 76s | 50s | 90s | scheduler-bounded, not call-bounded |
+| Total cost per phase | $0.014 | $0.010 | $0.012 | → flat |
+| LLM calls per phase | 12 | 8 | 10 | scheduler fired 10 cycles cleanly |
 
-Performance numbers are largely a function of how many scenarios are
-re-run rather than dreamscape itself getting faster. The
-per-dream-cost number is the steady-state baseline — track that
-across phases to spot real regressions.
+Per-dream-cost remains the steady-state baseline; Phase 3 confirms it
+holds when the scheduler is in the loop (i.e. no extra overhead from
+the background timer itself).
 
 ## Feature verdict history
 
-| Feature | Phase 1 | Phase 2 |
-|---|---|---|
-| Dream engine | 🟢 sings | 🟢 sings |
-| Imagination injection | 🟢 sings | 🟢 sings (no re-run, mechanism unchanged) |
-| Cross-agent shared memory | 🟢 sings | 🟢 sings |
-| Lifecycle state machine | 🟢 works | 🟢 works |
-| Laws hard rejects | 🟡 partial | 🟢 works |
-| Constitution soft logging | 🟢 works | 🟢 works |
-| Agent-state dashboard | 🟡 staleness bug | 🟢 works |
-| Repo overview | 🟢 works | 🟢 works |
-| Opt-in defaults | 🟢 ironclad | 🟢 ironclad |
+| Feature | Phase 1 | Phase 2 | Phase 3 |
+|---|---|---|---|
+| Dream engine | 🟢 sings | 🟢 sings | 🟢 sings |
+| **Dream scheduler** | n/a | n/a | 🟢 **sings — multi-cycle validated** |
+| Imagination injection | 🟢 sings | 🟢 sings | 🟢 sings (compounds correctly 0→15.0) |
+| Cross-agent shared memory | 🟢 sings | 🟢 sings | 🟢 sings (no re-run, mechanism unchanged) |
+| Lifecycle state machine | 🟢 works | 🟢 works | 🟢 works (10 dormant→dreaming→dormant cycles, zero leakage) |
+| Laws hard rejects | 🟡 partial | 🟢 works | 🟢 works |
+| Constitution soft logging | 🟢 works | 🟢 works | 🟢 works |
+| Agent-state dashboard | 🟡 staleness bug | 🟢 works | 🟢 works |
+| Repo overview | 🟢 works | 🟢 works | 🟢 works |
+| Opt-in defaults | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad |
 
 ## Cumulative cost
 
@@ -53,29 +55,36 @@ across phases to spot real regressions.
 |---|---|---|
 | 1 | $0.014 | $0.014 |
 | 2 | $0.010 | $0.024 |
+| 3 | $0.012 | $0.036 |
 
-Two phases for less than three pennies. Cheap data.
+Three phases for under four pennies. Cheap data.
 
 ## What this trend view tells us
 
-Two data points isn't enough to spot drift, but it IS enough to
-confirm:
+Three data points and the picture sharpens:
 
-1. **The bug fixes worked.** No regression in pass-rate after the
-   normaliser changes; the false-positive rate stayed at zero.
-2. **Performance is stable.** Dream generation cost is the same
-   per-call; the only meaningful per-phase variation is "how many
-   scenarios did the tester re-run."
-3. **The features that scored 🟢 in Phase 1 still score 🟢.** The
-   yellow flags from Phase 1 (laws partial, dashboard staleness)
-   both flipped to green in Phase 2.
+1. **The bug fixes from Phase 2 stuck.** Laws pass-rate held at 100%
+   into Phase 3. The normaliser work continues to behave.
+2. **Per-call cost is genuinely stable.** Phase 3 introduced a new
+   delivery mechanism (background timer) but the per-dream LLM cost
+   sits at the same ~$0.001/call as Phases 1 and 2 — the scheduler
+   itself adds no measurable overhead.
+3. **The orphaned-callable problem is closed.** `maybe_dream` is no
+   longer dead code; an asyncio task now drives it on a poll, and 10
+   consecutive cycles fired cleanly with zero errors and zero state
+   leakage between dormant/dreaming transitions.
+4. **Variety holds across cycles, not just batches.** Phase 1/2 dream
+   uniqueness was measured within a single 5-pass batch. Phase 3
+   extended that to 10 cycles over 90 seconds and still got 10/10
+   unique titles — the RNG seeding is not just picking unique seeds
+   *per batch*, it's picking unique seeds *per cycle*.
 
-The first real signal from this trend view will come at **Phase 3**,
-when we live-test the multi-day daemon dream cycle — a workload that
-exercises the dormancy timer + dream-engine + imagination-injection
-under a real schedule rather than synthesised state. That's the
-moment we'll see whether the in-memory state correctly hands off
-to long-running background processes.
+The next real signal will come at **Phase 4**, when we drop the
+accelerated knobs and run a real multi-day cycle with production
+timing (poll=60s, dormancy=1800s, dreaming=600s). That tests whether
+the asyncio task survives a long quiet stretch — i.e. whether the
+timer holds across overnight runs, not just whether it fires in a
+tight loop.
 
 ## Phase log
 
@@ -85,3 +94,9 @@ to long-running background processes.
   (re-ran 1, 4, 5; added bug-fix verification for 3 + dashboard).
   All Phase-1 bugs fixed. 8 regression tests added.
   Verdict: **READY TO MERGE.**
+* **Phase 3 — 2026-05-13 (multi-cycle scheduler validation).** Built
+  `DreamScheduler` (250 lines, 5 unit tests) and wired it into
+  `LifecycleMiddleware` via a lazy-start factory. Live test: 90s of
+  accelerated-time scheduling with real Haiku 4.5 fired **10 dreams,
+  10/10 unique titles, 0 errors** across 11 ticks. Imagination
+  compounded 0 → 15.0 exactly as designed. Verdict: **READY TO MERGE.**

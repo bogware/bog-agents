@@ -268,11 +268,23 @@ class LifecycleMiddleware(AgentMiddleware):
     """
 
     def __init__(
-        self, *, agent_id: str = "default", cfg: LifecycleConfig | None = None
+        self,
+        *,
+        agent_id: str = "default",
+        cfg: LifecycleConfig | None = None,
+        dream_scheduler_factory: Callable[[], Any] | None = None,
     ) -> None:
         self._agent_id = agent_id or "default"
         self._cfg = cfg or LifecycleConfig()
         self._tools: list[Any] = []
+        # Optional factory that returns a started ``DreamScheduler``
+        # (Phase 3 wiring). Called once on the first ``awrap_model_call``
+        # so we're guaranteed a running event loop. The factory may
+        # return None when prerequisites aren't met (e.g. no dream
+        # model resolved); in that case we silently skip and never
+        # try again for this middleware instance.
+        self._dream_scheduler_factory = dream_scheduler_factory
+        self._dream_scheduler_started = False
 
     @property
     def tools(self) -> list[Any]:
@@ -307,7 +319,31 @@ class LifecycleMiddleware(AgentMiddleware):
         if not self.active:
             return await call_next(request)
         self._safely_record_activity()
+        self._maybe_start_dream_scheduler()
         return await call_next(request)
+
+    def _maybe_start_dream_scheduler(self) -> None:
+        """Lazy-start the dream scheduler on the first async call.
+
+        Deferred to the async path because :func:`asyncio.create_task`
+        needs a running event loop. We've now established one for
+        sure (we're inside ``awrap_model_call``). The factory itself
+        encodes the gating logic — whether ``auto_on_dormancy`` is
+        true, whether a dream model can be resolved, etc.
+        """
+        if self._dream_scheduler_started:
+            return
+        factory = self._dream_scheduler_factory
+        if factory is None:
+            return
+        try:
+            factory()
+        except Exception:
+            logger.exception("LifecycleMiddleware: dream scheduler factory failed")
+        finally:
+            # Even on failure, mark as started so we don't repeatedly
+            # retry a broken factory on every call.
+            self._dream_scheduler_started = True
 
     def _safely_record_activity(self) -> None:
         try:
