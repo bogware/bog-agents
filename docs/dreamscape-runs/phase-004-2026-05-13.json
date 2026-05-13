@@ -65,6 +65,11 @@
     "consecutive_failures": 0
   },
   "regression_test_added": 1,
+  "test_suite_stats": {
+    "cli_unit_tests": 3535,
+    "dreamscape_specific": 43,
+    "added_this_phase": 1
+  },
   "live_calls": 2,
   "approx_cost_usd": 0.002,
   "feature_verdicts": {

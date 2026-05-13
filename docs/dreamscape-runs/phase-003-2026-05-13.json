@@ -72,6 +72,11 @@
       "test_registry_singleton_per_agent"
     ]
   },
+  "test_suite_stats": {
+    "cli_unit_tests": 3534,
+    "dreamscape_specific": 42,
+    "added_this_phase": 5
+  },
   "feature_verdicts": {
     "dream_engine": "sings",
     "dream_scheduler": "sings — multi-cycle dormancy timer validated end-to-end",

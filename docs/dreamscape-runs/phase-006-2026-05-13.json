@@ -98,6 +98,11 @@
   "title_uniqueness_pct": 100.0,
   "live_calls": 28,
   "approx_cost_usd": 0.027,
+  "test_suite_stats": {
+    "cli_unit_tests": 3535,
+    "dreamscape_specific": 43,
+    "added_this_phase": 0
+  },
   "feature_verdicts": {
     "dream_engine": "sings",
     "dream_scheduler": "sings — production cadence + induced failure + 30-min endurance verified",

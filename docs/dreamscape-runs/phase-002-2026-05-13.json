@@ -1,6 +1,7 @@
 {
   "phase": 2,
   "date": "2026-05-13",
+  "test_focus": "bug-fix verification — re-ran Phase 1 scenarios + verified all 4 bug fixes (hyphen-vs-space, stop-word tolerance, comma-list cross-product, dashboard staleness). 8 regression tests added.",
   "branch": "feat/agentic-evolution",
   "branch_sha": "TBD (commit after this file lands)",
   "model": "claude-haiku-4-5",

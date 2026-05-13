@@ -1,6 +1,7 @@
 {
   "phase": 1,
   "date": "2026-05-12",
+  "test_focus": "baseline — first end-to-end run across 5 scenarios (dream cycle, imagination A/B, laws enforcement, cross-agent shared memory, real-codebase iteration on Oregon Trail). Found 4 bugs in the opt-in path.",
   "branch": "feat/agentic-evolution",
   "branch_sha": "f417af2",
   "model": "claude-haiku-4-5",

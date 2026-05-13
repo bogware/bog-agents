@@ -1049,6 +1049,139 @@ class TestDreamscapeRunner:
 
 
 # ---------------------------------------------------------------------------
+# Phase 8 — trends.md generator
+# ---------------------------------------------------------------------------
+
+
+class TestDreamscapeTrendsBuilder:
+    """Tests for `scripts/build_dreamscape_trends.py`.
+
+    The script auto-generates `docs/dreamscape-runs/trends.md` from the
+    per-phase JSON snapshots. These tests verify:
+
+    1. Loading + normalization handles the heterogeneous P1/P2 vs
+       P3-P7 JSON shapes without raising.
+    2. The rendered markdown contains every phase by number and a
+       few load-bearing section headings.
+    3. `--check` mode is a no-op when the file is up to date.
+
+    We use the *actual* on-disk JSONs as fixtures rather than synthetic
+    ones — they're the contract the generator promises to handle.
+    """
+
+    @pytest.fixture
+    def builder(self):
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        # The script lives outside the package; import it by file path.
+        # parents[0]=unit_tests, [1]=tests, [2]=cli, [3]=libs, [4]=repo root.
+        script_path = (
+            Path(__file__).resolve().parents[4] / "scripts" / "build_dreamscape_trends.py"
+        )
+        if not script_path.exists():
+            pytest.skip(f"build script not found at {script_path}")
+        spec = importlib.util.spec_from_file_location(
+            "build_dreamscape_trends", script_path
+        )
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["build_dreamscape_trends"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_loads_all_phase_jsons_without_raising(self, builder) -> None:
+        summaries = builder.load_phase_summaries()
+        # We expect at least 7 phases as of the time these tests were
+        # written. Allow the count to grow without breaking the test.
+        assert len(summaries) >= 7
+        phases = [s.phase for s in summaries]
+        assert phases == sorted(phases), "phases must be sorted numerically"
+        # P1 in particular has the scenarios-array shape; P3 has the
+        # live_test.results shape. Both must yield a non-zero phase number.
+        assert all(s.phase > 0 for s in summaries)
+        assert all(s.date for s in summaries)
+
+    def test_renders_markdown_with_every_phase_and_section(self, builder) -> None:
+        summaries = builder.load_phase_summaries()
+        md = builder.render_markdown(summaries)
+        # Header
+        assert md.startswith("# Dreamscape — cross-phase trends")
+        # Every phase number must appear in a column header
+        for s in summaries:
+            assert f"P{s.phase}" in md, f"phase column missing for P{s.phase}"
+        # Load-bearing sections
+        for heading in (
+            "## Pass-rate over time",
+            "## Performance over time",
+            "## Feature verdict history",
+            "## Cumulative cost",
+            "## Phase log",
+            "## Provenance",
+        ):
+            assert heading in md, f"missing section: {heading}"
+
+    def test_check_mode_passes_when_file_is_fresh(self, builder, tmp_path: Path) -> None:
+        """`--check` exits 0 when the on-disk file matches the rendered one."""
+        summaries = builder.load_phase_summaries()
+        rendered = builder.render_markdown(summaries)
+        target = tmp_path / "trends.md"
+        target.write_text(rendered, encoding="utf-8")
+        # Run check mode against the temp file. Should return 0 (fresh).
+        rc = builder.main(
+            ["--check", "--out", str(target), "--source", str(builder.PHASE_DIR)]
+        )
+        assert rc == 0
+
+    def test_summary_normalizer_handles_scenarios_shape(self, builder) -> None:
+        """P1/P2 used a scenarios array. Normalizer must still produce dreams_fired."""
+        p1_blob = {
+            "phase": 1,
+            "date": "2026-05-12",
+            "verdict": "ship-after-bugfix",
+            "total_cost_usd_estimate": 0.014,
+            "total_llm_calls": 12,
+            "scenarios": [
+                {"name": "dream-cycle", "metrics": {"dreams_generated": 5, "approx_cost_usd": 0.004}},
+                {"name": "imagination-ab", "metrics": {"approx_cost_usd": 0.003}},
+            ],
+        }
+        s = builder.extract_summary(p1_blob)
+        assert s.phase == 1
+        assert s.dreams_fired == 5
+        # Cost should come from the top-level estimate, not the scenario sum
+        assert s.cost_usd == pytest.approx(0.014)
+        assert s.llm_calls == 12
+
+    def test_summary_normalizer_handles_live_test_shape(self, builder) -> None:
+        """P3+ uses live_test.results. Normalizer must still produce errors=0 etc."""
+        p3_blob = {
+            "phase": 3,
+            "date": "2026-05-13",
+            "verdict": "READY TO MERGE",
+            "live_test": {
+                "duration_seconds": 90.2,
+                "results": {
+                    "dreams_fired": 10,
+                    "errors": 0,
+                    "unique_titles": 10,
+                    "avg_seconds_per_dream_in_cycle": 8.4,
+                    "approx_cost_usd": 0.012,
+                },
+            },
+            "live_calls": 10,
+        }
+        s = builder.extract_summary(p3_blob)
+        assert s.dreams_fired == 10
+        assert s.errors == 0
+        assert s.unique_titles == 10
+        assert s.cost_usd == pytest.approx(0.012)
+        assert s.wall_seconds == pytest.approx(90.2)
+
+
+# ---------------------------------------------------------------------------
 # Slash-command wiring smoke test
 # ---------------------------------------------------------------------------
 
