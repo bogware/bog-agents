@@ -118,6 +118,93 @@ def _resolve_thinking_config() -> tuple[bool, int]:
     return enabled, budget
 
 
+def _attach_dreamscape_middleware(
+    middleware_list: list[Any],
+    *,
+    cfg: Any,  # noqa: ANN401 — DreamscapeConfig is deferred-imported; typing leaks here
+    agent_id: str,
+) -> None:
+    """Append every enabled dreamscape middleware to ``middleware_list``.
+
+    Caller has already verified ``cfg.any_active`` is True. Each
+    sub-middleware is gated on its individual ``enabled`` flag so the
+    master switch can be on while specific features stay off. All
+    imports are deferred to keep CLI cold-start fast.
+
+    Args:
+        middleware_list: The accumulating list of agent middleware.
+            New middlewares are appended in place.
+        cfg: A ``DreamscapeConfig`` (typed as ``Any`` here to avoid
+            an import that runs even when the feature is off).
+        agent_id: Per-agent identifier so on-disk state files end up
+            in the right directory.
+    """
+    safe_id = agent_id or "default"
+
+    if cfg.lifecycle.enabled:
+        try:
+            from bog_agents_cli.dreamscape.lifecycle import LifecycleMiddleware
+
+            middleware_list.append(
+                LifecycleMiddleware(agent_id=safe_id, cfg=cfg.lifecycle)
+            )
+            logger.info("dreamscape: lifecycle middleware attached (agent=%s)", safe_id)
+        except Exception:
+            logger.warning(
+                "dreamscape: lifecycle middleware failed to attach", exc_info=True
+            )
+
+    if cfg.laws.enabled:
+        try:
+            from bog_agents_cli.dreamscape.laws import LawsMiddleware
+
+            middleware_list.append(LawsMiddleware(cfg=cfg.laws))
+            logger.info(
+                "dreamscape: laws middleware attached (reject_on_violation=%s)",
+                cfg.laws.reject_on_violation,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: laws middleware failed to attach", exc_info=True
+            )
+
+    if cfg.shared_memory.enabled:
+        try:
+            from bog_agents_cli.dreamscape.shared_memory import (
+                SharedMemoryMiddleware,
+            )
+
+            middleware_list.append(
+                SharedMemoryMiddleware(agent_id=safe_id, cfg=cfg.shared_memory)
+            )
+            logger.info(
+                "dreamscape: shared-memory middleware attached (backend=%s)",
+                cfg.shared_memory.backend,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: shared-memory middleware failed to attach", exc_info=True
+            )
+
+    if cfg.imagination.enabled:
+        try:
+            from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+            middleware_list.append(
+                ImaginationMiddleware(agent_id=safe_id, cfg=cfg.imagination)
+            )
+            logger.info(
+                "dreamscape: imagination middleware attached "
+                "(trigger@%d failures, threshold=%.1f)",
+                cfg.imagination.trigger_after_failures,
+                cfg.imagination.min_imagination_trait,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: imagination middleware failed to attach", exc_info=True
+            )
+
+
 DEFAULT_AGENT_NAME = "agent"
 """The default agent name used when no `-a` flag is provided."""
 
@@ -1167,6 +1254,32 @@ def create_cli_agent(
             logger.info("ThinkingMiddleware auto-enabled (budget=%d)", thinking_budget)
     except ImportError:
         logger.debug("ThinkingMiddleware not importable; skipping")
+
+    # Dreamscape middleware stack — entirely opt-in.
+    #
+    # When `~/.bog-agents/dreamscape.toml` is missing or has
+    # `enabled = false`, NONE of these middlewares attach and the
+    # agent behaves bit-for-bit identical to a build without the
+    # dreamscape package. Per-feature toggles inside the master
+    # switch give finer control: someone can enable lifecycle
+    # tracking (for the dashboard) without enabling laws enforcement
+    # or imagination injection.
+    #
+    # Wrapped in a try/except so any import/config error here can
+    # never block agent creation — observability features must not
+    # be load-bearing.
+    try:
+        from bog_agents_cli.dreamscape import load_dreamscape_config
+
+        dreamscape_cfg = load_dreamscape_config()
+        if dreamscape_cfg.any_active:
+            _attach_dreamscape_middleware(
+                agent_middleware,
+                cfg=dreamscape_cfg,
+                agent_id=assistant_id,
+            )
+    except Exception:
+        logger.warning("dreamscape middleware setup failed; skipping", exc_info=True)
 
     # Worktree isolation middleware (Feature #1)
     if sandbox is None and enable_git_tools:

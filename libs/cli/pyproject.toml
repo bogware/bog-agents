@@ -320,6 +320,24 @@ ignore-var-parameters = true
     "S404",     # subprocess imported — required for shell step
     "TRY004",   # ValueError vs TypeError — kept for caller compatibility
 ]
+# Dreamscape package: dataclass-heavy, dynamic-data-heavy, intentionally
+# uses Any for cross-cutting helpers (response normalisation, config
+# overlays) and re-uses the SDK's middleware ``_utils`` private helper.
+"bog_agents_cli/dreamscape/**" = [
+    "ANN401",   # Any in response normalisation + config helpers — by design
+    "D102",     # Missing docstring on dataclass to_dict / property helpers
+    "D103",     # Missing docstring on small helper functions
+    "D105",     # Missing docstring on dunder methods
+    "D205",     # Multi-paragraph one-line summaries — readable here
+    "DOC501",   # Raises documented at module / class level, not per-method
+    "DOC502",   # Documented raise propagates from a callee, not raised in body
+    "PLC1901",  # `== ""` checks are fine in dream-frontmatter parsing
+    "PLC2701",  # ``_utils`` import is the canonical SDK middleware helper
+    "PLR6301",  # Method-could-be-static on backend protocol implementations
+    "RUF001",   # Em-dash + multiplication-sign used in dashboard glyphs
+    "S110",     # try/except/pass — observability paths must be silent on failure
+    "S311",     # random for non-cryptographic sampling (dream seeds)
+]
 "bog_agents_cli/vars.py" = [
     "ANN401",   # Any in user-supplied values — by design
     "D102",     # Missing docstring on dataclass to/from_dict helpers

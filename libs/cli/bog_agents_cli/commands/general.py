@@ -352,4 +352,68 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_version_command",
     ),
+    # ---- Dreamscape (opt-in lifecycle + dreams + laws + imagination) ---
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/agent-state",
+            "Show lifecycle, imagination trait, recent dreams, and recent shared-memory entries",
+            "lifecycle dormant dreaming imagination dashboard state observability",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_agent_state_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/repo",
+            "One-screen summary of the current git checkout (branch, dirty files, top edits)",
+            "repository git branch overview status clone",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_repo_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/dreamscape",
+            "View or initialise the dreamscape configuration (lifecycle, dreams, laws, imagination)",
+            "dreamscape config wizard preset master switch opt-in lifecycle imagination",
+            "general",
+            available=True,
+            subcommands=(
+                ("status", "Show current dreamscape config (default action)"),
+                (
+                    "init",
+                    "Write a starter ~/.bog-agents/dreamscape.toml (master still off)",
+                ),
+                ("disable", "Force-disable the whole subsystem for this session"),
+            ),
+        ),
+        handler_method="_handle_dreamscape_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/laws",
+            "Audit a sample against your Laws and Constitution, or initialise starter files",
+            "laws constitution rules audit policy guardrails dreamscape",
+            "general",
+            available=True,
+            subcommands=(
+                ("audit <text>", "Dry-run the rules against a sample"),
+                ("init", "Write starter laws.md + constitution.md (project-local)"),
+                ("list", "Show currently loaded Laws + Constitution"),
+            ),
+        ),
+        handler_method="_handle_laws_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/help-dream",
+            "Last-ditch creative push — inject dream snippets into the next agent call",
+            "imagination stuck unstuck dream creative help last-ditch",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_help_dream_command",
+    ),
 )

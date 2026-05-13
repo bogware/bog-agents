@@ -10083,6 +10083,216 @@ class BogAgentsApp(App):
             logger.exception("/whisper failed")
             await self._mount_message(ErrorMessage(f"/whisper failed: {exc}"))
 
+    # ---- Dreamscape handlers (read-only / config / advisory) ------------
+    # Safe to call regardless of dreamscape master switch — the dashboard
+    # surfaces show "everything off" when master_enabled=false (default).
+
+    async def _handle_agent_state_command(self, command: str) -> None:
+        """``/agent-state`` — lifecycle + imagination + recent dreams + shared memory."""
+        from bog_agents_cli.dreamscape.dashboard import render_agent_state
+
+        await self._mount_message(UserMessage(command))
+        try:
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            body = render_agent_state(agent_id)
+        except Exception as exc:
+            logger.exception("/agent-state failed")
+            await self._mount_message(ErrorMessage(f"/agent-state failed: {exc}"))
+            return
+        await self._mount_message(AppMessage(body))
+
+    async def _handle_repo_command(self, command: str) -> None:
+        """``/repo`` — branch + dirty files + top-edited + clone command."""
+        from bog_agents_cli.dreamscape.dashboard import render_repo_overview
+
+        await self._mount_message(UserMessage(command))
+        try:
+            body = render_repo_overview(Path(self._cwd))
+        except Exception as exc:
+            logger.exception("/repo failed")
+            await self._mount_message(ErrorMessage(f"/repo failed: {exc}"))
+            return
+        await self._mount_message(AppMessage(body))
+
+    async def _handle_dreamscape_command(self, command: str) -> None:
+        """``/dreamscape [status|init|disable]`` — view or init config."""
+        from bog_agents_cli.dreamscape.dashboard import (
+            init_dreamscape_config,
+            render_dreamscape_status,
+        )
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            try:
+                await self._mount_message(AppMessage(render_dreamscape_status()))
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape status failed: {exc}")
+                )
+            return
+
+        if raw_arg == "init":
+            try:
+                written = init_dreamscape_config()
+                await self._mount_message(
+                    AppMessage(
+                        f"[bold]Dreamscape config written[/bold] "
+                        f"[cyan]{written}[/cyan]\n"
+                        "[dim]Master switch is still OFF — flip "
+                        "[bold]enabled = true[/bold] in the TOML to opt in, then "
+                        "enable each subsystem under its section.[/dim]"
+                    )
+                )
+            except FileExistsError:
+                from bog_agents_cli.dreamscape.config import dreamscape_config_path
+
+                await self._mount_message(
+                    AppMessage(
+                        f"[yellow]Dreamscape config already exists at "
+                        f"{dreamscape_config_path()}.[/yellow]"
+                    )
+                )
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape init failed: {exc}")
+                )
+            return
+
+        if raw_arg == "disable":
+            os.environ["BOG_AGENTS_DREAMSCAPE_DISABLE"] = "1"
+            from bog_agents_cli.dreamscape import config as ds_config
+
+            ds_config.clear_cache()
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Dreamscape force-disabled for this session.[/bold] "
+                    "Unset BOG_AGENTS_DREAMSCAPE_DISABLE to re-enable."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /dreamscape           Show current config\n"
+                "  /dreamscape status    Same as above\n"
+                "  /dreamscape init      Write a starter ~/.bog-agents/dreamscape.toml\n"
+                "  /dreamscape disable   Force-disable for this session"
+            )
+        )
+
+    async def _handle_laws_command(self, command: str) -> None:
+        """``/laws [audit|init|list]`` — manage two-tier behavioural rules."""
+        from bog_agents_cli.dreamscape.config import load_dreamscape_config
+        from bog_agents_cli.dreamscape.dashboard import (
+            init_laws_templates,
+            render_laws_audit,
+        )
+        from bog_agents_cli.dreamscape.laws import load_rules
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw = command.strip()[len(prefix) :].strip()
+        head, _, rest = raw.partition(" ")
+        head = head.lower()
+
+        if head == "init":
+            try:
+                written = init_laws_templates()
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"/laws init failed: {exc}"))
+                return
+            if not written:
+                await self._mount_message(
+                    AppMessage(
+                        "[dim]No files written — laws.md or constitution.md already "
+                        "exist. Use them or delete to regenerate.[/dim]"
+                    )
+                )
+                return
+            lines = ["[bold]Wrote starter files:[/bold]"]
+            for path in written:
+                lines.append(f"  [cyan]{path}[/cyan]")
+            lines.append("")
+            lines.append(
+                "[dim]Edit them, then enable [bold]laws.enabled = true[/bold] in "
+                "~/.bog-agents/dreamscape.toml to activate.[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if head == "list":
+            cfg = load_dreamscape_config()
+            rule_set = load_rules(cfg.laws)
+            lines: list[str] = []
+            lines.append(f"[bold]Laws ({len(rule_set.laws)})[/bold]")
+            for r in rule_set.laws:
+                lines.append(
+                    f"  • {r.text}  [dim]({r.source_path.name}:{r.line_number})[/dim]"
+                )
+            lines.append("")
+            lines.append(f"[bold]Constitution ({len(rule_set.constitution)})[/bold]")
+            for r in rule_set.constitution:
+                lines.append(
+                    f"  • {r.text}  [dim]({r.source_path.name}:{r.line_number})[/dim]"
+                )
+            if rule_set.is_empty():
+                lines = [
+                    "[dim]No rules configured. Run [bold]/laws init[/bold] to "
+                    "write starter files.[/dim]"
+                ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if head == "audit":
+            sample = rest.strip() or (
+                "Sample audit text — paste any model output here to dry-run."
+            )
+            try:
+                body = render_laws_audit(sample)
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"/laws audit failed: {exc}"))
+                return
+            await self._mount_message(AppMessage(body))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /laws audit <text>   Dry-run rules against a sample\n"
+                "  /laws init           Write starter laws.md + constitution.md\n"
+                "  /laws list           Show currently loaded rules"
+            )
+        )
+
+    async def _handle_help_dream_command(self, command: str) -> None:
+        """``/help-dream`` — show dream snippets when stuck (read-only)."""
+        from bog_agents_cli.dreamscape.imagination import explicit_inject_excerpts
+
+        await self._mount_message(UserMessage(command))
+        agent_id = getattr(self, "_assistant_id", "default") or "default"
+        try:
+            excerpts = explicit_inject_excerpts(agent_id, count=3)
+        except Exception as exc:
+            await self._mount_message(ErrorMessage(f"/help-dream failed: {exc}"))
+            return
+        if not excerpts:
+            await self._mount_message(
+                AppMessage(
+                    "[dim]No dreams in the archive yet.[/dim]\n"
+                    "Enable [bold]dreamscape.dreams.auto_on_dormancy[/bold] and let "
+                    "the agent rest for a while, or run [bold]/dream[/bold] manually."
+                )
+            )
+            return
+        lines = ["[bold]Recent dream excerpts — use as creative fuel[/bold]\n"]
+        for i, excerpt in enumerate(excerpts, start=1):
+            lines.append(f"### Fragment {i}\n\n{excerpt}\n")
+        await self._mount_message(AppMessage("\n".join(lines)))
+
     async def _handle_rules_command(self, command: str) -> None:
         """Handle `/rules` project rules management.
 
