@@ -14,63 +14,71 @@ See `README.md` for the snapshot schema. Source data: the
 
 ## Pass-rate over time
 
-| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Dreams fired (live tests)** | 5 | 5 | 10 | n/a | 15 | 27 | 10 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Scheduler errors** | n/a | n/a | 0 | n/a | 0 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Unique titles (in-test)** | n/a | n/a | 10 | n/a | 15 | n/a | 8 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Open bugs (end of phase)** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Known limitations (carried)** | 0 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 3 | 3 | 3 | 2 | 3 | 2 |
-| **Dreamscape unit tests** | n/a | 37 | 42 | 43 | 43 | 43 | 47 | 52 | 67 | 67 | 68 | 79 | 79 | 81 |
-| **CLI total unit tests** | n/a | 3529 | 3534 | 3535 | 3535 | 3535 | 3539 | 3544 | 3552 | 3552 | 3553 | 3564 | 3564 | 3566 |
+| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Dreams fired (live tests)** | 5 | 5 | 10 | n/a | 15 | 27 | 10 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Scheduler errors** | n/a | n/a | 0 | n/a | 0 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Unique titles (in-test)** | n/a | n/a | 10 | n/a | 15 | n/a | 8 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Open bugs (end of phase)** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Known limitations (carried)** | 0 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 3 | 3 | 3 | 2 | 3 | 2 | 3 | 4 | 1 |
+| **Dreamscape unit tests** | n/a | 37 | 42 | 43 | 43 | 43 | 47 | 52 | 67 | 67 | 68 | 79 | 79 | 81 | 81 | 88 | 81 |
+| **CLI total unit tests** | n/a | 3529 | 3534 | 3535 | 3535 | 3535 | 3539 | 3544 | 3552 | 3552 | 3553 | 3564 | 3564 | 3566 | 3568 | 3573 | 3566 |
 
 ## Performance over time
 
-| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **LLM calls per phase** | 12 | 8 | n/a | 2 | 15 | 28 | 10 | n/a | 21 | 21 | 35 | 4 | 840 | 210 |
-| **Total wall-clock (s)** | 76.0 | 50.0 | 90.2 | n/a | n/a | 1803.1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Total cost (USD)** | 0.014 | 0.010 | 0.012 | 0.002 | 0.015 | 0.027 | 0.010 | n/a | 0.040 | 0.039 | 0.070 | 0.004 | 2.100 | 0.400 |
-| **Avg seconds per dream** | n/a | n/a | 8.4 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **LLM calls per phase** | 12 | 8 | n/a | 2 | 15 | 28 | 10 | n/a | 21 | 21 | 35 | 4 | 840 | 210 | 525 | 135 | n/a |
+| **Total wall-clock (s)** | 76.0 | 50.0 | 90.2 | n/a | n/a | 1803.1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Total cost (USD)** | 0.014 | 0.010 | 0.012 | 0.002 | 0.015 | 0.027 | 0.010 | n/a | 0.040 | 0.039 | 0.070 | 0.004 | 2.100 | 0.400 | 1.400 | 0.300 | n/a |
+| **Avg seconds per dream** | n/a | n/a | 8.4 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Feature verdict history
 
-| Feature | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| dream engine | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings |
-| Imagination injection | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings (was BROKEN; fixed in this phase, now end-to-end verified) | 🟢 sings (fixed in Phase 4) | 🟢 sings (Phase 4) | 🟢 sings (Phase 4 fix) | 🟢 sings (Phase 4 fix) | n/a | n/a | n/a | n/a | n/a | n/a |
-| cross agent shared memory | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings — concurrent writes p95 <10ms, perfect isolation | 🟢 sings (Phase 5) | 🟢 sings (Phase 5) | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings |
-| lifecycle state machine | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works — concurrent multi-agent verified | 🟢 works (state transitions visible in checkpoint snapshots) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| laws hard rejects | 🟢 works for clear cases | 🟢 works (9/9 with paraphrase tolerance) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| constitution soft logging | 🟢 works as designed | 🟢 works as designed | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works (now surfaced) | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| agent state dashboard | 🟢 mostly works (staleness bug) | 🟢 works (staleness fixed) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| repo overview | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| opt in defaults | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | n/a | n/a | n/a |
-| dream scheduler | n/a | n/a | 🟢 sings — multi-cycle dormancy timer validated end-to-end | 🟢 sings | 🟢 sings — works under concurrent multi-agent load | 🟢 sings — production cadence + induced failure + 30-min endurance verified | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | n/a |
-| scheduler resilience under transient failure | n/a | n/a | n/a | n/a | n/a | 🟢 sings — model failure absorbed without crashing the loop | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| dreamscape runner | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — daemon-style entrypoint validated end-to-end with crash recovery | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a |
-| snapshot persistence across processes | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — survives SIGKILL | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| trends automation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — idempotent, --check mode for CI, full coverage by 5 new tests | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (Phase 4) | 🟢 sings (Phase 4) | 🟢 sings | n/a | 🟢 sings (Phase 4) | 🟢 sings |
-| Imagination injection effectiveness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — 1/7 wins on technical-debugging questions. Domain mismatch is the leading hypothesis. | n/a | n/a | n/a | n/a | n/a |
-| constitution log surfacing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (R1) | 🟢 sings | 🟢 sings | n/a | n/a | n/a |
-| seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (50 entries, R2) | 🟢 sings | 🟢 sings | n/a | n/a | n/a |
-| daily dream cap | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works (R3) | 🟢 works | 🟢 works | n/a | n/a | n/a |
-| Imagination injection effectiveness on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 6/7 wins (86%) | n/a | n/a | n/a | n/a |
-| Imagination injection effectiveness on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — Phase 10 said 1/7, Phase 12 said 5/7 same scenario set; high variance suggests effect is small or noisy | n/a | n/a | n/a | n/a |
-| Imagination injection dreams style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | noisy on technical prompts — Phase 10 said -, Phase 12 said + | n/a | n/a | n/a |
-| Imagination injection neutral style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | roughly equivalent to dreams on technical prompts; preserves the option to ship | n/a | n/a | n/a |
-| domain classifier | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 14/14 assertions pass | 🟢 sings — verified end-to-end in Phase 13 | 🟢 sings |
-| agent profile persistence | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — round-trips through disk | n/a | n/a |
-| seed category routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly prefers computing-history | n/a | n/a |
-| injection style routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly gets neutral wrapper end-to-end | n/a | n/a |
-| creative routing isolation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | verified — creative-prompt output from engineering agent is still usable (not catastrophic), but doesn't earn the Phase 11 / 14 treatment-win lift | n/a | n/a |
-| Imagination injection on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 SINGS — 79.3% win rate (95% CI [72%, 85%]) at N=140 | n/a |
-| Imagination injection on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | HURTS — 27.9% win rate (95% CI [21%, 36%]) at N=140; the shipped neutral-wrapper routing addresses this | n/a |
-| domain conditional effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ROBUST — 51 pp difference between domains, non-overlapping 95% CIs | n/a |
-| engineering craft seed library | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 62.9% win rate vs computing-history on engineering prompts, lower CI bound above 50% |
-| domain aware seed selection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering-craft as primary engineering preference justified by data |
-| Imagination injection on engineering prompts with eng craft seeds | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | improved — likely closes part of Phase 14's 28% gap (combined experiment in future phase) |
+| Feature | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| dream engine | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a |
+| Imagination injection | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings (was BROKEN; fixed in this phase, now end-to-end verified) | 🟢 sings (fixed in Phase 4) | 🟢 sings (Phase 4) | 🟢 sings (Phase 4 fix) | 🟢 sings (Phase 4 fix) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cross agent shared memory | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings — concurrent writes p95 <10ms, perfect isolation | 🟢 sings (Phase 5) | 🟢 sings (Phase 5) | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a |
+| lifecycle state machine | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works — concurrent multi-agent verified | 🟢 works (state transitions visible in checkpoint snapshots) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| laws hard rejects | 🟢 works for clear cases | 🟢 works (9/9 with paraphrase tolerance) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| constitution soft logging | 🟢 works as designed | 🟢 works as designed | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works (now surfaced) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| agent state dashboard | 🟢 mostly works (staleness bug) | 🟢 works (staleness fixed) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| repo overview | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| opt in defaults | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | n/a | n/a | n/a | n/a | n/a | n/a |
+| dream scheduler | n/a | n/a | 🟢 sings — multi-cycle dormancy timer validated end-to-end | 🟢 sings | 🟢 sings — works under concurrent multi-agent load | 🟢 sings — production cadence + induced failure + 30-min endurance verified | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | n/a | n/a | n/a | n/a |
+| scheduler resilience under transient failure | n/a | n/a | n/a | n/a | n/a | 🟢 sings — model failure absorbed without crashing the loop | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| dreamscape runner | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — daemon-style entrypoint validated end-to-end with crash recovery | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| snapshot persistence across processes | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — survives SIGKILL | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| trends automation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — idempotent, --check mode for CI, full coverage by 5 new tests | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (Phase 4) | 🟢 sings (Phase 4) | 🟢 sings | n/a | 🟢 sings (Phase 4) | 🟢 sings | n/a | n/a | n/a |
+| Imagination injection effectiveness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — 1/7 wins on technical-debugging questions. Domain mismatch is the leading hypothesis. | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| constitution log surfacing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (R1) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
+| seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (50 entries, R2) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
+| daily dream cap | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works (R3) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection effectiveness on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 6/7 wins (86%) | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection effectiveness on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — Phase 10 said 1/7, Phase 12 said 5/7 same scenario set; high variance suggests effect is small or noisy | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection dreams style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | noisy on technical prompts — Phase 10 said -, Phase 12 said + | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection neutral style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | roughly equivalent to dreams on technical prompts; preserves the option to ship | n/a | n/a | n/a | n/a | n/a | n/a |
+| domain classifier | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 14/14 assertions pass | 🟢 sings — verified end-to-end in Phase 13 | 🟢 sings | n/a | n/a | n/a |
+| agent profile persistence | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — round-trips through disk | n/a | n/a | n/a | n/a | n/a |
+| seed category routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly prefers computing-history | n/a | n/a | n/a | n/a | n/a |
+| injection style routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly gets neutral wrapper end-to-end | n/a | n/a | n/a | n/a | n/a |
+| creative routing isolation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | verified — creative-prompt output from engineering agent is still usable (not catastrophic), but doesn't earn the Phase 11 / 14 treatment-win lift | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 SINGS — 79.3% win rate (95% CI [72%, 85%]) at N=140 | n/a | n/a | n/a | n/a |
+| Imagination injection on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | HURTS — 27.9% win rate (95% CI [21%, 36%]) at N=140; the shipped neutral-wrapper routing addresses this | n/a | n/a | n/a | n/a |
+| domain conditional effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ROBUST — 51 pp difference between domains, non-overlapping 95% CIs | n/a | n/a | n/a | n/a |
+| engineering craft seed library | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 62.9% win rate vs computing-history on engineering prompts, lower CI bound above 50% | n/a | n/a | n/a |
+| domain aware seed selection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering-craft as primary engineering preference justified by data | n/a | n/a | n/a |
+| Imagination injection on engineering prompts with eng craft seeds | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | improved — likely closes part of Phase 14's 28% gap (combined experiment in future phase) | n/a | n/a | n/a |
+| Imagination injection with neutral wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | break-even-to-positive — 57% win rate, lower CI ~48% | n/a | n/a |
+| engineering craft vs computing history at n 105 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | statistically indistinguishable on aggregate, EC dominates on decision-shaped scenarios | n/a | n/a |
+| neutral wrapper advantage over dreams wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | MASSIVE — 29pp lift attributable to wrapper alone | n/a | n/a |
+| per prompt routing mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — classifier + middleware integration work correctly | n/a |
+| per prompt routing effectiveness on engineering agents | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ambiguous-to-negative — does not reliably improve outcomes | n/a |
+| shipping decision | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 ship the knob, keep it off by default. Engineering agents continue using neutral wrapper for all prompts (Phase 16 validated). | n/a |
+| decision pattern detection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works — fires on intended patterns. The 'designing' keyword overlap with creative-vocabulary is a known false positive. | n/a |
+| engineering craft seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 30 entries, ~2x reduction in same-seed-twice probability per agent-day |
 
 ## Cumulative cost
 
@@ -90,8 +98,11 @@ See `README.md` for the snapshot schema. Source data: the
 | 13 | $0.004 | $0.243 |
 | 14 | $2.100 | $2.343 |
 | 15 | $0.400 | $2.743 |
+| 16 | $1.400 | $4.143 |
+| 17 | $0.300 | $4.443 |
+| 18 | n/a | $4.443 |
 
-**14 phases for under $2.75.** Cheap data.
+**17 phases for under $4.45.** Cheap data.
 
 ## Phase log
 
@@ -109,6 +120,9 @@ See `README.md` for the snapshot schema. Source data: the
 * **Phase 13 — 2026-05-13.** routing verification — confirm the dreamscape/domain. Verdict: **READY TO MERGE — routing layer ships correctly.**
 * **Phase 14 — 2026-05-13.** statistical-power re-run of Phase 10 + 11 — N=20 trials per scenario per domain with parallelized API calls. Verdict: **DECISIVE — domain-conditional effect is statistically robust. The shipping context-aware routing is justified by data, not just intuition.**
 * **Phase 15 — 2026-05-13.** does the CONTENT of injected dreams matter — engineering-craft seeds (new, Phase 15) vs computing-history seeds (existing) on technical-debugging prompts. Verdict: **WIN — domain-appropriate dream CONTENT helps. Engineering agents should dream of engineering-craft, not historical-figures-in-computing.**
+* **Phase 16 — 2026-05-13.** three-arm experiment — does treatment-with-engineering-craft + neutral wrapper beat no-injection control on technical-debugging prompts? Combined with computing-history vs control as a calibration arm. Verdict: **WIN — the technical-prompt story flips. With the neutral wrapper, imagination injection is net-positive (or at least neutral) on technical work. The shipping defaults (engineering routing → neutral wrapper) are validated by data, not just intuition.**
+* **Phase 17 — 2026-05-13.** per-prompt routing — classify the USER PROMPT (not just the agent profile) and override the injection wrapper style per-call. Verdict: **MIXED — mechanism ships clean (and may be useful for power-users), but per-prompt routing is NOT a default enabled feature. Phase 16's data already validated the agent-level routing as the load-bearing decision; per-prompt is a refinement that didn't pay off at this N.**
+* **Phase 18 — 2026-05-13.** expand engineering-craft seed library from 15 (Phase 15) to 30 entries. Verdict: **READY TO MERGE — pure curation work, no behavior change beyond reducing repetition.**
 
 ## Provenance
 
@@ -128,4 +142,7 @@ See `README.md` for the snapshot schema. Source data: the
 | 13 | 2026-05-13 | claude-haiku-4-5 | READY TO MERGE — routing layer ships correctly. | `phase-013-2026-05-13.json` |
 | 14 | 2026-05-13 | claude-haiku-4-5 | DECISIVE — domain-conditional effect is statistically robust. The shipping context-aware routing is justified by data, not just intuition. | `phase-014-2026-05-13.json` |
 | 15 | 2026-05-13 | claude-haiku-4-5 | WIN — domain-appropriate dream CONTENT helps. Engineering agents should dream of engineering-craft, not historical-figures-in-computing. | `phase-015-2026-05-13.json` |
+| 16 | 2026-05-13 | claude-haiku-4-5 | WIN — the technical-prompt story flips. With the neutral wrapper, imagination injection is net-positive (or at least neutral) on technical work. The shipping defaults (engineering routing → neutral wrapper) are validated by data, not just intuition. | `phase-016-2026-05-13.json` |
+| 17 | 2026-05-13 | claude-haiku-4-5 | MIXED — mechanism ships clean (and may be useful for power-users), but per-prompt routing is NOT a default enabled feature. Phase 16's data already validated the agent-level routing as the load-bearing decision; per-prompt is a refinement that didn't pay off at this N. | `phase-017-2026-05-13.json` |
+| 18 | 2026-05-13 | claude-haiku-4-5 | READY TO MERGE — pure curation work, no behavior change beyond reducing repetition. | `phase-018-2026-05-13.json` |
 

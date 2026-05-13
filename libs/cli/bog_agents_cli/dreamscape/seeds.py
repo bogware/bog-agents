@@ -86,9 +86,8 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "Ken Thompson and Dennis Ritchie inventing Unix on a cast-off PDP-7 because nobody would let them use the new machine.",
     ),
     "engineering-craft": (
-        # Added in Phase 15 — software-engineering-specific seeds for
-        # engineering-classified agents. Not historical figures; the
-        # texture is the everyday craft of debugging, refactoring,
+        # Phase 15 seeds — software-engineering-specific imagery.
+        # The texture: the everyday craft of debugging, refactoring,
         # and the long tail of "this has been wrong for years."
         "The 3am page where the on-call engineer found the bug had been live for six years.",
         "The git bisect that ended at the merge commit whose author had left the company.",
@@ -105,6 +104,23 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "The integration test suite that quietly stopped running for eighteen months because someone renamed the make target.",
         "The log line added 'just for this one debug session' that is now shipped to a third-party SIEM.",
         "The TODO comment from 2014 that was wrong then and is wrong now in the exact opposite way.",
+        # Phase 18 additions — second batch, doubling the library to 30
+        # entries so daily-dreaming engineers don't repeat seeds quickly.
+        "The shared dictionary mutated in five threads that worked for three years because nobody held it long.",
+        "The retry loop that succeeded on the seventh attempt and was treated as a permanent fix.",
+        "The race condition that only appeared when the engineer who knew about it was on vacation.",
+        "The cron job that drifted forty-five minutes over four years because nobody noticed the timezone.",
+        "The 'temporary' shell script in /opt that ran every five minutes for the entire life of the company.",
+        "The integration test that passed because both halves of it were broken in canceling ways.",
+        "The float comparison that worked for years until a sensor with three more digits of precision was added.",
+        "The error message no one read because the rate of false positives had quietly crossed 50 percent.",
+        "The connection pool that never grew because the metric measuring its size was itself in the pool.",
+        "The fixed-size buffer that was correct in 2012 and slowly went out of fashion alongside the unit it measured.",
+        "The merge that resolved a conflict by deleting both sides, ship-tested for six weeks, never noticed.",
+        "The system that scaled cleanly to a thousand users because it crashed at user one hundred and was rewritten.",
+        "The graceful shutdown that took six minutes to flush a queue nobody was reading.",
+        "The encoding bug that only appeared when a user with an accent in their name signed up.",
+        "The performance fix that was a regression in disguise because the slow path had been suppressing a bug.",
     ),
 }
 

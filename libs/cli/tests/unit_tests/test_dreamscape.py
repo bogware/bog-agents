@@ -720,17 +720,19 @@ class TestDreamSeeds:
             )
 
     def test_engineering_craft_category_present_and_curated(self) -> None:
-        """Phase 15 adds an ``engineering-craft`` category.
+        """Phase 15 adds an ``engineering-craft`` category; Phase 18 doubles it.
 
-        Pins it to ``>= 15`` entries so a future edit can't accidentally
-        regress the library below the size Phase 15 validated against.
+        Pins to ``>= 30`` entries so a daily-dreaming engineer doesn't
+        cycle through the entire library in a day. Phase 15 validated
+        the 62.9% EC-win effect at 15 entries; Phase 18 grew the library
+        without altering the per-seed shape.
         """
         from bog_agents_cli.dreamscape.seeds import _SEEDS, list_categories
 
         assert "engineering-craft" in list_categories()
         eng_craft = _SEEDS["engineering-craft"]
-        assert len(eng_craft) >= 15, (
-            f"engineering-craft has {len(eng_craft)} entries; Phase 15 validated >= 15"
+        assert len(eng_craft) >= 30, (
+            f"engineering-craft has {len(eng_craft)} entries; Phase 18 expanded floor to >= 30"
         )
         # No "Tonight I dreamed of" prefix — these are observation-shaped
         # seeds, not pre-titled dreams.
@@ -1430,6 +1432,256 @@ class TestDomainClassifier:
         # Conservative fallback for unspecified domains.
         assert recommended_injection_style("research") == "neutral"
         assert recommended_injection_style("general") == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 — per-prompt routing
+# ---------------------------------------------------------------------------
+
+
+class TestPromptRouting:
+    """Cover the per-prompt routing shipped in Phase 17.
+
+    The ``classify_prompt_domain`` function and the imagination
+    middleware's per-call routing. Phase 17 hypothesis: prompts whose
+    surface vocabulary is technical but whose underlying shape is
+    decision/judgment (the ``legacy-deletion`` Phase 14 outlier at 55%
+    treatment-win) benefit from creative-wrapper routing on a per-call
+    basis, even when the host agent is engineering-classified.
+    """
+
+    def test_pure_technical_prompt_classifies_engineering(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_prompt_domain
+
+        # No decision-signal — should classify on surface vocabulary alone.
+        prompt = (
+            "My pytest test fails 1-in-20 in CI. I've freezegun'd every "
+            "clock and isolated fixtures. The traceback shows a Python "
+            "module import order issue."
+        )
+        assert classify_prompt_domain(prompt) == "engineering"
+
+    def test_decision_shaped_technical_prompt_classifies_creative(self) -> None:
+        """Pin Phase 17's main hypothesis.
+
+        Decision-shaped engineering prompts route to creative even
+        though their surface vocabulary is technical.
+        """
+        from bog_agents_cli.dreamscape.domain import classify_prompt_domain
+
+        prompt = (
+            "I have a 4000-line god-class. I can extract subclasses or "
+            "rewrite incrementally behind a feature flag. Which approach "
+            "should I take?"
+        )
+        # Surface signal: engineering ("class", "feature flag", "refactor"
+        # not explicit but implied). Decision signal: "which approach",
+        # "should I". Phase 17 routes this to creative.
+        assert classify_prompt_domain(prompt) == "creative"
+
+    def test_pure_creative_prompt_classifies_creative(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_prompt_domain
+
+        prompt = (
+            "Help me name a new product feature. The voice should feel "
+            "playful and memorable; the metaphor should be evocative."
+        )
+        assert classify_prompt_domain(prompt) == "creative"
+
+    def test_decision_signal_helper_recognizes_patterns(self) -> None:
+        from bog_agents_cli.dreamscape.domain import _has_decision_signal
+
+        assert _has_decision_signal("Should I extract this method?") is True
+        assert _has_decision_signal("Which approach is better?") is True
+        assert _has_decision_signal("What's the trade-off here?") is True
+        assert _has_decision_signal("Help me decide between A and B.") is True
+        assert _has_decision_signal("What would you call this class?") is True
+        # No decision-pattern: routine debug question.
+        assert _has_decision_signal("The test fails 1-in-20. Why?") is False
+
+    def test_empty_prompt_falls_back_to_general(self) -> None:
+        from bog_agents_cli.dreamscape.domain import classify_prompt_domain
+
+        assert classify_prompt_domain("") == "general"
+
+    async def test_middleware_routes_per_prompt_when_enabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exercise the full middleware path end-to-end.
+
+        An engineering-style config gets neutral wrapper by default,
+        but a decision-shaped prompt forces the dreams wrapper on that
+        one call.
+        """
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+        # Pre-seed a dream so sample_dream_excerpts returns content.
+        dreams_dir = lc_mod.agent_state_dir("zeta") / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        (dreams_dir / "00000000000001-fixture.md").write_text(
+            "---\ntitle: fixture\n---\n\n### fixture\n\nA short observation.\n",
+            encoding="utf-8",
+        )
+
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="zeta", imagination=5.0, consecutive_tool_failures=5
+        )
+        lc_mod.save_snapshot(snap)
+
+        # Engineering-style cfg: default neutral wrapper, but enable
+        # per-prompt routing so decision-shaped prompts get dreams.
+        cfg = ImaginationConfig(
+            enabled=True,
+            trigger_after_failures=3,
+            min_imagination_trait=1.0,
+            max_snippets_per_injection=1,
+            injection_style="neutral",
+            use_prompt_routing=True,
+        )
+        mw = ImaginationMiddleware(agent_id="zeta", cfg=cfg)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="OK.")
+
+        # Case 1: pure-technical prompt should KEEP the neutral wrapper.
+        tech_req = ModelRequest(
+            model=_Stub(),
+            system_message=SystemMessage(content="base"),
+            messages=[HumanMessage(content="The pytest test fails in CI. Why?")],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+        captured_tech: list[str] = []
+
+        async def _capture_tech(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            captured_tech.append(str(sm.content) if sm else "")
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(tech_req, _capture_tech)  # type: ignore[arg-type]
+        assert captured_tech, "call_next never observed the request"
+        # Tech prompt → neutral wrapper preserved (no "stuck" header).
+        assert "Additional context" in captured_tech[-1]
+        assert "You appear to be stuck" not in captured_tech[-1]
+
+        # Need to re-prime — the previous call moved state to IMAGINING.
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="zeta", imagination=5.0, consecutive_tool_failures=5
+        )
+        lc_mod.save_snapshot(snap)
+
+        # Case 2: decision-shaped prompt should SWITCH to dreams wrapper.
+        decision_req = ModelRequest(
+            model=_Stub(),
+            system_message=SystemMessage(content="base"),
+            messages=[
+                HumanMessage(
+                    content=(
+                        "Should I extract this 800-line method into a "
+                        "helper class, or inline it across the three "
+                        "callers? What's the right trade-off?"
+                    )
+                )
+            ],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+        captured_dec: list[str] = []
+
+        async def _capture_dec(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            captured_dec.append(str(sm.content) if sm else "")
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(decision_req, _capture_dec)  # type: ignore[arg-type]
+        assert captured_dec, "call_next never observed the request"
+        # Decision prompt → dreams wrapper invoked despite neutral default.
+        assert "You appear to be stuck" in captured_dec[-1]
+        assert "Additional context" not in captured_dec[-1]
+
+    async def test_middleware_ignores_prompt_when_routing_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify routing is fully bypassed when the knob is off.
+
+        When ``use_prompt_routing=False`` (default), the prompt is
+        NEVER classified — the configured style always applies.
+        """
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        dreams_dir = lc_mod.agent_state_dir("eta") / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        (dreams_dir / "00000000000001-fixture.md").write_text(
+            "---\ntitle: fixture\n---\n\n### fixture\n\nA short observation.\n",
+            encoding="utf-8",
+        )
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="eta", imagination=5.0, consecutive_tool_failures=5
+        )
+        lc_mod.save_snapshot(snap)
+
+        cfg = ImaginationConfig(
+            enabled=True,
+            trigger_after_failures=3,
+            min_imagination_trait=1.0,
+            injection_style="neutral",
+            use_prompt_routing=False,  # disabled
+        )
+        mw = ImaginationMiddleware(agent_id="eta", cfg=cfg)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="OK.")
+
+        # Decision-shaped prompt — but routing is OFF, so wrapper stays
+        # neutral.
+        req = ModelRequest(
+            model=_Stub(),
+            system_message=SystemMessage(content="base"),
+            messages=[HumanMessage(content="Which approach should I take?")],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+        captured: list[str] = []
+
+        async def _capture(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            captured.append(str(sm.content) if sm else "")
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(req, _capture)  # type: ignore[arg-type]
+        assert "Additional context" in captured[-1]
+        assert "You appear to be stuck" not in captured[-1]
 
 
 # ---------------------------------------------------------------------------

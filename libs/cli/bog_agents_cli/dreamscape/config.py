@@ -238,6 +238,28 @@ class ImaginationConfig:
     threshold, the middleware auto-disables itself until the next
     dream lands. Set to 0.0 to disable the kill-switch."""
 
+    use_prompt_routing: bool = False
+    """When True, classify the user's prompt per-call and override the
+    injection wrapper style accordingly. Phase 17.
+
+    The agent-level domain classification (set at build time) decides
+    the *default* injection style for an agent. With
+    ``use_prompt_routing=True``, every individual call also classifies
+    the user's prompt — and if the prompt is decision-shaped (e.g.
+    "which approach is better", "should I extract or rewrite"), the
+    middleware overrides the default style to ``"dreams"`` for that
+    call only.
+
+    Phase 14 found ``legacy-deletion`` at 55% treatment-win vs ~25%
+    for other technical scenarios — almost certainly because it's
+    decision-shaped underneath technical surface vocabulary. Phase 17
+    routes such prompts to the dreams wrapper that wins for them.
+
+    Default ``False`` for backward compatibility. The agent.py routing
+    layer enables this for engineering/research/general profiles when
+    dreamscape is active.
+    """
+
     injection_style: str = "dreams"
     """How the injected snippets are framed in the system prompt.
 

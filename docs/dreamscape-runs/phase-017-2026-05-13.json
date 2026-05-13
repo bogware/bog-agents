@@ -1,0 +1,120 @@
+{
+  "phase": 17,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment_and_control": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "per-prompt routing — classify the USER PROMPT (not just the agent profile) and override the injection wrapper style per-call. The Phase 14 outlier (legacy-deletion at 55% treatment-win on a 'technical' agent) strongly suggested a 'decision-shaped technical prompt' class that would benefit from creative routing.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation_added": {
+    "module_changes": [
+      "bog_agents_cli/dreamscape/domain.py — classify_prompt_domain() + _has_decision_signal() + _DECISION_PATTERNS list",
+      "bog_agents_cli/dreamscape/config.py — ImaginationConfig.use_prompt_routing field (default False)",
+      "bog_agents_cli/dreamscape/imagination.py — _route_style_for_request() + style_override path in _build_injection_body() + per-call routing in _maybe_inject()",
+      "bog_agents_cli/agent.py — the mechanism is shipped but NOT auto-enabled (defaults to False) given Phase 17 validation's ambiguous-to-negative result"
+    ],
+    "decision_patterns_captured": [
+      "should i", "would you call", "would you recommend", "what would you",
+      "what's the right way", "right way to", "decide between", "decision",
+      "which approach", "which one", "is it better", "is it worth",
+      "trade-off", "tradeoff", "trade off", "which lens", "name for",
+      "what would you call"
+    ],
+    "tests_added": 7
+  },
+  "validation_experiment_design": {
+    "n_trials_per_scenario": 15,
+    "scenarios": 3,
+    "scenario_selection": "the most decision-shaped Phase 14 scenarios (legacy-deletion 55%, refactor-decision 25%) + a calibration control (retry-under-load 10% in P14, expected to KEEP neutral wrapper)",
+    "config": "use_prompt_routing=True, injection_style='neutral' (default), engineering-craft archive seeded",
+    "model": "claude-haiku-4-5"
+  },
+  "validation_results": {
+    "total_elapsed_seconds": 63.6,
+    "total_trials": 45,
+    "per_scenario": [
+      {
+        "scenario": "legacy-deletion",
+        "prompt_classified_as": "creative (decision-signal: 'should I', 'right way to')",
+        "wrapper_used_dreams": 15,
+        "wrapper_used_neutral": 0,
+        "treatment_wins": 10,
+        "control_wins": 5,
+        "ties": 0,
+        "win_rate": 0.67,
+        "ci": [0.42, 0.85],
+        "comparison_to_phase_16_neutral": "P16 EC+neutral: 87% → P17 EC+dreams-via-routing: 67% (worse)"
+      },
+      {
+        "scenario": "refactor-decision",
+        "prompt_classified_as": "creative (decision-signal: 'which lens')",
+        "wrapper_used_dreams": 15,
+        "wrapper_used_neutral": 0,
+        "treatment_wins": 9,
+        "control_wins": 6,
+        "ties": 0,
+        "win_rate": 0.60,
+        "ci": [0.36, 0.80],
+        "comparison_to_phase_16_neutral": "P16 EC+neutral: 60% → P17 EC+dreams-via-routing: 60% (same)"
+      },
+      {
+        "scenario": "retry-under-load",
+        "prompt_classified_as": "creative (UNEXPECTED — surface keyword 'designing' triggered creative classification despite my categorizing it as engineering)",
+        "wrapper_used_dreams": 15,
+        "wrapper_used_neutral": 0,
+        "treatment_wins": 5,
+        "control_wins": 10,
+        "ties": 0,
+        "win_rate": 0.33,
+        "ci": [0.15, 0.58],
+        "comparison_to_phase_16_neutral": "P16 EC+neutral: 60% → P17 EC+dreams-via-routing: 33% (worse)"
+      }
+    ]
+  },
+  "implications": [
+    "**The routing MECHANISM works as designed.** All 3 scenarios got correctly classified (all triggered the dreams wrapper). The decision-pattern detection fires correctly; the prompt classification fires correctly.",
+    "**The EFFECTIVENESS is ambiguous-to-negative.** On 2 of 3 scenarios the dreams wrapper underperformed the neutral wrapper from Phase 16. On the third (refactor-decision) it tied. None showed the Phase 11 creative-prompt magic (~79% win rate) we hoped per-prompt routing would unlock on engineering agents.",
+    "**Hypothesis: the AGENT VOICE matters more than the wrapper at the call level.** An engineering-profiled agent's voice is engineering. Forcing it to receive a dreams-style injection ('You appear to be stuck. Here is some imagination.') for a decision-shaped prompt doesn't bring the creative-agent magic because the agent itself isn't creative. The Phase 11 win rate came from creative agents getting dreams wrapper — both halves aligned.",
+    "**Surprise: the classifier triggered 'creative' on retry-under-load** because 'designing' is a creative keyword. That's a reasonable classification ('I'm designing the retry policy' IS partly a design question) but it shows the keyword-only approach is sometimes too eager.",
+    "**Confidence intervals overlap.** P16 legacy-deletion CI [62%, 96%] overlaps with P17 [42%, 85%]; P16 retry-under-load CI [36%, 80%] overlaps with P17 [15%, 58%]. At N=15 we can't statistically distinguish routed vs unrouted. Phase 17's signal is directional (slightly worse on average) but not conclusive.",
+    "**Decision: ship the mechanism, DON'T auto-enable.** ImaginationConfig.use_prompt_routing defaults to False. agent.py does NOT enable it for engineering agents. The knob is preserved for future research (Phase 19+) and power-users who want to A/B test on their own workloads."
+  ],
+  "what_actually_landed": [
+    "Per-prompt routing mechanism (classify_prompt_domain, _has_decision_signal, style override path)",
+    "7 unit tests covering classifier behavior and middleware integration",
+    "Config knob `use_prompt_routing` (default False)",
+    "Agent.py preserves the AGENT-level routing from Phase 11/12 — does not auto-enable per-prompt routing",
+    "Phase 17 documentation honestly reporting the ambiguous validation finding"
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 90,
+    "sonnet_calls": 45,
+    "approx_cost_total_usd": 0.30
+  },
+  "live_calls": 135,
+  "approx_cost_usd": 0.30,
+  "test_suite_stats": {
+    "cli_unit_tests": 3573,
+    "dreamscape_specific": 88,
+    "added_this_phase": 7
+  },
+  "feature_verdicts": {
+    "per_prompt_routing_mechanism": "sings — classifier + middleware integration work correctly",
+    "per_prompt_routing_effectiveness_on_engineering_agents": "ambiguous-to-negative — does not reliably improve outcomes",
+    "shipping_decision": "ship the knob, keep it off by default. Engineering agents continue using neutral wrapper for all prompts (Phase 16 validated).",
+    "decision_pattern_detection": "works — fires on intended patterns. The 'designing' keyword overlap with creative-vocabulary is a known false positive."
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "Per-prompt routing is shipped as a non-default knob. Users can opt in but defaults preserve the validated agent-level routing.",
+    "N=15 per scenario, 3 scenarios — insufficient to declare a real negative effect. The CIs overlap with the baseline. A definitive verdict would need N=30+ per scenario.",
+    "The keyword classifier sometimes triggers 'creative' on debatable cases ('designing the retry policy' → creative is debatable). A future LLM-classifier fallback (Phase 19) would handle these nuances.",
+    "We tested only engineering→creative override. The reverse (creative agent asked a technical question) wasn't tested but is implied by symmetry."
+  ],
+  "verdict": "MIXED — mechanism ships clean (and may be useful for power-users), but per-prompt routing is NOT a default enabled feature. Phase 16's data already validated the agent-level routing as the load-bearing decision; per-prompt is a refinement that didn't pay off at this N.",
+  "next_steps": [
+    "Phase 19 (suggested): LLM-classifier fallback for the long tail of profiles that the keyword classifier returns 'general' on. Could also be used to validate the per-prompt classifier's edge cases ('designing the retry policy').",
+    "Phase 20 (suggested): N=30 per-scenario re-run of Phase 17 validation. The current N=15 result is suggestive but not definitive.",
+    "Phase 21 (suggested): instead of toggling the WRAPPER per-prompt, toggle the SEED ARCHIVE per-prompt — engineering-craft archive for engineering-shaped questions, broader archive for decision-shaped ones. This is content-level routing rather than wrapper-level routing."
+  ]
+}

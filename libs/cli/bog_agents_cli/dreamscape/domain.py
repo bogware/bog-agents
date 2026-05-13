@@ -292,6 +292,83 @@ def classify_agent_domain(profile: str) -> Domain:
 
 
 # ---------------------------------------------------------------------------
+# Phase 17 — per-prompt classification
+# ---------------------------------------------------------------------------
+
+# A user prompt can have engineering surface vocabulary but be
+# decision-shaped underneath ("should I extract subclasses or rewrite
+# behind a feature flag?" reads as engineering but is a judgment
+# question that benefits from creative routing). Phase 14 showed
+# `legacy-deletion` at 55% treatment-win vs ~25% for the other
+# technical scenarios — almost certainly because it's decision-shaped.
+# This pattern set catches the lexical signal.
+
+_DECISION_PATTERNS: tuple[str, ...] = (
+    "should i",
+    "would you call",
+    "would you recommend",
+    "what would you",
+    "what's the right way",
+    "what is the right way",
+    "right way to",
+    "decide between",
+    "decision",
+    "which approach",
+    "which one",
+    "is it better",
+    "is it worth",
+    "trade-off",
+    "tradeoff",
+    "trade off",
+    "which lens",
+    "name for",
+    "what would you call",
+)
+
+
+def _has_decision_signal(prompt: str) -> bool:
+    """Detect 'decision-shaped' phrasing in a user prompt.
+
+    Returns True if any pattern from ``_DECISION_PATTERNS`` is a
+    substring of the prompt (case-insensitive). The signal is
+    deliberately conservative — overlapping rather than alternative
+    interpretations of the same prompt.
+    """
+    if not prompt:
+        return False
+    text = prompt.lower()
+    return any(pat in text for pat in _DECISION_PATTERNS)
+
+
+def classify_prompt_domain(prompt: str) -> Domain:
+    """Classify a user PROMPT (not a system prompt).
+
+    Reuses the agent-profile classifier vocabulary, then applies a
+    decision-signal override: prompts asking "what should I" or
+    "which approach" benefit from creative routing even when their
+    surface vocabulary is technical.
+
+    Phase 17 hypothesis: this per-prompt routing fixes the
+    ``legacy-deletion`` Phase 14 outlier — a technical-classified
+    scenario whose 55% treatment-win rate strongly hints it's
+    actually decision-shaped.
+
+    Args:
+        prompt: The user's prompt text. Empty input → ``"general"``.
+
+    Returns:
+        ``"engineering" | "creative" | "research" | "general"``.
+        Specifically: ``"creative"`` if a decision-signal is present
+        AND the base classification is engineering or general; the
+        base classification otherwise.
+    """
+    base = classify_agent_domain(prompt)
+    if _has_decision_signal(prompt) and base in ("engineering", "general"):
+        return "creative"
+    return base
+
+
+# ---------------------------------------------------------------------------
 # Domain → seed-category preferences
 # ---------------------------------------------------------------------------
 

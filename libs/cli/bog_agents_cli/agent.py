@@ -323,6 +323,18 @@ def _attach_dreamscape_middleware(
             # on technical-debugging prompts); creative agents get the
             # original dreams wrapper (Phase 11 showed it's a feature
             # there, 6/7 treatment wins).
+            #
+            # Phase 17 — the per-prompt routing mechanism is shipped
+            # (use_prompt_routing in ImaginationConfig) but is NOT
+            # enabled by default. Phase 17's N=45 validation showed
+            # that forcing the dreams wrapper on engineering agents
+            # via decision-pattern detection did not reliably improve
+            # outcomes (legacy-deletion 87% with neutral dropped to
+            # 67% with prompt-routed dreams; retry-under-load 60%
+            # dropped to 33%). The mechanism is preserved as a knob
+            # for future experiments and for power-users who can A/B
+            # test it on their workloads. The default keeps the
+            # agent-level routing only.
             domain = resolve_agent_domain(safe_id)
             preferred_style = recommended_injection_style(domain)
             effective_cfg = dc_replace(cfg.imagination, injection_style=preferred_style)

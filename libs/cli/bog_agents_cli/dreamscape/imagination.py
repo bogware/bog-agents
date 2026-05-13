@@ -160,7 +160,9 @@ class ImaginationMiddleware(AgentMiddleware):
                 return False
         return True
 
-    def _build_injection_body(self, excerpts: list[str]) -> str:
+    def _build_injection_body(
+        self, excerpts: list[str], *, style_override: str | None = None
+    ) -> str:
         """Render the dream-excerpt block in the configured style.
 
         Two styles supported via ``ImaginationConfig.injection_style``:
@@ -172,8 +174,16 @@ class ImaginationMiddleware(AgentMiddleware):
           becomes *"## Additional context"*; excerpts are labeled
           *"Observation N."* and *"Tonight I dreamed of"* prefixes
           are removed. Phase 12 ablation.
+
+        Args:
+            excerpts: Dream excerpts to render.
+            style_override: Phase 17 — when set, overrides
+                ``cfg.injection_style`` for this single call. Used by
+                ``_maybe_inject`` when per-prompt routing detects a
+                decision-shaped prompt and wants to force the dreams
+                wrapper.
         """
-        style = getattr(self._cfg, "injection_style", "dreams")
+        style = style_override or getattr(self._cfg, "injection_style", "dreams")
         if style == "neutral":
             body_parts = [_NEUTRAL_INJECTION_HEADER, "", _NEUTRAL_INJECTION_PREFACE, ""]
             label = "Observation"
@@ -187,6 +197,51 @@ class ImaginationMiddleware(AgentMiddleware):
             body_parts.append("")
         return "\n".join(body_parts)
 
+    def _route_style_for_request(self, request: ModelRequest) -> str | None:
+        """Phase 17 — pick the wrapper style for this specific request.
+
+        Returns ``None`` when per-prompt routing is off (caller falls
+        back to ``cfg.injection_style``). Returns ``"dreams"`` or
+        ``"neutral"`` when the prompt classification implies an
+        override.
+        """
+        if not getattr(self._cfg, "use_prompt_routing", False):
+            return None
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from bog_agents_cli.dreamscape.domain import (
+                classify_prompt_domain,
+                recommended_injection_style,
+            )
+
+            # Pull the latest human message from the request.
+            last_human: str = ""
+            for msg in reversed(getattr(request, "messages", []) or []):
+                if isinstance(msg, HumanMessage):
+                    content = getattr(msg, "content", "")
+                    if isinstance(content, str):
+                        last_human = content
+                    elif isinstance(content, list):
+                        # content-blocks form — concat text parts.
+                        parts: list[str] = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                parts.append(str(block.get("text", "")))
+                        last_human = "\n".join(parts)
+                    if last_human:
+                        break
+
+            if not last_human:
+                return None
+            prompt_domain = classify_prompt_domain(last_human)
+            return recommended_injection_style(prompt_domain)
+        except Exception:  # pragma: no cover — observability path
+            logger.debug(
+                "ImaginationMiddleware: per-prompt routing failed", exc_info=True
+            )
+            return None
+
     def _maybe_inject(self, request: ModelRequest) -> ModelRequest:
         try:
             if not self._should_inject():
@@ -197,7 +252,8 @@ class ImaginationMiddleware(AgentMiddleware):
             )
             if not excerpts:
                 return request
-            body = self._build_injection_body(excerpts)
+            style_override = self._route_style_for_request(request)
+            body = self._build_injection_body(excerpts, style_override=style_override)
 
             from bog_agents.middleware._utils import append_to_system_message
 
