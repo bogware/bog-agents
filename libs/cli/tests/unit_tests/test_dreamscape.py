@@ -719,6 +719,37 @@ class TestDreamSeeds:
                 f"category {cat!r} has {len(entries)} entries; need >= 10"
             )
 
+    def test_engineering_craft_category_present_and_curated(self) -> None:
+        """Phase 15 adds an ``engineering-craft`` category.
+
+        Pins it to ``>= 15`` entries so a future edit can't accidentally
+        regress the library below the size Phase 15 validated against.
+        """
+        from bog_agents_cli.dreamscape.seeds import _SEEDS, list_categories
+
+        assert "engineering-craft" in list_categories()
+        eng_craft = _SEEDS["engineering-craft"]
+        assert len(eng_craft) >= 15, (
+            f"engineering-craft has {len(eng_craft)} entries; Phase 15 validated >= 15"
+        )
+        # No "Tonight I dreamed of" prefix — these are observation-shaped
+        # seeds, not pre-titled dreams.
+        assert not any(s.lower().startswith("tonight i dreamed") for s in eng_craft)
+
+    def test_engineering_domain_prefers_engineering_craft_first(self) -> None:
+        """Pin the Phase 15 engineering preference order.
+
+        Engineering-craft must lead over computing-history in the
+        engineering domain's seed preferences.
+        """
+        from bog_agents_cli.dreamscape.domain import preferred_seed_categories
+        from bog_agents_cli.dreamscape.seeds import list_categories
+
+        prefs = preferred_seed_categories("engineering", available=list_categories())
+        assert prefs[0] == "engineering-craft"
+        assert "computing-history" in prefs
+        assert prefs.index("engineering-craft") < prefs.index("computing-history")
+
     def test_library_entries_are_unique_within_category(self) -> None:
         """Each category's snippets are distinct.
 

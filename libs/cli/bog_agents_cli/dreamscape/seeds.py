@@ -85,6 +85,27 @@ _SEEDS: Final[dict[str, tuple[str, ...]]] = {
         "Mel Kaye writing the unreadable real-time assembly of the Royal McBee LGP-30, single-stepping through interrupts on a drum.",
         "Ken Thompson and Dennis Ritchie inventing Unix on a cast-off PDP-7 because nobody would let them use the new machine.",
     ),
+    "engineering-craft": (
+        # Added in Phase 15 — software-engineering-specific seeds for
+        # engineering-classified agents. Not historical figures; the
+        # texture is the everyday craft of debugging, refactoring,
+        # and the long tail of "this has been wrong for years."
+        "The 3am page where the on-call engineer found the bug had been live for six years.",
+        "The git bisect that ended at the merge commit whose author had left the company.",
+        "The assertion that fired only at midnight UTC, only on Fridays, only after a daylight-savings transition.",
+        "The off-by-one in the parser that everyone agreed was a feature.",
+        "The retry policy that worked perfectly for three years, until the downstream API added a 429 response code.",
+        "The cache hit that was actually a cache miss because the key contained a NaN.",
+        "The deprecated API still in production six years after EOL, quietly holding up everything that replaced it.",
+        "The unit test that passed locally and on CI but failed in prod because prod's NTP was 47 seconds off.",
+        "The dependency that worked because its bugs canceled the bugs in the library it wrapped.",
+        "The performance regression that traced back to a benchmark harness which was itself the bottleneck.",
+        "The feature flag that was meant to be temporary in 2017 and is now load-bearing.",
+        "The migration script that ran perfectly in staging and had to be re-run in prod because staging's DB used a different collation.",
+        "The integration test suite that quietly stopped running for eighteen months because someone renamed the make target.",
+        "The log line added 'just for this one debug session' that is now shipped to a third-party SIEM.",
+        "The TODO comment from 2014 that was wrong then and is wrong now in the exact opposite way.",
+    ),
 }
 
 

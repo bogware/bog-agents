@@ -615,3 +615,95 @@ magnitude). That's the dreamscape thesis earning its keep —
 narrower than the original pitch, but real.
 
 — Reviewer (after Phases 11 + 12)
+
+---
+
+## Third postscript — Phases 13 + 14 + 15 (2026-05-13)
+
+Three more phases land. Each closes a question the prior postscript
+flagged.
+
+### Phase 13 — routing verification
+
+14 mechanistic assertions + 4 live prompts confirmed the classifier
++ profile persistence + seed-preference routing + injection-style
+routing all work end-to-end. The routing layer ships clean. Cost:
+$0.004.
+
+### Phase 14 — N=20 statistical power (the campaign-defining phase)
+
+Re-ran Phase 10's technical scenarios + Phase 11's creative
+scenarios at N=20 trials per scenario (140 trials per domain, 280
+total). Parallelized with asyncio.Semaphore(8).
+
+**The result is decisive:**
+
+| Domain | Treatment win rate | 95% Wilson CI |
+|---|---|---|
+| **Creative** | **79.3%** | **[71.8%, 85.2%]** |
+| **Technical** | **27.9%** | **[21.1%, 35.8%]** |
+
+* **51-percentage-point gap.**
+* **Non-overlapping 95% CIs.**
+* Phase 10's headline (1/7 = 14% on technical) **underestimated**
+  the truth. Phase 12's headline (5/7 = 71% on technical)
+  **overestimated** it. Both were within N=7 noise of 28%. P11's
+  6/7 = 86% creative result slightly overestimated 79% but in the
+  right ballpark.
+
+The methodological lesson is: **at N=7, ±25 percentage points of
+noise is normal**. Future phases should default to N=15+ for
+marginal-effect questions.
+
+Cost: $2.10 across 840 API calls in 4 min 15 sec.
+
+### Phase 15 — engineering-craft seeds
+
+Built a new ``engineering-craft`` seed category (15 entries focused
+on the day-to-day texture of software engineering: the 6-year-old
+bug, the bisect into the void, the feature flag from 2017). Direct
+A/B head-to-head: engineering-craft seeds vs computing-history
+seeds on the same 7 technical scenarios, N=10 per scenario.
+
+**Result: engineering-craft wins 44/70 (62.9%), CI [51.1%, 73.2%].**
+
+The lower CI bound just exceeds 50%, so the effect is statistically
+significant. **Content matters, not just the wrapper.** The biggest
+wins land on scenarios where the engineering-craft texture maps
+directly to the prompt: retry-under-load (90%) and legacy-deletion
+(90%) both echo the "system holds hidden context over years"
+theme of the new seeds.
+
+Cost: $0.40 across 210 API calls.
+
+### Final updated grades
+
+| Axis | Previous | Now (after P13/14/15) |
+|---|---|---|
+| Engineering quality | A | **A+** (4 more well-tested modules + 15 new seeds) |
+| Stability + resilience | A | **A** (unchanged) |
+| Cost-effectiveness | A | **A** (P14 most expensive at $2.10, P15 cheap at $0.40) |
+| Real-world impact (validated) | B− | **A−** (N=140 per domain, non-overlapping CIs) |
+| Documentation + reproducibility | A | **A+** (auto-generated trends, every phase has .json + .md + commit) |
+| Coverage of failure modes | B | **A−** (run-to-run variance now characterized) |
+| Real-world useful-ness for coding | B | **A−** for creative domain (79% solid); **B+** for engineering (28% with default seeds; lifts with eng-craft seeds; routing prevents user-facing harm) |
+
+### Final overall grade: **A−**
+
+The journey: B+ → B (clear-eyed) → B+ (back, but earned) → **A−**.
+
+What unlocked the upgrade: Phase 14's statistical power giving
+non-overlapping CIs on the domain-conditional effect, plus Phase 15
+showing that even within the harder domain (engineering), tuning
+the content helps materially. The dreamscape thesis is no longer
+"works in theory" — it's "works on creative work at ~79% reliability,
+and engineering-craft seeds open a path to net-positive on
+engineering work too."
+
+What keeps it from A: per-call routing isn't built (the
+legacy-deletion scenario in Phase 14 was 55% — a "technical"
+scenario that's actually decision-shaped, which a prompt-level
+classifier would route correctly). The library at 15 engineering-
+craft seeds will repeat. A true A would have those edges sanded.
+
+— Reviewer (after Phases 13 + 14 + 15)

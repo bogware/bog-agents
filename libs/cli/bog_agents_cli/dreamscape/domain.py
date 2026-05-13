@@ -304,9 +304,14 @@ def classify_agent_domain(profile: str) -> Domain:
 
 _DOMAIN_SEED_PREFERENCES: dict[Domain, tuple[str, ...]] = {
     "engineering": (
-        "computing-history",  # primary — these resonate with engineers
-        "history",  # secondary — engineering's longer tail
-        "space",  # tertiary — large-scale systems metaphor
+        # engineering-craft (added Phase 15) leads — the day-to-day
+        # "bug live for six years" texture resonates with engineering
+        # work in a way the historical figures don't. computing-history
+        # stays as the secondary mix.
+        "engineering-craft",  # primary — Phase 15 seeds
+        "computing-history",  # secondary — Hopper, Hamilton, Engelbart
+        "history",  # tertiary — engineering's longer arc
+        "space",  # quaternary — large-scale-systems metaphor
         # "myth", "nature" are intentionally de-emphasized
     ),
     "creative": (
@@ -319,6 +324,7 @@ _DOMAIN_SEED_PREFERENCES: dict[Domain, tuple[str, ...]] = {
     "research": (
         "history",  # primary — research has long memory
         "computing-history",
+        "engineering-craft",  # secondary — research is craft-adjacent
         "space",
         "nature",
     ),

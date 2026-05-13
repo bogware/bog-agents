@@ -1,0 +1,69 @@
+{
+  "phase": 13,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "routing verification — confirm the dreamscape/domain.py classifier + injection-style routing + seed-preference routing all work end-to-end against a real engineering-profiled agent.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "part_1": "mechanistic — 14 assertions covering classification, persistence, seed preferences, and injection style mapping for engineering / creative / research / general / empty / unknown profiles. No LLM cost.",
+    "part_2": "small live check — 4 prompts (2 technical + 2 creative) routed through an engineering-classified agent. Verify the injection wrapper is neutral (not dreams) on every call.",
+    "model": "claude-haiku-4-5"
+  },
+  "results": {
+    "part_1_mechanistic": {
+      "classifier_engineering": "engineering",
+      "classifier_creative": "creative",
+      "classifier_empty": "general",
+      "eng_agent_resolved_via_disk": "engineering",
+      "creative_agent_resolved_via_disk": "creative",
+      "unknown_agent_resolved_via_disk": "general",
+      "eng_preferred_seeds": ["computing-history", "history", "space"],
+      "creative_preferred_seeds": ["myth", "nature", "history", "space", "computing-history"],
+      "general_preferred_seeds": ["nature", "space", "history", "myth", "computing-history"],
+      "eng_style": "neutral",
+      "creative_style": "dreams",
+      "general_style": "neutral",
+      "research_style": "neutral",
+      "eng_profile_preserved": true,
+      "all_assertions_passed": true
+    },
+    "part_2_live_routing": {
+      "prompts_tested": 4,
+      "all_used_neutral_wrapper": true,
+      "all_had_neutral_header": true,
+      "none_had_dreams_header": true,
+      "none_had_fragment_label": true,
+      "all_had_observation_label": true,
+      "none_leaked_dream_prefix": true
+    }
+  },
+  "qualitative_notes": [
+    "Engineering-classified agent produced direct, tool-naming responses on the 2 creative prompts. The neutral wrapper did not catastrophically hurt creative output — but the Phase 14 N=140 result shows the trade-off: an engineering-classified agent's creative-prompt responses won't get the 79% treatment-win lift that a creative-classified agent gets.",
+    "Routing layer is correct end-to-end: classifier → persistence → seed preferences → injection style → middleware all produce expected outputs at every step.",
+    "Cost was negligible (~$0.004 for 4 live calls). The mechanistic part is free; that's the design goal."
+  ],
+  "live_calls": 4,
+  "approx_cost_usd": 0.004,
+  "test_suite_stats": {
+    "cli_unit_tests": 3564,
+    "dreamscape_specific": 79,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "domain_classifier": "sings — 14/14 assertions pass",
+    "agent_profile_persistence": "sings — round-trips through disk",
+    "seed_category_routing": "sings — engineering correctly prefers computing-history",
+    "injection_style_routing": "sings — engineering correctly gets neutral wrapper end-to-end",
+    "creative_routing_isolation": "verified — creative-prompt output from engineering agent is still usable (not catastrophic), but doesn't earn the Phase 11 / 14 treatment-win lift"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "An engineering-classified agent loses the Phase 11/14 creative-prompt lift. The trade-off is intentional — most agents focus on one domain — but agents that genuinely span domains would benefit from per-call routing.",
+    "Live check is N=4 prompts (1 per scenario); Phase 14 has the proper statistical power. P13 is a routing smoke test, not an effectiveness measurement."
+  ],
+  "verdict": "READY TO MERGE — routing layer ships correctly.",
+  "next_steps": [
+    "Phase 14 (now complete) gives proper statistical power on the treatment effect.",
+    "Phase 15 (running) tests engineering-craft seeds vs computing-history seeds."
+  ]
+}
