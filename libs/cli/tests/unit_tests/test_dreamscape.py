@@ -907,6 +907,148 @@ class TestImaginationGating:
 
 
 # ---------------------------------------------------------------------------
+# Standalone dreamscape runner (Phase 7)
+# ---------------------------------------------------------------------------
+
+
+class TestDreamscapeRunner:
+    """Unit tests for the standalone `python -m bog_agents_cli.dreamscape.runner`.
+
+    The runner is the daemon-style entrypoint: it owns a single
+    ``DreamScheduler`` for one ``agent_id``, runs until SIGINT/SIGTERM
+    or a configured duration. Cross-process state continuity (the
+    actual "survives process death" property) is durable via the
+    on-disk snapshot — these tests verify the runner correctly resumes
+    that state instead of stomping it.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        from bog_agents_cli.dreamscape import scheduler as sched_mod
+
+        sched_mod.clear_registry()
+
+    def test_arg_parser_accepts_minimum_flags(self) -> None:
+        from bog_agents_cli.dreamscape.runner import _parse_args
+
+        ns = _parse_args(["--agent-id", "alpha"])
+        assert ns.agent_id == "alpha"
+        assert ns.poll_seconds == 60.0
+        assert ns.dormancy_after_seconds == 1800
+        assert ns.dreaming_after_dormant_seconds == 600
+        assert ns.duration_seconds is None
+
+    def test_arg_parser_threads_overrides(self) -> None:
+        from bog_agents_cli.dreamscape.runner import _parse_args
+
+        ns = _parse_args(
+            [
+                "--agent-id",
+                "beta",
+                "--poll-seconds",
+                "1",
+                "--dormancy-after-seconds",
+                "3",
+                "--dreaming-after-dormant-seconds",
+                "2",
+                "--duration-seconds",
+                "5",
+            ]
+        )
+        assert ns.poll_seconds == 1.0
+        assert ns.dormancy_after_seconds == 3
+        assert ns.dreaming_after_dormant_seconds == 2
+        assert ns.duration_seconds == 5.0
+
+    async def test_resumes_existing_snapshot_without_resetting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify the cross-process continuity invariant.
+
+        If a snapshot already exists for the agent_id, the runner must
+        NOT zero out the imagination trait.
+        """
+        import time as _time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod, runner as runner_mod
+
+        # Pre-write a snapshot as if a previous run left state behind.
+        prior = lc_mod.LifecycleSnapshot(
+            agent_id="gamma",
+            last_activity_at=_time.time() - 60.0,  # within the dormancy window
+            imagination=2.5,
+            total_dreams=7,
+        )
+        lc_mod.save_snapshot(prior)
+
+        # Patch _build_model to skip the network entirely.
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="### dream\n\nbody\n\n**Waking thought:**\nx")
+
+        monkeypatch.setattr(runner_mod, "_build_model", lambda _spec: _Stub())
+
+        # Run for a very short duration (no dreams should fire since
+        # we're inside the dormancy window — that's the point: we're
+        # testing snapshot preservation, not dream firing).
+        await runner_mod.run_forever(
+            agent_id="gamma",
+            model_spec="anthropic:fake",
+            poll_seconds=0.1,
+            dormancy_after_seconds=600,
+            dreaming_after_dormant_seconds=120,
+            duration_seconds=0.25,
+        )
+
+        after = lc_mod.load_snapshot("gamma")
+        # The imagination trait must be preserved (this is the
+        # regression assertion — runner_mod.run_forever must not
+        # overwrite an existing snapshot's imagination value).
+        assert after.imagination == 2.5
+        assert after.total_dreams == 7
+
+    async def test_seeds_fresh_snapshot_on_first_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify the fresh-start backdating.
+
+        When no snapshot exists, the runner seeds one with an old
+        last_activity_at so the first tick can immediately see DORMANT.
+        """
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod, runner as runner_mod
+
+        # No prior snapshot exists for "delta".
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="### dream\n\nbody\n\n**Waking thought:**\nx")
+
+        monkeypatch.setattr(runner_mod, "_build_model", lambda _spec: _Stub())
+
+        await runner_mod.run_forever(
+            agent_id="delta",
+            model_spec="anthropic:fake",
+            poll_seconds=0.05,
+            dormancy_after_seconds=2,
+            dreaming_after_dormant_seconds=1,
+            duration_seconds=0.2,
+        )
+
+        after = lc_mod.load_snapshot("delta")
+        # last_activity_at should be in the past, not the current moment
+        # — that's how the seeding logic enables immediate DORMANT.
+        import time as _time
+
+        assert after.last_activity_at > 0.0
+        assert after.last_activity_at < _time.time() - 1.0
+
+
+# ---------------------------------------------------------------------------
 # Slash-command wiring smoke test
 # ---------------------------------------------------------------------------
 
