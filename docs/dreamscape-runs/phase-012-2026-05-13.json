@@ -1,0 +1,89 @@
+{
+  "phase": 12,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment_and_control": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "metaphor-wrapper ablation — same 7 technical-debugging scenarios as Phase 10, but a 3-arm experiment: control vs current 'dreams' wrapper vs new 'neutral' wrapper.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation_added": {
+    "config": "ImaginationConfig.injection_style: Literal['dreams', 'neutral']",
+    "default": "'dreams' — preserves backward compatibility",
+    "behavior_dreams": "header='## You appear to be stuck. Here is some imagination.', preface mentions 'dreams', items labelled 'Fragment N', 'Tonight I dreamed of' titles preserved",
+    "behavior_neutral": "header='## Additional context', preface neutral, items labelled 'Observation N', 'Tonight I dreamed of' prefixes stripped via _strip_dream_prefix",
+    "1_new_unit_test": "TestImaginationGating::test_neutral_injection_style_strips_dream_framing"
+  },
+  "experiment_design": {
+    "scenarios": 7,
+    "scenario_types": "same 7 technical-debugging scenarios as Phase 10 (chmod permission-denied, Python memory creep, flaky-CI test, slow prod query, refactor decision, retry-under-load, legacy-code deletion)",
+    "arms": ["control (no injection)", "dreams (current wrapper)", "neutral (stripped wrapper)"],
+    "judge_comparisons": "Two head-to-head judgments per scenario: Control vs Dreams, and Control vs Neutral. Did not directly judge Dreams vs Neutral.",
+    "rng_seed": 20260515,
+    "blinding": "response order randomized per comparison via the seeded RNG"
+  },
+  "results": {
+    "scenarios_run": 7,
+    "control_vs_dreams_treatment": {"control_wins": 2, "treatment_wins": 5, "ties": 0},
+    "control_vs_neutral_treatment": {"control_wins": 3, "treatment_wins": 4, "ties": 0},
+    "elapsed_seconds": 99.3,
+    "verdict_summary": "Both treatment arms beat control more often than not on the same scenario set Phase 10 had control winning 6/7. The neutral wrapper is not decisively better than dreams. The most-important finding is the variance: Phase 10 said treatment-with-dreams wins 1/7, Phase 12 same scenarios said treatment-with-dreams wins 5/7."
+  },
+  "per_scenario_judgments": [
+    {"scenario": "permission-denied-chmod", "c_vs_d": "treatment", "c_vs_n": "treatment"},
+    {"scenario": "python-memory-creep", "c_vs_d": "control", "c_vs_n": "control"},
+    {"scenario": "flaky-test-ci-only", "c_vs_d": "treatment", "c_vs_n": "treatment"},
+    {"scenario": "slow-prod-query", "c_vs_d": "treatment", "c_vs_n": "treatment"},
+    {"scenario": "refactor-decision", "c_vs_d": "treatment", "c_vs_n": "control"},
+    {"scenario": "retry-under-load", "c_vs_d": "control", "c_vs_n": "control"},
+    {"scenario": "legacy-deletion", "c_vs_d": "treatment", "c_vs_n": "treatment"}
+  ],
+  "implications": [
+    "**Phase 10 vs Phase 12 reveals substantial run-to-run variance.** Same scenarios, same wrapper, opposite outcomes: P10 had control winning 6/7 against dreams, P12 has dreams winning 5/7. The TRUE effect size on technical-debugging prompts is much smaller than P10 headlines suggested.",
+    "The neutral wrapper is not decisively better than the dreams wrapper on technical prompts (4 vs 5 wins). Stripping the metaphor doesn't fix anything important.",
+    "Phase 11's 6/7 creative-prompt result is sturdier — the larger margin survives across runs, and the consistency of the judge's reasoning (rewarding evocative reframes) is the real signal.",
+    "Lesson: at N=7 with stochastic LLMs and a stochastic judge, ±2 wins of noise is normal. Phase 10's headline was correct DIRECTIONALLY (treatment is weaker on technical) but its magnitude was overstated.",
+    "Recommendation: in the context-aware design that ships in this commit, use the neutral wrapper for engineering/research/general agents not because it's clearly better but because it's at least not WORSE and it removes a known irritant ('Fragment from your dreams' framing). Use the dreams wrapper for creative agents because Phase 11 evidence is strong."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 21,
+    "sonnet_calls": 14,
+    "approx_cost_haiku_usd": 0.020,
+    "approx_cost_sonnet_usd": 0.050,
+    "approx_cost_total_usd": 0.070
+  },
+  "live_calls": 35,
+  "approx_cost_usd": 0.070,
+  "test_suite_stats": {
+    "cli_unit_tests": 3553,
+    "dreamscape_specific": 68,
+    "added_this_phase": 1
+  },
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "dream_scheduler": "sings",
+    "imagination_injection_mechanism": "sings",
+    "imagination_injection_dreams_style": "noisy on technical prompts — Phase 10 said -, Phase 12 said +",
+    "imagination_injection_neutral_style": "roughly equivalent to dreams on technical prompts; preserves the option to ship",
+    "cross_agent_shared_memory": "sings",
+    "constitution_log_surfacing": "sings",
+    "seed_library_size": "sings",
+    "daily_dream_cap": "works",
+    "lifecycle_state_machine": "works",
+    "laws_hard_rejects": "works",
+    "constitution_soft_logging": "works",
+    "agent_state_dashboard": "works",
+    "repo_overview": "works",
+    "opt_in_defaults": "ironclad"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "singular-vs-plural stem matching (Phase 2)",
+    "scheduler self-restart uses recursive coroutine (Phase 3)",
+    "N=7 is too small to distinguish a marginal effect from noise (this phase's main lesson)"
+  ],
+  "verdict": "MIXED — neutral wrapper does not materially improve outcomes, but it's the safer default for non-creative agents and ships clean.",
+  "next_steps": [
+    "Phase 13 (suggested): mixed-scenario set, single agent profile pinned engineering. Verify the new classifier routes correctly.",
+    "Phase 14 (suggested): N=30 per scenario class for proper statistical power."
+  ]
+}

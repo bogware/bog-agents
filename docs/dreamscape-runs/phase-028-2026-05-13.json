@@ -1,0 +1,77 @@
+{
+  "phase": 28,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "telemetry exporter — bundle per-agent telemetry from multiple agents into a single JSON file for cross-deployment analysis. Optional privacy mode strips metadata. The infrastructure unlocks future studies of real-user dreamscape behavior across deployments.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation": {
+    "module_changes": [
+      "bog_agents_cli/dreamscape/telemetry.py — list_agents_with_telemetry(), export_telemetry_bundle()",
+      "bog_agents_cli/app.py — /dreamscape export [path] [--no-metadata] subcommand handler",
+      "bog_agents_cli/commands/general.py — registered the export subcommand for autocomplete + help text"
+    ],
+    "public_api": [
+      "list_agents_with_telemetry() -> list[str]  # discover all agents with a telemetry log",
+      "export_telemetry_bundle(output_path, agent_ids=None, since=None, include_metadata=True) -> dict[str, Any]"
+    ],
+    "bundle_schema": {
+      "schema_version": 1,
+      "generated_at": "unix epoch seconds",
+      "since": "optional lower-bound timestamp",
+      "include_metadata": "bool — when False, events are bare {ts, kind, agent_id}",
+      "agents": "dict[agent_id, {events: [...], summary: {dreams_fired, injections_fired, helped_rate, ...}}]",
+      "summary": "{agent_count, total_events, total_dreams, total_injections, total_injections_helped}"
+    },
+    "privacy_mode": "include_metadata=False strips dream titles, injection styles, content categories — keeps only event counts + timestamps. Useful for cross-org aggregation where individual prompt content shouldn't leak.",
+    "tests_added": 5,
+    "tests_cover": [
+      "list_agents_with_telemetry returns only agents with actual logs (not just profile files)",
+      "export bundle includes all agents + sums correctly",
+      "privacy mode strips metadata (no prompt-derived content leaks)",
+      "since filter respects timestamp bound",
+      "agent_ids=None triggers auto-discovery"
+    ]
+  },
+  "live_demo": {
+    "not_required": true,
+    "reasoning": "Phase 25 already demonstrated the upstream telemetry pipeline end-to-end. Phase 28 is just the bundler — exercised by 5 unit tests against synthetic events. A real live demo would require accumulating events from real usage, which is exactly what the exporter enables for future research."
+  },
+  "what_this_unlocks": [
+    "Operators can run `/dreamscape export ~/telemetry.json` to pack their dreamscape activity into a single portable file.",
+    "Privacy-conscious users can use `/dreamscape export --no-metadata` for aggregated counts without dream titles or content categories — share counts without sharing content.",
+    "Future Phase 29+ analyses can pool telemetry across deployments. The campaign's offline measurements (Phases 10-26) are sturdy proxies; the exporter unlocks the real-world signal we've been waiting to measure.",
+    "An operator who runs dreamscape across 5 different projects can `/dreamscape export` and see aggregate dream count, helped rate, cost — across all of them — without manually grepping JSONL files."
+  ],
+  "cost_breakdown": {
+    "live_calls": 0,
+    "approx_cost_total_usd": 0.0
+  },
+  "live_calls": 0,
+  "approx_cost_usd": 0.0,
+  "test_suite_stats": {
+    "cli_unit_tests": 3604,
+    "dreamscape_specific": 119,
+    "added_this_phase": 5
+  },
+  "feature_verdicts": {
+    "list_agents_with_telemetry": "sings — only returns agents with actual log files, ignores profile-only dirs",
+    "export_telemetry_bundle": "sings — schema-versioned bundle, agent-by-agent summary + raw events",
+    "privacy_mode": "sings — strips metadata cleanly while preserving aggregate counts",
+    "since_filter": "sings — respects timestamp lower bound",
+    "auto_discovery": "sings — agent_ids=None auto-enumerates the agents dir",
+    "slash_command_integration": "ships — /dreamscape export available with autocomplete"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "The bundle is JSON, not JSONL — for very large logs (>10MB) streaming serialization would be preferable. Acceptable at current scales.",
+    "No remote-export adapter (S3, HTTPS POST, etc.) — operators must manually move the bundle. Easy to add as a future extension; intentionally not shipped yet so security review can land first.",
+    "The privacy mode strips event metadata but keeps per-agent agg summaries which include `dreams_by_category` and `injections_by_style`. These are very coarse aggregations (no individual prompts leak) but a 'maximum privacy' mode could blank these too.",
+    "No schema-version forward-compatibility logic — schema_version=1 is recorded but readers must handle future versions themselves."
+  ],
+  "verdict": "READY TO MERGE — clean infrastructure ship. Unlocks future cross-deployment analysis without changing modal behavior.",
+  "next_steps": [
+    "Phase 29 (suggested): once Phase 25 telemetry accumulates from real usage, run /dreamscape export and compare to the offline judge proxies from the campaign. Disagreement is itself informative.",
+    "Phase 32 (suggested): pluggable remote-export adapters (HTTPS POST + auth). For deployments that want to forward telemetry to a central observability backend.",
+    "Phase 33 (suggested): maximum-privacy export mode — strip even the per-agent summary categories/styles, leaving only timestamp + kind + agent_id. For environments with strict data-residency requirements."
+  ]
+}

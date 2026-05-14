@@ -1,0 +1,102 @@
+{
+  "phase": 21,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "per-prompt CONTENT routing. Phase 17 found per-prompt WRAPPER routing didn't help. Phase 20 confirmed EC > CH on decision-shaped scenarios. Phase 21 tests the smaller intervention: keep the neutral wrapper, but swap the seed CATEGORY per call based on the prompt's classified domain.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation": {
+    "module_changes": [
+      "bog_agents_cli/dreamscape/dream_engine.py — sample_dream_excerpts(category_filter=...), _dream_category(), _wrap_with_frontmatter(category=...)",
+      "bog_agents_cli/dreamscape/config.py — ImaginationConfig.use_content_routing (default False)",
+      "bog_agents_cli/dreamscape/imagination.py — _route_content_category_for_request() + per-call category filter in _maybe_inject, with fallback to unfiltered when no match",
+      "Dreams generated from Phase 21+ carry a `category:` field in their frontmatter"
+    ],
+    "tests_added": 6,
+    "tests_cover": [
+      "Category filter selects matching dreams",
+      "Empty result when filter matches nothing",
+      "Unfiltered sampling preserves v1 behavior",
+      "Pre-Phase-21 dreams (no category field) excluded when filter is on",
+      "Middleware filters end-to-end on decision-shaped prompts",
+      "Middleware falls back to unfiltered archive when no match"
+    ]
+  },
+  "experiment_design": {
+    "n_trials_per_scenario": 15,
+    "scenarios": 7,
+    "scenario_mix": "3 pure-debugging + 2 decision-shaped + 2 creative-shape technical scenarios",
+    "arms": [
+      "Static — sample from any dream (no filter). Phase 16 shipped engineering default behavior.",
+      "Per-prompt routed — classify the prompt, sample from EC dreams when prompt is engineering, myth dreams when prompt is creative/decision-shaped."
+    ],
+    "archives": "Both arms get the SAME mixed archive: 3 engineering-craft dreams + 3 myth dreams per agent.",
+    "judge_design": "Sonnet 4.6 head-to-head, response order randomized per trial.",
+    "wrapper": "Both arms use neutral wrapper. Only the seed CATEGORY differs.",
+    "concurrency": "asyncio.Semaphore(8)"
+  },
+  "results": {
+    "total_elapsed_seconds": 93.8,
+    "aggregate": {
+      "routed_wins": 50,
+      "static_wins": 50,
+      "ties": 5,
+      "n": 105,
+      "errors": 0,
+      "routed_win_rate": 0.476,
+      "wilson_95_ci": [0.383, 0.571],
+      "interpretation": "Statistically indistinguishable from static. 95% CI [38.3%, 57.1%] straddles 50%. Point estimate slightly favors static (50.5%) but well within noise."
+    },
+    "by_kind": [
+      {"kind": "debugging", "routed_wins": 24, "static_wins": 19, "ties": 2, "routed_win_rate": 0.533, "ci": [0.39, 0.67]},
+      {"kind": "decision", "routed_wins": 14, "static_wins": 16, "ties": 0, "routed_win_rate": 0.467, "ci": [0.30, 0.64]},
+      {"kind": "creative", "routed_wins": 12, "static_wins": 15, "ties": 3, "routed_win_rate": 0.40, "ci": [0.25, 0.58]}
+    ],
+    "per_scenario": [
+      {"scenario": "permission-denied-chmod", "kind": "debugging", "routed_wins": 6, "static_wins": 8, "ties": 1, "routed_win_rate": 0.40},
+      {"scenario": "python-memory-creep", "kind": "debugging", "routed_wins": 8, "static_wins": 6, "ties": 1, "routed_win_rate": 0.53},
+      {"scenario": "slow-prod-query", "kind": "debugging", "routed_wins": 10, "static_wins": 5, "ties": 0, "routed_win_rate": 0.67},
+      {"scenario": "refactor-decision", "kind": "decision", "routed_wins": 6, "static_wins": 9, "ties": 0, "routed_win_rate": 0.40},
+      {"scenario": "legacy-deletion", "kind": "decision", "routed_wins": 8, "static_wins": 7, "ties": 0, "routed_win_rate": 0.53},
+      {"scenario": "name-the-orchestrator", "kind": "creative", "routed_wins": 7, "static_wins": 5, "ties": 3, "routed_win_rate": 0.47},
+      {"scenario": "release-note-voice", "kind": "creative", "routed_wins": 5, "static_wins": 10, "ties": 0, "routed_win_rate": 0.33}
+    ]
+  },
+  "implications": [
+    "**Per-prompt CONTENT routing does NOT improve outcomes at this N.** Aggregate routed win rate 47.6% with 95% CI [38.3%, 57.1%] — straddles 50%. The mechanism works correctly but doesn't pay off in measurable judge preference.",
+    "**The pattern is similar to Phase 17's wrapper-routing result.** Both per-prompt routing variants (wrapper and content) ship as mechanisms but don't auto-engage. The agent-level routing from Phase 11/12 is the load-bearing decision.",
+    "**Debugging-shaped routed wins (53%, slow-prod-query 67%) hint there's signal, but it's within noise at this N.** The single big winner (slow-prod-query at 67%) is suspicious — could be the prompt's 'designing' surface keyword tripping the classifier into creative routing, and the routed myth seeds happened to land for that prompt.",
+    "**Decision and creative routed-arm performance is essentially tied with static.** Myth seeds on decision-shaped technical prompts don't recreate the Phase 11 creative-prompt magic — likely because the agent voice is still engineering, not creative (the wrapper is also neutral).",
+    "**Release-note-voice at 33% is the biggest static win.** Routed used myth seeds; static sampled the mixed archive (some EC, some myth). For voice/copy questions, mixed sampling outperforms exclusive myth.",
+    "**Shipping decision: ship the mechanism, keep `use_content_routing=False` default.** Like Phase 17's per-prompt wrapper routing, content routing is preserved as a knob for future research and power-users who can A/B test on their workloads."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 210,
+    "sonnet_calls": 105,
+    "approx_cost_total_usd": 0.60
+  },
+  "live_calls": 315,
+  "approx_cost_usd": 0.60,
+  "test_suite_stats": {
+    "cli_unit_tests": 3589,
+    "dreamscape_specific": 104,
+    "added_this_phase": 6
+  },
+  "feature_verdicts": {
+    "category_filter_mechanism": "sings — 6 unit tests pass, end-to-end live verification works",
+    "per_prompt_content_routing_effectiveness": "ambiguous-to-slightly-negative — routed 47.6% with CI [38%, 57%]. Mechanism works; outcomes don't measurably improve.",
+    "shipping_decision": "ship the knob, default OFF. Like Phase 17, the per-call routing surface is preserved for future research."
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "N=15 per scenario means CI widths are 15-25pp. A larger trial (N=30+) could distinguish marginal effects.",
+    "The mixed archive (3 EC + 3 myth) is artificially balanced; real archives accumulate from real dreams over time and skew per the agent's domain preferences.",
+    "Decision-pattern detection over-triggers on surface keywords ('designing' → creative). An LLM-based prompt classifier (analog to Phase 19) could improve precision."
+  ],
+  "verdict": "MIXED — mechanism solid, default keeps it off. The agent-level routing from Phase 11/12 (which Phase 14 + Phase 20 confirmed at N=140 and N=60 respectively) is the load-bearing decision. Per-prompt content routing is preserved as a knob.",
+  "next_steps": [
+    "Phase 26 (suggested): N=30+ confirmation of the per-prompt content-routing finding. Phase 21's CI [38%, 57%] is wide; a tighter measurement would resolve whether the slight negative lean is real.",
+    "Phase 27 (suggested): use Phase 19's LLM classifier to drive per-prompt routing. The keyword classifier's surface-keyword false positives might be hurting routed-arm performance."
+  ]
+}

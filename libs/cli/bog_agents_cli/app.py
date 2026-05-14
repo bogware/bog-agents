@@ -9873,6 +9873,815 @@ class BogAgentsApp(App):
             )
         )
 
+    # ---- New "killer-features" handlers ----------------------------------
+    # The implementations live in dedicated modules in bog_agents_cli/ so
+    # each feature is testable without the TUI; this handler is a thin
+    # adapter that mounts user-visible messages around the call.
+
+    async def _handle_handoff_command(self, command: str) -> None:
+        """``/handoff [author]`` — compile a context-transfer document.
+
+        Captures the current session's conversation, recent git activity,
+        and modified files, then asks the active model to write a brief
+        in the next dev's voice. Saves to
+        ``~/.bog-agents/handoffs/<timestamp>-<branch>.md`` and renders
+        the body in chat.
+        """
+        from bog_agents_cli.handoff import run_handoff
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        author = command.strip()[len(prefix) :].strip()
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /handoff while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Compiling handoff")
+        try:
+            result = await run_handoff(self, author_voice=author)
+        except Exception as exc:
+            logger.exception("/handoff failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
+            return
+        await self._set_spinner("")
+
+        await self._mount_message(
+            AppMessage(
+                f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
+                f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                f"{result.content}"
+            )
+        )
+
+    async def _handle_release_train_command(self, command: str) -> None:
+        """``/release-train [config|enable|disable|test|<tag>|<from..to>]`` — release notes + enrichment.
+
+        Sub-commands:
+          * ``config`` — show resolved enrichment config + which transport
+            each source resolved to.
+          * ``enable jira|halo`` — flip a source on (persists to TOML).
+          * ``disable jira|halo`` — flip a source off.
+          * ``test jira|halo`` — probe the configured transport for one key.
+
+        Otherwise the argument is treated as a tag or range and the
+        standard release-notes flow runs (reads ``git log``, enriches
+        with PR titles + Jira/Halo tickets where configured, asks the
+        model to render user-facing notes + breaking changes + upgrade
+        guide). Saves to ``~/.bog-agents/release-notes/<range>.md``.
+        """
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+
+        # Route sub-commands before the generation flow.
+        first = raw_arg.split(" ", 1)[0].lower() if raw_arg else ""
+        if first in {"config", "enable", "disable", "test"}:
+            await self._handle_release_train_subcommand(first, raw_arg)
+            return
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /release-train while the agent is busy.")
+            )
+            return
+
+        from bog_agents_cli.release_train import run_release_train
+
+        await self._set_spinner("Building release notes")
+        try:
+            result = await run_release_train(self, raw_arg)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/release-train: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/release-train failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/release-train failed: {exc}"))
+            return
+        await self._set_spinner("")
+
+        enrichment_line = ""
+        if result.source_resolutions:
+            bits: list[str] = []
+            for r in result.source_resolutions:
+                bits.append(
+                    f"{r.source}={r.transport} "
+                    f"(extracted {r.keys_extracted}, resolved {r.keys_resolved})"
+                )
+            enrichment_line = f"\n[dim]Enrichment:[/dim] {' · '.join(bits)}\n"
+
+        await self._mount_message(
+            AppMessage(
+                f"[bold]Release notes for[/bold] [cyan]{result.tag_range}[/cyan] "
+                f"saved to [cyan]{result.path}[/cyan] "
+                f"([dim]{len(result.commits)} commits, "
+                f"{result.elapsed_seconds:.1f}s[/dim])"
+                f"{enrichment_line}\n"
+                f"{result.content}"
+            )
+        )
+
+    async def _handle_release_train_subcommand(self, action: str, raw_arg: str) -> None:
+        """Dispatch ``/release-train config|enable|disable|test``."""
+        from bog_agents_cli.release_train_config import (
+            load_release_train_config,
+            release_train_config_path,
+            save_release_train_config,
+        )
+        from bog_agents_cli.release_train_sources import (
+            detect_mcp_server,
+            resolve_halo_transport,
+            resolve_jira_transport,
+        )
+
+        tokens = raw_arg.split()
+        target = tokens[1].lower() if len(tokens) > 1 else ""
+
+        if action == "config":
+            cfg = load_release_train_config(use_cache=False)
+            jira_transport, jira_detail = resolve_jira_transport(cfg.jira)
+            halo_transport, halo_detail = resolve_halo_transport(cfg.halo)
+            path = release_train_config_path()
+            mcp_jira = "yes" if detect_mcp_server(cfg.jira.mcp_server) else "no"
+            mcp_halo = "yes" if detect_mcp_server(cfg.halo.mcp_server) else "no"
+            lines = [
+                "[bold]/release-train configuration[/bold]",
+                f"  config file: [cyan]{path}[/cyan] "
+                f"({'exists' if path.exists() else 'not present — defaults active'})",
+                "",
+                f"  [bold]jira[/bold]: enabled={cfg.jira.enabled} mode={cfg.jira.mode}",
+                f"    resolved transport: [cyan]{jira_transport}[/cyan] — {jira_detail}",
+                f"    MCP server {cfg.jira.mcp_server!r} detected: {mcp_jira}",
+                f"    api_base_url: {cfg.jira.api_base_url or '(unset)'}",
+                f"    project_keys: {cfg.jira.project_keys or '(any)'}",
+                "",
+                f"  [bold]halo[/bold]: enabled={cfg.halo.enabled} mode={cfg.halo.mode}",
+                f"    resolved transport: [cyan]{halo_transport}[/cyan] — {halo_detail}",
+                f"    MCP server {cfg.halo.mcp_server!r} detected: {mcp_halo}",
+                f"    api_base_url: {cfg.halo.api_base_url or '(unset)'}",
+                "",
+                "[dim]Toggle with:[/dim]  /release-train enable jira   |   "
+                "/release-train enable halo",
+                "[dim]Probe with:[/dim]   /release-train test jira     |   "
+                "/release-train test halo",
+            ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action in {"enable", "disable"}:
+            if target not in {"jira", "halo"}:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"/release-train {action}: expected 'jira' or 'halo', got {target!r}"
+                    )
+                )
+                return
+            cfg = load_release_train_config(use_cache=False)
+            new_state = action == "enable"
+            if target == "jira":
+                cfg.jira.enabled = new_state
+            else:
+                cfg.halo.enabled = new_state
+            path = save_release_train_config(cfg)
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]/release-train:[/bold] {target} "
+                    f"[cyan]{'enabled' if new_state else 'disabled'}[/cyan] "
+                    f"([dim]persisted to {path}[/dim])"
+                )
+            )
+            return
+
+        if action == "test":
+            if target not in {"jira", "halo"}:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"/release-train test: expected 'jira' or 'halo', got {target!r}"
+                    )
+                )
+                return
+            await self._set_spinner(f"Probing {target}")
+            try:
+                summary = await self._probe_release_train_source(target)
+            except Exception as exc:
+                logger.exception("/release-train test failed")
+                await self._set_spinner("")
+                await self._mount_message(
+                    ErrorMessage(f"/release-train test {target} failed: {exc}")
+                )
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(summary))
+            return
+
+    @staticmethod
+    async def _probe_release_train_source(source: str) -> str:
+        """Run a single resolution against the configured source for diagnostics.
+
+        Synthesises one fake CommitEntry containing a placeholder issue
+        key, then runs the source's resolution path. Returns a
+        Rich-formatted summary string.
+        """
+        from bog_agents_cli.release_train import CommitEntry
+        from bog_agents_cli.release_train_config import load_release_train_config
+        from bog_agents_cli.release_train_sources import enrich_commits
+
+        cfg = load_release_train_config(use_cache=False)
+        probe_key = "ABC-1" if source == "jira" else "INC-1"
+        probe_commit = CommitEntry(
+            sha="probe000",
+            type="other",
+            scope="",
+            subject=f"probe {probe_key}",
+        )
+        # Temporarily ensure only the requested source is on for the probe.
+        if source == "jira":
+            cfg.halo.enabled = False
+            if not cfg.jira.enabled:
+                return (
+                    "[yellow]/release-train test jira:[/yellow] jira source is "
+                    "disabled — run [cyan]/release-train enable jira[/cyan] first."
+                )
+        else:
+            cfg.jira.enabled = False
+            if not cfg.halo.enabled:
+                return (
+                    "[yellow]/release-train test halo:[/yellow] halo source is "
+                    "disabled — run [cyan]/release-train enable halo[/cyan] first."
+                )
+        resolutions = await enrich_commits([probe_commit], cfg)
+        if not resolutions:
+            return f"[yellow]No resolution produced for {source}.[/yellow]"
+        r = resolutions[0]
+        return (
+            f"[bold]/release-train test {source}:[/bold]\n"
+            f"  transport: [cyan]{r.transport}[/cyan]\n"
+            f"  detail:    {r.detail}\n"
+            f"  keys extracted: {r.keys_extracted}\n"
+            f"  keys resolved:  {r.keys_resolved}"
+        )
+
+    async def _handle_imagine_command(self, command: str) -> None:
+        """``/imagine [N] [prompt]`` — spawn N parallel angles on the same problem."""
+        from bog_agents_cli.imagine import run_imagine
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /imagine while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Imagining approaches in parallel")
+        try:
+            result = await run_imagine(self, raw_arg)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/imagine failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
+            return
+        await self._set_spinner("")
+        await self._mount_message(AppMessage(result.render()))
+
+    async def _handle_devil_command(self, command: str) -> None:
+        """``/devil`` — critique the last assistant message adversarially."""
+        from bog_agents_cli.devil import run_devil
+
+        await self._mount_message(UserMessage(command))
+
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot run /devil while the agent is busy.")
+            )
+            return
+
+        await self._set_spinner("Summoning devil's advocate")
+        try:
+            result = await run_devil(self)
+        except ValueError as exc:
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/devil: {exc}"))
+            return
+        except Exception as exc:
+            logger.exception("/devil failed")
+            await self._set_spinner("")
+            await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
+            return
+        await self._set_spinner("")
+        await self._mount_message(AppMessage(result.render()))
+
+    async def _handle_squad_command(self, command: str) -> None:
+        """``/squad`` — multi-persona dialogue review."""
+        from bog_agents_cli.squad import handle_squad_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_squad_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/squad failed")
+            await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+
+    async def _handle_dream_command(self, command: str) -> None:
+        """``/dream`` — overnight ideation, daemon-backed."""
+        from bog_agents_cli.dream import handle_dream_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_dream_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/dream failed")
+            await self._mount_message(ErrorMessage(f"/dream failed: {exc}"))
+
+    async def _handle_scratch_command(self, command: str) -> None:
+        """``/scratch`` — disposable git worktrees with isolated venvs."""
+        from bog_agents_cli.scratch import handle_scratch_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_scratch_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/scratch failed")
+            await self._mount_message(ErrorMessage(f"/scratch failed: {exc}"))
+
+    async def _handle_proxy_command(self, command: str) -> None:
+        """``/proxy`` — register shell commands as agent tools."""
+        from bog_agents_cli.proxy_tools import handle_proxy_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_proxy_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/proxy failed")
+            await self._mount_message(ErrorMessage(f"/proxy failed: {exc}"))
+
+    async def _handle_whisper_command(self, command: str) -> None:
+        """``/whisper`` — passive observation mode (file edits + git tail)."""
+        from bog_agents_cli.whisper import handle_whisper_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_whisper_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/whisper failed")
+            await self._mount_message(ErrorMessage(f"/whisper failed: {exc}"))
+
+    # ---- Dreamscape handlers (read-only / config / advisory) ------------
+    # Safe to call regardless of dreamscape master switch — the dashboard
+    # surfaces show "everything off" when master_enabled=false (default).
+
+    async def _handle_agent_state_command(self, command: str) -> None:
+        """``/agent-state`` — lifecycle + imagination + recent dreams + shared memory."""
+        from bog_agents_cli.dreamscape.dashboard import render_agent_state
+
+        await self._mount_message(UserMessage(command))
+        try:
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            body = render_agent_state(agent_id)
+        except Exception as exc:
+            logger.exception("/agent-state failed")
+            await self._mount_message(ErrorMessage(f"/agent-state failed: {exc}"))
+            return
+        await self._mount_message(AppMessage(body))
+
+    async def _handle_repo_command(self, command: str) -> None:
+        """``/repo`` — branch + dirty files + top-edited + clone command."""
+        from bog_agents_cli.dreamscape.dashboard import render_repo_overview
+
+        await self._mount_message(UserMessage(command))
+        try:
+            body = render_repo_overview(Path(self._cwd))
+        except Exception as exc:
+            logger.exception("/repo failed")
+            await self._mount_message(ErrorMessage(f"/repo failed: {exc}"))
+            return
+        await self._mount_message(AppMessage(body))
+
+    async def _handle_dreamscape_command(self, command: str) -> None:
+        """``/dreamscape [status|init|enable|disable|stats|export]`` — manage dreamscape."""
+        from bog_agents_cli.dreamscape.dashboard import (
+            init_dreamscape_config,
+            render_dreamscape_status,
+            render_dreamscape_telemetry,
+        )
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip().lower()
+
+        if not raw_arg or raw_arg == "status":
+            try:
+                await self._mount_message(AppMessage(render_dreamscape_status()))
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape status failed: {exc}")
+                )
+            return
+
+        if raw_arg.startswith("stats"):
+            # Optional window-hours arg: "/dreamscape stats 168" = last 7 days.
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            window_hours: float | None = 24.0
+            tokens = raw_arg.split()
+            if len(tokens) >= 2:
+                token = tokens[1]
+                if token == "all":
+                    window_hours = None
+                else:
+                    try:
+                        window_hours = max(0.1, float(token))
+                    except ValueError:
+                        pass
+            try:
+                body = render_dreamscape_telemetry(agent_id, window_hours=window_hours)
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape stats failed: {exc}")
+                )
+                return
+            await self._mount_message(AppMessage(body))
+            return
+
+        if raw_arg.startswith("export"):
+            # /dreamscape export [path] [--no-metadata]
+            import time as _time
+            from pathlib import Path as _Path
+
+            from bog_agents_cli.dreamscape.telemetry import (
+                export_telemetry_bundle,
+                list_agents_with_telemetry,
+            )
+
+            tokens_raw = command.strip()[len(prefix) :].strip().split()[1:]
+            include_metadata = True
+            path_str: str | None = None
+            for tok in tokens_raw:
+                if tok == "--no-metadata":
+                    include_metadata = False
+                elif not tok.startswith("--"):
+                    path_str = tok
+            if path_str is None:
+                stamp = _time.strftime("%Y%m%d-%H%M%S")
+                export_path = (
+                    _Path.home() / ".bog-agents" / f"telemetry-export-{stamp}.json"
+                )
+            else:
+                export_path = _Path(path_str).expanduser()  # noqa: ASYNC240 — local-disk only, no I/O on this line
+
+            try:
+                agents = list_agents_with_telemetry()
+                bundle = export_telemetry_bundle(
+                    export_path,
+                    agent_ids=agents,
+                    include_metadata=include_metadata,
+                )
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape export failed: {exc}")
+                )
+                return
+            summary = bundle["summary"]
+            metadata_label = "yes" if include_metadata else "no (privacy mode)"
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Telemetry exported[/bold]\n"
+                    f"  Path: [cyan]{export_path}[/cyan]\n"
+                    f"  Agents: {summary['agent_count']}\n"
+                    f"  Events: {summary['total_events']} "
+                    f"({summary['total_dreams']} dreams, "
+                    f"{summary['total_injections']} injections)\n"
+                    f"  Metadata included: {metadata_label}"
+                )
+            )
+            return
+
+        if raw_arg.startswith("enable"):
+            # /dreamscape enable [--session] [--with imagination,creative,...]
+            #
+            # Default: master on + lifecycle + laws + shared_memory +
+            # dreams.auto_on_dormancy + dashboard. Imagination stays OFF
+            # by default (Phase 14: neutral-to-negative on engineering
+            # work, which is the dogfooding target).
+            #
+            # --session: don't touch the TOML; set env vars for this
+            # shell process only. Reverts when the shell exits.
+            # --with imagination: also enable imagination injection.
+            from bog_agents_cli.dreamscape import (
+                config as ds_config,
+                load_dreamscape_config,
+                save_dreamscape_config,
+            )
+
+            tokens = command.strip()[len(prefix) :].strip().split()[1:]
+            session_only = False
+            extras: set[str] = set()
+            i = 0
+            while i < len(tokens):
+                tok = tokens[i].lower()
+                if tok == "--session":
+                    session_only = True
+                elif tok == "--with" and i + 1 < len(tokens):
+                    i += 1
+                    for raw_tok in tokens[i].split(","):
+                        normalized = raw_tok.strip().lower().replace("-", "_")
+                        if normalized:
+                            extras.add(normalized)
+                i += 1
+
+            # The default-on set (validated by the campaign).
+            default_subsystems = {
+                "lifecycle",
+                "laws",
+                "shared_memory",
+                "dreams_auto",
+            }
+            enabled = default_subsystems | extras
+
+            try:
+                if session_only:
+                    # Session-only via env vars. Subsystem env vars
+                    # are read by load_dreamscape_config().
+                    os.environ["BOG_AGENTS_DREAMSCAPE"] = "1"
+                    os.environ.pop("BOG_AGENTS_DREAMSCAPE_DISABLE", None)
+                    if "lifecycle" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_LIFECYCLE"] = "1"
+                    if "laws" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_LAWS"] = "1"
+                    if "shared_memory" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_SHARED_MEMORY"] = "1"
+                    if "dreams_auto" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_DREAMS_AUTO"] = "1"
+                    if "imagination" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_IMAGINATION"] = "1"
+                    ds_config.clear_cache()
+                else:
+                    # Persist to ~/.bog-agents/dreamscape.toml.
+                    cfg = load_dreamscape_config(use_cache=False)
+                    cfg.master_enabled = True
+                    cfg.lifecycle.enabled = "lifecycle" in enabled
+                    cfg.laws.enabled = "laws" in enabled
+                    cfg.shared_memory.enabled = "shared_memory" in enabled
+                    cfg.dreams.auto_on_dormancy = "dreams_auto" in enabled
+                    cfg.imagination.enabled = "imagination" in enabled
+                    # Dashboard defaults on; leave it.
+                    save_dreamscape_config(cfg)
+                    # Also make sure no stale emergency-disable env var
+                    # is masking the freshly-enabled config.
+                    if os.environ.get("BOG_AGENTS_DREAMSCAPE_DISABLE"):
+                        os.environ.pop("BOG_AGENTS_DREAMSCAPE_DISABLE", None)
+                    ds_config.clear_cache()
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape enable failed: {exc}")
+                )
+                return
+
+            # Build success message.
+            label_map = {
+                "lifecycle": "lifecycle",
+                "laws": "laws",
+                "shared_memory": "shared-memory",
+                "dreams_auto": "dreams (auto-on-dormancy)",
+                "imagination": "imagination",
+            }
+            active = sorted(label_map[k] for k in enabled if k in label_map)
+            off = [v for k, v in label_map.items() if k not in enabled]
+            mode = (
+                "session-only (env vars; reverts on shell exit)"
+                if session_only
+                else "persisted to ~/.bog-agents/dreamscape.toml"
+            )
+            tip_imagination = (
+                ""
+                if "imagination" in enabled
+                else (
+                    "\n[dim]Imagination injection stays off by default — Phase 14 "
+                    "found it neutral-to-negative on engineering work. Pass "
+                    "[bold]--with imagination[/bold] to enable it anyway.[/dim]"
+                )
+            )
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]✓ Dreamscape enabled[/bold green] ([dim]{mode}[/dim])\n"
+                    "\n"
+                    f"  [bold]Active:[/bold] {', '.join(active)}\n"
+                    f"  [bold]Off:[/bold] {', '.join(off) if off else '(none — everything on)'}\n"
+                    "\n"
+                    "[dim]Useful next steps:[/dim]\n"
+                    "  [cyan]/agent-state[/cyan]    — see lifecycle + recent dreams\n"
+                    "  [cyan]/dreamscape stats[/cyan] — telemetry after a few sessions\n"
+                    "  [cyan]/dreamscape disable[/cyan] — revert (session-only kill switch)"
+                    f"{tip_imagination}"
+                )
+            )
+            return
+
+        if raw_arg == "init":
+            try:
+                written = init_dreamscape_config()
+                await self._mount_message(
+                    AppMessage(
+                        f"[bold]Dreamscape config written[/bold] "
+                        f"[cyan]{written}[/cyan]\n"
+                        "[dim]Master switch is still OFF — flip "
+                        "[bold]enabled = true[/bold] in the TOML to opt in, then "
+                        "enable each subsystem under its section.[/dim]"
+                    )
+                )
+            except FileExistsError:
+                from bog_agents_cli.dreamscape.config import dreamscape_config_path
+
+                await self._mount_message(
+                    AppMessage(
+                        f"[yellow]Dreamscape config already exists at "
+                        f"{dreamscape_config_path()}.[/yellow]"
+                    )
+                )
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape init failed: {exc}")
+                )
+            return
+
+        if raw_arg == "disable":
+            os.environ["BOG_AGENTS_DREAMSCAPE_DISABLE"] = "1"
+            from bog_agents_cli.dreamscape import config as ds_config
+
+            ds_config.clear_cache()
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Dreamscape force-disabled for this session.[/bold] "
+                    "Unset BOG_AGENTS_DREAMSCAPE_DISABLE to re-enable."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /dreamscape           Show current config\n"
+                "  /dreamscape status    Same as above\n"
+                "  /dreamscape init      Write a starter ~/.bog-agents/dreamscape.toml\n"
+                "  /dreamscape enable [--session] [--with imagination]\n"
+                "                        Turn dreamscape ON with sensible defaults\n"
+                "  /dreamscape disable   Force-disable for this session\n"
+                "  /dreamscape stats [H] Show telemetry for last H hours (default 24, 'all')\n"
+                "  /dreamscape export [path] [--no-metadata]\n"
+                "                        Bundle telemetry from all agents into a single JSON file"
+            )
+        )
+
+    async def _handle_laws_command(self, command: str) -> None:
+        """``/laws [audit|init|list|violations]`` — manage rules + view recent violations."""
+        from bog_agents_cli.dreamscape.config import load_dreamscape_config
+        from bog_agents_cli.dreamscape.dashboard import (
+            init_laws_templates,
+            render_laws_audit,
+            render_recent_violations,
+        )
+        from bog_agents_cli.dreamscape.laws import load_rules
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw = command.strip()[len(prefix) :].strip()
+        head, _, rest = raw.partition(" ")
+        head = head.lower()
+
+        if head == "init":
+            try:
+                written = init_laws_templates()
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"/laws init failed: {exc}"))
+                return
+            if not written:
+                await self._mount_message(
+                    AppMessage(
+                        "[dim]No files written — laws.md or constitution.md already "
+                        "exist. Use them or delete to regenerate.[/dim]"
+                    )
+                )
+                return
+            lines = ["[bold]Wrote starter files:[/bold]"]
+            for path in written:
+                lines.append(f"  [cyan]{path}[/cyan]")
+            lines.append("")
+            lines.append(
+                "[dim]Edit them, then enable [bold]laws.enabled = true[/bold] in "
+                "~/.bog-agents/dreamscape.toml to activate.[/dim]"
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if head == "list":
+            cfg = load_dreamscape_config()
+            rule_set = load_rules(cfg.laws)
+            lines: list[str] = []
+            lines.append(f"[bold]Laws ({len(rule_set.laws)})[/bold]")
+            for r in rule_set.laws:
+                lines.append(
+                    f"  • {r.text}  [dim]({r.source_path.name}:{r.line_number})[/dim]"
+                )
+            lines.append("")
+            lines.append(f"[bold]Constitution ({len(rule_set.constitution)})[/bold]")
+            for r in rule_set.constitution:
+                lines.append(
+                    f"  • {r.text}  [dim]({r.source_path.name}:{r.line_number})[/dim]"
+                )
+            if rule_set.is_empty():
+                lines = [
+                    "[dim]No rules configured. Run [bold]/laws init[/bold] to "
+                    "write starter files.[/dim]"
+                ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if head == "audit":
+            sample = rest.strip() or (
+                "Sample audit text — paste any model output here to dry-run."
+            )
+            try:
+                body = render_laws_audit(sample)
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"/laws audit failed: {exc}"))
+                return
+            await self._mount_message(AppMessage(body))
+            return
+
+        if head in ("violations", "recent"):
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            limit = 20
+            arg = rest.strip()
+            if arg:
+                try:
+                    limit = max(1, min(200, int(arg)))
+                except ValueError:
+                    pass
+            try:
+                body = render_recent_violations(agent_id, limit=limit)
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/laws violations failed: {exc}")
+                )
+                return
+            await self._mount_message(AppMessage(body))
+            return
+
+        await self._mount_message(
+            AppMessage(
+                "Usage:\n"
+                "  /laws audit <text>   Dry-run rules against a sample\n"
+                "  /laws init           Write starter laws.md + constitution.md\n"
+                "  /laws list           Show currently loaded rules\n"
+                "  /laws violations [N] Show the last N recorded violations (default 20)"
+            )
+        )
+
+    async def _handle_help_dream_command(self, command: str) -> None:
+        """``/help-dream`` — show dream snippets when stuck (read-only)."""
+        from bog_agents_cli.dreamscape.imagination import explicit_inject_excerpts
+
+        await self._mount_message(UserMessage(command))
+        agent_id = getattr(self, "_assistant_id", "default") or "default"
+        try:
+            excerpts = explicit_inject_excerpts(agent_id, count=3)
+        except Exception as exc:
+            await self._mount_message(ErrorMessage(f"/help-dream failed: {exc}"))
+            return
+        if not excerpts:
+            await self._mount_message(
+                AppMessage(
+                    "[dim]No dreams in the archive yet.[/dim]\n"
+                    "Enable [bold]dreamscape.dreams.auto_on_dormancy[/bold] and let "
+                    "the agent rest for a while, or run [bold]/dream[/bold] manually."
+                )
+            )
+            return
+        lines = ["[bold]Recent dream excerpts — use as creative fuel[/bold]\n"]
+        for i, excerpt in enumerate(excerpts, start=1):
+            lines.append(f"### Fragment {i}\n\n{excerpt}\n")
+        await self._mount_message(AppMessage("\n".join(lines)))
+
     async def _handle_rules_command(self, command: str) -> None:
         """Handle `/rules` project rules management.
 

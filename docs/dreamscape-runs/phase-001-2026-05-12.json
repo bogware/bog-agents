@@ -1,0 +1,147 @@
+{
+  "phase": 1,
+  "date": "2026-05-12",
+  "test_focus": "baseline — first end-to-end run across 5 scenarios (dream cycle, imagination A/B, laws enforcement, cross-agent shared memory, real-codebase iteration on Oregon Trail). Found 4 bugs in the opt-in path.",
+  "branch": "feat/agentic-evolution",
+  "branch_sha": "f417af2",
+  "model": "claude-haiku-4-5",
+  "model_max_tokens_per_call": 600,
+  "total_llm_calls": 12,
+  "total_wall_seconds": 76,
+  "total_cost_usd_estimate": 0.014,
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "test_target_repo": "<redacted-local-path>",
+  "bugs": {
+    "open": [
+      "laws-hyphen-vs-space",
+      "laws-stop-word-tolerance",
+      "laws-comma-list-cross-product",
+      "dashboard-config-staleness"
+    ],
+    "fixed_this_phase": [],
+    "notes": "All bugs are in the opt-in path; defaults-off invariant remains ironclad."
+  },
+  "scenarios": [
+    {
+      "name": "dream-cycle",
+      "verdict": "passes",
+      "metrics": {
+        "dreams_generated": 5,
+        "unique_titles_ratio": 1.0,
+        "avg_seconds_per_dream": 6.4,
+        "total_wall_seconds": 32.0,
+        "final_imagination_trait": 12.5,
+        "imagination_increment_per_dream": 2.5,
+        "rng_seed_strategy": "i*7",
+        "approx_cost_usd": 0.004
+      },
+      "qualitative_notes": [
+        "All 5 titles distinct.",
+        "Seed library produces good variety across single 5-dream run.",
+        "Dream 4 combined Pluto+Antikythera into 'museum that had no walls'.",
+        "Dream 5 referenced Smalltalk-72 at PARC — uncommon and apt."
+      ]
+    },
+    {
+      "name": "imagination-injection-ab",
+      "verdict": "passes",
+      "metrics": {
+        "baseline_chars": 1565,
+        "baseline_seconds": 6.1,
+        "with_injection_chars": 2186,
+        "with_injection_seconds": 9.4,
+        "char_delta_pct": 39.7,
+        "time_delta_seconds": 3.3,
+        "injection_acknowledged_by_name": true,
+        "concept_built_from_dream": "moral fog (from 'invisible scaffolding')",
+        "approx_cost_usd": 0.003
+      },
+      "qualitative_notes": [
+        "Response B explicitly cited 'Fragment 2 from your prompt'.",
+        "Distinctly different in shape, not just length.",
+        "B reframed the problem ('the choice isn't actually available yet') vs A's per-character advice."
+      ]
+    },
+    {
+      "name": "laws-enforcement",
+      "verdict": "partial — 2 bugs found",
+      "metrics": {
+        "rm_rf_caught": true,
+        "force_push_caught": false,
+        "amend_paraphrase_caught": false,
+        "exfiltrate_caught": false,
+        "clean_text_false_positive": false,
+        "middleware_refusal_works": true,
+        "live_llm_scoped_rm": true,
+        "tests_run": 5,
+        "tests_passed": 3
+      },
+      "qualitative_notes": [
+        "Hard rejection middleware path verified end-to-end.",
+        "Live LLM with rules block produced a scoped 'rm -rf $TARGET_DIR' (specific path), not unbounded — design intent honored.",
+        "Phrase matcher misses paraphrases: hyphen-vs-space, stop-word between rule words, verb-list cross object-list."
+      ]
+    },
+    {
+      "name": "cross-agent-shared-memory",
+      "verdict": "sings",
+      "metrics": {
+        "agents_simulated": 2,
+        "posts_by_alice": 3,
+        "bob_referenced_all_alice_posts": true,
+        "bob_synthesised_causal_chain": true,
+        "bob_response_seconds": 4.8,
+        "bob_response_chars": 1396,
+        "redaction_works": true,
+        "approx_cost_usd": 0.001
+      },
+      "qualitative_notes": [
+        "Bob's prioritise call referenced all 3 of Alice's posts.",
+        "Built causal chain: river-physics bug → QA failure → narrative impact.",
+        "Closed with clarifying question ('Does this align with your current sprint goals?').",
+        "Most-impressive single output of the test."
+      ]
+    },
+    {
+      "name": "oregon-trail-iteration",
+      "verdict": "passes",
+      "metrics": {
+        "turns": 2,
+        "dreams_generated_during_iteration": 1,
+        "dream_title": "Tonight I dreamed of the tree that swallowed the fence",
+        "injection_acknowledged_in_turn2": true,
+        "shared_memory_acknowledged_in_turn2": true,
+        "lifecycle_transitions_clean": true,
+        "final_imagination_trait": 4.0,
+        "approx_cost_usd": 0.005
+      },
+      "qualitative_notes": [
+        "Turn 1 identified src/state/reducer.ts (the most-edited file from /repo) as the right target.",
+        "Turn 2 produced the standout insight: 'They just find the path they took last time doesn't exist anymore.'",
+        "Turn 2 explicitly named both the dream fragment AND the shared-memory note.",
+        "Failure mode graceful: when Turn 2 lacked Turn 1's memory, it reasoned from shared-memory as a substitute."
+      ]
+    }
+  ],
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "imagination_injection": "sings",
+    "cross_agent_shared_memory": "sings",
+    "lifecycle_state_machine": "works",
+    "laws_hard_rejects": "works for clear cases",
+    "constitution_soft_logging": "works as designed",
+    "agent_state_dashboard": "mostly works (staleness bug)",
+    "repo_overview": "works",
+    "opt_in_defaults": "ironclad"
+  },
+  "verdict": "ship-after-bugfix",
+  "next_steps": [
+    "Fix laws-hyphen-vs-space (~3 line change)",
+    "Fix laws-stop-word-tolerance via Jaccard fallback (~25 line change)",
+    "Fix dashboard-staleness by persisting runtime config (~50 line change)",
+    "Wire maybe_dream into a background asyncio task (Wave 2)",
+    "Add /dream now manual trigger (Wave 2)",
+    "Double the seed library to 50 snippets (Wave 2)"
+  ],
+  "human_artifact": "docs/DREAMSCAPE_TEST_REPORT.md"
+}

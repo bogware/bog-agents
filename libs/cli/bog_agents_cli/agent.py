@@ -118,6 +118,332 @@ def _resolve_thinking_config() -> tuple[bool, int]:
     return enabled, budget
 
 
+def _build_dream_scheduler_factory(
+    *,
+    cfg: Any,  # noqa: ANN401 — DreamscapeConfig; typed Any to avoid eager import
+    agent_id: str,
+) -> Callable[[], Any] | None:
+    """Build a zero-arg factory that starts a DreamScheduler.
+
+    Returns ``None`` when prerequisites aren't met — typically because
+    no dream model can be resolved. The factory closure resolves the
+    model lazily (only when the lifecycle middleware first fires)
+    so we don't pay the model-construction cost during agent build.
+
+    Args:
+        cfg: A ``DreamscapeConfig`` (typed Any to avoid the cost of
+            an import that runs even when this feature is off).
+        agent_id: Stable identifier passed to the scheduler.
+
+    Returns:
+        A nullary callable, or ``None`` when scheduling can't be set up.
+    """
+
+    def factory() -> Any:  # noqa: ANN401 — returns a DreamScheduler, import deferred
+
+        # Imports deferred — these pull in langchain providers we
+        # don't want to load when dreamscape is disabled.
+        from bog_agents_cli.config import create_model
+
+        spec = (cfg.dreams.model or "").strip()
+        if not spec:
+            # Inherit the active model — read from CLI settings.
+            from bog_agents_cli.config import settings as _settings
+
+            provider = (_settings.model_provider or "").strip()
+            model_name = (_settings.model_name or "").strip()
+            spec = f"{provider}:{model_name}" if provider and model_name else model_name
+
+        if not spec:
+            logger.info("dreamscape: dream scheduler not started — no model resolved")
+            return None
+
+        try:
+            result = create_model(spec)
+        except Exception:
+            logger.warning(
+                "dreamscape: dream scheduler model creation failed (%s)",
+                spec,
+                exc_info=True,
+            )
+            return None
+
+        from bog_agents_cli.dreamscape.scheduler import ensure_scheduler
+
+        scheduler = ensure_scheduler(
+            agent_id=agent_id,
+            model=result.model,
+            dreams_cfg=cfg.dreams,
+            lifecycle_cfg=cfg.lifecycle,
+        )
+        scheduler.start()
+        return scheduler
+
+    return factory
+
+
+# Phase 19 — module-level strong refs for fire-and-forget LLM-classifier
+# tasks. Without this set, the GC can reap the task before it
+# completes, dropping the classification + cache write.
+_LLM_CLASSIFIER_TASKS: set[Any] = set()
+
+
+def _schedule_llm_domain_classification(agent_id: str, system_prompt: str) -> None:
+    """Phase 19 — fire-and-forget LLM classification for the long tail.
+
+    The keyword classifier returned ``"general"`` for this agent's
+    system prompt — either the prompt is intentionally broad or its
+    vocabulary doesn't intersect the keyword dictionaries. Phase 19
+    builds an LLM-based fallback that runs once per agent build,
+    caches the result to disk, and is consulted by
+    :func:`resolve_agent_domain` on subsequent dream cycles.
+
+    The classification runs as a background asyncio task using a
+    cheap dream-model spec when one is configured. Failure here is
+    silent — the agent uses the keyword "general" classification
+    until the cache is populated.
+    """
+    try:
+        import asyncio
+
+        from bog_agents_cli.dreamscape import load_dreamscape_config
+        from bog_agents_cli.dreamscape.domain import (
+            _save_cached_llm_domain,
+            classify_agent_domain_llm_async,
+            llm_cache_path,
+        )
+
+        # Skip if already cached — avoids paying for repeat agent builds.
+        if llm_cache_path(agent_id).exists():
+            return
+
+        ds_cfg = load_dreamscape_config()
+        spec = (ds_cfg.dreams.model or "").strip()
+        if not spec:
+            from bog_agents_cli.config import settings as _settings
+
+            provider = (_settings.model_provider or "").strip()
+            model_name = (_settings.model_name or "").strip()
+            spec = f"{provider}:{model_name}" if provider and model_name else model_name
+        if not spec:
+            return
+
+        from bog_agents_cli.config import create_model
+
+        result = create_model(spec)
+
+        async def _do() -> None:
+            domain = await classify_agent_domain_llm_async(system_prompt, result.model)
+            if domain != "general":
+                _save_cached_llm_domain(agent_id, domain)
+                logger.info(
+                    "dreamscape: llm classifier cached %s for agent=%s",
+                    domain,
+                    agent_id,
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+            # Fire-and-forget by design. The task may be GC'd before
+            # completion if the event loop tears down; that's fine —
+            # this is a best-effort enhancement, not a correctness
+            # path. Stored in a module-level set so the GC doesn't
+            # reap it during normal operation.
+            _LLM_CLASSIFIER_TASKS.add(loop.create_task(_do()))
+        except RuntimeError:
+            # No running event loop — the agent build is synchronous.
+            # Skip; the next async call from the agent will leave the
+            # keyword classification in place. (Real users always
+            # build agents inside an event loop.)
+            logger.debug(
+                "dreamscape: llm classifier deferred — no event loop at build time"
+            )
+    except Exception:
+        logger.debug("dreamscape: llm classifier scheduling failed", exc_info=True)
+
+
+def _attach_dreamscape_middleware(
+    middleware_list: list[Any],
+    *,
+    cfg: Any,  # noqa: ANN401 — DreamscapeConfig is deferred-imported; typing leaks here
+    agent_id: str,
+    system_prompt: str | None = None,
+) -> None:
+    """Append every enabled dreamscape middleware to ``middleware_list``.
+
+    Caller has already verified ``cfg.any_active`` is True. Each
+    sub-middleware is gated on its individual ``enabled`` flag so the
+    master switch can be on while specific features stay off. All
+    imports are deferred to keep CLI cold-start fast.
+
+    Args:
+        middleware_list: The accumulating list of agent middleware.
+            New middlewares are appended in place.
+        cfg: A ``DreamscapeConfig`` (typed as ``Any`` here to avoid
+            an import that runs even when the feature is off).
+        agent_id: Per-agent identifier so on-disk state files end up
+            in the right directory.
+        system_prompt: The agent's resolved system prompt. When
+            provided, captured via :func:`capture_agent_profile` so the
+            dream engine can classify the agent's working domain.
+    """
+    safe_id = agent_id or "default"
+
+    # Capture the agent's system prompt so the dream engine can
+    # classify the agent's working domain (engineering / creative /
+    # research / general) and steer seed selection accordingly. Phases
+    # 10-12 showed the effect of injected dreams is domain-conditional;
+    # this hook is the input to context-aware dreaming. Best-effort —
+    # disk failure here must not block agent creation.
+    if system_prompt:
+        try:
+            from bog_agents_cli.dreamscape.domain import (
+                capture_agent_profile,
+                classify_agent_domain,
+            )
+
+            capture_agent_profile(safe_id, system_prompt)
+            # Phase 19 — if the keyword classifier falls back to
+            # "general", schedule a background LLM classification.
+            # The result is cached to disk and consulted on next dream
+            # cycle. Best-effort: failure here logs and continues.
+            if classify_agent_domain(system_prompt) == "general":
+                _schedule_llm_domain_classification(safe_id, system_prompt)
+        except Exception:
+            logger.debug("dreamscape: agent-profile capture failed", exc_info=True)
+
+    # Persist the resolved runtime config so the dashboard (/agent-state,
+    # /dreamscape status) shows what's actually active instead of what
+    # the canonical TOML says. Best-effort — disk failure logs and
+    # continues. Fixes the Phase-1 staleness bug where the dashboard
+    # reported ``master_enabled: False`` whenever the runtime was
+    # driven entirely by env-var overrides.
+    try:
+        from bog_agents_cli.dreamscape import write_active_runtime_config
+
+        write_active_runtime_config(cfg)
+    except Exception:
+        logger.debug("dreamscape: failed to persist active config", exc_info=True)
+
+    if cfg.lifecycle.enabled:
+        try:
+            from bog_agents_cli.dreamscape.lifecycle import LifecycleMiddleware
+
+            # When dream auto-on-dormancy is on, give the lifecycle
+            # middleware a factory that lazy-starts a DreamScheduler
+            # the first time it sees a real async model call. The
+            # factory closure captures the dream-model resolution +
+            # configs so the middleware itself stays decoupled from
+            # langchain/model loading.
+            dream_factory = (
+                _build_dream_scheduler_factory(cfg=cfg, agent_id=safe_id)
+                if cfg.dreams.auto_on_dormancy
+                else None
+            )
+            middleware_list.append(
+                LifecycleMiddleware(
+                    agent_id=safe_id,
+                    cfg=cfg.lifecycle,
+                    dream_scheduler_factory=dream_factory,
+                )
+            )
+            logger.info(
+                "dreamscape: lifecycle middleware attached "
+                "(agent=%s, dream_scheduler=%s)",
+                safe_id,
+                "yes" if dream_factory else "no",
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: lifecycle middleware failed to attach", exc_info=True
+            )
+
+    if cfg.laws.enabled:
+        try:
+            from bog_agents_cli.dreamscape.laws import LawsMiddleware
+            from bog_agents_cli.dreamscape.violations import make_violation_recorder
+
+            middleware_list.append(
+                LawsMiddleware(
+                    cfg=cfg.laws,
+                    violation_recorder=make_violation_recorder(safe_id),
+                )
+            )
+            logger.info(
+                "dreamscape: laws middleware attached (reject_on_violation=%s)",
+                cfg.laws.reject_on_violation,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: laws middleware failed to attach", exc_info=True
+            )
+
+    if cfg.shared_memory.enabled:
+        try:
+            from bog_agents_cli.dreamscape.shared_memory import (
+                SharedMemoryMiddleware,
+            )
+
+            middleware_list.append(
+                SharedMemoryMiddleware(agent_id=safe_id, cfg=cfg.shared_memory)
+            )
+            logger.info(
+                "dreamscape: shared-memory middleware attached (backend=%s)",
+                cfg.shared_memory.backend,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: shared-memory middleware failed to attach", exc_info=True
+            )
+
+    if cfg.imagination.enabled:
+        try:
+            from dataclasses import replace as dc_replace
+
+            from bog_agents_cli.dreamscape.domain import (
+                recommended_injection_style,
+                resolve_agent_domain,
+            )
+            from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+            # Context-aware injection style: engineering / research /
+            # general agents get the neutral wrapper (Phase 10 + 12
+            # showed the "Fragment from your dreams" framing is penalized
+            # on technical-debugging prompts); creative agents get the
+            # original dreams wrapper (Phase 11 showed it's a feature
+            # there, 6/7 treatment wins).
+            #
+            # Phase 17 — the per-prompt routing mechanism is shipped
+            # (use_prompt_routing in ImaginationConfig) but is NOT
+            # enabled by default. Phase 17's N=45 validation showed
+            # that forcing the dreams wrapper on engineering agents
+            # via decision-pattern detection did not reliably improve
+            # outcomes (legacy-deletion 87% with neutral dropped to
+            # 67% with prompt-routed dreams; retry-under-load 60%
+            # dropped to 33%). The mechanism is preserved as a knob
+            # for future experiments and for power-users who can A/B
+            # test it on their workloads. The default keeps the
+            # agent-level routing only.
+            domain = resolve_agent_domain(safe_id)
+            preferred_style = recommended_injection_style(domain)
+            effective_cfg = dc_replace(cfg.imagination, injection_style=preferred_style)
+            middleware_list.append(
+                ImaginationMiddleware(agent_id=safe_id, cfg=effective_cfg)
+            )
+            logger.info(
+                "dreamscape: imagination middleware attached "
+                "(trigger@%d failures, threshold=%.1f, domain=%s, style=%s)",
+                cfg.imagination.trigger_after_failures,
+                cfg.imagination.min_imagination_trait,
+                domain,
+                preferred_style,
+            )
+        except Exception:
+            logger.warning(
+                "dreamscape: imagination middleware failed to attach", exc_info=True
+            )
+
+
 DEFAULT_AGENT_NAME = "agent"
 """The default agent name used when no `-a` flag is provided."""
 
@@ -758,12 +1084,29 @@ def create_cli_agent(
 
         model = _create_model(model).model
 
-    tools = tools or []
+    tools = list(tools or [])
     effective_cwd = (
         Path(cwd)
         if cwd is not None
         else (project_context.user_cwd if project_context is not None else None)
     )
+
+    # User-defined proxy tools — shell-command templates registered via
+    # ``/proxy add``. They live in ``~/.bog-agents/proxies.toml`` and are
+    # materialised as LangChain StructuredTools at build time. Failure
+    # to load any one tool is logged but never blocks agent creation.
+    try:
+        from bog_agents_cli.proxy_tools import build_proxy_tools
+
+        proxy_tools = build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        if proxy_tools:
+            tools.extend(proxy_tools)
+            logger.info(
+                "Loaded %d proxy tools from ~/.bog-agents/proxies.toml",
+                len(proxy_tools),
+            )
+    except Exception:
+        logger.warning("Failed to build proxy tools; skipping", exc_info=True)
 
     # Setup agent directory for persistent memory (if enabled)
     if enable_memory or enable_skills:
@@ -1150,6 +1493,33 @@ def create_cli_agent(
             logger.info("ThinkingMiddleware auto-enabled (budget=%d)", thinking_budget)
     except ImportError:
         logger.debug("ThinkingMiddleware not importable; skipping")
+
+    # Dreamscape middleware stack — entirely opt-in.
+    #
+    # When `~/.bog-agents/dreamscape.toml` is missing or has
+    # `enabled = false`, NONE of these middlewares attach and the
+    # agent behaves bit-for-bit identical to a build without the
+    # dreamscape package. Per-feature toggles inside the master
+    # switch give finer control: someone can enable lifecycle
+    # tracking (for the dashboard) without enabling laws enforcement
+    # or imagination injection.
+    #
+    # Wrapped in a try/except so any import/config error here can
+    # never block agent creation — observability features must not
+    # be load-bearing.
+    try:
+        from bog_agents_cli.dreamscape import load_dreamscape_config
+
+        dreamscape_cfg = load_dreamscape_config()
+        if dreamscape_cfg.any_active:
+            _attach_dreamscape_middleware(
+                agent_middleware,
+                cfg=dreamscape_cfg,
+                agent_id=assistant_id,
+                system_prompt=system_prompt,
+            )
+    except Exception:
+        logger.warning("dreamscape middleware setup failed; skipping", exc_info=True)
 
     # Worktree isolation middleware (Feature #1)
     if sandbox is None and enable_git_tools:

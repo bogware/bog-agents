@@ -120,9 +120,19 @@ DEFAULT_TIER_CONFIGS: list[ContextTierConfig] = [
 ]
 
 
-# Known model context window sizes (tokens)
+# Known model context window sizes (tokens).
+#
+# Keep this list short and fact-based — the function
+# :func:`detect_context_window` consults the installed LangChain
+# provider package's `_PROFILES` first, so this dict is only the
+# fallback for models the provider package hasn't catalogued yet (or
+# for cases where the provider package isn't installed). New 1M+
+# models do NOT need an entry here; they'll be picked up
+# automatically once the provider package ships the profile.
 MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-    # Anthropic
+    # Anthropic — 1M tier introduced with Opus 4.7
+    "claude-opus-4-7": 1_000_000,
+    "claude-opus-4-7-20250219": 1_000_000,
     "claude-sonnet-4-6": 200_000,
     "claude-opus-4-6": 200_000,
     "claude-haiku-4-5": 200_000,
@@ -130,6 +140,7 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-opus": 200_000,
     "claude-3-haiku": 200_000,
     # OpenAI
+    "gpt-5": 1_000_000,
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
     "gpt-4-turbo": 128_000,
@@ -139,6 +150,7 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
     "o1-mini": 128_000,
     "o3": 200_000,
     "o3-mini": 200_000,
+    "o4-mini": 200_000,
     # Google
     "gemini-2.5-pro": 1_000_000,
     "gemini-2.5-flash": 1_000_000,
@@ -162,29 +174,145 @@ MODEL_CONTEXT_WINDOWS: dict[str, int] = {
 def detect_context_window(model_name: str, *, default: int = 128_000) -> int:
     """Detect the context window size for a given model.
 
+    Resolution order (highest priority first):
+
+    1. **Live provider profile**: the installed LangChain provider
+       package's ``_PROFILES`` (e.g. ``langchain_anthropic.data._profiles``)
+       is the source of truth for current models. We import it on
+       demand and read ``max_input_tokens``. This means a 2M / 10M
+       model added to the provider package tomorrow Just Works
+       without a release of this library.
+    2. **Curated fallback table** :data:`MODEL_CONTEXT_WINDOWS`. Used
+       when the provider package isn't installed or the model isn't
+       yet in its profile data.
+    3. **Partial-name fallback** within the curated table (so
+       ``claude-sonnet`` matches ``claude-sonnet-4-6``).
+    4. **Caller-supplied default**.
+
     Args:
-        model_name: Model name or identifier.
-        default: Default window size if model is unknown.
+        model_name: Model name or identifier; ``"provider:model"``
+            specs are accepted and the provider prefix is stripped.
+        default: Window size when nothing else resolves.
 
     Returns:
         Context window size in tokens.
     """
-    # Strip provider prefix (e.g., "anthropic:claude-sonnet-4-6" -> "claude-sonnet-4-6")
-    name = model_name.rsplit(":", maxsplit=1)[-1] if ":" in model_name else model_name
-    # Strip version suffixes for matching
+    # Strip provider prefix (``anthropic:claude-sonnet-4-6`` →
+    # ``claude-sonnet-4-6``) and remember it so we can route the
+    # provider-profile lookup correctly.
+    provider_hint: str | None = None
+    if ":" in model_name:
+        provider_hint, name = model_name.split(":", 1)
+    else:
+        name = model_name
     name_lower = name.lower()
 
-    # Direct match
+    # 1. Live provider profile.
+    live = _lookup_provider_profile_window(name_lower, provider_hint)
+    if live is not None:
+        return live
+
+    # 2. Curated fallback — direct match.
     if name_lower in MODEL_CONTEXT_WINDOWS:
         return MODEL_CONTEXT_WINDOWS[name_lower]
 
-    # Partial match (e.g., "claude-sonnet" matches "claude-sonnet-4-6")
+    # 3. Partial match (``claude-sonnet`` ↔ ``claude-sonnet-4-6``).
     for known_name, window_size in MODEL_CONTEXT_WINDOWS.items():
         if name_lower.startswith(known_name) or known_name.startswith(name_lower):
             return window_size
 
     logger.info("Unknown model %s, using default context window %d", model_name, default)
     return default
+
+
+# Cache of (provider, model) → window size so we don't re-import
+# provider data modules on every call. Cleared on process restart.
+_PROFILE_WINDOW_CACHE: dict[tuple[str | None, str], int | None] = {}
+
+# Provider-name hints we try when no explicit prefix is supplied.
+# Order matters: most common first. Each entry is the LangChain
+# provider package's ``data._profiles`` module path.
+_PROVIDER_PROFILE_MODULES: tuple[tuple[str, str], ...] = (
+    ("anthropic", "langchain_anthropic.data._profiles"),
+    ("openai", "langchain_openai.data._profiles"),
+    ("google_genai", "langchain_google_genai.data._profiles"),
+    ("google_vertexai", "langchain_google_vertexai.data._profiles"),
+    ("bedrock", "langchain_aws.data._profiles"),
+    ("deepseek", "langchain_deepseek.data._profiles"),
+    ("groq", "langchain_groq.data._profiles"),
+    ("mistralai", "langchain_mistralai.data._profiles"),
+    ("ollama", "langchain_ollama.data._profiles"),
+)
+
+
+def _lookup_provider_profile_window(model_name_lower: str, provider_hint: str | None) -> int | None:
+    """Look up ``max_input_tokens`` from an installed provider's `_profiles` module.
+
+    Args:
+        model_name_lower: Lower-cased bare model name.
+        provider_hint: When non-None, only this provider's profile
+            module is consulted. Otherwise we scan all known
+            providers in priority order and return the first hit.
+
+    Returns:
+        The model's ``max_input_tokens`` if present in the profile;
+        ``None`` when the profile module isn't installed, doesn't
+        list the model, or doesn't include a tokens entry.
+    """
+    cache_key = (provider_hint, model_name_lower)
+    if cache_key in _PROFILE_WINDOW_CACHE:
+        return _PROFILE_WINDOW_CACHE[cache_key]
+
+    candidates: list[tuple[str, str]]
+    if provider_hint:
+        # Build the canonical module path for an explicit provider.
+        package_root = {
+            "anthropic": "langchain_anthropic",
+            "openai": "langchain_openai",
+            "azure_openai": "langchain_openai",
+            "google_genai": "langchain_google_genai",
+            "google_vertexai": "langchain_google_vertexai",
+            "bedrock": "langchain_aws",
+            "bedrock_converse": "langchain_aws",
+            "deepseek": "langchain_deepseek",
+            "groq": "langchain_groq",
+            "mistralai": "langchain_mistralai",
+            "ollama": "langchain_ollama",
+        }.get(provider_hint)
+        if package_root is None:
+            _PROFILE_WINDOW_CACHE[cache_key] = None
+            return None
+        candidates = [(provider_hint, f"{package_root}.data._profiles")]
+    else:
+        candidates = list(_PROVIDER_PROFILE_MODULES)
+
+    import importlib
+
+    for _provider, module_path in candidates:
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError:
+            continue
+        profiles = getattr(module, "_PROFILES", None)
+        if not isinstance(profiles, dict):
+            continue
+        profile = profiles.get(model_name_lower)
+        if profile is None:
+            # Try partial match for versioned ids like
+            # ``claude-sonnet-4-6-20250219``.
+            for known_name, prof in profiles.items():
+                if model_name_lower.startswith(known_name.lower()) or known_name.lower().startswith(model_name_lower):
+                    profile = prof
+                    break
+        if not isinstance(profile, dict):
+            continue
+        window = profile.get("max_input_tokens")
+        if isinstance(window, int) and window > 0:
+            _PROFILE_WINDOW_CACHE[cache_key] = window
+            return window
+
+    _PROFILE_WINDOW_CACHE[cache_key] = None
+    return None
 
 
 def get_tier_config(

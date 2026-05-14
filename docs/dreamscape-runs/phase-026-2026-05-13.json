@@ -1,0 +1,81 @@
+{
+  "phase": 26,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "N=30 confirmation of Phase 21's per-prompt content routing finding. P21's CI [38%, 57%] was wide and straddled 50%. P26 doubles the N to halve the CI width.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "n_trials_per_scenario": 30,
+    "scenarios": 7,
+    "scenario_mix": "3 debugging + 2 decision-shaped + 2 creative-shape (same set as P21)",
+    "arms": [
+      "static — no content routing, sample from full mixed archive",
+      "routed — per-prompt content routing via keyword classifier, sample by category filter"
+    ],
+    "archives": "Both arms get the same mixed archive: 3 engineering-craft + 3 myth dreams.",
+    "wrapper": "Both arms use neutral wrapper. Only the seed CATEGORY differs."
+  },
+  "results": {
+    "total_elapsed_seconds": 201.8,
+    "aggregate": {
+      "routed_wins": 84,
+      "static_wins": 115,
+      "ties": 11,
+      "n": 210,
+      "routed_win_rate": 0.40,
+      "wilson_95_ci": [0.336, 0.467],
+      "interpretation": "Per-prompt content routing genuinely LOSES at N=210. Lower CI bound 33.6%, upper bound 46.7% — ENTIRELY below 50%. Static routing wins by ~10 percentage points."
+    },
+    "by_kind": [
+      {"kind": "debugging", "routed_wins": 35, "static_wins": 47, "ties": 8, "n": 90, "routed_win_rate": 0.39, "ci": [0.30, 0.49]},
+      {"kind": "decision", "routed_wins": 20, "static_wins": 39, "ties": 1, "n": 60, "routed_win_rate": 0.33, "ci": [0.23, 0.46]},
+      {"kind": "creative", "routed_wins": 29, "static_wins": 29, "ties": 2, "n": 60, "routed_win_rate": 0.48, "ci": [0.36, 0.61]}
+    ]
+  },
+  "phase_21_vs_26_comparison": {
+    "phase_21_n_per_scenario": 15,
+    "phase_21_aggregate_routed_win_rate": 0.476,
+    "phase_21_ci": [0.383, 0.571],
+    "phase_26_n_per_scenario": 30,
+    "phase_26_aggregate_routed_win_rate": 0.40,
+    "phase_26_ci": [0.336, 0.467],
+    "interpretation": "P21 at N=105 reported 47.6% with CI [38%, 57%] — straddling 50%. P26 at N=210 reports 40% with CI [34%, 47%] — fully below 50%. The point estimate shifted DOWN (toward worse) as the CI tightened. P21 was at the optimistic edge of the noise band; the truth is closer to 40% routed-win-rate."
+  },
+  "implications": [
+    "**Per-prompt content routing (keyword classifier) actively HURTS outcomes.** Routing reduces dream variety by filtering — the static arm's diverse-sampling beats the routed arm's filtered-sampling even on debugging prompts where the classifier correctly picks EC seeds.",
+    "**The hypothesis isn't classifier-precision — it's filtering-vs-diversity.** Even on debugging (where the keyword classifier correctly identifies engineering and picks EC), the routed arm at 39% [30%, 49%] loses to the static arm's mixed sampling. The diverse dreams archive (some EC, some myth) appears to inadvertently work better than category-filtered sampling.",
+    "**Decision-shaped is the worst case for routing.** Routed wins only 33% [23%, 46%] on decision prompts. The keyword classifier flips these to creative → myth seeds, but an engineering-styled agent with neutral wrapper doesn't benefit from myth seeds; the mixed static archive does better.",
+    "**Creative scenarios are roughly tied.** Routed 48% [36%, 61%] vs static — straddles 50%. The agent's voice is engineering; injecting myth-only seeds doesn't recreate Phase 11's creative-agent + dreams magic.",
+    "**Shipping decision: keep `use_content_routing=False` as default.** The Phase 21 hint is now confirmed. Per-prompt content routing as currently implemented should NOT be enabled.",
+    "**Phase 27 will test whether LLM classification fixes this.** The hypothesis is no (since the issue is filtering not accuracy), but worth measuring."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 420,
+    "sonnet_calls": 210,
+    "approx_cost_total_usd": 1.20
+  },
+  "live_calls": 630,
+  "approx_cost_usd": 1.20,
+  "test_suite_stats": {
+    "cli_unit_tests": 3599,
+    "dreamscape_specific": 114,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "per_prompt_content_routing_keyword_classifier": "actively hurts — 40% win rate, CI fully below 50%",
+    "p21_interpretation_revised": "P21's 47.6% was the upper edge of the noise band; P26's tighter measurement shows true rate is ~40%."
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "Phase 26 confirms Phase 21's mechanism doesn't pay off. The keyword classifier's accuracy is one possible cause — Phase 27 tests this.",
+    "The 'filter reduces diversity' hypothesis is intuitive but not directly tested. A future phase could compare routed-pure-EC vs routed-pure-myth vs static-mixed at fixed N."
+  ],
+  "verdict": "CLARIFYING NEGATIVE — per-prompt content routing should NOT be enabled by default. The N=210 measurement resolves Phase 21's wide CI; the keyword-classifier-driven routing genuinely loses to static.",
+  "next_steps": [
+    "Phase 27 (running): does the LLM classifier (Phase 19/27) change the outcome? If yes, the issue was accuracy. If no, the issue is filtering-vs-diversity.",
+    "Phase 28: telemetry exporter for cross-deployment analysis (no LLM cost).",
+    "Phase 31 (suggested): diversity-vs-routing experiment — three arms: pure-EC, pure-myth, mixed. Confirm that mixing wins regardless of prompt shape."
+  ]
+}

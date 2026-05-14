@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
+import subprocess  # noqa: S404 — used only for list2cmdline quoting helper, no process spawned
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -47,6 +50,36 @@ VarType = str  # "string" | "secret" | "enum" | "int" | "bool"
 # Pattern for ${var_name} substitution. Names accept letters, digits, and _.
 # We deliberately don't support ${a.b} or ${a:-default} — keep it boring.
 _VAR_PATTERN = re.compile(r"\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _shell_quote_for_platform(value: str) -> str:
+    """Quote ``value`` so it cannot break out of a shell-command argument.
+
+    Used when interpolating untrusted variable values into a string that
+    will be handed to ``subprocess.Popen(..., shell=True)``. On POSIX the
+    standard ``shlex.quote`` is correct (wraps in single quotes,
+    escapes embedded single quotes). On Windows the shell is cmd.exe,
+    where ``shlex.quote`` is unsafe — cmd uses ``"`` for grouping but
+    treats ``^``, ``&``, ``|``, ``<``, ``>``, ``(``, ``)``, and ``%``
+    as metacharacters that must be escaped with ``^`` even inside
+    quotes. We delegate to ``subprocess.list2cmdline`` (the same
+    routine the stdlib uses when building Windows command lines) and
+    then escape the residual cmd-shell metacharacters.
+
+    Returns:
+        A safely-quoted form of ``value``. Always a non-empty string.
+    """
+    if sys.platform != "win32":
+        return shlex.quote(value)
+    # Stage 1: produce a double-quoted argument with internal quotes
+    # and backslashes escaped per the C runtime's argv-parsing rules.
+    quoted = subprocess.list2cmdline([value])
+    # Stage 2: cmd.exe metacharacters survive C-runtime quoting and
+    # must be escaped with a leading ``^`` even inside double quotes
+    # (per Microsoft's cmd.exe special-characters reference).
+    for meta in ("^", "&", "|", "<", ">", "(", ")", "%", "!"):
+        quoted = quoted.replace(meta, "^" + meta)
+    return quoted
 
 
 class VarError(ValueError):
@@ -270,7 +303,12 @@ class VarBundle:
             else:
                 self.set(spec.name, answer)
 
-    def substitute(self, template: str | dict[str, Any] | list[Any]) -> Any:
+    def substitute(
+        self,
+        template: str | dict[str, Any] | list[Any],
+        *,
+        shell_quote: bool = False,
+    ) -> Any:
         """Recursively replace ``${var_name}`` placeholders in ``template``.
 
         For secret vars, the substituted value is the cleartext (so HTTP
@@ -279,6 +317,12 @@ class VarBundle:
         Args:
             template: A string with ``${name}`` placeholders, or a nested
                 dict/list of such strings.
+            shell_quote: When True, each interpolated value passes through
+                :func:`shlex.quote` (POSIX) or
+                :func:`subprocess.list2cmdline` (Windows) so it cannot
+                escape its argument when embedded in a shell command.
+                Use this for any template that ends up at
+                ``subprocess.Popen(..., shell=True)``.
 
         Returns:
             The same shape as ``template`` with placeholders replaced.
@@ -287,14 +331,17 @@ class VarBundle:
             VarError: If a referenced var is not declared.
         """
         if isinstance(template, str):
-            return self._sub_string(template)
+            return self._sub_string(template, shell_quote=shell_quote)
         if isinstance(template, dict):
-            return {k: self.substitute(v) for k, v in template.items()}
+            return {
+                k: self.substitute(v, shell_quote=shell_quote)
+                for k, v in template.items()
+            }
         if isinstance(template, list):
-            return [self.substitute(v) for v in template]
+            return [self.substitute(v, shell_quote=shell_quote) for v in template]
         return template
 
-    def _sub_string(self, s: str) -> str:
+    def _sub_string(self, s: str, *, shell_quote: bool = False) -> str:
         def _replace(m: re.Match[str]) -> str:
             name = m.group(1)
             if name not in self.specs:
@@ -304,9 +351,12 @@ class VarBundle:
             if value is None:
                 msg = f"var ${{{name}}} is unresolved (call resolve() first)"
                 raise VarError(msg)
-            if isinstance(value, SecretStr):
-                return value.get_secret_value()
-            return str(value)
+            raw = (
+                value.get_secret_value() if isinstance(value, SecretStr) else str(value)
+            )
+            if shell_quote:
+                return _shell_quote_for_platform(raw)
+            return raw
 
         return _VAR_PATTERN.sub(_replace, s)
 

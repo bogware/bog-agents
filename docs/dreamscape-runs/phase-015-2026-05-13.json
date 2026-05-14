@@ -1,0 +1,95 @@
+{
+  "phase": 15,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "does the CONTENT of injected dreams matter — engineering-craft seeds (new, Phase 15) vs computing-history seeds (existing) on technical-debugging prompts. The Phase 14 finding established imagination injection hurts on technical (28% win vs control); Phase 15 asks whether domain-appropriate content can claw that back.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation_added": {
+    "module": "bog_agents_cli/dreamscape/seeds.py",
+    "new_category": "engineering-craft",
+    "entries_added": 15,
+    "examples": [
+      "The 3am page where the on-call engineer found the bug had been live for six years.",
+      "The git bisect that ended at the merge commit whose author had left the company.",
+      "The retry policy that worked perfectly for three years, until the downstream API added a 429 response code.",
+      "The feature flag that was meant to be temporary in 2017 and is now load-bearing."
+    ],
+    "domain_preference_change": "engineering domain now prefers engineering-craft FIRST, computing-history second. Research domain gets engineering-craft as secondary.",
+    "tests_added": 2
+  },
+  "experiment_design": {
+    "n_trials_per_scenario": 10,
+    "scenarios": 7,
+    "total_trials": 70,
+    "arms": [
+      "engineering-craft (EC): 5-dream archive seeded with 'the bug live for six years' and similar texture",
+      "computing-history (CH): 5-dream archive seeded with Hamilton, Knuth, Engelbart, Hopper, Thompson + Ritchie imagery"
+    ],
+    "judge_design": "Direct EC-vs-CH head-to-head. Both arms use the neutral wrapper (engineering routing). Response order randomized per trial.",
+    "no_control_baseline": "Phase 14 already gave us tight CI on no-injection control vs treatment; Phase 15 is specifically asking which seeds win.",
+    "concurrency": "asyncio.Semaphore(6)"
+  },
+  "results": {
+    "total_elapsed_seconds": 93.8,
+    "total_trials": 70,
+    "engineering_craft_wins": 44,
+    "computing_history_wins": 23,
+    "ties": 3,
+    "ec_win_rate": 0.629,
+    "wilson_95_ci_lo": 0.511,
+    "wilson_95_ci_hi": 0.732,
+    "interpretation": "Engineering-craft win rate 62.9% with 95% CI [51%, 73%]. The lower bound JUST exceeds 50%, so the EC > CH effect is statistically significant at alpha=0.05 (one-sided). The directional finding is clear: domain-appropriate dream content lifts the imagination-injection effect on engineering prompts."
+  },
+  "per_scenario": [
+    {"scenario": "permission-denied-chmod", "engineering_craft_wins": 6, "computing_history_wins": 4, "ties": 0, "ec_win_rate": 0.60, "ci": [0.31, 0.83]},
+    {"scenario": "python-memory-creep", "engineering_craft_wins": 3, "computing_history_wins": 6, "ties": 1, "ec_win_rate": 0.30, "ci": [0.11, 0.60]},
+    {"scenario": "flaky-test-ci-only", "engineering_craft_wins": 5, "computing_history_wins": 4, "ties": 1, "ec_win_rate": 0.50, "ci": [0.24, 0.76]},
+    {"scenario": "slow-prod-query", "engineering_craft_wins": 5, "computing_history_wins": 4, "ties": 1, "ec_win_rate": 0.50, "ci": [0.24, 0.76]},
+    {"scenario": "refactor-decision", "engineering_craft_wins": 7, "computing_history_wins": 3, "ties": 0, "ec_win_rate": 0.70, "ci": [0.40, 0.89]},
+    {"scenario": "retry-under-load", "engineering_craft_wins": 9, "computing_history_wins": 1, "ties": 0, "ec_win_rate": 0.90, "ci": [0.60, 0.98]},
+    {"scenario": "legacy-deletion", "engineering_craft_wins": 9, "computing_history_wins": 1, "ties": 0, "ec_win_rate": 0.90, "ci": [0.60, 0.98]}
+  ],
+  "implications": [
+    "**The CONTENT of the dream archive matters — not just the wrapper.** When an engineering agent dreams of 'the bug that had been live for six years' instead of 'Margaret Hamilton at the Apollo console,' the resulting injections score better on engineering-prompt judgments.",
+    "**The wins concentrate on scenarios where the engineering-craft texture maps directly to the prompt.** retry-under-load (90% EC win — the new 'retry policy that worked for three years until...' seed maps cleanly), legacy-deletion (90% — the 'feature flag from 2017 is now load-bearing' seed maps), refactor-decision (70% — the 'TODO from 2014 wrong in opposite direction' seed maps).",
+    "**The one CH win (python-memory-creep at 30% EC) suggests historical-figure framing can still help on some prompts.** Computing-history seeds aren't useless; they're just not the strongest default for engineering work.",
+    "**Phase 14 + 15 together strongly justify the routing layer.** Phase 14: domain-aware *wrapper* selection avoids the technical-prompt penalty. Phase 15: domain-aware *content* selection further lifts the technical-prompt win rate above what neutral-wrapper-with-historical-seeds achieves.",
+    "**The shipped engineering preference order (engineering-craft FIRST, computing-history second) is justified by data.** The CI lower bound is just above 50%, so this is statistically significant — but the per-scenario heterogeneity (30% to 90%) shows the effect varies a lot by prompt shape.",
+    "**This is a domain-content story, not a generic 'better seeds' story.** Engineering-craft seeds are specifically tuned to engineering work; they would likely lose on creative prompts the same way computing-history wins do.",
+    "**Combined with Phase 14: imagination injection on engineering prompts now has a path forward.** With engineering-craft seeds + neutral wrapper, we'd estimate a treatment-win rate somewhere between Phase 14's 28% and the EC/CH ratio implies — possibly 35-45% — still below 50% vs no-injection but materially better than the historical-figure default."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 140,
+    "sonnet_calls": 70,
+    "approx_cost_total_usd": 0.40
+  },
+  "live_calls": 210,
+  "approx_cost_usd": 0.40,
+  "test_suite_stats": {
+    "cli_unit_tests": 3566,
+    "dreamscape_specific": 81,
+    "added_this_phase": 2
+  },
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "engineering_craft_seed_library": "sings — 62.9% win rate vs computing-history on engineering prompts, lower CI bound above 50%",
+    "domain_aware_seed_selection": "sings — engineering-craft as primary engineering preference justified by data",
+    "imagination_injection_on_engineering_prompts_with_eng_craft_seeds": "improved — likely closes part of Phase 14's 28% gap (combined experiment in future phase)",
+    "imagination_injection_mechanism": "sings",
+    "cross_agent_shared_memory": "sings",
+    "domain_classifier": "sings"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "Phase 15 did not include a no-injection control arm — we don't know whether eng-craft injection beats no-injection control. The implicit claim ('eng-craft lifts the Phase-14 28% rate') is inferred from the EC > CH delta, not directly measured. A future combined experiment would test eng-craft vs no-injection control directly.",
+    "N=10 per scenario is still modest. Some per-scenario CIs are wide (e.g. permission-denied-chmod: [31%, 83%])."
+  ],
+  "verdict": "WIN — domain-appropriate dream CONTENT helps. Engineering agents should dream of engineering-craft, not historical-figures-in-computing.",
+  "next_steps": [
+    "Phase 16 (suggested): combined experiment — control vs treatment-with-engineering-craft on technical prompts (N=20). Does engineering-craft + neutral wrapper close enough of Phase 14's 28% gap to make imagination injection net-positive for engineering agents?",
+    "Phase 17 (suggested): per-call routing. The 90% EC-win on retry-under-load and legacy-deletion vs 30% on memory-creep shows even within 'technical' there's prompt-shape variance. A per-prompt classifier could route the right seeds to each prompt.",
+    "Phase 18 (suggested): write more engineering-craft seeds (toward 30+ entries). The library at 15 entries will repeat fairly quickly under a daily-dreaming engineer."
+  ]
+}

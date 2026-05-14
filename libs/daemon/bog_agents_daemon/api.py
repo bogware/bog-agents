@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 if TYPE_CHECKING:
     from bog_agents_daemon.models import JobRun
     from bog_agents_daemon.scheduler import DaemonScheduler
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from bog_agents_daemon import __version__
 from bog_agents_daemon.models import (
@@ -48,7 +48,19 @@ _TOKEN_FILE = Path.home() / ".bog-agents" / "daemon" / "token"
 class TriggerConfigModel(BaseModel):
     """Pydantic schema for TriggerConfig."""
 
+    model_config = ConfigDict(extra="forbid")
+
     type: str
+
+    @field_validator("type")
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
+        valid = {t.value for t in TriggerType}
+        if v not in valid:
+            msg = f"invalid trigger type {v!r} — must be one of {sorted(valid)}"
+            raise ValueError(msg)
+        return v
+
     cron: str = ""
     interval_seconds: int = 0
     watch_patterns: list[str] = []
@@ -62,7 +74,19 @@ class TriggerConfigModel(BaseModel):
 class OutputConfigModel(BaseModel):
     """Pydantic schema for OutputConfig."""
 
+    model_config = ConfigDict(extra="forbid")
+
     target: str
+
+    @field_validator("target")
+    @classmethod
+    def _validate_target(cls, v: str) -> str:
+        valid = {t.value for t in OutputTarget}
+        if v not in valid:
+            msg = f"invalid output target {v!r} — must be one of {sorted(valid)}"
+            raise ValueError(msg)
+        return v
+
     file_path: str = ""
     append: bool = True
     smtp_host: str = ""
@@ -97,6 +121,8 @@ _MAX_OUTPUTS = 64
 class CreateJobRequest(BaseModel):
     """Request body for creating an ambient job."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., max_length=_MAX_NAME_LEN, min_length=1)
     description: str = Field("", max_length=_MAX_DESCRIPTION_LEN)
     prompt: str = Field("", max_length=_MAX_PROMPT_LEN)
@@ -112,6 +138,8 @@ class CreateJobRequest(BaseModel):
 class TriggerRunRequest(BaseModel):
     """Optional body for manual job trigger."""
 
+    model_config = ConfigDict(extra="forbid")
+
     context: dict[str, Any] = {}
 
 
@@ -121,6 +149,8 @@ class UpdateJobRequest(BaseModel):
     Every field is optional. Only the fields the caller sends are
     overwritten on the stored record; everything else is preserved.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, max_length=_MAX_NAME_LEN)
     description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LEN)
@@ -751,10 +781,23 @@ def create_app(
         # instead. We still accept a daemon-token request — that's how the
         # in-process CLI test harness fires webhooks — but we no longer
         # *require* it, which would have made external use impossible.
-        # If a trigger configures a webhook_secret, the X-Hub-Signature-256
-        # check below is the sole guard. If neither auth is presented and
-        # the trigger has no secret, we treat the webhook as a public
-        # entry point (as documented).
+        #
+        # Security contract — fail closed
+        # -------------------------------
+        # 1. If a valid daemon token is presented, the request is trusted
+        #    and the HMAC check is skipped (CLI test path).
+        # 2. If no token is presented AND the trigger has a non-empty
+        #    ``webhook_secret``, the X-Hub-Signature-256 HMAC check is
+        #    the sole guard; mismatch → trigger is silently skipped.
+        # 3. If no token is presented AND the trigger has an empty
+        #    ``webhook_secret``, the request is REJECTED for that trigger
+        #    (a warning is logged for the operator). Empty secret means
+        #    "misconfigured trigger", not "public endpoint" — the latter
+        #    is too easy to misconfigure into an open RCE.
+        # An earlier version of this comment block claimed empty secrets
+        # were "public entry points"; that was always aspirational and
+        # never matched the rejection logic below. See
+        # tests/unit_tests/test_webhook_auth.py for the pinned behaviour.
         provided_token = request.headers.get("X-Daemon-Token", "")
         is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token)
         raw_body = await request.body()

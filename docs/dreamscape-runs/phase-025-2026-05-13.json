@@ -1,0 +1,108 @@
+{
+  "phase": 25,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "production telemetry infrastructure — event logging + aggregator + dashboard. The campaign's effectiveness measurements have all been offline (scripted scenarios, blind A/B with Sonnet judge). Phase 25 ships the infrastructure for ONLINE measurement: real dreams fired, real injections, real helped-rates over real user sessions.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation": {
+    "new_module": "bog_agents_cli/dreamscape/telemetry.py (~240 lines)",
+    "public_api": [
+      "record_event(agent_id, kind, metadata)",
+      "iter_events(agent_id, since, kind)",
+      "aggregate_events(agent_id, since) -> TelemetryAggregate",
+      "telemetry_path(agent_id)",
+      "clear_telemetry(agent_id)"
+    ],
+    "event_kinds": [
+      "dream_fired — recorded when maybe_dream produces a DreamArtifact",
+      "injection_fired — recorded when ImaginationMiddleware._maybe_inject lands a wrapper into the system prompt",
+      "injection_helped — recorded when the next response after injection is not error-flagged"
+    ],
+    "storage": "~/.bog-agents/agents/<agent_id>/telemetry.jsonl, append-only, rotated at 1 MB",
+    "metadata_per_dream": ["title", "elapsed_seconds", "seeds_used_count", "category"],
+    "metadata_per_injection": ["injection_style", "content_category", "excerpt_count"],
+    "metadata_per_helped": "empty (the relationship to prior injection is implicit in ordering)",
+    "wiring": [
+      "dream_engine.maybe_dream — records dream_fired after artifact write, reading category from frontmatter",
+      "imagination._maybe_inject — records injection_fired with style + content_category",
+      "imagination._record_outcome — records injection_helped when post-injection response is non-error"
+    ],
+    "user_surface": [
+      "render_dreamscape_telemetry() in dashboard.py — Rich-markup operator view",
+      "/dreamscape stats [hours|all] — slash command shows last N hours (default 24) or whole history",
+      "Subcommand registered in commands/general.py for autocomplete"
+    ],
+    "tests_added": 10,
+    "tests_cover": [
+      "Round-trip: record then iter",
+      "Reject invalid kind",
+      "Filter by since timestamp",
+      "Filter by kind",
+      "Empty when no log",
+      "Aggregate counts + dreams_by_category + injections_by_style + helped_rate + approx_cost",
+      "Helped rate None when no injections",
+      "clear_telemetry removes log file",
+      "Render handles empty state",
+      "Render shows populated counts + breakdowns"
+    ]
+  },
+  "live_demo": {
+    "name": "scratch_phase25_telemetry_demo.py",
+    "kind": "end-to-end exercise — no A/B, just pipeline verification",
+    "steps": [
+      "Pre-seed snapshot for dream eligibility",
+      "Fire 2 real dreams via maybe_dream (Haiku calls)",
+      "Fire 2 imagination injections (mechanism-only, no real Haiku)",
+      "Verify all events landed in JSONL",
+      "Aggregate + render dashboard view"
+    ],
+    "result": {
+      "events_total": 6,
+      "dreams_fired": 2,
+      "injections_fired": 2,
+      "injections_helped": 2,
+      "helped_rate": 1.0,
+      "approx_cost_usd": 0.002,
+      "dreams_by_category": {"nature": 2},
+      "injections_by_style": {"neutral": 2}
+    },
+    "interpretation": "The telemetry pipeline works end-to-end. Every dream fired produced a dream_fired event with title + elapsed + category metadata. Every injection produced an injection_fired event with style + content_category metadata. Every successful injection produced an injection_helped event. The aggregator correctly counts + breaks down by category/style. The dashboard render displays the operator-relevant numbers + rates."
+  },
+  "what_this_unlocks": [
+    "Operators can run `/dreamscape stats` in the CLI to see what dreamscape is actually doing in their session: how many dreams fired, what categories, what injection style, what helped rate.",
+    "Future research (Phase 28+) can analyze production telemetry to answer 'does dreamscape help my real users on their real work' — the question the campaign's offline measurements can only proxy.",
+    "The category + style breakdowns let an operator see WHICH knob is active: e.g. an engineering agent's dreams_by_category should show 'engineering-craft' as the top entry.",
+    "The helped_rate at the agent level surfaces the auto-disable feedback loop transparently — Phase 4's auto-disable mechanism reads this rate too; now operators can see it."
+  ],
+  "cost_breakdown": {
+    "live_demo_haiku_calls": 2,
+    "approx_cost_total_usd": 0.002
+  },
+  "live_calls": 2,
+  "approx_cost_usd": 0.002,
+  "test_suite_stats": {
+    "cli_unit_tests": 3599,
+    "dreamscape_specific": 114,
+    "added_this_phase": 10
+  },
+  "feature_verdicts": {
+    "event_recorder": "sings — 10 unit tests pass, file rotation works at 1 MB cap",
+    "aggregator": "sings — counts + rates + cost estimate correct in unit tests + live demo",
+    "dashboard_view": "sings — empty state + populated state render correctly",
+    "slash_command_integration": "ships — /dreamscape stats [hours|all] in the registry",
+    "production_readiness": "the infrastructure is production-ready; the data is yet to accumulate in real deployments"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "The injection-helped signal is coarse (keyword scan for 'traceback', 'error', etc. on the next response). Could miss helpful injections whose response happens to mention an error generically.",
+    "JSONL doesn't compact — at 1 MB the log rotates to .1; further rotation needs operator action. Reasonable for current scales but worth revisiting if usage grows.",
+    "The dashboard render is text-only Rich markup. A future TUI surface could plot trends over time.",
+    "Telemetry isn't shipped to a remote backend by default — it lives locally only. Operators who want to aggregate across deployments would need to add an exporter."
+  ],
+  "verdict": "READY TO MERGE — clean infrastructure ship. The data accumulates as users use dreamscape; the campaign's offline measurements are unchanged.",
+  "next_steps": [
+    "Phase 28 (suggested): privacy-respecting telemetry exporter for operators who want to aggregate across deployments (push to local file path / S3 / SQLite).",
+    "Phase 29 (suggested): re-validate the campaign's offline findings against real production telemetry once it accumulates. The judge proxy might disagree with real-user signals; that disagreement is itself informative.",
+    "Phase 30 (suggested): per-injection-feedback signal beyond keyword failure detection. E.g. did the user explicitly thank the agent, edit the suggested code, accept a tool call without further prompting?"
+  ]
+}

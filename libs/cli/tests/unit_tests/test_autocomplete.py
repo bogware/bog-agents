@@ -215,8 +215,13 @@ class TestSlashCommandController:
         controller.on_text_changed("/h", 2)
         mock_view.render_completion_suggestions.assert_called()
 
-        # Now type something that doesn't match - should clear
-        controller.on_text_changed("/xyz", 4)
+        # Now type something that doesn't match - should clear.
+        # ``/qqzz`` is deliberately phonetically improbable so the fuzzy
+        # scorer (SequenceMatcher-based) doesn't accidentally hit ANY
+        # command's description as new commands are added. The earlier
+        # ``/xyz`` form started matching ``/proxy``'s description once
+        # the proxy-tool feature shipped.
+        controller.on_text_changed("/qqzz", 5)
         mock_view.clear_completion_suggestions.assert_called()
 
     def test_reset_clears_state(self, controller, mock_view):

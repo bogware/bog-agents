@@ -1,1 +1,0 @@
-{"name": "review-pack", "version": "2.0.0", "description": "Review helpers", "skills": ["skills/review/SKILL.md"], "commands": [{"name": "/scout", "prompt": "Scout: {args}"}]}

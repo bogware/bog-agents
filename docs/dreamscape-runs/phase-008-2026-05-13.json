@@ -1,0 +1,72 @@
+{
+  "phase": 8,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "automation — trends.md was 100+ lines hand-maintained by Phase 7. Phase 8 closes that loop by sourcing the tables from the per-phase JSON files directly so adding a new phase needs no manual table-editing.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation_added": {
+    "module": "scripts/build_dreamscape_trends.py",
+    "lines_added": 555,
+    "purpose": "Reads every phase-NNN-YYYY-MM-DD.json, normalizes the heterogeneous shapes (P1-P2 scenarios array vs P3-P7 live_test.results) into a PhaseSummary record, renders the cross-phase markdown tables idempotently.",
+    "interfaces": [
+      "python scripts/build_dreamscape_trends.py — regenerate trends.md",
+      "python scripts/build_dreamscape_trends.py --check — CI-friendly staleness detector",
+      "python scripts/build_dreamscape_trends.py --out PATH --source PATH — testable I/O"
+    ],
+    "json_backfills_applied": [
+      "Added test_suite_stats to phase-003 through phase-007 (back-fill for the unit-test count trend column)",
+      "Added test_focus to phase-001 and phase-002 (back-fill for the auto-generated phase log)"
+    ]
+  },
+  "unit_tests": {
+    "added": 5,
+    "names": [
+      "test_loads_all_phase_jsons_without_raising",
+      "test_renders_markdown_with_every_phase_and_section",
+      "test_check_mode_passes_when_file_is_fresh",
+      "test_summary_normalizer_handles_scenarios_shape",
+      "test_summary_normalizer_handles_live_test_shape"
+    ]
+  },
+  "test_suite_stats": {
+    "cli_unit_tests": 3544,
+    "dreamscape_specific": 52,
+    "added_this_phase": 5
+  },
+  "live_test": {
+    "name": "round-trip — load 7 JSONs, render markdown, verify check-mode invariance",
+    "results": {
+      "phases_loaded": 7,
+      "rendered_markdown_bytes": "approx 5KB",
+      "check_mode_clean_after_first_run": true,
+      "duration_seconds": 0.5,
+      "approx_cost_usd": 0.0
+    }
+  },
+  "live_calls": 0,
+  "approx_cost_usd": 0.0,
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "dream_scheduler": "sings",
+    "dreamscape_runner": "sings",
+    "trends_automation": "sings — idempotent, --check mode for CI, full coverage by 5 new tests",
+    "imagination_injection": "sings (Phase 4 fix)",
+    "cross_agent_shared_memory": "sings",
+    "lifecycle_state_machine": "works",
+    "laws_hard_rejects": "works",
+    "constitution_soft_logging": "works",
+    "agent_state_dashboard": "works",
+    "repo_overview": "works",
+    "opt_in_defaults": "ironclad"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "singular-vs-plural stem matching (Phase 2)",
+    "scheduler self-restart uses recursive coroutine (Phase 3)"
+  ],
+  "verdict": "READY TO MERGE",
+  "next_steps": [
+    "Phase 9 (suggested): true overnight run (8h+) to validate the httpx response-object GC hypothesis from Phase 6.",
+    "Phase 10 (suggested): measure DOWNSTREAM effectiveness — does an agent solve a real bug FASTER or BETTER with dreamscape on vs off? The whole feature set has been validated by mechanism + stability; we still have not measured impact on agent task success."
+  ]
+}

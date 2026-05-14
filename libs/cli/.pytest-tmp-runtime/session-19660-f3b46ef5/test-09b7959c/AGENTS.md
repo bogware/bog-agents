@@ -1,3 +1,0 @@
-## Memory Note
-
-test note

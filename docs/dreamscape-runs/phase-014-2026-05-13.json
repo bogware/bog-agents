@@ -1,0 +1,105 @@
+{
+  "phase": 14,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment_and_control": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "test_focus": "statistical-power re-run of Phase 10 + 11 — N=20 trials per scenario per domain with parallelized API calls. Goal: tight 95% Wilson confidence intervals on the treatment win rate by domain, after Phase 12's variance findings showed N=7 was too small to draw firm conclusions.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "experiment_design": {
+    "n_trials_per_scenario": 20,
+    "scenarios": 7,
+    "domains": ["technical", "creative"],
+    "total_trials": 280,
+    "concurrency": "asyncio.Semaphore(8); ~140 trials gather-parallelized per domain",
+    "per_trial_agent_ids": "phase14-<domain>-s<scenario_idx>-t<trial_idx> so concurrent trials don't race on snapshot writes",
+    "judge_blinding": "response order randomized per trial via seeded RNG",
+    "judge_prompts": "domain-specific (technical favors unblocking + tool-naming; creative favors non-obvious angle + memorable framing)"
+  },
+  "results": {
+    "total_elapsed_seconds": 255.0,
+    "technical": {
+      "total_trials": 140,
+      "treatment_wins": 39,
+      "control_wins": 101,
+      "ties": 0,
+      "treatment_win_rate": 0.279,
+      "wilson_95_ci_lo": 0.211,
+      "wilson_95_ci_hi": 0.358,
+      "interpretation": "Statistically significantly BELOW 50% — treatment hurts on technical-debugging prompts. The 95% CI [21%, 36%] does not include 50%, confirming the directional finding from Phase 10."
+    },
+    "creative": {
+      "total_trials": 140,
+      "treatment_wins": 111,
+      "control_wins": 28,
+      "ties": 1,
+      "treatment_win_rate": 0.793,
+      "wilson_95_ci_lo": 0.718,
+      "wilson_95_ci_hi": 0.852,
+      "interpretation": "Statistically significantly ABOVE 50% — treatment helps on creative/design prompts. The 95% CI [72%, 85%] does not include 50%, confirming Phase 11's headline at much tighter precision."
+    },
+    "domain_effect_size": "Treatment win rate differs by 51 percentage points between domains (79% creative vs 28% technical). The 95% confidence intervals do not overlap. This is one of the largest and most robust effect sizes in the campaign."
+  },
+  "per_scenario_technical": [
+    {"scenario": "permission-denied-chmod", "treatment_wins": 4, "control_wins": 16, "ties": 0, "win_rate": 0.20, "ci": [0.08, 0.42]},
+    {"scenario": "python-memory-creep", "treatment_wins": 5, "control_wins": 15, "ties": 0, "win_rate": 0.25, "ci": [0.11, 0.47]},
+    {"scenario": "flaky-test-ci-only", "treatment_wins": 8, "control_wins": 12, "ties": 0, "win_rate": 0.40, "ci": [0.22, 0.61]},
+    {"scenario": "slow-prod-query", "treatment_wins": 4, "control_wins": 16, "ties": 0, "win_rate": 0.20, "ci": [0.08, 0.42]},
+    {"scenario": "refactor-decision", "treatment_wins": 5, "control_wins": 15, "ties": 0, "win_rate": 0.25, "ci": [0.11, 0.47]},
+    {"scenario": "retry-under-load", "treatment_wins": 2, "control_wins": 18, "ties": 0, "win_rate": 0.10, "ci": [0.03, 0.30]},
+    {"scenario": "legacy-deletion", "treatment_wins": 11, "control_wins": 9, "ties": 0, "win_rate": 0.55, "ci": [0.34, 0.74]}
+  ],
+  "per_scenario_creative": [
+    {"scenario": "name-the-orchestrator", "treatment_wins": 14, "control_wins": 6, "ties": 0, "win_rate": 0.70, "ci": [0.48, 0.86]},
+    {"scenario": "api-shape-config-vs-args", "treatment_wins": 17, "control_wins": 3, "ties": 0, "win_rate": 0.85, "ci": [0.64, 0.95]},
+    {"scenario": "error-message-copy", "treatment_wins": 14, "control_wins": 5, "ties": 1, "win_rate": 0.70, "ci": [0.48, 0.86]},
+    {"scenario": "metaphor-for-fanout-architecture", "treatment_wins": 18, "control_wins": 2, "ties": 0, "win_rate": 0.90, "ci": [0.70, 0.97]},
+    {"scenario": "release-note-voice", "treatment_wins": 16, "control_wins": 4, "ties": 0, "win_rate": 0.80, "ci": [0.58, 0.92]},
+    {"scenario": "ux-microcopy-empty-state", "treatment_wins": 18, "control_wins": 2, "ties": 0, "win_rate": 0.90, "ci": [0.70, 0.97]},
+    {"scenario": "shape-of-a-new-feature", "treatment_wins": 14, "control_wins": 6, "ties": 0, "win_rate": 0.70, "ci": [0.48, 0.86]}
+  ],
+  "implications": [
+    "**The domain-conditional effect is now statistically robust at N=140 per domain.** The technical CI [21%, 36%] and the creative CI [72%, 85%] do not overlap. Treatment differs by 51 percentage points between domains — this is the single biggest and most reliable finding in the campaign.",
+    "**Phase 10's headline (1/7 wins on technical) UNDERSTATED the technical win rate. Phase 12's 5/7 OVERSTATED it. The true value is ~28% — both prior runs were within reasonable N=7 noise of this number.** Phase 14's N=140 finally pins the magnitude.",
+    "**Phase 11's headline (6/7 wins on creative) was an OVERESTIMATE of the true 79%, but in the right ballpark.** N=7 favored the high-margin side of the noise; Phase 14 confirms the directional finding with much tighter precision.",
+    "**The shipped context-aware routing (Phase 11/12 commit) is justified by this data.** Engineering agents getting the neutral wrapper avoids the ~28% treatment-win rate; creative agents getting the dreams wrapper gets the ~79% lift.",
+    "**Per-scenario heterogeneity is REAL.** Technical scenarios range from 10% (retry-under-load) to 55% (legacy-deletion) treatment-win. Creative scenarios range from 70% to 90%. Even within a domain, some scenarios are friendlier to imagination injection than others. The legacy-deletion scenario sits near the 50% line on the technical side — suggesting it has some creative / decision-flavored qualities that the heuristic classifier could pick up.",
+    "**Cost is reasonable.** $2.10 for 840 API calls over 4 minutes 15 seconds wall clock — well within reach for any future statistical-power phase."
+  ],
+  "cost_breakdown": {
+    "haiku_calls": 560,
+    "sonnet_calls": 280,
+    "approx_cost_haiku_usd": 0.560,
+    "approx_cost_sonnet_usd": 1.540,
+    "approx_cost_total_usd": 2.10
+  },
+  "live_calls": 840,
+  "approx_cost_usd": 2.10,
+  "test_suite_stats": {
+    "cli_unit_tests": 3564,
+    "dreamscape_specific": 79,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "dream_engine": "sings",
+    "dream_scheduler": "sings",
+    "imagination_injection_mechanism": "sings (Phase 4)",
+    "imagination_injection_on_creative_prompts": "SINGS — 79.3% win rate (95% CI [72%, 85%]) at N=140",
+    "imagination_injection_on_technical_prompts": "HURTS — 27.9% win rate (95% CI [21%, 36%]) at N=140; the shipped neutral-wrapper routing addresses this",
+    "domain_conditional_effect": "ROBUST — 51 pp difference between domains, non-overlapping 95% CIs",
+    "cross_agent_shared_memory": "sings",
+    "domain_classifier": "sings — verified end-to-end in Phase 13"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "singular-vs-plural stem matching (Phase 2)",
+    "scheduler self-restart uses recursive coroutine (Phase 3)",
+    "per-scenario heterogeneity isn't fully explained — legacy-deletion at 55% may be a creative/decision-flavored question masquerading as technical"
+  ],
+  "verdict": "DECISIVE — domain-conditional effect is statistically robust. The shipping context-aware routing is justified by data, not just intuition.",
+  "next_steps": [
+    "Phase 15 (running): test whether engineering-craft seeds beat computing-history seeds on technical prompts. Hypothesis: domain-appropriate content might lift treatment from 28% to closer to 50%.",
+    "Phase 16 (suggested): LLM classifier fallback for the long tail of profiles that the keyword classifier returns 'general' on.",
+    "Phase 17 (suggested): per-call routing — classify the prompt, not just the agent. For agents that span domains."
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "phase": 18,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "test_focus": "expand engineering-craft seed library from 15 (Phase 15) to 30 entries. Pure curation — no LLM cost, no experiment. Reduces seed-repetition for daily-dreaming engineers.",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation": {
+    "module": "bog_agents_cli/dreamscape/seeds.py",
+    "category": "engineering-craft",
+    "entries_before": 15,
+    "entries_after": 30,
+    "test_floor": "TestDreamSeeds::test_engineering_craft_category_present_and_curated pinned to >= 30",
+    "new_seeds_themes": [
+      "thread-safety and shared-state failure modes",
+      "retry / cron / timing-dependent bugs",
+      "metric self-reference and observability blind spots",
+      "drift over years (encoding bugs, timezone drift, deprecated APIs)",
+      "merge resolutions that ship and never surface",
+      "performance regressions disguised as fixes"
+    ]
+  },
+  "examples_added": [
+    "The shared dictionary mutated in five threads that worked for three years because nobody held it long.",
+    "The race condition that only appeared when the engineer who knew about it was on vacation.",
+    "The 'temporary' shell script in /opt that ran every five minutes for the entire life of the company.",
+    "The connection pool that never grew because the metric measuring its size was itself in the pool.",
+    "The merge that resolved a conflict by deleting both sides, ship-tested for six weeks, never noticed.",
+    "The performance fix that was a regression in disguise because the slow path had been suppressing a bug."
+  ],
+  "rationale": "Phase 15 validated the engineering-craft category at 15 entries. At one dream every ~30 min (production cadence), an engineer would cycle through all 15 in 7.5 hours — fast enough that seed repetition becomes noticeable within a single day. Doubling to 30 doubles the cycle time and reduces the chance of two consecutive same-seed dreams. The new entries follow the same texture (the bug live for years, the system holding hidden context) so the Phase 15 effect should generalize.",
+  "live_calls": 0,
+  "approx_cost_usd": 0.0,
+  "test_suite_stats": {
+    "cli_unit_tests": 3566,
+    "dreamscape_specific": 81,
+    "added_this_phase": 0,
+    "note": "test count unchanged; existing TestDreamSeeds tests still pass, floor moved 15→30"
+  },
+  "feature_verdicts": {
+    "engineering_craft_seed_library_size": "sings — 30 entries, ~2x reduction in same-seed-twice probability per agent-day"
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "30 entries may still be tight for an agent that runs for weeks. Future phases could expand toward 50-75 entries if observability shows seed repetition is hurting variety."
+  ],
+  "verdict": "READY TO MERGE — pure curation work, no behavior change beyond reducing repetition.",
+  "next_steps": [
+    "Phase 16 (running): does engineering-craft + neutral wrapper beat no-injection control on technical prompts?",
+    "Phase 17 (next): per-prompt routing for decision-shaped prompts."
+  ]
+}
