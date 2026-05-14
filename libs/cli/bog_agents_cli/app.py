@@ -10115,10 +10115,11 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage(body))
 
     async def _handle_dreamscape_command(self, command: str) -> None:
-        """``/dreamscape [status|init|disable]`` — view or init config."""
+        """``/dreamscape [status|init|disable|stats]`` — view or init config."""
         from bog_agents_cli.dreamscape.dashboard import (
             init_dreamscape_config,
             render_dreamscape_status,
+            render_dreamscape_telemetry,
         )
 
         await self._mount_message(UserMessage(command))
@@ -10132,6 +10133,30 @@ class BogAgentsApp(App):
                 await self._mount_message(
                     ErrorMessage(f"/dreamscape status failed: {exc}")
                 )
+            return
+
+        if raw_arg.startswith("stats"):
+            # Optional window-hours arg: "/dreamscape stats 168" = last 7 days.
+            agent_id = getattr(self, "_assistant_id", "default") or "default"
+            window_hours: float | None = 24.0
+            tokens = raw_arg.split()
+            if len(tokens) >= 2:
+                token = tokens[1]
+                if token == "all":
+                    window_hours = None
+                else:
+                    try:
+                        window_hours = max(0.1, float(token))
+                    except ValueError:
+                        pass
+            try:
+                body = render_dreamscape_telemetry(agent_id, window_hours=window_hours)
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape stats failed: {exc}")
+                )
+                return
+            await self._mount_message(AppMessage(body))
             return
 
         if raw_arg == "init":
@@ -10180,7 +10205,8 @@ class BogAgentsApp(App):
                 "  /dreamscape           Show current config\n"
                 "  /dreamscape status    Same as above\n"
                 "  /dreamscape init      Write a starter ~/.bog-agents/dreamscape.toml\n"
-                "  /dreamscape disable   Force-disable for this session"
+                "  /dreamscape disable   Force-disable for this session\n"
+                "  /dreamscape stats [H] Show telemetry for last H hours (default 24, 'all')"
             )
         )
 

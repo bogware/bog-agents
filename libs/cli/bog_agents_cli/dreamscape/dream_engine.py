@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -173,7 +174,12 @@ def _format_dream_user_prompt(excerpts: list[str], chosen_seeds: list[str]) -> s
 
 
 def _wrap_with_frontmatter(
-    body: str, *, model_spec: str, used_seeds: list[str], agent_id: str
+    body: str,
+    *,
+    model_spec: str,
+    used_seeds: list[str],
+    agent_id: str,
+    category: str | None = None,
 ) -> str:
     lines = [
         "---",
@@ -182,10 +188,13 @@ def _wrap_with_frontmatter(
         f"generated: {time.strftime('%Y-%m-%dT%H:%M:%S')}",
         f"seeds: {used_seeds!r}",
         "kind: dream-auto",
-        "---",
-        "",
-        body,
     ]
+    if category:
+        # Phase 21 — record the dominant seed category so the
+        # imagination middleware can filter by it at injection time
+        # (per-prompt content routing).
+        lines.append(f"category: {category}")
+    lines.extend(["---", "", body])
     return "\n".join(lines)
 
 
@@ -253,8 +262,17 @@ async def generate_dream(
     # Persist to BOTH locations: the per-agent log (so imagination can
     # sample it back) and the global dreams folder (so the existing
     # `/dream list` UI sees it).
+    # Phase 21 — record the dominant seed category so the imagination
+    # middleware can filter by category at injection time.
+    dominant_category: str | None = None
+    if chosen_categories:
+        dominant_category = chosen_categories[0]
     wrapped = _wrap_with_frontmatter(
-        body, model_spec="auto", used_seeds=chosen, agent_id=agent_id
+        body,
+        model_spec="auto",
+        used_seeds=chosen,
+        agent_id=agent_id,
+        category=dominant_category,
     )
 
     per_agent_dir = agent_state_dir(agent_id) / "dreams"
@@ -349,6 +367,39 @@ async def maybe_dream(
     bump_imagination(snap, dreams_cfg.imagination_trait_increment)
     snap.state = LifecycleState.DORMANT.value
     save_snapshot(snap, enabled=lifecycle_cfg.persist_state_to_disk)
+
+    # Phase 25 — record the dream firing for downstream telemetry.
+    # Best-effort: failure here logs and continues.
+    with suppress(Exception):
+        # Read back the category we wrote into the artifact's
+        # frontmatter so the telemetry agg can break down by category.
+        from typing import Any as _Any
+
+        from bog_agents_cli.dreamscape.telemetry import record_event
+
+        cat_md: dict[str, _Any] = {
+            "title": artifact.title,
+            "elapsed_seconds": artifact.elapsed_seconds,
+            "seeds_used_count": len(artifact.seeds_used),
+        }
+        try:
+            with artifact.path.open("r", encoding="utf-8") as fh:
+                # Skip the opening "---" delimiter, then scan the
+                # frontmatter for the "category:" field. Stop at the
+                # closing delimiter or after a bounded line count.
+                first = fh.readline()
+                if first.startswith("---"):
+                    for _ in range(20):
+                        line = fh.readline()
+                        if not line or line.strip().startswith("---"):
+                            break
+                        if line.lower().startswith("category:"):
+                            cat_md["category"] = line.split(":", 1)[1].strip()
+                            break
+        except OSError:
+            pass
+        record_event(agent_id, "dream_fired", metadata=cat_md)
+
     return artifact
 
 
@@ -388,13 +439,33 @@ def _dreams_in_last_24h(agent_id: str) -> int:
 
 
 def sample_dream_excerpts(
-    agent_id: str, *, count: int = 3, max_chars: int = 600, rng_seed: int | None = None
+    agent_id: str,
+    *,
+    count: int = 3,
+    max_chars: int = 600,
+    rng_seed: int | None = None,
+    category_filter: str | None = None,
 ) -> list[str]:
     """Return ``count`` short excerpts from this agent's dream archive.
 
     Used by :class:`ImaginationMiddleware` to inject material when the
     agent is stuck. Each excerpt is ≤``max_chars``; we pull the first
     paragraph after the title.
+
+    Args:
+        agent_id: Per-agent identifier — selects the dream archive.
+        count: How many excerpts to return.
+        max_chars: Per-excerpt cap.
+        rng_seed: When set, makes the sample deterministic.
+        category_filter: Phase 21 — when set, only sample dreams whose
+            frontmatter ``category:`` value matches. Dreams written
+            before Phase 21 (no category in frontmatter) are excluded
+            when the filter is active. Unrecognized categories yield
+            an empty result rather than silently falling back.
+
+    Returns:
+        Up to ``count`` non-empty excerpts. Empty list when the archive
+        is empty or no dream matches the filter.
     """
     import random
 
@@ -402,6 +473,10 @@ def sample_dream_excerpts(
     files = list_agent_dreams(agent_id, limit=30)
     if not files:
         return []
+    if category_filter:
+        files = [f for f in files if _dream_category(f) == category_filter]
+        if not files:
+            return []
     chosen_files = rng.sample(files, min(count, len(files)))
     excerpts: list[str] = []
     for path in chosen_files:
@@ -432,3 +507,29 @@ def sample_dream_excerpts(
         excerpt = title + "\n" + " ".join(first_para)
         excerpts.append(excerpt[:max_chars].strip())
     return [e for e in excerpts if e]
+
+
+def _dream_category(path: Path) -> str | None:
+    """Read the ``category:`` frontmatter field from a dream file.
+
+    Phase 21 — used by ``sample_dream_excerpts`` to filter by seed
+    category. Returns ``None`` when the file has no frontmatter or
+    no ``category:`` line.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            first = fh.readline()
+            if not first.startswith("---"):
+                return None
+            for _ in range(20):  # bounded scan
+                line = fh.readline()
+                if not line:
+                    return None
+                stripped = line.strip()
+                if stripped.startswith("---"):
+                    return None
+                if stripped.lower().startswith("category:"):
+                    return stripped.split(":", 1)[1].strip()
+    except OSError:
+        return None
+    return None

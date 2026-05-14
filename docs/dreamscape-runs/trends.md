@@ -14,81 +14,88 @@ See `README.md` for the snapshot schema. Source data: the
 
 ## Pass-rate over time
 
-| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P22 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Dreams fired (live tests)** | 5 | 5 | 10 | n/a | 15 | 27 | 10 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Scheduler errors** | n/a | n/a | 0 | n/a | 0 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Unique titles (in-test)** | n/a | n/a | 10 | n/a | 15 | n/a | 8 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Open bugs (end of phase)** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Known limitations (carried)** | 0 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 3 | 3 | 3 | 2 | 3 | 2 | 3 | 4 | 1 | 4 | 3 | 4 |
-| **Dreamscape unit tests** | n/a | 37 | 42 | 43 | 43 | 43 | 47 | 52 | 67 | 67 | 68 | 79 | 79 | 81 | 81 | 88 | 81 | 98 | 98 | 98 |
-| **CLI total unit tests** | n/a | 3529 | 3534 | 3535 | 3535 | 3535 | 3539 | 3544 | 3552 | 3552 | 3553 | 3564 | 3564 | 3566 | 3568 | 3573 | 3566 | 3583 | 3583 | 3583 |
+| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P21 | P22 | P25 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **Dreams fired (live tests)** | 5 | 5 | 10 | n/a | 15 | 27 | 10 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Scheduler errors** | n/a | n/a | 0 | n/a | 0 | 0 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Unique titles (in-test)** | n/a | n/a | 10 | n/a | 15 | n/a | 8 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Open bugs (end of phase)** | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Known limitations (carried)** | 0 | 1 | 2 | 2 | 2 | 2 | 2 | 2 | 3 | 3 | 3 | 2 | 3 | 2 | 3 | 4 | 1 | 4 | 3 | 3 | 4 | 4 |
+| **Dreamscape unit tests** | n/a | 37 | 42 | 43 | 43 | 43 | 47 | 52 | 67 | 67 | 68 | 79 | 79 | 81 | 81 | 88 | 81 | 98 | 98 | 104 | 98 | 114 |
+| **CLI total unit tests** | n/a | 3529 | 3534 | 3535 | 3535 | 3535 | 3539 | 3544 | 3552 | 3552 | 3553 | 3564 | 3564 | 3566 | 3568 | 3573 | 3566 | 3583 | 3583 | 3589 | 3583 | 3599 |
 
 ## Performance over time
 
-| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P22 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **LLM calls per phase** | 12 | 8 | n/a | 2 | 15 | 28 | 10 | n/a | 21 | 21 | 35 | 4 | 840 | 210 | 525 | 135 | n/a | 4 | 180 | 200 |
-| **Total wall-clock (s)** | 76.0 | 50.0 | 90.2 | n/a | n/a | 1803.1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| **Total cost (USD)** | 0.014 | 0.010 | 0.012 | 0.002 | 0.015 | 0.027 | 0.010 | n/a | 0.040 | 0.039 | 0.070 | 0.004 | 2.100 | 0.400 | 1.400 | 0.300 | n/a | 0.003 | 0.400 | 0.200 |
-| **Avg seconds per dream** | n/a | n/a | 8.4 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Metric | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P21 | P22 | P25 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **LLM calls per phase** | 12 | 8 | n/a | 2 | 15 | 28 | 10 | n/a | 21 | 21 | 35 | 4 | 840 | 210 | 525 | 135 | n/a | 4 | 180 | 315 | 200 | 2 |
+| **Total wall-clock (s)** | 76.0 | 50.0 | 90.2 | n/a | n/a | 1803.1 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| **Total cost (USD)** | 0.014 | 0.010 | 0.012 | 0.002 | 0.015 | 0.027 | 0.010 | n/a | 0.040 | 0.039 | 0.070 | 0.004 | 2.100 | 0.400 | 1.400 | 0.300 | n/a | 0.003 | 0.400 | 0.600 | 0.200 | 0.002 |
+| **Avg seconds per dream** | n/a | n/a | 8.4 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
 
 ## Feature verdict history
 
-| Feature | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P22 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| dream engine | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings (was BROKEN; fixed in this phase, now end-to-end verified) | 🟢 sings (fixed in Phase 4) | 🟢 sings (Phase 4) | 🟢 sings (Phase 4 fix) | 🟢 sings (Phase 4 fix) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| cross agent shared memory | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings — concurrent writes p95 <10ms, perfect isolation | 🟢 sings (Phase 5) | 🟢 sings (Phase 5) | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
-| lifecycle state machine | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works — concurrent multi-agent verified | 🟢 works (state transitions visible in checkpoint snapshots) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| laws hard rejects | 🟢 works for clear cases | 🟢 works (9/9 with paraphrase tolerance) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| constitution soft logging | 🟢 works as designed | 🟢 works as designed | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works (now surfaced) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| agent state dashboard | 🟢 mostly works (staleness bug) | 🟢 works (staleness fixed) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| repo overview | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| opt in defaults | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| dream scheduler | n/a | n/a | 🟢 sings — multi-cycle dormancy timer validated end-to-end | 🟢 sings | 🟢 sings — works under concurrent multi-agent load | 🟢 sings — production cadence + induced failure + 30-min endurance verified | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| scheduler resilience under transient failure | n/a | n/a | n/a | n/a | n/a | 🟢 sings — model failure absorbed without crashing the loop | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| dreamscape runner | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — daemon-style entrypoint validated end-to-end with crash recovery | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| snapshot persistence across processes | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — survives SIGKILL | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| trends automation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — idempotent, --check mode for CI, full coverage by 5 new tests | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (Phase 4) | 🟢 sings (Phase 4) | 🟢 sings | n/a | 🟢 sings (Phase 4) | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection effectiveness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — 1/7 wins on technical-debugging questions. Domain mismatch is the leading hypothesis. | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| constitution log surfacing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (R1) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (50 entries, R2) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| daily dream cap | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works (R3) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection effectiveness on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 6/7 wins (86%) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection effectiveness on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — Phase 10 said 1/7, Phase 12 said 5/7 same scenario set; high variance suggests effect is small or noisy | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection dreams style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | noisy on technical prompts — Phase 10 said -, Phase 12 said + | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection neutral style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | roughly equivalent to dreams on technical prompts; preserves the option to ship | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| domain classifier | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 14/14 assertions pass | 🟢 sings — verified end-to-end in Phase 13 | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a |
-| agent profile persistence | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — round-trips through disk | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| seed category routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly prefers computing-history | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| injection style routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly gets neutral wrapper end-to-end | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| creative routing isolation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | verified — creative-prompt output from engineering agent is still usable (not catastrophic), but doesn't earn the Phase 11 / 14 treatment-win lift | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 SINGS — 79.3% win rate (95% CI [72%, 85%]) at N=140 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | HURTS — 27.9% win rate (95% CI [21%, 36%]) at N=140; the shipped neutral-wrapper routing addresses this | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| domain conditional effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ROBUST — 51 pp difference between domains, non-overlapping 95% CIs | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-| engineering craft seed library | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 62.9% win rate vs computing-history on engineering prompts, lower CI bound above 50% | n/a | n/a | n/a | n/a | n/a | n/a |
-| domain aware seed selection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering-craft as primary engineering preference justified by data | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection on engineering prompts with eng craft seeds | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | improved — likely closes part of Phase 14's 28% gap (combined experiment in future phase) | n/a | n/a | n/a | n/a | n/a | n/a |
-| Imagination injection with neutral wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | break-even-to-positive — 57% win rate, lower CI ~48% | n/a | n/a | n/a | n/a | n/a |
-| engineering craft vs computing history at n 105 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | statistically indistinguishable on aggregate, EC dominates on decision-shaped scenarios | n/a | n/a | n/a | n/a | n/a |
-| neutral wrapper advantage over dreams wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | MASSIVE — 29pp lift attributable to wrapper alone | n/a | n/a | n/a | n/a | n/a |
-| per prompt routing mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — classifier + middleware integration work correctly | n/a | n/a | n/a | n/a |
-| per prompt routing effectiveness on engineering agents | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ambiguous-to-negative — does not reliably improve outcomes | n/a | n/a | n/a | n/a |
-| shipping decision | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 ship the knob, keep it off by default. Engineering agents continue using neutral wrapper for all prompts (Phase 16 validated). | n/a | n/a | n/a | n/a |
-| decision pattern detection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works — fires on intended patterns. The 'designing' keyword overlap with creative-vocabulary is a known false positive. | n/a | n/a | n/a | n/a |
-| engineering craft seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 30 entries, ~2x reduction in same-seed-twice probability per agent-day | n/a | n/a | n/a |
-| llm classifier mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 10 unit tests pass, validation profiles classify coherently | n/a | n/a |
-| llm classifier caching | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — cache round-trips disk, resolve_agent_domain consults it on the long tail | n/a | n/a |
-| agent py integration | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — fires as background task, doesn't block agent creation, only runs when keyword classifier returns 'general' | n/a | n/a |
-| engineering craft seeds beat computing history on decision shaped | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — N=60, lower CI bound 54% (above 50%) | n/a |
-| shipping engineering preference order | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | justified by data, not just intuition | n/a |
-| per scenario heterogeneity pattern | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | confirmed — decision-shaped scenarios favor EC, debugging-shaped scenarios are closer or favor CH | n/a |
-| real bug pass rate easy bugs | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | treatment indistinguishable from control (both 100%) |
-| real bug pass rate harder bugs | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | treatment indistinguishable from control (both 100%) |
-| ceiling effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 Haiku 4.5 is too competent at single-function bug fixes for this kind of A/B to discriminate — even on harder-bug fixtures |
-| judge based preference signal still valid | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Phase 14's 79% creative + Phase 16's 57% engineering win rates hold; they measure response USEFULNESS, not response CORRECTNESS — different question, different surface |
+| Feature | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P10 | P11 | P12 | P13 | P14 | P15 | P16 | P17 | P18 | P19 | P20 | P21 | P22 | P25 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| dream engine | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings (was BROKEN; fixed in this phase, now end-to-end verified) | 🟢 sings (fixed in Phase 4) | 🟢 sings (Phase 4) | 🟢 sings (Phase 4 fix) | 🟢 sings (Phase 4 fix) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| cross agent shared memory | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings — concurrent writes p95 <10ms, perfect isolation | 🟢 sings (Phase 5) | 🟢 sings (Phase 5) | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| lifecycle state machine | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works — concurrent multi-agent verified | 🟢 works (state transitions visible in checkpoint snapshots) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| laws hard rejects | 🟢 works for clear cases | 🟢 works (9/9 with paraphrase tolerance) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| constitution soft logging | 🟢 works as designed | 🟢 works as designed | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works (now surfaced) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| agent state dashboard | 🟢 mostly works (staleness bug) | 🟢 works (staleness fixed) | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| repo overview | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| opt in defaults | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | 🟢 ironclad | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| dream scheduler | n/a | n/a | 🟢 sings — multi-cycle dormancy timer validated end-to-end | 🟢 sings | 🟢 sings — works under concurrent multi-agent load | 🟢 sings — production cadence + induced failure + 30-min endurance verified | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | 🟢 sings | n/a | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| scheduler resilience under transient failure | n/a | n/a | n/a | n/a | n/a | 🟢 sings — model failure absorbed without crashing the loop | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| dreamscape runner | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — daemon-style entrypoint validated end-to-end with crash recovery | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| snapshot persistence across processes | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — survives SIGKILL | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| trends automation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — idempotent, --check mode for CI, full coverage by 5 new tests | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (Phase 4) | 🟢 sings (Phase 4) | 🟢 sings | n/a | 🟢 sings (Phase 4) | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection effectiveness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — 1/7 wins on technical-debugging questions. Domain mismatch is the leading hypothesis. | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| constitution log surfacing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (R1) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings (50 entries, R2) | 🟢 sings | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| daily dream cap | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works (R3) | 🟢 works | 🟢 works | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection effectiveness on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 6/7 wins (86%) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection effectiveness on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | negative — Phase 10 said 1/7, Phase 12 said 5/7 same scenario set; high variance suggests effect is small or noisy | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection dreams style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | noisy on technical prompts — Phase 10 said -, Phase 12 said + | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection neutral style | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | roughly equivalent to dreams on technical prompts; preserves the option to ship | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| domain classifier | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 14/14 assertions pass | 🟢 sings — verified end-to-end in Phase 13 | 🟢 sings | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| agent profile persistence | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — round-trips through disk | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| seed category routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly prefers computing-history | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| injection style routing | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering correctly gets neutral wrapper end-to-end | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| creative routing isolation | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | verified — creative-prompt output from engineering agent is still usable (not catastrophic), but doesn't earn the Phase 11 / 14 treatment-win lift | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection on creative prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 SINGS — 79.3% win rate (95% CI [72%, 85%]) at N=140 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection on technical prompts | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | HURTS — 27.9% win rate (95% CI [21%, 36%]) at N=140; the shipped neutral-wrapper routing addresses this | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| domain conditional effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ROBUST — 51 pp difference between domains, non-overlapping 95% CIs | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| engineering craft seed library | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 62.9% win rate vs computing-history on engineering prompts, lower CI bound above 50% | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| domain aware seed selection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — engineering-craft as primary engineering preference justified by data | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection on engineering prompts with eng craft seeds | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | improved — likely closes part of Phase 14's 28% gap (combined experiment in future phase) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| Imagination injection with neutral wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | break-even-to-positive — 57% win rate, lower CI ~48% | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| engineering craft vs computing history at n 105 | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | statistically indistinguishable on aggregate, EC dominates on decision-shaped scenarios | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| neutral wrapper advantage over dreams wrapper on technical | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | MASSIVE — 29pp lift attributable to wrapper alone | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
+| per prompt routing mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — classifier + middleware integration work correctly | n/a | n/a | n/a | n/a | n/a | n/a |
+| per prompt routing effectiveness on engineering agents | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ambiguous-to-negative — does not reliably improve outcomes | n/a | n/a | n/a | n/a | n/a | n/a |
+| shipping decision | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 ship the knob, keep it off by default. Engineering agents continue using neutral wrapper for all prompts (Phase 16 validated). | n/a | n/a | n/a | ship the knob, default OFF. Like Phase 17, the per-call routing surface is preserved for future research. | n/a | n/a |
+| decision pattern detection | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 works — fires on intended patterns. The 'designing' keyword overlap with creative-vocabulary is a known false positive. | n/a | n/a | n/a | n/a | n/a | n/a |
+| engineering craft seed library size | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 30 entries, ~2x reduction in same-seed-twice probability per agent-day | n/a | n/a | n/a | n/a | n/a |
+| llm classifier mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 10 unit tests pass, validation profiles classify coherently | n/a | n/a | n/a | n/a |
+| llm classifier caching | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — cache round-trips disk, resolve_agent_domain consults it on the long tail | n/a | n/a | n/a | n/a |
+| agent py integration | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — fires as background task, doesn't block agent creation, only runs when keyword classifier returns 'general' | n/a | n/a | n/a | n/a |
+| engineering craft seeds beat computing history on decision shaped | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — N=60, lower CI bound 54% (above 50%) | n/a | n/a | n/a |
+| shipping engineering preference order | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | justified by data, not just intuition | n/a | n/a | n/a |
+| per scenario heterogeneity pattern | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | confirmed — decision-shaped scenarios favor EC, debugging-shaped scenarios are closer or favor CH | n/a | n/a | n/a |
+| category filter mechanism | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 6 unit tests pass, end-to-end live verification works | n/a | n/a |
+| per prompt content routing effectiveness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 ambiguous-to-slightly-negative — routed 47.6% with CI [38%, 57%]. Mechanism works; outcomes don't measurably improve. | n/a | n/a |
+| real bug pass rate easy bugs | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | treatment indistinguishable from control (both 100%) | n/a |
+| real bug pass rate harder bugs | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | treatment indistinguishable from control (both 100%) | n/a |
+| ceiling effect | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 Haiku 4.5 is too competent at single-function bug fixes for this kind of A/B to discriminate — even on harder-bug fixtures | n/a |
+| judge based preference signal still valid | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | Phase 14's 79% creative + Phase 16's 57% engineering win rates hold; they measure response USEFULNESS, not response CORRECTNESS — different question, different surface | n/a |
+| event recorder | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — 10 unit tests pass, file rotation works at 1 MB cap |
+| aggregator | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — counts + rates + cost estimate correct in unit tests + live demo |
+| dashboard view | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | 🟢 sings — empty state + populated state render correctly |
+| slash command integration | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | ships — /dreamscape stats [hours|all] in the registry |
+| production readiness | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | the infrastructure is production-ready; the data is yet to accumulate in real deployments |
 
 ## Cumulative cost
 
@@ -113,9 +120,11 @@ See `README.md` for the snapshot schema. Source data: the
 | 18 | n/a | $4.443 |
 | 19 | $0.003 | $4.446 |
 | 20 | $0.400 | $4.846 |
-| 22 | $0.200 | $5.046 |
+| 21 | $0.600 | $5.446 |
+| 22 | $0.200 | $5.646 |
+| 25 | $0.002 | $5.648 |
 
-**20 phases for under $5.05.** Cheap data.
+**22 phases for under $5.65.** Cheap data.
 
 ## Phase log
 
@@ -138,7 +147,9 @@ See `README.md` for the snapshot schema. Source data: the
 * **Phase 18 — 2026-05-13.** expand engineering-craft seed library from 15 (Phase 15) to 30 entries. Verdict: **READY TO MERGE — pure curation work, no behavior change beyond reducing repetition.**
 * **Phase 19 — 2026-05-13.** LLM-based domain classifier fallback for the long tail of profiles where the keyword classifier returns 'general'. Verdict: **READY TO MERGE — small surface, robust failure modes, gracefully handles the long tail without changing modal behavior.**
 * **Phase 20 — 2026-05-13.** N=30 confirmation of engineering-craft seeds > computing-history seeds on the two DECISION-shaped technical scenarios where the effect was strongest in Phase 15 (62. Verdict: **STATISTICALLY ROBUST WIN — engineering-craft seeds beat computing-history seeds on decision-shaped technical scenarios. The shipping content preferences are justified beyond noise.**
+* **Phase 21 — 2026-05-13.** per-prompt CONTENT routing. Verdict: **MIXED — mechanism solid, default keeps it off. The agent-level routing from Phase 11/12 (which Phase 14 + Phase 20 confirmed at N=140 and N=60 respectively) is the load-bearing decision. Per-prompt content routing is preserved as a knob.**
 * **Phase 22 — 2026-05-13.** real-bug outcome experiment — does imagination injection make an agent fix bugs better? Objective pytest pass-rate measurement, NOT a judge-based preference comparison. Verdict: **NULL RESULT — honestly reported. Imagination injection neither helps nor hurts on single-function bug-fix tasks at the difficulty Haiku 4.5 handles trivially. The campaign's prior judge-based findings (79% / 57% / 67% win rates by domain) still stand as the load-bearing effectiveness measurements; they capture a different (and arguably more important) property: response usefulness on open-ended questions where 'correct' is underdetermined.**
+* **Phase 25 — 2026-05-13.** production telemetry infrastructure — event logging + aggregator + dashboard. Verdict: **READY TO MERGE — clean infrastructure ship. The data accumulates as users use dreamscape; the campaign's offline measurements are unchanged.**
 
 ## Provenance
 
@@ -163,5 +174,7 @@ See `README.md` for the snapshot schema. Source data: the
 | 18 | 2026-05-13 | claude-haiku-4-5 | READY TO MERGE — pure curation work, no behavior change beyond reducing repetition. | `phase-018-2026-05-13.json` |
 | 19 | 2026-05-13 | claude-haiku-4-5 | READY TO MERGE — small surface, robust failure modes, gracefully handles the long tail without changing modal behavior. | `phase-019-2026-05-13.json` |
 | 20 | 2026-05-13 | claude-haiku-4-5 | STATISTICALLY ROBUST WIN — engineering-craft seeds beat computing-history seeds on decision-shaped technical scenarios. The shipping content preferences are justified beyond noise. | `phase-020-2026-05-13.json` |
+| 21 | 2026-05-13 | claude-haiku-4-5 | MIXED — mechanism solid, default keeps it off. The agent-level routing from Phase 11/12 (which Phase 14 + Phase 20 confirmed at N=140 and N=60 respectively) is the load-bearing decision. Per-prompt content routing is preserved as a knob. | `phase-021-2026-05-13.json` |
 | 22 | 2026-05-13 | claude-haiku-4-5 | NULL RESULT — honestly reported. Imagination injection neither helps nor hurts on single-function bug-fix tasks at the difficulty Haiku 4.5 handles trivially. The campaign's prior judge-based findings (79% / 57% / 67% win rates by domain) still stand as the load-bearing effectiveness measurements; they capture a different (and arguably more important) property: response usefulness on open-ended questions where 'correct' is underdetermined. | `phase-022-2026-05-13.json` |
+| 25 | 2026-05-13 | claude-haiku-4-5 | READY TO MERGE — clean infrastructure ship. The data accumulates as users use dreamscape; the campaign's offline measurements are unchanged. | `phase-025-2026-05-13.json` |
 

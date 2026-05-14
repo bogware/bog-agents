@@ -387,6 +387,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                     "Write a starter ~/.bog-agents/dreamscape.toml (master still off)",
                 ),
                 ("disable", "Force-disable the whole subsystem for this session"),
+                (
+                    "stats [H]",
+                    "Show telemetry for last H hours (default 24, 'all' for full history)",
+                ),
             ),
         ),
         handler_method="_handle_dreamscape_command",

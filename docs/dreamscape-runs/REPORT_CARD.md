@@ -976,3 +976,100 @@ that protect users who don't opt in.
 That's a complete, shippable, well-instrumented research program.
 
 — Reviewer (campaign complete, after Phases 19 + 20 + 22)
+
+---
+
+## Sixth postscript — Phases 21 + 25 (2026-05-13)
+
+Two more phases land — one experimental, one infrastructure.
+
+### Phase 21 — per-prompt content routing (mechanism ships, default off)
+
+The smaller intervention compared to Phase 17. Keep the neutral
+wrapper; swap the seed CATEGORY per call based on prompt
+classification.
+
+**At N=105 (15 trials × 7 mixed-kind scenarios):**
+
+| Metric | Result |
+|---|---|
+| Routed (per-prompt) wins | 50/105 (**47.6%**) |
+| Static wins | 50/105 |
+| Wilson 95% CI | **[38.3%, 57.1%]** |
+
+Statistically indistinguishable from static routing. Per-kind:
+debugging 53%, decision 47%, creative 40% — all within noise.
+Like Phase 17, the mechanism ships as
+`ImaginationConfig.use_content_routing` defaulting to False. The
+agent-level routing from Phase 11/12 captures most of the
+achievable lift; per-call refinements need an LLM-based prompt
+classifier (Phase 27 suggested) to be worth turning on.
+
+Implementation: 6 unit tests + `sample_dream_excerpts(category_filter=...)`
++ middleware `_route_content_category_for_request()` + `category:`
+field in dream frontmatter. Cost: $0.60, 315 calls.
+
+### Phase 25 — production telemetry infrastructure
+
+**No new effectiveness claim** — just the plumbing for *online*
+measurement. New module `dreamscape/telemetry.py` (240 lines)
+with three event kinds (`dream_fired`, `injection_fired`,
+`injection_helped`), wired into the dream engine + imagination
+middleware. JSONL log at
+`~/.bog-agents/agents/<id>/telemetry.jsonl`, rotated at 1 MB.
+
+New slash command `/dreamscape stats [H|all]` surfaces the
+aggregated operator view: counts, helped-rate, dreams-by-category,
+injections-by-style, approx LLM cost. 10 new unit tests cover
+every primitive (record/iter/filter/aggregate/render).
+
+Live demo confirmed the full pipeline end-to-end (real Haiku
+dreams + mechanism-only injections; all events land correctly +
+aggregator + dashboard render produce expected output).
+
+This unlocks future "do real users actually benefit" analyses that
+the offline judge proxy can't answer. Cost: $0.002 (demo).
+
+### Updated final grades after 22 experimental + 2 infrastructure phases
+
+| Axis | After P19/20/22 | Now (after P21/25) |
+|---|---|---|
+| Engineering quality | A+ | **A+** (telemetry layer, category filter, per-prompt routing knob — all well-tested) |
+| Stability + resilience | A | **A** |
+| Cost-effectiveness | A | **A** ($5.65 cumulative; biggest single phase $2.10) |
+| Real-world impact (validated) | A | **A** |
+| Documentation + reproducibility | A+ | **A+** (24 phase snapshots, auto-trends, every phase committed) |
+| Coverage of failure modes | A | **A** |
+| Real-world useful-ness for coding | A creative / A− engineering | **A creative / A− engineering** (held) |
+| **Production observability** | n/a | **A** — new axis. Phase 25 ships `/dreamscape stats` + the data plumbing |
+| **OVERALL** | A | **A** (held — campaign continues to converge) |
+
+### Final grade after 24 phases: **A**
+
+The journey:
+**B+ → B (clear-eyed) → B+ → A− → A → A (held) → A (held + observability)**
+
+### What the campaign now provides
+
+For an end user:
+* **Creative work** — opt in, get ~79% judge-preferred responses (P14, N=140)
+* **Engineering work** — opt in, get break-even-to-positive
+  routing (P16: ~57%, P20 decision-shaped: 67%)
+* **Bug fixing** — opt in or not; injection is correctly inert
+  on tasks the agent doesn't fail at (P22 ceiling effect)
+* **`/dreamscape stats`** — see what dreamscape is actually doing
+  for you in real time (P25)
+
+For a future researcher:
+* **24 phase snapshots** (JSON + MD) + auto-generated trends
+* **114 dreamscape-specific unit tests**, 3599 CLI total
+* **A production telemetry layer** that accumulates real-user data
+* **Two off-by-default routing knobs** preserved for future work
+* **An LLM-classifier fallback** for the long tail of ambiguous
+  profiles
+* **A clear research agenda**: Phase 26 (N=30 P21 re-confirm),
+  Phase 27 (LLM prompt classifier), Phase 28+ (production
+  telemetry analysis), Phase 29 (offline-vs-online comparison),
+  Phase 30 (richer feedback signals)
+
+— Reviewer (final, after Phases 21 + 25; **24 phases total**)

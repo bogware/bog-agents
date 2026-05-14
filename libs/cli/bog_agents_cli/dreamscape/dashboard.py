@@ -459,6 +459,93 @@ def render_recent_violations(agent_id: str = "default", *, limit: int = 20) -> s
     return "\n".join(lines)
 
 
+def render_dreamscape_telemetry(
+    agent_id: str = "default", *, window_hours: float | None = 24.0
+) -> str:
+    """Render aggregated dreamscape telemetry for ``/dreamscape stats``.
+
+    Reads ``~/.bog-agents/agents/<agent_id>/telemetry.jsonl`` and
+    aggregates the events into counts + rates. Surfaces:
+
+    * Total dreams fired in the window
+    * Injection-fired count (when imagination middleware actually
+      injected)
+    * Helped rate (fraction of injections followed by non-error
+      responses)
+    * Dream breakdown by seed category
+    * Injection breakdown by wrapper style
+    * Approx LLM cost over the window
+
+    Args:
+        agent_id: Per-agent identifier.
+        window_hours: Look-back window in hours. ``None`` = whole log.
+
+    Returns:
+        Rich-markup text ready for the TUI/console.
+    """
+    from bog_agents_cli.dreamscape.telemetry import aggregate_events
+
+    since = None if window_hours is None else time.time() - window_hours * 3600.0
+    agg = aggregate_events(agent_id, since=since)
+
+    if agg.events_total == 0:
+        scope = (
+            f"the last {window_hours:.0f} hours"
+            if window_hours is not None
+            else "all time"
+        )
+        return (
+            "[bold]Dreamscape telemetry[/bold]\n"
+            "\n"
+            f"[dim]No events recorded for agent [bold]{agent_id}[/bold] in {scope}. "
+            "Events accumulate when the dream scheduler fires dreams and the "
+            "imagination middleware injects them. If you've never enabled "
+            "dreamscape, this is expected.[/dim]"
+        )
+
+    lines: list[str] = [
+        f"[bold]Dreamscape telemetry — {agent_id}[/bold]",
+        "",
+    ]
+    if window_hours is not None:
+        lines.append(f"  Window: last [bold]{window_hours:.0f}h[/bold]")
+    else:
+        lines.append("  Window: [bold]all time[/bold]")
+    lines.extend(
+        [
+            f"  Total events:       {agg.events_total}",
+            f"  Dreams fired:       [magenta]{agg.dreams_fired}[/magenta]",
+            f"  Injections fired:   {agg.injections_fired}",
+        ]
+    )
+    helped_rate = agg.helped_rate
+    if helped_rate is not None:
+        lines.append(
+            f"  Injection helped:   {agg.injections_helped}/{agg.injections_fired} "
+            f"([magenta]{helped_rate:.0%}[/magenta] success rate)"
+        )
+    else:
+        lines.append("  Injection helped:   [dim]n/a (no injections yet)[/dim]")
+    lines.append(f"  Approx LLM cost:    ${agg.approx_cost_usd:.4f}")
+
+    if agg.dreams_by_category:
+        lines.append("")
+        lines.append("[bold]Dreams by category[/bold]")
+        for cat, count in sorted(
+            agg.dreams_by_category.items(), key=lambda kv: kv[1], reverse=True
+        ):
+            lines.append(f"  {cat:<22} {count}")
+    if agg.injections_by_style:
+        lines.append("")
+        lines.append("[bold]Injections by style[/bold]")
+        for style, count in sorted(
+            agg.injections_by_style.items(), key=lambda kv: kv[1], reverse=True
+        ):
+            lines.append(f"  {style:<22} {count}")
+
+    return "\n".join(lines)
+
+
 # Re-exports — keep the templates importable without depending on the
 # laws module for callers that only want the wizard text.
 __all__ = [

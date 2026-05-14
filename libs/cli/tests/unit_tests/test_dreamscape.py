@@ -1435,6 +1435,388 @@ class TestDomainClassifier:
 
 
 # ---------------------------------------------------------------------------
+# Phase 25 — production telemetry
+# ---------------------------------------------------------------------------
+
+
+class TestTelemetry:
+    """Cover bog_agents_cli/dreamscape/telemetry.py.
+
+    The campaign's measurements have all been offline (scripted
+    scenarios + Sonnet judge). Phase 25 ships the infrastructure for
+    *online* measurement: dreams fired, injections fired, injections
+    that helped, broken down by category and wrapper style.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    def test_record_and_iter_round_trips(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import iter_events, record_event
+
+        assert record_event("alpha", "dream_fired", {"title": "T1"}) is True
+        assert (
+            record_event("alpha", "injection_fired", {"injection_style": "neutral"})
+            is True
+        )
+        events = list(iter_events("alpha"))
+        assert len(events) == 2
+        kinds = [e.kind for e in events]
+        assert kinds == ["dream_fired", "injection_fired"]
+        assert events[0].metadata["title"] == "T1"
+        assert events[1].metadata["injection_style"] == "neutral"
+
+    def test_record_rejects_invalid_kind(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import record_event
+
+        assert record_event("alpha", "rumor", {}) is False  # type: ignore[arg-type]
+        # The valid-kinds set is the contract; this verifies it.
+
+    def test_iter_filters_by_since(self) -> None:
+        import time as _time
+
+        from bog_agents_cli.dreamscape.telemetry import iter_events, record_event
+
+        record_event("beta", "dream_fired", {})
+        _time.sleep(0.02)
+        cutoff = _time.time()
+        _time.sleep(0.02)
+        record_event("beta", "dream_fired", {})
+
+        recent = list(iter_events("beta", since=cutoff))
+        # Only the second event should clear the cutoff.
+        assert len(recent) == 1
+
+    def test_iter_filters_by_kind(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import iter_events, record_event
+
+        record_event("gamma", "dream_fired", {"title": "a"})
+        record_event("gamma", "injection_fired", {"injection_style": "neutral"})
+        record_event("gamma", "dream_fired", {"title": "b"})
+
+        dreams = list(iter_events("gamma", kind="dream_fired"))
+        assert len(dreams) == 2
+        assert [e.metadata["title"] for e in dreams] == ["a", "b"]
+
+    def test_iter_empty_when_no_log(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import iter_events
+
+        assert list(iter_events("never-recorded")) == []
+
+    def test_aggregate_counts_and_rates(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            aggregate_events,
+            record_event,
+        )
+
+        record_event("delta", "dream_fired", {"category": "engineering-craft"})
+        record_event("delta", "dream_fired", {"category": "engineering-craft"})
+        record_event("delta", "dream_fired", {"category": "myth"})
+        record_event("delta", "injection_fired", {"injection_style": "neutral"})
+        record_event("delta", "injection_fired", {"injection_style": "dreams"})
+        record_event("delta", "injection_fired", {"injection_style": "neutral"})
+        record_event("delta", "injection_helped", {})
+        record_event("delta", "injection_helped", {})
+
+        agg = aggregate_events("delta")
+        assert agg.events_total == 8
+        assert agg.dreams_fired == 3
+        assert agg.injections_fired == 3
+        assert agg.injections_helped == 2
+        assert agg.dreams_by_category == {"engineering-craft": 2, "myth": 1}
+        assert agg.injections_by_style == {"neutral": 2, "dreams": 1}
+        assert abs((agg.helped_rate or 0) - 2 / 3) < 1e-9
+        # 3 dreams * $0.001 = $0.003
+        assert abs(agg.approx_cost_usd - 0.003) < 1e-9
+
+    def test_aggregate_helped_rate_none_when_no_injections(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            aggregate_events,
+            record_event,
+        )
+
+        record_event("epsilon", "dream_fired", {})
+        agg = aggregate_events("epsilon")
+        assert agg.injections_fired == 0
+        assert agg.helped_rate is None
+
+    def test_clear_telemetry_removes_log(self) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            clear_telemetry,
+            iter_events,
+            record_event,
+            telemetry_path,
+        )
+
+        record_event("zeta", "dream_fired", {})
+        assert telemetry_path("zeta").exists()
+        assert clear_telemetry("zeta") is True
+        assert not telemetry_path("zeta").exists()
+        assert list(iter_events("zeta")) == []
+
+    def test_render_empty_state(self) -> None:
+        from bog_agents_cli.dreamscape.dashboard import render_dreamscape_telemetry
+
+        body = render_dreamscape_telemetry("nobody")
+        assert "Dreamscape telemetry" in body
+        assert "No events recorded" in body
+
+    def test_render_populated_view(self) -> None:
+        from bog_agents_cli.dreamscape.dashboard import render_dreamscape_telemetry
+        from bog_agents_cli.dreamscape.telemetry import record_event
+
+        record_event("eta", "dream_fired", {"category": "engineering-craft"})
+        record_event("eta", "injection_fired", {"injection_style": "neutral"})
+        record_event("eta", "injection_helped", {})
+
+        body = render_dreamscape_telemetry("eta")
+        assert "Dreams fired:" in body
+        assert "Injections fired:" in body
+        # Helped rate should appear since there's >= 1 injection.
+        assert "Injection helped:" in body
+        # Category + style breakdowns should appear.
+        assert "engineering-craft" in body
+        assert "neutral" in body
+
+
+# ---------------------------------------------------------------------------
+# Phase 21 — per-prompt content routing
+# ---------------------------------------------------------------------------
+
+
+class TestContentRouting:
+    """Cover the Phase 21 per-prompt content-routing layer.
+
+    Two surfaces:
+    * ``sample_dream_excerpts(category_filter=...)`` — filters by the
+      ``category:`` frontmatter field.
+    * ``ImaginationMiddleware._route_content_category_for_request`` —
+      classifies the user's prompt and returns the seed-category name
+      to filter on.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    def _write_dream(
+        self, agent_id: str, slug: str, category: str, title: str = "stub"
+    ) -> None:
+        from bog_agents_cli.dreamscape.lifecycle import agent_state_dir
+
+        dreams_dir = agent_state_dir(agent_id) / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        import time as _time
+
+        ts = int(_time.time() * 1_000_000)
+        path = dreams_dir / f"{ts:020d}-{slug}.md"
+        path.write_text(
+            f"---\ntitle: {title}\ncategory: {category}\n---\n\n"
+            f"### {title}\n\nA short body for {slug}.\n",
+            encoding="utf-8",
+        )
+
+    def test_category_filter_picks_matching_dream(self) -> None:
+        """When filter matches a dream, that dream is sampled."""
+        from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
+
+        self._write_dream("alpha", "ec1", "engineering-craft", title="EC One")
+        self._write_dream("alpha", "myth1", "myth", title="Myth One")
+
+        ec = sample_dream_excerpts(
+            "alpha", count=5, category_filter="engineering-craft"
+        )
+        assert any("EC One" in e for e in ec)
+        assert not any("Myth One" in e for e in ec)
+
+    def test_category_filter_no_match_returns_empty(self) -> None:
+        """When filter matches nothing, returns empty (caller can fall back)."""
+        from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
+
+        self._write_dream("beta", "ec1", "engineering-craft")
+        # Filter for a category none of the dreams have.
+        result = sample_dream_excerpts("beta", count=5, category_filter="myth")
+        assert result == []
+
+    def test_no_filter_returns_all_dreams(self) -> None:
+        """``category_filter=None`` preserves v1 behavior — no filtering."""
+        from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
+
+        self._write_dream("gamma", "ec1", "engineering-craft", title="EC One")
+        self._write_dream("gamma", "myth1", "myth", title="Myth One")
+
+        result = sample_dream_excerpts("gamma", count=5, category_filter=None)
+        titles = " ".join(result)
+        assert "EC One" in titles
+        assert "Myth One" in titles
+
+    def test_dream_without_category_excluded_when_filtering(self) -> None:
+        """Pre-Phase-21 dreams (no ``category:`` field) are excluded when filter is on."""
+        from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
+        from bog_agents_cli.dreamscape.lifecycle import agent_state_dir
+
+        dreams_dir = agent_state_dir("delta") / "dreams"
+        dreams_dir.mkdir(parents=True, exist_ok=True)
+        # Old-style dream with NO category field.
+        (dreams_dir / "00000000000001-old.md").write_text(
+            "---\ntitle: Pre-P21 Dream\n---\n\n### Pre-P21 Dream\n\nBody.\n",
+            encoding="utf-8",
+        )
+        # Phase-21 dream with category.
+        self._write_dream("delta", "new", "engineering-craft", title="P21 Dream")
+
+        result = sample_dream_excerpts(
+            "delta", count=5, category_filter="engineering-craft"
+        )
+        titles = " ".join(result)
+        assert "P21 Dream" in titles
+        assert "Pre-P21 Dream" not in titles
+
+    async def test_middleware_filters_when_routing_enabled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Verify the middleware's content-routing path end-to-end.
+
+        Engineering agent with a mixed archive (EC + myth dreams). When
+        the prompt is decision-shaped, EC is preferred → only EC
+        excerpts are sampled.
+        """
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+        self._write_dream("epsilon", "ec-a", "engineering-craft", title="EC Alpha")
+        self._write_dream("epsilon", "myth-a", "myth", title="Myth Alpha")
+
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="epsilon", imagination=5.0, consecutive_tool_failures=5
+        )
+        lc_mod.save_snapshot(snap)
+
+        cfg = ImaginationConfig(
+            enabled=True,
+            trigger_after_failures=3,
+            min_imagination_trait=1.0,
+            max_snippets_per_injection=3,
+            injection_style="neutral",
+            use_content_routing=True,
+        )
+        mw = ImaginationMiddleware(agent_id="epsilon", cfg=cfg)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="OK.")
+
+        # Decision-shaped prompt — classified as creative, top
+        # preferred category for "creative" domain is "myth". So the
+        # filter selects MYTH dreams.
+        req = ModelRequest(
+            model=_Stub(),
+            system_message=SystemMessage(content="base"),
+            messages=[
+                HumanMessage(
+                    content=(
+                        "Should I extract this method or inline it? "
+                        "What's the right trade-off?"
+                    )
+                )
+            ],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+        captured: list[str] = []
+
+        async def _capture(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            captured.append(str(sm.content) if sm else "")
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(req, _capture)  # type: ignore[arg-type]
+        assert captured, "call_next never observed the request"
+        full = captured[-1]
+        # Decision prompt → creative classification → myth filter →
+        # only the Myth dream should be injected.
+        assert "Myth Alpha" in full
+        assert "EC Alpha" not in full
+
+    async def test_middleware_falls_back_when_no_match(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Verify unfiltered fallback.
+
+        When the filter matches no dreams, the middleware falls back
+        to the unfiltered archive so injection still fires.
+        """
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import ImaginationConfig
+        from bog_agents_cli.dreamscape.imagination import ImaginationMiddleware
+
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+        # Only EC dreams — no myth dreams to satisfy a creative filter.
+        self._write_dream("zeta", "ec-a", "engineering-craft", title="EC Alpha")
+
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id="zeta", imagination=5.0, consecutive_tool_failures=5
+        )
+        lc_mod.save_snapshot(snap)
+
+        cfg = ImaginationConfig(
+            enabled=True,
+            trigger_after_failures=3,
+            min_imagination_trait=1.0,
+            max_snippets_per_injection=3,
+            injection_style="neutral",
+            use_content_routing=True,
+        )
+        mw = ImaginationMiddleware(agent_id="zeta", cfg=cfg)
+
+        class _Stub:
+            async def ainvoke(self, messages, **_kw):
+                from langchain_core.messages import AIMessage
+
+                return AIMessage(content="OK.")
+
+        # Decision-shaped prompt → myth filter → no matching dreams →
+        # fall back to unfiltered (which still has the EC dream).
+        req = ModelRequest(
+            model=_Stub(),
+            system_message=SystemMessage(content="base"),
+            messages=[HumanMessage(content="Which approach should I take?")],
+            tool_choice=None,
+            tools=[],
+            response_format=None,
+            model_settings={},
+            state={"messages": []},
+            runtime=None,
+        )
+        captured: list[str] = []
+
+        async def _capture(req: object) -> object:
+            sm = req.system_message  # type: ignore[attr-defined]
+            captured.append(str(sm.content) if sm else "")
+            return await req.model.ainvoke(req.messages)  # type: ignore[attr-defined]
+
+        await mw.awrap_model_call(req, _capture)  # type: ignore[arg-type]
+        assert "EC Alpha" in captured[-1]
+
+
+# ---------------------------------------------------------------------------
 # Phase 19 — LLM classifier fallback
 # ---------------------------------------------------------------------------
 

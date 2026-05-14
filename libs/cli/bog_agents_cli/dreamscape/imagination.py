@@ -242,14 +242,77 @@ class ImaginationMiddleware(AgentMiddleware):
             )
             return None
 
+    def _route_content_category_for_request(self, request: ModelRequest) -> str | None:
+        """Phase 21 — pick the seed category to filter on for this request.
+
+        Returns ``None`` when content routing is off OR no specific
+        category is appropriate (caller samples the full archive).
+        Returns a seed-category name (e.g. ``"engineering-craft"``,
+        ``"myth"``) when the prompt's classified domain has a clear
+        preferred category.
+        """
+        if not getattr(self._cfg, "use_content_routing", False):
+            return None
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from bog_agents_cli.dreamscape.domain import (
+                classify_prompt_domain,
+                preferred_seed_categories,
+            )
+
+            # Pull the latest human message.
+            last_human: str = ""
+            for msg in reversed(getattr(request, "messages", []) or []):
+                if isinstance(msg, HumanMessage):
+                    content = getattr(msg, "content", "")
+                    if isinstance(content, str):
+                        last_human = content
+                    elif isinstance(content, list):
+                        parts: list[str] = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                parts.append(str(block.get("text", "")))
+                        last_human = "\n".join(parts)
+                    if last_human:
+                        break
+
+            if not last_human:
+                return None
+            prompt_domain = classify_prompt_domain(last_human)
+            prefs = preferred_seed_categories(prompt_domain)
+            if not prefs:
+                return None
+            # Use the TOP-preferred category as the filter. Sampling
+            # falls back to the full archive (returns []) if no dream
+            # in the archive matches; the caller then falls back to
+            # unfiltered sampling.
+            return prefs[0]
+        except Exception:  # pragma: no cover — defensive
+            logger.debug("ImaginationMiddleware: content routing failed", exc_info=True)
+            return None
+
     def _maybe_inject(self, request: ModelRequest) -> ModelRequest:
         try:
             if not self._should_inject():
                 return request
+            # Phase 21 — try per-prompt content routing first. If it
+            # yields no excerpts (the archive doesn't have a matching
+            # category), fall back to the unfiltered archive so the
+            # injection still fires.
+            content_filter = self._route_content_category_for_request(request)
             excerpts = sample_dream_excerpts(
                 self._agent_id,
                 count=self._cfg.max_snippets_per_injection,
+                category_filter=content_filter,
             )
+            if not excerpts and content_filter is not None:
+                # Content routing produced no matches — try the
+                # unfiltered archive.
+                excerpts = sample_dream_excerpts(
+                    self._agent_id,
+                    count=self._cfg.max_snippets_per_injection,
+                )
             if not excerpts:
                 return request
             style_override = self._route_style_for_request(request)
@@ -269,6 +332,23 @@ class ImaginationMiddleware(AgentMiddleware):
                 save_snapshot(snap, enabled=True)
             except Exception:
                 pass
+            # Phase 25 — telemetry record of the injection. The
+            # category-route + style override are useful breakdowns.
+            with suppress(Exception):
+                from bog_agents_cli.dreamscape.telemetry import record_event
+
+                effective_style = style_override or getattr(
+                    self._cfg, "injection_style", "dreams"
+                )
+                record_event(
+                    self._agent_id,
+                    "injection_fired",
+                    metadata={
+                        "injection_style": effective_style,
+                        "content_category": content_filter,
+                        "excerpt_count": len(excerpts),
+                    },
+                )
             return new_request  # type: ignore[return-value]
         except Exception:
             logger.exception("ImaginationMiddleware: injection failed")
@@ -299,6 +379,11 @@ class ImaginationMiddleware(AgentMiddleware):
                     # The injection precedes a non-failure response —
                     # count it as having helped.
                     snap.imagination_injections_helped += 1
+                    # Phase 25 — telemetry record.
+                    with suppress(Exception):
+                        from bog_agents_cli.dreamscape.telemetry import record_event
+
+                        record_event(self._agent_id, "injection_helped", metadata={})
                 record_tool_success(snap)
             if currently_imagining:
                 snap.state = LifecycleState.AWAKE.value

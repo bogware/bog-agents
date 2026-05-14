@@ -238,6 +238,27 @@ class ImaginationConfig:
     threshold, the middleware auto-disables itself until the next
     dream lands. Set to 0.0 to disable the kill-switch."""
 
+    use_content_routing: bool = False
+    """Phase 21 — classify the user's prompt per-call and filter the
+    sampled dream excerpts by seed category accordingly.
+
+    Phase 14 showed dreams are domain-conditional. Phase 20 confirmed
+    engineering-craft seeds beat computing-history seeds 67% on
+    decision-shaped technical prompts. Phase 17 found that swapping
+    the WRAPPER per-prompt didn't help. Phase 21 swaps the CONTENT
+    instead — sample EC dreams when prompt is engineering/decision-
+    shaped, sample creative-category dreams when prompt is creative-
+    shaped, fall back to all dreams when no category match.
+
+    Requires that dreams in the archive carry a ``category:`` field
+    in their frontmatter. Phase 21+ dreams do; earlier dreams do not
+    and will be SKIPPED when this knob is on. Set to False to preserve
+    the full-archive behavior.
+
+    Default ``False`` so prior dreams keep working. Power-users can
+    opt in once they've accumulated category-tagged dreams.
+    """
+
     use_prompt_routing: bool = False
     """When True, classify the user's prompt per-call and override the
     injection wrapper style accordingly. Phase 17.
