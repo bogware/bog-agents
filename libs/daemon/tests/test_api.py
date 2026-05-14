@@ -145,6 +145,102 @@ class TestDeleteJob:
 
 
 # ---------------------------------------------------------------------------
+# Request-body validation — extra fields + invalid enum values
+# ---------------------------------------------------------------------------
+
+
+class TestRequestValidation:
+    """Workday regression tests for daemon request-body validation.
+
+    Background:
+
+    Before these guards, a caller could POST ``{"trigger": {...}, "output": {...}}``
+    (singular, looks like English) and the daemon would silently drop the
+    unknown fields, store a job with empty triggers/outputs, and accept it
+    with HTTP 201 — so the job never fired and the user had no clue why.
+    Invalid enum values like ``triggers[0].type = "nonsense"`` returned
+    HTTP 500 (server crash on ``TriggerType(v)`` ValueError) instead of
+    a clean 422.
+    """
+
+    def test_singular_trigger_typo_returns_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """The schema uses ``triggers`` (plural). A singular ``trigger`` is rejected."""
+        resp = client.post(
+            "/jobs",
+            json={"name": "x", "prompt": "y", "trigger": {"type": "cron"}},
+            headers=auth,
+        )
+        assert resp.status_code == 422
+        body = resp.json()
+        assert any(err["type"] == "extra_forbidden" for err in body["detail"])
+
+    def test_singular_output_typo_returns_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """Same rule for ``output`` (singular) vs ``outputs`` (plural)."""
+        resp = client.post(
+            "/jobs",
+            json={"name": "x", "prompt": "y", "output": {"target": "file"}},
+            headers=auth,
+        )
+        assert resp.status_code == 422
+
+    def test_unknown_top_level_field_returns_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """Misspelled top-level fields are surfaced, not silently dropped."""
+        resp = client.post(
+            "/jobs",
+            json={"name": "x", "prompt": "y", "trigggers": []},
+            headers=auth,
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_trigger_type_returns_422_not_500(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """A bogus trigger type 422s with a precise message — not 500."""
+        resp = client.post(
+            "/jobs",
+            json={"name": "x", "prompt": "y", "triggers": [{"type": "nonsense"}]},
+            headers=auth,
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert any("nonsense" in err.get("msg", "") for err in detail)
+        # The error message lists every valid value so the user can pick.
+        msg = " ".join(err.get("msg", "") for err in detail)
+        for valid in ("cron", "file_change", "webhook", "manual", "interval"):
+            assert valid in msg
+
+    def test_invalid_output_target_returns_422_not_500(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """Bogus output target same treatment."""
+        resp = client.post(
+            "/jobs",
+            json={"name": "x", "prompt": "y", "outputs": [{"target": "telegram"}]},
+            headers=auth,
+        )
+        assert resp.status_code == 422
+        msg = " ".join(err.get("msg", "") for err in resp.json()["detail"])
+        assert "telegram" in msg
+        for valid in ("file", "email", "slack", "stdout"):
+            assert valid in msg
+
+    def test_correctly_shaped_request_still_201(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """The strict validation must not break correctly-shaped requests."""
+        resp = client.post(
+            "/jobs",
+            json={
+                "name": "valid",
+                "prompt": "y",
+                "triggers": [{"type": "cron", "cron": "0 9 * * *"}],
+                "outputs": [{"target": "file", "file_path": "/tmp/x"}],
+            },
+            headers=auth,
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert len(body["triggers"]) == 1
+        assert body["triggers"][0]["type"] == "cron"
+        assert len(body["outputs"]) == 1
+        assert body["outputs"][0]["target"] == "file"
+
+
+# ---------------------------------------------------------------------------
 # PATCH /jobs/{id} — partial edit
 # ---------------------------------------------------------------------------
 

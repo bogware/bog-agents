@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 if TYPE_CHECKING:
     from bog_agents_daemon.models import JobRun
     from bog_agents_daemon.scheduler import DaemonScheduler
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from bog_agents_daemon import __version__
 from bog_agents_daemon.models import (
@@ -48,7 +48,19 @@ _TOKEN_FILE = Path.home() / ".bog-agents" / "daemon" / "token"
 class TriggerConfigModel(BaseModel):
     """Pydantic schema for TriggerConfig."""
 
+    model_config = ConfigDict(extra="forbid")
+
     type: str
+
+    @field_validator("type")
+    @classmethod
+    def _validate_type(cls, v: str) -> str:
+        valid = {t.value for t in TriggerType}
+        if v not in valid:
+            msg = f"invalid trigger type {v!r} — must be one of {sorted(valid)}"
+            raise ValueError(msg)
+        return v
+
     cron: str = ""
     interval_seconds: int = 0
     watch_patterns: list[str] = []
@@ -62,7 +74,19 @@ class TriggerConfigModel(BaseModel):
 class OutputConfigModel(BaseModel):
     """Pydantic schema for OutputConfig."""
 
+    model_config = ConfigDict(extra="forbid")
+
     target: str
+
+    @field_validator("target")
+    @classmethod
+    def _validate_target(cls, v: str) -> str:
+        valid = {t.value for t in OutputTarget}
+        if v not in valid:
+            msg = f"invalid output target {v!r} — must be one of {sorted(valid)}"
+            raise ValueError(msg)
+        return v
+
     file_path: str = ""
     append: bool = True
     smtp_host: str = ""
@@ -97,6 +121,8 @@ _MAX_OUTPUTS = 64
 class CreateJobRequest(BaseModel):
     """Request body for creating an ambient job."""
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(..., max_length=_MAX_NAME_LEN, min_length=1)
     description: str = Field("", max_length=_MAX_DESCRIPTION_LEN)
     prompt: str = Field("", max_length=_MAX_PROMPT_LEN)
@@ -112,6 +138,8 @@ class CreateJobRequest(BaseModel):
 class TriggerRunRequest(BaseModel):
     """Optional body for manual job trigger."""
 
+    model_config = ConfigDict(extra="forbid")
+
     context: dict[str, Any] = {}
 
 
@@ -121,6 +149,8 @@ class UpdateJobRequest(BaseModel):
     Every field is optional. Only the fields the caller sends are
     overwritten on the stored record; everything else is preserved.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, max_length=_MAX_NAME_LEN)
     description: str | None = Field(default=None, max_length=_MAX_DESCRIPTION_LEN)

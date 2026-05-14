@@ -228,6 +228,48 @@ class TestTransportResolution:
         transport, _ = resolve_halo_transport(cfg, env={})
         assert transport == "off"
 
+    def test_jira_diagnostic_names_only_missing_piece(self) -> None:
+        """Diagnostic message must specify which credential is missing.
+
+        Regression test for the workday-found bug where the message
+        said 'no api_base_url or JIRA_API_TOKEN' even when api_base_url
+        was set — confusing the user about which piece was missing.
+        """
+        # base_url set, token missing → message names ONLY the token
+        cfg = JiraSourceConfig(
+            enabled=True,
+            api_base_url="https://acme.atlassian.net",
+            mcp_server="__nope__",
+        )
+        _, detail = resolve_jira_transport(cfg, env={})
+        assert "JIRA_API_TOKEN" in detail
+        assert "api_base_url empty" not in detail
+
+        # base_url empty, token set → message names ONLY the base_url
+        cfg2 = JiraSourceConfig(enabled=True, api_base_url="", mcp_server="__nope__")
+        _, detail2 = resolve_jira_transport(cfg2, env={"JIRA_API_TOKEN": "x"})
+        assert "api_base_url empty" in detail2
+        assert "JIRA_API_TOKEN unset" not in detail2
+
+        # both missing → message names both
+        cfg3 = JiraSourceConfig(enabled=True, api_base_url="", mcp_server="__nope__")
+        _, detail3 = resolve_jira_transport(cfg3, env={})
+        assert "api_base_url empty" in detail3
+        assert "JIRA_API_TOKEN unset" in detail3
+
+    def test_halo_diagnostic_names_only_missing_piece(self) -> None:
+        """Same regression for Halo — message must name only what's actually missing."""
+        # All present except client_secret
+        cfg = HaloSourceConfig(
+            enabled=True,
+            api_base_url="https://acme.halopsa.com",
+            mcp_server="__nope__",
+        )
+        _, detail = resolve_halo_transport(cfg, env={"HALO_CLIENT_ID": "x"})
+        assert "HALO_CLIENT_SECRET" in detail
+        assert "HALO_CLIENT_ID unset" not in detail
+        assert "api_base_url empty" not in detail
+
 
 # ---------------------------------------------------------------------------
 # Ticket attachment

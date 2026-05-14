@@ -287,13 +287,34 @@ async def generate_dream(
         except OSError:
             logger.debug("could not mirror dream into global /dreams/", exc_info=True)
 
-    return DreamArtifact(
+    artifact = DreamArtifact(
         path=per_agent_path,
         body=body,
         title=title,
         elapsed_seconds=elapsed,
         seeds_used=chosen,
     )
+
+    # Record one telemetry event per dream firing. Doing this here in
+    # ``generate_dream`` (rather than only in the lifecycle wrapper)
+    # means EVERY caller path — ``maybe_dream``, the ``/dream`` slash
+    # command, tests, programmatic use — produces telemetry. Best-effort:
+    # disk failures degrade silently so the dream itself still returns.
+    with suppress(Exception):
+        from bog_agents_cli.dreamscape.telemetry import record_event
+
+        record_event(
+            agent_id,
+            "dream_fired",
+            metadata={
+                "title": title,
+                "elapsed_seconds": elapsed,
+                "seeds_used_count": len(chosen),
+                "category": dominant_category or "",
+            },
+        )
+
+    return artifact
 
 
 # ---------------------------------------------------------------------------
@@ -368,38 +389,9 @@ async def maybe_dream(
     snap.state = LifecycleState.DORMANT.value
     save_snapshot(snap, enabled=lifecycle_cfg.persist_state_to_disk)
 
-    # Phase 25 — record the dream firing for downstream telemetry.
-    # Best-effort: failure here logs and continues.
-    with suppress(Exception):
-        # Read back the category we wrote into the artifact's
-        # frontmatter so the telemetry agg can break down by category.
-        from typing import Any as _Any
-
-        from bog_agents_cli.dreamscape.telemetry import record_event
-
-        cat_md: dict[str, _Any] = {
-            "title": artifact.title,
-            "elapsed_seconds": artifact.elapsed_seconds,
-            "seeds_used_count": len(artifact.seeds_used),
-        }
-        try:
-            with artifact.path.open("r", encoding="utf-8") as fh:
-                # Skip the opening "---" delimiter, then scan the
-                # frontmatter for the "category:" field. Stop at the
-                # closing delimiter or after a bounded line count.
-                first = fh.readline()
-                if first.startswith("---"):
-                    for _ in range(20):
-                        line = fh.readline()
-                        if not line or line.strip().startswith("---"):
-                            break
-                        if line.lower().startswith("category:"):
-                            cat_md["category"] = line.split(":", 1)[1].strip()
-                            break
-        except OSError:
-            pass
-        record_event(agent_id, "dream_fired", metadata=cat_md)
-
+    # Telemetry is now recorded inside ``generate_dream`` itself so
+    # every caller path (lifecycle wrapper, /dream slash command,
+    # programmatic invocations, tests) produces consistent events.
     return artifact
 
 

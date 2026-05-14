@@ -197,10 +197,7 @@ def resolve_jira_transport(
     if mode == "api":
         if has_api:
             return ("api", "REST API credentials present")
-        return (
-            "off",
-            f"mode=api but {cfg.api_token_env} unset or api_base_url empty",
-        )
+        return ("off", f"mode=api but {_jira_api_missing(cfg, e)}")
     # auto
     if has_mcp:
         return ("mcp", f"MCP server {cfg.mcp_server!r} detected (auto)")
@@ -208,9 +205,21 @@ def resolve_jira_transport(
         return ("api", "REST API credentials present (auto)")
     return (
         "off",
-        f"auto: no MCP server {cfg.mcp_server!r}, "
-        f"no api_base_url or {cfg.api_token_env}",
+        f"auto: MCP server {cfg.mcp_server!r} not configured; "
+        f"{_jira_api_missing(cfg, e)}",
     )
+
+
+def _jira_api_missing(cfg: JiraSourceConfig, env: dict[str, str]) -> str:
+    """Return a precise diagnostic naming exactly which Jira API piece is missing."""
+    missing: list[str] = []
+    if not cfg.api_base_url:
+        missing.append("api_base_url empty")
+    if not env.get(cfg.api_token_env):
+        missing.append(f"{cfg.api_token_env} unset")
+    if not missing:
+        return "api credentials present (auto)"
+    return " and ".join(missing)
 
 
 def resolve_halo_transport(
@@ -238,11 +247,7 @@ def resolve_halo_transport(
     if mode == "api":
         if has_api:
             return ("api", "REST API credentials present")
-        return (
-            "off",
-            f"mode=api but {cfg.api_client_id_env}/{cfg.api_client_secret_env} unset "
-            "or api_base_url empty",
-        )
+        return ("off", f"mode=api but {_halo_api_missing(cfg, e)}")
     # auto
     if has_mcp:
         return ("mcp", f"MCP server {cfg.mcp_server!r} detected (auto)")
@@ -250,9 +255,23 @@ def resolve_halo_transport(
         return ("api", "REST API credentials present (auto)")
     return (
         "off",
-        "auto: no MCP server, no api_base_url or "
-        f"{cfg.api_client_id_env}/{cfg.api_client_secret_env}",
+        f"auto: MCP server {cfg.mcp_server!r} not configured; "
+        f"{_halo_api_missing(cfg, e)}",
     )
+
+
+def _halo_api_missing(cfg: HaloSourceConfig, env: dict[str, str]) -> str:
+    """Return a precise diagnostic naming exactly which Halo API piece is missing."""
+    missing: list[str] = []
+    if not cfg.api_base_url:
+        missing.append("api_base_url empty")
+    if not env.get(cfg.api_client_id_env):
+        missing.append(f"{cfg.api_client_id_env} unset")
+    if not env.get(cfg.api_client_secret_env):
+        missing.append(f"{cfg.api_client_secret_env} unset")
+    if not missing:
+        return "api credentials present (auto)"
+    return " and ".join(missing)
 
 
 # ---------------------------------------------------------------------------
