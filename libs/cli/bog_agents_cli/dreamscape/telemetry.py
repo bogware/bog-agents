@@ -277,3 +277,116 @@ def clear_telemetry(agent_id: str) -> bool:
                 logger.warning("dreamscape telemetry clear failed (%s): %s", p, exc)
                 ok = False
     return ok
+
+
+# ---------------------------------------------------------------------------
+# Phase 28 — telemetry exporter
+# ---------------------------------------------------------------------------
+
+
+def list_agents_with_telemetry() -> list[str]:
+    """Return every agent_id that has a telemetry log on disk.
+
+    Used by :func:`export_telemetry_bundle` to discover all agents
+    without requiring the caller to enumerate them.
+    """
+    out: list[str] = []
+    try:
+        agents_root = Path.home() / ".bog-agents" / "agents"
+        if not agents_root.exists():
+            return out
+        for child in agents_root.iterdir():
+            if not child.is_dir():
+                continue
+            if (child / _FILE_NAME).exists() or (child / (_FILE_NAME + ".1")).exists():
+                out.append(child.name)
+    except OSError as exc:
+        logger.warning("dreamscape: list_agents_with_telemetry failed: %s", exc)
+    return sorted(out)
+
+
+def export_telemetry_bundle(
+    output_path: Path,
+    *,
+    agent_ids: list[str] | None = None,
+    since: float | None = None,
+    include_metadata: bool = True,
+) -> dict[str, Any]:
+    """Bundle telemetry from one or more agents into a single JSON file.
+
+    Phase 28 — operators who want to aggregate dreamscape signal
+    across deployments can run this to produce a portable artifact.
+
+    Args:
+        output_path: Where to write the bundle (JSON).
+        agent_ids: Which agents to include. ``None`` = every agent
+            with a telemetry log under ``~/.bog-agents/agents/``.
+        since: Optional Unix-epoch lower bound on event timestamps.
+        include_metadata: When False, strips event metadata to bare
+            ``{ts, kind, agent_id}`` records. Useful for
+            privacy-sensitive exports — no prompt text, no dream
+            titles, just counts. Defaults to True.
+
+    Returns:
+        A dict with summary statistics that's also written to disk.
+    """
+    if agent_ids is None:
+        agent_ids = list_agents_with_telemetry()
+
+    bundle: dict[str, Any] = {
+        "schema_version": 1,
+        "generated_at": time.time(),
+        "since": since,
+        "include_metadata": include_metadata,
+        "agents": {},
+        "summary": {
+            "agent_count": 0,
+            "total_events": 0,
+            "total_dreams": 0,
+            "total_injections": 0,
+            "total_injections_helped": 0,
+        },
+    }
+
+    for agent_id in agent_ids:
+        agent_events: list[dict[str, Any]] = []
+        for event in iter_events(agent_id, since=since):
+            entry: dict[str, Any] = {
+                "ts": event.timestamp,
+                "kind": event.kind,
+                "agent_id": event.agent_id,
+            }
+            if include_metadata:
+                entry["metadata"] = dict(event.metadata)
+            agent_events.append(entry)
+        agg = aggregate_events(agent_id, since=since)
+        bundle["agents"][agent_id] = {
+            "events": agent_events,
+            "summary": {
+                "events_total": agg.events_total,
+                "dreams_fired": agg.dreams_fired,
+                "injections_fired": agg.injections_fired,
+                "injections_helped": agg.injections_helped,
+                "helped_rate": agg.helped_rate,
+                "approx_cost_usd": agg.approx_cost_usd,
+                "dreams_by_category": dict(agg.dreams_by_category),
+                "injections_by_style": dict(agg.injections_by_style),
+            },
+        }
+        bundle["summary"]["agent_count"] += 1
+        bundle["summary"]["total_events"] += agg.events_total
+        bundle["summary"]["total_dreams"] += agg.dreams_fired
+        bundle["summary"]["total_injections"] += agg.injections_fired
+        bundle["summary"]["total_injections_helped"] += agg.injections_helped
+
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(bundle, indent=2, default=str), encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.warning(
+            "dreamscape: export bundle write failed (%s): %s", output_path, exc
+        )
+
+    return bundle

@@ -1581,6 +1581,115 @@ class TestTelemetry:
 
 
 # ---------------------------------------------------------------------------
+# Phase 28 — telemetry exporter
+# ---------------------------------------------------------------------------
+
+
+class TestTelemetryExporter:
+    """Cover the Phase 28 telemetry-export pipeline.
+
+    The exporter bundles per-agent telemetry into a single JSON file
+    so operators can aggregate across deployments. Includes a
+    privacy-mode flag that strips metadata when set.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+
+    def test_list_agents_with_telemetry_returns_only_logged(self) -> None:
+        from bog_agents_cli.dreamscape.lifecycle import agent_state_dir
+        from bog_agents_cli.dreamscape.telemetry import (
+            list_agents_with_telemetry,
+            record_event,
+        )
+
+        # alpha has events; beta is captured-but-quiet (profile but no log).
+        record_event("alpha", "dream_fired", {"title": "a"})
+        (agent_state_dir("beta") / "agent_profile.txt").write_text(
+            "anything", encoding="utf-8"
+        )
+        agents = list_agents_with_telemetry()
+        assert agents == ["alpha"]
+
+    def test_export_bundle_includes_all_agents(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            export_telemetry_bundle,
+            record_event,
+        )
+
+        record_event("gamma", "dream_fired", {"title": "G1", "category": "myth"})
+        record_event("delta", "injection_fired", {"injection_style": "neutral"})
+        record_event("delta", "injection_helped", {})
+
+        out = tmp_path / "out" / "bundle.json"
+        bundle = export_telemetry_bundle(
+            out, agent_ids=["gamma", "delta"], include_metadata=True
+        )
+        assert out.exists()
+        assert bundle["summary"]["agent_count"] == 2
+        assert bundle["summary"]["total_events"] == 3
+        assert bundle["summary"]["total_dreams"] == 1
+        assert bundle["summary"]["total_injections"] == 1
+        assert bundle["summary"]["total_injections_helped"] == 1
+        gamma_events = bundle["agents"]["gamma"]["events"]
+        assert len(gamma_events) == 1
+        assert gamma_events[0]["kind"] == "dream_fired"
+        assert gamma_events[0]["metadata"]["title"] == "G1"
+
+    def test_export_bundle_privacy_mode_strips_metadata(self, tmp_path: Path) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            export_telemetry_bundle,
+            record_event,
+        )
+
+        record_event("epsilon", "dream_fired", {"title": "sensitive"})
+        out = tmp_path / "privacy.json"
+        bundle = export_telemetry_bundle(
+            out, agent_ids=["epsilon"], include_metadata=False
+        )
+        events = bundle["agents"]["epsilon"]["events"]
+        assert len(events) == 1
+        assert "metadata" not in events[0]
+        assert events[0]["kind"] == "dream_fired"
+        assert bundle["agents"]["epsilon"]["summary"]["dreams_fired"] == 1
+
+    def test_export_bundle_with_since_filter(self, tmp_path: Path) -> None:
+        import time as _time
+
+        from bog_agents_cli.dreamscape.telemetry import (
+            export_telemetry_bundle,
+            record_event,
+        )
+
+        record_event("zeta", "dream_fired", {})
+        _time.sleep(0.02)
+        cutoff = _time.time()
+        _time.sleep(0.02)
+        record_event("zeta", "dream_fired", {})
+
+        bundle = export_telemetry_bundle(
+            tmp_path / "since.json", agent_ids=["zeta"], since=cutoff
+        )
+        assert bundle["agents"]["zeta"]["summary"]["events_total"] == 1
+
+    def test_export_with_no_explicit_agent_ids_uses_discovery(
+        self, tmp_path: Path
+    ) -> None:
+        from bog_agents_cli.dreamscape.telemetry import (
+            export_telemetry_bundle,
+            record_event,
+        )
+
+        record_event("eta", "dream_fired", {})
+        record_event("theta", "injection_fired", {"injection_style": "neutral"})
+
+        bundle = export_telemetry_bundle(tmp_path / "auto.json", agent_ids=None)
+        assert set(bundle["agents"].keys()) == {"eta", "theta"}
+        assert bundle["summary"]["agent_count"] == 2
+
+
+# ---------------------------------------------------------------------------
 # Phase 21 — per-prompt content routing
 # ---------------------------------------------------------------------------
 

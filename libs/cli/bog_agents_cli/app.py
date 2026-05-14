@@ -10159,6 +10159,59 @@ class BogAgentsApp(App):
             await self._mount_message(AppMessage(body))
             return
 
+        if raw_arg.startswith("export"):
+            # /dreamscape export [path] [--no-metadata]
+            import time as _time
+            from pathlib import Path as _Path
+
+            from bog_agents_cli.dreamscape.telemetry import (
+                export_telemetry_bundle,
+                list_agents_with_telemetry,
+            )
+
+            tokens_raw = command.strip()[len(prefix) :].strip().split()[1:]
+            include_metadata = True
+            path_str: str | None = None
+            for tok in tokens_raw:
+                if tok == "--no-metadata":
+                    include_metadata = False
+                elif not tok.startswith("--"):
+                    path_str = tok
+            if path_str is None:
+                stamp = _time.strftime("%Y%m%d-%H%M%S")
+                export_path = (
+                    _Path.home() / ".bog-agents" / f"telemetry-export-{stamp}.json"
+                )
+            else:
+                export_path = _Path(path_str).expanduser()  # noqa: ASYNC240 — local-disk only, no I/O on this line
+
+            try:
+                agents = list_agents_with_telemetry()
+                bundle = export_telemetry_bundle(
+                    export_path,
+                    agent_ids=agents,
+                    include_metadata=include_metadata,
+                )
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape export failed: {exc}")
+                )
+                return
+            summary = bundle["summary"]
+            metadata_label = "yes" if include_metadata else "no (privacy mode)"
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Telemetry exported[/bold]\n"
+                    f"  Path: [cyan]{export_path}[/cyan]\n"
+                    f"  Agents: {summary['agent_count']}\n"
+                    f"  Events: {summary['total_events']} "
+                    f"({summary['total_dreams']} dreams, "
+                    f"{summary['total_injections']} injections)\n"
+                    f"  Metadata included: {metadata_label}"
+                )
+            )
+            return
+
         if raw_arg == "init":
             try:
                 written = init_dreamscape_config()
@@ -10206,7 +10259,9 @@ class BogAgentsApp(App):
                 "  /dreamscape status    Same as above\n"
                 "  /dreamscape init      Write a starter ~/.bog-agents/dreamscape.toml\n"
                 "  /dreamscape disable   Force-disable for this session\n"
-                "  /dreamscape stats [H] Show telemetry for last H hours (default 24, 'all')"
+                "  /dreamscape stats [H] Show telemetry for last H hours (default 24, 'all')\n"
+                "  /dreamscape export [path] [--no-metadata]\n"
+                "                        Bundle telemetry from all agents into a single JSON file"
             )
         )
 

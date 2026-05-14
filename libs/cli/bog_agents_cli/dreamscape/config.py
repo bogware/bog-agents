@@ -238,6 +238,20 @@ class ImaginationConfig:
     threshold, the middleware auto-disables itself until the next
     dream lands. Set to 0.0 to disable the kill-switch."""
 
+    use_llm_prompt_classifier: bool = False
+    """Phase 27 — when True, prompt classification (for both wrapper
+    and content routing) uses an LLM call instead of the keyword
+    classifier. Slower (one extra Haiku call per gated injection) but
+    less brittle than the keyword classifier on edge cases like
+    "designing the retry policy" (Phase 17 surprise).
+
+    Per-prompt LLM classifications are cached in-memory on the
+    middleware instance keyed by the prompt's hash, so repeat
+    prompts in a session don't repeat the cost. Default ``False`` to
+    keep the per-call cost predictable; opt in for power-users with
+    ambiguous prompts.
+    """
+
     use_content_routing: bool = False
     """Phase 21 — classify the user's prompt per-call and filter the
     sampled dream excerpts by seed category accordingly.

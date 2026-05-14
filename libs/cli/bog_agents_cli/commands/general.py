@@ -391,6 +391,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                     "stats [H]",
                     "Show telemetry for last H hours (default 24, 'all' for full history)",
                 ),
+                (
+                    "export [path]",
+                    "Bundle telemetry across all agents into one JSON file (--no-metadata for privacy mode)",
+                ),
             ),
         ),
         handler_method="_handle_dreamscape_command",

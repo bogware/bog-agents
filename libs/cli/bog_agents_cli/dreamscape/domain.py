@@ -621,3 +621,73 @@ async def classify_with_fallback_async(profile: str, model: object) -> Domain:
     if keyword_result != "general":
         return keyword_result
     return await classify_agent_domain_llm_async(profile, model)
+
+
+_PROMPT_CLASSIFIER_SYSTEM = (
+    "You classify a developer's question by its underlying shape. "
+    "Pick exactly one label:"
+    "\n\n"
+    "* engineering — debug a stack trace, fix a specific tool, name a "
+    "concrete command, diagnose a runtime issue. The asker wants a "
+    "specific tool or step."
+    "\n* creative — name something, choose a metaphor, draft user-facing "
+    "copy, design API shape, decide between options where multiple are "
+    "valid. The asker wants an evocative reframe or judgment."
+    "\n* research — survey, compare benchmarks, design an experiment, "
+    "analyze data."
+    "\n* general — none of the above clearly dominates."
+    "\n\n"
+    "Surface vocabulary can mislead. 'I'm designing the retry policy' "
+    "looks creative because of 'designing' but is engineering if the "
+    "asker wants concrete retry-policy mechanics. Look at what the "
+    "asker is actually asking for, not what words they use."
+    "\n\n"
+    "Output STRICT JSON with no preamble:"
+    '\n{"domain": "engineering" | "creative" | "research" | "general", '
+    '"reasoning": "one short sentence"}'
+)
+
+
+async def classify_prompt_domain_llm_async(prompt: str, model: object) -> Domain:
+    """Phase 27 — classify a user PROMPT (not a profile) via an LLM call.
+
+    Like :func:`classify_agent_domain_llm_async` but tuned for a
+    user's short question rather than a system prompt. The classifier
+    is instructed to look past surface vocabulary (the
+    "designing the retry policy" Phase-17 false-positive) and judge
+    the prompt's underlying SHAPE.
+
+    Returns ``"general"`` on empty input, unparseable response,
+    provider error, or unknown label. Never raises.
+    """
+    if not prompt or not prompt.strip():
+        return "general"
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        resp = await model.ainvoke(  # type: ignore[attr-defined]
+            [
+                SystemMessage(content=_PROMPT_CLASSIFIER_SYSTEM),
+                HumanMessage(content=f"## Prompt\n\n{prompt[:_MAX_PROFILE_CHARS]}"),
+            ]
+        )
+    except Exception as exc:
+        logger.warning("dreamscape: llm prompt classifier call failed: %s", exc)
+        return "general"
+
+    text = str(getattr(resp, "content", "")).strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0]
+    text = text.strip()
+    import json as _json
+
+    try:
+        parsed = _json.loads(text)
+    except (_json.JSONDecodeError, ValueError):
+        return "general"
+    label = parsed.get("domain", "") if isinstance(parsed, dict) else ""
+    if label in ("engineering", "creative", "research", "general"):
+        return label  # type: ignore[return-value]
+    return "general"

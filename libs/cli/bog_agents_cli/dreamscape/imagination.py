@@ -93,6 +93,10 @@ class ImaginationMiddleware(AgentMiddleware):
         self._agent_id = agent_id or "default"
         self._cfg = cfg or ImaginationConfig()
         self._tools: list[Any] = []
+        # Phase 27 — in-memory cache of LLM-classified prompt domains.
+        # Keyed by prompt-text hash. Persists for the lifetime of the
+        # middleware instance (= the agent session).
+        self._llm_prompt_cache: dict[str, str] = {}
 
     @property
     def tools(self) -> list[Any]:
@@ -118,6 +122,58 @@ class ImaginationMiddleware(AgentMiddleware):
         self._record_outcome(response)
         return response
 
+    async def _llm_classify_request(self, request: ModelRequest) -> str | None:
+        """Phase 27 — async LLM classification of the request's prompt.
+
+        Returns one of ``"engineering" | "creative" | "research" |
+        "general"``, or ``None`` if classification cannot proceed
+        (e.g. no prompt text, no model available). Caches results
+        keyed by prompt hash for the middleware's lifetime.
+        """
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from bog_agents_cli.dreamscape.domain import (
+                classify_prompt_domain_llm_async,
+            )
+
+            # Extract last human message.
+            last_human: str = ""
+            for msg in reversed(getattr(request, "messages", []) or []):
+                if isinstance(msg, HumanMessage):
+                    content = getattr(msg, "content", "")
+                    if isinstance(content, str):
+                        last_human = content
+                    elif isinstance(content, list):
+                        parts: list[str] = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                parts.append(str(block.get("text", "")))
+                        last_human = "\n".join(parts)
+                    if last_human:
+                        break
+            if not last_human:
+                return None
+
+            # Cache lookup.
+            cache_key = str(hash(last_human))
+            cached = self._llm_prompt_cache.get(cache_key)
+            if cached:
+                return cached
+
+            # Live LLM call via the request's own model.
+            model = getattr(request, "model", None)
+            if model is None:
+                return None
+            domain = await classify_prompt_domain_llm_async(last_human, model)
+            self._llm_prompt_cache[cache_key] = domain
+            return domain
+        except Exception:  # pragma: no cover — defensive
+            logger.debug(
+                "ImaginationMiddleware: LLM prompt classifier failed", exc_info=True
+            )
+            return None
+
     async def awrap_model_call(  # type: ignore[override]
         self,
         request: ModelRequest,
@@ -125,7 +181,13 @@ class ImaginationMiddleware(AgentMiddleware):
     ) -> ModelResponse:
         if not self.active:
             return await call_next(request)
-        request = self._maybe_inject(request)
+        # Phase 27 — async LLM prompt classification when the knob is on.
+        # The override flows into _maybe_inject and overrides both
+        # wrapper-style routing and content-category routing.
+        prompt_override: str | None = None
+        if getattr(self._cfg, "use_llm_prompt_classifier", False):
+            prompt_override = await self._llm_classify_request(request)
+        request = self._maybe_inject(request, prompt_domain_override=prompt_override)
         response = await call_next(request)
         self._record_outcome(response)
         return response
@@ -197,7 +259,12 @@ class ImaginationMiddleware(AgentMiddleware):
             body_parts.append("")
         return "\n".join(body_parts)
 
-    def _route_style_for_request(self, request: ModelRequest) -> str | None:
+    def _route_style_for_request(
+        self,
+        request: ModelRequest,
+        *,
+        prompt_domain_override: str | None = None,
+    ) -> str | None:
         """Phase 17 — pick the wrapper style for this specific request.
 
         Returns ``None`` when per-prompt routing is off (caller falls
@@ -208,14 +275,35 @@ class ImaginationMiddleware(AgentMiddleware):
         if not getattr(self._cfg, "use_prompt_routing", False):
             return None
         try:
+            from bog_agents_cli.dreamscape.domain import recommended_injection_style
+
+            prompt_domain = prompt_domain_override or self._classify_prompt_keyword(
+                request
+            )
+            if not prompt_domain:
+                return None
+            return recommended_injection_style(prompt_domain)  # type: ignore[arg-type]
+        except Exception:  # pragma: no cover — observability path
+            logger.debug(
+                "ImaginationMiddleware: per-prompt routing failed", exc_info=True
+            )
+            return None
+
+    def _classify_prompt_keyword(self, request: ModelRequest) -> str | None:
+        """Extract the latest user prompt and run the keyword classifier.
+
+        Returns ``None`` when no prompt is found; otherwise one of
+        ``"engineering" | "creative" | "research" | "general"``.
+        Pulled out into its own helper so the wrapper-style + content-
+        category routing paths share the extraction logic and the
+        Phase 27 LLM override can substitute its result at the call
+        site.
+        """
+        try:
             from langchain_core.messages import HumanMessage
 
-            from bog_agents_cli.dreamscape.domain import (
-                classify_prompt_domain,
-                recommended_injection_style,
-            )
+            from bog_agents_cli.dreamscape.domain import classify_prompt_domain
 
-            # Pull the latest human message from the request.
             last_human: str = ""
             for msg in reversed(getattr(request, "messages", []) or []):
                 if isinstance(msg, HumanMessage):
@@ -223,7 +311,6 @@ class ImaginationMiddleware(AgentMiddleware):
                     if isinstance(content, str):
                         last_human = content
                     elif isinstance(content, list):
-                        # content-blocks form — concat text parts.
                         parts: list[str] = []
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "text":
@@ -231,18 +318,18 @@ class ImaginationMiddleware(AgentMiddleware):
                         last_human = "\n".join(parts)
                     if last_human:
                         break
-
             if not last_human:
                 return None
-            prompt_domain = classify_prompt_domain(last_human)
-            return recommended_injection_style(prompt_domain)
-        except Exception:  # pragma: no cover — observability path
-            logger.debug(
-                "ImaginationMiddleware: per-prompt routing failed", exc_info=True
-            )
+            return classify_prompt_domain(last_human)
+        except Exception:
             return None
 
-    def _route_content_category_for_request(self, request: ModelRequest) -> str | None:
+    def _route_content_category_for_request(
+        self,
+        request: ModelRequest,
+        *,
+        prompt_domain_override: str | None = None,
+    ) -> str | None:
         """Phase 21 — pick the seed category to filter on for this request.
 
         Returns ``None`` when content routing is off OR no specific
@@ -250,49 +337,34 @@ class ImaginationMiddleware(AgentMiddleware):
         Returns a seed-category name (e.g. ``"engineering-craft"``,
         ``"myth"``) when the prompt's classified domain has a clear
         preferred category.
+
+        Phase 27 — accepts ``prompt_domain_override`` (e.g. from an
+        async LLM classifier) which short-circuits the keyword path.
         """
         if not getattr(self._cfg, "use_content_routing", False):
             return None
         try:
-            from langchain_core.messages import HumanMessage
+            from bog_agents_cli.dreamscape.domain import preferred_seed_categories
 
-            from bog_agents_cli.dreamscape.domain import (
-                classify_prompt_domain,
-                preferred_seed_categories,
+            prompt_domain = prompt_domain_override or self._classify_prompt_keyword(
+                request
             )
-
-            # Pull the latest human message.
-            last_human: str = ""
-            for msg in reversed(getattr(request, "messages", []) or []):
-                if isinstance(msg, HumanMessage):
-                    content = getattr(msg, "content", "")
-                    if isinstance(content, str):
-                        last_human = content
-                    elif isinstance(content, list):
-                        parts: list[str] = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                parts.append(str(block.get("text", "")))
-                        last_human = "\n".join(parts)
-                    if last_human:
-                        break
-
-            if not last_human:
+            if not prompt_domain:
                 return None
-            prompt_domain = classify_prompt_domain(last_human)
-            prefs = preferred_seed_categories(prompt_domain)
+            prefs = preferred_seed_categories(prompt_domain)  # type: ignore[arg-type]
             if not prefs:
                 return None
-            # Use the TOP-preferred category as the filter. Sampling
-            # falls back to the full archive (returns []) if no dream
-            # in the archive matches; the caller then falls back to
-            # unfiltered sampling.
             return prefs[0]
         except Exception:  # pragma: no cover — defensive
             logger.debug("ImaginationMiddleware: content routing failed", exc_info=True)
             return None
 
-    def _maybe_inject(self, request: ModelRequest) -> ModelRequest:
+    def _maybe_inject(
+        self,
+        request: ModelRequest,
+        *,
+        prompt_domain_override: str | None = None,
+    ) -> ModelRequest:
         try:
             if not self._should_inject():
                 return request
@@ -300,7 +372,9 @@ class ImaginationMiddleware(AgentMiddleware):
             # yields no excerpts (the archive doesn't have a matching
             # category), fall back to the unfiltered archive so the
             # injection still fires.
-            content_filter = self._route_content_category_for_request(request)
+            content_filter = self._route_content_category_for_request(
+                request, prompt_domain_override=prompt_domain_override
+            )
             excerpts = sample_dream_excerpts(
                 self._agent_id,
                 count=self._cfg.max_snippets_per_injection,
@@ -315,7 +389,9 @@ class ImaginationMiddleware(AgentMiddleware):
                 )
             if not excerpts:
                 return request
-            style_override = self._route_style_for_request(request)
+            style_override = self._route_style_for_request(
+                request, prompt_domain_override=prompt_domain_override
+            )
             body = self._build_injection_body(excerpts, style_override=style_override)
 
             from bog_agents.middleware._utils import append_to_system_message

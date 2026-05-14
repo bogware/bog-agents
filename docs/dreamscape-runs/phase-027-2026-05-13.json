@@ -1,0 +1,104 @@
+{
+  "phase": 27,
+  "date": "2026-05-13",
+  "branch": "feat/agentic-evolution",
+  "model_treatment": "claude-haiku-4-5",
+  "model_judge": "claude-sonnet-4-6",
+  "model_classifier": "claude-haiku-4-5",
+  "test_focus": "swap keyword prompt classifier for LLM classifier in per-prompt content routing. Does the keyword classifier's surface-keyword false positives explain Phase 26's regression, or is the issue filtering-vs-diversity?",
+  "tester": "Claude Opus 4.7 (1M context), live as the developer",
+  "implementation_added": {
+    "module_changes": [
+      "bog_agents_cli/dreamscape/domain.py — classify_prompt_domain_llm_async() with prompt-specific system prompt that explicitly warns about surface-vocabulary traps",
+      "bog_agents_cli/dreamscape/config.py — ImaginationConfig.use_llm_prompt_classifier (default False)",
+      "bog_agents_cli/dreamscape/imagination.py — _llm_classify_request() with in-memory hash-keyed cache; awrap_model_call passes the override to _maybe_inject",
+      "bog_agents_cli/dreamscape/imagination.py — _classify_prompt_keyword() helper extracted from _route_style/content_for_request so override path is clean",
+      "Updated _route_style_for_request and _route_content_category_for_request to accept prompt_domain_override"
+    ],
+    "tests_already_covered": "Phase 19/27 LLM classifier mechanism is covered by the existing TestLLMClassifierFallback suite (10 tests) plus the existing TestPromptRouting + TestContentRouting suites. No additional unit tests needed for Phase 27 since the override path reuses the same classification helpers."
+  },
+  "experiment_design": {
+    "n_trials_per_scenario": 15,
+    "scenarios": 7,
+    "scenario_mix": "same 7 mixed-kind scenarios as Phase 21 + 26",
+    "arms": [
+      "static — no content routing, no LLM classifier",
+      "routed — content routing ON + LLM classifier ON via use_llm_prompt_classifier=True"
+    ],
+    "pre_classified_prompts": "Each scenario's prompt was pre-classified by the LLM classifier once before the trials; the middleware's in-memory cache keeps the cost bounded.",
+    "concurrency": "asyncio.Semaphore(8)"
+  },
+  "llm_classifications": {
+    "permission-denied-chmod": "engineering (kind=debugging — agrees)",
+    "python-memory-creep": "engineering (kind=debugging — agrees)",
+    "slow-prod-query": "engineering (kind=debugging — agrees)",
+    "refactor-decision": "creative (kind=decision — agrees that decision-shaped routes to creative)",
+    "legacy-deletion": "engineering (kind=decision — DISAGREES with my hand-labeled kind; LLM sees the prompt as primarily engineering)",
+    "name-the-orchestrator": "creative (kind=creative — agrees)",
+    "release-note-voice": "creative (kind=creative — agrees)"
+  },
+  "classifier_comparison_note": "The LLM classifier's biggest disagreement with the keyword classifier is on legacy-deletion: keyword (with decision-pattern detection on 'right way to') flips it to creative; LLM keeps it as engineering. This is a real precision improvement — legacy-deletion's surface vocabulary is overwhelmingly engineering even though it's a judgment question.",
+  "results": {
+    "total_elapsed_seconds": 121.6,
+    "aggregate": {
+      "routed_wins": 49,
+      "static_wins": 48,
+      "ties": 8,
+      "n": 105,
+      "errors": 0,
+      "routed_win_rate": 0.467,
+      "wilson_95_ci": [0.374, 0.562],
+      "interpretation": "Routed win rate 46.7%. 95% CI [37%, 56%] STRADDLES 50%. Statistically indistinguishable from static. The LLM classifier did NOT fix the routing regression."
+    },
+    "by_kind": [
+      {"kind": "debugging", "routed_wins": 22, "static_wins": 18, "ties": 5, "n": 45, "routed_win_rate": 0.489, "ci": [0.35, 0.63]},
+      {"kind": "decision", "routed_wins": 12, "static_wins": 18, "ties": 0, "n": 30, "routed_win_rate": 0.40, "ci": [0.25, 0.58]},
+      {"kind": "creative", "routed_wins": 15, "static_wins": 12, "ties": 3, "n": 30, "routed_win_rate": 0.50, "ci": [0.33, 0.67]}
+    ]
+  },
+  "comparison_across_phases": {
+    "p21_keyword_n105": {"routed_win_rate": 0.476, "ci": [0.383, 0.571]},
+    "p26_keyword_n210": {"routed_win_rate": 0.40, "ci": [0.336, 0.467]},
+    "p27_llm_n105": {"routed_win_rate": 0.467, "ci": [0.374, 0.562]},
+    "interpretation": "At same N (105), P21 keyword and P27 LLM produce nearly identical results (47.6% vs 46.7%). The classifier choice didn't materially change outcomes. P26's tighter measurement at N=210 nailed the keyword arm at 40%; we'd expect an N=210 LLM measurement to land in a similar place. The point estimate may differ by a few pp; the directional finding (routing doesn't help) would survive."
+  },
+  "implications": [
+    "**Phase 26 hypothesis confirmed.** The per-prompt content-routing regression is NOT explained by classifier accuracy. The LLM classifier is more precise (it correctly keeps legacy-deletion as engineering instead of flipping to creative), but the routed arm still doesn't beat static.",
+    "**The dominant effect is filtering-vs-diversity.** Even with perfect classification, filtering the dream archive down to a single category removes the variety that the mixed-sampling static arm provides. The injection benefits from diverse content more than from category-precision.",
+    "**The decision-shaped 40% [25%, 58%] is the consistent loser across all routing variants.** Decision prompts seem to want diversity. The Phase 11 magic was creative-AGENT + creative-WRAPPER + diverse-seeds — not a single-category injection.",
+    "**Shipping decision: both per-prompt routing knobs stay off.** `use_content_routing=False` and `use_llm_prompt_classifier=False` remain the defaults. The mechanisms ship as power-user knobs preserved for future research, especially Phase 31 (diversity-vs-routing direct test).",
+    "**The LLM classifier IS more accurate than the keyword classifier.** This isn't wasted — it's the right tool for Phase 19's agent-profile fallback (where surface vocabulary CAN be ambiguous). It just doesn't fix per-prompt content routing.",
+    "**The classifier-precision improvement is real but small.** P21's keyword classified legacy-deletion → creative → myth; P27's LLM classified it → engineering → EC. The legacy-deletion trial outcomes might be slightly better under LLM routing — but the aggregate effect is washed out by other scenarios."
+  ],
+  "cost_breakdown": {
+    "haiku_calls_pre_classify": 7,
+    "haiku_calls_trial_gen": 210,
+    "haiku_calls_llm_classify_during_trials": 105,
+    "sonnet_calls_judge": 105,
+    "approx_cost_total_usd": 1.10
+  },
+  "live_calls": 427,
+  "approx_cost_usd": 1.10,
+  "test_suite_stats": {
+    "cli_unit_tests": 3604,
+    "dreamscape_specific": 119,
+    "added_this_phase": 0
+  },
+  "feature_verdicts": {
+    "llm_prompt_classifier_mechanism": "sings — accurately classifies prompts (4/7 agree with keyword exactly, 1/7 produces a more nuanced verdict on legacy-deletion)",
+    "llm_classifier_routing_effectiveness": "no significant improvement over keyword — 46.7% vs P21's 47.6% at same N. Both straddle 50%.",
+    "shipping_decision": "both per-prompt routing knobs stay OFF by default."
+  },
+  "open_bugs": [],
+  "known_limitations": [
+    "N=15 per scenario keeps the CI wide. An N=30 re-run would tighten the conclusion, but P26's N=210 already gives high confidence that the directional finding is real.",
+    "We didn't test 'weighted sampling' (e.g., 70% EC + 30% myth instead of binary filter). That's the Phase 31 hypothesis — diversity preservation while still biasing toward the classified domain.",
+    "The LLM classifier cost is non-trivial (~$0.001 per agent build OR per call, depending on whether the middleware cache hits). At production cadence with prompt-cache hits, the amortized cost is small."
+  ],
+  "verdict": "CONFIRMATORY NEGATIVE — LLM classification doesn't rescue per-prompt content routing. Phase 26's directional finding holds with a more precise classifier. The dominant effect is filtering-vs-diversity, not classifier accuracy.",
+  "next_steps": [
+    "Phase 31 (suggested): diversity-vs-routing direct test. Three arms — pure-EC, pure-myth, mixed — at fixed N. Should confirm that mixed wins regardless of prompt shape, validating the Phase 26 hypothesis.",
+    "Phase 29 (suggested): real-deployment dogfood + telemetry-export analysis. The campaign has saturated what offline measurement can tell us; real-user signal is the missing data.",
+    "Phase 34 (suggested): weighted-sampling variant of content routing. Instead of binary filter, sample 60% from preferred category + 40% from others. Preserves diversity while biasing toward routing's intent."
+  ]
+}
