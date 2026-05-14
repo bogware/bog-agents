@@ -9918,25 +9918,38 @@ class BogAgentsApp(App):
         )
 
     async def _handle_release_train_command(self, command: str) -> None:
-        """``/release-train [tag | from..to]`` — generate release notes + migration guide.
+        """``/release-train [config|enable|disable|test|<tag>|<from..to>]`` — release notes + enrichment.
 
-        Reads ``git log <prev>..<tag>``, classifies commits by
-        Conventional-Commit type, optionally enriches with PR titles
-        via ``gh``, and asks the model to render user-facing notes,
-        a breaking-changes table, deprecations, and an upgrade guide.
-        Saves to ``~/.bog-agents/release-notes/<range>.md``.
+        Sub-commands:
+          * ``config`` — show resolved enrichment config + which transport
+            each source resolved to.
+          * ``enable jira|halo`` — flip a source on (persists to TOML).
+          * ``disable jira|halo`` — flip a source off.
+          * ``test jira|halo`` — probe the configured transport for one key.
+
+        Otherwise the argument is treated as a tag or range and the
+        standard release-notes flow runs (reads ``git log``, enriches
+        with PR titles + Jira/Halo tickets where configured, asks the
+        model to render user-facing notes + breaking changes + upgrade
+        guide). Saves to ``~/.bog-agents/release-notes/<range>.md``.
         """
-        from bog_agents_cli.release_train import run_release_train
-
         await self._mount_message(UserMessage(command))
         prefix = self._command_name(command)
         raw_arg = command.strip()[len(prefix) :].strip()
+
+        # Route sub-commands before the generation flow.
+        first = raw_arg.split(" ", 1)[0].lower() if raw_arg else ""
+        if first in {"config", "enable", "disable", "test"}:
+            await self._handle_release_train_subcommand(first, raw_arg)
+            return
 
         if self._agent_running:
             await self._mount_message(
                 ErrorMessage("Cannot run /release-train while the agent is busy.")
             )
             return
+
+        from bog_agents_cli.release_train import run_release_train
 
         await self._set_spinner("Building release notes")
         try:
@@ -9952,14 +9965,165 @@ class BogAgentsApp(App):
             return
         await self._set_spinner("")
 
+        enrichment_line = ""
+        if result.source_resolutions:
+            bits: list[str] = []
+            for r in result.source_resolutions:
+                bits.append(
+                    f"{r.source}={r.transport} "
+                    f"(extracted {r.keys_extracted}, resolved {r.keys_resolved})"
+                )
+            enrichment_line = f"\n[dim]Enrichment:[/dim] {' · '.join(bits)}\n"
+
         await self._mount_message(
             AppMessage(
                 f"[bold]Release notes for[/bold] [cyan]{result.tag_range}[/cyan] "
                 f"saved to [cyan]{result.path}[/cyan] "
                 f"([dim]{len(result.commits)} commits, "
-                f"{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                f"{result.elapsed_seconds:.1f}s[/dim])"
+                f"{enrichment_line}\n"
                 f"{result.content}"
             )
+        )
+
+    async def _handle_release_train_subcommand(self, action: str, raw_arg: str) -> None:
+        """Dispatch ``/release-train config|enable|disable|test``."""
+        from bog_agents_cli.release_train_config import (
+            load_release_train_config,
+            release_train_config_path,
+            save_release_train_config,
+        )
+        from bog_agents_cli.release_train_sources import (
+            detect_mcp_server,
+            resolve_halo_transport,
+            resolve_jira_transport,
+        )
+
+        tokens = raw_arg.split()
+        target = tokens[1].lower() if len(tokens) > 1 else ""
+
+        if action == "config":
+            cfg = load_release_train_config(use_cache=False)
+            jira_transport, jira_detail = resolve_jira_transport(cfg.jira)
+            halo_transport, halo_detail = resolve_halo_transport(cfg.halo)
+            path = release_train_config_path()
+            mcp_jira = "yes" if detect_mcp_server(cfg.jira.mcp_server) else "no"
+            mcp_halo = "yes" if detect_mcp_server(cfg.halo.mcp_server) else "no"
+            lines = [
+                "[bold]/release-train configuration[/bold]",
+                f"  config file: [cyan]{path}[/cyan] "
+                f"({'exists' if path.exists() else 'not present — defaults active'})",
+                "",
+                f"  [bold]jira[/bold]: enabled={cfg.jira.enabled} mode={cfg.jira.mode}",
+                f"    resolved transport: [cyan]{jira_transport}[/cyan] — {jira_detail}",
+                f"    MCP server {cfg.jira.mcp_server!r} detected: {mcp_jira}",
+                f"    api_base_url: {cfg.jira.api_base_url or '(unset)'}",
+                f"    project_keys: {cfg.jira.project_keys or '(any)'}",
+                "",
+                f"  [bold]halo[/bold]: enabled={cfg.halo.enabled} mode={cfg.halo.mode}",
+                f"    resolved transport: [cyan]{halo_transport}[/cyan] — {halo_detail}",
+                f"    MCP server {cfg.halo.mcp_server!r} detected: {mcp_halo}",
+                f"    api_base_url: {cfg.halo.api_base_url or '(unset)'}",
+                "",
+                "[dim]Toggle with:[/dim]  /release-train enable jira   |   "
+                "/release-train enable halo",
+                "[dim]Probe with:[/dim]   /release-train test jira     |   "
+                "/release-train test halo",
+            ]
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
+
+        if action in {"enable", "disable"}:
+            if target not in {"jira", "halo"}:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"/release-train {action}: expected 'jira' or 'halo', got {target!r}"
+                    )
+                )
+                return
+            cfg = load_release_train_config(use_cache=False)
+            new_state = action == "enable"
+            if target == "jira":
+                cfg.jira.enabled = new_state
+            else:
+                cfg.halo.enabled = new_state
+            path = save_release_train_config(cfg)
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]/release-train:[/bold] {target} "
+                    f"[cyan]{'enabled' if new_state else 'disabled'}[/cyan] "
+                    f"([dim]persisted to {path}[/dim])"
+                )
+            )
+            return
+
+        if action == "test":
+            if target not in {"jira", "halo"}:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"/release-train test: expected 'jira' or 'halo', got {target!r}"
+                    )
+                )
+                return
+            await self._set_spinner(f"Probing {target}")
+            try:
+                summary = await self._probe_release_train_source(target)
+            except Exception as exc:
+                logger.exception("/release-train test failed")
+                await self._set_spinner("")
+                await self._mount_message(
+                    ErrorMessage(f"/release-train test {target} failed: {exc}")
+                )
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(summary))
+            return
+
+    @staticmethod
+    async def _probe_release_train_source(source: str) -> str:
+        """Run a single resolution against the configured source for diagnostics.
+
+        Synthesises one fake CommitEntry containing a placeholder issue
+        key, then runs the source's resolution path. Returns a
+        Rich-formatted summary string.
+        """
+        from bog_agents_cli.release_train import CommitEntry
+        from bog_agents_cli.release_train_config import load_release_train_config
+        from bog_agents_cli.release_train_sources import enrich_commits
+
+        cfg = load_release_train_config(use_cache=False)
+        probe_key = "ABC-1" if source == "jira" else "INC-1"
+        probe_commit = CommitEntry(
+            sha="probe000",
+            type="other",
+            scope="",
+            subject=f"probe {probe_key}",
+        )
+        # Temporarily ensure only the requested source is on for the probe.
+        if source == "jira":
+            cfg.halo.enabled = False
+            if not cfg.jira.enabled:
+                return (
+                    "[yellow]/release-train test jira:[/yellow] jira source is "
+                    "disabled — run [cyan]/release-train enable jira[/cyan] first."
+                )
+        else:
+            cfg.jira.enabled = False
+            if not cfg.halo.enabled:
+                return (
+                    "[yellow]/release-train test halo:[/yellow] halo source is "
+                    "disabled — run [cyan]/release-train enable halo[/cyan] first."
+                )
+        resolutions = await enrich_commits([probe_commit], cfg)
+        if not resolutions:
+            return f"[yellow]No resolution produced for {source}.[/yellow]"
+        r = resolutions[0]
+        return (
+            f"[bold]/release-train test {source}:[/bold]\n"
+            f"  transport: [cyan]{r.transport}[/cyan]\n"
+            f"  detail:    {r.detail}\n"
+            f"  keys extracted: {r.keys_extracted}\n"
+            f"  keys resolved:  {r.keys_resolved}"
         )
 
     async def _handle_imagine_command(self, command: str) -> None:

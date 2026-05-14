@@ -309,6 +309,13 @@ COMMANDS: tuple[SlashCommand, ...] = (
             subcommands=(
                 ("[tag]", "Generate notes for a specific tag (defaults to latest)"),
                 ("[from]..[to]", "Generate notes for a range (e.g. v0.8.5..v0.8.6)"),
+                (
+                    "config",
+                    "Show enrichment config + which transport each source resolved to",
+                ),
+                ("enable jira|halo", "Turn an enrichment source ON (persists to TOML)"),
+                ("disable jira|halo", "Turn an enrichment source OFF"),
+                ("test jira|halo", "Probe the configured transport for the source"),
             ),
         ),
         handler_method="_handle_release_train_command",

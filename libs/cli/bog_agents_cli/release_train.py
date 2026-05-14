@@ -35,6 +35,12 @@ from bog_agents_cli.feature_helpers import (
     resolve_active_model_spec,
     write_artifact,
 )
+from bog_agents_cli.release_train_config import load_release_train_config
+from bog_agents_cli.release_train_sources import (
+    ResolvedTicket,
+    SourceResolution,
+    enrich_commits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +51,13 @@ an open-source library. You will receive:
 
 * the version tag (or tag range) being released,
 * a structured commit list grouped by Conventional Commit type,
-* optionally, short PR descriptions linked from the commits.
+* optionally, short PR descriptions linked from the commits,
+* optionally, indented ``jira:`` / ``halo:`` lines under each commit
+  carrying issue/ticket summary, status, type, and fix-version. Use
+  these to ground Highlights and Upgrade-guide claims — when a commit
+  has a Jira ticket marked as a Bug fix, prefer the ticket summary
+  over the raw commit subject because it usually describes the user
+  impact more clearly. Never invent ticket data that isn't present.
 
 Produce ONE markdown document with these sections, in order:
 
@@ -125,6 +137,11 @@ class CommitEntry:
     breaking: bool = False
     pr_number: int | None = None
     pr_title: str = ""
+    jira_tickets: list[ResolvedTicket] = field(default_factory=list)
+    """Jira issues mentioned in subject/PR title, resolved via the configured transport."""
+
+    halo_tickets: list[ResolvedTicket] = field(default_factory=list)
+    """Halo tickets mentioned in subject/PR title, resolved via the configured transport."""
 
     def render(self) -> str:
         """Render as a single bullet for embedding in the prompt."""
@@ -135,6 +152,10 @@ class CommitEntry:
             head += f"  [PR #{self.pr_number}]"
         if self.pr_title and self.pr_title != self.subject:
             head += f"  — {self.pr_title}"
+        for ticket in self.jira_tickets:
+            head += f"\n    jira: {ticket.render()}"
+        for ticket in self.halo_tickets:
+            head += f"\n    halo: {ticket.render()}"
         return head
 
 
@@ -153,6 +174,9 @@ class ReleaseTrainResult:
 
     commits: list[CommitEntry] = field(default_factory=list)
     """Structured commit list, exposed for tests and future tooling."""
+
+    source_resolutions: list[SourceResolution] = field(default_factory=list)
+    """One entry per enabled enrichment source describing how it resolved."""
 
     elapsed_seconds: float = 0.0
 
@@ -388,6 +412,11 @@ async def run_release_train(app: object, raw_arg: str) -> ReleaseTrainResult:
     commits = [c for c in commits if c.sha]
     enrich_with_pr_titles(commits, cwd=cwd)
 
+    rt_config = load_release_train_config()
+    source_resolutions: list[SourceResolution] = []
+    if rt_config.any_enabled:
+        source_resolutions = await enrich_commits(commits, rt_config)
+
     spec = resolve_active_model_spec(app)
     if not spec:
         msg = "no active model — run /model first or set a default"
@@ -415,6 +444,7 @@ async def run_release_train(app: object, raw_arg: str) -> ReleaseTrainResult:
         content=body,
         tag_range=label,
         commits=commits,
+        source_resolutions=source_resolutions,
         elapsed_seconds=elapsed,
     )
 
