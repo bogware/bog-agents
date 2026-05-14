@@ -1,4 +1,0 @@
-
-[models.providers.baseten]
-class_path = "langchain_baseten.chat_models:ChatBaseten"
-api_key_env = "BASETEN_API_KEY"

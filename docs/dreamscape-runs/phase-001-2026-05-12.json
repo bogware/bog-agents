@@ -10,7 +10,7 @@
   "total_wall_seconds": 76,
   "total_cost_usd_estimate": 0.014,
   "tester": "Claude Opus 4.7 (1M context), live as the developer",
-  "test_target_repo": "E:/oregon-trail",
+  "test_target_repo": "<redacted-local-path>",
   "bugs": {
     "open": [
       "laws-hyphen-vs-space",

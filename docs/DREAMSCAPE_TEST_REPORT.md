@@ -2,7 +2,7 @@
 
 > **Run date:** 2026-05-12
 > **Tester:** Claude Opus 4.7 (1M context), live as the developer
-> **Test target:** `E:\oregon-trail` (a real Oregon Trail remake under active development)
+> **Test target:** a real-world game-remake project under active development (path redacted)
 > **Real-LLM driver:** Claude Haiku 4.5 via `langchain-anthropic`, ~12 calls
 > **Total cost:** ≈$0.02 across all scenarios
 > **Total wall-clock:** ~2 minutes of real LLM traffic

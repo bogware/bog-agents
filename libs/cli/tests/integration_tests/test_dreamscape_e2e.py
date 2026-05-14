@@ -11,9 +11,10 @@ The test environment is fully isolated:
 * ``Path.home`` is monkey-patched to ``tmp_path`` so the entire
   ``~/.bog-agents/`` tree lives inside the test's temporary directory.
 * No network calls unless the env var is set.
-* Oregon Trail (``E:\\oregon-trail``) is used as the *repo under test*
-  for ``/repo`` and ``/laws audit`` surfaces — the user's stated
-  testing target.
+* A target repo (path from ``BOG_DREAMSCAPE_TARGET_REPO`` env var) is
+  used as the *repo under test* for ``/repo`` and ``/laws audit``
+  surfaces. Tests that need it skip cleanly when the env var is unset
+  or the path doesn't exist.
 
 Run with::
 
@@ -31,10 +32,15 @@ from pathlib import Path
 
 import pytest
 
-# Oregon Trail path is platform-specific to the user's machine; tests
-# that need it skip cleanly when the directory doesn't exist.
-_OREGON_TRAIL = Path("E:/oregon-trail")
-_OREGON_TRAIL_AVAILABLE = _OREGON_TRAIL.exists()
+# Target repo for ``/repo`` and ``/laws audit`` integration probes.
+# Point ``BOG_DREAMSCAPE_TARGET_REPO`` at any local git repo to exercise
+# these surfaces; tests skip cleanly when the env var is unset or the
+# path doesn't resolve.
+_TARGET_REPO_ENV = "BOG_DREAMSCAPE_TARGET_REPO"
+_TARGET_REPO = Path(os.environ.get(_TARGET_REPO_ENV, ""))
+_TARGET_REPO_AVAILABLE = (
+    bool(os.environ.get(_TARGET_REPO_ENV)) and _TARGET_REPO.exists()
+)
 
 
 @pytest.fixture
@@ -416,14 +422,14 @@ class TestDashboardSurfaces:
         assert "OFF" in body.upper()
 
     @pytest.mark.skipif(
-        not _OREGON_TRAIL_AVAILABLE,
-        reason="Oregon Trail repo not available at E:/oregon-trail",
+        not _TARGET_REPO_AVAILABLE,
+        reason=f"target repo env var {_TARGET_REPO_ENV} unset or path missing",
     )
-    def test_repo_overview_against_oregon_trail(self, isolated_home: Path) -> None:
-        """Real ``/repo`` view of the user's Oregon Trail project."""
+    def test_repo_overview_against_target_repo(self, isolated_home: Path) -> None:
+        """Real ``/repo`` view of the configured target repo."""
         from bog_agents_cli.dreamscape.dashboard import render_repo_overview
 
-        body = render_repo_overview(_OREGON_TRAIL)
+        body = render_repo_overview(_TARGET_REPO)
         assert "Branch" in body
         # Either the project is on a branch, or we get the helpful
         # "(no branch)" placeholder — both pass the renderer.

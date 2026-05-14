@@ -1,1 +1,0 @@
-{"name": "review-pack", "version": "1.0.0", "commands": [{"name": "/scout", "aliases": ["/survey"], "description": "Scout the target area", "prompt": "Scout this area: {args}"}]}

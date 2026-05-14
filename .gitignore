@@ -196,6 +196,8 @@ node_modules/
 
 # Pytest temporary runtime directories (created by conftest.py test isolation)
 .pytest-tmp-runtime/
+.pytest-tmp/
+session-test-data/
 
 # PyPI configuration file
 .pypirc
@@ -224,9 +226,14 @@ libs/cli/TEXTUAL_PROGRESS.md
 
 /tmp/
 .tmp*/
+tmp-*
+
+# uv local cache
+.uv-cache/
+
+# Personal commit-message drafts (forgot-to-clean leftovers)
+.commit-msg*
 
 # macOS
 .DS_Store
 */tmp/.DS_Store
-
-CLAUDE.md
