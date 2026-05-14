@@ -10115,7 +10115,7 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage(body))
 
     async def _handle_dreamscape_command(self, command: str) -> None:
-        """``/dreamscape [status|init|disable|stats]`` — view or init config."""
+        """``/dreamscape [status|init|enable|disable|stats|export]`` — manage dreamscape."""
         from bog_agents_cli.dreamscape.dashboard import (
             init_dreamscape_config,
             render_dreamscape_status,
@@ -10212,6 +10212,127 @@ class BogAgentsApp(App):
             )
             return
 
+        if raw_arg.startswith("enable"):
+            # /dreamscape enable [--session] [--with imagination,creative,...]
+            #
+            # Default: master on + lifecycle + laws + shared_memory +
+            # dreams.auto_on_dormancy + dashboard. Imagination stays OFF
+            # by default (Phase 14: neutral-to-negative on engineering
+            # work, which is the dogfooding target).
+            #
+            # --session: don't touch the TOML; set env vars for this
+            # shell process only. Reverts when the shell exits.
+            # --with imagination: also enable imagination injection.
+            from bog_agents_cli.dreamscape import (
+                config as ds_config,
+                load_dreamscape_config,
+                save_dreamscape_config,
+            )
+
+            tokens = command.strip()[len(prefix) :].strip().split()[1:]
+            session_only = False
+            extras: set[str] = set()
+            i = 0
+            while i < len(tokens):
+                tok = tokens[i].lower()
+                if tok == "--session":
+                    session_only = True
+                elif tok == "--with" and i + 1 < len(tokens):
+                    i += 1
+                    for raw_tok in tokens[i].split(","):
+                        normalized = raw_tok.strip().lower().replace("-", "_")
+                        if normalized:
+                            extras.add(normalized)
+                i += 1
+
+            # The default-on set (validated by the campaign).
+            default_subsystems = {
+                "lifecycle",
+                "laws",
+                "shared_memory",
+                "dreams_auto",
+            }
+            enabled = default_subsystems | extras
+
+            try:
+                if session_only:
+                    # Session-only via env vars. Subsystem env vars
+                    # are read by load_dreamscape_config().
+                    os.environ["BOG_AGENTS_DREAMSCAPE"] = "1"
+                    os.environ.pop("BOG_AGENTS_DREAMSCAPE_DISABLE", None)
+                    if "lifecycle" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_LIFECYCLE"] = "1"
+                    if "laws" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_LAWS"] = "1"
+                    if "shared_memory" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_SHARED_MEMORY"] = "1"
+                    if "dreams_auto" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_DREAMS_AUTO"] = "1"
+                    if "imagination" in enabled:
+                        os.environ["BOG_AGENTS_DREAMSCAPE_IMAGINATION"] = "1"
+                    ds_config.clear_cache()
+                else:
+                    # Persist to ~/.bog-agents/dreamscape.toml.
+                    cfg = load_dreamscape_config(use_cache=False)
+                    cfg.master_enabled = True
+                    cfg.lifecycle.enabled = "lifecycle" in enabled
+                    cfg.laws.enabled = "laws" in enabled
+                    cfg.shared_memory.enabled = "shared_memory" in enabled
+                    cfg.dreams.auto_on_dormancy = "dreams_auto" in enabled
+                    cfg.imagination.enabled = "imagination" in enabled
+                    # Dashboard defaults on; leave it.
+                    save_dreamscape_config(cfg)
+                    # Also make sure no stale emergency-disable env var
+                    # is masking the freshly-enabled config.
+                    if os.environ.get("BOG_AGENTS_DREAMSCAPE_DISABLE"):
+                        os.environ.pop("BOG_AGENTS_DREAMSCAPE_DISABLE", None)
+                    ds_config.clear_cache()
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/dreamscape enable failed: {exc}")
+                )
+                return
+
+            # Build success message.
+            label_map = {
+                "lifecycle": "lifecycle",
+                "laws": "laws",
+                "shared_memory": "shared-memory",
+                "dreams_auto": "dreams (auto-on-dormancy)",
+                "imagination": "imagination",
+            }
+            active = sorted(label_map[k] for k in enabled if k in label_map)
+            off = [v for k, v in label_map.items() if k not in enabled]
+            mode = (
+                "session-only (env vars; reverts on shell exit)"
+                if session_only
+                else "persisted to ~/.bog-agents/dreamscape.toml"
+            )
+            tip_imagination = (
+                ""
+                if "imagination" in enabled
+                else (
+                    "\n[dim]Imagination injection stays off by default — Phase 14 "
+                    "found it neutral-to-negative on engineering work. Pass "
+                    "[bold]--with imagination[/bold] to enable it anyway.[/dim]"
+                )
+            )
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]✓ Dreamscape enabled[/bold green] ([dim]{mode}[/dim])\n"
+                    "\n"
+                    f"  [bold]Active:[/bold] {', '.join(active)}\n"
+                    f"  [bold]Off:[/bold] {', '.join(off) if off else '(none — everything on)'}\n"
+                    "\n"
+                    "[dim]Useful next steps:[/dim]\n"
+                    "  [cyan]/agent-state[/cyan]    — see lifecycle + recent dreams\n"
+                    "  [cyan]/dreamscape stats[/cyan] — telemetry after a few sessions\n"
+                    "  [cyan]/dreamscape disable[/cyan] — revert (session-only kill switch)"
+                    f"{tip_imagination}"
+                )
+            )
+            return
+
         if raw_arg == "init":
             try:
                 written = init_dreamscape_config()
@@ -10258,6 +10379,8 @@ class BogAgentsApp(App):
                 "  /dreamscape           Show current config\n"
                 "  /dreamscape status    Same as above\n"
                 "  /dreamscape init      Write a starter ~/.bog-agents/dreamscape.toml\n"
+                "  /dreamscape enable [--session] [--with imagination]\n"
+                "                        Turn dreamscape ON with sensible defaults\n"
                 "  /dreamscape disable   Force-disable for this session\n"
                 "  /dreamscape stats [H] Show telemetry for last H hours (default 24, 'all')\n"
                 "  /dreamscape export [path] [--no-metadata]\n"

@@ -386,6 +386,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                     "init",
                     "Write a starter ~/.bog-agents/dreamscape.toml (master still off)",
                 ),
+                (
+                    "enable [--session] [--with imagination]",
+                    "Turn dreamscape ON with sensible defaults — persists to TOML; --session = env-var-only",
+                ),
                 ("disable", "Force-disable the whole subsystem for this session"),
                 (
                     "stats [H]",

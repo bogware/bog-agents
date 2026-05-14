@@ -1581,6 +1581,171 @@ class TestTelemetry:
 
 
 # ---------------------------------------------------------------------------
+# /dreamscape enable — dogfood-first activation surface
+# ---------------------------------------------------------------------------
+
+
+class TestDreamscapeEnableCommand:
+    """Cover the /dreamscape enable handler's effects on config + env.
+
+    The handler itself lives inside the TUI's _handle_dreamscape_command,
+    which isn't directly importable as a function. These tests exercise
+    the EFFECTS the handler produces — the config saved to disk, the env
+    vars set — via the same primitives the handler calls.
+
+    The shipping contract:
+    * Default `enable` turns on master + lifecycle + laws + shared_memory +
+      dreams.auto_on_dormancy. Imagination stays OFF by default.
+    * `--with imagination` flips imagination on.
+    * `--session` writes env vars instead of touching the TOML.
+    * The slash registry has `/dreamscape enable` declared.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path, raising=False)
+        for var in (
+            "BOG_AGENTS_DREAMSCAPE",
+            "BOG_AGENTS_DREAMSCAPE_DISABLE",
+            "BOG_AGENTS_DREAMSCAPE_LIFECYCLE",
+            "BOG_AGENTS_DREAMSCAPE_LAWS",
+            "BOG_AGENTS_DREAMSCAPE_SHARED_MEMORY",
+            "BOG_AGENTS_DREAMSCAPE_DREAMS_AUTO",
+            "BOG_AGENTS_DREAMSCAPE_IMAGINATION",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        from bog_agents_cli.dreamscape import config as ds_config
+
+        ds_config.clear_cache()
+
+    def test_slash_command_registry_declares_enable(self) -> None:
+        """Verify autocomplete surfaces the enable subcommand.
+
+        The slash-command registry must list `/dreamscape enable` so
+        the TUI's tab-completion + /help discovery see it.
+        """
+        from bog_agents_cli.commands import COMMANDS
+
+        dreamscape_cmd = next(
+            (c for c in COMMANDS if c.spec.name == "/dreamscape"), None
+        )
+        assert dreamscape_cmd is not None
+        subcommands = dreamscape_cmd.spec.subcommands or ()
+        sub_names = [s[0] for s in subcommands]
+        # The "enable" entry can include flag hints; check by prefix.
+        assert any(name.startswith("enable") for name in sub_names), (
+            f"missing 'enable' subcommand in registry; got {sub_names}"
+        )
+
+    def test_persisted_enable_writes_sensible_defaults(self) -> None:
+        """Verify the shipping default subsystem set.
+
+        Simulate `/dreamscape enable` with no flags — the resulting
+        TOML should have master + lifecycle + laws + shared_memory +
+        dreams.auto_on_dormancy on, and imagination off.
+        """
+        from bog_agents_cli.dreamscape.config import (
+            load_dreamscape_config,
+            save_dreamscape_config,
+        )
+
+        cfg = load_dreamscape_config(use_cache=False)
+        # The handler would do these mutations:
+        cfg.master_enabled = True
+        cfg.lifecycle.enabled = True
+        cfg.laws.enabled = True
+        cfg.shared_memory.enabled = True
+        cfg.dreams.auto_on_dormancy = True
+        cfg.imagination.enabled = False  # default — imagination stays off
+        save_dreamscape_config(cfg)
+
+        reloaded = load_dreamscape_config(use_cache=False)
+        assert reloaded.master_enabled is True
+        assert reloaded.lifecycle.enabled is True
+        assert reloaded.laws.enabled is True
+        assert reloaded.shared_memory.enabled is True
+        assert reloaded.dreams.auto_on_dormancy is True
+        assert reloaded.imagination.enabled is False
+        # The "any_active" computed property — what the wiring layer reads.
+        assert reloaded.any_active is True
+
+    def test_persisted_enable_with_imagination_flips_it_on(self) -> None:
+        from bog_agents_cli.dreamscape.config import (
+            load_dreamscape_config,
+            save_dreamscape_config,
+        )
+
+        cfg = load_dreamscape_config(use_cache=False)
+        cfg.master_enabled = True
+        cfg.lifecycle.enabled = True
+        cfg.imagination.enabled = True  # `--with imagination`
+        save_dreamscape_config(cfg)
+
+        reloaded = load_dreamscape_config(use_cache=False)
+        assert reloaded.imagination.enabled is True
+
+    def test_session_mode_env_vars_drive_config_loading(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify --session mode works via env vars alone.
+
+        The `--session` mode sets env vars; load_dreamscape_config must
+        reflect them WITHOUT a saved TOML.
+        """
+        from bog_agents_cli.dreamscape import config as ds_config
+        from bog_agents_cli.dreamscape.config import load_dreamscape_config
+
+        # No TOML written — defaults are all OFF.
+        baseline = load_dreamscape_config(use_cache=False)
+        assert baseline.master_enabled is False
+        ds_config.clear_cache()
+
+        # Simulate what the handler's --session path does.
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE", "1")
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_LIFECYCLE", "1")
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_LAWS", "1")
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_SHARED_MEMORY", "1")
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_DREAMS_AUTO", "1")
+        # No imagination — the default.
+        ds_config.clear_cache()
+
+        live = load_dreamscape_config(use_cache=False)
+        assert live.master_enabled is True
+        assert live.lifecycle.enabled is True
+        assert live.laws.enabled is True
+        assert live.shared_memory.enabled is True
+        assert live.dreams.auto_on_dormancy is True
+        assert live.imagination.enabled is False
+
+    def test_disable_env_var_still_kills_active_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Verify the kill switch overrides a fully-enabled TOML.
+
+        `/dreamscape disable` sets BOG_AGENTS_DREAMSCAPE_DISABLE; even
+        with everything turned on in the TOML, that env var wins.
+        """
+        from bog_agents_cli.dreamscape import config as ds_config
+        from bog_agents_cli.dreamscape.config import (
+            load_dreamscape_config,
+            save_dreamscape_config,
+        )
+
+        cfg = load_dreamscape_config(use_cache=False)
+        cfg.master_enabled = True
+        cfg.lifecycle.enabled = True
+        cfg.dreams.auto_on_dormancy = True
+        save_dreamscape_config(cfg)
+        ds_config.clear_cache()
+
+        monkeypatch.setenv("BOG_AGENTS_DREAMSCAPE_DISABLE", "1")
+        ds_config.clear_cache()
+        reloaded = load_dreamscape_config(use_cache=False)
+        assert reloaded.master_enabled is False
+        assert reloaded.any_active is False
+
+
+# ---------------------------------------------------------------------------
 # Phase 28 — telemetry exporter
 # ---------------------------------------------------------------------------
 
