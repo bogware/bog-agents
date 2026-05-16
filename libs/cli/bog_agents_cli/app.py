@@ -10860,6 +10860,41 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_prove, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_sidecar_command(self, command: str) -> None:
+        """Handle `/sidecar <question>` — isolated read-only Q&A subagent.
+
+        Spawns a fresh agent with a read-only tool surface
+        (read_file / glob / grep / web_search), feeds it a one-time
+        summary of the parent's recent turns as background, and drops
+        the answer back into the parent transcript as a quoted block.
+        The parent's plan, todos, and uncommitted edits are untouched.
+
+        Implements REVIEW.md T-1.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.sidecar_controller import SidecarController
+
+        spec = self._model_override or settings.model_name
+        question = command.strip()[len("/sidecar") :].strip()
+
+        def model_factory() -> Any:
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = SidecarController(
+            working_dir=Path(self._cwd),
+            model_factory=model_factory,
+        )
+        # v1: no auto-summary of parent messages. The TUI stores
+        # conversation as Textual widgets, not a flat LangChain message
+        # list, so a clean extractor needs careful work. Users who want
+        # the sidecar to know about parent state can paste relevant
+        # context into the question. See REVIEW.md T-1 for the eventual
+        # parent-context auto-summary plan.
+        result = await asyncio.to_thread(controller.run, question)
+        await self._mount_message(AppMessage(result.quote_for_parent()))
+
     async def _handle_search_command(self, command: str) -> None:
         """Handle `/search` hybrid codebase search.
 

@@ -228,6 +228,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/sidecar",
+            "Ask a one-shot question in a fresh read-only subagent — without "
+            "disturbing the main agent's work-in-progress",
+            "question ask isolated subagent read-only sidecar parallel side aside",
+            "general",
+            available=True,
+            subcommands=(
+                ("<question>", "What you want the sidecar to answer"),
+            ),
+        ),
+        handler_method="_handle_sidecar_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/prove",
             "Backward-chain query — could the engine derive this goal from current working memory?",
             "prove goal derive backward chain target",
