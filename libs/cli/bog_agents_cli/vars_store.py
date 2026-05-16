@@ -11,10 +11,12 @@ Storage backends (tried in order):
    macOS Keychain, Windows Credential Manager, Linux SecretService/libsecret.
    Values are encrypted by the OS.  Requires the ``keyring`` package.
 
-2. **Encrypted TOML fallback** — ``~/.bog-agents/vars.toml`` with file
-   permissions 0600.  Values are stored in plaintext inside the file so the
-   security guarantee is file-system level only.  A one-time warning is shown
-   when this path is taken.
+2. **TOML fallback** — ``~/.bog-agents/vars.toml``. Values are stored in
+   plaintext inside the file. On POSIX the file is ``chmod 0600``; on
+   Windows we invoke ``icacls`` to remove inherited ACLs and grant only
+   the current user. When ``icacls`` isn't available the file falls back
+   to whatever Windows defaults to and the user gets a loud warning.
+   A one-time warning is shown when this path is taken regardless.
 
 Variable names are case-sensitive, alphanumeric + underscore only.
 
@@ -30,8 +32,9 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 import re
-import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -156,10 +159,108 @@ def _keyring_list() -> list[str]:
 def _ensure_config_dir() -> None:
     """Create the config directory with restrictive permissions."""
     _DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _secure_owner_only(_DEFAULT_CONFIG_DIR, is_dir=True)
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform "owner-only" file/directory permissions
+# ---------------------------------------------------------------------------
+#
+# ``Path.chmod(0o600)`` is a silent no-op on Windows — the file ends up
+# readable by every member of the local ``Users`` group. The vars-store
+# docstring used to promise mode 0600 unconditionally; on Windows that was
+# a lie. We now invoke ``icacls`` to grant only the current user when on
+# Windows (which is a real ACL change). The function reports its success /
+# failure so :func:`is_using_toml_fallback` can warn loudly when neither
+# protection is available. Fixes P0-E in REVIEW.md.
+
+
+def _secure_owner_only(path: Path, *, is_dir: bool = False) -> bool:
+    """Restrict *path* to owner-only access.
+
+    On POSIX this is ``chmod 0600`` (file) / ``0700`` (dir). On Windows we
+    invoke ``icacls`` to grant only the current SID and remove inherited
+    ACLs — the only realistic way to mirror POSIX 0600 without a native
+    extension. If ``icacls`` is missing or fails we return False so the
+    caller can decide whether to warn or refuse.
+
+    Args:
+        path: File or directory to lock down.
+        is_dir: Pass True for directories so the POSIX mode becomes 0700.
+
+    Returns:
+        True when an OS-level restriction was applied, False if we
+        couldn't (and the file is therefore at the default umask /
+        Windows ACL).
+    """
+    if not path.exists():
+        return False
+    if os.name == "nt":
+        return _secure_owner_only_windows(path)
     try:
-        _DEFAULT_CONFIG_DIR.chmod(0o700)
-    except OSError:
-        pass
+        path.chmod(0o700 if is_dir else 0o600)
+    except OSError as exc:
+        logger.debug("chmod on %s failed: %s", path, exc)
+        return False
+    return True
+
+
+def _secure_owner_only_windows(path: Path) -> bool:
+    """Lock down *path* on Windows via icacls.
+
+    Uses the cheapest reliable option that ships with every modern Windows:
+    ``icacls <path> /inheritance:r /grant:r %USERNAME%:F``. Removes
+    inherited ACLs (everyone-readable inheritance from %APPDATA% is the
+    usual leak) and grants Full Control only to the running user.
+
+    Returns True on success. Does not raise — caller decides what to do
+    when False.
+    """
+    import shutil
+
+    icacls = shutil.which("icacls")
+    if icacls is None:
+        logger.debug("icacls not found on PATH; skipping Windows ACL hardening")
+        return False
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+    if not user:
+        logger.debug("could not determine current user for icacls grant")
+        return False
+    try:
+        # /inheritance:r removes inherited ACEs; /grant:r adds explicit ACE.
+        # /Q quiet, /C continue on errors (still returns non-zero on real
+        # failure though).
+        completed = subprocess.run(  # noqa: S603 — icacls path is known absolute
+            [icacls, str(path), "/inheritance:r", "/grant:r", f"{user}:F", "/Q", "/C"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.debug("icacls hardening failed on %s: %s", path, exc)
+        return False
+    if completed.returncode != 0:
+        logger.debug(
+            "icacls returned %d for %s (stderr=%r)",
+            completed.returncode,
+            path,
+            completed.stderr.decode(errors="replace")[:200],
+        )
+        return False
+    return True
+
+
+def can_secure_owner_only() -> bool:
+    """Return True iff this host can actually enforce owner-only perms.
+
+    On POSIX always True (``chmod`` always works on regular files we own).
+    On Windows we need ``icacls`` on PATH. Used by ``is_using_toml_fallback``
+    to escalate the warning when neither path works.
+    """
+    if os.name == "nt":
+        import shutil
+        return shutil.which("icacls") is not None
+    return True
 
 
 def _load_toml() -> dict[str, Any]:
@@ -176,30 +277,48 @@ def _load_toml() -> dict[str, Any]:
 
 
 def _save_toml(data: dict[str, Any]) -> None:
-    """Write *data* to the vars TOML file with mode 0600 via atomic rename."""
+    """Write *data* to the vars TOML file with owner-only perms.
+
+    POSIX: chmod 0600. Windows: ``icacls`` to grant only the current user
+    and remove inherited ACLs. See P0-E in REVIEW.md.
+    """
     import tomli_w
 
     from bog_agents_cli.io_utils import atomic_write_text
 
     _ensure_config_dir()
     atomic_write_text(_VARS_PATH, tomli_w.dumps(data))
-    try:
-        _VARS_PATH.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
-    except OSError:
-        pass
+    _secure_owner_only(_VARS_PATH, is_dir=False)
 
 
 def _warn_fallback_once() -> None:
-    """Emit a one-time warning that vars fall back to plaintext TOML."""
+    """Emit a one-time warning that vars fall back to plaintext TOML.
+
+    The wording is platform-aware (P0-E): on Windows we tell the user
+    whether ``icacls`` is on PATH so the warning matches reality. Before
+    the fix, the message claimed "mode 0600" unconditionally — a lie on
+    Windows where ``Path.chmod`` is a no-op.
+    """
     global _warned_fallback  # noqa: PLW0603
     if _warned_fallback:
         return
     _warned_fallback = True
+    if os.name == "nt":
+        if can_secure_owner_only():
+            perms_note = "Windows ACL restricted to current user via icacls"
+        else:
+            perms_note = (
+                "WARNING: icacls not on PATH; file is readable by the local Users "
+                "group. Install/repair Windows components or use the keyring backend"
+            )
+    else:
+        perms_note = "POSIX mode 0600"
     logger.warning(
-        "OS keyring unavailable; storing vars in %s (plaintext, mode 0600). "
+        "OS keyring unavailable; storing vars in %s (plaintext; %s). "
         "Install 'keyring' and a backend (e.g. 'keyrings.alt' or 'secretstorage') "
         "for encrypted storage.",
         _VARS_PATH,
+        perms_note,
     )
 
 

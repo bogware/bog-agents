@@ -8,8 +8,10 @@ Feature #27: Authenticated web fetching.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import socket
 import subprocess
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,6 +27,120 @@ from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# P0-C: SSRF + local-file-read gate
+# ---------------------------------------------------------------------------
+#
+# ``urllib.request`` happily follows ``file://``, ``ftp://``,
+# ``http://169.254.169.254/...`` (cloud metadata), RFC1918 ranges, and
+# loopback. A model that's been steered by adversarial content (poisoned
+# README, hostile MCP tool description, prompt-injected web search result)
+# could fetch AWS creds from the IMDS endpoint and exfil them through a
+# second call. We gate every URL passed to ``web_fetch`` / ``api_request``
+# unless the caller explicitly opts in via ``allow_private_ips=True``.
+# See P0-C in REVIEW.md.
+_SAFE_SCHEMES = frozenset({"http", "https"})
+
+
+def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, str]:
+    """Return ``(is_safe, reason)`` for a URL about to be fetched.
+
+    Args:
+        url: The URL the model is requesting.
+        allow_private_ips: When True (caller opt-in for legit internal
+            services), private + loopback IPs and ``.local`` hostnames
+            are permitted. Cloud metadata IPs are always rejected.
+
+    Rejects, in order:
+
+    1. ``file://``, ``ftp://``, ``data:``, ``gopher://`` and any other
+       non-``http(s)`` scheme — these read disk or route through
+       unexpected handlers in ``urllib.request``.
+    2. URLs whose host is a link-local IPv4 (``169.254.0.0/16``) or the
+       IPv6 equivalent — cloud metadata endpoints (AWS/GCP/Azure).
+    3. Unless ``allow_private_ips``: loopback (``127.0.0.0/8``, ``::1``),
+       RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``), unique-local
+       IPv6 (``fc00::/7``), site-local IPv6 (``fec0::/10``), and the
+       reserved ``0.0.0.0/8`` block.
+
+    Returns:
+        ``(True, "")`` when the URL is safe to fetch, else
+        ``(False, "<reason for caller / model>")``.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _SAFE_SCHEMES:
+        return (False, f"refusing non-http(s) scheme {scheme!r} (URL: {url!r})")
+
+    host = parsed.hostname
+    if not host:
+        return (False, f"refusing URL with no host: {url!r}")
+
+    # Strip IPv6 brackets if any.
+    host_stripped = host.strip("[]")
+
+    # Resolve the hostname to its address set; we evaluate every resolved
+    # address so a hostname that resolves to multiple addresses (some
+    # private, some public) is still blocked when ANY is private.
+    addresses: list[ipaddress._BaseAddress] = []
+    try:
+        ip = ipaddress.ip_address(host_stripped)
+        addresses.append(ip)
+    except ValueError:
+        # Not a literal IP — resolve.
+        try:
+            for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(
+                host_stripped, None
+            ):
+                if family in (socket.AF_INET, socket.AF_INET6):
+                    addr_str = sockaddr[0]
+                    # Strip IPv6 scope id (``fe80::1%eth0`` → ``fe80::1``).
+                    if "%" in addr_str:
+                        addr_str = addr_str.split("%", 1)[0]
+                    try:
+                        addresses.append(ipaddress.ip_address(addr_str))
+                    except ValueError:
+                        continue
+        except socket.gaierror as exc:
+            # Hostname doesn't resolve — let urllib raise its own DNS error
+            # (we're not the right layer to swallow this).
+            return (False, f"DNS lookup failed for {host_stripped!r}: {exc}")
+
+    if not addresses:
+        return (False, f"could not resolve {host_stripped!r}")
+
+    for addr in addresses:
+        if addr.is_link_local:
+            # Always blocked — covers AWS/GCP/Azure cloud-metadata IMDS.
+            return (
+                False,
+                f"refusing link-local address {addr} (cloud-metadata IMDS endpoints "
+                "are blocked unconditionally)",
+            )
+        if addr.is_multicast:
+            return (False, f"refusing multicast address {addr}")
+        if addr.is_unspecified:
+            return (False, f"refusing unspecified address {addr}")
+        if not allow_private_ips:
+            if addr.is_loopback:
+                return (
+                    False,
+                    f"refusing loopback address {addr} for {url!r}. "
+                    "Pass ``allow_private_ips=True`` on BrowserAgentMiddleware "
+                    "if you intend to talk to a local server.",
+                )
+            if addr.is_private:
+                return (
+                    False,
+                    f"refusing private address {addr} for {url!r}. "
+                    "Pass ``allow_private_ips=True`` on BrowserAgentMiddleware "
+                    "if you intend to talk to an internal service.",
+                )
+            if addr.is_reserved:
+                return (False, f"refusing reserved address {addr}")
+    return (True, "")
 
 
 class BrowserAgentState(TypedDict):
@@ -48,9 +164,15 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
         *,
         working_dir: Path | None = None,
         allowed_domains: list[str] | None = None,
+        allow_private_ips: bool = False,
     ) -> None:
         self._working_dir = working_dir or Path.cwd()
         self._allowed_domains = set(allowed_domains) if allowed_domains else None
+        # Opt-in: when True the SSRF gate permits loopback / RFC1918 / ULA
+        # so this middleware can talk to a developer-local server or an
+        # internal API. Cloud-metadata link-local addresses are always
+        # rejected regardless. See P0-C in REVIEW.md.
+        self._allow_private_ips = bool(allow_private_ips)
         self._preview_processes: dict[int, subprocess.Popen[str]] = {}
         self.tools = self._build_tools()
 
@@ -86,6 +208,13 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             """
             if not middleware._is_domain_allowed(url):
                 return f"Error: Domain not in allowed list for URL: {url}"
+
+            safe, reason = _is_url_safe(
+                url, allow_private_ips=middleware._allow_private_ips
+            )
+            if not safe:
+                logger.warning("browser_agent.web_fetch SSRF gate: %s", reason)
+                return f"Error: {reason}"
 
             try:
                 import urllib.request
@@ -129,6 +258,17 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             import urllib.request
 
             start = time.monotonic()
+
+            if not middleware._is_domain_allowed(url):
+                return f"Error: Domain not in allowed list for URL: {url}"
+
+            safe, reason = _is_url_safe(
+                url, allow_private_ips=middleware._allow_private_ips
+            )
+            if not safe:
+                logger.warning("browser_agent.api_request SSRF gate: %s", reason)
+                return f"Error: {reason}"
+
             try:
                 req = urllib.request.Request(url, method=method)
                 req.add_header("Content-Type", "application/json")
