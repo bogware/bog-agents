@@ -1,5 +1,22 @@
-"""Market Sentiment Dashboard middleware for social/news/options sentiment aggregation."""
+"""Market Sentiment Dashboard middleware for social/news/options sentiment aggregation.
 
+⚠ **STUB — NOT FOR PRODUCTION USE.**
+
+This middleware is a scaffold that demonstrates the shape of a real
+implementation. Its tools accept calls and return placeholder structures
+so an agent can be wired against the surface, but the underlying logic
+is not implemented — for example, ``fetch_quote`` returns ``price=0.0``
+with a note instructing the caller to populate real data. Models that
+call these tools will receive plausible-looking but **incorrect**
+results.
+
+This module ships at "Development Status :: 4 - Beta" deliberately;
+see REVIEW.md P0-A for the broader plan (extract to a separate
+``bog-agents-finance``-style package once the implementations are real,
+or remove from the headline middleware list if they will not be).
+Do not enable in any flow whose output is consumed by a downstream
+system, customer-facing surface, or compliance-relevant artifact.
+"""
 from __future__ import annotations
 
 import logging
