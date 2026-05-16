@@ -329,7 +329,7 @@ class ReplayStore:
         if not file_path.exists():
             return None
         try:
-            data = json.loads(file_path.read_text())
+            data = json.loads(file_path.read_text(encoding="utf-8"))
             return ReplaySession.from_dict(data)
         except (json.JSONDecodeError, KeyError) as exc:
             logger.warning("Failed to load replay %s: %s", session_id, exc)
@@ -349,7 +349,7 @@ class ReplayStore:
             if len(sessions) >= limit:
                 break
             try:
-                data = json.loads(file_path.read_text())
+                data = json.loads(file_path.read_text(encoding="utf-8"))
                 sessions.append(
                     {
                         "session_id": data["session_id"],

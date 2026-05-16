@@ -31,7 +31,7 @@ def is_daemon_running() -> bool:
     if not _PID_FILE.exists():
         return False
     try:
-        pid = int(_PID_FILE.read_text().strip())
+        pid = int(_PID_FILE.read_text(encoding="utf-8").strip())
     except (ValueError, OSError):
         return False
     return is_running(pid)
@@ -46,7 +46,7 @@ def get_daemon_token() -> str | None:
     if not _TOKEN_FILE.exists():
         return None
     try:
-        return _TOKEN_FILE.read_text().strip()
+        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         return None
 

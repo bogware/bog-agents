@@ -313,7 +313,7 @@ class SelfImprovingMiddleware(AgentMiddleware):
         if not self._store_path.exists():
             return
         try:
-            data = json.loads(self._store_path.read_text())
+            data = json.loads(self._store_path.read_text(encoding="utf-8"))
             self.record.total_sessions = data.get("total_sessions", 0)
             self.record.average_efficiency = data.get("average_efficiency", 0.5)
             self.record.top_patterns = data.get("top_patterns", [])

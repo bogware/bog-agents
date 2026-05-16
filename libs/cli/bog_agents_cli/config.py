@@ -1451,7 +1451,7 @@ def get_default_coding_instructions() -> str:
         The default agent instructions as a string.
     """
     default_prompt_path = Path(__file__).parent / "default_agent_prompt.md"
-    return default_prompt_path.read_text()
+    return default_prompt_path.read_text(encoding="utf-8")
 
 
 def _get_recommended_model_spec(provider: str) -> str | None:

@@ -590,7 +590,7 @@ def reset_agent(
             )
             return
 
-        source_content = source_md.read_text()
+        source_content = source_md.read_text(encoding="utf-8")
         action_desc = f"contents of agent '{source_agent}'"
     else:
         source_content = get_default_coding_instructions()
@@ -662,7 +662,7 @@ def get_system_prompt(
         ... {CONDITIONAL SECTIONS} ...
         ```
     """
-    template = (Path(__file__).parent / "system_prompt.md").read_text()
+    template = (Path(__file__).parent / "system_prompt.md").read_text(encoding="utf-8")
 
     skills_path = f"~/.bog-agents/{assistant_id}/skills"
 

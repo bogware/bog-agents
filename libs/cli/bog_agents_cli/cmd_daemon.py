@@ -36,7 +36,7 @@ def _daemon_url(port: int = _DEFAULT_PORT) -> str:
 
 def _read_token() -> str | None:
     if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text().strip()
+        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
     return None
 
 
@@ -44,7 +44,7 @@ def _read_pid() -> int | None:
     if not _PID_FILE.exists():
         return None
     try:
-        return int(_PID_FILE.read_text().strip())
+        return int(_PID_FILE.read_text(encoding="utf-8").strip())
     except ValueError:
         return None
 

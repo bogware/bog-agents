@@ -151,7 +151,7 @@ class LifecycleHooksMiddleware(AgentMiddleware[LifecycleHooksState, ContextT, Re
         try:
             from pathlib import Path as P
 
-            config = json.loads(P(path).read_text())
+            config = json.loads(P(path).read_text(encoding="utf-8"))
             hooks_data = config.get("hooks", [])
             for hook_data in hooks_data:
                 events = [HookEvent(e) for e in hook_data.get("events", [])]

@@ -598,7 +598,7 @@ class FilesystemBackend(BackendProtocol):
             except OSError:
                 continue
             try:
-                content = fp.read_text()
+                content = fp.read_text(encoding="utf-8")
             except (UnicodeDecodeError, PermissionError, OSError):
                 continue
             for line_num, line in enumerate(content.splitlines(), 1):

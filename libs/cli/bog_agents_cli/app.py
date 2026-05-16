@@ -7881,7 +7881,7 @@ class BogAgentsApp(App):
             # Read PID for the header
             pid_file = Path.home() / ".bog-agents" / "daemon" / "daemon.pid"
             try:
-                pid_str = pid_file.read_text().strip() if pid_file.exists() else "?"
+                pid_str = pid_file.read_text(encoding="utf-8").strip() if pid_file.exists() else "?"
             except OSError:
                 pid_str = "?"
 

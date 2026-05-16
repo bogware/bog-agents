@@ -87,7 +87,7 @@ def detect_project(working_dir: Path) -> ProjectDetection | None:
             # Refine npm-based detection
             if indicator == "package.json":
                 try:
-                    pkg = json.loads((working_dir / indicator).read_text())
+                    pkg = json.loads((working_dir / indicator).read_text(encoding="utf-8"))
                     scripts = pkg.get("scripts", {})
                     if "lint" not in scripts:
                         lint = None
@@ -121,7 +121,7 @@ def detect_project(working_dir: Path) -> ProjectDetection | None:
             # Refine pyproject.toml detection
             if indicator == "pyproject.toml":
                 try:
-                    content = (working_dir / indicator).read_text()
+                    content = (working_dir / indicator).read_text(encoding="utf-8")
                     if "[tool.poetry]" in content:
                         pkg_mgr = "poetry"
                         lint = "poetry run ruff check ."

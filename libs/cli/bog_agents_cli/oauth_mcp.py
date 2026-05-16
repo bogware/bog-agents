@@ -102,7 +102,7 @@ def load_oauth_configs(config_dir: Path) -> dict[str, OAuthConfig]:
         return {}
 
     try:
-        data = json.loads(oauth_file.read_text())
+        data = json.loads(oauth_file.read_text(encoding="utf-8"))
         configs = {}
         for name, cfg in data.items():
             configs[name] = OAuthConfig(
@@ -136,7 +136,7 @@ def load_stored_token(config_dir: Path, server_name: str) -> OAuthToken | None:
         return None
 
     try:
-        data = json.loads(token_path.read_text())
+        data = json.loads(token_path.read_text(encoding="utf-8"))
         token_data = data.get(server_name)
         if not token_data:
             return None
@@ -170,7 +170,7 @@ def save_token(config_dir: Path, server_name: str, token: OAuthToken) -> None:
 
     if token_path.exists():
         try:
-            existing = json.loads(token_path.read_text())
+            existing = json.loads(token_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
 
