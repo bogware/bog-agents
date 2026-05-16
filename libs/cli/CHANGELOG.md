@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.7](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.6...bog-agents-cli==0.8.7) (2026-05-16)
+
+
+### Features
+
+* dreamscape subsystem, nine killer slash commands, release-train enrichment, and reliability hardening ([#79](https://github.com/bogware/bog-agents/issues/79)) ([17a52ab](https://github.com/bogware/bog-agents/commit/17a52abcb8b20e8ebd3fdc5c2eb5f282b8e0026b))
+
+
+### Bug Fixes
+
+* **cli:** de-flake dreamscape rate-limit test on slow Windows runners ([#81](https://github.com/bogware/bog-agents/issues/81)) ([eb14713](https://github.com/bogware/bog-agents/commit/eb14713ebba9a219fa53bddfdc5378c5a7056193))
+
 ## [0.8.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.8.5...bog-agents-cli==0.8.6) (2026-05-12)
 
 
