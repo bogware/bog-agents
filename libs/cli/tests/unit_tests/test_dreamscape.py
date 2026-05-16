@@ -519,15 +519,29 @@ class TestDreamScheduler:
         scheduler.start()
         import asyncio
 
-        await asyncio.sleep(1.5)
+        # Poll for the rate-limited skip rather than relying on a fixed
+        # wall-clock budget — slow CI runners (notably Windows py3.13)
+        # can spend the entire budget on the first dream's file I/O,
+        # leaving zero ticks for the skipped path. The scheduler
+        # clamps poll_seconds to 0.5s, so we need at least one
+        # post-dream tick to land before we stop.
+        for _ in range(60):  # up to 6s wall clock
+            await asyncio.sleep(0.1)
+            if (
+                scheduler.stats.dreams_fired >= 1
+                and scheduler.stats.skipped_ineligible >= 1
+            ):
+                break
         await scheduler.stop()
-        # 60-second dreaming window means at most ONE dream in 1.5s.
-        # Everything else should be ``skipped_ineligible``.
+        # 60-second dreaming window means at most ONE dream in the
+        # polling budget. Everything else should be ``skipped_ineligible``.
         assert scheduler.stats.dreams_fired == 1, (
             f"expected exactly 1 dream in rate-limited window, got "
             f"{scheduler.stats.dreams_fired} (stats: {scheduler.stats})"
         )
-        assert scheduler.stats.skipped_ineligible > 0
+        assert scheduler.stats.skipped_ineligible > 0, (
+            f"expected at least one rate-limited skip, got stats: {scheduler.stats}"
+        )
 
     async def test_emergency_disable_skips_dreams(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
