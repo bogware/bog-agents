@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.7](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.8.6...bog-agents-daemon==0.8.7) (2026-05-16)
+
+
+### Features
+
+* dreamscape subsystem, nine killer slash commands, release-train enrichment, and reliability hardening ([#79](https://github.com/bogware/bog-agents/issues/79)) ([17a52ab](https://github.com/bogware/bog-agents/commit/17a52abcb8b20e8ebd3fdc5c2eb5f282b8e0026b))
+
 ## [0.8.6](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.8.5...bog-agents-daemon==0.8.6) (2026-05-12)
 
 
