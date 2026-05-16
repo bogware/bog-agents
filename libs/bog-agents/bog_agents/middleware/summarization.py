@@ -57,13 +57,19 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, cast
 
 from langchain.agents.middleware.summarization import (
-    _DEFAULT_MESSAGES_TO_KEEP,
-    _DEFAULT_TRIM_TOKEN_LIMIT,
     DEFAULT_SUMMARY_PROMPT,
     ContextSize,
     SummarizationMiddleware as LCSummarizationMiddleware,
     TokenCounter,
 )
+
+# Inlined from langchain.agents.middleware.summarization to avoid coupling
+# bog-agents to a private langchain symbol (leading underscore). The
+# upstream constants matched these values at langchain 1.2.x; if upstream
+# changes them we want our defaults to remain stable rather than break
+# on a langchain minor bump. See P0-J in REVIEW.md.
+_DEFAULT_MESSAGES_TO_KEEP = 20
+_DEFAULT_TRIM_TOKEN_LIMIT = 4000
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ExtendedModelResponse, PrivateStateAttr
 from langchain.tools import ToolRuntime
 from langchain_core.exceptions import ContextOverflowError

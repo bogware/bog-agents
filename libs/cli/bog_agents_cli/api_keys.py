@@ -10,29 +10,91 @@ from __future__ import annotations
 import logging
 import os
 
+from bog_agents_cli.model_config import PROVIDER_API_KEY_ENV
+
 logger = logging.getLogger(__name__)
 
-# Map of env-var name -> (human description, docs URL)
-WELL_KNOWN_API_KEYS: dict[str, tuple[str, str]] = {
+# Provider env-var metadata: (human description, docs URL). Keys NOT covered
+# by ``PROVIDER_API_KEY_ENV`` are listed first (non-LLM-provider tooling, plus
+# user-facing aliases that downstream libraries also read). Provider keys are
+# merged in below so the two registries can never drift out of sync — see
+# P0-G in REVIEW.md.
+_NON_PROVIDER_KEYS: dict[str, tuple[str, str]] = {
     "LANGSMITH_API_KEY": ("LangSmith API key", "https://smith.langchain.com"),
-    "ANTHROPIC_API_KEY": ("Anthropic API key", "https://console.anthropic.com"),
-    "OPENAI_API_KEY": ("OpenAI API key", "https://platform.openai.com"),
-    "GOOGLE_API_KEY": ("Google AI API key", "https://aistudio.google.com"),
-    "GROQ_API_KEY": ("Groq API key", "https://console.groq.com"),
-    "MISTRAL_API_KEY": ("Mistral AI API key", "https://console.mistral.ai"),
-    "COHERE_API_KEY": ("Cohere API key", "https://dashboard.cohere.com"),
-    "NVIDIA_API_KEY": ("NVIDIA NIM API key", "https://build.nvidia.com"),
-    "FIREWORKS_API_KEY": ("Fireworks AI API key", "https://fireworks.ai"),
-    "DEEPSEEK_API_KEY": ("DeepSeek API key", "https://platform.deepseek.com"),
-    "XAI_API_KEY": ("xAI API key", "https://console.x.ai"),
-    "OPENROUTER_API_KEY": ("OpenRouter API key", "https://openrouter.ai"),
-    "TAVILY_API_KEY": ("Tavily search API key", "https://tavily.com"),
     "LANGCHAIN_API_KEY": (
         "LangChain/LangSmith API key (alias)",
         "https://smith.langchain.com",
     ),
-    "DAYTONA_API_KEY": ("Daytona API key", "https://daytona.io"),
+    "TAVILY_API_KEY": ("Tavily search API key", "https://tavily.com"),
+    "DAYTONA_API_KEY": ("Daytona sandbox API key", "https://daytona.io"),
 }
+
+# Per-provider metadata for the keys discovered via ``PROVIDER_API_KEY_ENV``.
+# When a provider lists multiple env vars (only one today, but easily
+# extended) we keep the entry keyed by env-var so users find what they expect.
+_PROVIDER_KEY_METADATA: dict[str, tuple[str, str]] = {
+    "ANTHROPIC_API_KEY": ("Anthropic API key", "https://console.anthropic.com"),
+    "AZURE_OPENAI_API_KEY": ("Azure OpenAI API key", "https://azure.microsoft.com/en-us/products/ai-services/openai-service"),
+    "BASETEN_API_KEY": ("Baseten API key", "https://www.baseten.co"),
+    "AWS_ACCESS_KEY_ID": ("AWS access key (Bedrock)", "https://aws.amazon.com/bedrock"),
+    "COHERE_API_KEY": ("Cohere API key", "https://dashboard.cohere.com"),
+    "DEEPSEEK_API_KEY": ("DeepSeek API key", "https://platform.deepseek.com"),
+    "FIREWORKS_API_KEY": ("Fireworks AI API key", "https://fireworks.ai"),
+    "GOOGLE_API_KEY": ("Google AI API key", "https://aistudio.google.com"),
+    "GOOGLE_CLOUD_PROJECT": ("Google Cloud project (Vertex AI)", "https://cloud.google.com/vertex-ai"),
+    "GROQ_API_KEY": ("Groq API key", "https://console.groq.com"),
+    "HUGGINGFACEHUB_API_TOKEN": ("Hugging Face Hub token", "https://huggingface.co"),
+    "WATSONX_APIKEY": ("IBM watsonx.ai API key", "https://www.ibm.com/watsonx"),
+    "LITELLM_API_KEY": ("LiteLLM proxy API key", "https://litellm.ai"),
+    "MISTRAL_API_KEY": ("Mistral AI API key", "https://console.mistral.ai"),
+    "NVIDIA_API_KEY": ("NVIDIA NIM API key", "https://build.nvidia.com"),
+    "OPENAI_API_KEY": ("OpenAI API key", "https://platform.openai.com"),
+    "OPENROUTER_API_KEY": ("OpenRouter API key", "https://openrouter.ai"),
+    "PPLX_API_KEY": ("Perplexity API key", "https://www.perplexity.ai/settings/api"),
+    "TOGETHER_API_KEY": ("Together AI API key", "https://api.together.xyz"),
+    "XAI_API_KEY": ("xAI API key", "https://console.x.ai"),
+}
+
+# Common alias users will type from memory but that the SDK does NOT read.
+# Stored in the vault under the canonical name (e.g. ``PPLX_API_KEY``) when
+# the user sets the alias.
+_PROVIDER_KEY_ALIASES: dict[str, str] = {
+    "PERPLEXITY_API_KEY": "PPLX_API_KEY",
+}
+
+
+def _build_well_known_api_keys() -> dict[str, tuple[str, str]]:
+    """Derive the full registry from ``PROVIDER_API_KEY_ENV`` + the manual
+    metadata maps above. Raises on drift between the two maps so a future
+    typo'd entry surfaces at import time rather than as a silent miss.
+    """
+    out: dict[str, tuple[str, str]] = dict(_NON_PROVIDER_KEYS)
+    for env_var in PROVIDER_API_KEY_ENV.values():
+        meta = _PROVIDER_KEY_METADATA.get(env_var)
+        if meta is None:
+            # If a new provider lands in model_config.py without metadata
+            # here, fail loudly rather than silently dropping vault support.
+            msg = (
+                f"api_keys.py is missing metadata for env-var {env_var!r}. "
+                "Add an entry to _PROVIDER_KEY_METADATA when adding a new provider."
+            )
+            raise RuntimeError(msg)
+        out[env_var] = meta
+    return out
+
+
+WELL_KNOWN_API_KEYS: dict[str, tuple[str, str]] = _build_well_known_api_keys()
+"""Public registry of env-var → (description, docs URL).
+
+Derived from ``model_config.PROVIDER_API_KEY_ENV`` so a new provider is
+automatically picked up by the vault and the ``/vars`` UI. To add a new
+provider:
+
+1. Add it to ``PROVIDER_API_KEY_ENV`` in ``model_config.py``.
+2. Add a description + URL entry to ``_PROVIDER_KEY_METADATA`` here.
+
+A test asserts the two stay in sync.
+"""
 
 
 def vault_key_name(env_var: str) -> str:
@@ -79,6 +141,25 @@ def inject_vault_keys_into_env() -> list[str]:
         if value:
             os.environ[env_var] = value
             injected.append(env_var)
+
+    # Resolve aliases — e.g. ``PERPLEXITY_API_KEY`` (user-facing name) ->
+    # ``PPLX_API_KEY`` (what langchain-perplexity reads). Honor both stored
+    # vault entries and an environment alias the user may have exported.
+    for alias, canonical in _PROVIDER_KEY_ALIASES.items():
+        if os.environ.get(canonical):
+            continue
+        # Try alias env var first, then alias vault key.
+        value = os.environ.get(alias)
+        if not value:
+            try:
+                value = get_var(alias)
+            except Exception:
+                logger.debug("Could not read alias vault key %r", alias, exc_info=True)
+                value = None
+        if value:
+            os.environ[canonical] = value
+            if canonical not in injected:
+                injected.append(canonical)
     return injected
 
 

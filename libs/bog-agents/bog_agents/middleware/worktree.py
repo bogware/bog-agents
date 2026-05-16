@@ -673,6 +673,10 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         self._auto_cleanup = auto_cleanup
         self._tasks: dict[str, WorktreeTask] = {}
         self._semaphore: asyncio.Semaphore | None = None
+        # Strong references to in-flight background tasks. asyncio's docs
+        # explicitly warn that without a stable reference the task may be
+        # garbage-collected mid-execution. See P0-I in REVIEW.md.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._tools = self._build_tools()
 
     def _get_semaphore(self) -> asyncio.Semaphore:
@@ -797,15 +801,19 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 mw._tasks[task.task_id] = task
                 created_tasks.append(task)
 
-            # Fire and forget — tasks run in the background
+            # Fire and forget — tasks run in the background. Keep a strong
+            # reference on ``mw._background_tasks`` so asyncio doesn't GC the
+            # task mid-flight. The done-callback discards from the set so
+            # memory stays bounded over the session. (Fixes P0-I.)
             if created_tasks:
-                _bg = asyncio.ensure_future(
+                bg = asyncio.ensure_future(
                     asyncio.gather(
                         *(mw._run_task_in_worktree(t) for t in created_tasks),
                         return_exceptions=True,
                     )
                 )
-                _ = _bg  # suppress "local variable assigned but never used"
+                mw._background_tasks.add(bg)
+                bg.add_done_callback(mw._background_tasks.discard)
 
             ids = ", ".join(t.task_id for t in created_tasks)
             return f"Spawned {len(created_tasks)} parallel task(s): {ids}\nUse `worktree_status` to monitor progress."
