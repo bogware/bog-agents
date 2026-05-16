@@ -27,7 +27,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -50,6 +50,9 @@ from bog_agents.middleware.expert_engine import (
     RuleLoadError,
     load_rules_from_dir,
 )
+
+if TYPE_CHECKING:
+    from bog_agents.middleware.approval_gates import ApprovalStore
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +100,14 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         audit: Optional audit log sink.
         on_approval_required: Callback fired when a rule's
             ``require_approval`` action triggers. Receives the resolved
-            params dict.
+            params dict. Pure observer — does not block.
+        approval_store: Optional :class:`ApprovalStore` from
+            :mod:`bog_agents.middleware.approval_gates`. When supplied,
+            every ``require_approval`` action creates a real submission
+            on the store (auto-creating the gate if it doesn't exist)
+            so downstream review UIs / hooks can pick it up. Without a
+            store the middleware still blocks the tool call but the
+            approval lives only in the engine's return value.
         extra_rules: Rules to load programmatically (additive over disk).
     """
 
@@ -114,6 +124,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         notify: NotifySink | None = None,
         audit: AuditSink | None = None,
         on_approval_required: Callable[[dict[str, Any]], None] | None = None,
+        approval_store: ApprovalStore | None = None,
         extra_rules: list[Rule] | None = None,
     ) -> None:
         self._working_dir = working_dir or Path.cwd()
@@ -128,6 +139,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             audit=audit,
         )
         self._on_approval = on_approval_required
+        self._approval_store = approval_store
         self._last_loaded: float = 0.0
         self._last_load_error: str = ""
         self._denials = 0
@@ -309,12 +321,42 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             return _DENY
         if result.actions.approvals_required:
             self._approvals += 1
-            if self._on_approval is not None:
-                for params in result.actions.approvals_required:
+            for params in result.actions.approvals_required:
+                # Fire observer callback first so a watcher sees every gate.
+                if self._on_approval is not None:
                     try:
                         self._on_approval(params)
                     except Exception:
                         logger.exception("expert_rules: approval callback failed")
+                # Create a real submission on the store if one was supplied.
+                # Auto-create the gate if missing (the engine names them by
+                # the ``gate`` param so downstream reviewers see the
+                # rule-author's wording rather than a synthetic id).
+                if self._approval_store is not None:
+                    gate_name = str(params.get("gate") or "expert-rule")
+                    risk = str(params.get("risk") or params.get("severity") or "medium")
+                    action_desc = str(
+                        params.get("reason")
+                        or params.get("description")
+                        or f"expert rule fired: {gate_name}",
+                    )
+                    try:
+                        if gate_name not in self._approval_store.gates:
+                            self._approval_store.create_gate(
+                                name=gate_name,
+                                required_approvers=int(params.get("required_approvers", 1)),
+                                description=action_desc,
+                            )
+                        self._approval_store.submit(
+                            gate_name=gate_name,
+                            action_description=action_desc,
+                            risk_level=risk,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "expert_rules: failed to register approval submission "
+                            "on approval_store"
+                        )
             return _APPROVAL
         mods = result.actions.merged_modification()
         if mods:

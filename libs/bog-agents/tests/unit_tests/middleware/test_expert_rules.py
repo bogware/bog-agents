@@ -352,3 +352,78 @@ class TestExplain:
         trace = mw.last_trace()
         # No rules loaded → trace may be empty, but list-shape must hold.
         assert isinstance(trace, list)
+
+
+# ---------------------------------------------------------------------------
+# Wave 5: ApprovalStore integration
+# ---------------------------------------------------------------------------
+
+
+class TestApprovalStoreIntegration:
+    """When an :class:`ApprovalStore` is passed in, ``require_approval``
+    actions create real submissions on the store (auto-creating gates).
+    """
+
+    def test_submission_created_on_approval_action(self, tmp_path: Path) -> None:
+        from bog_agents.middleware.approval_gates import ApprovalStore
+
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        _write_rule_file(
+            rules_dir,
+            "approve.yaml",
+            """
+            - name: prod_gate
+              when:
+                - tool_call:
+                    name: deploy
+              then:
+                - require_approval:
+                    gate: "prod-deploy"
+                    risk: high
+                    reason: "Deploying to prod requires sign-off"
+            """,
+        )
+        store = ApprovalStore()
+        mw = ExpertRulesMiddleware(
+            working_dir=tmp_path,
+            reload_interval=0,
+            approval_store=store,
+        )
+        mw.wrap_tool_call(_make_request("deploy", {"env": "prod"}), lambda _r: "")
+        assert "prod-deploy" in store.gates
+        assert store.gates["prod-deploy"].description.startswith("Deploying to prod")
+        assert len(store.submissions) == 1
+        sub = store.submissions[0]
+        assert sub.gate_name == "prod-deploy"
+        assert sub.risk_level == "high"
+
+    def test_existing_gate_is_reused(self, tmp_path: Path) -> None:
+        from bog_agents.middleware.approval_gates import ApprovalStore
+
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        _write_rule_file(
+            rules_dir,
+            "approve.yaml",
+            """
+            - name: gate
+              when:
+                - tool_call:
+                    name: x
+              then:
+                - require_approval:
+                    gate: "existing"
+                    risk: low
+            """,
+        )
+        store = ApprovalStore()
+        store.create_gate("existing", required_approvers=2, description="manual")
+        mw = ExpertRulesMiddleware(
+            working_dir=tmp_path,
+            reload_interval=0,
+            approval_store=store,
+        )
+        mw.wrap_tool_call(_make_request("x", {}), lambda _r: "")
+        # The existing gate is kept, not overwritten.
+        assert store.gates["existing"].required_approvers == 2
+        assert store.gates["existing"].description == "manual"
+        assert len(store.submissions) == 1

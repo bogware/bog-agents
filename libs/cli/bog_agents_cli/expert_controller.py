@@ -24,6 +24,8 @@ from bog_agents.middleware.expert_engine import (
     Pattern,
     Predicate,
     PredicateOp,
+    lint as lint_rules,
+    render_report as render_lint_report,
 )
 from bog_agents.middleware.expert_engine.backward import render_tree
 from bog_agents.middleware.expert_rules import ExpertRulesMiddleware
@@ -241,6 +243,55 @@ class ExpertController:
         """Print a starter rule YAML."""
         return _EXAMPLE_RULE
 
+    def lint(self) -> str:
+        """Run the rulebook linter and render findings as text."""
+        report = lint_rules(self._middleware.engine.rules)
+        return render_lint_report(report)
+
+    def dry_run(self, fact_type: str, **fields: Any) -> str:
+        """Assert a fact, run the engine, then retract — show what would happen.
+
+        Unlike ``/expert assert`` + ``/expert run``, the asserted fact is
+        rolled back at the end so working memory remains untouched. The
+        ``denials`` / ``modifications`` / ``approvals`` counters are NOT
+        bumped (we restore them to their pre-call values). This is the
+        right command for "would my rule fire against this kind of call?"
+        without polluting later traces.
+        """
+        if not fact_type:
+            return "Usage: /expert dry-run <fact_type> [field=value ...]"
+        engine = self._middleware.engine
+        before_counters = dict(self._middleware.counters)
+        asserted = engine.assert_fact(Fact(fact_type=fact_type, data=dict(fields)))
+        try:
+            result = engine.run()
+        finally:
+            engine.retract(asserted.id)
+            # Restore counters so dry-run doesn't pollute the session view.
+            self._middleware._denials = before_counters["denials"]
+            self._middleware._modifications = before_counters["modifications"]
+            self._middleware._approvals = before_counters["approvals"]
+        lines = [
+            f"Dry-run: asserted {fact_type}#{asserted.id} {dict(fields)!r}",
+            f"  Iterations: {result.iterations}"
+            f"{' (truncated)' if result.truncated else ''}",
+            f"  Activations fired: {len(result.activations)}"
+            + (
+                f" — {', '.join(a.rule.name for a in result.activations)}"
+                if result.activations
+                else ""
+            ),
+            f"  Denied: {result.denied}",
+        ]
+        if result.deny_reasons:
+            lines.append(f"  Deny reasons: {result.deny_reasons}")
+        if result.actions.modifications:
+            lines.append(f"  Modifications: {result.actions.modifications}")
+        if result.actions.approvals_required:
+            lines.append(f"  Approvals required: {result.actions.approvals_required}")
+        lines.append("(fact retracted; counters restored)")
+        return "\n".join(lines)
+
     def memory_stats(self) -> str:
         """Show working-memory contents (by fact type)."""
         stats = self._middleware.engine.memory.stats()
@@ -294,22 +345,29 @@ class ExpertController:
             return self.run()
         if sub == "example":
             return self.example()
+        if sub == "lint":
+            return self.lint()
+        if sub in ("dry-run", "dryrun"):
+            ft, fields = _parse_pattern_args(rest)
+            return self.dry_run(ft, **fields)
         if sub == "status":
             return self.status()
         return (
             f"Unknown /expert subcommand: '{sub}'.\n\n"
             "Try one of:\n"
-            "  /expert            — show status\n"
-            "  /expert on|off     — toggle the engine\n"
-            "  /expert list       — list loaded rules\n"
-            "  /expert show <name> — show a rule\n"
-            "  /expert trace [N]   — last run trace\n"
-            "  /expert memory     — working-memory contents\n"
-            "  /expert clear      — wipe working memory\n"
-            "  /expert assert <fact_type> k=v ... — inject a fact\n"
-            "  /expert run        — run engine to fixed point\n"
-            "  /expert reload     — reload rules from disk\n"
-            "  /expert example    — print a starter rule"
+            "  /expert                              — show status\n"
+            "  /expert on|off                       — toggle the engine\n"
+            "  /expert list                         — list loaded rules\n"
+            "  /expert show <name>                  — show a rule\n"
+            "  /expert lint                         — static analysis of the rulebook\n"
+            "  /expert trace [N]                    — last run trace\n"
+            "  /expert memory                       — working-memory contents\n"
+            "  /expert clear                        — wipe working memory\n"
+            "  /expert assert <fact_type> k=v ...    — inject a fact\n"
+            "  /expert dry-run <fact_type> k=v ...   — simulate without persisting\n"
+            "  /expert run                          — run engine to fixed point\n"
+            "  /expert reload                       — reload rules from disk\n"
+            "  /expert example                      — print a starter rule"
         )
 
     def handle_why(self, args: str) -> str:

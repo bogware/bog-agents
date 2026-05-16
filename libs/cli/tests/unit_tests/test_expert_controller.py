@@ -272,3 +272,87 @@ class TestReloadAndExtraRules:
         after = c.list_rules()
         assert "block_force_push" in after
         assert before  # smoke
+
+
+# ---------------------------------------------------------------------------
+# Wave 5: lint + dry-run + ApprovalStore wiring
+# ---------------------------------------------------------------------------
+
+
+class TestLintCommand:
+    def test_lint_clean(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).lint()
+        # Two well-formed rules — clean (or at most info-only).
+        assert "error" not in out.lower() or "0 error" in out.lower()
+
+    def test_lint_flags_dead_rule(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "dead.yaml").write_text(
+            "- name: orphan\n  when:\n    - totally_unknown_fact: {}\n  then:\n    - audit_log\n",
+            encoding="utf-8",
+        )
+        c = get_controller(tmp_path)
+        out = c.lint()
+        assert "dead-rule" in out
+
+    def test_dispatch_lint(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert lint", project_with_rules)
+        assert "Lint" in out
+
+
+class TestDryRunCommand:
+    def test_dry_run_simulates_without_persisting(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(project_with_rules)
+        # Counters before
+        before = dict(c.middleware.counters)
+        memory_before = c.middleware.engine.memory.stats()
+
+        out = c.dry_run("tool_call", name="shell", command="git push --force main")
+        assert "Activations fired" in out
+        assert "block_force_push" in out
+        # Engine reports the deny in the dry-run output, but the counters
+        # and memory must be untouched.
+        assert "Denied: True" in out
+        assert c.middleware.counters == before
+        assert c.middleware.engine.memory.stats() == memory_before
+
+    def test_dispatch_dry_run(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch(
+            "/expert dry-run tool_call name=shell command='git push --force main'",
+            project_with_rules,
+        )
+        assert "Dry-run" in out
+
+    def test_dry_run_without_fact_type_shows_usage(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert dry-run", tmp_path)
+        assert "Usage" in out
+
+
+class TestStarterRulesShip:
+    """The shipped starter file must exist and parse."""
+
+    def test_starter_yaml_exists_and_loads(self) -> None:
+        from pathlib import Path
+
+        from bog_agents.middleware.expert_engine import load_rule_file
+
+        candidates = list(
+            (Path(__file__).resolve().parent.parent.parent / "bog_agents_cli")
+            .glob("built_in_skills/expert_starter_rules/*.yaml")
+        )
+        assert candidates, "starter.yaml is missing"
+        rules = load_rule_file(candidates[0])
+        assert len(rules) >= 3

@@ -41,6 +41,12 @@ from bog_agents.middleware.expert_engine.engine import (
     ExpertEngine,
     FireResult,
 )
+from bog_agents.middleware.expert_engine.lint import (
+    LintFinding,
+    LintReport,
+    lint,
+    render_report,
+)
 from bog_agents.middleware.expert_engine.loader import (
     RuleLoadError,
     load_rule_file,
@@ -76,6 +82,8 @@ __all__ = [
     "ExpertEngine",
     "Fact",
     "FireResult",
+    "LintFinding",
+    "LintReport",
     "Match",
     "NotifySink",
     "Pattern",
@@ -89,6 +97,8 @@ __all__ = [
     "Trace",
     "TraceEntry",
     "WorkingMemory",
+    "lint",
     "load_rule_file",
     "load_rules_from_dir",
+    "render_report",
 ]
