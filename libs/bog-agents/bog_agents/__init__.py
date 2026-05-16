@@ -45,6 +45,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "EarningsAnalysisMiddleware": ("bog_agents.middleware.earnings_analysis", "EarningsAnalysisMiddleware"),
     "EnhancedSkillsMiddleware": ("bog_agents.middleware.enhanced_skills", "EnhancedSkillsMiddleware"),
     "EnterpriseMiddleware": ("bog_agents.middleware.enterprise", "EnterpriseMiddleware"),
+    "ExpertRulesMiddleware": ("bog_agents.middleware.expert_rules", "ExpertRulesMiddleware"),
     "FactCheckMiddleware": ("bog_agents.middleware.fact_check", "FactCheckMiddleware"),
     "FilesystemMiddleware": ("bog_agents.middleware.filesystem", "FilesystemMiddleware"),
     "FinancialDataMiddleware": ("bog_agents.middleware.financial_data", "FinancialDataMiddleware"),

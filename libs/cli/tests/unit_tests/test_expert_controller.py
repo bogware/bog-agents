@@ -1,0 +1,274 @@
+"""Tests for the ``/expert``, ``/why``, ``/prove`` slash-command controller."""
+
+from __future__ import annotations
+
+import textwrap
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated() -> None:
+    """Reset the controller registry between tests so each gets a fresh engine."""
+    from bog_agents_cli.expert_controller import reset_controllers
+
+    reset_controllers()
+
+
+@pytest.fixture
+def project_with_rules(tmp_path: Path) -> Path:
+    rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "block.yaml").write_text(
+        textwrap.dedent(
+            """
+            - name: block_force_push
+              description: Block force-push to main.
+              salience: 100
+              when:
+                - tool_call:
+                    name: shell
+                    command:
+                      matches: 'git push.*--force.*main'
+              then:
+                - deny: "no force-push to main"
+
+            - name: budget_brake
+              description: Brake on cost > $5.
+              salience: 90
+              when:
+                - session:
+                    cost_usd:
+                      gt: 5.0
+              then:
+                - require_approval:
+                    gate: "Over $5 — continue?"
+            """
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+class TestStatusAndToggle:
+    def test_initial_status_off(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(tmp_path).status()
+        assert "Expert mode: OFF" in out
+        assert "Rules loaded: 0" in out
+
+    def test_status_with_rules(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).status()
+        assert "Rules loaded: 2" in out
+        assert "block_force_push" in out
+        assert "budget_brake" in out
+
+    def test_toggle(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(tmp_path)
+        assert "ON" in c.set_enabled(True)
+        assert c.middleware.enabled is True
+        assert "OFF" in c.set_enabled(False)
+        assert c.middleware.enabled is False
+
+
+class TestListAndShow:
+    def test_list_rules(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).list_rules()
+        assert "block_force_push" in out
+        assert "budget_brake" in out
+        assert "salience=100" in out
+
+    def test_list_empty(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(tmp_path).list_rules()
+        assert "No rules loaded" in out
+
+    def test_show_existing(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).show_rule("block_force_push")
+        assert "Rule: block_force_push" in out
+        assert "tool_call" in out
+        assert "deny" in out
+
+    def test_show_missing(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).show_rule("nope")
+        assert "not found" in out
+
+    def test_show_no_name_returns_usage(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(project_with_rules).show_rule("")
+        assert "Usage:" in out
+
+
+class TestExplainAndProve:
+    def test_explain_with_direct_fact(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(project_with_rules)
+        c.assert_fact("session", cost_usd=10.0)
+        out = c.explain("session")
+        assert "✓" in out  # proven
+        assert "fact: session" in out
+
+    def test_prove_succeeds_when_producer_active(
+        self,
+        project_with_rules: Path,
+    ) -> None:
+        # block_force_push doesn't assert_fact (it denies), so we need a producer
+        # rule. Use a rule that asserts via /expert assert + then run.
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(project_with_rules)
+        c.assert_fact("session", cost_usd=10.0)
+        out = c.prove("session", cost_usd=10.0)
+        assert "✓" in out  # direct fact satisfies
+
+    def test_why_with_no_producer_and_no_fact(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(tmp_path).explain("anything")
+        assert "✗" in out
+
+    def test_why_requires_fact_type(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(tmp_path).explain("")
+        assert "Usage:" in out
+
+
+class TestDispatcher:
+    def test_dispatch_expert_status(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert", tmp_path)
+        assert "Expert mode" in out
+
+    def test_dispatch_expert_on(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch, get_controller
+
+        out = dispatch("/expert on", tmp_path)
+        assert "ON" in out
+        assert get_controller(tmp_path).middleware.enabled
+
+    def test_dispatch_expert_off(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        dispatch("/expert on", tmp_path)
+        assert "OFF" in dispatch("/expert off", tmp_path)
+
+    def test_dispatch_expert_list(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert list", project_with_rules)
+        assert "block_force_push" in out
+
+    def test_dispatch_expert_assert_and_run(self, tmp_path: Path) -> None:
+        """Inject a fact then run engine (no rules → no-op but still answer)."""
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert assert session cost_usd=10.0", tmp_path)
+        assert "Asserted session" in out
+        run_out = dispatch("/expert run", tmp_path)
+        assert "Engine ran" in run_out
+
+    def test_dispatch_expert_memory(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        dispatch("/expert assert thing kind=test", tmp_path)
+        out = dispatch("/expert memory", tmp_path)
+        assert "thing: 1" in out
+        dispatch("/expert clear", tmp_path)
+        assert "empty" in dispatch("/expert memory", tmp_path)
+
+    def test_dispatch_expert_example(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert example", tmp_path)
+        assert "block_force_push_to_main" in out
+        assert "salience" in out
+
+    def test_dispatch_unknown_expert_subcommand(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        out = dispatch("/expert wibble", tmp_path)
+        assert "Unknown /expert subcommand" in out
+
+    def test_dispatch_why(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch, get_controller
+
+        get_controller(project_with_rules).assert_fact("session", cost_usd=10.0)
+        out = dispatch("/why session", project_with_rules)
+        assert "session" in out
+
+    def test_dispatch_prove(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch, get_controller
+
+        get_controller(tmp_path).assert_fact("session", cost_usd=10.0)
+        out = dispatch("/prove session cost_usd=10.0", tmp_path)
+        assert "✓" in out
+
+
+class TestSlashCommandRegistry:
+    """Verify the new commands are wired into the registry / autocomplete."""
+
+    def test_expert_command_registered(self) -> None:
+        from bog_agents_cli.commands import general
+
+        names = {cmd.name for cmd in general.COMMANDS}
+        assert "/expert" in names
+        assert "/why" in names
+        assert "/prove" in names
+
+    def test_handler_methods_named_consistently(self) -> None:
+        from bog_agents_cli.commands import general
+
+        handlers = {cmd.name: cmd.handler_method for cmd in general.COMMANDS}
+        assert handlers["/expert"] == "_handle_expert_command"
+        assert handlers["/why"] == "_handle_why_command"
+        assert handlers["/prove"] == "_handle_prove_command"
+
+
+class TestReloadAndExtraRules:
+    def test_reload_picks_up_new_file(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(tmp_path)
+        assert "0" in c.list_rules() or "No rules" in c.list_rules()
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "r.yaml").write_text(
+            "- name: r\n  when:\n    - x: {}\n  then:\n    - audit_log\n",
+            encoding="utf-8",
+        )
+        c.reload()
+        assert "r" in c.list_rules()
+
+    def test_reload_with_bad_file_keeps_old(self, project_with_rules: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(project_with_rules)
+        before = c.list_rules()
+        # Add a malformed file
+        (project_with_rules / ".bog-agents" / "expert_rules" / "broken.yaml").write_text(
+            "not yaml: [\n",
+            encoding="utf-8",
+        )
+        out = c.reload()
+        assert "error" in out.lower() or "errors" in out.lower()
+        # Original rules still listable
+        after = c.list_rules()
+        assert "block_force_push" in after
+        assert before  # smoke

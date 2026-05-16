@@ -10827,6 +10827,39 @@ class BogAgentsApp(App):
             )
         )
 
+    async def _handle_expert_command(self, command: str) -> None:
+        """Handle `/expert` — rule engine for policy gates and constraints.
+
+        See ``expert_controller.handle_expert`` for subcommand semantics.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.expert_controller import get_controller
+
+        controller = get_controller(self._cwd)
+        args = command.strip()[len("/expert") :].strip()
+        output = await asyncio.to_thread(controller.handle_expert, args)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_why_command(self, command: str) -> None:
+        """Handle `/why <fact_type> [k=v ...]` — backward-chain explanation."""
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.expert_controller import get_controller
+
+        controller = get_controller(self._cwd)
+        args = command.strip()[len("/why") :].strip()
+        output = await asyncio.to_thread(controller.handle_why, args)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_prove_command(self, command: str) -> None:
+        """Handle `/prove <fact_type> [k=v ...]` — backward-chain goal query."""
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.expert_controller import get_controller
+
+        controller = get_controller(self._cwd)
+        args = command.strip()[len("/prove") :].strip()
+        output = await asyncio.to_thread(controller.handle_prove, args)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_search_command(self, command: str) -> None:
         """Handle `/search` hybrid codebase search.
 

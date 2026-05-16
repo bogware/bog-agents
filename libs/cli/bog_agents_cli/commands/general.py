@@ -190,6 +190,55 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/expert",
+            "Expert Mode — forward+backward chaining rule engine for policy gates, "
+            "deterministic constraints, and deny/modify/approval actions",
+            "rules engine policy expert clips forward backward chaining inference",
+            "general",
+            available=True,
+            subcommands=(
+                ("on|off", "Toggle the engine"),
+                ("list", "List loaded rules"),
+                ("show <name>", "Show a single rule's contents"),
+                ("trace [N]", "Last engine-run trace (default 50 entries)"),
+                ("memory", "Working-memory contents"),
+                ("assert <fact_type> k=v ...", "Inject a fact"),
+                ("run", "Run the engine to a fixed point"),
+                ("reload", "Reload rules from disk"),
+                ("example", "Print a starter rule YAML"),
+            ),
+        ),
+        handler_method="_handle_expert_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/why",
+            "Backward-chain explanation — which rules can produce this fact and "
+            "are their conditions satisfied?",
+            "explain trace reason proof backward expert why",
+            "general",
+            available=True,
+            subcommands=(
+                ("<fact_type> [k=v ...]", "Fact-type pattern to explain"),
+            ),
+        ),
+        handler_method="_handle_why_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/prove",
+            "Backward-chain query — could the engine derive this goal from current working memory?",
+            "prove goal derive backward chain target",
+            "general",
+            available=True,
+            subcommands=(
+                ("<fact_type> [k=v ...]", "Goal pattern to prove"),
+            ),
+        ),
+        handler_method="_handle_prove_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/search",
             "Hybrid codebase search — ripgrep exact + fuzzy filename + semantic",
             "ripgrep rg find grep vector embeddings semantic hybrid",
