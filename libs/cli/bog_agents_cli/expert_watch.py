@@ -235,6 +235,7 @@ async def _run_loop(
     agent_id: str,
     auto_activate: bool,
     on_summary: Callable[[str], Awaitable[None]] | None,
+    working_dir: Path | str | None = None,
 ) -> None:
     """The asyncio task body. Stops cleanly when ``stop_event`` fires."""
     s = stats
@@ -295,6 +296,20 @@ async def _run_loop(
             s.skips,
             s.errors,
         )
+        # H8: if the loop crashed (not a clean stop()), clear the
+        # persistence file so the next launch doesn't try to resume a
+        # dead watcher. ``stop()`` already clears state on the clean
+        # path; this defensive call is a no-op there but rescues the
+        # case where ``_run_loop`` exited via an unhandled exception.
+        # Failures here are non-fatal — best-effort cleanup.
+        if working_dir is not None:
+            try:
+                clear_state(working_dir)
+            except Exception:
+                logger.debug(
+                    "expert_watch: clear_state in crash-recovery path failed",
+                    exc_info=True,
+                )
 
 
 def start(
@@ -348,6 +363,7 @@ def start(
             agent_id=agent_id,
             auto_activate=auto_activate,
             on_summary=on_summary,
+            working_dir=working_dir,
         ),
         name=f"expert-watcher-{key.name}",
     )

@@ -79,6 +79,60 @@ logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 _monotonic = time.monotonic
 
+
+_DEFAULT_TURN_TIMEOUT_SECONDS = 3600.0
+"""H1: default cap on one agent turn (model + tool calls + streaming).
+
+One hour is generous — legitimate long-running turns (deep research,
+large refactors) need headroom, but a literally-hung worker would
+otherwise lock the TUI indefinitely.
+"""
+
+
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
+    """H4: done-callback that surfaces task failures through the logger.
+
+    ``asyncio.create_task`` doesn't print or log unhandled exceptions
+    in fire-and-forget tasks; they only surface at GC time as a
+    "task exception was never retrieved" warning, which most
+    operators never see. We retrieve the exception explicitly so the
+    failure shows up in the log with a full stack trace.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    logger.error(
+        "Background task '%s' failed: %s",
+        task.get_name() if hasattr(task, "get_name") else "<unnamed>",
+        exc,
+        exc_info=exc,
+    )
+
+
+def _resolve_turn_timeout() -> float | None:
+    """Read ``BOG_AGENTS_TURN_TIMEOUT_SECONDS`` for the per-turn cap.
+
+    Returns:
+        Float seconds, or ``None`` to mean "no cap" (env var set to
+        ``0`` or ``none``). Invalid values fall back silently to the
+        default.
+    """
+    raw = (os.environ.get("BOG_AGENTS_TURN_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_TURN_TIMEOUT_SECONDS
+    if raw.lower() in ("0", "none", "off", "false"):
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_TURN_TIMEOUT_SECONDS
+    if value <= 0:
+        return None
+    return value
+
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -1104,10 +1158,17 @@ class BogAgentsApp(App):
         running loop, so a fire-and-forget task can be garbage-collected
         before completion. Tasks routed through this helper survive until
         they finish.
+
+        H4: in addition to the strong-ref bookkeeping, every task gets
+        a done callback that surfaces unhandled exceptions through the
+        logger. Without this, a fire-and-forget worker that raises
+        produces no output at all — silently dropping the failure on
+        the floor.
         """
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(_log_task_exception)
         return task
 
     def _install_termination_signal_handlers(self) -> None:
@@ -1156,17 +1217,37 @@ class BogAgentsApp(App):
 
         if not self._background_tasks:
             return
+        # H3: cancel first, then wait. If the 2s grace period elapses
+        # with tasks still alive, name them in the log so a hung
+        # task gets a paper trail instead of silently leaking.
         for task in list(self._background_tasks):
             if not task.done():
                 task.cancel()
-        # Give cancelled tasks a chance to settle so we don't lose log lines.
         try:
             await asyncio.wait_for(
                 asyncio.gather(*self._background_tasks, return_exceptions=True),
                 timeout=2.0,
             )
         except TimeoutError:
-            logger.warning("Background tasks did not settle within 2s of unmount")
+            unfinished = [
+                t for t in self._background_tasks if not t.done()
+            ]
+            if unfinished:
+                names = ", ".join(
+                    (t.get_name() if hasattr(t, "get_name") else repr(t))
+                    for t in unfinished[:10]
+                )
+                logger.warning(
+                    "Background tasks did not settle within 2s of unmount "
+                    "(%d unfinished: %s%s). They will be abandoned.",
+                    len(unfinished),
+                    names,
+                    "…" if len(unfinished) > 10 else "",
+                )
+            else:
+                logger.warning(
+                    "Background tasks did not settle within 2s of unmount"
+                )
 
     def _init_agent_adapter(self) -> None:
         """Create the UI adapter and kick off background cache prewarming."""
@@ -13381,8 +13462,16 @@ class BogAgentsApp(App):
         if self._ui_adapter is None:
             return
         turn_stats: SessionStats | None = None
+        # H1: cap the per-turn agent execution. Without this, a hung
+        # remote (model stall, network outage, runaway tool loop)
+        # freezes the entire TUI. The cap is generous (default 1h)
+        # because legitimate long-running turns exist; users can
+        # override via BOG_AGENTS_TURN_TIMEOUT_SECONDS=N or =0/none for
+        # no cap. On timeout we surface a recovery-aware error and
+        # leave the thread state intact so the user can resume.
+        turn_timeout_seconds = _resolve_turn_timeout()
         try:
-            turn_stats = await execute_task_textual(
+            agent_coro = execute_task_textual(
                 user_input=message,
                 agent=self._agent,
                 assistant_id=self._assistant_id,
@@ -13392,6 +13481,34 @@ class BogAgentsApp(App):
                 image_tracker=self._image_tracker,
                 context=self._build_cli_context(),
             )
+            if turn_timeout_seconds is None:
+                turn_stats = await agent_coro
+            else:
+                turn_stats = await asyncio.wait_for(
+                    agent_coro, timeout=turn_timeout_seconds
+                )
+        except TimeoutError:
+            logger.warning(
+                "Agent turn exceeded %.0fs timeout; cancelled",
+                turn_timeout_seconds,
+            )
+            if self._ui_adapter:
+                self._ui_adapter.finalize_pending_tools_with_error(
+                    f"Turn exceeded {turn_timeout_seconds:.0f}s"
+                )
+            await self._mount_message(
+                ErrorMessage(
+                    f"Agent turn exceeded {turn_timeout_seconds:.0f}s and was "
+                    "cancelled. Thread state is preserved on the server — "
+                    "send another message to continue, or set "
+                    "BOG_AGENTS_TURN_TIMEOUT_SECONDS=N (or 0 for no cap) to "
+                    "extend the budget."
+                )
+            )
+            self._agent_running = False
+            if self._chat_input:
+                self._chat_input.set_cursor_active(active=True)
+            return
         except Exception as e:  # Resilient tool rendering
             logger.exception("Agent execution failed")
             # Ensure any in-flight tool calls don't remain stuck in "Running..."
