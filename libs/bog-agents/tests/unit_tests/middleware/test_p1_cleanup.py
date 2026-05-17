@@ -165,19 +165,8 @@ class TestP12PathTraversal:
         assert out[0].error is not None
 
 
-# ---------------------------------------------------------------------------
-# P1-7: SSO stub fires NOTSECURE warning on init
-# ---------------------------------------------------------------------------
-
-
-class TestP17SsoWarning:
-    def test_first_instantiation_warns(self) -> None:
-        from bog_agents.middleware.sso_auth import SSOAuthMiddleware
-
-        # Reset the once-per-process flag so the warning fires for this test.
-        SSOAuthMiddleware._NOTSECURE_WARNING_FIRED = False
-        with pytest.warns(UserWarning, match="STUB"):
-            SSOAuthMiddleware()
+# P1-7 was the SSO-stub NOTSECURE warning test. Wave V removed the
+# stub entirely so the test no longer applies.
 
 
 # ---------------------------------------------------------------------------

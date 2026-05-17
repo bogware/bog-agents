@@ -36,43 +36,6 @@ class TestWorktreeMiddleware:
         assert not info.is_main
 
 
-class TestMultiAgentOrchestratorMiddleware:
-    """Tests for multi-agent orchestrator (Features #2-6)."""
-
-    def test_import(self):
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        assert MultiAgentOrchestratorMiddleware is not None
-
-    def test_init(self):
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        mw = MultiAgentOrchestratorMiddleware(max_threads=5)
-        assert mw._max_threads == 5
-        assert len(mw.tools) == 9
-
-    def test_tool_names(self):
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        mw = MultiAgentOrchestratorMiddleware()
-        names = {t.name for t in mw.tools}
-        assert "spawn_agent_thread" in names
-        assert "list_agent_threads" in names
-        assert "switch_thread" in names
-        assert "stop_thread" in names
-        assert "close_thread" in names
-        assert "send_message_to_thread" in names
-        assert "spawn_agents_on_csv" in names
-        assert "monitor_status" in names
-
-    def test_threads_property(self):
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        mw = MultiAgentOrchestratorMiddleware()
-        assert isinstance(mw.threads, dict)
-        assert len(mw.threads) == 0
-
-
 class TestSmartContextMiddleware:
     """Tests for smart context middleware (Features #13-18)."""
 
@@ -565,7 +528,6 @@ class TestAllExports:
         import bog_agents
 
         assert hasattr(bog_agents, "WorktreeMiddleware")
-        assert hasattr(bog_agents, "MultiAgentOrchestratorMiddleware")
         assert hasattr(bog_agents, "SmartContextMiddleware")
         assert hasattr(bog_agents, "ConversationBranchMiddleware")
         assert hasattr(bog_agents, "ImageInputMiddleware")
@@ -583,7 +545,6 @@ class TestAllExports:
         from bog_agents import middleware
 
         assert hasattr(middleware, "WorktreeMiddleware")
-        assert hasattr(middleware, "MultiAgentOrchestratorMiddleware")
         assert hasattr(middleware, "SmartContextMiddleware")
         assert hasattr(middleware, "ConversationBranchMiddleware")
         assert hasattr(middleware, "ImageInputMiddleware")

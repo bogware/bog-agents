@@ -3299,7 +3299,10 @@ class TestWaveNTimeoutResolvers:
 
     def test_turn_timeout_default(self, monkeypatch):
         monkeypatch.delenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", raising=False)
-        from bog_agents_cli.app import _DEFAULT_TURN_TIMEOUT_SECONDS, _resolve_turn_timeout
+        from bog_agents_cli.app import (
+            _DEFAULT_TURN_TIMEOUT_SECONDS,
+            _resolve_turn_timeout,
+        )
 
         assert _resolve_turn_timeout() == _DEFAULT_TURN_TIMEOUT_SECONDS
 
@@ -3323,7 +3326,10 @@ class TestWaveNTimeoutResolvers:
 
     def test_turn_timeout_invalid_falls_back(self, monkeypatch):
         monkeypatch.setenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", "not-a-number")
-        from bog_agents_cli.app import _DEFAULT_TURN_TIMEOUT_SECONDS, _resolve_turn_timeout
+        from bog_agents_cli.app import (
+            _DEFAULT_TURN_TIMEOUT_SECONDS,
+            _resolve_turn_timeout,
+        )
 
         assert _resolve_turn_timeout() == _DEFAULT_TURN_TIMEOUT_SECONDS
 

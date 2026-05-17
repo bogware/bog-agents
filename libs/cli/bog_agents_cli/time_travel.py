@@ -1,4 +1,4 @@
-"""``/causal replay <event_id>`` — time-travel from a rule fire (Q3).
+"""``/trace-mind replay <event_id>`` — time-travel from a rule fire (Q3).
 
 Read a recorded causal session, locate the rule fire (or tool call)
 the user wants to revisit, and re-run the **rules engine** over the
@@ -156,7 +156,7 @@ def replay(
             input,
             error=(
                 f"Event #{input.anchor_event_id} not found in session "
-                f"{session_id}. Use /causal last to find a valid id."
+                f"{session_id}. Use /trace-mind last to find a valid id."
             ),
         )
 
@@ -348,7 +348,7 @@ def _error(
 def render_result(result: ReplayResult) -> str:
     """Format the diff between the before/after engine outcomes."""
     if result.error:
-        return f"/causal replay failed: {result.error}"
+        return f"/trace-mind replay failed: {result.error}"
     lines = [
         f"== Time-travel replay from event #{result.anchor.id} ==",
         f"  Anchor: [{result.anchor.kind.value}] "
@@ -429,11 +429,11 @@ def dispatch(
     session_id: str | None,
     rules_provider: RulesProvider,
 ) -> str:
-    """Top-level ``/causal replay …`` dispatch.
+    """Top-level ``/trace-mind replay …`` dispatch.
 
     Args:
         command_text: Raw slash input. Expected to start with
-            ``/causal replay`` (the outer ``/causal`` dispatcher in
+            ``/trace-mind replay`` (the outer ``/causal`` dispatcher in
             ``causal/controller.py`` already handles the other
             subcommands; this function exists so the time-travel
             logic stays cohesive).
@@ -444,7 +444,12 @@ def dispatch(
             normally the expert controller's middleware.
     """
     rest = command_text.strip()
-    for prefix in ("/causal replay", "/causal-replay"):
+    for prefix in (
+        "/trace-mind replay",
+        "/trace-mind-replay",
+        "/trace-mind replay",
+        "/causal-replay",
+    ):
         if rest.startswith(prefix):
             rest = rest[len(prefix):].strip()
             break
@@ -461,7 +466,7 @@ def dispatch(
         sessions = list_sessions(working_dir)
         if not sessions:
             return (
-                "No causal sessions found. Run /causal on and a turn first."
+                "No causal sessions found. Run /trace-mind on and a turn first."
             )
         resolved_id = sessions[0]
     try:
@@ -488,7 +493,7 @@ def _parse_args(
     """Parse ``<event-id> [--no-rule X]* [--with-rule <yaml-or-path>]``."""
     tokens = rest.split()
     if not tokens:
-        return "Usage: /causal replay <event_id> [--no-rule NAME] [--with-rule PATH]"
+        return "Usage: /trace-mind replay <event_id> [--no-rule NAME] [--with-rule PATH]"
     try:
         anchor = int(tokens[0])
     except ValueError:
@@ -524,15 +529,15 @@ def _parse_args(
 
 def _help_text() -> str:
     return (
-        "/causal replay <event_id> — time-travel from a rule fire.\n\n"
+        "/trace-mind replay <event_id> — time-travel from a rule fire.\n\n"
         "Usage:\n"
-        "  /causal replay <id>                       — re-run rules over\n"
+        "  /trace-mind replay <id>                       — re-run rules over\n"
         "                                              the anchor's facts\n"
-        "  /causal replay <id> --no-rule NAME ...    — drop named rule(s)\n"
-        "  /causal replay <id> --with-rule PATH      — add rules from\n"
+        "  /trace-mind replay <id> --no-rule NAME ...    — drop named rule(s)\n"
+        "  /trace-mind replay <id> --with-rule PATH      — add rules from\n"
         "                                              a YAML file or inline body\n\n"
         "Outputs a before/after diff of activations, denials, mods, approvals.\n"
-        "Use /causal last to find event ids worth replaying."
+        "Use /trace-mind last to find event ids worth replaying."
     )
 
 

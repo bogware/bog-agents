@@ -64,9 +64,17 @@ _PROVIDER_KEY_ALIASES: dict[str, str] = {
 
 
 def _build_well_known_api_keys() -> dict[str, tuple[str, str]]:
-    """Derive the full registry from ``PROVIDER_API_KEY_ENV`` + the manual
-    metadata maps above. Raises on drift between the two maps so a future
-    typo'd entry surfaces at import time rather than as a silent miss.
+    """Derive the well-known API-key registry from the source maps.
+
+    Combines ``PROVIDER_API_KEY_ENV`` and the manual metadata maps
+    above. A future typo (provider added to one map but not the
+    other) raises at import time rather than slipping through as a
+    silent miss.
+
+    Raises:
+        RuntimeError: When a provider env-var listed in
+            ``PROVIDER_API_KEY_ENV`` has no matching entry in
+            ``_PROVIDER_KEY_METADATA``.
     """
     out: dict[str, tuple[str, str]] = dict(_NON_PROVIDER_KEYS)
     for env_var in PROVIDER_API_KEY_ENV.values():

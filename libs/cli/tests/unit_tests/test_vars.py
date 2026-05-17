@@ -344,7 +344,7 @@ class TestP0EWindowsPerms:
             stdout = b""
             stderr = b""
 
-        def fake_run(cmd, **_kwargs):  # noqa: ANN001, ANN202
+        def fake_run(cmd, **_kwargs):
             called.append(cmd)
             return _Completed()
 

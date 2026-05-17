@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
+import subprocess  # noqa: S404 — icacls invocation on Windows; no user-controlled args
 from pathlib import Path
 from typing import Any
 

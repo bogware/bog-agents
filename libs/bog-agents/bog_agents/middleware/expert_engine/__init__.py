@@ -60,14 +60,6 @@ from bog_agents.middleware.expert_engine.loader import (
     load_rule_file,
     load_rules_from_dir,
 )
-from bog_agents.middleware.expert_engine.wizard import (
-    WizardCategory,
-    WizardRun,
-    default_catalog,
-    find_category,
-    menu_text,
-    run_wizard,
-)
 from bog_agents.middleware.expert_engine.matcher import (
     Match,
     PatternMatcher,
@@ -83,6 +75,14 @@ from bog_agents.middleware.expert_engine.types import (
     Rule,
     Trace,
     TraceEntry,
+)
+from bog_agents.middleware.expert_engine.wizard import (
+    WizardCategory,
+    WizardRun,
+    default_catalog,
+    find_category,
+    menu_text,
+    run_wizard,
 )
 from bog_agents.middleware.expert_engine.working_memory import WorkingMemory
 

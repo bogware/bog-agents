@@ -381,10 +381,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
-            "/causal",
-            "Causal replay — see the proof tree behind any agent decision, "
-            "tool call, or final answer",
-            "trace causal replay debug provenance ancestry why-did graph history",
+            "/trace-mind",
+            "Trace-mind — see the proof tree behind any agent decision, "
+            "tool call, or final answer (was: /causal)",
+            "trace mind causal replay debug provenance ancestry why-did graph history",
             "general",
             available=True,
             subcommands=(
@@ -394,19 +394,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("why <event_id>", "Render the causal-ancestry tree of one event"),
                 ("graph [N]", "Render the whole session as a tree"),
                 ("sessions [id]", "List recorded sessions (or render one by id)"),
+                ("replay <id> [flags]", "Time-travel rule replay (Q3)"),
             ),
         ),
-        handler_method="_handle_causal_command",
-    ),
-    SlashCommand(
-        spec=SlashCommandSpec(
-            "/trace-mind",
-            "Alias for /causal — causal-replay debugger for agent runs",
-            "trace mind causal replay why ancestry",
-            "general",
-            available=True,
-        ),
-        handler_method="_handle_causal_command",
+        handler_method="_handle_trace_mind_command",
     ),
     SlashCommand(
         spec=SlashCommandSpec(

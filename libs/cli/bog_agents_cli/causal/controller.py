@@ -140,7 +140,7 @@ class CausalController:
     # ------------------------------------------------------------------
 
     def handle(self, args: str) -> str:
-        """Top-level ``/causal …`` dispatcher."""
+        """Top-level ``/trace-mind …`` dispatcher."""
         rest = args.strip()
         if not rest:
             return self._status_or_setup_hint()
@@ -164,15 +164,15 @@ class CausalController:
         if head == "replay":
             return self._replay(tail)
         return (
-            f"Unknown /causal subcommand: '{head}'.\n\n"
+            f"Unknown /trace-mind subcommand: '{head}'.\n\n"
             "Try one of:\n"
-            "  /causal                          — show status\n"
-            "  /causal on|off                   — toggle recording\n"
-            "  /causal last [N]                 — last N events (default 20)\n"
-            "  /causal why <event_id>           — causal ancestry tree\n"
-            "  /causal graph [N]                — session as a tree (last N)\n"
-            "  /causal sessions                 — list recorded sessions\n"
-            "  /causal replay <id> [flags]      — time-travel rule replay"
+            "  /trace-mind                          — show status\n"
+            "  /trace-mind on|off                   — toggle recording\n"
+            "  /trace-mind last [N]                 — last N events (default 20)\n"
+            "  /trace-mind why <event_id>           — causal ancestry tree\n"
+            "  /trace-mind graph [N]                — session as a tree (last N)\n"
+            "  /trace-mind sessions                 — list recorded sessions\n"
+            "  /trace-mind replay <id> [flags]      — time-travel rule replay"
         )
 
     def _replay(self, tail: str) -> str:
@@ -192,7 +192,7 @@ class CausalController:
 
         active_id = self._active.session_id if self._active is not None else None
         return _replay_dispatch(
-            f"/causal replay {tail}",
+            f"/trace-mind replay {tail}",
             working_dir=self._working_dir,
             session_id=active_id,
             rules_provider=_rules_provider,
@@ -206,7 +206,7 @@ class CausalController:
         if self._active is None:
             return (
                 "Causal recording: not yet initialized.\n"
-                "Start with /causal on — the next prompt will be traced "
+                "Start with /trace-mind on — the next prompt will be traced "
                 "and saved under .bog-agents/causal/."
             )
         return (
@@ -216,24 +216,24 @@ class CausalController:
 
     def _recent(self, tail: str) -> str:
         if self._active is None:
-            return "No active session — run /causal on first."
+            return "No active session — run /trace-mind on first."
         limit = _parse_int(tail, default=20)
         return render_recent(self._active, limit=limit)
 
     def _why(self, tail: str) -> str:
         if not tail:
-            return "Usage: /causal why <event_id>"
+            return "Usage: /trace-mind why <event_id>"
         try:
             event_id = int(tail.split(maxsplit=1)[0])
         except (IndexError, ValueError):
             return f"Invalid event id: {tail!r} — expected an integer."
         if self._active is None:
-            return "No active session — run /causal on first."
+            return "No active session — run /trace-mind on first."
         return render_ancestry(self._active, event_id)
 
     def _graph(self, tail: str) -> str:
         if self._active is None:
-            return "No active session — run /causal on first."
+            return "No active session — run /trace-mind on first."
         limit = _parse_int(tail, default=60)
         return render_graph(self._active, limit=limit)
 
@@ -266,17 +266,20 @@ def _parse_int(text: str, *, default: int) -> int:
 
 
 def dispatch(command_text: str, working_dir: Path | str) -> str:
-    """TUI entry point — ``/causal …`` and ``/trace-mind …`` alias."""
+    """TUI entry point — ``/trace-mind …``.
+
+    Wave V renamed the slash from ``/causal`` to ``/trace-mind``.
+    The legacy ``/causal`` prefix is still recognised so users with
+    muscle memory don't hit a wall, but the canonical name is
+    ``/trace-mind`` and the slash registry only ships that one.
+    """
     text = command_text.strip()
-    if text.startswith("/trace-mind"):
-        return get_controller(working_dir).handle(
-            text[len("/trace-mind"):].strip()
-        )
-    if text.startswith("/causal"):
-        return get_controller(working_dir).handle(
-            text[len("/causal"):].strip()
-        )
-    return f"Unknown causal command: {text}"
+    for prefix in ("/trace-mind", "/causal"):
+        if text.startswith(prefix):
+            return get_controller(working_dir).handle(
+                text[len(prefix):].strip()
+            )
+    return f"Unknown trace-mind command: {text}"
 
 
 __all__ = [

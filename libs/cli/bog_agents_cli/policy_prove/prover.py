@@ -103,8 +103,6 @@ class InvariantProof:
 def prove(
     invariant: Invariant,
     rules: Iterable[Rule],
-    *,
-    use_z3: bool | None = None,
 ) -> InvariantProof:
     """Prove or refute *invariant* against the given rulebook.
 
@@ -112,41 +110,22 @@ def prove(
         invariant: The invariant to check.
         rules: The expert rules currently loaded — typically
             ``ExpertRulesMiddleware.engine.rules``.
-        use_z3: Honesty knob for an unfinished feature. ``True``
-            opts in to the Z3 backend; ``False`` forces the heuristic
-            backend; ``None`` (default) uses the heuristic backend.
-
-            The Z3 backend today is a **stub** — it imports ``z3`` so
-            future work can extend it, but the body still delegates
-            to the heuristic prover with an extra "z3 backend
-            invoked" note. We surface this honestly via the
-            :class:`InvariantProof.notes` field so users know what
-            they actually got. Set ``use_z3=True`` only if you want
-            an immediate error when ``z3-solver`` isn't installed.
 
     Returns:
         :class:`InvariantProof` summarising the outcome. ``verdict``
         is :class:`ProofVerdict.HOLDS` when at least one guard rule
         was found, ``COUNTEREXAMPLE`` when a violating sequence is
         constructable, ``INCONCLUSIVE`` otherwise.
+
+    Note:
+        Wave V removed the half-finished ``use_z3`` knob. The Z3
+        backend never did anything Z3-specific; it delegated to the
+        heuristic prover with a confusing "z3 backend invoked"
+        note. The heuristic prover is now the only backend.
+        Future-work for symbolic subsumption is tracked in
+        ``REVIEW.md`` rather than as a stub function.
     """
-    rule_list = list(rules)
-    notes: list[str] = []
-    if use_z3:
-        # Honour the explicit request: if the user asked for Z3 and
-        # z3-solver isn't installed, raise — they need to know.
-        try:
-            return _prove_z3(invariant, rule_list)
-        except Z3UnavailableError:
-            notes.append(
-                "z3-solver not installed; falling back to heuristic prover."
-            )
-    # Default + use_z3=False both route through the heuristic prover
-    # WITHOUT trying Z3 first. The earlier "always try Z3" behavior
-    # masked the heuristic's role and produced confusing
-    # "z3 backend invoked" notes on every call. Heuristic is the
-    # honest default until the Z3 path is real.
-    return _prove_heuristic(invariant, rule_list, notes=notes)
+    return _prove_heuristic(invariant, list(rules), notes=[])
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +203,7 @@ def _prove_heuristic(
         rationale=(
             "No guard rule found and no concrete counterexample "
             "could be synthesised. The heuristic prover can't decide; "
-            "consider running with --z3 once z3-solver is installed."
+            "consider tightening the invariant's predicates."
         ),
         notes=tuple(notes),
     )
@@ -329,7 +308,7 @@ def _synthesize_counterexample(
     return "\n".join(lines)
 
 
-def _example_fact(label: str, pattern: PatternSpec) -> str | None:
+def _example_fact(label: str, pattern: PatternSpec) -> str | None:  # noqa: ARG001
     """Render an example fact dict satisfying *pattern*.
 
     Returns ``None`` if the pattern contains a predicate the
@@ -390,53 +369,8 @@ def _stable_value(value: object) -> object:
     return value
 
 
-# ---------------------------------------------------------------------------
-# Z3 backend (lazy import)
-# ---------------------------------------------------------------------------
-
-
-class Z3UnavailableError(RuntimeError):
-    """Raised when the Z3 backend was requested but z3-solver is missing."""
-
-
-def _prove_z3(invariant: Invariant, rules: list[Rule]) -> InvariantProof:
-    """Z3 backend — stub. Today defers to the heuristic prover.
-
-    The function name + import are kept so the public API
-    (``use_z3=True``) raises :class:`Z3UnavailableError` immediately
-    when z3-solver isn't installed, rather than silently falling
-    through. When z3 *is* installed, we still delegate to the
-    heuristic prover and surface a clear note saying so — no
-    pretending we did anything Z3-specific.
-
-    Roadmap: a real Z3 backend would discharge subsumption checks
-    the heuristic can't (``op: in`` with overlapping value sets,
-    numeric-range implication, regex-equivalence in the common
-    cases). Tracked separately so the public API stays honest.
-    """
-    try:
-        import z3  # noqa: F401 — kept so the import raises on absence
-    except ImportError as exc:
-        msg = (
-            "z3 backend requested but z3-solver is not installed. "
-            "Install with: pip install z3-solver"
-        )
-        raise Z3UnavailableError(msg) from exc
-
-    return _prove_heuristic(
-        invariant,
-        rules,
-        notes=[
-            "z3 backend is a stub today — proof produced by the "
-            "heuristic prover. Track honest implementation in the "
-            "policy_prove roadmap."
-        ],
-    )
-
-
 __all__ = [
     "InvariantProof",
     "ProofVerdict",
-    "Z3UnavailableError",
     "prove",
 ]

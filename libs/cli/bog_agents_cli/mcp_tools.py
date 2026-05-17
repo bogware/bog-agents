@@ -47,6 +47,7 @@ def _mcp_startup_timeout_seconds() -> float:
         return _DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS
     return value
 
+
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
     from langchain_mcp_adapters.client import Connection, MultiServerMCPClient
@@ -540,7 +541,7 @@ async def _load_tools_from_config(
                     ),
                     timeout=timeout_s,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # A misbehaving stdio server (e.g. ``npx -y …`` doing a
                 # cold install, OAuth-pending SSE server) used to freeze
                 # the entire welcome banner. We log + record the failure
@@ -563,7 +564,7 @@ async def _load_tools_from_config(
                     )
                 )
                 continue
-            except Exception as per_server_exc:  # noqa: BLE001 — isolate per-server failures
+            except Exception as per_server_exc:
                 # Same isolation strategy: a single broken server should
                 # never brick the rest of the rulebook.
                 err = f"startup failed: {per_server_exc}"

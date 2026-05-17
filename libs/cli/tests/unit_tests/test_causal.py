@@ -372,9 +372,10 @@ class TestController:
         assert f"#{u.id:>4}" in out or f"#{u.id}" in out
 
     def test_unknown_subcommand_lists_help(self, tmp_path: Path) -> None:
-        out = dispatch("/causal nope", tmp_path)
+        out = dispatch("/trace-mind nope", tmp_path)
         assert "Unknown" in out
-        assert "/causal on" in out
+        # Wave V renamed the slash; the help text reflects that.
+        assert "/trace-mind on" in out
 
     def test_trace_mind_alias_works(self, tmp_path: Path) -> None:
         on_out = dispatch("/trace-mind on", tmp_path)

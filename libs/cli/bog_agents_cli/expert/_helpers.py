@@ -26,7 +26,7 @@ class _NullModel:
     the category help.
     """
 
-    def invoke(self, _messages: list) -> Any:  # noqa: ANN401, PLR6301
+    def invoke(self, _messages: list) -> Any:  # noqa: PLR6301
         msg = "_NullModel.invoke should never be called"
         raise AssertionError(msg)
 
@@ -67,7 +67,7 @@ def _parse_pattern_args(text: str) -> tuple[str, dict[str, Any]]:
     return (fact_type, fields)
 
 
-def _coerce_value(raw: str) -> Any:  # noqa: ANN401 — CLI values are intentionally untyped
+def _coerce_value(raw: str) -> Any:
     """Best-effort JSON-ish coercion of a CLI value."""
     if not raw:
         return ""

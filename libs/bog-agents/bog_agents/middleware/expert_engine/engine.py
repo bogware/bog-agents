@@ -20,6 +20,8 @@ Once-flags: a rule with ``once=True`` fires at most one activation per
 from __future__ import annotations
 
 import logging
+import os
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
@@ -42,6 +44,29 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_ITERATIONS = 200
 
+_DEFAULT_SLOW_RUN_WARN_MS = 50.0
+"""V5: warn when one engine run exceeds this many milliseconds.
+
+The matcher is O(P x F^k) in the number of rules, facts, and pattern
+arity. At current scale (~100 rules, ~1000 facts) one run completes
+in microseconds. As either grows we want a structured warning so the
+team can defer optimization until a real customer signal arrives.
+
+Override via the ``BOG_AGENTS_RULES_SLOW_WARN_MS`` env var. Set to
+``0`` to disable.
+"""
+
+
+def _resolve_slow_warn_ms() -> float:
+    raw = os.environ.get("BOG_AGENTS_RULES_SLOW_WARN_MS", "").strip()
+    if not raw:
+        return _DEFAULT_SLOW_RUN_WARN_MS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_SLOW_RUN_WARN_MS
+    return max(0.0, value)
+
 
 # ---------------------------------------------------------------------------
 # Result
@@ -58,6 +83,10 @@ class FireResult:
         trace: The full :class:`Trace` for the run.
         iterations: How many fixed-point passes were run.
         truncated: True iff ``max_iterations`` was reached.
+        elapsed_ms: Wall-clock time the run consumed, in milliseconds.
+            Populated by :meth:`ExpertEngine.run`; the engine emits a
+            structured warning when this exceeds the configured
+            slow-run threshold (V5).
     """
 
     activations: list[Activation] = field(default_factory=list)
@@ -65,6 +94,7 @@ class FireResult:
     trace: Trace = field(default_factory=Trace)
     iterations: int = 0
     truncated: bool = False
+    elapsed_ms: float = 0.0
 
     @property
     def denied(self) -> bool:
@@ -167,6 +197,11 @@ class ExpertEngine:
         self._once_fired.clear()
         self._activation_history.clear()
         result = FireResult()
+        # V5: time the whole run so we can warn on slow rulebooks
+        # without paying for fine-grained instrumentation in the hot
+        # path. ``time.perf_counter`` is the right clock on every
+        # supported platform.
+        started_at = time.perf_counter()
         for iteration in range(1, limit + 1):
             result.iterations = iteration
             activations = self._collect_activations(result.trace)
@@ -202,6 +237,26 @@ class ExpertEngine:
                 kind="cycle",
                 detail=f"max_iterations={limit} hit",
             )
+        # V5: emit a structured warning if the run took longer than
+        # the configured threshold. The threshold can be lowered for
+        # CI runs (set BOG_AGENTS_RULES_SLOW_WARN_MS=10) or disabled
+        # entirely with =0. The matcher itself stays O(P · F^k); this
+        # is an observability hook, not an optimization.
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        threshold = _resolve_slow_warn_ms()
+        if threshold > 0 and elapsed_ms > threshold:
+            logger.warning(
+                "expert_engine slow run: %.1fms over %d rule(s) + %d fact(s) "
+                "(threshold %.0fms). Iterations=%d, activations=%d. "
+                "Set BOG_AGENTS_RULES_SLOW_WARN_MS to retune.",
+                elapsed_ms,
+                len(self._rules),
+                len(self._memory),
+                threshold,
+                result.iterations,
+                len(result.activations),
+            )
+        result.elapsed_ms = elapsed_ms
         self.last_result = result
         return result
 

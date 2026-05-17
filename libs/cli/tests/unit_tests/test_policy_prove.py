@@ -40,9 +40,7 @@ from bog_agents_cli.policy_prove.controller import (
 )
 from bog_agents_cli.policy_prove.invariant import InvariantParseError
 from bog_agents_cli.policy_prove.prover import (
-    Z3UnavailableError,
     _pattern_subsumes,
-    _prove_z3,
 )
 
 # ---------------------------------------------------------------------------
@@ -202,7 +200,7 @@ class TestProverHolds:
             name="block_rm_rf",
             when_predicates=[("command", "matches", r"rm\s+-rf\s+/")],
         )
-        proof = prove(invariant, [guard], use_z3=False)
+        proof = prove(invariant, [guard])
         assert proof.verdict == ProofVerdict.HOLDS
         assert "block_rm_rf" in proof.guards
 
@@ -215,7 +213,7 @@ class TestProverHolds:
             when_predicates=[("name", "eq", "deploy_prod")],
             action_kind=ActionKind.REQUIRE_APPROVAL,
         )
-        proof = prove(invariant, [guard], use_z3=False)
+        proof = prove(invariant, [guard])
         assert proof.verdict == ProofVerdict.HOLDS
 
     def test_multiple_guards_all_listed(self):
@@ -224,7 +222,7 @@ class TestProverHolds:
         )
         g1 = _mk_guard_rule(name="g1", when_predicates=[("name", "eq", "x")])
         g2 = _mk_guard_rule(name="g2", when_predicates=[("name", "eq", "x")])
-        proof = prove(invariant, [g1, g2], use_z3=False)
+        proof = prove(invariant, [g1, g2])
         assert proof.verdict == ProofVerdict.HOLDS
         assert set(proof.guards) == {"g1", "g2"}
 
@@ -235,7 +233,7 @@ class TestProverCounterexample:
             pre_preds=[("name", "eq", "shell_execute")],
             forbid_preds=[("name", "eq", "leak_secrets")],
         )
-        proof = prove(invariant, [], use_z3=False)
+        proof = prove(invariant, [])
         assert proof.verdict == ProofVerdict.COUNTEREXAMPLE
         assert "leak_secrets" in proof.counterexample
 
@@ -249,7 +247,7 @@ class TestProverCounterexample:
             when_predicates=[("name", "eq", "x")],
             action_kind=ActionKind.AUDIT_LOG,
         )
-        proof = prove(invariant, [audit_rule], use_z3=False)
+        proof = prove(invariant, [audit_rule])
         assert proof.verdict == ProofVerdict.COUNTEREXAMPLE
 
     def test_different_fact_type_does_not_guard(self):
@@ -262,7 +260,7 @@ class TestProverCounterexample:
             when=(Pattern(fact_type="session"),),
             then=(Action(kind=ActionKind.DENY),),
         )
-        proof = prove(invariant, [other_rule], use_z3=False)
+        proof = prove(invariant, [other_rule])
         assert proof.verdict == ProofVerdict.COUNTEREXAMPLE
 
     def test_counterexample_unrenderable_falls_through(self):
@@ -275,7 +273,7 @@ class TestProverCounterexample:
         invariant = _mk_invariant(
             forbid_preds=[("name", "missing", None)],
         )
-        proof = prove(invariant, [], use_z3=False)
+        proof = prove(invariant, [])
         assert proof.verdict == ProofVerdict.INCONCLUSIVE
 
 
@@ -386,65 +384,9 @@ class TestRender:
         assert "z3 backend unavailable" in out
 
 
-# ---------------------------------------------------------------------------
-# Z3 backend hook
-# ---------------------------------------------------------------------------
-
-
-class TestZ3Backend:
-    def test_use_z3_true_raises_when_unavailable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Explicit Z3 request raises when z3-solver is missing.
-
-        We want the unavailable error inside the prover entry path
-        instead of silently falling through to the heuristic prover.
-        """
-        import builtins as _b
-
-        real_import = _b.__import__
-
-        def fake_import(name, *a, **kw):
-            if name == "z3":
-                msg = "no z3 installed"
-                raise ImportError(msg)
-            return real_import(name, *a, **kw)
-
-        monkeypatch.setattr(_b, "__import__", fake_import)
-        inv = _mk_invariant(forbid_preds=[("name", "eq", "x")])
-        with pytest.raises(Z3UnavailableError):
-            _prove_z3(inv, [])
-
-    def test_use_z3_none_falls_back_silently(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Default ``use_z3=None`` skips the Z3 path entirely.
-
-        After the U2 honesty fix, the default path no longer attempts
-        z3-import speculatively — it routes straight to the heuristic
-        prover. Tests pin that contract so we don't regress to the
-        "always emits a z3 note" behavior the audit flagged as
-        confusing.
-        """
-        import builtins as _b
-
-        real_import = _b.__import__
-        z3_import_attempted = []
-
-        def fake_import(name, *a, **kw):
-            if name == "z3":
-                z3_import_attempted.append(True)
-                msg = "no z3 installed"
-                raise ImportError(msg)
-            return real_import(name, *a, **kw)
-
-        monkeypatch.setattr(_b, "__import__", fake_import)
-        inv = _mk_invariant(forbid_preds=[("name", "eq", "x")])
-        proof = prove(inv, [], use_z3=None)
-        # No z3 path attempted, no z3 note emitted, heuristic verdict.
-        assert proof.verdict == ProofVerdict.COUNTEREXAMPLE
-        assert z3_import_attempted == []
-        assert not any("z3" in n.lower() for n in proof.notes)
+# Wave V removed the Z3 backend entirely. Tests that exercised the
+# parameter shape (use_z3=True / use_z3=None) live in git history
+# rather than as dead code.
 
 
 # ---------------------------------------------------------------------------
@@ -513,11 +455,16 @@ class TestController:
         )
         assert "Could not parse invariant" in out
 
-    def test_z3_flag_is_stripped_from_body(self, tmp_path: Path):
-        # Mix the flag with a YAML body; the flag must not poison parsing.
+    def test_legacy_z3_flag_silently_ignored(self, tmp_path: Path):
+        """Wave V removed --z3, but the controller still strips it.
+
+        Users with muscle-memory from earlier waves shouldn't get
+        a parse error when they include --z3 in a /prove-invariant
+        invocation; the flag is silently dropped and the heuristic
+        prover runs.
+        """
         body = "\n".join([_GOOD_YAML, ""])
         out = prove_dispatch(
             f"/prove-invariant --z3\n{body}", tmp_path
         )
-        # No rules → counterexample (or fallback note).
         assert "COUNTEREXAMPLE" in out or "INCONCLUSIVE" in out

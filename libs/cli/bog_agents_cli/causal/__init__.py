@@ -1,4 +1,4 @@
-"""Causal-replay subsystem (trace-mind).
+"""Causal-replay subsystem.
 
 Records the *causal graph* of an agent run — which tool calls produced
 which outputs, which rules fired on which facts, which dreams biased

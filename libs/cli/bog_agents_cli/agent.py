@@ -1618,12 +1618,10 @@ def create_cli_agent(
         working_dir = effective_cwd or Path.cwd()
         agent_middleware.append(WorktreeMiddleware(working_dir=working_dir))
 
-    # Multi-agent orchestrator middleware (Features #2-6)
-    from bog_agents.middleware.multi_agent_orchestrator import (
-        MultiAgentOrchestratorMiddleware,
-    )
-
-    agent_middleware.append(MultiAgentOrchestratorMiddleware())
+    # Wave V removed MultiAgentOrchestratorMiddleware (it was a STUB
+    # whose import is no longer available). Multi-agent orchestration
+    # is handled today by /orchestrate + the sub-agent system, not by
+    # a dedicated middleware.
 
     # Smart context middleware (Features #13-18)
     from bog_agents.middleware.smart_context import SmartContextMiddleware

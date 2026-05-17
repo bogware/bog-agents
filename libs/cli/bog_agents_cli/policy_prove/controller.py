@@ -46,7 +46,6 @@ from bog_agents_cli.policy_prove.invariant import (
 from bog_agents_cli.policy_prove.prover import (
     InvariantProof,
     ProofVerdict,
-    Z3UnavailableError,
     prove,
 )
 
@@ -66,14 +65,13 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     if head in ("list", "ls"):
         return _list_examples(Path(working_dir))
 
-    # Parse use-z3 flag (it can appear anywhere, but we strip it
-    # before YAML parsing so it doesn't confuse the loader).
-    use_z3 = False
+    # Wave V removed the --z3 flag — strip it silently from older
+    # invocations so we don't break user muscle memory, but ignore
+    # it; the heuristic prover is the only backend now.
     body = text
     for flag in ("--z3", "-z3"):
         if f" {flag}" in f" {body} ":
             body = body.replace(flag, "", 1).strip()
-            use_z3 = True
     try:
         invariant = _load_invariant_from_input(body, Path(working_dir))
     except InvariantParseError as exc:
@@ -85,10 +83,7 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
         logger.exception("Could not load rules for /prove-invariant")
         return f"Could not load active rules: {exc}"
 
-    try:
-        proof = prove(invariant, rules, use_z3=use_z3)
-    except Z3UnavailableError as exc:
-        return f"/prove-invariant failed: {exc}"
+    proof = prove(invariant, rules)
     return render_proof(proof)
 
 
@@ -186,8 +181,6 @@ def _help_text() -> str:
         "  /prove-invariant list                   — list invariants/*.yaml in cwd\n"
         "  /prove-invariant help                   — this message\n\n"
         "Flags:\n"
-        "  --z3                                    — prefer the Z3-backed prover\n"
-        "                                            (falls back if not installed)\n\n"
         "Invariant YAML shape:\n"
         "  name: <slug>\n"
         "  description: <one line>\n"
@@ -201,12 +194,12 @@ def _help_text() -> str:
 
 
 def prove_dict(
-    data: dict, working_dir: Path | str, *, use_z3: bool = False
+    data: dict, working_dir: Path | str,
 ) -> InvariantProof:
     """Programmatic entry point for tests + scripts."""
     invariant = load_invariant_from_dict(data)
     rules = list(_expert_controller(working_dir).middleware.engine.rules)
-    return prove(invariant, rules, use_z3=use_z3)
+    return prove(invariant, rules)
 
 
 __all__ = [

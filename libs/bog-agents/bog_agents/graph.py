@@ -651,11 +651,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(HallucinationDetectionMiddleware())
 
-    if f.enable_meeting_prep:
-        from bog_agents.middleware.meeting_prep import MeetingPrepMiddleware
-
-        agents_middleware.append(MeetingPrepMiddleware())
-
     if f.enable_enhanced_skills:
         if not f.enhanced_skills_sources:
             import logging as _logging
@@ -681,17 +676,8 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(SavedPromptsMiddleware(backend=backend, sources=f.saved_prompts_sources))
 
-    # Batch 2 financial advisor middleware
-    if f.enable_portfolio_analysis:
-        from bog_agents.middleware.portfolio_analysis import PortfolioAnalysisMiddleware
-
-        agents_middleware.append(PortfolioAnalysisMiddleware(risk_free_rate=f.portfolio_risk_free_rate))
-
-    if f.enable_client_reports:
-        from bog_agents.middleware.client_reports import ClientReportsMiddleware
-
-        agents_middleware.append(ClientReportsMiddleware(firm_name=f.client_reports_firm_name, advisor_name=f.client_reports_advisor_name))
-
+    # Vertical-market batch (deep_research, dlp, version_control, nl_query, …)
+    # — Wave V removed the financial-advisor stubs that lived here.
     if f.enable_deep_research:
         from bog_agents.middleware.deep_research import DeepResearchMiddleware
 
@@ -707,41 +693,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(VersionControlMiddleware())
 
-    if f.enable_scenario_engine:
-        from bog_agents.middleware.scenario_engine import ScenarioEngineMiddleware
-
-        agents_middleware.append(ScenarioEngineMiddleware())
-
-    if f.enable_tax_optimization:
-        from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
-
-        agents_middleware.append(TaxOptimizationMiddleware())
-
     if f.enable_nl_query:
         from bog_agents.middleware.nl_query import NLQueryMiddleware
 
         agents_middleware.append(NLQueryMiddleware())
 
-    if f.enable_peer_comparison:
-        from bog_agents.middleware.peer_comparison import PeerComparisonMiddleware
-
-        agents_middleware.append(PeerComparisonMiddleware())
-
-    # Batch 3 financial advisor middleware
     if f.enable_code_review:
         from bog_agents.middleware.code_review import CodeReviewMiddleware
 
         agents_middleware.append(CodeReviewMiddleware())
-
-    if f.enable_financial_data:
-        from bog_agents.middleware.financial_data import FinancialDataMiddleware
-
-        agents_middleware.append(FinancialDataMiddleware())
-
-    if f.enable_regulatory_alerts:
-        from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
-
-        agents_middleware.append(RegulatoryAlertsMiddleware())
 
     if f.enable_model_portfolio:
         from bog_agents.middleware.model_portfolio import ModelPortfolioMiddleware
@@ -752,11 +712,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.knowledge_graph import KnowledgeGraphMiddleware
 
         agents_middleware.append(KnowledgeGraphMiddleware())
-
-    if f.enable_client_knowledge_base:
-        from bog_agents.middleware.client_knowledge_base import ClientKnowledgeBaseMiddleware
-
-        agents_middleware.append(ClientKnowledgeBaseMiddleware())
 
     if f.enable_rbac:
         from bog_agents.middleware.rbac import RBACMiddleware
@@ -773,26 +728,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ApprovalGatesMiddleware())
 
-    if f.enable_earnings_analysis:
-        from bog_agents.middleware.earnings_analysis import EarningsAnalysisMiddleware
-
-        agents_middleware.append(EarningsAnalysisMiddleware())
-
-    if f.enable_regulatory_impact:
-        from bog_agents.middleware.regulatory_impact import RegulatoryImpactMiddleware
-
-        agents_middleware.append(RegulatoryImpactMiddleware())
-
-    # Batch 4 (final) middleware
+    # Browser + remote-execution batch
     if f.enable_browser_agent_fa:
         from bog_agents.middleware.browser_agent_fa import BrowserAgentFAMiddleware
 
         agents_middleware.append(BrowserAgentFAMiddleware())
-
-    if f.enable_agent_teams:
-        from bog_agents.middleware.agent_teams import AgentTeamsMiddleware
-
-        agents_middleware.append(AgentTeamsMiddleware())
 
     if f.enable_automations:
         from bog_agents.middleware.automations import AutomationsMiddleware
@@ -819,20 +759,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(OpenSearchRAGMiddleware())
 
-    if f.enable_firm_deployment:
-        from bog_agents.middleware.firm_deployment import FirmDeploymentMiddleware
-
-        agents_middleware.append(FirmDeploymentMiddleware())
-
     if f.enable_air_gapped:
         from bog_agents.middleware.air_gapped import AirGappedMiddleware
 
         agents_middleware.append(AirGappedMiddleware())
-
-    if f.enable_sso_auth:
-        from bog_agents.middleware.sso_auth import SSOAuthMiddleware
-
-        agents_middleware.append(SSOAuthMiddleware())
 
     if f.enable_dashboard:
         from bog_agents.middleware.dashboard import DashboardMiddleware
@@ -858,16 +788,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.voice_io import VoiceIOMiddleware
 
         agents_middleware.append(VoiceIOMiddleware())
-
-    if f.enable_due_diligence:
-        from bog_agents.middleware.due_diligence import DueDiligenceMiddleware
-
-        agents_middleware.append(DueDiligenceMiddleware())
-
-    if f.enable_market_sentiment:
-        from bog_agents.middleware.market_sentiment import MarketSentimentMiddleware
-
-        agents_middleware.append(MarketSentimentMiddleware())
 
     if f.enable_competitive_intel:
         from bog_agents.middleware.competitive_intel import CompetitiveIntelMiddleware

@@ -1564,7 +1564,7 @@ class TestMcpStartupTimeout:
         async def fake_load_mcp_tools(
             _session: object,
             *,
-            connection: object,  # noqa: ARG001
+            connection: object,
             server_name: str,
             **_kwargs: object,
         ) -> list[object]:

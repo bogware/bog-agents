@@ -135,7 +135,7 @@ def test_unknown_attribute_raises_attribute_error() -> None:
     import bog_agents.middleware as m
 
     try:
-        _ = m.DefinitelyNotARealMiddleware  # noqa: F841
+        _ = m.DefinitelyNotARealMiddleware
     except AttributeError as exc:
         assert "DefinitelyNotARealMiddleware" in str(exc)
     else:

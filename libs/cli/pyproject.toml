@@ -251,6 +251,12 @@ ignore = [
     "TC003",   # Typing-only standard library import — keep explicit
     "TD002",   # Missing author in TODO
     "TD003",   # Missing issue link in TODO
+    "TRY003",  # Long-message exceptions — convention across the CLI is to
+               # carry user-facing detail in the exception text itself; the
+               # alternative (a dedicated class per error class) is overkill
+               # for slash-command handlers.
+    "EM101",   # Raw string in exception — same rationale as TRY003.
+    "EM102",   # f-string in exception — same rationale.
     "TRY300",  # Consider moving to else block — readability
     "UP036",   # Outdated version block — backwards compat
 ]
@@ -338,143 +344,63 @@ ignore-var-parameters = true
     "S110",     # try/except/pass — observability paths must be silent on failure
     "S311",     # random for non-cryptographic sampling (dream seeds)
 ]
-# Expert sub-package + controller: K4 split made the controller a thin
-# facade where each public method is a 1-line delegator to a free
-# function in the sub-package. The docstring lives on the free
-# function; D102 on the delegator would be pure duplication.
+# Slash-command controllers (moat waves Q/R/S/T): dispatch tables,
+# user-facing error rendering, ingest of foreign-vendor payloads.
+# The user-facing-string rules (TRY003/EM101/EM102) and defensive
+# bare-Exception trapping (BLE001) are CLI-wide convention and live
+# in the global ignore list; per-file entries cover the remaining
+# module-specific surface.
+"bog_agents_cli/{causal,policy_prove,compliance,tracefile,expert}/**" = [
+    "ANN401",   # Any in YAML loader / payload preview signatures
+    "DOC501",   # Exceptions documented at module level
+    "DOC502",   # Cron raises documented at module level
+    "D102",     # Property accessors / thin delegators
+    "D105",     # __len__ / __repr__ etc are self-describing
+    "D205",     # Multi-paragraph one-line summaries in renderers
+    "PLR0911",  # Dispatch tables read better as flat ifs
+    "RET504",   # Local-then-return improves readability of session list
+    "RUF001",   # Unicode arrows (→/✓/✗) in renderers
+    "S110",     # try/except/pass in defensive paths
+    "TC001",    # Cross-module dataclasses kept eager for clarity
+]
 "bog_agents_cli/expert_controller.py" = [
     "D102",     # Delegator methods — docstring lives on the free function
-    "SLF001",   # Sub-modules read controller._private fields by design
 ]
-"bog_agents_cli/expert/**" = [
-    "SLF001",   # Free functions read controller._private fields by design
-    "BLE001",   # Model-factory + dreamscape callouts trap bare Exception
-    "TRY003",   # Long messages inside the user-facing error strings
-    "EM101",    # Raw string in exception — user-facing error strings
-    "EM102",    # f-string in exception — user-facing error strings
-    "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
-]
-# TraceFile v1 (Wave S). Open trace format with Ed25519-signed
-# manifests + Merkle-DAG framing. Adapter modules under
-# tracefile/exporters/ have user-facing error strings + ANN401 because
-# they ingest arbitrary dicts from other vendors' hook payloads.
-"bog_agents_cli/tracefile/**" = [
-    "TRY003",
-    "EM101",
-    "EM102",
+# Postmortem / time-travel / web fetch / computer use / feedback loop:
+# small standalone slash modules. Share the same dispatch + user-facing
+# error shape as the moat subpackages.
+"bog_agents_cli/{postmortem,time_travel,web_fetch,computer_use,feedback_loop}.py" = [
     "ANN401",
-    "BLE001",
+    "A002",     # ``input`` kwarg in time_travel API
+    "ARG001",   # placeholder args for future symmetry
     "DOC501",
-    "DOC502",
+    "D102",     # property accessors
     "PLR0911",
+    "S110",     # decode-fallback paths
+    "SLF001",   # stash sentinel attributes on third-party objects
+]
+# TraceFile + Claude Code exporter: ingest arbitrary vendor payloads.
+"bog_agents_cli/tracefile/**" = [
     "PLR0912",
     "PLR0915",
     "PLC0415",
-    "RET504",
-    "RUF001",
-    "TC001",
     "TC003",
-    "ARG005",
     "ARG004",
+    "ARG005",
     "PT004",
     "S104",
-    "D101",   # LineKind enum is self-describing
-    "D102",   # KeyMaterial.can_sign property is self-describing
-    "D205",
-    "D301",   # Hook-payload docstring shows raw backslash escapes by design
-    "C901",   # Adapters have many branches mapping vendor payloads
-    "B007",   # idx loop var kept for future trace-line context
+    "D101",     # LineKind enum is self-describing
+    "D301",     # Hook-payload docstring shows raw backslash escapes by design
+    "C901",     # Adapters have many branches mapping vendor payloads
+    "B007",     # idx loop var kept for future trace-line context
 ]
-# Compliance auditor (Wave R). Pack loader + HMAC-sealed reports +
-# slash/cron dispatch — user-facing error strings throughout.
+# Compliance has a few extras: lazy renderer imports + the
+# CronAuditFailed naming convention.
 "bog_agents_cli/compliance/**" = [
-    "TRY003",
-    "EM101",
-    "EM102",
-    "ANN401",
-    "BLE001",   # Defensive: corrupt sessions / IO errors are logged-and-skip
-    "DOC501",
-    "DOC502",   # Cron raises documented at module level
-    "PLR0911",
     "PLR0912",
     "PLR0915",
     "PLC0415",  # Lazy slash-output imports — intentional in renderers
-    "RET504",
-    "RUF001",   # Unicode arrows (→/✓/✗) are intentional in renderers
-    "TC001",    # CausalEvent kept eager for renderer hot path
     "N818",     # CronAuditFailed reads like the daemon's exit semantics
-    "D205",     # Module-style docstrings on tiny exception classes
-]
-# Time-travel rule replay (Q3, moat wave). Engine re-run helper +
-# CLI dispatch over the existing causal log.
-"bog_agents_cli/time_travel.py" = [
-    "A002",     # ``input`` as kwarg shadows the builtin — kept for API symmetry
-    "TRY003",
-    "EM101",
-    "EM102",
-    "DOC501",   # Exceptions documented at module level
-    "BLE001",   # rules_provider wraps bare Exception for user-facing reporting
-    "ARG001",   # _error reserves session_id for future symmetry
-    "PLR0911",
-]
-# Postmortem subsystem (Q2, moat wave). Markdown templating + LLM IO.
-"bog_agents_cli/postmortem.py" = [
-    "TRY003",
-    "EM101",
-    "EM102",
-    "BLE001",   # model_invoke wraps bare Exception for user-facing reporting
-    "PLR0911",  # Dispatch reads better as flat ifs
-]
-# Policy invariant prover (Q1, moat wave). Heuristic + Z3-optional
-# prover; user-facing error strings.
-"bog_agents_cli/policy_prove/**" = [
-    "TRY003",   # User-facing error strings
-    "EM101",    # Raw string in exception — user-facing
-    "EM102",    # f-string in exception — user-facing
-    "ANN401",   # Any in YAML loader signatures — by design
-    "PLR0911",  # Dispatch tables read better as flat ifs
-    "DOC501",   # Exceptions documented at module level
-    "TC001",    # Cross-module dataclasses kept eager for clarity
-    "ARG001",   # _example_fact's `label` arg is reserved for future use
-    "BLE001",   # Controller wraps bare Exception for user-facing messages
-    "S110",     # try/except/pass in defensive paths
-]
-# Computer Use / browser tools (Gap 6). Thin shim over Playwright;
-# property accessors + tool wrappers — D102 noise outweighs the value.
-"bog_agents_cli/computer_use.py" = [
-    "D102",     # Property accessors and tool wrappers
-    "DOC501",   # BrowserUnavailableError documented at module level
-    "BLE001",   # close() defensively traps bare Exception
-    "S110",     # try/except/pass on tool-error-path logging — intentional
-    "SLF001",   # Stash runtime on browser via _bog_runtime attribute
-    "TRY003",
-    "EM101",
-    "EM102",
-]
-# /web URL-fetch surface (Gap 10). User-facing error messages are
-# inlined into exceptions; the urllib3 wrapper is intentionally light.
-"bog_agents_cli/web_fetch.py" = [
-    "S110",     # try/except/pass on body-decoding fallback — intentional
-    "BLE001",   # decode_body fallback traps bare Exception
-    "TRY003",   # User-facing error strings
-    "EM101",    # Raw string in exception — user-facing
-    "EM102",    # f-string in exception — user-facing
-]
-# Causal subsystem (trace-mind). Same shape as the expert package: a
-# thin facade with property accessors, a dispatch table, and structured
-# exception messages aimed at end users.
-"bog_agents_cli/causal/**" = [
-    "D102",     # Property accessors and 1-line delegators
-    "D105",     # __len__ on the ledger is self-explanatory
-    "DOC501",   # ValueError documented at module level
-    "RET504",   # Local-then-return improves readability of session list
-    "SLF001",   # Controller pokes ledger._next_id in resume path
-    "ANN401",   # Any in payload preview helpers — by design
-    "PLR0911",  # Dispatch table reads better as flat ifs
-    "TRY003",   # Long user-facing error strings
-    "EM101",    # Raw string in exception — user-facing
-    "EM102",    # f-string in exception — user-facing
-    "BLE001",   # Disk-IO defensive paths trap bare Exception
 ]
 "bog_agents_cli/vars.py" = [
     "ANN401",   # Any in user-supplied values — by design

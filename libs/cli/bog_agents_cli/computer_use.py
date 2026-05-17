@@ -163,7 +163,7 @@ class BrowserSession:
             self._page = page
             logger.info("Browser session started")
 
-    async def page(self) -> Any:  # noqa: ANN401
+    async def page(self) -> Any:
         """Return the live Page, opening the browser if needed."""
         await self.ensure_started()
         return self._page

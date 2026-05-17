@@ -11137,8 +11137,8 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(_prove_dispatch, command, self._cwd)
         await self._mount_message(AppMessage(output))
 
-    async def _handle_causal_command(self, command: str) -> None:
-        """Handle ``/causal`` (and ``/trace-mind`` alias) — trace-mind causal replay.
+    async def _handle_trace_mind_command(self, command: str) -> None:
+        """Handle ``/trace-mind`` — causal-replay (Wave V renamed from /causal).
 
         Thin wrapper that mounts the user's command, hands off to
         :mod:`bog_agents_cli.causal.controller` on a worker thread so
@@ -11147,9 +11147,9 @@ class BogAgentsApp(App):
         subcommand vocabulary.
         """
         await self._mount_message(UserMessage(command))
-        from bog_agents_cli.causal.controller import dispatch as _causal_dispatch
+        from bog_agents_cli.causal.controller import dispatch as _trace_mind_dispatch
 
-        output = await asyncio.to_thread(_causal_dispatch, command, self._cwd)
+        output = await asyncio.to_thread(_trace_mind_dispatch, command, self._cwd)
         await self._mount_message(AppMessage(output))
 
     async def _handle_why_command(self, command: str) -> None:

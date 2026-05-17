@@ -21,7 +21,7 @@ from bog_agents.backends.local_shell import LocalShellBackend
 
 
 @pytest.fixture
-def backend(tmp_path):  # noqa: ANN001, ANN201
+def backend(tmp_path):
     return LocalShellBackend(root_dir=str(tmp_path))
 
 
@@ -51,7 +51,7 @@ def backend(tmp_path):  # noqa: ANN001, ANN201
         "Clear-Disk -Number 0 -RemoveData",
     ],
 )
-def test_pattern_trips_gate(backend, command):  # noqa: ANN001, ANN201
+def test_pattern_trips_gate(backend, command):
     with pytest.raises(PermissionError) as exc_info:
         backend.execute(command)
     assert "Dangerous command blocked" in str(exc_info.value)
@@ -68,7 +68,7 @@ def test_pattern_trips_gate(backend, command):  # noqa: ANN001, ANN201
         "git clean -n",  # dry-run only
     ],
 )
-def test_benign_commands_pass(backend, command, monkeypatch):  # noqa: ANN001, ANN201
+def test_benign_commands_pass(backend, command, monkeypatch):
     """Confirm the gate doesn't reject ordinary commands.
 
     Stubs ``subprocess.run`` so this stays offline and platform-independent.

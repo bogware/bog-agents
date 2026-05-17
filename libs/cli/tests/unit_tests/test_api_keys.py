@@ -12,7 +12,6 @@ from collections.abc import Iterator
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Registry consistency
 # ---------------------------------------------------------------------------
@@ -72,7 +71,7 @@ def _isolated_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for env_var in WELL_KNOWN_API_KEYS:
         monkeypatch.delenv(env_var, raising=False)
     monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
-    yield
+    return
 
 
 class TestVaultInjection:
@@ -80,7 +79,7 @@ class TestVaultInjection:
         self, _isolated_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A vault key without a matching env var should be injected."""
-        import bog_agents_cli.api_keys as api_keys
+        from bog_agents_cli import api_keys
 
         monkeypatch.setattr(
             "bog_agents_cli.vars_store.get_var",
@@ -98,7 +97,7 @@ class TestVaultInjection:
         import os
         os.environ["OPENAI_API_KEY"] = "from-shell"
         try:
-            import bog_agents_cli.api_keys as api_keys
+            from bog_agents_cli import api_keys
 
             monkeypatch.setattr(
                 "bog_agents_cli.vars_store.get_var",
@@ -121,7 +120,7 @@ class TestPerplexityAlias:
         self, _isolated_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A user storing PERPLEXITY_API_KEY in vault should land at PPLX_API_KEY."""
-        import bog_agents_cli.api_keys as api_keys
+        from bog_agents_cli import api_keys
 
         monkeypatch.setattr(
             "bog_agents_cli.vars_store.get_var",
@@ -140,7 +139,7 @@ class TestPerplexityAlias:
         import os
         os.environ["PERPLEXITY_API_KEY"] = "from-shell-alias"
         try:
-            import bog_agents_cli.api_keys as api_keys
+            from bog_agents_cli import api_keys
 
             monkeypatch.setattr(
                 "bog_agents_cli.vars_store.get_var",
@@ -160,7 +159,7 @@ class TestPerplexityAlias:
         os.environ["PPLX_API_KEY"] = "canonical"
         os.environ["PERPLEXITY_API_KEY"] = "alias"
         try:
-            import bog_agents_cli.api_keys as api_keys
+            from bog_agents_cli import api_keys
 
             monkeypatch.setattr(
                 "bog_agents_cli.vars_store.get_var",

@@ -69,54 +69,46 @@ class FeatureConfig:
         enable_citations: Enable citation tracking.
         enable_reasoning_chain: Enable reasoning chain middleware.
         enable_hallucination_detection: Enable hallucination detection.
-        enable_meeting_prep: Enable meeting prep middleware.
         enable_enhanced_skills: Enable enhanced skills.
         enhanced_skills_sources: Skill sources for enhanced skills.
         enhanced_skills_cache_dir: Cache directory for enhanced skills.
         enable_saved_prompts: Enable saved prompts.
         saved_prompts_sources: Prompt sources for saved prompts.
-        enable_portfolio_analysis: Enable portfolio analysis.
-        portfolio_risk_free_rate: Risk-free rate (default 0.05).
-        enable_client_reports: Enable client report generation.
-        client_reports_firm_name: Firm name for client reports.
-        client_reports_advisor_name: Advisor name for client reports.
         enable_deep_research: Enable deep research middleware.
         enable_dlp: Enable data loss prevention.
         dlp_mode: DLP mode (default ``"redact"``).
         enable_version_control: Enable version control middleware.
-        enable_scenario_engine: Enable scenario engine.
-        enable_tax_optimization: Enable tax optimization middleware.
         enable_nl_query: Enable natural language query middleware.
-        enable_peer_comparison: Enable peer comparison middleware.
         enable_code_review: Enable code review middleware.
-        enable_financial_data: Enable financial data middleware.
-        enable_regulatory_alerts: Enable regulatory alerts.
         enable_model_portfolio: Enable model portfolio middleware.
         enable_knowledge_graph: Enable knowledge graph middleware.
-        enable_client_knowledge_base: Enable client knowledge base.
         enable_rbac: Enable role-based access control.
         enable_fact_check: Enable fact-checking middleware.
         enable_approval_gates: Enable approval gates.
-        enable_earnings_analysis: Enable earnings analysis.
-        enable_regulatory_impact: Enable regulatory impact analysis.
         enable_browser_agent_fa: Enable browser agent (financial advisor).
-        enable_agent_teams: Enable agent teams.
         enable_automations: Enable automation middleware.
         enable_image_pdf_input: Enable image/PDF input processing.
         enable_cloud_sandbox: Enable cloud sandbox.
         enable_computer_use: Enable computer-use middleware.
         enable_opensearch_rag: Enable OpenSearch RAG middleware.
-        enable_firm_deployment: Enable firm deployment middleware.
         enable_air_gapped: Enable air-gapped mode.
-        enable_sso_auth: Enable SSO authentication.
         enable_dashboard: Enable dashboard middleware.
         enable_scheduled_reports: Enable scheduled reports.
         enable_collaborative_sessions: Enable collaborative sessions.
         enable_messaging_integration: Enable messaging integration.
         enable_voice_io: Enable voice I/O middleware.
-        enable_due_diligence: Enable due diligence middleware.
-        enable_market_sentiment: Enable market sentiment analysis.
         enable_competitive_intel: Enable competitive intelligence.
+
+    Note (Wave V): the vertical-market middleware flags
+    (portfolio_analysis, client_reports, scenario_engine,
+    tax_optimization, peer_comparison, financial_data,
+    regulatory_alerts, client_knowledge_base, earnings_analysis,
+    regulatory_impact, due_diligence, market_sentiment,
+    meeting_prep, agent_teams, multi_agent_orchestrator,
+    firm_deployment) were removed in V1 because their implementations
+    were scaffolds returning placeholder values. Any kwarg with one
+    of those names is now treated as a legacy_feature_flag and a
+    deprecation warning is emitted.
     """
 
     # General
@@ -176,56 +168,43 @@ class FeatureConfig:
     enable_provenance_loop: bool = False
 
     # Skills & prompts
-    enable_meeting_prep: bool = False
     enable_enhanced_skills: bool = False
     enhanced_skills_sources: list[str] | None = None
     enhanced_skills_cache_dir: str | None = None
     enable_saved_prompts: bool = False
     saved_prompts_sources: list[str] | None = None
 
-    # Financial advisor features
-    enable_portfolio_analysis: bool = False
-    portfolio_risk_free_rate: float = 0.05
-    enable_client_reports: bool = False
-    client_reports_firm_name: str = ""
-    client_reports_advisor_name: str = ""
+    # Vertical-market features — Wave V removed 16 stubs that were
+    # never real implementations (portfolio_analysis, client_reports,
+    # scenario_engine, tax_optimization, peer_comparison, financial_data,
+    # regulatory_alerts, client_knowledge_base, earnings_analysis,
+    # regulatory_impact, due_diligence, market_sentiment, meeting_prep,
+    # agent_teams, multi_agent_orchestrator, firm_deployment).
+    # The flags lived alongside the stubs and produced false positives.
     enable_deep_research: bool = False
     enable_dlp: bool = False
     dlp_mode: str = "redact"
     enable_version_control: bool = False
-    enable_scenario_engine: bool = False
-    enable_tax_optimization: bool = False
     enable_nl_query: bool = False
-    enable_peer_comparison: bool = False
     enable_code_review: bool = False
-    enable_financial_data: bool = False
-    enable_regulatory_alerts: bool = False
     enable_model_portfolio: bool = False
     enable_knowledge_graph: bool = False
-    enable_client_knowledge_base: bool = False
     enable_rbac: bool = False
     enable_fact_check: bool = False
     enable_approval_gates: bool = False
-    enable_earnings_analysis: bool = False
-    enable_regulatory_impact: bool = False
 
     # Batch 4 features
     enable_browser_agent_fa: bool = False
-    enable_agent_teams: bool = False
     enable_automations: bool = False
     enable_image_pdf_input: bool = False
     enable_cloud_sandbox: bool = False
     enable_computer_use: bool = False
     enable_opensearch_rag: bool = False
-    enable_firm_deployment: bool = False
     enable_air_gapped: bool = False
-    enable_sso_auth: bool = False
     enable_dashboard: bool = False
     enable_scheduled_reports: bool = False
     enable_collaborative_sessions: bool = False
     enable_messaging_integration: bool = False
     enable_voice_io: bool = False
-    enable_due_diligence: bool = False
-    enable_market_sentiment: bool = False
     enable_competitive_intel: bool = False
     enable_result_synthesis: bool = False

@@ -2583,11 +2583,11 @@ def test_inlined_summarization_defaults_match_upstream() -> None:
         _DEFAULT_TRIM_TOKEN_LIMIT,
     )
 
-    assert _DEFAULT_MESSAGES_TO_KEEP == upstream_msgs, (
+    assert upstream_msgs == _DEFAULT_MESSAGES_TO_KEEP, (
         "Inlined _DEFAULT_MESSAGES_TO_KEEP no longer matches langchain — "
         "either update our copy or remove this test."
     )
-    assert _DEFAULT_TRIM_TOKEN_LIMIT == upstream_trim, (
+    assert upstream_trim == _DEFAULT_TRIM_TOKEN_LIMIT, (
         "Inlined _DEFAULT_TRIM_TOKEN_LIMIT no longer matches langchain — "
         "either update our copy or remove this test."
     )

@@ -3,7 +3,7 @@
 The replay engine only re-runs the *rules engine* — no LLM, no
 filesystem mutations. We build small causal logs and rule sets,
 exercise replay() directly, then exercise the slash dispatch and the
-hookup through /causal replay.
+hookup through /trace-mind replay.
 """
 
 from __future__ import annotations
@@ -260,7 +260,7 @@ class TestRenderer:
             rules=[],
         )
         out = render_result(result)
-        assert "/causal replay failed" in out
+        assert "/trace-mind replay failed" in out
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ class TestRenderer:
 class TestDispatch:
     def test_help_empty(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay",
+            "/trace-mind replay",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -280,7 +280,7 @@ class TestDispatch:
 
     def test_help_word(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay help",
+            "/trace-mind replay help",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -289,7 +289,7 @@ class TestDispatch:
 
     def test_invalid_event_id(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay abc",
+            "/trace-mind replay abc",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -298,7 +298,7 @@ class TestDispatch:
 
     def test_unknown_flag(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay 1 --weird",
+            "/trace-mind replay 1 --weird",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -307,7 +307,7 @@ class TestDispatch:
 
     def test_missing_value_after_no_rule(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay 1 --no-rule",
+            "/trace-mind replay 1 --no-rule",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -316,7 +316,7 @@ class TestDispatch:
 
     def test_no_sessions_returns_friendly(self, tmp_path: Path):
         out = replay_dispatch(
-            "/causal replay 1",
+            "/trace-mind replay 1",
             working_dir=tmp_path,
             session_id=None,
             rules_provider=list,
@@ -326,7 +326,7 @@ class TestDispatch:
     def test_end_to_end_via_dispatch(self, tmp_path: Path):
         sid, tc_id = _session_with_leak(tmp_path)
         out = replay_dispatch(
-            f"/causal replay {tc_id} --no-rule block_leak",
+            f"/trace-mind replay {tc_id} --no-rule block_leak",
             working_dir=tmp_path,
             session_id=sid,
             rules_provider=lambda: [_block_rule()],
@@ -350,7 +350,7 @@ class TestDispatch:
             encoding="utf-8",
         )
         out = replay_dispatch(
-            f"/causal replay {tc_id} --with-rule {rule_file}",
+            f"/trace-mind replay {tc_id} --with-rule {rule_file}",
             working_dir=tmp_path,
             session_id=sid,
             rules_provider=lambda: [_audit_rule()],
@@ -366,7 +366,7 @@ class TestDispatch:
             raise RuntimeError(msg)
 
         out = replay_dispatch(
-            f"/causal replay {tc_id}",
+            f"/trace-mind replay {tc_id}",
             working_dir=tmp_path,
             session_id=sid,
             rules_provider=boom,
@@ -406,9 +406,9 @@ class TestCausalIntegration:
                 summary="cmd",
                 parent_ids=(u.id,),
             )
-            # Now invoke /causal replay through the outer dispatcher.
+            # Now invoke /trace-mind replay through the outer dispatcher.
             out = causal_dispatch(
-                f"/causal replay {tc.id} --no-rule block_leak",
+                f"/trace-mind replay {tc.id} --no-rule block_leak",
                 tmp_path,
             )
             # Either time-travel rendered or surfaces a sensible error

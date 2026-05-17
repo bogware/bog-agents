@@ -32,7 +32,7 @@ def dispatch_watch(controller: ExpertController, rest: str) -> str:
     )
 
 
-def set_watch_summary_callback(controller: ExpertController, fn: Any | None) -> None:  # noqa: ANN401
+def set_watch_summary_callback(controller: ExpertController, fn: Any | None) -> None:
     """Register an async callback fired after every watcher run.
 
     Used by the TUI's expert handler to surface a Textual

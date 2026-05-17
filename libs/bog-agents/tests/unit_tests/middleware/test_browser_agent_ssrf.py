@@ -11,7 +11,6 @@ unconditionally even when the caller opts into private IPs.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
@@ -20,10 +19,6 @@ from bog_agents.middleware.browser_agent import (
     BrowserAgentMiddleware,
     _is_url_safe,
 )
-
-if TYPE_CHECKING:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # Direct gate tests
@@ -141,7 +136,7 @@ class TestMiddlewareIntegration:
                 return tool.func
         raise AssertionError(f"tool {name!r} not found")
 
-    def test_web_fetch_blocks_file_scheme(self, tmp_path) -> None:  # noqa: ANN001 — pytest fixture
+    def test_web_fetch_blocks_file_scheme(self, tmp_path) -> None:
         secret = tmp_path / "secret.txt"
         secret.write_text("DO NOT LEAK", encoding="utf-8")
         mw = BrowserAgentMiddleware()
