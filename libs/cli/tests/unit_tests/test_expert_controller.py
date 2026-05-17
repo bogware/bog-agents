@@ -356,3 +356,116 @@ class TestStarterRulesShip:
         assert candidates, "starter.yaml is missing"
         rules = load_rule_file(candidates[0])
         assert len(rules) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Wave D: /expert write (LLM-driven authoring) — REVIEW.md T-11 v2 #4
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedModel:
+    """Mini chat model returning a pre-scripted YAML response."""
+
+    def __init__(self, scripted_yaml: str) -> None:
+        self._yaml = scripted_yaml
+
+    def invoke(self, _messages: list) -> object:
+        from langchain_core.messages import AIMessage
+
+        return AIMessage(content=self._yaml)
+
+
+class TestExpertWrite:
+    def test_write_without_model_factory_returns_actionable_error(
+        self, tmp_path: Path
+    ) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        out = get_controller(tmp_path).write("block X")
+        assert "model factory" in out.lower()
+
+    def test_write_with_empty_intent_shows_usage(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(
+            tmp_path, model_factory=lambda: _ScriptedModel("ignored")
+        )
+        assert "Usage" in c.write("")
+
+    def test_write_full_flow(self, tmp_path: Path) -> None:
+        import textwrap
+
+        from bog_agents_cli.expert_controller import dispatch, get_controller
+
+        yaml = textwrap.dedent(
+            """
+            - name: block_rm
+              when:
+                - tool_call:
+                    name: shell
+                    command:
+                      matches: '^rm '
+              then:
+                - deny: "no rm"
+            """
+        )
+        controller = get_controller(
+            tmp_path, model_factory=lambda: _ScriptedModel(yaml)
+        )
+        out = controller.write("block rm commands")
+        assert "Expert rule proposal" in out
+        assert "block_rm" in out
+        # save_save now commits to disk
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        save_out = dispatch("/expert write save", tmp_path)
+        assert "Saved" in save_out
+        saved_files = list(rules_dir.glob("*.yaml"))
+        assert len(saved_files) == 1
+        assert saved_files[0].read_text(encoding="utf-8").startswith("- name: block_rm")
+        # And the controller's engine now has the rule live.
+        assert any(r.name == "block_rm" for r in controller.middleware.engine.rules)
+
+    def test_write_save_without_pending_proposal(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(
+            tmp_path, model_factory=lambda: _ScriptedModel("ignored")
+        )
+        assert "No pending proposal" in c.write_save("rule.yaml")
+
+    def test_write_cancel_clears_proposal(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch
+
+        yaml = (
+            "- name: x\n"
+            "  when:\n"
+            "    - tool_call: {}\n"
+            "  then:\n"
+            "    - audit_log\n"
+        )
+        dispatch_factory = lambda: _ScriptedModel(yaml)  # noqa: E731
+
+        # Place a proposal by going through the dispatcher.
+        from bog_agents_cli.expert_controller import get_controller
+
+        c = get_controller(tmp_path, model_factory=dispatch_factory)
+        c.write("any intent")
+        # Cancel via the slash dispatcher
+        out = dispatch("/expert write cancel", tmp_path)
+        assert "Discarded" in out
+        # A follow-up save now fails because the proposal is gone.
+        assert "No pending proposal" in c.write_save()
+
+    def test_write_dispatch_routes_correctly(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import dispatch, get_controller
+
+        yaml = (
+            "- name: x\n"
+            "  when:\n"
+            "    - tool_call: {}\n"
+            "  then:\n"
+            "    - audit_log\n"
+        )
+        get_controller(tmp_path, model_factory=lambda: _ScriptedModel(yaml))
+        out = dispatch("/expert write block X", tmp_path)
+        assert "Expert rule proposal" in out

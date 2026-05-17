@@ -32,6 +32,14 @@ from bog_agents.middleware.expert_engine.actions import (
     AuditSink,
     NotifySink,
 )
+from bog_agents.middleware.expert_engine.authoring import (
+    AuthoringProposal,
+    ReplayOutcome,
+    build_proposal,
+    generate_yaml,
+    render_proposal,
+    save_proposal,
+)
 from bog_agents.middleware.expert_engine.backward import (
     BackwardChainer,
     ProofNode,
@@ -78,6 +86,7 @@ __all__ = [
     "ActionResult",
     "Activation",
     "AuditSink",
+    "AuthoringProposal",
     "BackwardChainer",
     "ExpertEngine",
     "Fact",
@@ -92,13 +101,18 @@ __all__ = [
     "PredicateOp",
     "ProofNode",
     "ProofTree",
+    "ReplayOutcome",
     "Rule",
     "RuleLoadError",
     "Trace",
     "TraceEntry",
     "WorkingMemory",
+    "build_proposal",
+    "generate_yaml",
     "lint",
     "load_rule_file",
     "load_rules_from_dir",
+    "render_proposal",
     "render_report",
+    "save_proposal",
 ]

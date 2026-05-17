@@ -20,12 +20,16 @@ from pathlib import Path
 from typing import Any
 
 from bog_agents.middleware.expert_engine import (
+    AuthoringProposal,
     Fact,
     Pattern,
     Predicate,
     PredicateOp,
+    build_proposal as build_authoring_proposal,
     lint as lint_rules,
+    render_proposal as render_authoring_proposal,
     render_report as render_lint_report,
+    save_proposal as save_authoring_proposal,
 )
 from bog_agents.middleware.expert_engine.backward import render_tree
 from bog_agents.middleware.expert_rules import ExpertRulesMiddleware
@@ -37,17 +41,28 @@ from bog_agents.middleware.expert_rules import ExpertRulesMiddleware
 _CONTROLLERS: dict[Path, ExpertController] = {}
 
 
-def get_controller(working_dir: Path | str) -> ExpertController:
+def get_controller(
+    working_dir: Path | str,
+    *,
+    model_factory: Any | None = None,  # noqa: ANN401 — Callable[[], BaseChatModel]
+) -> ExpertController:
     """Return the (per-cwd) singleton controller.
 
     Args:
         working_dir: Project root. Different roots get independent
             controllers — useful when the CLI hops between repos via
             ``/cd``.
+        model_factory: Optional zero-arg callable returning a fresh
+            chat model. Required for ``/expert write`` (LLM authoring).
+            Honored only on first call per cwd; later calls return the
+            cached instance unchanged. Use :func:`reset_controllers`
+            to swap.
     """
     key = Path(working_dir).resolve()
     if key not in _CONTROLLERS:
-        _CONTROLLERS[key] = ExpertController(working_dir=key)
+        _CONTROLLERS[key] = ExpertController(
+            working_dir=key, model_factory=model_factory
+        )
     return _CONTROLLERS[key]
 
 
@@ -69,6 +84,10 @@ class ExpertController:
             ``<working_dir>/.bog-agents/expert_rules/``).
         middleware: Optional preconstructed middleware. Tests use this
             to inject programmatic rules.
+        model_factory: Zero-arg callable returning a fresh chat model.
+            Required for ``/expert write`` (LLM-driven rule authoring,
+            REVIEW.md T-11 v2 #4). When None, the write flow refuses
+            cleanly with an actionable error.
     """
 
     def __init__(
@@ -76,12 +95,18 @@ class ExpertController:
         *,
         working_dir: Path,
         middleware: ExpertRulesMiddleware | None = None,
+        model_factory: Any | None = None,  # noqa: ANN401 — Callable[[], BaseChatModel]
     ) -> None:
         self._working_dir = working_dir
         self._middleware = middleware or ExpertRulesMiddleware(
             working_dir=working_dir,
             enabled=False,  # start disabled — explicit opt-in via /expert on
         )
+        self._model_factory = model_factory
+        # ``/expert write`` stashes the most recent proposal here so
+        # ``/expert write save [name]`` can commit it. Cleared on save
+        # or on a new ``/expert write <intent>`` call.
+        self._pending_proposal: AuthoringProposal | None = None
 
     # ------------------------------------------------------------------
     # Used by app.py to register the middleware with create_agent
@@ -248,6 +273,77 @@ class ExpertController:
         report = lint_rules(self._middleware.engine.rules)
         return render_lint_report(report)
 
+    def write(self, intent: str) -> str:
+        """``/expert write <intent>`` — LLM-driven rule authoring (T-11 v2 #4).
+
+        Generates YAML implementing *intent*, validates + lints it,
+        replays against the session's recent tool_call history so the
+        user sees what the rule would have done. Stashes the proposal
+        on the controller; the user follows up with
+        ``/expert write save [filename]`` to commit it.
+        """
+        if not intent.strip():
+            return (
+                "Usage: /expert write <your policy in plain English>\n"
+                "Example: /expert write block force-push to main"
+            )
+        if self._model_factory is None:
+            return (
+                "Cannot author rules: no model factory configured. "
+                "The CLI normally supplies one — this controller was "
+                "constructed without model_factory= (test / programmatic "
+                "use). Set model_factory= on ExpertController."
+            )
+        try:
+            model = self._model_factory()
+        except Exception as exc:
+            return f"Could not build authoring model: {exc}"
+
+        history = self._middleware.tool_call_history
+        proposal = build_authoring_proposal(intent, model=model, history=history)
+        self._pending_proposal = proposal
+        return render_authoring_proposal(proposal)
+
+    def write_save(self, filename: str = "") -> str:
+        """``/expert write save [filename]`` — commit the pending proposal.
+
+        Writes the stashed proposal to disk under
+        ``<cwd>/.bog-agents/expert_rules/`` and triggers a reload so
+        the rule is live in the same session.
+        """
+        if self._pending_proposal is None:
+            return (
+                "No pending proposal — run /expert write <intent> first."
+            )
+        if not self._pending_proposal.ok_to_save:
+            return (
+                "Pending proposal has errors; fix them and rerun "
+                "/expert write <intent>."
+            )
+        rules_dir = self._working_dir / ".bog-agents" / "expert_rules"
+        try:
+            written = save_authoring_proposal(
+                self._pending_proposal,
+                rules_dir=rules_dir,
+                filename=filename or None,
+            )
+        except ValueError as exc:
+            return f"Save failed: {exc}"
+        # Clear the stash and hot-reload so the new rule is live.
+        self._pending_proposal = None
+        count, err = self._middleware.reload()
+        line = f"Saved {written} ({count} rule(s) now active)"
+        if err:
+            line += f"\nReload reported: {err}"
+        return line
+
+    def discard_proposal(self) -> str:
+        """``/expert write cancel`` — drop the pending proposal without saving."""
+        if self._pending_proposal is None:
+            return "No pending proposal to discard."
+        self._pending_proposal = None
+        return "Discarded pending proposal."
+
     def dry_run(self, fact_type: str, **fields: Any) -> str:
         """Assert a fact, run the engine, then retract — show what would happen.
 
@@ -350,6 +446,8 @@ class ExpertController:
         if sub in ("dry-run", "dryrun"):
             ft, fields = _parse_pattern_args(rest)
             return self.dry_run(ft, **fields)
+        if sub == "write":
+            return self._dispatch_write(rest)
         if sub == "status":
             return self.status()
         return (
@@ -365,10 +463,26 @@ class ExpertController:
             "  /expert clear                        — wipe working memory\n"
             "  /expert assert <fact_type> k=v ...    — inject a fact\n"
             "  /expert dry-run <fact_type> k=v ...   — simulate without persisting\n"
+            "  /expert write <intent>               — LLM generates a rule from your description\n"
+            "  /expert write save [filename]        — commit the most recent /expert write proposal\n"
+            "  /expert write cancel                 — discard the pending proposal\n"
             "  /expert run                          — run engine to fixed point\n"
             "  /expert reload                       — reload rules from disk\n"
             "  /expert example                      — print a starter rule"
         )
+
+    def _dispatch_write(self, rest: str) -> str:
+        """Handle the ``write`` sub-tree: ``write <intent>``, ``write save [name]``, ``write cancel``."""
+        rest = rest.strip()
+        if not rest:
+            return self.write("")
+        head, _, tail = rest.partition(" ")
+        head = head.lower()
+        if head == "save":
+            return self.write_save(tail.strip())
+        if head in ("cancel", "discard"):
+            return self.discard_proposal()
+        return self.write(rest)
 
     def handle_why(self, args: str) -> str:
         """Dispatch ``/why <fact_type> [field=value ...]``."""

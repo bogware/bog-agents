@@ -10833,9 +10833,16 @@ class BogAgentsApp(App):
         See ``expert_controller.handle_expert`` for subcommand semantics.
         """
         await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
         from bog_agents_cli.expert_controller import get_controller
 
-        controller = get_controller(self._cwd)
+        spec = self._model_override or settings.model_name
+
+        def model_factory() -> Any:  # noqa: ANN401 — boundary into LangChain's BaseChatModel
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = get_controller(self._cwd, model_factory=model_factory)
         args = command.strip()[len("/expert") :].strip()
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
@@ -10878,7 +10885,7 @@ class BogAgentsApp(App):
         spec = self._model_override or settings.model_name
         question = command.strip()[len("/sidecar") :].strip()
 
-        def model_factory() -> Any:
+        def model_factory() -> Any:  # noqa: ANN401 — boundary into LangChain's BaseChatModel
             resolved = create_model(spec, profile_overrides=self._profile_override)
             return resolved.model
 

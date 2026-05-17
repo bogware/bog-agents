@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -145,6 +146,11 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         self._denials = 0
         self._modifications = 0
         self._approvals = 0
+        # Bounded ring buffer of recent tool_call data dicts. Used by
+        # /expert write to replay LLM-proposed rules against real
+        # historical calls (Wave D, REVIEW.md T-11 v2 #4). 200 is
+        # plenty for an hours-long session without bloating memory.
+        self._tool_call_history: deque[dict[str, Any]] = deque(maxlen=200)
         # Eagerly load once so the first tool call doesn't pay a stat() cost
         # on disk inside the hot path.
         self._reload_rules(force=True)
@@ -285,16 +291,18 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         # Build a tool_call fact with the request shape rule authors expect.
         # ``args`` is a dict in modern langchain; coerce to JSON-friendly types.
         args = tool_call.get("args") or {}
-        fact = Fact(
-            fact_type="tool_call",
-            data={
-                "name": tool_call.get("name", ""),
-                "args": dict(args),
-                "id": tool_call.get("id", ""),
-                # Convenience flatten for common shell-execute pattern:
-                "command": args.get("command", "") if isinstance(args, dict) else "",
-            },
-        )
+        data = {
+            "name": tool_call.get("name", ""),
+            "args": dict(args),
+            "id": tool_call.get("id", ""),
+            # Convenience flatten for common shell-execute pattern:
+            "command": args.get("command", "") if isinstance(args, dict) else "",
+        }
+        # Record into the ring buffer BEFORE asserting so /expert write
+        # replay (Wave D) can see every call the agent has made, not
+        # just the ones rules fired against.
+        self._tool_call_history.append(dict(data))
+        fact = Fact(fact_type="tool_call", data=data)
         # The engine's memory is shared across calls; the caller can flush it
         # via ``engine.memory.clear()`` if needed. By default we let it grow
         # so cross-call rules (rate-limiting, cumulative cost) work.
@@ -305,6 +313,16 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             # Retract the tool_call fact after the run so the next call doesn't
             # double-match. The fact is preserved in the trace.
             self._engine.retract(asserted.id)
+
+    @property
+    def tool_call_history(self) -> list[dict[str, Any]]:
+        """Return a snapshot of the recent tool_call data (oldest first).
+
+        Used by the /expert write authoring flow (REVIEW.md T-11 v2 #4)
+        to replay LLM-proposed rules against real calls the agent has
+        made this session.
+        """
+        return list(self._tool_call_history)
 
     def _apply_decision(
         self,

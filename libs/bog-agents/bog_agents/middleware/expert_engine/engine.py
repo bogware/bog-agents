@@ -103,7 +103,11 @@ class ExpertEngine:
         audit: AuditSink | None = None,
     ) -> None:
         self._rules: list[Rule] = list(rules)
-        self._memory = memory or WorkingMemory()
+        # ``or`` would fall through on an empty WorkingMemory (truthiness
+        # is driven by __len__, which is 0 for a fresh memory). Use an
+        # explicit None check so a caller-provided empty memory is
+        # honoured. Was a real bug in /expert write replay (Wave D).
+        self._memory = memory if memory is not None else WorkingMemory()
         self._matcher = PatternMatcher()
         self._executor = ActionExecutor(self._memory, notify=notify, audit=audit)
         self._max_iterations = max(1, int(max_iterations))
