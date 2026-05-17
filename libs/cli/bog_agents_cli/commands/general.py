@@ -283,6 +283,35 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/causal",
+            "Causal replay — see the proof tree behind any agent decision, "
+            "tool call, or final answer",
+            "trace causal replay debug provenance ancestry why-did graph history",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show recording state + counts"),
+                ("on|off", "Toggle recording for this cwd"),
+                ("last [N]", "Show the last N events (default 20)"),
+                ("why <event_id>", "Render the causal-ancestry tree of one event"),
+                ("graph [N]", "Render the whole session as a tree"),
+                ("sessions [id]", "List recorded sessions (or render one by id)"),
+            ),
+        ),
+        handler_method="_handle_causal_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/trace-mind",
+            "Alias for /causal — causal-replay debugger for agent runs",
+            "trace mind causal replay why ancestry",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_causal_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/search",
             "Hybrid codebase search — ripgrep exact + fuzzy filename + semantic",
             "ripgrep rg find grep vector embeddings semantic hybrid",

@@ -10892,6 +10892,21 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_causal_command(self, command: str) -> None:
+        """Handle ``/causal`` (and ``/trace-mind`` alias) — trace-mind causal replay.
+
+        Thin wrapper that mounts the user's command, hands off to
+        :mod:`bog_agents_cli.causal.controller` on a worker thread so
+        the TUI loop stays responsive, then mounts the rendered output.
+        See ``causal.controller.CausalController.handle`` for the
+        subcommand vocabulary.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.causal.controller import dispatch as _causal_dispatch
+
+        output = await asyncio.to_thread(_causal_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_why_command(self, command: str) -> None:
         """Handle `/why <fact_type> [k=v ...]` — backward-chain explanation."""
         await self._mount_message(UserMessage(command))

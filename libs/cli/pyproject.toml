@@ -354,6 +354,22 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# Causal subsystem (trace-mind). Same shape as the expert package: a
+# thin facade with property accessors, a dispatch table, and structured
+# exception messages aimed at end users.
+"bog_agents_cli/causal/**" = [
+    "D102",     # Property accessors and 1-line delegators
+    "D105",     # __len__ on the ledger is self-explanatory
+    "DOC501",   # ValueError documented at module level
+    "RET504",   # Local-then-return improves readability of session list
+    "SLF001",   # Controller pokes ledger._next_id in resume path
+    "ANN401",   # Any in payload preview helpers — by design
+    "PLR0911",  # Dispatch table reads better as flat ifs
+    "TRY003",   # Long user-facing error strings
+    "EM101",    # Raw string in exception — user-facing
+    "EM102",    # f-string in exception — user-facing
+    "BLE001",   # Disk-IO defensive paths trap bare Exception
+]
 "bog_agents_cli/vars.py" = [
     "ANN401",   # Any in user-supplied values — by design
     "D102",     # Missing docstring on dataclass to/from_dict helpers
