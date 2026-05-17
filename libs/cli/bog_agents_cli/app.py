@@ -1018,6 +1018,16 @@ class BogAgentsApp(App):
             },
         )
 
+        # K2: resume the /expert watcher if a state file is present
+        # under .bog-agents/. Non-fatal — a stale or unreadable state
+        # file just means no resume happens; the user can /expert watch
+        # start manually.
+        self.run_worker(
+            self._resume_expert_watcher,
+            exclusive=True,
+            group="startup-expert-watch-resume",
+        )
+
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
             self._seed_defaults,
@@ -10919,7 +10929,20 @@ class BogAgentsApp(App):
         )
 
         spec = self._model_override or settings.model_name
-        goal = command.strip()[len("/orchestrate") :].strip()
+        tail = command.strip()[len("/orchestrate") :].strip()
+        # K1: accept --parallel anywhere in the goal string so users
+        # can opt in to concurrent subtask execution. Default stays
+        # sequential — parallel changes the failure mode (one subtask
+        # crashing no longer short-circuits the rest) and the output
+        # is the same shape so we don't want it to be a silent default.
+        parallel = False
+        goal_tokens: list[str] = []
+        for tok in tail.split():
+            if tok in ("--parallel", "--concurrent"):
+                parallel = True
+            else:
+                goal_tokens.append(tok)
+        goal = " ".join(goal_tokens)
 
         def model_factory() -> Any:  # noqa: ANN401 — LangChain BaseChatModel
             resolved = create_model(spec, profile_overrides=self._profile_override)
@@ -10928,6 +10951,7 @@ class BogAgentsApp(App):
         controller = OrchestratorController(
             working_dir=Path(self._cwd),
             model_factory=model_factory,
+            parallel=parallel,
         )
         result = await asyncio.to_thread(controller.run, goal)
         await self._mount_message(AppMessage(render_result(result)))
@@ -14638,6 +14662,48 @@ class BogAgentsApp(App):
                     f"({result.completed_steps} step{'s' if result.completed_steps != 1 else ''} run)."
                 )
             )
+
+    async def _resume_expert_watcher(self) -> None:
+        """Resume the /expert watcher if a persistence file exists. (K2)
+
+        Runs as a startup worker so a stale state file or a missing
+        model factory can't block the TUI from coming up. Logs at info
+        on success, debug on no-op, warning on error.
+        """
+        try:
+            from bog_agents_cli.config import create_model, settings
+            from bog_agents_cli.expert_controller import get_controller
+
+            spec = self._model_override or settings.model_name
+
+            def model_factory() -> Any:  # noqa: ANN401
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+                return resolved.model
+
+            controller = get_controller(self._cwd, model_factory=model_factory)
+            # Register the notification surface so resumed watcher
+            # proposals still toast.
+            async def _surface(summary: str) -> None:  # noqa: RUF029
+                short = summary.replace("\n", " ")
+                short = short[:140] + ("…" if len(summary) > 140 else "")
+                with contextlib.suppress(Exception):
+                    self.notify(f"💡 expert watcher: {short}", timeout=8)
+
+            controller.set_watch_summary_callback(_surface)
+            resumed, message = controller.resume_watcher_if_persisted()
+            if resumed:
+                logger.info("Resumed expert watcher: %s", message)
+                try:
+                    self.notify(
+                        f"💡 expert watcher resumed: {message[:140]}",
+                        timeout=6,
+                    )
+                except Exception:
+                    logger.debug("watcher-resume notify failed", exc_info=True)
+            else:
+                logger.debug("expert watcher resume skipped: %s", message)
+        except Exception:
+            logger.warning("Expert watcher resume worker failed", exc_info=True)
 
     async def _seed_defaults(self) -> None:  # noqa: PLR6301
         """Seed built-in default prompts and pipelines (runs once per version, additive)."""

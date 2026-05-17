@@ -41,10 +41,93 @@ _MIN_INTERVAL_SECONDS = 60  # 1 minute floor in production
 # Lives at module level so monkeypatch can override it cheaply.
 _min_interval_override: float | None = None
 
+# K2: persistence file lives under the project's .bog-agents/. We
+# record interval + auto_activate + a started_at marker so the next
+# CLI launch can resume the watcher cleanly. Stop() clears the file.
+_STATE_FILENAME = "watch-state.toml"
+_STATE_SUBDIR = ".bog-agents"
+
 
 def _effective_floor() -> float:
     """Return the active interval floor (production or test-overridden)."""
     return float(_min_interval_override) if _min_interval_override is not None else float(_MIN_INTERVAL_SECONDS)
+
+
+def _state_path(working_dir: Path | str) -> Path:
+    """Return ``<working_dir>/.bog-agents/watch-state.toml``."""
+    return Path(working_dir).resolve() / _STATE_SUBDIR / _STATE_FILENAME
+
+
+def save_state(
+    working_dir: Path | str,
+    *,
+    interval_seconds: float,
+    auto_activate: bool,
+    agent_id: str = "default",
+) -> Path:
+    """Persist the watcher's start parameters atomically.
+
+    Args:
+        working_dir: Project root the watcher belongs to.
+        interval_seconds: Configured cadence.
+        auto_activate: Whether the watcher was started with --apply.
+        agent_id: Dreamscape agent id.
+
+    Returns:
+        The path the state was written to.
+    """
+    target = _state_path(working_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Use tomli_w so we don't need to hand-roll TOML escaping.
+    import tomli_w
+
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    payload = {
+        "interval_seconds": float(interval_seconds),
+        "auto_activate": bool(auto_activate),
+        "agent_id": str(agent_id),
+        "started_at": time.time(),
+    }
+    atomic_write_text(target, tomli_w.dumps(payload))
+    return target
+
+
+def load_state(working_dir: Path | str) -> dict[str, object] | None:
+    """Read the persisted watcher state if present, else ``None``.
+
+    Returns a dict with ``interval_seconds`` (float), ``auto_activate``
+    (bool), ``agent_id`` (str), and ``started_at`` (float). Returns
+    ``None`` when the file is missing or unreadable — the caller treats
+    that as "no resume needed."
+    """
+    target = _state_path(working_dir)
+    if not target.is_file():
+        return None
+    try:
+        import tomllib
+
+        with target.open("rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, ValueError) as exc:
+        logger.warning("Could not read watcher state at %s: %s", target, exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def clear_state(working_dir: Path | str) -> bool:
+    """Delete the persistence file. Returns True iff one existed."""
+    target = _state_path(working_dir)
+    if not target.is_file():
+        return False
+    try:
+        target.unlink()
+    except OSError as exc:
+        logger.warning("Could not delete watcher state %s: %s", target, exc)
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +352,18 @@ def start(
         name=f"expert-watcher-{key.name}",
     )
     _HANDLES[key] = _WatcherHandle(task=task, stats=stats, stop_event=stop_event)
+    # K2: persist start parameters so the next app launch can resume.
+    try:
+        save_state(
+            key,
+            interval_seconds=interval,
+            auto_activate=auto_activate,
+            agent_id=agent_id,
+        )
+    except Exception:
+        # State persistence is a nice-to-have; never let a write
+        # failure block the user from starting the watcher.
+        logger.exception("expert_watch.save_state failed (watcher still running)")
     mode = "auto-apply" if auto_activate else "staged"
     return (
         True,
@@ -298,6 +393,12 @@ async def stop(working_dir: Path | str) -> tuple[bool, str]:
         # Cancellation is expected; other exceptions are loop bugs we
         # don't want to surface as a failed-stop. Log at debug.
         logger.debug("expert_watch.stop swallowed %s", type(exc).__name__)
+    # K2: drop the persistence file so a subsequent app launch
+    # doesn't auto-resume a watcher the user explicitly stopped.
+    try:
+        clear_state(key)
+    except Exception:
+        logger.exception("expert_watch.clear_state failed on stop")
     return (True, "Stopped expert watcher.")
 
 
@@ -306,10 +407,51 @@ def reset() -> None:
     _HANDLES.clear()
 
 
+def resume_if_persisted(
+    *,
+    working_dir: Path | str,
+    propose: ProposeFn,
+    on_summary: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[bool, str]:
+    """Restart the watcher if a state file is present for *working_dir*.
+
+    Called at app launch. Returns ``(resumed, message)``. ``resumed``
+    is False when no state file exists OR when starting fails — the
+    app should log the message at debug rather than surfacing it as a
+    notification.
+
+    Args:
+        working_dir: Project root the watcher belongs to.
+        propose: Same propose callable :func:`start` accepts.
+        on_summary: Same per-run callback :func:`start` accepts.
+    """
+    state = load_state(working_dir)
+    if state is None:
+        return (False, "no persisted watcher state")
+    try:
+        interval = float(state.get("interval_seconds", _DEFAULT_INTERVAL_SECONDS))
+        auto_activate = bool(state.get("auto_activate", False))
+        agent_id = str(state.get("agent_id", "default")) or "default"
+    except (TypeError, ValueError):
+        return (False, "persisted state is malformed; ignoring")
+    return start(
+        working_dir=working_dir,
+        propose=propose,
+        interval_seconds=interval,
+        agent_id=agent_id,
+        auto_activate=auto_activate,
+        on_summary=on_summary,
+    )
+
+
 __all__ = [
     "WatcherStats",
+    "clear_state",
     "is_running",
+    "load_state",
     "reset",
+    "resume_if_persisted",
+    "save_state",
     "start",
     "status",
     "stop",

@@ -726,6 +726,26 @@ class ExpertController:
         """
         self._on_watch_summary = fn
 
+    def resume_watcher_if_persisted(self) -> tuple[bool, str]:
+        """Resume a previously-started watcher if its state file is present.
+
+        K2: called by the TUI at launch so ``/expert watch start``
+        survives across app restarts. Returns ``(resumed, message)``
+        — the app should log non-resumed cases at debug rather than
+        surfacing them as notifications. Requires
+        ``model_factory`` to have been set (the resumed watcher needs
+        to be able to build models for proposals).
+        """
+        if self._model_factory is None:
+            return (False, "no model factory configured — skipping watcher resume")
+        from bog_agents_cli import expert_watch
+
+        return expert_watch.resume_if_persisted(
+            working_dir=self._working_dir,
+            propose=self.propose_from_dreamscape,
+            on_summary=self._on_watch_summary,
+        )
+
     def _dispatch_watch_start(self, rest: str) -> str:
         from bog_agents_cli import expert_watch
 

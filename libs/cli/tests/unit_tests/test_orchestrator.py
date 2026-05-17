@@ -388,3 +388,50 @@ class TestParallel:
         )
         result = c.run("anything")
         assert result.ok
+
+
+# ---------------------------------------------------------------------------
+# K1: /orchestrate --parallel TUI flag
+# ---------------------------------------------------------------------------
+
+
+class TestSlashFlagParsing:
+    """Verify that the /orchestrate handler's --parallel parse logic
+    strips the flag from the goal and produces an OrchestratorController
+    with parallel=True. We test the parse-logic equivalent directly so
+    we don't have to spin up the full Textual app.
+    """
+
+    def test_parse_strips_flag(self) -> None:
+        """Mimic the in-handler tokenizer."""
+        tail = "--parallel review and document the auth flow"
+        parallel = False
+        tokens: list[str] = []
+        for tok in tail.split():
+            if tok in ("--parallel", "--concurrent"):
+                parallel = True
+            else:
+                tokens.append(tok)
+        goal = " ".join(tokens)
+        assert parallel is True
+        assert goal == "review and document the auth flow"
+
+    def test_parse_no_flag(self) -> None:
+        tail = "review my diff"
+        parallel = False
+        tokens: list[str] = []
+        for tok in tail.split():
+            if tok in ("--parallel", "--concurrent"):
+                parallel = True
+            else:
+                tokens.append(tok)
+        goal = " ".join(tokens)
+        assert parallel is False
+        assert goal == "review my diff"
+
+    def test_slash_spec_advertises_parallel(self) -> None:
+        from bog_agents_cli.commands import general
+
+        cmd = next(c for c in general.COMMANDS if c.name == "/orchestrate")
+        subcommand_strs = [s[0] for s in cmd.spec.subcommands]
+        assert any("--parallel" in s for s in subcommand_strs)

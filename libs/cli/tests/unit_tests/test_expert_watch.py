@@ -292,3 +292,100 @@ class TestControllerCallback:
         assert c._on_watch_summary is cb
         c.set_watch_summary_callback(None)
         assert c._on_watch_summary is None
+
+
+# ---------------------------------------------------------------------------
+# K2: persistence across app restart
+# ---------------------------------------------------------------------------
+
+
+class TestPersistence:
+    def test_save_creates_file(self, tmp_path: Path) -> None:
+        path = expert_watch.save_state(
+            tmp_path, interval_seconds=120, auto_activate=False, agent_id="x"
+        )
+        assert path.is_file()
+        assert path.parent.name == ".bog-agents"
+        assert path.name == "watch-state.toml"
+
+    def test_load_round_trips(self, tmp_path: Path) -> None:
+        expert_watch.save_state(
+            tmp_path, interval_seconds=200, auto_activate=True, agent_id="alpha"
+        )
+        state = expert_watch.load_state(tmp_path)
+        assert state is not None
+        assert state["interval_seconds"] == 200
+        assert state["auto_activate"] is True
+        assert state["agent_id"] == "alpha"
+        assert "started_at" in state
+
+    def test_load_missing_returns_none(self, tmp_path: Path) -> None:
+        assert expert_watch.load_state(tmp_path) is None
+
+    def test_clear_state(self, tmp_path: Path) -> None:
+        expert_watch.save_state(
+            tmp_path, interval_seconds=120, auto_activate=False, agent_id="x"
+        )
+        assert expert_watch.clear_state(tmp_path) is True
+        assert expert_watch.load_state(tmp_path) is None
+        # Idempotent: second clear returns False.
+        assert expert_watch.clear_state(tmp_path) is False
+
+
+async def test_start_persists_and_stop_clears(tmp_path: Path) -> None:
+    expert_watch.start(
+        working_dir=tmp_path,
+        propose=_dummy_propose_x,
+        interval_seconds=60,
+    )
+    state = expert_watch.load_state(tmp_path)
+    assert state is not None
+    assert state["interval_seconds"] >= 0.01  # honor the test floor override
+    stopped, _ = await expert_watch.stop(tmp_path)
+    assert stopped
+    assert expert_watch.load_state(tmp_path) is None
+
+
+async def test_resume_if_persisted_starts_a_watcher(tmp_path: Path) -> None:
+    expert_watch.save_state(
+        tmp_path,
+        interval_seconds=0.05,
+        auto_activate=False,
+        agent_id="resume-test",
+    )
+    seen_summaries: list[str] = []
+
+    async def _on_summary(text: str) -> None:
+        seen_summaries.append(text)
+
+    resumed, message = expert_watch.resume_if_persisted(
+        working_dir=tmp_path,
+        propose=_dummy_propose_x,
+        on_summary=_on_summary,
+    )
+    assert resumed
+    assert "Started" in message
+    assert expert_watch.is_running(tmp_path)
+    await asyncio.sleep(0.15)
+    await expert_watch.stop(tmp_path)
+    assert seen_summaries, "resumed watcher should have fired on_summary"
+
+
+def test_resume_without_state_is_noop(tmp_path: Path) -> None:
+    resumed, message = expert_watch.resume_if_persisted(
+        working_dir=tmp_path,
+        propose=_dummy_propose_x,
+    )
+    assert not resumed
+    assert "no persisted" in message.lower()
+
+
+def test_resume_handles_malformed_state(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".bog-agents"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "watch-state.toml").write_text("not = ::: valid toml\n[", encoding="utf-8")
+    resumed, _ = expert_watch.resume_if_persisted(
+        working_dir=tmp_path,
+        propose=_dummy_propose_x,
+    )
+    assert not resumed

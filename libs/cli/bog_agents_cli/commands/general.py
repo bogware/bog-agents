@@ -263,6 +263,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
             subcommands=(
                 ("<goal>", "Plain-English goal to decompose and run"),
+                ("--parallel <goal>", "Run subtasks concurrently (each gets a fresh model)"),
             ),
         ),
         handler_method="_handle_orchestrate_command",
