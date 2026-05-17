@@ -354,6 +354,26 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# Compliance auditor (Wave R). Pack loader + HMAC-sealed reports +
+# slash/cron dispatch — user-facing error strings throughout.
+"bog_agents_cli/compliance/**" = [
+    "TRY003",
+    "EM101",
+    "EM102",
+    "ANN401",
+    "BLE001",   # Defensive: corrupt sessions / IO errors are logged-and-skip
+    "DOC501",
+    "DOC502",   # Cron raises documented at module level
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "PLC0415",  # Lazy slash-output imports — intentional in renderers
+    "RET504",
+    "RUF001",   # Unicode arrows (→/✓/✗) are intentional in renderers
+    "TC001",    # CausalEvent kept eager for renderer hot path
+    "N818",     # CronAuditFailed reads like the daemon's exit semantics
+    "D205",     # Module-style docstrings on tiny exception classes
+]
 # Time-travel rule replay (Q3, moat wave). Engine re-run helper +
 # CLI dispatch over the existing causal log.
 "bog_agents_cli/time_travel.py" = [

@@ -11053,6 +11053,24 @@ class BogAgentsApp(App):
         prompt_block = render_prompt_block(result, intent=intent)
         await self._send_prompt_to_agent(prompt_block)
 
+    async def _handle_compliance_command(self, command: str) -> None:
+        """Handle ``/compliance …`` — Wave R compliance auditor.
+
+        Slow paths (YAML parse + invariant proofs + trace IO) run on
+        a worker thread so the TUI stays responsive even when the
+        audit walks a large causal log. The renamed surface avoids
+        clashing with the pre-existing ``/audit`` dependency-scan
+        command in commands/quality.py.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.compliance.controller import dispatch as _audit_dispatch
+
+        # The controller dispatcher recognises "/compliance" alongside the
+        # legacy "/audit" prefix it was written against, so the user's
+        # raw command flows straight through.
+        output = await asyncio.to_thread(_audit_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_postmortem_command(self, command: str) -> None:
         """Handle ``/postmortem …`` — Q2 causal-replay postmortem.
 

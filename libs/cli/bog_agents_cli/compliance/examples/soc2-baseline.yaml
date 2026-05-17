@@ -1,0 +1,93 @@
+# SOC 2 baseline audit pack — illustrative starter.
+#
+# This pack maps a handful of bog-agents controls to SOC 2 Common Criteria
+# (Trust Services Criteria, 2017 with 2022 points of focus). It is NOT
+# a substitute for a SOC 2 audit — it gives you machine-checked, daily
+# evidence that the agent's *behavioural* controls are still in place
+# between formal audits.
+#
+# Run with:
+#   /audit run soc2-baseline.yaml
+#
+# Or wire to your daemon via compliance/examples/audit-nightly.yaml.
+
+version: 1
+name: soc2-baseline
+description: |
+  Baseline SOC 2 controls. Each check is reproducible: same pack +
+  same rulebook + same trace window → same verdict. Pair this pack
+  with an evening daemon job and bank the reports for your next
+  audit cycle.
+
+window:
+  # Audit 24 hours of trace activity. Shorten in CI gates (e.g. 1h)
+  # to detect regressions in the latest run only.
+  lookback_hours: 24
+
+checks:
+  # ---- CC6.1 — Logical and physical access controls ----------------
+  - id: CC6.1-shell-without-approval
+    title: Shell calls without approval must be blocked
+    kind: invariant
+    control: SOC2.CC6.1
+    description: |
+      Every `shell_execute` call that does NOT carry
+      `requires_approval=true` should be intercepted by an approval
+      gate or denied outright. We prove this by searching the loaded
+      rules for a guard with a deny / require_approval action that
+      subsumes the forbidden pattern.
+    invariant:
+      name: shell_requires_approval
+      precondition:
+        fact_type: tool_call
+        predicates:
+          - {field: name, op: eq, value: shell_execute}
+      forbidden:
+        fact_type: tool_call
+        predicates:
+          - {field: name, op: eq, value: shell_execute}
+          - {field: requires_approval, op: eq, value: false}
+
+  # ---- CC7.2 — System monitoring -----------------------------------
+  - id: CC7.2-trace-recording-on
+    title: Trace recording is active
+    kind: trace_assertion
+    control: SOC2.CC7.2
+    description: |
+      The causal ledger must contain at least one session in the
+      audit window. A zero-session window means observability was
+      disabled — a control failure on its own.
+    evidence:
+      kind: at_least_one_session
+
+  - id: CC7.2-user-activity
+    title: At least one user_message in the window
+    kind: trace_assertion
+    control: SOC2.CC7.2
+    description: Demonstrates the system was actually exercised.
+    evidence:
+      kind: event_count
+      fact_kind: user_message
+      min: 1
+
+  # ---- CC8.1 — Change management -----------------------------------
+  - id: CC8.1-force-push-rule-loaded
+    title: The force-push guard rule must be loaded
+    kind: rule_presence
+    control: SOC2.CC8.1
+    description: |
+      A specific rule named `block_force_push_to_main` (or whatever
+      your project uses) must be present in the rulebook. Rule-pack
+      drift is silent without a check like this.
+    rule_name: block_force_push_to_main
+
+  # ---- CC8.1 — Change management (negative) ------------------------
+  - id: CC8.1-no-experimental-bypass
+    title: No experimental override rule is loaded
+    kind: rule_absence
+    control: SOC2.CC8.1
+    description: |
+      A rule named `__experimental_bypass_all_guards` MUST NOT be
+      present. If anyone copy-pastes the experimental ruleset into
+      production, this check fails.
+    rule_name: __experimental_bypass_all_guards

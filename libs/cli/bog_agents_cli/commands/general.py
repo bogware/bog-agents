@@ -311,6 +311,24 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/compliance",
+            "Compliance auditor — run a YAML audit pack against the loaded "
+            "rules + causal traces; produces a signed SOC2-aligned report",
+            "audit compliance soc2 iso nist controls invariant evidence report seal pack",
+            "general",
+            available=True,
+            subcommands=(
+                ("run <pack>", "Run an audit pack (project-local or bundled)"),
+                ("list", "List saved audit reports newest-first"),
+                ("show <filename>", "Read a saved report; verifies the seal"),
+                ("packs", "List available audit packs"),
+                ("help", "Usage + YAML schema"),
+            ),
+        ),
+        handler_method="_handle_compliance_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/postmortem",
             "Causal-replay postmortem — analyse a session, propose remediations "
             "(rule / skill / config)",
