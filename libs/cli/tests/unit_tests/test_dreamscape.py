@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -583,6 +584,183 @@ class TestDreamScheduler:
         )
         assert first is second
         assert get_scheduler("dupe-test") is first
+
+
+class TestDreamCompleteCallback:
+    """K5: ``on_dream_complete`` callback fires once per successful dream."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        from bog_agents_cli.dreamscape import scheduler as _s
+
+        _s._GLOBAL_SCHEDULERS.clear()
+
+    class _FakeModel:
+        provider_name = "fake"
+        model_name = "fake-1"
+
+        async def ainvoke(self, _messages, **_kw):
+            from langchain_core.messages import AIMessage
+
+            return AIMessage(
+                content=(
+                    "### A brief dream\n\n"
+                    "Nothing notable.\n\n"
+                    "**Waking thought:**\nThe ticks keep coming."
+                )
+            )
+
+    async def test_callback_fires_after_dream(self, tmp_path: Path) -> None:
+        import asyncio
+        import time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        agent_id = "k5-callback-fires"
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id=agent_id, last_activity_at=time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        seen: list[tuple[str, str]] = []
+
+        async def on_complete(aid: str, title: str) -> None:
+            seen.append((aid, title))
+
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(
+                auto_on_dormancy=True,
+                max_seeds_per_dream=2,
+            ),
+            lifecycle_cfg=LifecycleConfig(
+                enabled=True,
+                dormancy_after_seconds=2,
+                dreaming_after_dormant_seconds=1,
+            ),
+            poll_seconds=0.05,
+            on_dream_complete=on_complete,
+        )
+        scheduler.start()
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if seen:
+                break
+        await scheduler.stop()
+        # Drain in-flight completion tasks.
+        await asyncio.sleep(0.05)
+        assert seen, f"expected callback, stats={scheduler.stats}"
+        assert seen[0][0] == agent_id
+        assert isinstance(seen[0][1], str)
+
+    async def test_callback_exception_does_not_kill_scheduler(
+        self, tmp_path: Path
+    ) -> None:
+        """A raising callback must not stop the scheduler loop."""
+        import asyncio
+        import time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        agent_id = "k5-callback-raises"
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id=agent_id, last_activity_at=time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        async def on_complete(_aid: str, _title: str) -> None:
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(
+                auto_on_dormancy=True,
+                max_seeds_per_dream=2,
+            ),
+            lifecycle_cfg=LifecycleConfig(
+                enabled=True,
+                dormancy_after_seconds=2,
+                dreaming_after_dormant_seconds=1,
+            ),
+            poll_seconds=0.05,
+            on_dream_complete=on_complete,
+        )
+        scheduler.start()
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            if scheduler.stats.dreams_fired >= 1:
+                break
+        # Let the completion task settle so the exception is logged.
+        await asyncio.sleep(0.1)
+        assert scheduler.is_running, "scheduler must survive callback error"
+        await scheduler.stop()
+        assert scheduler.stats.dreams_fired >= 1
+
+    async def test_set_on_dream_complete_replaces_callback(
+        self, tmp_path: Path
+    ) -> None:
+        """Late wiring (the K5 install-after-create pattern) takes effect."""
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        s = DreamScheduler(
+            agent_id="k5-replace",
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(),
+            lifecycle_cfg=LifecycleConfig(enabled=True),
+        )
+        assert s._on_dream_complete is None
+
+        async def cb(_a: str, _t: str) -> None: ...
+
+        s.set_on_dream_complete(cb)
+        assert s._on_dream_complete is cb
+        s.set_on_dream_complete(None)
+        assert s._on_dream_complete is None
+
+
+class TestProposeRulesOnCompleteFlag:
+    """K5: ``propose_rules_on_complete`` wires the proposer to dream-complete.
+
+    Confirms the config flag's default and that the callback builder
+    returns a coroutine function suitable for ``DreamScheduler``.
+    """
+
+    def test_flag_default_is_off(self) -> None:
+        from bog_agents_cli.dreamscape.config import DreamsConfig
+
+        cfg = DreamsConfig()
+        assert cfg.propose_rules_on_complete is False
+
+    def test_callback_builder_returns_coroutine_function(self) -> None:
+        from bog_agents_cli.agent import _build_propose_on_dream_callback
+        from bog_agents_cli.dreamscape.config import DreamscapeConfig
+
+        cfg = DreamscapeConfig()
+        cb = _build_propose_on_dream_callback(cfg)
+        assert callable(cb)
+        import inspect
+
+        assert inspect.iscoroutinefunction(cb)
 
 
 class TestDashboardRuntimeActiveConfig:

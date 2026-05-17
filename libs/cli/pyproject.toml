@@ -338,6 +338,22 @@ ignore-var-parameters = true
     "S110",     # try/except/pass — observability paths must be silent on failure
     "S311",     # random for non-cryptographic sampling (dream seeds)
 ]
+# Expert sub-package + controller: K4 split made the controller a thin
+# facade where each public method is a 1-line delegator to a free
+# function in the sub-package. The docstring lives on the free
+# function; D102 on the delegator would be pure duplication.
+"bog_agents_cli/expert_controller.py" = [
+    "D102",     # Delegator methods — docstring lives on the free function
+    "SLF001",   # Sub-modules read controller._private fields by design
+]
+"bog_agents_cli/expert/**" = [
+    "SLF001",   # Free functions read controller._private fields by design
+    "BLE001",   # Model-factory + dreamscape callouts trap bare Exception
+    "TRY003",   # Long messages inside the user-facing error strings
+    "EM101",    # Raw string in exception — user-facing error strings
+    "EM102",    # f-string in exception — user-facing error strings
+    "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
+]
 "bog_agents_cli/vars.py" = [
     "ANN401",   # Any in user-supplied values — by design
     "D102",     # Missing docstring on dataclass to/from_dict helpers
