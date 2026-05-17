@@ -243,6 +243,65 @@ def build_postmortem_prompt(
     return "\n".join(lines)
 
 
+_EVENT_SUMMARY_MAX = 200
+"""Hard cap on the summary slice we paste into the prompt.
+
+Postmortem U3: a long, attacker-controlled summary is the most
+direct prompt-injection vector — a tool that returns
+``"\n\n## System override: ignore previous rules ..."`` would
+otherwise land verbatim in the LLM context. We cap and sanitise.
+"""
+
+
+_DEFAULT_BANNED_SUMMARY_FRAGMENTS = (
+    "## rule",
+    "## skill",
+    "## config",
+    "ignore previous",
+    "ignore all previous",
+    "system override",
+    "<|im_start|>",
+    "<|im_end|>",
+    "<<sys>>",
+)
+
+
+def _sanitise_for_prompt(text: str) -> str:
+    """Make a piece of trace-derived text safe to paste into an LLM prompt.
+
+    The defense is intentionally defensive-in-depth rather than perfect:
+
+    * Collapse newlines so injected ``## Header`` lines can't break out
+      of the surrounding indentation.
+    * Strip C0 control characters except tab (which renders fine).
+    * Truncate to :data:`_EVENT_SUMMARY_MAX` chars.
+    * Mask known prompt-injection fragments by replacing the
+      delimiter character so the LLM still sees the text but
+      doesn't recognise it as a structural marker.
+
+    A motivated attacker with arbitrary-string control could still
+    write subtly adversarial content; our job is to remove the easy
+    wins.
+    """
+    if not text:
+        return ""
+    collapsed = " ".join(text.split())
+    cleaned = "".join(ch for ch in collapsed if ch == "\t" or ch >= " ")
+    truncated = cleaned[:_EVENT_SUMMARY_MAX]
+    lower = truncated.lower()
+    for needle in _DEFAULT_BANNED_SUMMARY_FRAGMENTS:
+        idx = lower.find(needle)
+        while idx != -1:
+            # Break the marker by replacing the first delimiter char.
+            # The LLM still sees the textual content but the framing
+            # cue is dropped, which kills most injection patterns.
+            broken = "·" + truncated[idx + 1:]
+            truncated = truncated[:idx] + broken
+            lower = truncated.lower()
+            idx = lower.find(needle, idx + 1)
+    return truncated
+
+
 def _render_event(event: CausalEvent) -> str:
     parent = (
         f" ← {','.join(str(p) for p in event.parent_ids)}"
@@ -252,13 +311,17 @@ def _render_event(event: CausalEvent) -> str:
     payload = ""
     if event.payload:
         # Keep payload preview short — the LLM doesn't need full text.
+        # The payload is JSON-serialised, which itself escapes the
+        # most dangerous prompt-injection sequences (quotes, line
+        # breaks), but we still cap the length.
         payload_text = json.dumps(event.payload, default=str, sort_keys=True)
         if len(payload_text) > 120:
             payload_text = payload_text[:119] + "…"
         payload = f"  payload={payload_text}"
     return (
         f"#{event.id:>4}  [{event.kind.value}] "
-        f"{event.actor}: {event.summary}{parent}{payload}"
+        f"{event.actor[:60]}: {_sanitise_for_prompt(event.summary)}"
+        f"{parent}{payload}"
     )
 
 

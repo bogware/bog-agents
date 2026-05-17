@@ -21,13 +21,20 @@ def discover() -> tuple[tuple[SlashCommand, ...], dict[str, str]]:
         ``{slash_name: app_method_name}`` including aliases).
 
     Raises:
-        TypeError: If a discovered ``COMMANDS`` export contains an entry
-            that isn't a ``SlashCommand``.
+        TypeError: When a discovered ``COMMANDS`` export contains a
+            non-:class:`SlashCommand` entry, or when two commands /
+            aliases claim the same slash name. The duplicate check
+            previously lived only in a test (``test_commands_registry``);
+            U5 moved it here so an at-import-time mistake fails fast
+            instead of "test only on CI".
     """
     import bog_agents_cli.commands as _pkg
 
     commands: list[SlashCommand] = []
     handler_map: dict[str, str] = {}
+    # U5: track where each slash name was registered so duplicate
+    # diagnostics include both call sites.
+    origin: dict[str, str] = {}
 
     for module_info in pkgutil.iter_modules(_pkg.__path__):
         if module_info.name.startswith("_"):
@@ -40,10 +47,27 @@ def discover() -> tuple[tuple[SlashCommand, ...], dict[str, str]]:
             if not isinstance(command, SlashCommand):
                 msg = f"{module.__name__}.COMMANDS contains a non-SlashCommand entry: {command!r}"
                 raise TypeError(msg)
+            if command.name in handler_map:
+                msg = (
+                    f"Slash-command name collision: {command.name!r} declared by "
+                    f"{module.__name__} but already registered by "
+                    f"{origin.get(command.name, '<unknown>')}. Slash names "
+                    "must be unique across commands/*.py."
+                )
+                raise TypeError(msg)
             commands.append(command)
             handler_map[command.name] = command.handler_method
+            origin[command.name] = module.__name__
             for alias in command.spec.aliases:
+                if alias in handler_map:
+                    msg = (
+                        f"Slash-command alias collision: {alias!r} (from "
+                        f"{command.name} in {module.__name__}) already maps to "
+                        f"{handler_map[alias]!r} via {origin.get(alias, '<unknown>')}."
+                    )
+                    raise TypeError(msg)
                 handler_map[alias] = command.handler_method
+                origin[alias] = module.__name__
 
     # Stable order: featured commands first (in their canonical order),
     # then everything else alphabetically. Featured commands match the

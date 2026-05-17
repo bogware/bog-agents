@@ -418,17 +418,22 @@ class TestZ3Backend:
     def test_use_z3_none_falls_back_silently(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Default ``use_z3=None`` falls back silently when Z3 missing.
+        """Default ``use_z3=None`` skips the Z3 path entirely.
 
-        Without an explicit request, the prover quietly degrades to
-        the heuristic backend rather than raising.
+        After the U2 honesty fix, the default path no longer attempts
+        z3-import speculatively — it routes straight to the heuristic
+        prover. Tests pin that contract so we don't regress to the
+        "always emits a z3 note" behavior the audit flagged as
+        confusing.
         """
         import builtins as _b
 
         real_import = _b.__import__
+        z3_import_attempted = []
 
         def fake_import(name, *a, **kw):
             if name == "z3":
+                z3_import_attempted.append(True)
                 msg = "no z3 installed"
                 raise ImportError(msg)
             return real_import(name, *a, **kw)
@@ -436,9 +441,10 @@ class TestZ3Backend:
         monkeypatch.setattr(_b, "__import__", fake_import)
         inv = _mk_invariant(forbid_preds=[("name", "eq", "x")])
         proof = prove(inv, [], use_z3=None)
-        # No Z3 → falls back; counterexample because no rules.
+        # No z3 path attempted, no z3 note emitted, heuristic verdict.
         assert proof.verdict == ProofVerdict.COUNTEREXAMPLE
-        assert any("z3" in n.lower() for n in proof.notes)
+        assert z3_import_attempted == []
+        assert not any("z3" in n.lower() for n in proof.notes)
 
 
 # ---------------------------------------------------------------------------

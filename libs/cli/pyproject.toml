@@ -451,21 +451,6 @@ ignore-var-parameters = true
     "EM101",
     "EM102",
 ]
-# MCP marketplace (Gap 5). Small thin facade + curated catalog.
-"bog_agents_cli/mcp_marketplace.py" = [
-    "D102",     # __call__ on the protocol stub is self-explanatory
-    "DOC501",   # ValueError + RuntimeError documented in module text
-    "TRY003",   # User-facing error strings
-    "EM101",    # Raw string in exception — user-facing
-    "EM102",    # f-string in exception — user-facing
-]
-"bog_agents_cli/mcp_marketplace_controller.py" = [
-    "TRY003",   # User-facing error strings
-    "EM101",
-    "EM102",
-    "PLR0911",  # Dispatch table reads better as flat ifs
-    "PLR0912",  # Too many branches — _install option parsing
-]
 # /web URL-fetch surface (Gap 10). User-facing error messages are
 # inlined into exceptions; the urllib3 wrapper is intentionally light.
 "bog_agents_cli/web_fetch.py" = [

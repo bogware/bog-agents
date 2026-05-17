@@ -161,6 +161,20 @@ def load_keypair_from_path(path: Path) -> KeyMaterial:
     if derived != public_b64:
         msg = f"Key file {path} is inconsistent (public != derived from private)."
         raise SigningError(msg)
+    # U4: byte-equality on the public key catches obvious copy-paste
+    # corruption, but a key that *parsed* but is otherwise damaged
+    # could still fail at sign-time. Round-trip a random nonce so the
+    # caller gets a clean error here rather than at the first export.
+    nonce = secrets.token_bytes(32)
+    try:
+        signature = sk.sign(nonce)
+        pk.verify(signature, nonce)
+    except (InvalidSignature, ValueError) as exc:
+        msg = (
+            f"Key file {path} is structurally valid but failed a "
+            f"sign+verify self-check: {exc}"
+        )
+        raise SigningError(msg) from exc
     return KeyMaterial(
         private_key=sk,
         public_key=pk,
@@ -241,13 +255,6 @@ def _public_b64(pk: Ed25519PublicKey) -> str:
 def _fingerprint(public_b64: str) -> str:
     """Short fingerprint — first 8 chars of the base64 public key."""
     return public_b64[:8]
-
-
-def _silence_unused() -> None:
-    # ``secrets`` is intentionally imported to make this module the
-    # one place where cryptographic randomness is sourced even though
-    # generate_keypair() uses cryptography's RNG transitively.
-    _ = secrets
 
 
 __all__ = [
