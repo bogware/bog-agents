@@ -116,6 +116,10 @@ class PostmortemRun:
     saved_path: Path | None = None
     error: str = ""
     notes: tuple[str, ...] = field(default_factory=tuple)
+    enrollment: "object | None" = None  # noqa: UP037 — forward ref to EnrolledProposal
+    """Wave T: optional :class:`bog_agents_cli.feedback_loop.EnrolledProposal`
+    when the caller asked us to enroll the rule + skill into the
+    proposer pipeline. ``None`` when ``enroll=False`` (the default)."""
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +306,8 @@ def run_postmortem(
     model_invoke: Callable[[str, str], str],
     user_note: str = "",
     save: bool = True,
+    enroll: bool = False,
+    enroll_auto_activate: bool = False,
 ) -> PostmortemRun:
     """End-to-end postmortem: load events, build prompt, call model, save.
 
@@ -316,6 +322,15 @@ def run_postmortem(
             ("the agent should have asked before running the
             migration").
         save: When True, persist the rendered proposal to disk.
+        enroll: Wave T — when True, route the proposal through
+            :func:`bog_agents_cli.feedback_loop.enroll_postmortem_proposal`
+            after a successful run. The result lands on
+            :attr:`PostmortemRun.enrollment`. Default False to
+            preserve the explicit-review workflow.
+        enroll_auto_activate: When True (and ``enroll`` is True),
+            the rule lands in the *active* rules directory rather
+            than staging. Use only when the postmortem runs under
+            human supervision.
 
     Returns:
         :class:`PostmortemRun` summarising what happened. ``error``
@@ -360,11 +375,38 @@ def run_postmortem(
     saved_path: Path | None = None
     if save:
         saved_path = save_proposal(resolved_id, failure, proposal, working_dir)
+
+    enrollment = None
+    if enroll:
+        # Wave T: feed the model's rule + skill into the proposer
+        # staging dir so the same approve / lint pipeline applies.
+        # We import lazily to avoid the (tiny) cost on the common
+        # path where enrollment is off.
+        from bog_agents_cli.feedback_loop import (
+            enroll_postmortem_proposal,
+        )
+
+        try:
+            enrollment = enroll_postmortem_proposal(
+                proposal,
+                working_dir=working_dir,
+                source_session=resolved_id,
+                auto_activate=enroll_auto_activate,
+            )
+        except Exception as exc:
+            logger.exception("postmortem: enrollment failed")
+            from bog_agents_cli.feedback_loop import EnrolledProposal
+
+            enrollment = EnrolledProposal(
+                skipped_reason=f"enrollment failed: {exc}"
+            )
+
     return PostmortemRun(
         session_id=resolved_id,
         failure=failure,
         proposal=proposal,
         saved_path=saved_path,
+        enrollment=enrollment,
     )
 
 
@@ -446,6 +488,11 @@ def render_run(run: PostmortemRun) -> str:
     if run.saved_path is not None:
         lines.append("")
         lines.append(f"Proposal saved to: {run.saved_path}")
+    if run.enrollment is not None:
+        lines.append("")
+        from bog_agents_cli.feedback_loop import render_enrollment
+
+        lines.append(render_enrollment(run.enrollment))
     return "\n".join(lines)
 
 
@@ -476,10 +523,28 @@ def dispatch(
         return _help_text()
     if text.lower() in ("list", "ls"):
         return _list_postmortems(working_dir)
-    # First token is the session id (or "latest"); rest is user note.
-    parts = text.split(None, 1)
-    session_id = parts[0]
-    user_note = parts[1] if len(parts) > 1 else ""
+
+    # Parse flags up front. ``--enroll`` and ``--apply`` are
+    # whitespace-delimited and can appear anywhere after the
+    # session id; we strip them before the remaining text becomes
+    # the user note.
+    enroll = False
+    enroll_auto_activate = False
+    tokens = text.split()
+    cleaned_tokens: list[str] = []
+    for tok in tokens:
+        if tok == "--enroll":
+            enroll = True
+        elif tok == "--apply":
+            enroll = True
+            enroll_auto_activate = True
+        else:
+            cleaned_tokens.append(tok)
+    if not cleaned_tokens:
+        return "Usage: /postmortem <session-id|latest> [--enroll] [--apply] [<note>]"
+    session_id = cleaned_tokens[0]
+    user_note = " ".join(cleaned_tokens[1:])
+
     if model_invoke is None:
         return (
             "/postmortem requires a model. The CLI normally supplies one "
@@ -490,6 +555,8 @@ def dispatch(
         working_dir=working_dir,
         model_invoke=model_invoke,
         user_note=user_note,
+        enroll=enroll,
+        enroll_auto_activate=enroll_auto_activate,
     )
     return render_run(run)
 
@@ -519,13 +586,19 @@ def _help_text() -> str:
     return (
         "/postmortem — review a causal session and propose remediations.\n\n"
         "Usage:\n"
-        "  /postmortem <session-id>        — analyse a specific session\n"
-        "  /postmortem latest              — newest session\n"
-        "  /postmortem latest <note>       — add free-text context\n"
-        "  /postmortem list                — list saved postmortems\n"
-        "  /postmortem help                — this message\n\n"
-        "The model produces three sections: ## Rule / ## Skill / ## Config\n"
-        "and the proposal is saved under .bog-agents/postmortems/.\n"
+        "  /postmortem <session-id>          — analyse a specific session\n"
+        "  /postmortem latest                — newest session\n"
+        "  /postmortem latest <note>         — add free-text context\n"
+        "  /postmortem latest --enroll       — also stage the rule + skill\n"
+        "                                      for /expert proposals review\n"
+        "  /postmortem latest --apply        — enroll AND activate the rule\n"
+        "                                      immediately (use with care)\n"
+        "  /postmortem list                  — list saved postmortems\n"
+        "  /postmortem help                  — this message\n\n"
+        "The model produces three sections: ## Rule / ## Skill / ## Config.\n"
+        "The proposal is saved under .bog-agents/postmortems/. With\n"
+        "--enroll, valid rule YAML lands in .bog-agents/expert_rules/proposals/\n"
+        "and skill drafts in .bog-agents/skills/proposals/.\n"
     )
 
 
