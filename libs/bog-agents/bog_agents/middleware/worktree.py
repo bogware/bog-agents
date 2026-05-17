@@ -106,6 +106,56 @@ class WorktreeState(TypedDict):
     """State for the worktree middleware."""
 
 
+# ---------------------------------------------------------------------------
+# Ref-name validation (P1-9)
+# ---------------------------------------------------------------------------
+#
+# Git's command-line parser treats leading ``-`` as flags. A model-supplied
+# branch name like ``--exec`` would be interpreted as a flag by older gits
+# and is just confusing in newer ones. We reject anything that doesn't pass
+# a conservative ref-name check BEFORE invoking git, and add ``--`` to the
+# argv where positional args follow options. Fixes REVIEW.md P1-9.
+
+# Git's own rules (man git-check-ref-format) plus our extra "no leading
+# dash" constraint. Allows alphanumerics, slashes, hyphens, dots, and
+# underscores. Rejects empty names, leading/trailing slashes, ``..``,
+# ``@{``, control chars, and anything that starts with ``-``.
+_GIT_REF_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./\-]*$")
+
+
+def _validate_git_ref(name: str, *, label: str = "ref") -> str:
+    """Return *name* if it looks like a safe git ref, else raise ValueError.
+
+    Args:
+        name: Candidate ref name.
+        label: Human-readable label for the error message.
+
+    Returns:
+        The (unchanged) name when safe.
+
+    Raises:
+        ValueError: When the name would be interpreted as a flag, contains
+            disallowed characters, or otherwise fails the conservative
+            check.
+    """
+    if not isinstance(name, str) or not name:
+        msg = f"{label} must be a non-empty string"
+        raise ValueError(msg)
+    if name.startswith("-"):
+        msg = f"{label} {name!r} starts with '-' — refusing (looks like a flag)"
+        raise ValueError(msg)
+    if ".." in name or "@{" in name or "//" in name or "\\" in name:
+        msg = f"{label} {name!r} contains disallowed sequence (.., @{{, //, or \\)"
+        raise ValueError(msg)
+    if name.endswith((".lock", "/")):
+        msg = f"{label} {name!r} ends with disallowed suffix"
+        raise ValueError(msg)
+    if not _GIT_REF_PATTERN.match(name):
+        msg = f"{label} {name!r} contains characters outside [A-Za-z0-9_./-]"
+        raise ValueError(msg)
+    return name
+
+
 def _run_git(working_dir: Path, *args: str, timeout: int = 30) -> str:
     """Run a git command and return output.
 
@@ -155,11 +205,20 @@ def create_worktree(
     if base_dir is None:
         base_dir = Path(tempfile.mkdtemp(prefix="bog-agents-worktree-"))
 
+    # P1-9: validate the model-supplied branch name before passing it to
+    # git so a hostile or typo'd ref can't be mistaken for a flag.
+    _validate_git_ref(branch, label="branch")
+
     worktree_path = base_dir / branch.replace("/", "-")
-    result = _run_git(repo_dir, "worktree", "add", "-b", branch, str(worktree_path))
+    # P1-9: also use ``--`` as the option terminator so any future
+    # positional-arg additions to ``git worktree add`` can't be tricked
+    # by a leading-dash branch / path.
+    result = _run_git(
+        repo_dir, "worktree", "add", "-b", branch, "--", str(worktree_path)
+    )
     if result.startswith("[exit code"):
         # Branch might already exist, try without -b
-        result = _run_git(repo_dir, "worktree", "add", str(worktree_path), branch)
+        result = _run_git(repo_dir, "worktree", "add", "--", str(worktree_path), branch)
 
     commit = _run_git(worktree_path, "rev-parse", "HEAD") if worktree_path.exists() else None
     return WorktreeInfo(path=worktree_path, branch=branch, commit=commit)

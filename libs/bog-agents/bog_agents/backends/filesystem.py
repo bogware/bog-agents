@@ -162,7 +162,15 @@ class FilesystemBackend(BackendProtocol):
         """
         if self.virtual_mode:
             vpath = key if key.startswith("/") else "/" + key
-            if ".." in vpath or vpath.startswith("~"):
+            # P1-2: split on path separators so a legitimate filename
+            # containing ``..`` (e.g. "version..backup") doesn't trip the
+            # check. Substring matching also rejected ``foo..bar`` which
+            # was a false positive. The real security check below
+            # (``relative_to(self.cwd)``) is what actually keeps reads
+            # inside the root — this part-based test is the
+            # ``virtual_mode`` UX-friendly fast path.
+            vparts = vpath.replace("\\", "/").split("/")
+            if ".." in vparts or vpath.startswith("~"):
                 # Keep the exact prefix ``"Path traversal not allowed"`` so
                 # existing pytest.raises(match=...) assertions continue to
                 # work; append the actionable hint after the colon.

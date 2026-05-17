@@ -1,12 +1,36 @@
 """SSO / OAuth integration middleware.
 
-Feature #24: SAML/OIDC authentication, Active Directory integration,
-session management, and role-based access for the financial advisor agent.
+⚠ **NOTSECURE — DEMO STUB, NOT REAL AUTHENTICATION.**
+
+This middleware exposes a SAML/OIDC-shaped API but does NOT verify any
+identity assertion. ``authenticate(user_id, provider, roles, …)`` simply
+records whatever the caller (typically the LLM itself) claims. There is
+no signature check, no provider round-trip, no token validation, no IdP
+metadata verification.
+
+Use this only for:
+
+* UI prototyping where you want auth-shaped fields in the audit log but
+  don't yet have a real IdP integration.
+* Local development against a fake provider.
+
+DO NOT use this in any flow whose access decisions matter — the LLM can
+self-authenticate as any user with any roles, simply by calling the
+tool. Fixes the misleading framing flagged in REVIEW.md P1-7. The plan
+is to either:
+
+1. Wrap a real OIDC library (``authlib``, ``oauthlib``) for the
+   authenticate path, or
+2. Rename this module to ``mock_auth.py`` and ship a real SSO middleware
+   in a separate package.
+
+Until one of those lands, the middleware is disabled by default in
+``create_agent`` and emits a runtime warning on first instantiation.
 
 ## Tools
 
-- `register_sso_provider`: Register a SAML/OIDC provider
-- `authenticate`: Create an authenticated session
+- `register_sso_provider`: Register a SAML/OIDC provider (no verification)
+- `authenticate`: Create an authenticated session (no verification)
 - `whoami`: Show current session information
 - `auth_status`: View all providers and sessions
 - `clear_auth`: Clear all authentication data
@@ -16,7 +40,7 @@ session management, and role-based access for the financial advisor agent.
 ```python
 from bog_agents.middleware.sso_auth import SSOAuthMiddleware
 
-middleware = SSOAuthMiddleware()
+middleware = SSOAuthMiddleware()  # logs a NOTSECURE warning
 ```
 """
 
@@ -235,7 +259,24 @@ class SSOAuthMiddleware(AgentMiddleware[SSOAuthState, ContextT, ResponseT]):
 
     state_schema = SSOAuthState
 
+    _NOTSECURE_WARNING_FIRED = False
+
     def __init__(self) -> None:
+        # P1-7: surface the stub-not-real-auth status at instantiation
+        # time so a developer who casually drops this middleware into a
+        # stack can't miss the warning. Logged once per process to avoid
+        # log spam.
+        if not SSOAuthMiddleware._NOTSECURE_WARNING_FIRED:
+            SSOAuthMiddleware._NOTSECURE_WARNING_FIRED = True
+            import warnings
+
+            warnings.warn(
+                "SSOAuthMiddleware is a DEMO STUB — it records identity "
+                "assertions but does not verify them. Do not use for "
+                "access decisions. See module docstring (REVIEW.md P1-7).",
+                UserWarning,
+                stacklevel=2,
+            )
         self.store = AuthStore()
         self.tools: list[BaseTool] = self._build_tools()
 

@@ -125,6 +125,14 @@ class CostTracker:
     session_start: float = field(default_factory=time.time)
     budget_usd: float | None = None
     snapshots: list[UsageSnapshot] = field(default_factory=list)
+    # P1-5: hard cap on the in-memory snapshot list. A long session
+    # (hours, hundreds of turns) used to accumulate one record per
+    # ``record_usage`` indefinitely — at ~250 bytes each the structure
+    # alone tipped past 1MB on extended sessions. The current totals
+    # live on the parent fields; the snapshot list is for fine-grained
+    # charts, so capping it doesn't lose the headline numbers. Override
+    # via ``max_snapshots`` if you need more granularity.
+    max_snapshots: int = 1000
     # Guards record_usage so token totals stay coherent under concurrent
     # turns (parallel-worktree, multi-agent). Held only across the integer
     # increments + snapshot append, never across model I/O.
@@ -209,6 +217,11 @@ class CostTracker:
                     estimated_cost_usd=self.estimated_cost_usd,
                 )
             )
+            # P1-5: drop the oldest snapshots in bulk once the cap is
+            # exceeded, so the slice happens at most once per N inserts.
+            if len(self.snapshots) > self.max_snapshots:
+                overflow = len(self.snapshots) - self.max_snapshots
+                del self.snapshots[:overflow]
 
     def format_summary(self) -> str:
         """Format a human-readable cost summary.

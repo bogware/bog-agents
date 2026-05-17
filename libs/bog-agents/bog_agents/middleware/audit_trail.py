@@ -98,12 +98,35 @@ class AuditLog:
 
     Entries are append-only — no deletion or modification is permitted
     after creation, ensuring regulatory compliance.
+
+    Memory characteristics
+    ----------------------
+    The ``entries`` list grows unboundedly within a session by design:
+    regulatory audit-trail use cases (FINRA Rule 3110, SOC 2, etc.)
+    require every event to be retained. Long-running daemon processes
+    that won't or can't tolerate that should set ``max_entries`` to opt
+    into FIFO eviction — but they ALSO need an external durable store
+    (database, append-only log file) wired into ``on_entry_recorded``,
+    otherwise eviction silently drops compliance evidence.
+
+    Fixes the documentation gap REVIEW.md P1-5 flagged. The default
+    behavior (unbounded retention) is unchanged.
     """
 
     entries: list[AuditEntry] = field(default_factory=list)
     session_id: str = ""
     advisor_id: str = ""
     started_at: str = ""
+    # Optional in-memory cap. ``None`` (default) preserves the
+    # compliance-correct unbounded behavior. Set to an int (e.g. 10000)
+    # to FIFO-evict oldest entries — only safe when paired with
+    # ``on_entry_recorded`` flushing to durable storage.
+    max_entries: int | None = None
+    # Hook fired after every successful add_entry call. Receives the
+    # newly-recorded :class:`AuditEntry`. Used to flush to an external
+    # store before any eviction. Exceptions are caught and logged so a
+    # broken sink can't crash the agent.
+    on_entry_recorded: Callable[[AuditEntry], None] | None = None
     _next_id: int = field(default=1, repr=False)
     # Serializes ``add_entry`` so the entry-id counter and the entries list
     # stay consistent under concurrent agent turns (e.g. parallel-worktree
@@ -145,6 +168,20 @@ class AuditLog:
             )
             self.entries.append(entry)
             self._next_id += 1
+            # P1-5: Hook BEFORE eviction so durable-store flushers can
+            # see every entry even when we're about to FIFO-drop the
+            # oldest. Hook exceptions never crash the agent.
+            if self.on_entry_recorded is not None:
+                try:
+                    self.on_entry_recorded(entry)
+                except Exception:
+                    logger.exception(
+                        "audit_trail.on_entry_recorded raised on entry #%d",
+                        entry.entry_id,
+                    )
+            if self.max_entries is not None and len(self.entries) > self.max_entries:
+                overflow = len(self.entries) - self.max_entries
+                del self.entries[:overflow]
         logger.debug("Audit entry #%d: %s — %s", entry.entry_id, action_type, description)
         return entry
 

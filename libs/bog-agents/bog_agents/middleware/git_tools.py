@@ -155,10 +155,23 @@ class GitToolsMiddleware(AgentMiddleware[GitToolsState, ContextT, ResponseT]):
             checkout: bool = False,
         ) -> str:
             """List branches, create a new branch, or checkout an existing one."""
+            if name is not None:
+                # P1-9: refuse ref names that would be re-interpreted as
+                # flags by git. Defensive check that catches the
+                # hostile-model-supplies-flag-shaped-branch-name class
+                # of attack. See worktree.py _validate_git_ref.
+                from bog_agents.middleware.worktree import _validate_git_ref
+
+                try:
+                    name = _validate_git_ref(name, label="branch")
+                except ValueError as exc:
+                    return f"Error: {exc}"
             if name and checkout:
-                return middleware._git("checkout", "-b", name)
+                # ``--`` after the option-bearing arg makes ``name`` a
+                # positional that git's parser can't reinterpret.
+                return middleware._git("checkout", "-b", name, "--")
             if name:
-                return middleware._git("branch", name)
+                return middleware._git("branch", "--", name)
             if checkout:
                 return middleware._git("branch", "-a")
             return middleware._git("branch", "-a", "--sort=-committerdate")

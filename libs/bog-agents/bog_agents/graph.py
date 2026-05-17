@@ -37,7 +37,10 @@ from bog_agents.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from bog_agents.middleware.summarization import create_summarization_middleware
+from bog_agents.middleware.summarization import (
+    _BogAgentsSummarizationMiddleware,
+    create_summarization_middleware,
+)
 
 BASE_AGENT_PROMPT = """You are a Bog Agents agent, an AI assistant that helps users accomplish tasks using tools. You respond with text and tool calls. The user can see your responses and tool outputs in real time.
 
@@ -158,9 +161,18 @@ def _resolve_feature_config(
 
     import warnings as _warnings
 
+    # P1-6: This deprecation shim will be removed in bog-agents 1.0.
+    # Users still hitting it should migrate to ``config=FeatureConfig(...)``
+    # — the kwarg backdoor makes ``FeatureConfig`` evolution backwards-
+    # incompatible (renaming a field silently rejects what used to be
+    # valid kwargs). When you bump the major version, delete the
+    # ``**legacy_feature_flags`` parameter and the call to
+    # ``_resolve_feature_config`` that supplies it, and raise immediately
+    # on any unknown kwargs.
     _warnings.warn(
         "Passing individual feature flags as kwargs to create_agent() is "
-        "deprecated; pass `config=FeatureConfig(...)` instead. Affected "
+        "deprecated and will be removed in bog-agents 1.0; pass "
+        "`config=FeatureConfig(...)` instead. Affected "
         f"flags: {sorted(legacy_flags)}",
         DeprecationWarning,
         stacklevel=3,
@@ -198,6 +210,38 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     """Create a bog-agents agent.
 
     !!! warning "Bog Agents agents require a LLM that supports tool calling!"
+
+    ## Middleware execution order
+
+    Middleware runs in **declaration order** within the stack. The default
+    stack composed by ``create_agent`` is, in this order:
+
+    1. Lifecycle / observability — ``LifecycleHooksMiddleware``,
+       ``HttpHooksMiddleware``, ``LangSmithMiddleware``,
+       ``AuditTrailMiddleware``
+    2. Pre-prompt safety — ``DLPMiddleware``, ``RBACMiddleware``,
+       ``SafeToolsMiddleware``, ``ApprovalGatesMiddleware``,
+       ``ExpertRulesMiddleware``
+    3. Context preparation — ``RulesMiddleware``, ``MemoryMiddleware``,
+       ``SkillsMiddleware``, ``RepoMapMiddleware``,
+       ``CodeIntelligenceMiddleware``, ``ContextPackingMiddleware``
+    4. Tool & state surfaces — ``FilesystemMiddleware``,
+       ``GitToolsMiddleware``, ``WorktreeMiddleware``,
+       ``SubAgentMiddleware``, ``PlanModeMiddleware``,
+       ``ThinkingMiddleware``, ``CheckpointingMiddleware``
+    5. Token / cost management — ``SummarizationMiddleware``,
+       ``IntelligentCompactionMiddleware``, ``CostTrackerMiddleware``
+    6. Anything you pass via ``middleware=`` — appended at the very end.
+
+    The order matters for soft conflicts the static
+    ``_validate_middleware_ordering`` check can't catch. For example
+    ``DLPMiddleware`` must run before ``AuditTrailMiddleware`` if you want
+    redacted values to land in audit logs; both fire in pre-prompt safety,
+    in declaration order. When adding new built-in middleware, place it
+    in the section that matches its concern. When passing user middleware
+    via ``middleware=`` you control its position relative to the defaults
+    only by being appended after them; an ``after=`` / ``before=`` API is
+    a deliberate TODO.
 
     By default, this agent has access to the following tools:
 
@@ -796,22 +840,35 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             agents_middleware.append(parallel_mw)
         agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
 
-    agents_middleware.extend(
-        [
-            FilesystemMiddleware(backend=backend),
-            SubAgentMiddleware(
-                backend=backend,
-                subagents=all_subagents,
-            ),
-            create_summarization_middleware(model, backend),
-            PatchToolCallsMiddleware(),
-        ]
+    # P1-4: don't double-append defaults the user has already supplied
+    # via ``middleware=``. The previous behavior appended both, which
+    # ran the same middleware twice per request. We check by class
+    # identity (covers subclasses too) so a user who has subclassed
+    # FilesystemMiddleware for custom behavior takes precedence.
+    user_middleware = list(middleware) if middleware else []
+    user_supplied_filesystem = any(
+        isinstance(m, FilesystemMiddleware) for m in user_middleware
     )
+    user_supplied_summarization = any(
+        isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware
+    )
+
+    defaults_to_append: list[Any] = []
+    if not user_supplied_filesystem:
+        defaults_to_append.append(FilesystemMiddleware(backend=backend))
+    defaults_to_append.append(
+        SubAgentMiddleware(backend=backend, subagents=all_subagents)
+    )
+    if not user_supplied_summarization:
+        defaults_to_append.append(create_summarization_middleware(model, backend))
+    defaults_to_append.append(PatchToolCallsMiddleware())
+
+    agents_middleware.extend(defaults_to_append)
     if async_subagents:
         agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
 
-    if middleware:
-        agents_middleware.extend(middleware)
+    if user_middleware:
+        agents_middleware.extend(user_middleware)
     agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     if memory is not None:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))

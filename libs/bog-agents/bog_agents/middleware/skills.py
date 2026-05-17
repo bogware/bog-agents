@@ -91,6 +91,7 @@ middleware = SkillsMiddleware(
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Annotated
@@ -458,12 +459,28 @@ def _list_skills(backend: BackendProtocol, source_path: str) -> list[SkillMetada
     skills: list[SkillMetadata] = []
     items = backend.ls_info(source_path)
 
-    # Find all skill directories (directories containing SKILL.md)
+    # Find all skill directories (directories containing SKILL.md).
+    # P1-8: refuse symlinked skill directories. A skill registered as
+    # ``~/.skills/research -> /etc`` would otherwise load whatever the
+    # link pointed at as SKILL.md content, which is unwanted (the
+    # FilesystemBackend's O_NOFOLLOW protects file reads but ``ls_info``
+    # walks directories). We use ``os.path.islink`` on the absolute
+    # path so virtual-mode and absolute-mode are both covered.
     skill_dirs = []
     for item in items:
         if not item.get("is_dir"):
             continue
-        skill_dirs.append(item["path"])
+        item_path = item["path"]
+        try:
+            if os.path.islink(item_path):
+                logger.warning(
+                    "Skipping symlinked skill directory %s (P1-8 hardening)",
+                    item_path,
+                )
+                continue
+        except OSError:
+            continue
+        skill_dirs.append(item_path)
 
     if not skill_dirs:
         return []
