@@ -53,7 +53,7 @@ from typing import Any
 
 import yaml
 
-from bog_agents_cli.vars import VarBundle, auto_variabilize
+from bog_agents_cli.vars import auto_variabilize
 
 logger = logging.getLogger(__name__)
 
@@ -487,73 +487,95 @@ def find_replay_session(config_dir: Path, session_id: str) -> Path | None:
 
 
 # ---------------------------------------------------------------------------
-# Replay prompt builder
+# Drive-script emission
+#
+# Recordings are replayed by feeding their user prompts back into the
+# drive runner (``bog-agents drive``). The earlier ``build_replay_prompt``
+# helper baked the whole session into a single markdown blob and asked
+# the LLM to follow it as a reference — which never round-tripped tool
+# calls faithfully and never actually drove the TUI. This function emits
+# a proper drive script: each user message becomes a ``Submit`` action
+# followed by ``wait_for_idle``, with tool calls preserved as comments
+# so a reviewer can see what the original agent did.
 # ---------------------------------------------------------------------------
 
 
-def build_replay_prompt(session: ReplaySession, bundle: VarBundle) -> str:
-    """Render a session into an LLM-ready prompt with vars substituted.
+def session_to_drive_yaml(session: ReplaySession) -> str:
+    """Render a recorded session as a ``bog-agents drive``-compatible YAML.
 
-    The output is a structured instruction block the agent can execute.
-    Steps are described, not literally re-issued: the agent decides which
-    tools to call (the recording is a *reference*, not a script).
+    The output is a complete drive script with:
+        * a ``vars:`` block carrying every detected ``${var}`` (so a
+          reviewer can edit defaults before re-running);
+        * one ``submit:`` + ``wait_for_idle`` pair per recorded user
+          message, in order;
+        * comments above each user message describing the tool calls
+          the original agent made and a preview of its response, so
+          deviations show up in the diff against the new transcript.
 
     Args:
-        session: Loaded session.
-        bundle: A :class:`VarBundle` whose values have already been
-            resolved (call ``await bundle.resolve(...)`` first).
+        session: Loaded replay session.
 
     Returns:
-        A markdown-style prompt for the agent.
+        YAML string ready to be written to disk.
     """
-    title = session.name or session.session_id
-    lines = [
-        f"# Replay: {title}",
-        "",
-        session.description or "Replaying a previously recorded agent session.",
-        "",
-        "Follow these steps in order, adapting to the current environment as needed.",
-        "Use the variables below — they have already been resolved for this run.",
-        "",
-        "## Variables",
-    ]
-    if not bundle.specs:
-        lines.append("(none)")
-    else:
-        for name in bundle.specs:
-            spec = bundle.specs[name]
-            if spec.type == "secret":
-                lines.append(
-                    f"- `{name}`: <secret> (use it directly when a tool needs it)"
-                )
-            else:
-                value = bundle.get(name)
-                lines.append(f"- `{name}`: {value!r}")
+    spec_block: dict[str, Any] = {
+        "name": session.name or session.session_id,
+        "description": session.description
+        or f"Drive script generated from recording {session.session_id}",
+        "session": {
+            "cwd": session.original_context.get("cwd", "."),
+            "model": "fake:Recording replays use a fixed model by default.",
+            "approval_mode": "auto-all",
+        },
+        "vars": session.vars_spec or {},
+    }
 
-    lines.extend(["", "## Steps", ""])
-    for i, step in enumerate(session.steps, 1):
-        if step.kind == "user_message":
-            rendered = bundle.substitute(step.content)
-            lines.append(f"{i}. **User originally said:** {rendered}")
-        elif step.kind == "tool_call":
-            rendered_args = bundle.substitute(step.args)
-            args_str = ", ".join(f"{k}={v!r}" for k, v in rendered_args.items())
-            lines.append(f"{i}. Call `{step.tool}({args_str})`")
-            if step.result_pattern:
-                lines.append(f"   _Original result hint:_ {step.result_pattern}")
-        elif step.kind == "ai_message":
-            # AI messages are hints for the agent on what was previously said —
-            # not strict instructions. Keep them short.
-            snippet = step.content[:200].replace("\n", " ")
-            lines.append(f"{i}. _Previously the agent said:_ {snippet}")
-        lines.append("")
+    steps: list[Any] = []
+    pending_comments: list[str] = []
+    for step in session.steps:
+        if step.kind == "tool_call":
+            args_preview = json.dumps(step.args, default=str, ensure_ascii=False)
+            if len(args_preview) > 200:
+                args_preview = args_preview[:200] + "...(truncated)"
+            pending_comments.append(
+                f"original agent called {step.tool}({args_preview})"
+            )
+            continue
+        if step.kind == "ai_message":
+            snippet = step.content[:160].replace("\n", " ")
+            pending_comments.append(f"original agent replied: {snippet}")
+            continue
+        if step.kind != "user_message":
+            continue
+        for note in pending_comments:
+            steps.append({"_comment": note})
+        pending_comments.clear()
+        steps.append({"submit": {"value": step.content}})
+        steps.append({"wait_for_idle": 60})
+    # Trailing comments after the last user_message — keep them as a tail.
+    for note in pending_comments:
+        steps.append({"_comment": note})
 
-    lines.extend(
-        [
-            "## Notes",
-            "",
-            "- The recorded steps are a reference. If the new context requires a different approach, follow it.",
-            "- Verify each step succeeds before moving on. Stop and report if a step fails irrecoverably.",
-        ]
-    )
-    return "\n".join(lines)
+    out = yaml.safe_dump(spec_block, sort_keys=False, allow_unicode=True)
+    out += "\nsteps:\n"
+    for step in steps:
+        if "_comment" in step:
+            out += f"  # {step['_comment']}\n"
+            continue
+        out += "  - " + yaml.safe_dump(step, default_flow_style=True).strip() + "\n"
+    return out
+
+
+def save_drive_script_for_session(config_dir: Path, session: ReplaySession) -> Path:
+    """Write the drive-script form of *session* next to its YAML recording.
+
+    Returns the on-disk path.
+    """
+    replays_dir = config_dir / "replays"
+    replays_dir.mkdir(parents=True, exist_ok=True)
+    path = replays_dir / f"{session.session_id}.drive.yaml"
+    body = "# bog-agents drive script — generated from a /record session.\n"
+    body += "# Edit freely; re-run with `bog-agents --drive <this-file>`.\n\n"
+    body += session_to_drive_yaml(session)
+    path.write_text(body, encoding="utf-8")
+    return path

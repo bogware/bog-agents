@@ -1,0 +1,11 @@
+# Smoke script: open the /help command and verify the response lands in the
+# transcript. Fake model — no LLM call.
+name: smoke-help
+description: Slash command surface — /help dispatches and renders a response.
+session:
+  model: fake:hello
+  approval_mode: auto-all
+steps:
+  - "/help"
+  - wait_for_idle: 5
+  - expect_transcript_contains: "(?i)help|usage|command"

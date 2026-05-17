@@ -127,6 +127,19 @@ class AuditLog:
     # store before any eviction. Exceptions are caught and logged so a
     # broken sink can't crash the agent.
     on_entry_recorded: Callable[[AuditEntry], None] | None = None
+    # When True, a hook exception aborts ``add_entry`` and propagates to
+    # the caller. The entry is NOT appended in this case, so a failing
+    # durable sink doesn't quietly diverge from in-memory state.
+    # Default False preserves the historical "logged but not crashy"
+    # behavior compliance-critical operators should explicitly opt into
+    # ``strict_hooks=True`` to fail loudly on sink errors.
+    strict_hooks: bool = False
+    # Running count of hook failures observed since this log was
+    # instantiated. Surfaced so operators can build alerts ("alert if
+    # audit_log.hook_failure_count > 0 over 5 min") without needing to
+    # scrape stderr. Always increments on a hook exception, regardless
+    # of ``strict_hooks``.
+    hook_failure_count: int = field(default=0, repr=False)
     _next_id: int = field(default=1, repr=False)
     # Serializes ``add_entry`` so the entry-id counter and the entries list
     # stay consistent under concurrent agent turns (e.g. parallel-worktree
@@ -166,19 +179,30 @@ class AuditLog:
                 advisor_id=self.advisor_id,
                 entry_id=self._next_id,
             )
-            self.entries.append(entry)
-            self._next_id += 1
-            # P1-5: Hook BEFORE eviction so durable-store flushers can
-            # see every entry even when we're about to FIFO-drop the
-            # oldest. Hook exceptions never crash the agent.
+            # P1-5: Hook BEFORE append/eviction so a strict durable-store
+            # flusher can fail the entry without leaving in-memory state
+            # diverged from what got persisted. In non-strict mode the
+            # hook still runs before eviction so durable sinks see the
+            # entry, but a failure no longer crashes the agent.
             if self.on_entry_recorded is not None:
                 try:
                     self.on_entry_recorded(entry)
                 except Exception:
+                    self.hook_failure_count += 1
                     logger.exception(
-                        "audit_trail.on_entry_recorded raised on entry #%d",
+                        "audit_trail.on_entry_recorded raised on entry #%d "
+                        "(failure_count=%d, strict_hooks=%s)",
                         entry.entry_id,
+                        self.hook_failure_count,
+                        self.strict_hooks,
                     )
+                    if self.strict_hooks:
+                        # Entry NOT appended; counter increment + log
+                        # already happened. Caller decides whether to
+                        # retry or fail the agent turn.
+                        raise
+            self.entries.append(entry)
+            self._next_id += 1
             if self.max_entries is not None and len(self.entries) > self.max_entries:
                 overflow = len(self.entries) - self.max_entries
                 del self.entries[:overflow]

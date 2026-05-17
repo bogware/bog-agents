@@ -753,6 +753,18 @@ async def _stream_agent(
     import asyncio
 
     chunk_timeout = _resolve_stream_chunk_timeout()
+    # Announce the chunk-timeout policy on every stream start. Without
+    # this, an operator hitting a stalled-and-cancelled stream had no
+    # way to correlate the eventual TimeoutError back to which knob
+    # was in play (default? env override? off entirely?). The log
+    # cost is trivial and the on-call signal is real.
+    if chunk_timeout is None:
+        logger.info("agent stream: per-chunk timeout disabled (BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0)")
+    else:
+        logger.info(
+            "agent stream: per-chunk timeout %.0fs (override via BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS)",
+            chunk_timeout,
+        )
     stream_iter = agent.astream(
         stream_input,
         stream_mode=["messages", "updates"],
@@ -761,6 +773,7 @@ async def _stream_agent(
         durability="exit",
     )
     iterator = aiter(stream_iter)
+    last_chunk_at = time.monotonic()
     while True:
         try:
             if chunk_timeout is None:
@@ -772,11 +785,17 @@ async def _stream_agent(
         except StopAsyncIteration:
             break
         except TimeoutError as exc:
+            elapsed = time.monotonic() - last_chunk_at
             msg = (
                 f"Agent stream stalled — no chunk received in "
-                f"{chunk_timeout:.0f}s. The remote may be unreachable."
+                f"{elapsed:.0f}s (timeout {chunk_timeout:.0f}s). "
+                f"The remote may be unreachable or the model may be "
+                f"hung. Set BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0 "
+                f"to disable, or to a larger value for slower paths."
             )
+            logger.warning(msg)
             raise TimeoutError(msg) from exc
+        last_chunk_at = time.monotonic()
         _process_stream_chunk(chunk, state, console, file_op_tracker)
 
 

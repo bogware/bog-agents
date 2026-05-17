@@ -6987,7 +6987,10 @@ class BogAgentsApp(App):
             if self._recording_state is None:
                 await self._mount_message(AppMessage("No replay recording is active."))
                 return
-            from bog_agents_cli.replay import save_replay_session
+            from bog_agents_cli.replay import (
+                save_drive_script_for_session,
+                save_replay_session,
+            )
 
             state = self._recording_state
             recorder = state.recorder
@@ -7018,6 +7021,11 @@ class BogAgentsApp(App):
                 settings.user_agents_dir,
                 session,
             )
+            drive_path = await asyncio.to_thread(
+                save_drive_script_for_session,
+                settings.user_agents_dir,
+                session,
+            )
             self._recording_state = None
             var_count = len(session.vars_spec)
             tool_calls = sum(1 for s in session.steps if s.kind == "tool_call")
@@ -7025,8 +7033,11 @@ class BogAgentsApp(App):
                 AppMessage(
                     f"Saved replay `{session.name}` with {len(session.steps)} step(s) "
                     f"({tool_calls} tool call(s)) and {var_count} auto-detected "
-                    f"variable(s) to {file_path}.\n"
-                    "Open the YAML file to refine variable names, types, or defaults."
+                    f"variable(s).\n"
+                    f"  YAML recording: {file_path}\n"
+                    f"  Drive script:   {drive_path}\n"
+                    "Re-run via /replay run <id> (drives the script through the TUI) "
+                    "or `bog-agents --drive {drive_file}` from a shell."
                 )
             )
             return
@@ -7037,7 +7048,10 @@ class BogAgentsApp(App):
 
     async def _handle_replay_command(self, command: str) -> None:
         """Handle `/replay` for inspecting and rerunning recorded sessions."""
-        from bog_agents_cli.replay import build_replay_prompt, list_replay_sessions
+        from bog_agents_cli.replay import (
+            list_replay_sessions,
+            save_drive_script_for_session,
+        )
         from bog_agents_cli.vars import VarBundle
         from bog_agents_cli.vault import get_default_vault
 
@@ -7163,15 +7177,32 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"Replay cancelled: {exc}"))
                 return
 
-            prompt = build_replay_prompt(session, bundle)
-            if extra_context:
-                prompt += f"\n\n## Extra Context\n\n{extra_context}\n"
+            # Re-execute each recorded user message through the same chat
+            # input the live user uses. Variables resolved on the bundle
+            # are substituted at submit-time. The /record session captured
+            # tool calls and AI replies too, but those belong to the
+            # original LLM — the new run drives only the user side and
+            # lets the current agent decide tool calls and replies.
+            drive_path = await asyncio.to_thread(
+                save_drive_script_for_session,
+                settings.user_agents_dir,
+                session,
+            )
             await self._mount_message(
                 AppMessage(
-                    f"Replaying session `{session.name or session.session_id}`..."
+                    f"Replaying session `{session.name or session.session_id}`...\n"
+                    f"(Drive script: {drive_path}; run "
+                    f"`bog-agents --drive {drive_path}` to replay it "
+                    "headlessly outside the TUI.)"
                 )
             )
-            await self._send_prompt_to_agent(prompt)
+            user_steps = [s for s in session.steps if s.kind == "user_message"]
+            for user_step in user_steps:
+                rendered = bundle.substitute(user_step.content)
+                if extra_context:
+                    rendered = f"{rendered}\n\n## Extra Context\n\n{extra_context}\n"
+                    extra_context = ""  # Only attach on the first step.
+                await self._send_prompt_to_agent(rendered)
             return
 
         await self._mount_message(

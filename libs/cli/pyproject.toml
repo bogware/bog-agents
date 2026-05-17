@@ -326,6 +326,26 @@ ignore-var-parameters = true
     "S404",     # subprocess imported — required for shell step
     "TRY004",   # ValueError vs TypeError — kept for caller compatibility
 ]
+# Drive package: scripted-TUI runner that parses YAML actions (Any-typed
+# inputs by nature), wraps Pilot primitives, and orchestrates a real app
+# under run_test(). The handlers translate YAML payloads to dataclasses
+# so they take `Any` at the boundary; the snapshot capture path
+# intentionally swallows widget render failures so a transient one
+# doesn't abort the whole script.
+"bog_agents_cli/drive/**" = [
+    "ANN401",   # Any at the YAML-parsing boundary — by design
+    "D102",     # Missing docstring on small dataclass helpers
+    "D105",     # Missing docstring on dunder methods
+    "D205",     # Multi-paragraph summaries — readable here
+    "DOC501",   # Raises documented at module level, not per-helper
+    "PLR0911",  # Many returns — _dispatch_action is a type dispatch
+    "PLR0912",  # Many branches — same
+    "RUF029",   # Sync handler typed async to match the dispatch table
+    "S110",     # try/except/pass — snapshot rendering is best-effort
+    "S112",     # try/except/continue — same
+    "TRY004",   # ValueError chosen for parser errors over TypeError
+    "TRY301",   # Abstract raise — kept inline in the snapshot fallback
+]
 # Dreamscape package: dataclass-heavy, dynamic-data-heavy, intentionally
 # uses Any for cross-cutting helpers (response normalisation, config
 # overlays) and re-uses the SDK's middleware ``_utils`` private helper.

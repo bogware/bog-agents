@@ -1,0 +1,12 @@
+# Smoke script: ${var} substitution inside a submitted user message.
+name: smoke-vars
+description: Confirm placeholders resolve from the vars block at runtime.
+session:
+  model: fake:ok
+  approval_mode: auto-all
+vars:
+  who: { type: string, default: "World" }
+steps:
+  - submit: "hello ${who}"
+  - wait_for_idle: 10
+  - expect_transcript_contains: "hello ${who}"

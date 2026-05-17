@@ -83,17 +83,38 @@ async def run_job(
     upsert_job(job)
     save_run(run)
 
-    # Dispatch outputs best-effort
+    # Dispatch outputs best-effort. Capture per-target failures on the
+    # run so an operator can tell from the run record that delivery
+    # failed even though the agent itself completed successfully. The
+    # log line alone wasn't enough — silent dispatch outages turned
+    # into "why didn't the daily report arrive?" tickets with no
+    # paper trail in the runs table.
     job_wd = Path(job.working_dir) if job.working_dir else None
     for output_config in job.outputs:
         try:
             await _dispatch_output(run, output_config, working_dir=job_wd)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Output dispatch failed for job %s target %s",
                 job.job_id,
                 output_config.target,
             )
+            run.dispatch_errors.append(
+                {"target": str(output_config.target), "error": str(exc)}
+            )
+
+    # If the agent run succeeded but dispatches failed, mark the run as
+    # COMPLETED but keep ``error`` populated so HTTP clients and the
+    # ``/runs`` CLI surface flag the partial failure. Status stays
+    # COMPLETED to reflect that the work was done — the failure is in
+    # delivery, not execution — but a non-empty ``error`` is the
+    # universal signal callers already check.
+    if run.dispatch_errors and run.status == JobStatus.COMPLETED and not run.error:
+        run.error = (
+            f"agent succeeded but {len(run.dispatch_errors)} output "
+            f"target(s) failed; see dispatch_errors for details"
+        )
+        save_run(run)
 
     return run
 

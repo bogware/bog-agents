@@ -1779,10 +1779,18 @@ class TestCommandSurfaceEnhancements:
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with patch(
-                "bog_agents_cli.replay.save_replay_session",
-                return_value=app_module.Path(
-                    "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
+            with (
+                patch(
+                    "bog_agents_cli.replay.save_replay_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
+                    ),
+                ),
+                patch(
+                    "bog_agents_cli.replay.save_drive_script_for_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.drive.yaml"
+                    ),
                 ),
             ):
                 await app._handle_command("/record start bugfix-flow")
@@ -1801,6 +1809,12 @@ class TestCommandSurfaceEnhancements:
                     "bog_agents_cli.replay.list_replay_sessions",
                     return_value=[replay_session],
                 ),
+                patch(
+                    "bog_agents_cli.replay.save_drive_script_for_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.drive.yaml"
+                    ),
+                ),
                 patch.object(
                     app, "_send_prompt_to_agent", new=AsyncMock()
                 ) as mock_send,
@@ -1808,9 +1822,14 @@ class TestCommandSurfaceEnhancements:
                 await app._handle_command("/replay run bugfix-flow")
                 await pilot.pause()
 
+            # /replay run now drives each recorded user message
+            # individually through the agent rather than baking the
+            # session into a single prose prompt (the old
+            # build_replay_prompt path). One user_message in the
+            # fixture -> one send.
             mock_send.assert_awaited_once()
             assert mock_send.await_args is not None
-            assert "# Replay: bugfix-flow" in mock_send.await_args.args[0]
+            assert "Investigate the bug" in mock_send.await_args.args[0]
             app_msgs = app.query(AppMessage)
             assert any("Saved replay" in str(w._content) for w in app_msgs)
 
