@@ -11053,6 +11053,19 @@ class BogAgentsApp(App):
         prompt_block = render_prompt_block(result, intent=intent)
         await self._send_prompt_to_agent(prompt_block)
 
+    async def _handle_tracefile_command(self, command: str) -> None:
+        """Handle ``/trace …`` — TraceFile v1 export/import/verify/keygen.
+
+        Heavy paths (parse, hash, sign/verify) run on a worker thread.
+        Verification of an imported TraceFile is mandatory — the
+        controller never renders unverified content.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.tracefile.controller import dispatch as _trace_dispatch
+
+        output = await asyncio.to_thread(_trace_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_compliance_command(self, command: str) -> None:
         """Handle ``/compliance …`` — Wave R compliance auditor.
 

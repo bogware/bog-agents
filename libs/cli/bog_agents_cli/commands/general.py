@@ -311,6 +311,24 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/tracefile",
+            "TraceFile v1 — export, import, verify content-addressed signed "
+            "traces. Designed as an open format other agent CLIs can read + write.",
+            "tracefile export import verify ed25519 merkle signed portable causal",
+            "general",
+            available=True,
+            subcommands=(
+                ("export <session-id|latest>", "Sign + write a TraceFile"),
+                ("import <path>", "Verify and render a TraceFile"),
+                ("verify <path>", "Verify only; no render"),
+                ("keygen [--out PATH]", "Mint an Ed25519 keypair"),
+                ("help", "Usage"),
+            ),
+        ),
+        handler_method="_handle_tracefile_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/compliance",
             "Compliance auditor — run a YAML audit pack against the loaded "
             "rules + causal traces; produces a signed SOC2-aligned report",

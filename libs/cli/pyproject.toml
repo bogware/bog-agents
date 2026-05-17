@@ -354,6 +354,37 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# TraceFile v1 (Wave S). Open trace format with Ed25519-signed
+# manifests + Merkle-DAG framing. Adapter modules under
+# tracefile/exporters/ have user-facing error strings + ANN401 because
+# they ingest arbitrary dicts from other vendors' hook payloads.
+"bog_agents_cli/tracefile/**" = [
+    "TRY003",
+    "EM101",
+    "EM102",
+    "ANN401",
+    "BLE001",
+    "DOC501",
+    "DOC502",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+    "PLC0415",
+    "RET504",
+    "RUF001",
+    "TC001",
+    "TC003",
+    "ARG005",
+    "ARG004",
+    "PT004",
+    "S104",
+    "D101",   # LineKind enum is self-describing
+    "D102",   # KeyMaterial.can_sign property is self-describing
+    "D205",
+    "D301",   # Hook-payload docstring shows raw backslash escapes by design
+    "C901",   # Adapters have many branches mapping vendor payloads
+    "B007",   # idx loop var kept for future trace-line context
+]
 # Compliance auditor (Wave R). Pack loader + HMAC-sealed reports +
 # slash/cron dispatch — user-facing error strings throughout.
 "bog_agents_cli/compliance/**" = [
