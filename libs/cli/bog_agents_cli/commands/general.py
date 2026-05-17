@@ -283,6 +283,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/browser",
+            "Computer Use — Playwright-backed browser tools (navigate, click, screenshot, eval)",
+            "browser computer use playwright chromium navigate click screenshot",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show browser session status"),
+                ("close", "Close the active browser session"),
+            ),
+        ),
+        handler_method="_handle_browser_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/mcp",
             "MCP server marketplace — list, search, show, install, uninstall curated servers",
             "mcp model context protocol install marketplace registry tools",

@@ -354,6 +354,18 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# Computer Use / browser tools (Gap 6). Thin shim over Playwright;
+# property accessors + tool wrappers — D102 noise outweighs the value.
+"bog_agents_cli/computer_use.py" = [
+    "D102",     # Property accessors and tool wrappers
+    "DOC501",   # BrowserUnavailableError documented at module level
+    "BLE001",   # close() defensively traps bare Exception
+    "S110",     # try/except/pass on tool-error-path logging — intentional
+    "SLF001",   # Stash runtime on browser via _bog_runtime attribute
+    "TRY003",
+    "EM101",
+    "EM102",
+]
 # MCP marketplace (Gap 5). Small thin facade + curated catalog.
 "bog_agents_cli/mcp_marketplace.py" = [
     "D102",     # __call__ on the protocol stub is self-explanatory

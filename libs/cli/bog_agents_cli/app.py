@@ -10973,6 +10973,35 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_browser_command(self, command: str) -> None:
+        """Handle ``/browser …`` — Computer Use session control.
+
+        Today the slash command only manages the session lifecycle
+        (status / close). The actual browser tools are wired into
+        agents via ``computer_use.build_browser_tools()`` from
+        agent.py when the user opts in.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.computer_use import (
+            render_browser_status,
+            shutdown_browser,
+        )
+
+        rest = command.strip()[len("/browser"):].strip().lower()
+        if rest in ("", "status"):
+            output = render_browser_status()
+        elif rest in ("close", "stop", "shutdown"):
+            await shutdown_browser()
+            output = "Browser session closed."
+        else:
+            output = (
+                f"Unknown /browser subcommand: '{rest}'.\n\n"
+                "Usage:\n"
+                "  /browser           — show status\n"
+                "  /browser close     — close the active session"
+            )
+        await self._mount_message(AppMessage(output))
+
     async def _handle_mcp_command(self, command: str) -> None:
         """Handle ``/mcp …`` — MCP marketplace install / show / list.
 
