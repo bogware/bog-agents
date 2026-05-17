@@ -13,6 +13,7 @@ Textual app.
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,9 @@ class SidecarController:
 
 
 _CONTROLLERS: dict[Path, SidecarController] = {}
+# L4: thread-safe registry mutation. Same rationale as the other
+# per-cwd singletons.
+_CONTROLLERS_LOCK = threading.Lock()
 
 
 def get_controller(
@@ -157,24 +161,26 @@ def get_controller(
             without supplying ``model_factory``.
     """
     key = Path(working_dir).resolve()
-    if key not in _CONTROLLERS:
-        if model_factory is None:
-            msg = (
-                "SidecarController has not been built for this cwd yet — "
-                "the first call must pass model_factory=..."
+    with _CONTROLLERS_LOCK:
+        if key not in _CONTROLLERS:
+            if model_factory is None:
+                msg = (
+                    "SidecarController has not been built for this cwd yet — "
+                    "the first call must pass model_factory=..."
+                )
+                raise RuntimeError(msg)
+            _CONTROLLERS[key] = SidecarController(
+                working_dir=key,
+                model_factory=model_factory,
+                web_search=web_search,
             )
-            raise RuntimeError(msg)
-        _CONTROLLERS[key] = SidecarController(
-            working_dir=key,
-            model_factory=model_factory,
-            web_search=web_search,
-        )
-    return _CONTROLLERS[key]
+        return _CONTROLLERS[key]
 
 
 def reset_controllers() -> None:
     """Drop every cached controller. Test-only helper."""
-    _CONTROLLERS.clear()
+    with _CONTROLLERS_LOCK:
+        _CONTROLLERS.clear()
 
 
 # ---------------------------------------------------------------------------

@@ -14646,9 +14646,27 @@ class BogAgentsApp(App):
                 AppMessage(f"Step [{step_index + 1}/{len(pipeline.steps)}]: {step_id}")
             )
             await self._send_prompt_to_agent(rendered_text)
-            # Wait for the agent to finish before moving to the next step
+            # Wait for the agent to finish before moving to the next step.
+            # L2: cap the wait — without this, a hung agent (network
+            # outage, model stall, runaway loop) freezes the entire
+            # pipeline. The cap is generous (30 minutes) because some
+            # legitimate steps run long; the goal is to escape only
+            # genuinely hung calls. On timeout we surface an error
+            # message and let execute_pipeline mark the step as failed.
             if self._agent_worker is not None:
-                await self._agent_worker.wait()
+                import asyncio as _asyncio
+
+                try:
+                    await _asyncio.wait_for(
+                        self._agent_worker.wait(), timeout=1800.0
+                    )
+                except TimeoutError:
+                    await self._mount_message(
+                        ErrorMessage(
+                            f"Step '{step_id}' exceeded 30 minutes — moving on. "
+                            "Agent worker may still be running in the background."
+                        )
+                    )
 
         result = await execute_pipeline(pipeline, variable_values, on_step=on_step)
 
@@ -14664,7 +14682,7 @@ class BogAgentsApp(App):
             )
 
     async def _resume_expert_watcher(self) -> None:
-        """Resume the /expert watcher if a persistence file exists. (K2)
+        """Resume the /expert watcher if a persistence file exists (K2).
 
         Runs as a startup worker so a stale state file or a missing
         model factory can't block the TUI from coming up. Logs at info
@@ -14683,10 +14701,11 @@ class BogAgentsApp(App):
             controller = get_controller(self._cwd, model_factory=model_factory)
             # Register the notification surface so resumed watcher
             # proposals still toast.
+
             async def _surface(summary: str) -> None:  # noqa: RUF029
                 short = summary.replace("\n", " ")
                 short = short[:140] + ("…" if len(summary) > 140 else "")
-                with contextlib.suppress(Exception):
+                with suppress(Exception):
                     self.notify(f"💡 expert watcher: {short}", timeout=8)
 
             controller.set_watch_summary_callback(_surface)

@@ -305,3 +305,74 @@ class TestLiveCapture:
         s = r.finalize()
         assert len(s.steps) == 1
         assert s.steps[0].content == "real prompt"
+
+
+class TestL1CredentialRedaction:
+    """L1: ``record_tool_call`` must scrub credential-bearing fields.
+
+    Recordings land on disk under ``~/.bog-agents/replays/`` as plain
+    YAML, so any value we capture verbatim is a credential leak waiting
+    to happen. The recorder owns the denylist; callers should not have
+    to remember to redact.
+    """
+
+    def test_record_tool_call_redacts_obvious_secrets(self):
+        from bog_agents_cli.replay import SessionRecorder
+
+        r = SessionRecorder(name="redact")
+        r.start()
+        r.record_tool_call(
+            "http_get",
+            {
+                "url": "https://api.example.com/x",
+                "api_key": "sk-not-this-one",
+                "headers": {
+                    "Authorization": "Bearer 12345",
+                    "X-Trace": "ok-to-keep",
+                },
+            },
+        )
+        # Inspect the raw session before finalize() — the variabilizer
+        # rewrites benign fields (urls/paths) into ${var} placeholders,
+        # which would conflate "redacted" with "variabilized" here.
+        step = next(st for st in r._session.steps if st.kind == "tool_call")
+        assert step.args["url"] == "https://api.example.com/x"
+        assert step.args["api_key"] == "***REDACTED***"
+        assert step.args["headers"]["Authorization"] == "***REDACTED***"
+        assert step.args["headers"]["X-Trace"] == "ok-to-keep"
+        r.finalize()
+
+    def test_redact_secrets_handles_camelcase_keys(self):
+        from bog_agents_cli.replay import _redact_secrets
+
+        out = _redact_secrets(
+            {
+                "apiKey": "leak",
+                "passwordHash": "leak",
+                "client_secret": "leak",
+                "TOKEN": "leak",
+                "username": "ok",
+                "auth_header": "leak",
+            }
+        )
+        assert out["apiKey"] == "***REDACTED***"
+        assert out["passwordHash"] == "***REDACTED***"
+        assert out["client_secret"] == "***REDACTED***"
+        assert out["TOKEN"] == "***REDACTED***"
+        assert out["auth_header"] == "***REDACTED***"
+        assert out["username"] == "ok"
+
+    def test_redact_secrets_walks_lists(self):
+        from bog_agents_cli.replay import _redact_secrets
+
+        out = _redact_secrets(
+            {
+                "items": [
+                    {"name": "a", "api_key": "leak1"},
+                    {"name": "b", "api_key": "leak2"},
+                ],
+            }
+        )
+        assert out["items"][0]["api_key"] == "***REDACTED***"
+        assert out["items"][1]["api_key"] == "***REDACTED***"
+        assert out["items"][0]["name"] == "a"

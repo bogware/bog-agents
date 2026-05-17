@@ -14,6 +14,7 @@ share the same working memory.
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _CONTROLLERS: dict[Path, ExpertController] = {}
+# L4: guard the per-cwd singleton registry against concurrent
+# ``get_controller`` calls. Today the TUI is single-threaded asyncio so
+# the race is theoretical, but the SDK can be driven from worker
+# threads (non-interactive, daemon, tests) where this matters.
+_CONTROLLERS_LOCK = threading.Lock()
 
 
 def get_controller(
@@ -56,16 +62,18 @@ def get_controller(
             to swap.
     """
     key = Path(working_dir).resolve()
-    if key not in _CONTROLLERS:
-        _CONTROLLERS[key] = ExpertController(
-            working_dir=key, model_factory=model_factory
-        )
-    return _CONTROLLERS[key]
+    with _CONTROLLERS_LOCK:
+        if key not in _CONTROLLERS:
+            _CONTROLLERS[key] = ExpertController(
+                working_dir=key, model_factory=model_factory
+            )
+        return _CONTROLLERS[key]
 
 
 def reset_controllers() -> None:
     """Drop every cached controller. Test-only helper."""
-    _CONTROLLERS.clear()
+    with _CONTROLLERS_LOCK:
+        _CONTROLLERS.clear()
 
 
 # ---------------------------------------------------------------------------

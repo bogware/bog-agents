@@ -76,12 +76,17 @@ class TeachSession:
             tool_args: Arguments passed to the tool.
             result: Result from the tool.
         """
+        # L1: strip credential-bearing keys before recording. Teach
+        # recordings live on disk under ~/.bog-agents/teach/, so the
+        # same denylist that protects replay sessions applies here.
+        from bog_agents_cli.replay import _redact_secrets
+
         self.actions.append(
             RecordedAction(
                 timestamp=time.time(),
                 action_type="tool_call",
                 tool_name=tool_name,
-                tool_args=tool_args,
+                tool_args=_redact_secrets(tool_args or {}),
                 result=result[:500],  # Truncate long results
             )
         )

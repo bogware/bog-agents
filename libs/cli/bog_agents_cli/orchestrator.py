@@ -16,6 +16,7 @@ similar and operators see one consistent shape: pure-logic module
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -490,6 +491,16 @@ def _run_subtasks_parallel(
     """
     import asyncio
 
+    # L3: scale the outer cap with the per-subtask iteration budget.
+    # Each iteration is one LLM call + tool round; ~60s is a generous
+    # upper bound. We further pad by 30% so genuinely slow models
+    # don't hit the wall, then cap at one hour absolute so a single
+    # hung subtask can't freeze the whole TUI.
+    outer_cap_seconds = min(
+        3600.0,
+        max(120.0, max_iterations_per_subtask * 60.0 * 1.3),
+    )
+
     async def _gather() -> list[SubtaskResult]:
         tasks = [
             asyncio.to_thread(
@@ -502,7 +513,31 @@ def _run_subtasks_parallel(
             )
             for st in subtasks
         ]
-        return await asyncio.gather(*tasks)
+        try:
+            return await asyncio.wait_for(
+                asyncio.gather(*tasks), timeout=outer_cap_seconds
+            )
+        except TimeoutError:
+            # Fill any unfinished slots with a timeout-marker so the
+            # caller still gets a list aligned to ``subtasks``.
+            results: list[SubtaskResult] = []
+            for st, task in zip(subtasks, tasks, strict=False):
+                if isinstance(task, asyncio.Task) and task.done():
+                    with contextlib.suppress(Exception):
+                        results.append(task.result())
+                        continue
+                results.append(
+                    SubtaskResult(
+                        subtask=st,
+                        output="",
+                        elapsed_seconds=outer_cap_seconds,
+                        error=(
+                            f"subtask timed out (outer cap "
+                            f"{outer_cap_seconds:.0f}s)"
+                        ),
+                    )
+                )
+            return results
 
     try:
         loop = asyncio.get_event_loop()

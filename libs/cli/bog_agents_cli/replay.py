@@ -166,11 +166,18 @@ class SessionRecorder:
     ) -> None:
         if not self._recording or not tool or self._bounded():
             return
+        # L1: redact obvious credential-bearing keys *before* they hit
+        # disk. Recordings are stored under ~/.bog-agents/replays/ in
+        # plain YAML — anyone with the file gets these values. The
+        # denylist matches keys exactly and as a substring, since some
+        # callers pass camelCase ``apiKey`` and others pass
+        # ``Authorization``-style header names.
+        safe_args = _redact_secrets(args or {})
         self._session.steps.append(
             ReplayStep(
                 kind="tool_call",
                 tool=tool,
-                args=dict(args or {}),
+                args=safe_args,
                 result_pattern=(result or "")[:200],
             )
         )
@@ -251,6 +258,52 @@ def _shared_variabilize(
         if chosen != name:
             rewritten = rewritten.replace("${" + name + "}", "${" + chosen + "}")
     return rewritten, fresh
+
+
+# L1: keys whose values are stripped from on-disk tool-call recordings.
+# Match is case-insensitive substring. Keep this list conservative —
+# we'd rather over-redact a benign field than leak a credential.
+_REDACT_KEY_SUBSTRINGS = (
+    "api_key",
+    "apikey",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "authorization",
+    "auth_header",
+    "private_key",
+    "client_secret",
+)
+
+_REDACTED_PLACEHOLDER = "***REDACTED***"
+
+
+def _redact_secrets(args: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of *args* with credential-bearing values masked.
+
+    Walks one level of nested dicts and lists since tool-call args are
+    usually flat but a few wrappers ship a single ``headers`` dict.
+    Strings only — non-string values that match a denylist key are
+    replaced with the literal placeholder too, since a bool/int there
+    almost certainly indicates a malformed arg the user doesn't want
+    captured either.
+    """
+
+    def _redact_value(key: str, value: Any) -> Any:
+        if any(needle in key.lower() for needle in _REDACT_KEY_SUBSTRINGS):
+            return _REDACTED_PLACEHOLDER
+        if isinstance(value, dict):
+            return {k: _redact_value(k, v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [
+                _redact_value(key, item) if not isinstance(item, dict)
+                else {k: _redact_value(k, v) for k, v in item.items()}
+                for item in value
+            ]
+        return value
+
+    return {k: _redact_value(k, v) for k, v in args.items()}
 
 
 def _new_session_id() -> str:

@@ -9,6 +9,7 @@ thin dispatcher the TUI handler calls.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,10 @@ class OrchestratorController:
 
 
 _CONTROLLERS: dict[Path, OrchestratorController] = {}
+# L4: guard the singleton registry against concurrent get_controller
+# calls so a worker-thread driver can't accidentally create two
+# controllers for the same cwd.
+_CONTROLLERS_LOCK = threading.Lock()
 
 
 def get_controller(
@@ -91,22 +96,24 @@ def get_controller(
             without ``model_factory``.
     """
     key = Path(working_dir).resolve()
-    if key not in _CONTROLLERS:
-        if model_factory is None:
-            msg = (
-                "OrchestratorController has not been built for this cwd yet — "
-                "the first call must pass model_factory=..."
+    with _CONTROLLERS_LOCK:
+        if key not in _CONTROLLERS:
+            if model_factory is None:
+                msg = (
+                    "OrchestratorController has not been built for this cwd yet — "
+                    "the first call must pass model_factory=..."
+                )
+                raise RuntimeError(msg)
+            _CONTROLLERS[key] = OrchestratorController(
+                working_dir=key, model_factory=model_factory
             )
-            raise RuntimeError(msg)
-        _CONTROLLERS[key] = OrchestratorController(
-            working_dir=key, model_factory=model_factory
-        )
-    return _CONTROLLERS[key]
+        return _CONTROLLERS[key]
 
 
 def reset_controllers() -> None:
     """Drop every cached controller. Test-only."""
-    _CONTROLLERS.clear()
+    with _CONTROLLERS_LOCK:
+        _CONTROLLERS.clear()
 
 
 def dispatch(

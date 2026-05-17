@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -112,6 +113,12 @@ class DreamSchedulerStats:
 
 # Module-level registry so re-imports don't spawn duplicate tasks.
 _GLOBAL_SCHEDULERS: dict[str, DreamScheduler] = {}
+# L4: guard registry mutation. ``ensure_scheduler`` is normally called
+# from the agent-build path (TUI thread), but the SDK can be driven
+# from worker threads. Without a lock, two concurrent calls for the
+# same agent_id could race past the dict-membership check and create
+# two scheduler tasks.
+_GLOBAL_SCHEDULERS_LOCK = threading.Lock()
 
 
 class DreamScheduler:
@@ -344,32 +351,35 @@ def ensure_scheduler(
     overwrites the existing callback in place so the user always gets
     the most recent wiring.
     """
-    existing = _GLOBAL_SCHEDULERS.get(agent_id)
-    if existing is not None:
-        if on_dream_complete is not None:
-            existing.set_on_dream_complete(on_dream_complete)
-        return existing
-    scheduler = DreamScheduler(
-        agent_id=agent_id,
-        model=model,
-        dreams_cfg=dreams_cfg,
-        lifecycle_cfg=lifecycle_cfg,
-        poll_seconds=poll_seconds,
-        on_dream_complete=on_dream_complete,
-    )
-    _GLOBAL_SCHEDULERS[agent_id] = scheduler
-    return scheduler
+    with _GLOBAL_SCHEDULERS_LOCK:
+        existing = _GLOBAL_SCHEDULERS.get(agent_id)
+        if existing is not None:
+            if on_dream_complete is not None:
+                existing.set_on_dream_complete(on_dream_complete)
+            return existing
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=model,
+            dreams_cfg=dreams_cfg,
+            lifecycle_cfg=lifecycle_cfg,
+            poll_seconds=poll_seconds,
+            on_dream_complete=on_dream_complete,
+        )
+        _GLOBAL_SCHEDULERS[agent_id] = scheduler
+        return scheduler
 
 
 def get_scheduler(agent_id: str) -> DreamScheduler | None:
     """Return the registered scheduler for ``agent_id`` or None."""
-    return _GLOBAL_SCHEDULERS.get(agent_id)
+    with _GLOBAL_SCHEDULERS_LOCK:
+        return _GLOBAL_SCHEDULERS.get(agent_id)
 
 
 async def stop_all_schedulers() -> None:
     """Cancel every registered scheduler. Useful in test teardown."""
-    schedulers = list(_GLOBAL_SCHEDULERS.values())
-    _GLOBAL_SCHEDULERS.clear()
+    with _GLOBAL_SCHEDULERS_LOCK:
+        schedulers = list(_GLOBAL_SCHEDULERS.values())
+        _GLOBAL_SCHEDULERS.clear()
     for scheduler in schedulers:
         with suppress(Exception):
             await scheduler.stop()
@@ -377,4 +387,5 @@ async def stop_all_schedulers() -> None:
 
 def clear_registry() -> None:
     """Drop the registry WITHOUT cancelling tasks. Tests only."""
-    _GLOBAL_SCHEDULERS.clear()
+    with _GLOBAL_SCHEDULERS_LOCK:
+        _GLOBAL_SCHEDULERS.clear()
