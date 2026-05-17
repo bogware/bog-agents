@@ -92,11 +92,19 @@ class SidecarController:
                 error="empty question — pass `/sidecar <your question>`",
             )
 
-        context_summary = (
-            context_override
-            if context_override is not None
-            else summarize_parent_context(parent_messages or ())
-        )
+        # When neither context_override nor parent_messages is supplied,
+        # fall back to the CLI-wide conversation buffer so /sidecar
+        # has real situational awareness without the user having to
+        # paste anything. The buffer is bounded + thread-safe.
+        if context_override is not None:
+            context_summary = context_override
+        elif parent_messages:
+            context_summary = summarize_parent_context(parent_messages)
+        else:
+            from bog_agents_cli.conversation_buffer import recent_messages
+
+            buffered = recent_messages(self._working_dir)
+            context_summary = summarize_parent_context(buffered)
 
         try:
             model = self._model_factory()

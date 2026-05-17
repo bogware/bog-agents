@@ -13961,6 +13961,15 @@ class BogAgentsApp(App):
             except Exception:
                 logger.warning("recorder feed failed; continuing", exc_info=True)
 
+        # Wave H: also tap the conversation_buffer so /sidecar and
+        # /expert propose can auto-summarise the parent context without
+        # the user having to paste anything. Cheap + thread-safe — never
+        # raises out of this codepath.
+        try:
+            self._buffer_message(widget)
+        except Exception:
+            logger.debug("conversation_buffer tap failed", exc_info=True)
+
         # Store message data for virtualization
         message_data = MessageData.from_widget(widget)
         # Ensure the widget's DOM id matches the store id so that
@@ -13985,6 +13994,28 @@ class BogAgentsApp(App):
             input_container.scroll_visible()
         except NoMatches:
             pass
+
+    def _buffer_message(self, widget: Any) -> None:  # noqa: ANN401 — duck-typed widget
+        """Record the widget's text into the per-cwd conversation buffer.
+
+        Used by /sidecar (Wave H) and /expert propose to auto-summarise
+        the parent conversation. Maps the widget class to a role:
+        UserMessage → "user", AssistantMessage → "assistant", anything
+        else → "app" (filtered out by default consumers).
+        """
+        from bog_agents_cli.conversation_buffer import get_buffer
+
+        text_source = getattr(widget, "renderable", None) or getattr(widget, "content", None)
+        text = str(text_source) if text_source is not None else ""
+        if not text:
+            return
+        if isinstance(widget, UserMessage):
+            role = "user"
+        elif isinstance(widget, AssistantMessage):
+            role = "assistant"
+        else:
+            role = "app"
+        get_buffer(self._cwd).record(role=role, content=text)
 
     def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401, PLR6301 — duck-typed; method form mirrors siblings
         """Translate a mounted message widget into a recorder event.
