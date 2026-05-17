@@ -44,6 +44,24 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/async",
+            "Fire-and-forget agent task — submit, get a job id, "
+            "get a toast on completion",
+            "background async detached fire-and-forget delegate task",
+            "agent",
+            available=True,
+            subcommands=(
+                ("<prompt>", "Submit a prompt to run in the background"),
+                ("list", "Show all async tasks (alias for /background list)"),
+                ("wait <id> [timeout]", "Block until <id> finishes, then show the result inline"),
+                ("status <id>", "Show one task's status"),
+                ("cancel <id>", "Cancel a running task"),
+            ),
+        ),
+        handler_method="_handle_async_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/dashboard",
             "Show the multi-agent dashboard with status and costs",
             "agents monitor panel",

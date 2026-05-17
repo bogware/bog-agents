@@ -297,23 +297,6 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
-            "/mcp",
-            "MCP server marketplace — list, search, show, install, uninstall curated servers",
-            "mcp model context protocol install marketplace registry tools",
-            "general",
-            available=True,
-            subcommands=(
-                ("marketplace [query]", "List or search the curated catalog"),
-                ("show <name>", "Show one entry's details + required env vars"),
-                ("install <name> [--as <id>] [--overwrite] [KEY=value …]",
-                 "Install a server into ~/.bog-agents/.mcp.json"),
-                ("uninstall <name>", "Remove a server from the user MCP config"),
-            ),
-        ),
-        handler_method="_handle_mcp_command",
-    ),
-    SlashCommand(
-        spec=SlashCommandSpec(
             "/web",
             "Fetch a URL and add the cleaned page content to the conversation as context",
             "url fetch http get page web scrape document docs reference",

@@ -11002,28 +11002,6 @@ class BogAgentsApp(App):
             )
         await self._mount_message(AppMessage(output))
 
-    async def _handle_mcp_command(self, command: str) -> None:
-        """Handle ``/mcp …`` — MCP marketplace install / show / list.
-
-        For environment-variable prompts during install, we run the
-        controller on a worker thread but the prompter itself
-        bounces back through the Textual app via ``call_from_thread``
-        so the user sees a modal. When no env values are needed (a
-        listing or show), the worker thread just renders text.
-        """
-        await self._mount_message(UserMessage(command))
-        from bog_agents_cli.mcp_marketplace_controller import handle as _mcp_handle
-
-        rest = command.strip()
-        # Plain non-interactive paths (listing, show, uninstall, install
-        # with full inline KEY=value coverage) don't need a prompter.
-        # Install with required env vars that aren't supplied inline
-        # returns a "missing required" message — we can refine to use a
-        # Textual modal prompt in a follow-up; for now the inline form
-        # is the supported flow.
-        output = await asyncio.to_thread(_mcp_handle, rest)
-        await self._mount_message(AppMessage(output))
-
     async def _handle_web_command(self, command: str) -> None:
         """Handle ``/web <url> [-- <question>]`` — fetch a URL into context.
 
@@ -12173,6 +12151,97 @@ class BogAgentsApp(App):
             )
         except RuntimeError as exc:
             await self._mount_message(AppMessage(f"Error: {exc}"))
+
+    async def _handle_async_command(self, command: str) -> None:
+        """Handle ``/async …`` — fire-and-forget agent tasks (Gap 4).
+
+        Thin alias over the existing /background machinery with one
+        net-new verb: ``/async wait <id> [timeout]`` blocks the user
+        until the task finishes, then mounts the result inline. The
+        rest of the surface (list, status, cancel, submit) delegates
+        to the same BackgroundAgentManager.
+        """
+        await self._mount_message(UserMessage(command))
+        rest = command.strip()[len("/async"):].strip()
+        if not rest or rest.lower() == "list":
+            await self._handle_background_command("/background list")
+            return
+        head, _, tail = rest.partition(" ")
+        head = head.lower()
+        if head in ("status", "cancel"):
+            await self._handle_background_command(f"/background {head} {tail.strip()}")
+            return
+        if head == "wait":
+            await self._async_wait(tail.strip())
+            return
+        # Anything else is a prompt to submit — same dispatch as
+        # /background <prompt>, then show the task id as the immediate
+        # reply (the on_complete callback will mount the result when
+        # the task lands).
+        await self._handle_background_command(f"/background {rest}")
+
+    async def _async_wait(self, args: str) -> None:
+        """Implement ``/async wait <id> [timeout-seconds]``.
+
+        Polls the background manager once a second up to *timeout*
+        (default 600s) and mounts the result inline when the task
+        reaches a terminal status. Polling rather than callback-based
+        because the user explicitly opted to *wait* — the callback
+        infrastructure already toasts on completion regardless.
+        """
+        await self._ensure_background_manager()
+        tokens = args.strip().split()
+        if not tokens:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /async wait <task-id> [timeout-seconds]"
+                )
+            )
+            return
+        task_id = tokens[0]
+        timeout_seconds = 600.0
+        if len(tokens) > 1:
+            try:
+                timeout_seconds = max(1.0, float(tokens[1]))
+            except ValueError:
+                await self._mount_message(
+                    AppMessage(f"Invalid timeout: {tokens[1]!r}")
+                )
+                return
+        from bog_agents_cli.background_agents import BackgroundStatus
+
+        deadline = _monotonic() + timeout_seconds
+        last_status: str = ""
+        while _monotonic() < deadline:
+            task = self._bg_manager.get_status(task_id)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"No background task with id {task_id!r}.")
+                )
+                return
+            status = getattr(task, "status", "")
+            if status != last_status:
+                last_status = str(status)
+                logger.debug(
+                    "/async wait %s: status=%s", task_id, last_status
+                )
+            if status in (
+                BackgroundStatus.COMPLETED,
+                BackgroundStatus.FAILED,
+                BackgroundStatus.CANCELLED,
+            ):
+                await self._mount_message(
+                    AppMessage(self._format_background_task_detail(task))
+                )
+                return
+            await asyncio.sleep(1.0)
+        await self._mount_message(
+            AppMessage(
+                f"/async wait timed out after {timeout_seconds:.0f}s "
+                f"(task {task_id} still {last_status or 'unknown'}). "
+                "Use /async status to check again, or /async cancel to stop it."
+            )
+        )
 
     async def _notify_background_complete(self, task: object) -> None:
         """Show a notification when a background task finishes.
