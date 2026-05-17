@@ -354,6 +354,15 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# /web URL-fetch surface (Gap 10). User-facing error messages are
+# inlined into exceptions; the urllib3 wrapper is intentionally light.
+"bog_agents_cli/web_fetch.py" = [
+    "S110",     # try/except/pass on body-decoding fallback — intentional
+    "BLE001",   # decode_body fallback traps bare Exception
+    "TRY003",   # User-facing error strings
+    "EM101",    # Raw string in exception — user-facing
+    "EM102",    # f-string in exception — user-facing
+]
 # Causal subsystem (trace-mind). Same shape as the expert package: a
 # thin facade with property accessors, a dispatch table, and structured
 # exception messages aimed at end users.

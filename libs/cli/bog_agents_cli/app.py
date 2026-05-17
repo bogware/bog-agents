@@ -10973,6 +10973,57 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_web_command(self, command: str) -> None:
+        """Handle ``/web <url> [-- <question>]`` — fetch a URL into context.
+
+        Parses the rest of the slash command into ``url`` and an
+        optional follow-up question (separated by ``--``). The fetch
+        runs on a worker thread so the TUI loop stays responsive,
+        then the cleaned content is fed to the agent as if the user
+        had pasted it — letting the rest of the agent surface
+        (citations middleware, expert rules, trace-mind) treat the
+        web content as a normal turn.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.web_fetch import (
+            WebFetchError,
+            fetch_url,
+            render_prompt_block,
+        )
+
+        rest = command.strip()[len("/web"):].strip()
+        if not rest:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /web <url> [-- <question>]\n"
+                    "  Example: /web https://docs.python.org/3/library/asyncio.html\n"
+                    "  Example: /web https://example.com/foo -- summarize the first section"
+                )
+            )
+            return
+        if " -- " in rest:
+            url_part, _, intent = rest.partition(" -- ")
+        else:
+            url_part, intent = rest, ""
+        url = url_part.strip()
+        intent = intent.strip()
+        await self._mount_message(AppMessage(f"Fetching {url} …"))
+        try:
+            result = await asyncio.to_thread(fetch_url, url)
+        except WebFetchError as exc:
+            await self._mount_message(ErrorMessage(f"/web failed: {exc}"))
+            return
+        body_chars = len(result.body)
+        await self._mount_message(
+            AppMessage(
+                f"Fetched [bold]{result.final_url}[/bold]  "
+                f"({result.status_code}, {body_chars} chars"
+                + (", truncated)" if result.truncated else ")")
+            )
+        )
+        prompt_block = render_prompt_block(result, intent=intent)
+        await self._send_prompt_to_agent(prompt_block)
+
     async def _handle_causal_command(self, command: str) -> None:
         """Handle ``/causal`` (and ``/trace-mind`` alias) — trace-mind causal replay.
 

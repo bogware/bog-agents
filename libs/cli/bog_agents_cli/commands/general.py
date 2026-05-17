@@ -283,6 +283,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/web",
+            "Fetch a URL and add the cleaned page content to the conversation as context",
+            "url fetch http get page web scrape document docs reference",
+            "general",
+            available=True,
+            subcommands=(
+                ("<url>", "Fetch URL and inject as context"),
+                ("<url> -- <question>", "Fetch URL then ask the agent <question> about it"),
+            ),
+        ),
+        handler_method="_handle_web_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/causal",
             "Causal replay — see the proof tree behind any agent decision, "
             "tool call, or final answer",
