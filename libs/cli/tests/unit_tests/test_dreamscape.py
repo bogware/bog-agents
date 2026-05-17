@@ -661,6 +661,8 @@ class TestDreamCompleteCallback:
         assert seen, f"expected callback, stats={scheduler.stats}"
         assert seen[0][0] == agent_id
         assert isinstance(seen[0][1], str)
+        assert scheduler.stats.completion_callbacks_dispatched >= 1
+        assert scheduler.stats.completion_callbacks_failed == 0
 
     async def test_callback_exception_does_not_kill_scheduler(
         self, tmp_path: Path
@@ -711,6 +713,88 @@ class TestDreamCompleteCallback:
         assert scheduler.is_running, "scheduler must survive callback error"
         await scheduler.stop()
         assert scheduler.stats.dreams_fired >= 1
+        assert scheduler.stats.completion_callbacks_failed >= 1
+
+    async def test_scheduler_restart_is_iterative_not_recursive(
+        self, tmp_path: Path
+    ) -> None:
+        """Restart cycles run on the outer while loop, not recursion.
+
+        A repeated crash inside ``_tick_once`` must keep the scheduler
+        running with bounded stack depth. We exercise this by patching
+        ``_tick_once`` to always raise and verifying the scheduler
+        keeps ticking without exploding the call stack. Prior to the
+        fix, persistent outages awaited a recursive ``_run()`` call,
+        which would have eventually exceeded recursion limits.
+        """
+        import asyncio
+        import sys
+        import time
+
+        from bog_agents_cli.dreamscape import lifecycle as lc_mod
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        agent_id = "k-restart-iter"
+        snap = lc_mod.LifecycleSnapshot(
+            agent_id=agent_id, last_activity_at=time.time() - 7200
+        )
+        lc_mod.save_snapshot(snap)
+
+        s = DreamScheduler(
+            agent_id=agent_id,
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(
+                auto_on_dormancy=True,
+                max_seeds_per_dream=2,
+            ),
+            lifecycle_cfg=LifecycleConfig(
+                enabled=True,
+                dormancy_after_seconds=2,
+                dreaming_after_dormant_seconds=1,
+            ),
+            poll_seconds=0.05,
+        )
+        # Force an exception in the hot loop by patching the bound
+        # _tick_once method to raise. Use a tight no-op sleep override
+        # to make recovery fast in this test.
+        boom_count = [0]
+
+        async def boom(self_):  # type: ignore[no-untyped-def]
+            boom_count[0] += 1
+            msg = "synthetic"
+            raise RuntimeError(msg)
+
+        s._tick_once = boom.__get__(s, DreamScheduler)  # type: ignore[method-assign]
+
+        # Shorten the restart sleep so the test doesn't take 30s.
+        orig_sleep = asyncio.sleep
+
+        async def fast_sleep(delay):  # type: ignore[no-untyped-def]
+            await orig_sleep(min(delay, 0.05))
+
+        import bog_agents_cli.dreamscape.scheduler as sched_mod
+        sched_mod.asyncio.sleep = fast_sleep  # type: ignore[assignment]
+        try:
+            depth_before = sys.getrecursionlimit()
+            s.start()
+            # Let the loop crash and restart a few times.
+            for _ in range(30):
+                await asyncio.sleep(0.05)
+                if s.stats.errors >= 2:
+                    break
+            await s.stop()
+            assert s.stats.errors >= 2, (
+                f"expected restart cycles, got errors={s.stats.errors}, "
+                f"boom={boom_count[0]}"
+            )
+            # The whole point: didn't blow the stack.
+            assert sys.getrecursionlimit() == depth_before
+        finally:
+            sched_mod.asyncio.sleep = orig_sleep  # type: ignore[assignment]
 
     async def test_set_on_dream_complete_replaces_callback(
         self, tmp_path: Path

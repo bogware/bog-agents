@@ -100,6 +100,15 @@ class DreamSchedulerStats:
     the durable record. We keep this in-memory for tests + the live
     integration data capture."""
 
+    completion_callbacks_dispatched: int = 0
+    """K5 observability: times the ``on_dream_complete`` callback was
+    fired (one per successful dream when wired)."""
+
+    completion_callbacks_failed: int = 0
+    """K5 observability: times the ``on_dream_complete`` callback
+    raised an exception. Non-zero values point at a misbehaving
+    proposer (or other consumer) — the scheduler itself keeps running."""
+
 
 # Module-level registry so re-imports don't spawn duplicate tasks.
 _GLOBAL_SCHEDULERS: dict[str, DreamScheduler] = {}
@@ -209,30 +218,35 @@ class DreamScheduler:
     async def _run(self) -> None:
         """The hot loop. Catches every exception so a misbehaving dream
         cannot crash the asyncio task.
+
+        Restart strategy: a transient outage shouldn't permanently
+        disable dreaming, but recursive self-restart (the original
+        v1 behavior) was a latent stack-blow-up risk if the outage
+        persisted for hours. We now restart by re-entering the outer
+        ``while True`` instead — bounded stack, identical behavior.
+        ``CancelledError`` still propagates so ``stop()`` works.
         """
-        try:
-            while True:
-                self.stats.ticks += 1
-                self.stats.last_tick_at = time.time()
-                if is_emergency_disabled():
-                    self.stats.skipped_emergency_disable += 1
-                else:
-                    await self._tick_once()
-                await asyncio.sleep(self._poll_seconds)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "DreamScheduler loop crashed (agent=%s); restarting in 30s",
-                self._agent_id,
-            )
-            self.stats.errors += 1
-            with suppress(asyncio.CancelledError):
+        while True:
+            try:
+                while True:
+                    self.stats.ticks += 1
+                    self.stats.last_tick_at = time.time()
+                    if is_emergency_disabled():
+                        self.stats.skipped_emergency_disable += 1
+                    else:
+                        await self._tick_once()
+                    await asyncio.sleep(self._poll_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "DreamScheduler loop crashed (agent=%s); restarting in 30s",
+                    self._agent_id,
+                )
+                self.stats.errors += 1
+                # Iterative restart — sleep then loop back to the outer
+                # while to start a fresh inner loop.
                 await asyncio.sleep(30)
-                # Self-restart so a transient model outage doesn't
-                # permanently disable dreaming. The recursive call is
-                # safe because the outer task is the one re-entering.
-                await self._run()
 
     async def _tick_once(self) -> None:
         """One pass: check eligibility, optionally fire a dream."""
@@ -291,6 +305,7 @@ class DreamScheduler:
         )
         self._completion_tasks.add(task)
         task.add_done_callback(self._completion_tasks.discard)
+        self.stats.completion_callbacks_dispatched += 1
 
     async def _invoke_completion(
         self, cb: DreamCompleteCallback, title: str
@@ -298,6 +313,7 @@ class DreamScheduler:
         try:
             await cb(self._agent_id, title)
         except Exception:
+            self.stats.completion_callbacks_failed += 1
             logger.exception(
                 "DreamScheduler on_dream_complete callback raised "
                 "(agent=%s)",
