@@ -27,8 +27,10 @@ from bog_agents.middleware.expert_engine import (
     PredicateOp,
     build_proposal as build_authoring_proposal,
     lint as lint_rules,
+    menu_text as wizard_menu_text,
     render_proposal as render_authoring_proposal,
     render_report as render_lint_report,
+    run_wizard as run_wizard_step,
     save_proposal as save_authoring_proposal,
 )
 from bog_agents.middleware.expert_engine.backward import render_tree
@@ -354,13 +356,21 @@ class ExpertController:
     def _rules_dir(self) -> Path:
         return self._working_dir / ".bog-agents" / "expert_rules"
 
-    def propose_from_dreamscape(self, agent_id: str = "default") -> str:
-        """``/expert propose [agent]`` — mine dreams + tool history → propose rules.
+    def propose_from_dreamscape(
+        self,
+        agent_id: str = "default",
+        *,
+        auto_activate: bool = False,
+    ) -> str:
+        """``/expert propose [agent] [--apply]`` — mine dreams + tool history → propose rules.
 
-        Builds a :class:`ProposalRun` via
-        :func:`dreamscape.rule_proposer.propose_rules`, writes the
-        result under ``.bog-agents/expert_rules/proposals/`` (NEVER the
-        live rules dir — proposals require explicit human approval).
+        Args:
+            agent_id: Dreamscape agent id.
+            auto_activate: When True, write the proposed rule straight
+                to the active rules directory and hot-reload the engine
+                so it fires on the next tool call. Use only when the
+                user has explicitly opted in via ``--apply``. Default
+                False keeps the safer staged-then-approve pattern.
         """
         if self._model_factory is None:
             return (
@@ -382,7 +392,9 @@ class ExpertController:
             tool_history=self._middleware.tool_call_history,
             existing_rules=[r.name for r in self._middleware.engine.rules],
             proposals_dir=self._proposals_dir(),
+            rules_dir=self._rules_dir(),
             save=True,
+            auto_activate=auto_activate,
         )
         if run.error and run.proposal is None:
             return f"Propose failed: {run.error}"
@@ -400,10 +412,24 @@ class ExpertController:
                 "Model output (first 400 chars):\n"
                 f"{yaml_preview}"
             )
+        if run.active:
+            count, err = self._middleware.reload()
+            lines = [
+                f"⚡ Auto-activated rule: {run.saved_path.name}",
+                f"  → wrote to {run.saved_path}",
+                f"  → {count} rule(s) now active",
+            ]
+            if err:
+                lines.append(f"  → reload warning: {err}")
+            lines.append(
+                f"  → revert by removing {run.saved_path.name} and running /expert reload"
+            )
+            return "\n".join(lines)
         return (
             f"Saved proposal: {run.saved_path.name}\n"
             f"  → review with /expert proposals\n"
-            f"  → approve with /expert proposals approve {run.saved_path.name}"
+            f"  → approve with /expert proposals approve {run.saved_path.name}\n"
+            f"  → or skip staging next time with: /expert propose --apply"
         )
 
     def list_proposals(self) -> str:
@@ -435,6 +461,58 @@ class ExpertController:
         if err:
             line += f"\nReload reported: {err}"
         return line
+
+    def wizard(self, args: str) -> str:
+        """``/expert wizard [<category> [intent]]`` — guided rule-author flow.
+
+        With no args, prints the category menu. With a category and an
+        intent, runs the wizard step (category framing + intent → LLM
+        → AuthoringProposal) and stashes the result on
+        :attr:`_pending_proposal` so the user can ``/expert write save``
+        it just like a normal ``/expert write`` proposal.
+        """
+        args = args.strip()
+        if not args:
+            return wizard_menu_text()
+        head, _, rest = args.partition(" ")
+        category_key = head.lower()
+        intent = rest.strip()
+        # No model needed for the menu / empty-intent help paths.
+        if not intent:
+            run = run_wizard_step(
+                category_key=category_key,
+                intent="",
+                model=_NullModel(),  # never called when intent is empty
+            )
+            return run.error or wizard_menu_text()
+        if self._model_factory is None:
+            return (
+                "Cannot run wizard: no model factory configured. "
+                "Pass model_factory= to ExpertController."
+            )
+        try:
+            model = self._model_factory()
+        except Exception as exc:
+            return f"Could not build wizard model: {exc}"
+        history = self._middleware.tool_call_history
+        run = run_wizard_step(
+            category_key=category_key,
+            intent=intent,
+            model=model,
+            history=history,
+        )
+        if run.error:
+            return run.error
+        if run.proposal is None:
+            return f"Wizard returned no proposal for category {category_key!r}."
+        self._pending_proposal = run.proposal
+        lines = [
+            f"== Wizard ({run.category.title if run.category else category_key}) ==",
+            f"Intent: {run.proposal.intent[:200]}",
+            "",
+            render_authoring_proposal(run.proposal),
+        ]
+        return "\n".join(lines)
 
     def discard_proposal_file(self, name: str) -> str:
         """``/expert proposals discard <name>`` — delete a pending proposal."""
@@ -555,8 +633,18 @@ class ExpertController:
         if sub == "write":
             return self._dispatch_write(rest)
         if sub == "propose":
-            agent = rest.strip() or "default"
-            return self.propose_from_dreamscape(agent)
+            tokens = rest.strip().split()
+            auto = False
+            agent_tokens = []
+            for tok in tokens:
+                if tok in ("--apply", "--auto", "--activate"):
+                    auto = True
+                else:
+                    agent_tokens.append(tok)
+            agent = " ".join(agent_tokens).strip() or "default"
+            return self.propose_from_dreamscape(agent, auto_activate=auto)
+        if sub == "wizard":
+            return self.wizard(rest)
         if sub == "proposals":
             return self._dispatch_proposals(rest)
         if sub == "status":
@@ -577,12 +665,14 @@ class ExpertController:
             "  /expert write <intent>               — LLM generates a rule from your description\n"
             "  /expert write save [filename]        — commit the most recent /expert write proposal\n"
             "  /expert write cancel                 — discard the pending proposal\n"
-            "  /expert propose [agent]              — mine dreams + history → propose rules\n"
+            "  /expert propose [agent] [--apply]    — mine dreams + history → propose (or apply) rules\n"
             "  /expert proposals                    — list pending proposals\n"
             "  /expert proposals approve <name>     — promote a proposal to active rules\n"
             "  /expert proposals discard <name>     — delete a proposal\n"
             "  /expert run                          — run engine to fixed point\n"
             "  /expert reload                       — reload rules from disk\n"
+            "  /expert wizard                       — show the guided setup menu\n"
+            "  /expert wizard <category> <intent>   — build a rule via the wizard\n"
             "  /expert example                      — print a starter rule"
         )
 
@@ -626,8 +716,23 @@ class ExpertController:
 
 
 # ---------------------------------------------------------------------------
-# Parsing helpers
+# Placeholders + parsing helpers
 # ---------------------------------------------------------------------------
+
+
+class _NullModel:
+    """Placeholder for the wizard's "no-intent → help" path.
+
+    ``run_wizard`` only calls ``model.invoke`` when there's an intent
+    to author; the no-intent help branch returns formatted text without
+    going to the LLM. We hand this stub in so the signature stays
+    consistent and tests don't have to mock a real model just to print
+    the category help.
+    """
+
+    def invoke(self, _messages: list) -> Any:  # noqa: ANN401, PLR6301
+        msg = "_NullModel.invoke should never be called"
+        raise AssertionError(msg)
 
 
 def _split_subcommand(text: str) -> tuple[str, str]:

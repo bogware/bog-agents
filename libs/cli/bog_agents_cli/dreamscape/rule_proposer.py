@@ -105,6 +105,14 @@ class ProposalRun:
     saved_path: Path | None = None
     skipped: bool = False
     error: str = ""
+    # True when the proposal was written to the *active* rules dir
+    # (auto_activate path) rather than the staging proposals dir.
+    # The caller should trigger a middleware reload when this is True
+    # so the rule takes effect immediately. Distinct from
+    # ``saved_path is not None`` because the staging path also sets
+    # ``saved_path`` — ``active`` is the marker for "live without
+    # further user approval needed".
+    active: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +221,11 @@ def propose_rules(
     tool_history: Sequence[dict[str, Any]] = (),
     existing_rules: Sequence[str] = (),
     proposals_dir: Path | None = None,
+    rules_dir: Path | None = None,
     dream_limit: int = 5,
     max_chars_per_dream: int = 4000,
     save: bool = True,
+    auto_activate: bool = False,
 ) -> ProposalRun:
     """Generate a proposal from recent activity and (optionally) save it.
 
@@ -226,16 +236,26 @@ def propose_rules(
             :attr:`ExpertRulesMiddleware.tool_call_history`. Empty is OK.
         existing_rules: Names of rules the user already has loaded,
             so the proposer doesn't duplicate them.
-        proposals_dir: Where to write the YAML when ``save=True``.
-            Defaults to ``<cwd>/.bog-agents/expert_rules/proposals``.
+        proposals_dir: Where to write the YAML when ``save=True`` and
+            ``auto_activate=False``. Defaults to
+            ``<cwd>/.bog-agents/expert_rules/proposals``.
+        rules_dir: Where to write the YAML when ``auto_activate=True``.
+            Defaults to ``<cwd>/.bog-agents/expert_rules``.
         dream_limit: How many of the most-recent dreams to feed in.
         max_chars_per_dream: Per-dream truncation budget.
-        save: When True (default), write the proposal YAML to
-            *proposals_dir*. When False, returns the proposal in
-            memory only (dry-run mode used by tests).
+        save: When True (default), write the proposal YAML to disk.
+            When False, returns the proposal in memory only (dry-run).
+        auto_activate: When True, write the YAML directly to the
+            *active* rules directory instead of the staging
+            ``proposals/`` subdir. Use ONLY when you trust the proposer
+            and want the rule to take effect immediately on the next
+            engine reload. Default False — the staging dir is the
+            REVIEW-md-mandated safety pattern. See ``ProposalRun.active``.
 
     Returns:
-        A :class:`ProposalRun` describing what happened.
+        A :class:`ProposalRun` describing what happened. When
+        ``auto_activate`` is True and the save succeeded, ``active``
+        is True so the caller can trigger a middleware reload.
     """
     run = ProposalRun(agent_id=agent_id)
     try:
@@ -276,14 +296,39 @@ def propose_rules(
         )
         return run
 
-    target_dir = proposals_dir or (
-        Path.cwd() / ".bog-agents" / "expert_rules" / "proposals"
-    )
+    if auto_activate:
+        target_dir = rules_dir or (
+            Path.cwd() / ".bog-agents" / "expert_rules"
+        )
+    else:
+        target_dir = proposals_dir or (
+            Path.cwd() / ".bog-agents" / "expert_rules" / "proposals"
+        )
     target_dir.mkdir(parents=True, exist_ok=True)
-    filename = _timestamped_filename(proposal.suggested_filename)
+    # Auto-activated rules go in WITHOUT a timestamp prefix so
+    # repeated proposals for the same intent don't multiply files —
+    # the engine reload picks the latest version. Staged proposals
+    # KEEP the timestamp so the user can compare iterations.
+    filename = (
+        proposal.suggested_filename
+        if auto_activate
+        else _timestamped_filename(proposal.suggested_filename)
+    )
     target = target_dir / filename
+    # When auto-activating, refuse to clobber an existing rule with a
+    # different name silently — that would be a footgun.
+    if auto_activate and target.exists():
+        existing = target.read_text(encoding="utf-8")
+        if existing != proposal.yaml:
+            run.error = (
+                f"refusing to overwrite existing active rule {target.name!r} "
+                "with different content (auto_activate). Approve via "
+                "/expert proposals or remove the existing file first."
+            )
+            return run
     target.write_text(proposal.yaml, encoding="utf-8")
     run.saved_path = target
+    run.active = auto_activate
     return run
 
 

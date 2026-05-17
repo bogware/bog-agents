@@ -60,6 +60,14 @@ from bog_agents.middleware.expert_engine.loader import (
     load_rule_file,
     load_rules_from_dir,
 )
+from bog_agents.middleware.expert_engine.wizard import (
+    WizardCategory,
+    WizardRun,
+    default_catalog,
+    find_category,
+    menu_text,
+    run_wizard,
+)
 from bog_agents.middleware.expert_engine.matcher import (
     Match,
     PatternMatcher,
@@ -106,13 +114,19 @@ __all__ = [
     "RuleLoadError",
     "Trace",
     "TraceEntry",
+    "WizardCategory",
+    "WizardRun",
     "WorkingMemory",
     "build_proposal",
+    "default_catalog",
+    "find_category",
     "generate_yaml",
     "lint",
     "load_rule_file",
     "load_rules_from_dir",
+    "menu_text",
     "render_proposal",
     "render_report",
+    "run_wizard",
     "save_proposal",
 ]

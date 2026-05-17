@@ -386,3 +386,121 @@ class TestControllerProposalFlow:
         out = dispatch("/expert proposals discard discard-me.yaml", tmp_path)
         assert "Discarded" in out
         assert not target.exists()
+
+
+# ---------------------------------------------------------------------------
+# Wave F1: auto_activate
+# ---------------------------------------------------------------------------
+
+
+class TestAutoActivate:
+    def test_auto_activate_writes_to_rules_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
+            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+        )
+        yaml = (
+            "- name: gate_x\n"
+            "  when:\n"
+            "    - tool_call:\n"
+            "        name: x\n"
+            "  then:\n"
+            "    - deny: 'no'\n"
+        )
+        rules = tmp_path / "rules"
+        proposals = tmp_path / "proposals"
+        run = propose_rules(
+            agent_id="x",
+            model=_StubModel(yaml),
+            tool_history=[{"name": "x", "args": {}}],
+            proposals_dir=proposals,
+            rules_dir=rules,
+            auto_activate=True,
+        )
+        assert run.active
+        assert run.saved_path is not None
+        assert run.saved_path.parent == rules
+        # Filename should NOT have a timestamp prefix when auto-activated.
+        assert run.saved_path.name == "gate_x.yaml"
+        # Staging dir untouched.
+        assert not proposals.exists() or not list(proposals.iterdir())
+
+    def test_auto_activate_refuses_silent_clobber(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
+            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+        )
+        yaml_first = (
+            "- name: gate\n"
+            "  when:\n"
+            "    - tool_call: {}\n"
+            "  then:\n"
+            "    - deny: 'first'\n"
+        )
+        yaml_second = (
+            "- name: gate\n"
+            "  when:\n"
+            "    - tool_call: {}\n"
+            "  then:\n"
+            "    - deny: 'second different'\n"
+        )
+        rules = tmp_path / "rules"
+        run1 = propose_rules(
+            agent_id="x",
+            model=_StubModel(yaml_first),
+            tool_history=[{"name": "x", "args": {}}],
+            rules_dir=rules,
+            auto_activate=True,
+        )
+        assert run1.active
+        run2 = propose_rules(
+            agent_id="x",
+            model=_StubModel(yaml_second),
+            tool_history=[{"name": "x", "args": {}}],
+            rules_dir=rules,
+            auto_activate=True,
+        )
+        assert not run2.active
+        assert "refusing to overwrite" in run2.error
+
+    def test_apply_flag_routes_to_auto_activate(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from bog_agents_cli.expert_controller import (
+            dispatch,
+            get_controller,
+            reset_controllers,
+        )
+
+        monkeypatch.setattr(
+            "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
+            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+        )
+        reset_controllers()
+        yaml = (
+            "- name: applied_rule\n"
+            "  when:\n"
+            "    - tool_call: {}\n"
+            "  then:\n"
+            "    - audit_log\n"
+        )
+        c = get_controller(tmp_path, model_factory=lambda: _StubModel(yaml))
+        c.middleware._tool_call_history.append({"name": "x", "args": {}})
+        out = dispatch("/expert propose --apply", tmp_path)
+        assert "Auto-activated" in out or "applied_rule" in out
+        # The rule should be in the active rules dir, not proposals.
+        active = (tmp_path / ".bog-agents" / "expert_rules").glob("*.yaml")
+        names = [p.name for p in active]
+        assert "applied_rule.yaml" in names
+        # And reloaded into the engine.
+        assert any(r.name == "applied_rule" for r in c.middleware.engine.rules)
