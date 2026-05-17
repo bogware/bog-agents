@@ -344,6 +344,112 @@ class ExpertController:
         self._pending_proposal = None
         return "Discarded pending proposal."
 
+    # ------------------------------------------------------------------
+    # Dreamscape → proposals (Wave E)
+    # ------------------------------------------------------------------
+
+    def _proposals_dir(self) -> Path:
+        return self._working_dir / ".bog-agents" / "expert_rules" / "proposals"
+
+    def _rules_dir(self) -> Path:
+        return self._working_dir / ".bog-agents" / "expert_rules"
+
+    def propose_from_dreamscape(self, agent_id: str = "default") -> str:
+        """``/expert propose [agent]`` — mine dreams + tool history → propose rules.
+
+        Builds a :class:`ProposalRun` via
+        :func:`dreamscape.rule_proposer.propose_rules`, writes the
+        result under ``.bog-agents/expert_rules/proposals/`` (NEVER the
+        live rules dir — proposals require explicit human approval).
+        """
+        if self._model_factory is None:
+            return (
+                "Cannot propose rules: no model factory configured. "
+                "Pass model_factory= to ExpertController."
+            )
+        try:
+            model = self._model_factory()
+        except Exception as exc:
+            return f"Could not build proposer model: {exc}"
+
+        from bog_agents_cli.dreamscape.rule_proposer import (
+            propose_rules as _propose,
+        )
+
+        run = _propose(
+            agent_id=agent_id or "default",
+            model=model,
+            tool_history=self._middleware.tool_call_history,
+            existing_rules=[r.name for r in self._middleware.engine.rules],
+            proposals_dir=self._proposals_dir(),
+            save=True,
+        )
+        if run.error and run.proposal is None:
+            return f"Propose failed: {run.error}"
+        if run.skipped:
+            return (
+                "Dreamscape proposer found no patterns worth codifying as rules. "
+                f"({run.error or 'evidence not actionable'}) — try again after more activity."
+            )
+        if run.saved_path is None and run.proposal is not None:
+            # The model produced something the lint or parse rejected.
+            yaml_preview = run.proposal.yaml[:400]
+            return (
+                "Propose generated a rule that failed validation:\n"
+                f"  {run.error}\n\n"
+                "Model output (first 400 chars):\n"
+                f"{yaml_preview}"
+            )
+        return (
+            f"Saved proposal: {run.saved_path.name}\n"
+            f"  → review with /expert proposals\n"
+            f"  → approve with /expert proposals approve {run.saved_path.name}"
+        )
+
+    def list_proposals(self) -> str:
+        """``/expert proposals`` — list the YAML proposals awaiting review."""
+        from bog_agents_cli.dreamscape.rule_proposer import (
+            render_proposals_list,
+        )
+
+        return render_proposals_list(self._proposals_dir())
+
+    def approve_proposal_file(self, name: str) -> str:
+        """``/expert proposals approve <name>`` — promote a proposal to active rules."""
+        if not name:
+            return (
+                "Usage: /expert proposals approve <filename>"
+            )
+        from bog_agents_cli.dreamscape.rule_proposer import approve_proposal
+
+        try:
+            target = approve_proposal(
+                proposals_dir=self._proposals_dir(),
+                rules_dir=self._rules_dir(),
+                name=name,
+            )
+        except ValueError as exc:
+            return f"Approve failed: {exc}"
+        count, err = self._middleware.reload()
+        line = f"Approved {target.name} → {target} ({count} rule(s) active)"
+        if err:
+            line += f"\nReload reported: {err}"
+        return line
+
+    def discard_proposal_file(self, name: str) -> str:
+        """``/expert proposals discard <name>`` — delete a pending proposal."""
+        if not name:
+            return "Usage: /expert proposals discard <filename>"
+        from bog_agents_cli.dreamscape.rule_proposer import (
+            discard_proposal as _discard,
+        )
+
+        try:
+            target = _discard(proposals_dir=self._proposals_dir(), name=name)
+        except ValueError as exc:
+            return f"Discard failed: {exc}"
+        return f"Discarded proposal {target.name}"
+
     def dry_run(self, fact_type: str, **fields: Any) -> str:
         """Assert a fact, run the engine, then retract — show what would happen.
 
@@ -448,6 +554,11 @@ class ExpertController:
             return self.dry_run(ft, **fields)
         if sub == "write":
             return self._dispatch_write(rest)
+        if sub == "propose":
+            agent = rest.strip() or "default"
+            return self.propose_from_dreamscape(agent)
+        if sub == "proposals":
+            return self._dispatch_proposals(rest)
         if sub == "status":
             return self.status()
         return (
@@ -466,6 +577,10 @@ class ExpertController:
             "  /expert write <intent>               — LLM generates a rule from your description\n"
             "  /expert write save [filename]        — commit the most recent /expert write proposal\n"
             "  /expert write cancel                 — discard the pending proposal\n"
+            "  /expert propose [agent]              — mine dreams + history → propose rules\n"
+            "  /expert proposals                    — list pending proposals\n"
+            "  /expert proposals approve <name>     — promote a proposal to active rules\n"
+            "  /expert proposals discard <name>     — delete a proposal\n"
             "  /expert run                          — run engine to fixed point\n"
             "  /expert reload                       — reload rules from disk\n"
             "  /expert example                      — print a starter rule"
@@ -483,6 +598,21 @@ class ExpertController:
         if head in ("cancel", "discard"):
             return self.discard_proposal()
         return self.write(rest)
+
+    def _dispatch_proposals(self, rest: str) -> str:
+        """Handle ``proposals``, ``proposals approve <name>``, ``proposals discard <name>``."""
+        rest = rest.strip()
+        if not rest:
+            return self.list_proposals()
+        head, _, tail = rest.partition(" ")
+        head = head.lower()
+        if head == "approve":
+            return self.approve_proposal_file(tail.strip())
+        if head in ("discard", "delete", "reject"):
+            return self.discard_proposal_file(tail.strip())
+        return (
+            "Usage: /expert proposals [approve <name> | discard <name>]"
+        )
 
     def handle_why(self, args: str) -> str:
         """Dispatch ``/why <fact_type> [field=value ...]``."""
