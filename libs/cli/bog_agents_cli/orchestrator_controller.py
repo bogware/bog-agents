@@ -39,10 +39,16 @@ class OrchestratorController:
         working_dir: Path,
         model_factory: Any,  # noqa: ANN401 — Callable[[], BaseChatModel]
         max_iterations_per_subtask: int = 12,
+        parallel: bool = False,
     ) -> None:
         self._working_dir = working_dir
         self._model_factory = model_factory
         self._max_iterations = max_iterations_per_subtask
+        # When True, subtasks run concurrently via asyncio.to_thread.
+        # Each subtask gets its own fresh model via model_factory.
+        # Default False keeps the deterministic ordered output the
+        # sequential v1 produced. (Wave J4.)
+        self._parallel = parallel
 
     def run(self, goal: str) -> OrchestrationResult:
         """Execute one orchestration end-to-end."""
@@ -65,6 +71,8 @@ class OrchestratorController:
             model=model,
             working_dir=self._working_dir,
             max_iterations_per_subtask=self._max_iterations,
+            parallel=self._parallel,
+            model_factory=self._model_factory if self._parallel else None,
         )
 
 

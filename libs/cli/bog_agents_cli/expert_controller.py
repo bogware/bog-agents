@@ -109,6 +109,12 @@ class ExpertController:
         # ``/expert write save [name]`` can commit it. Cleared on save
         # or on a new ``/expert write <intent>`` call.
         self._pending_proposal: AuthoringProposal | None = None
+        # Optional async callback fired by ``/expert watch`` whenever
+        # the scheduled proposer completes one run. The TUI handler
+        # registers this via :meth:`set_watch_summary_callback` so the
+        # user sees a Textual notification when a proposal lands,
+        # without having to /expert watch (status) every few minutes.
+        self._on_watch_summary: Any | None = None
 
     # ------------------------------------------------------------------
     # Used by app.py to register the middleware with create_agent
@@ -711,6 +717,15 @@ class ExpertController:
             "Usage: /expert watch [status | start [interval-seconds] [--apply] | stop]"
         )
 
+    def set_watch_summary_callback(self, fn: Any | None) -> None:  # noqa: ANN401 — Optional[Callable[[str], Awaitable[None]]]
+        """Register an async callback fired after every watcher run.
+
+        Used by the TUI's expert handler to surface a Textual
+        notification when ``/expert watch`` produces a new proposal.
+        Pass ``None`` to clear.
+        """
+        self._on_watch_summary = fn
+
     def _dispatch_watch_start(self, rest: str) -> str:
         from bog_agents_cli import expert_watch
 
@@ -732,6 +747,7 @@ class ExpertController:
             propose=self.propose_from_dreamscape,
             interval_seconds=interval,
             auto_activate=auto,
+            on_summary=self._on_watch_summary,
         )
         return message
 

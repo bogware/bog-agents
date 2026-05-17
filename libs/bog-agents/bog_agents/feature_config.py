@@ -167,6 +167,13 @@ class FeatureConfig:
     enable_citations: bool = False
     enable_reasoning_chain: bool = False
     enable_hallucination_detection: bool = False
+    # D-5 umbrella flag — turns on citations + hallucination_detection +
+    # fact_check together and adds a system-prompt addendum telling the
+    # LLM to register sources, cite claims, verify numbers, and submit
+    # uncertain claims for fact-checking. The individual flags are
+    # honored too; this just makes "every claim has provenance" a
+    # single-knob default. See REVIEW.md D-5.
+    enable_provenance_loop: bool = False
 
     # Skills & prompts
     enable_meeting_prep: bool = False

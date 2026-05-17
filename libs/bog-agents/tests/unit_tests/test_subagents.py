@@ -864,11 +864,33 @@ class TestSubAgents:
         )
 
         test_context = {"user_id": "user-123", "session_id": "session-456"}
-        parent_agent.invoke(
-            {"messages": [HumanMessage(content="Process")]},
-            config={"configurable": {"thread_id": "test_context"}},
-            context=test_context,
-        )
+        # J2: langgraph emits a PydanticSerializationUnexpectedValue
+        # warning when a dict ``context`` is passed and the subagent's
+        # tool-node propagates it through pydantic validation. Setting
+        # context_schema=dict on both the parent and the subagent does
+        # NOT silence it — the warning fires deep inside langgraph's
+        # tool execution path during context-state propagation. It's a
+        # known upstream typing quirk (the dict context still arrives
+        # intact, as asserted below), so we filter the specific warning
+        # at the test level rather than masking real issues with a
+        # blanket suppression.
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            # Match the multi-line Pydantic serializer warning that
+            # fires during langgraph's tool-node context propagation.
+            # ``re.DOTALL`` would help but ``filterwarnings`` doesn't
+            # take a flag — fall back to a broad ``Pydantic serializer
+            # warnings`` prefix which is uniquely diagnostic.
+            _warnings.filterwarnings(
+                "ignore",
+                message="Pydantic serializer warnings",
+                category=UserWarning,
+            )
+            parent_agent.invoke(
+                {"messages": [HumanMessage(content="Process")]},
+                config={"configurable": {"thread_id": "test_context"}},
+                context=test_context,
+            )
 
         assert len(received_contexts) > 0, "Subagent tool should have been invoked"
         assert received_contexts[0] == test_context, f"Expected {test_context}, got {received_contexts[0]}"

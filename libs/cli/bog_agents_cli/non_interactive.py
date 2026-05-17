@@ -19,7 +19,6 @@ stderr, leaving stdout exclusively for the agent's response text.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import sys
 import threading
@@ -976,6 +975,24 @@ async def run_non_interactive(
     # need stdout reserved for the actual payload — chrome (server-ready,
     # thread headers, status line) must land on stderr.
     console = Console(stderr=True) if (quiet or output_format == "json") else Console()
+
+    # J2 fix: bail on always_ask BEFORE we instantiate any models.
+    # The combination is logically incompatible (non-interactive has no
+    # human to approve tool calls), so building a model first would be
+    # both wasteful and — for providers like Bedrock — failure-prone
+    # when the optional SDK isn't installed in the runtime that's
+    # asking for an early-exit return code.
+    if always_ask:
+        if not quiet:
+            console.print(
+                Text(
+                    "--always-ask requires an interactive TTY; refusing to run "
+                    "non-interactive task that would block waiting for approval.",
+                    style="bold red",
+                )
+            )
+        return 2
+
     try:
         result = create_model(
             model_name,
@@ -1041,27 +1058,10 @@ async def run_non_interactive(
         except Exception:
             logger.warning("MCP metadata preload task creation failed", exc_info=True)
 
-    if always_ask:
-        # Non-interactive mode has no human to approve tool calls, so
-        # always-ask would deadlock the run. Reject the combination loudly
-        # rather than hanging forever.
-        if not quiet:
-            console.print(
-                Text(
-                    "--always-ask requires an interactive TTY; refusing to run "
-                    "non-interactive task that would block waiting for approval.",
-                    style="bold red",
-                )
-            )
-        # Cancel the MCP preload task we just spawned — leaving it running
-        # produces a "coroutine was never awaited" RuntimeWarning at
-        # interpreter shutdown and may even fire a network call after the
-        # process has bailed.
-        if mcp_task is not None:
-            mcp_task.cancel()
-            with contextlib.suppress(BaseException):
-                await mcp_task
-        return 2
+    # ``always_ask`` is now rejected up-front (before create_model),
+    # so by the time we reach this point it's guaranteed False. The
+    # late-check branch used to also cancel a half-built MCP preload
+    # task; that's no longer reachable, so we drop it for clarity.
 
     try:
         # When the caller passes --auto-approve they're opting into headless

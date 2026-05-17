@@ -299,3 +299,92 @@ class TestRegistry:
 
         handlers = {cmd.name: cmd.handler_method for cmd in general.COMMANDS}
         assert handlers["/orchestrate"] == "_handle_orchestrate_command"
+
+
+# ---------------------------------------------------------------------------
+# J4: parallel execution
+# ---------------------------------------------------------------------------
+
+
+class TestParallel:
+    def test_parallel_requires_model_factory(self, tmp_path: Path) -> None:
+        result = run_orchestration(
+            goal="x",
+            model=_SequenceModel([_plan_json(("t1", "review", "do it"))]),
+            working_dir=tmp_path,
+            parallel=True,
+            model_factory=None,
+        )
+        assert result.error
+        assert "parallel=True requires model_factory" in result.error
+
+    def test_parallel_preserves_plan_order(self, tmp_path: Path) -> None:
+        # Planner emits 3 subtasks; each worker uses a fresh model
+        # that always answers with the subtask id. Order in result.subtasks
+        # must equal plan order regardless of completion timing.
+        plan = _plan_json(
+            ("t1", "review", "first"),
+            ("t2", "doc", "second"),
+            ("t3", "research", "third"),
+        )
+
+        # Single shared planner model + a per-subtask factory.
+        planner = _SequenceModel([plan])
+
+        # Each worker gets its own model that just echoes its first
+        # human message back as the answer.
+        class _EchoModel:
+            def bind_tools(self, _t: list) -> _EchoModel:
+                return self
+
+            def invoke(self, messages: list) -> AIMessage:
+                from langchain_core.messages import HumanMessage
+                human = next(
+                    (m for m in messages if isinstance(m, HumanMessage)), None
+                )
+                return AIMessage(content=str(human.content)[:80] if human else "ok")
+
+        # Use the planner for the first call; subsequent worker calls
+        # go through fresh _EchoModel instances via the factory.
+        calls = {"n": 0}
+
+        def model_factory():
+            calls["n"] += 1
+            return _EchoModel()
+
+        # Drive decomposition with the planner explicitly.
+        # ``run_orchestration`` calls decompose_goal(model=planner)
+        # internally, so we pass the planner as ``model`` and the
+        # factory for subtasks.
+        result = run_orchestration(
+            goal="parallel test",
+            model=planner,
+            working_dir=tmp_path,
+            parallel=True,
+            model_factory=model_factory,
+        )
+        assert result.ok, result
+        # Order preservation: ids stay in plan order.
+        assert [r.subtask.id for r in result.subtasks] == ["t1", "t2", "t3"]
+        # Factory was invoked once per subtask.
+        assert calls["n"] == 3
+
+    def test_controller_parallel_flag(self, tmp_path: Path) -> None:
+        from bog_agents_cli.orchestrator_controller import (
+            OrchestratorController,
+            reset_controllers,
+        )
+
+        reset_controllers()
+        plan = _plan_json(("t1", "review", "review"), ("t2", "doc", "doc"))
+
+        def factory():
+            return _SequenceModel([plan, "rev-ans", "doc-ans"])
+
+        c = OrchestratorController(
+            working_dir=tmp_path,
+            model_factory=factory,
+            parallel=False,  # explicitly sequential — easier to assert
+        )
+        result = c.run("anything")
+        assert result.ok

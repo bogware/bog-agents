@@ -237,3 +237,58 @@ class TestSlashSpec:
         assert "watch" in subs
         assert "watch start [N] [--apply]" in subs
         assert "watch stop" in subs
+
+
+# ---------------------------------------------------------------------------
+# Wave J1: controller-supplied watcher callback
+# ---------------------------------------------------------------------------
+
+
+class TestControllerCallback:
+    """set_watch_summary_callback should flow into expert_watch.start."""
+
+    async def test_callback_fires_when_set_via_controller(
+        self, tmp_path: Path
+    ) -> None:
+        from bog_agents_cli.expert_controller import (
+            get_controller,
+            reset_controllers,
+        )
+
+        reset_controllers()
+        seen: list[str] = []
+
+        async def cb(summary: str) -> None:
+            seen.append(summary)
+
+        c = get_controller(tmp_path)
+        c.set_watch_summary_callback(cb)
+        # Stub the controller's propose so the loop has something fast
+        # to call.
+        c.propose_from_dreamscape = lambda _a, *, auto_activate=False: "Saved proposal: x.yaml"  # noqa: ARG005
+
+        out = c._dispatch_watch_start("0.05")
+        assert "Started" in out
+        await asyncio.sleep(0.18)
+        from bog_agents_cli import expert_watch as _w
+
+        await _w.stop(tmp_path)
+        assert seen, "callback should have been invoked at least once"
+        assert any("Saved proposal" in s for s in seen)
+
+    def test_callback_can_be_cleared(self, tmp_path: Path) -> None:
+        from bog_agents_cli.expert_controller import (
+            get_controller,
+            reset_controllers,
+        )
+
+        reset_controllers()
+        c = get_controller(tmp_path)
+
+        async def cb(_: str) -> None:
+            pass
+
+        c.set_watch_summary_callback(cb)
+        assert c._on_watch_summary is cb
+        c.set_watch_summary_callback(None)
+        assert c._on_watch_summary is None

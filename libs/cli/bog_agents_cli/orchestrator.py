@@ -355,22 +355,30 @@ def run_orchestration(
     working_dir: Path,
     profiles: dict[SubtaskMode, ModeProfile] | None = None,
     max_iterations_per_subtask: int = 12,
+    parallel: bool = False,
+    model_factory: Any | None = None,  # noqa: ANN401 — Callable[[], BaseChatModel]
 ) -> OrchestrationResult:
     """End-to-end orchestration: decompose, run subtasks, return results.
 
-    Sequential v1 — runs subtasks in plan order, no parallelism.
-    Parallel execution is a follow-up; ordered run keeps the subtask
-    output deterministic and matches the way humans expect to read
-    boomerang results.
-
     Args:
         goal: User's plain-English goal.
-        model: Chat model. Used for BOTH the planner and the per-
-            subtask workers. Tests inject a stub.
+        model: Chat model used for the planner. When ``parallel`` is
+            False, this same instance is reused for every subtask
+            worker (sequential semantics, matches the original v1).
         working_dir: Project root for the read-only tools.
         profiles: Override the default mode → profile map (mostly
             for tests).
         max_iterations_per_subtask: Per-subtask loop cap.
+        parallel: When True, run subtasks concurrently via
+            ``asyncio.to_thread`` + ``asyncio.gather``. Requires
+            ``model_factory`` — each subtask gets its own fresh model
+            instance because LangChain ``BaseChatModel`` instances
+            often hold per-request state that doesn't survive
+            concurrent use. Falls back to sequential on
+            ``model_factory=None`` with a warning recorded as the
+            ``error`` on the first subtask.
+        model_factory: Zero-arg callable returning a fresh chat model.
+            Mandatory for ``parallel=True``; ignored otherwise.
 
     Returns:
         :class:`OrchestrationResult`. Never raises.
@@ -389,41 +397,126 @@ def run_orchestration(
     if profiles is None:
         profiles = _make_default_profiles(working_dir)
 
-    for st in subtasks:
-        st_result = SubtaskResult(subtask=st)
-        profile = profiles.get(st.mode)
-        if profile is None:
-            st_result.ok = False
-            st_result.error = f"no profile registered for mode {st.mode.value!r}"
-            result.subtasks.append(st_result)
-            continue
-        try:
-            tools = profile.tool_builder()
-        except Exception as exc:
-            st_result.ok = False
-            st_result.error = f"tool builder failed: {exc}"
-            result.subtasks.append(st_result)
-            continue
-        started = time.monotonic()
-        # Reuse sidecar's runner — same one-shot read-only semantics.
-        sidecar_run = run_sidecar_query(
-            question=st.description,
-            model=model,
-            tools=tools,
-            context_summary=(
-                f"You are subtask {st.id} of an orchestrator plan for goal: "
-                f"{goal.strip()}\nMode: {st.mode.value}."
-            ),
-            system_prompt=profile.system_prompt or SIDECAR_SYSTEM_PROMPT,
-            max_iterations=min(profile.max_iterations, max_iterations_per_subtask),
+    if parallel and model_factory is None:
+        # Honest refusal — silently sharing a single model across
+        # parallel workers would interleave streaming state.
+        result.error = (
+            "parallel=True requires model_factory; falling back is unsafe. "
+            "Pass a zero-arg model factory or set parallel=False."
         )
-        st_result.duration_seconds = time.monotonic() - started
-        st_result.answer = sidecar_run.answer
-        st_result.ok = sidecar_run.ok
-        st_result.error = sidecar_run.error
-        st_result.tool_calls_made = list(sidecar_run.tool_calls_made)
-        result.subtasks.append(st_result)
+        return result
+
+    if parallel:
+        result.subtasks = _run_subtasks_parallel(
+            subtasks=subtasks,
+            goal=goal.strip(),
+            profiles=profiles,
+            max_iterations_per_subtask=max_iterations_per_subtask,
+            model_factory=model_factory,
+        )
+        return result
+
+    # Sequential default — preserves the simpler test surface + a
+    # readable, deterministic output order.
+    for st in subtasks:
+        result.subtasks.append(
+            _run_one_subtask(
+                st,
+                goal=goal.strip(),
+                model=model,
+                profile=profiles.get(st.mode),
+                max_iterations_per_subtask=max_iterations_per_subtask,
+            )
+        )
     return result
+
+
+def _run_one_subtask(
+    st: Subtask,
+    *,
+    goal: str,
+    model: BaseChatModel,
+    profile: ModeProfile | None,
+    max_iterations_per_subtask: int,
+) -> SubtaskResult:
+    """Execute one subtask, returning its :class:`SubtaskResult`."""
+    st_result = SubtaskResult(subtask=st)
+    if profile is None:
+        st_result.ok = False
+        st_result.error = f"no profile registered for mode {st.mode.value!r}"
+        return st_result
+    try:
+        tools = profile.tool_builder()
+    except Exception as exc:
+        st_result.ok = False
+        st_result.error = f"tool builder failed: {exc}"
+        return st_result
+    started = time.monotonic()
+    sidecar_run = run_sidecar_query(
+        question=st.description,
+        model=model,
+        tools=tools,
+        context_summary=(
+            f"You are subtask {st.id} of an orchestrator plan for goal: "
+            f"{goal}\nMode: {st.mode.value}."
+        ),
+        system_prompt=profile.system_prompt or SIDECAR_SYSTEM_PROMPT,
+        max_iterations=min(profile.max_iterations, max_iterations_per_subtask),
+    )
+    st_result.duration_seconds = time.monotonic() - started
+    st_result.answer = sidecar_run.answer
+    st_result.ok = sidecar_run.ok
+    st_result.error = sidecar_run.error
+    st_result.tool_calls_made = list(sidecar_run.tool_calls_made)
+    return st_result
+
+
+def _run_subtasks_parallel(
+    *,
+    subtasks: list[Subtask],
+    goal: str,
+    profiles: dict[SubtaskMode, ModeProfile],
+    max_iterations_per_subtask: int,
+    model_factory: Any,  # noqa: ANN401
+) -> list[SubtaskResult]:
+    """Run all subtasks concurrently via threads, preserving plan order.
+
+    Each subtask gets its own fresh chat model (via ``model_factory()``)
+    because LangChain models often hold per-request state. We use
+    ``asyncio.to_thread`` so subtasks that block on LLM calls don't
+    starve each other. Results are returned in plan order regardless
+    of completion order — this matches the sequential output the user
+    expects to read.
+    """
+    import asyncio
+
+    async def _gather() -> list[SubtaskResult]:
+        tasks = [
+            asyncio.to_thread(
+                _run_one_subtask,
+                st,
+                goal=goal,
+                model=model_factory(),
+                profile=profiles.get(st.mode),
+                max_iterations_per_subtask=max_iterations_per_subtask,
+            )
+            for st in subtasks
+        ]
+        return await asyncio.gather(*tasks)
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # Called from inside an already-running loop (e.g. the TUI
+            # handler). Use run_coroutine_threadsafe through a fresh
+            # loop — this is a rare path; the orchestrator controller
+            # currently runs via ``asyncio.to_thread(...)`` so it's
+            # called from a worker thread without a running loop here.
+            fut = asyncio.run_coroutine_threadsafe(_gather(), loop)
+            return fut.result()
+    except RuntimeError:
+        pass
+    return asyncio.run(_gather())
 
 
 # ---------------------------------------------------------------------------

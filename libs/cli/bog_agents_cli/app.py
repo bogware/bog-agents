@@ -679,6 +679,19 @@ List what you captured and where you stored it:
 """
 
 
+# Conversation-buffer widget → role map (J4 cleanup). Built once at
+# module load instead of running isinstance chains on every mounted
+# message. Unknown widgets fall through to "app" in _buffer_message.
+_WIDGET_ROLE_MAP: dict[type, str] = {
+    UserMessage: "user",
+    QueuedUserMessage: "user",
+    AssistantMessage: "assistant",
+    ToolCallMessage: "tool",
+    ErrorMessage: "app",
+    AppMessage: "app",
+}
+
+
 class BogAgentsApp(App):
     """Main Textual application for bog-agents-cli."""
 
@@ -10831,6 +10844,8 @@ class BogAgentsApp(App):
         """Handle `/expert` — rule engine for policy gates and constraints.
 
         See ``expert_controller.handle_expert`` for subcommand semantics.
+        Also registers a watcher-summary callback so ``/expert watch``
+        proposals surface as Textual notifications. (Wave J1.)
         """
         await self._mount_message(UserMessage(command))
         from bog_agents_cli.config import create_model, settings
@@ -10843,6 +10858,26 @@ class BogAgentsApp(App):
             return resolved.model
 
         controller = get_controller(self._cwd, model_factory=model_factory)
+        # Register the TUI notification surface for /expert watch. The
+        # callback runs on the same asyncio loop as the watcher task,
+        # so we can call ``self.notify`` directly from it.
+
+        async def _surface_watch_summary(summary: str) -> None:  # noqa: RUF029 — async signature required by expert_watch
+            # Trim to fit a toast nicely; full text already lives in
+            # /expert watch (status).
+            short = summary.replace("\n", " ")
+            short = short[:140] + ("…" if len(summary) > 140 else "")
+            severity = "warning" if "error" in summary.lower() else "information"
+            try:
+                self.notify(
+                    f"💡 expert watcher: {short}",
+                    severity=severity,
+                    timeout=8,
+                )
+            except Exception:
+                logger.debug("expert watcher notification failed", exc_info=True)
+
+        controller.set_watch_summary_callback(_surface_watch_summary)
         args = command.strip()[len("/expert") :].strip()
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
@@ -13999,9 +14034,11 @@ class BogAgentsApp(App):
         """Record the widget's text into the per-cwd conversation buffer.
 
         Used by /sidecar (Wave H) and /expert propose to auto-summarise
-        the parent conversation. Maps the widget class to a role:
-        UserMessage → "user", AssistantMessage → "assistant", anything
-        else → "app" (filtered out by default consumers).
+        the parent conversation. The widget→role lookup uses
+        :data:`_WIDGET_ROLE_MAP` (built lazily on first call) so the
+        hot path is an ``id(type(widget))`` dict lookup instead of a
+        chain of ``isinstance`` checks. Unknown widget classes fall
+        through to ``"app"`` (filtered out by default consumers).
         """
         from bog_agents_cli.conversation_buffer import get_buffer
 
@@ -14009,12 +14046,7 @@ class BogAgentsApp(App):
         text = str(text_source) if text_source is not None else ""
         if not text:
             return
-        if isinstance(widget, UserMessage):
-            role = "user"
-        elif isinstance(widget, AssistantMessage):
-            role = "assistant"
-        else:
-            role = "app"
+        role = _WIDGET_ROLE_MAP.get(type(widget), "app")
         get_buffer(self._cwd).record(role=role, content=text)
 
     def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401, PLR6301 — duck-typed; method form mirrors siblings

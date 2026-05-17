@@ -86,6 +86,41 @@ Keep working until the task is fully complete. Don't stop partway and explain wh
 For longer tasks, provide brief progress updates at reasonable intervals — a concise sentence recapping what you've done and what's next."""  # noqa: E501
 
 
+_PROVENANCE_LOOP_PROMPT = """## Citations & Verification (D-5 provenance loop)
+
+You have access to provenance tools provided by the citations,
+hallucination_detection, and fact_check middleware. Use them by default
+so every factual claim you emit carries traceable evidence:
+
+1. **Register your sources.** When you read a file, fetch a web page,
+   or pull data from a database, call ``register_data_source`` (or the
+   equivalent for the active middleware) with the source's type, name,
+   and excerpt. Do this BEFORE you cite from it.
+2. **Cite inline.** When you make a factual claim drawn from a source,
+   call ``add_citation`` (or your output should include bracket
+   citations like ``[1]``, ``[2]``) that map to registered sources.
+   Label each citation's relationship as ``supports``,
+   ``contradicts``, or ``mentions``.
+3. **Verify numbers.** When you produce a numerical claim
+   (statistic, percentage, dollar amount, date), call
+   ``register_fact`` and ``verify_claim`` so the
+   hallucination-detection middleware can flag unsourced or
+   contradicted numbers before they reach the user.
+4. **Submit uncertain claims for fact-checking.** When you're less
+   than confident about a claim or when you couldn't find a primary
+   source, use ``submit_claim`` to log it for follow-up review rather
+   than asserting it.
+5. **Surface the bibliography.** At the end of substantive responses,
+   call the active middleware's ``generate_bibliography`` /
+   ``verification_report`` / ``factcheck_report`` so the user can see
+   the evidence trail at a glance.
+
+When you cannot find a source for a claim, SAY SO explicitly rather
+than guessing. Unsourced claims marked as such are far more useful
+than confident-sounding hallucinations.
+"""
+
+
 def get_default_model() -> ChatAnthropic:
     """Get the default model for bog-agents agents.
 
@@ -590,7 +625,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(AuditTrailMiddleware(session_id=f.audit_session_id, advisor_id=f.audit_advisor_id))
 
-    if f.enable_citations:
+    # D-5 provenance loop: composes citations + hallucination_detection
+    # + fact_check so every claim the agent emits has a registered
+    # source and the model is told to use the citation tools by default.
+    # The umbrella flag ORs into each individual flag — callers can
+    # still flip any of the three independently for granular control.
+    provenance_active = (
+        f.enable_provenance_loop
+        or f.enable_citations
+        or f.enable_hallucination_detection
+        or f.enable_fact_check
+    )
+    if f.enable_provenance_loop or f.enable_citations:
         from bog_agents.middleware.citations import CitationsMiddleware
 
         agents_middleware.append(CitationsMiddleware())
@@ -600,7 +646,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ReasoningChainMiddleware())
 
-    if f.enable_hallucination_detection:
+    if f.enable_provenance_loop or f.enable_hallucination_detection:
         from bog_agents.middleware.hallucination_detection import HallucinationDetectionMiddleware
 
         agents_middleware.append(HallucinationDetectionMiddleware())
@@ -717,7 +763,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(RBACMiddleware())
 
-    if f.enable_fact_check:
+    if f.enable_provenance_loop or f.enable_fact_check:
         from bog_agents.middleware.fact_check import FactCheckMiddleware
 
         agents_middleware.append(FactCheckMiddleware())
@@ -878,14 +924,23 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # Validate middleware dependency ordering before compiling the graph.
     _validate_middleware_ordering(agents_middleware)
 
-    # Combine system_prompt with BASE_AGENT_PROMPT
+    # Combine system_prompt with BASE_AGENT_PROMPT, plus an optional
+    # provenance-loop addendum (D-5) that tells the model to use the
+    # citation / hallucination-detection / fact-check tools by default
+    # when those middleware are active. We only inject the addendum
+    # when the loop is active — otherwise the model would be told to
+    # call tools that aren't bound.
+    base_prompt = BASE_AGENT_PROMPT
+    if provenance_active:
+        base_prompt = base_prompt + "\n\n" + _PROVENANCE_LOOP_PROMPT
+
     if system_prompt is None:
-        final_system_prompt: str | SystemMessage = BASE_AGENT_PROMPT
+        final_system_prompt: str | SystemMessage = base_prompt
     elif isinstance(system_prompt, SystemMessage):
-        final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{BASE_AGENT_PROMPT}"}])
+        final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{base_prompt}"}])
     else:
         # String: simple concatenation
-        final_system_prompt = system_prompt + "\n\n" + BASE_AGENT_PROMPT
+        final_system_prompt = system_prompt + "\n\n" + base_prompt
 
     return _langchain_create_agent(
         model,
