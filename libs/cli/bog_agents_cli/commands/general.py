@@ -311,6 +311,40 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/postmortem",
+            "Causal-replay postmortem — analyse a session, propose remediations "
+            "(rule / skill / config)",
+            "postmortem analyse review trace causal remediation rule skill",
+            "general",
+            available=True,
+            subcommands=(
+                ("<session-id>", "Analyse a specific causal session"),
+                ("latest", "Newest session"),
+                ("latest <note>", "Add free-text context for the model"),
+                ("list", "List saved postmortems"),
+            ),
+        ),
+        handler_method="_handle_postmortem_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/prove-invariant",
+            "Formally prove a safety invariant against the loaded expert rules "
+            "(e.g. 'no PII tool may run after git push to main')",
+            "prove invariant formal verification z3 smt policy guarantee safety",
+            "general",
+            available=True,
+            subcommands=(
+                ("<path.yaml>", "Prove an invariant from a YAML file"),
+                ("list", "List invariants/*.yaml in this project"),
+                ("--z3", "Prefer the Z3-backed prover (optional flag)"),
+                ("help", "Show usage + YAML schema"),
+            ),
+        ),
+        handler_method="_handle_prove_invariant_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/causal",
             "Causal replay — see the proof tree behind any agent decision, "
             "tool call, or final answer",

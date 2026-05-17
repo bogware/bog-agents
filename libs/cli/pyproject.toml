@@ -354,6 +354,40 @@ ignore-var-parameters = true
     "EM102",    # f-string in exception — user-facing error strings
     "PLR0911",  # Too-many-returns — dispatch tables read better as flat ifs
 ]
+# Time-travel rule replay (Q3, moat wave). Engine re-run helper +
+# CLI dispatch over the existing causal log.
+"bog_agents_cli/time_travel.py" = [
+    "A002",     # ``input`` as kwarg shadows the builtin — kept for API symmetry
+    "TRY003",
+    "EM101",
+    "EM102",
+    "DOC501",   # Exceptions documented at module level
+    "BLE001",   # rules_provider wraps bare Exception for user-facing reporting
+    "ARG001",   # _error reserves session_id for future symmetry
+    "PLR0911",
+]
+# Postmortem subsystem (Q2, moat wave). Markdown templating + LLM IO.
+"bog_agents_cli/postmortem.py" = [
+    "TRY003",
+    "EM101",
+    "EM102",
+    "BLE001",   # model_invoke wraps bare Exception for user-facing reporting
+    "PLR0911",  # Dispatch reads better as flat ifs
+]
+# Policy invariant prover (Q1, moat wave). Heuristic + Z3-optional
+# prover; user-facing error strings.
+"bog_agents_cli/policy_prove/**" = [
+    "TRY003",   # User-facing error strings
+    "EM101",    # Raw string in exception — user-facing
+    "EM102",    # f-string in exception — user-facing
+    "ANN401",   # Any in YAML loader signatures — by design
+    "PLR0911",  # Dispatch tables read better as flat ifs
+    "DOC501",   # Exceptions documented at module level
+    "TC001",    # Cross-module dataclasses kept eager for clarity
+    "ARG001",   # _example_fact's `label` arg is reserved for future use
+    "BLE001",   # Controller wraps bare Exception for user-facing messages
+    "S110",     # try/except/pass in defensive paths
+]
 # Computer Use / browser tools (Gap 6). Thin shim over Playwright;
 # property accessors + tool wrappers — D102 noise outweighs the value.
 "bog_agents_cli/computer_use.py" = [

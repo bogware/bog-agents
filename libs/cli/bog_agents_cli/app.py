@@ -11053,6 +11053,59 @@ class BogAgentsApp(App):
         prompt_block = render_prompt_block(result, intent=intent)
         await self._send_prompt_to_agent(prompt_block)
 
+    async def _handle_postmortem_command(self, command: str) -> None:
+        """Handle ``/postmortem …`` — Q2 causal-replay postmortem.
+
+        Builds a synchronous ``model_invoke`` callable that resolves
+        the active model and runs the postmortem on a worker thread.
+        The model is built fresh each call (no per-session caching
+        here) because the system prompt is short and the LLM call
+        dominates wall-clock time anyway.
+        """
+        await self._mount_message(UserMessage(command))
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.postmortem import dispatch as _postmortem_dispatch
+
+        spec = self._model_override or settings.model_name
+
+        def model_invoke(system_prompt: str, user_prompt: str) -> str:
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            response = resolved.model.invoke(
+                [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+            )
+            content = getattr(response, "content", "")
+            if isinstance(content, list):
+                parts: list[str] = []
+                for p in content:
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        parts.append(str(p.get("text", "")))
+                    elif isinstance(p, str):
+                        parts.append(p)
+                content = "".join(parts)
+            return str(content or "")
+
+        output = await asyncio.to_thread(
+            _postmortem_dispatch,
+            command,
+            working_dir=self._cwd,
+            model_invoke=model_invoke,
+        )
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_prove_invariant_command(self, command: str) -> None:
+        """Handle ``/prove-invariant …`` — Q1 formal-proof entry point.
+
+        Heavy lifting (YAML parse + rule walk + proof) runs on a
+        worker thread so a slow proof can't stall the TUI loop.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.policy_prove.controller import dispatch as _prove_dispatch
+
+        output = await asyncio.to_thread(_prove_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_causal_command(self, command: str) -> None:
         """Handle ``/causal`` (and ``/trace-mind`` alias) — trace-mind causal replay.
 

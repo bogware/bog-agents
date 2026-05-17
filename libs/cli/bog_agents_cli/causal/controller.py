@@ -161,15 +161,41 @@ class CausalController:
             return self._graph(tail)
         if head in ("sessions", "list"):
             return self._sessions(tail)
+        if head == "replay":
+            return self._replay(tail)
         return (
             f"Unknown /causal subcommand: '{head}'.\n\n"
             "Try one of:\n"
-            "  /causal                — show status\n"
-            "  /causal on|off         — toggle recording\n"
-            "  /causal last [N]       — show last N events (default 20)\n"
-            "  /causal why <event_id> — show the causal ancestry tree\n"
-            "  /causal graph [N]      — show the session as a tree (last N)\n"
-            "  /causal sessions       — list recorded sessions"
+            "  /causal                          — show status\n"
+            "  /causal on|off                   — toggle recording\n"
+            "  /causal last [N]                 — last N events (default 20)\n"
+            "  /causal why <event_id>           — causal ancestry tree\n"
+            "  /causal graph [N]                — session as a tree (last N)\n"
+            "  /causal sessions                 — list recorded sessions\n"
+            "  /causal replay <id> [flags]      — time-travel rule replay"
+        )
+
+    def _replay(self, tail: str) -> str:
+        """Q3: time-travel rule replay — delegates to time_travel.dispatch.
+
+        The outer ``/causal …`` surface owns parsing the ``replay``
+        head; from there we hand off so the heavy lifting stays
+        cohesive inside :mod:`bog_agents_cli.time_travel`.
+        """
+        from bog_agents_cli.expert_controller import (
+            get_controller as _get_expert,
+        )
+        from bog_agents_cli.time_travel import dispatch as _replay_dispatch
+
+        def _rules_provider() -> list:
+            return list(_get_expert(self._working_dir).middleware.engine.rules)
+
+        active_id = self._active.session_id if self._active is not None else None
+        return _replay_dispatch(
+            f"/causal replay {tail}",
+            working_dir=self._working_dir,
+            session_id=active_id,
+            rules_provider=_rules_provider,
         )
 
     # ------------------------------------------------------------------
