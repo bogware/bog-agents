@@ -252,6 +252,20 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/orchestrate",
+            "Decompose a goal into mode-typed subtasks and run each in its "
+            "own read-only worker; results boomerang back as a tree summary",
+            "orchestrate plan decompose boomerang subtasks roo workers fanout",
+            "general",
+            available=True,
+            subcommands=(
+                ("<goal>", "Plain-English goal to decompose and run"),
+            ),
+        ),
+        handler_method="_handle_orchestrate_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/prove",
             "Backward-chain query — could the engine derive this goal from current working memory?",
             "prove goal derive backward chain target",

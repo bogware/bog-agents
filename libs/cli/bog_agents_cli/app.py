@@ -10867,6 +10867,36 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_prove, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_orchestrate_command(self, command: str) -> None:
+        """Handle `/orchestrate <goal>` — Roo Boomerang Tasks parity.
+
+        LLM decomposes the goal into mode-typed subtasks (code / test /
+        review / doc / research), each runs in its own one-shot read-
+        only worker, results boomerang back as a tree summary into the
+        parent transcript. The parent's plan, todos, and uncommitted
+        edits are untouched. Implements REVIEW.md T-8.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.orchestrator import render_result
+        from bog_agents_cli.orchestrator_controller import (
+            OrchestratorController,
+        )
+
+        spec = self._model_override or settings.model_name
+        goal = command.strip()[len("/orchestrate") :].strip()
+
+        def model_factory() -> Any:  # noqa: ANN401 — LangChain BaseChatModel
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = OrchestratorController(
+            working_dir=Path(self._cwd),
+            model_factory=model_factory,
+        )
+        result = await asyncio.to_thread(controller.run, goal)
+        await self._mount_message(AppMessage(render_result(result)))
+
     async def _handle_sidecar_command(self, command: str) -> None:
         """Handle `/sidecar <question>` — isolated read-only Q&A subagent.
 
