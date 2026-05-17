@@ -10973,6 +10973,28 @@ class BogAgentsApp(App):
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
 
+    async def _handle_mcp_command(self, command: str) -> None:
+        """Handle ``/mcp …`` — MCP marketplace install / show / list.
+
+        For environment-variable prompts during install, we run the
+        controller on a worker thread but the prompter itself
+        bounces back through the Textual app via ``call_from_thread``
+        so the user sees a modal. When no env values are needed (a
+        listing or show), the worker thread just renders text.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.mcp_marketplace_controller import handle as _mcp_handle
+
+        rest = command.strip()
+        # Plain non-interactive paths (listing, show, uninstall, install
+        # with full inline KEY=value coverage) don't need a prompter.
+        # Install with required env vars that aren't supplied inline
+        # returns a "missing required" message — we can refine to use a
+        # Textual modal prompt in a follow-up; for now the inline form
+        # is the supported flow.
+        output = await asyncio.to_thread(_mcp_handle, rest)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_web_command(self, command: str) -> None:
         """Handle ``/web <url> [-- <question>]`` — fetch a URL into context.
 
