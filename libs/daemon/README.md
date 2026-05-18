@@ -32,8 +32,8 @@ something matters.
 - **Cross-platform**: POSIX systemd, Windows Task Scheduler, or just
   `bog-agents-daemon run` in a shell. Same config either way.
 
-If the CLI is *patient as still water*, the daemon is the still water that
-keeps watch overnight.
+If the CLI *passes through in harmony*, the daemon is what keeps watch
+through the night.
 
 ---
 
@@ -209,19 +209,19 @@ launchctl load ~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist
 
 ---
 
-## What's new in 0.8.0
+## What's new since 0.8.0
 
-Synced with `bog-agents` 0.8.0:
-
-- **Patient by default.** Every agent run is wrapped by
-  `ProviderRetryMiddleware` against transient provider failures.
-- **Subprocess `stdin=/dev/null`** — interactive shell commands fired
-  by the agent (e.g. Windows `date`) get an immediate EOF instead of
-  hanging the daemon forever.
-- **`virtual_mode=True` filesystem default** — agents launched by the
-  daemon are confined to their working directory unless you explicitly
-  opt out with `BOG_AGENTS_FS_UNSANDBOXED=1`.
-- **Structured event logs** at every chokepoint, ready for shippers.
+- **0.8.8 (Wave Y)** — `JobRun.dispatch_errors` capped at 20 entries
+  with an `(overflow)` summary so a wide-fanout outage (e.g. 100
+  Slack recipients hit during an API outage) doesn't blow up the
+  run record JSON.
+- **0.8.7 (Wave X)** — Per-target output dispatch failures (email,
+  webhook, Slack) are captured on `JobRun.dispatch_errors` so
+  operators can tell from the runs table that delivery failed even
+  when the agent itself completed.
+- **0.8.0** — Patient by default (provider retries, `stdin=/dev/null`
+  for interactive commands, `virtual_mode=True` filesystem confinement,
+  structured event logs ready for log shippers).
 
 ---
 
@@ -244,6 +244,10 @@ when you want an agent that wakes itself.
 
 ## Documentation
 
+- **Full docs**: <https://github.com/bogware/bog-agents/tree/main/docs>
+  — [daemon quickstart](https://github.com/bogware/bog-agents/blob/main/docs/daemon/quickstart.md),
+  [security model](https://github.com/bogware/bog-agents/blob/main/docs/security.md),
+  [troubleshooting](https://github.com/bogware/bog-agents/blob/main/docs/troubleshooting.md)
 - Repo: <https://github.com/bogware/bog-agents>
 - Issues: <https://github.com/bogware/bog-agents/issues>
 - Changelog: [`CHANGELOG.md`](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)

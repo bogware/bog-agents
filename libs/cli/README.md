@@ -1,6 +1,6 @@
 # Bog Agents CLI
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
 A coding agent that lives in your terminal. Point it at the work, step back,
 let it run.
@@ -32,9 +32,13 @@ one out from there for years. The CLI is shaped to support both.
   explicitly opt out. Secrets live in an in-memory vault that's never
   persisted to disk. OAuth tokens written atomically with `0o600` mode
   set before the rename — no world-readable race window.
-- **Discoverable.** Type `/` and a fuzzy menu shows you 80+ commands. The
+- **Discoverable.** Type `/` and a fuzzy menu shows you 120+ commands. The
   MCP marketplace browses 35+ servers across 9 categories. `--doctor-deep`
   probes every external dependency in under a second.
+- **Scriptable.** `bog-agents drive <script.yaml>` runs the TUI
+  non-interactively against a YAML grammar — slash commands, typed
+  prompts, modal interactions, snapshots, assertions — so you can
+  exercise every TUI surface in CI without a human at the keyboard.
 - **A *bog* aesthetic.** Matte swamp palette — muted moss, lichen-grey,
   firefly-amber warnings, heather-rust errors. Ultima-inspired heavy-serif
   splash banner with rune anchors. A still pool, not a neon arcade.
@@ -93,6 +97,28 @@ bog-agents -n "fix the failing test in tests/test_auth.py" --auto-approve
 `-n` is non-interactive (auto-exit), `-p` is pipe-friendly (clean stdout, no chrome).
 
 ---
+
+## What's new since 0.8.0
+
+The most recent waves (post-flagship) have hardened the CLI toward a
+credible 1.0:
+
+- **Wave Y (0.8.8)** — Audit-trail strict-hook warnings, first-run
+  no-API-key actionable error, preview-server cap (5/instance) +
+  `stop_all_preview_servers` tool, OAuth structured observability,
+  opt-in `MessageStore` JSONL persistence for crash recovery,
+  `__all__` declarations on headline middleware modules.
+- **Wave X (0.8.7)** — `merge_worktree` ref-injection fix,
+  `start_preview_server` shlex parsing + DEVNULL, daemon dispatch
+  errors captured on the run record.
+- **Wave W (0.8.6)** — **`bog-agents drive`** scripted TUI runner
+  (YAML grammar, Pilot harness, deterministic `fake:`/`replay:` model
+  shims, SVG + text snapshots); tool-bundle pattern; canonical
+  middleware-ordering test.
+
+See [CHANGELOG.md](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
+for the full history. The 0.8.0 notes below cover the original
+flagship release.
 
 ## What's new in 0.8.0
 
@@ -200,7 +226,7 @@ discord, kubernetes, datadog, sentry — and more.
 | `/mcp` | MCP server marketplace + manager |
 | `/quit` | Exit |
 
-80+ commands total. Type `/` and start typing — fuzzy autocomplete will surface
+120+ commands total. Type `/` and start typing — fuzzy autocomplete will surface
 what you need.
 
 ---
@@ -238,14 +264,16 @@ ship without any settings file at all.
 Run the agent inside an isolated remote sandbox instead of on your host:
 
 ```bash
-bog-agents --sandbox modal
-bog-agents --sandbox daytona
-bog-agents --sandbox runloop
-bog-agents --sandbox langsmith
+bog-agents --sandbox docker      # local Docker container
+bog-agents --sandbox daytona     # remote daytona.io workspace
+bog-agents --sandbox modal       # Modal sandbox (when the extra is installed)
+bog-agents --sandbox runloop     # RunLoop sandbox (when installed)
+bog-agents --sandbox langsmith   # LangSmith hosted sandbox
 ```
 
-Or wire up a Docker sandbox for local isolation. Each option installs as
-its own extra (`bog-agents-cli[modal]` etc.).
+Today's first-party sandbox is **Daytona** (`libs/partners/daytona/`).
+The other providers are configurable via their respective extras; see
+the SDK docs for credentials and limits.
 
 ---
 
@@ -259,8 +287,38 @@ its own extra (`bog-agents-cli[modal]` etc.).
 | `--prompt NAME` | Run a saved prompt from your prompt library. |
 | `--prompt-vars JSON` | Pass variable bindings to a saved prompt. |
 | `--pipeline NAME` | Run a saved pipeline from `.bog-agents/pipelines/`. |
+| `--drive PATH` | Run a YAML drive script that emulates a TUI user (Pilot-based, JSONL out). |
+| `--drive-stdin` | Read the drive script from stdin instead of a file. |
 | `--serve` | Long-running HTTP server mode. |
 | `--acp` | Agent Client Protocol mode (Zed editor). |
+
+### `bog-agents drive` example
+
+```yaml
+# smoke.yaml
+session:
+  model: fake:Hello from drive.
+  approval_mode: auto-all
+steps:
+  - "/help"
+  - wait_for_idle: 5
+  - expect_transcript_contains: "(?i)help|usage"
+  - type: "summarize the README"
+  - submit
+  - wait_for_idle: 30
+  - snapshot: artifacts/after-summary
+```
+
+```bash
+bog-agents --drive smoke.yaml
+# stdout (one JSONL row per step + summary):
+# {"step":0,"action":"slash","ok":true,"duration_ms":42,...}
+# {"step":1,"action":"waitforidle","ok":true,...}
+# {"summary":{"total":6,"passed":6,"failed":0,"duration_ms":3210}}
+```
+
+Exit code = number of failed steps. The runner produces SVG + text
+snapshots for visual review and a JSONL transcript for diffing.
 
 ---
 
@@ -281,6 +339,12 @@ uv run bog-agents
 ## Documentation
 
 - This README + `bog-agents --help`
+- **Full docs**: <https://github.com/bogware/bog-agents/tree/main/docs>
+  — [getting started](https://github.com/bogware/bog-agents/blob/main/docs/getting-started.md),
+  [cookbook](https://github.com/bogware/bog-agents/blob/main/docs/cookbook.md),
+  [troubleshooting](https://github.com/bogware/bog-agents/blob/main/docs/troubleshooting.md),
+  [drive deep dive](https://github.com/bogware/bog-agents/blob/main/docs/cli/drive.md),
+  [tips & tricks](https://github.com/bogware/bog-agents/blob/main/docs/tips-and-tricks.md)
 - Architecture overview: [`CLAUDE.md`](https://github.com/bogware/bog-agents/blob/main/CLAUDE.md)
 - Repo: <https://github.com/bogware/bog-agents>
 - Issues: <https://github.com/bogware/bog-agents/issues>

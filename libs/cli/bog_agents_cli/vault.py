@@ -190,15 +190,34 @@ class SessionVault:
 
         Failures (no backend installed, key absent, keychain locked) are
         deliberately swallowed — the caller will fall back to prompting.
+        We DO log at warning level for the "backend broken" cases
+        (e.g. KeyringError, KeyringLocked) so a misconfigured machine
+        gets a one-time visible signal instead of silently prompting
+        for every secret on every run. The "not found" case stays
+        debug-level — it's normal during first-time setup.
         """
         try:
             import keyring  # type: ignore[import-untyped]
+            from keyring.errors import KeyringError  # type: ignore[import-untyped]
         except ImportError:
             logger.debug("vault: keyring not installed, skipping OS keychain lookup")
             return None
         try:
             value = keyring.get_password(self.keyring_service, key)
-        except Exception as exc:
+        except KeyringError as exc:
+            # Backend present but broken (locked daemon, missing
+            # collection, permission denied). Surface once per process
+            # so the user knows their keyring needs attention.
+            if not getattr(self, "_keyring_warned", False):
+                logger.warning(
+                    "vault: OS keyring backend reported an error — "
+                    "falling back to prompts for the remainder of this "
+                    "session. Detail: %s",
+                    exc,
+                )
+                self._keyring_warned = True
+            return None
+        except Exception as exc:  # any other backend bug we don't recognize
             logger.debug("vault: keyring lookup for %r failed: %s", key, exc)
             return None
         return value

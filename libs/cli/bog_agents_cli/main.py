@@ -665,6 +665,53 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--drive",
+        dest="drive_script",
+        metavar="PATH",
+        help=(
+            "Run a YAML drive script that emulates a TUI user "
+            "non-interactively. Emits JSONL on stdout (one line per "
+            "step + summary). Exit code = number of failed steps."
+        ),
+    )
+    parser.add_argument(
+        "--drive-stdin",
+        action="store_true",
+        help="Read the drive script from stdin instead of a path.",
+    )
+    parser.add_argument(
+        "--drive-var",
+        dest="drive_vars",
+        action="append",
+        metavar="NAME=VALUE",
+        help=(
+            "Override a ${var} value used inside the drive script. "
+            "May be passed multiple times."
+        ),
+    )
+    parser.add_argument(
+        "--drive-artifacts",
+        dest="drive_artifacts",
+        metavar="DIR",
+        help=(
+            "Directory for snapshot artefacts. Defaults to "
+            "<script-dir>/.drive-artifacts/<timestamp>/."
+        ),
+    )
+    parser.add_argument(
+        "--drive-output",
+        dest="drive_output",
+        metavar="PATH",
+        help="Write the JSONL transcript to this file instead of stdout.",
+    )
+    parser.add_argument(
+        "--drive-stop-on-failure",
+        dest="drive_stop_on_failure",
+        action="store_true",
+        help="Abort the run at the first failed assertion.",
+    )
+
+    parser.add_argument(
         "--pr",
         action="store_true",
         help="PR-output mode: run agent non-interactively and create a pull request",
@@ -1484,6 +1531,23 @@ def cli_main() -> None:
             )
             server.run()
             sys.exit(0)
+
+        # --drive / --drive-stdin: scripted TUI run, JSONL out, no chrome.
+        if getattr(args, "drive_script", None) or getattr(args, "drive_stdin", False):
+            from bog_agents_cli.drive.entrypoint import (
+                parse_var_overrides,
+                run_drive_entrypoint,
+            )
+
+            exit_code = run_drive_entrypoint(
+                script_path=getattr(args, "drive_script", None),
+                from_stdin=bool(getattr(args, "drive_stdin", False)),
+                artifact_dir=getattr(args, "drive_artifacts", None),
+                var_overrides=parse_var_overrides(getattr(args, "drive_vars", None)),
+                stop_on_failure=bool(getattr(args, "drive_stop_on_failure", False)),
+                output_path=getattr(args, "drive_output", None),
+            )
+            sys.exit(exit_code)
 
         # --pr: PR-output mode (requires -n)
         if getattr(args, "pr", False):

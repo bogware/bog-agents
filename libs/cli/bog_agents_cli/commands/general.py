@@ -190,6 +190,220 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/expert",
+            "Expert Mode — forward+backward chaining rule engine for policy gates, "
+            "deterministic constraints, and deny/modify/approval actions",
+            "rules engine policy expert clips forward backward chaining inference",
+            "general",
+            available=True,
+            subcommands=(
+                ("on|off", "Toggle the engine"),
+                ("list", "List loaded rules"),
+                ("show <name>", "Show a single rule's contents"),
+                ("lint", "Static analysis of the rulebook"),
+                ("trace [N]", "Last engine-run trace (default 50 entries)"),
+                ("memory", "Working-memory contents"),
+                ("assert <fact_type> k=v ...", "Inject a fact"),
+                ("dry-run <fact_type> k=v ...", "Simulate firing without persisting"),
+                ("write <intent>", "LLM generates a rule from your description"),
+                ("write save [name]", "Commit the most recent /expert write proposal"),
+                ("write cancel", "Discard the pending /expert write proposal"),
+                ("wizard", "Guided setup — show category menu"),
+                ("wizard <category> <intent>", "Guided rule authoring per category"),
+                ("watch", "Show scheduled-proposer status"),
+                ("watch start [N] [--apply]", "Start the scheduled proposer"),
+                ("watch stop", "Stop the scheduled proposer"),
+                ("propose [agent]", "Mine dreams + history → stage a proposed rule"),
+                (
+                    "propose [agent] --apply",
+                    "Mine dreams + apply the rule directly (skip staging)",
+                ),
+                ("proposals", "List pending dream-mined proposals"),
+                ("proposals approve <name>", "Promote a proposal to active rules"),
+                ("proposals discard <name>", "Delete a pending proposal"),
+                ("run", "Run the engine to a fixed point"),
+                ("reload", "Reload rules from disk"),
+                ("example", "Print a starter rule YAML"),
+            ),
+        ),
+        handler_method="_handle_expert_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/why",
+            "Backward-chain explanation — which rules can produce this fact and "
+            "are their conditions satisfied?",
+            "explain trace reason proof backward expert why",
+            "general",
+            available=True,
+            subcommands=(("<fact_type> [k=v ...]", "Fact-type pattern to explain"),),
+        ),
+        handler_method="_handle_why_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/sidecar",
+            "Ask a one-shot question in a fresh read-only subagent — without "
+            "disturbing the main agent's work-in-progress",
+            "question ask isolated subagent read-only sidecar parallel side aside",
+            "general",
+            available=True,
+            subcommands=(("<question>", "What you want the sidecar to answer"),),
+        ),
+        handler_method="_handle_sidecar_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/orchestrate",
+            "Decompose a goal into mode-typed subtasks and run each in its "
+            "own read-only worker; results boomerang back as a tree summary",
+            "orchestrate plan decompose boomerang subtasks roo workers fanout",
+            "general",
+            available=True,
+            subcommands=(
+                ("<goal>", "Plain-English goal to decompose and run"),
+                (
+                    "--parallel <goal>",
+                    "Run subtasks concurrently (each gets a fresh model)",
+                ),
+            ),
+        ),
+        handler_method="_handle_orchestrate_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/prove",
+            "Backward-chain query — could the engine derive this goal from current working memory?",
+            "prove goal derive backward chain target",
+            "general",
+            available=True,
+            subcommands=(("<fact_type> [k=v ...]", "Goal pattern to prove"),),
+        ),
+        handler_method="_handle_prove_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/browser",
+            "Computer Use — Playwright-backed browser tools (navigate, click, screenshot, eval)",
+            "browser computer use playwright chromium navigate click screenshot",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show browser session status"),
+                ("close", "Close the active browser session"),
+            ),
+        ),
+        handler_method="_handle_browser_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/web",
+            "Fetch a URL and add the cleaned page content to the conversation as context",
+            "url fetch http get page web scrape document docs reference",
+            "general",
+            available=True,
+            subcommands=(
+                ("<url>", "Fetch URL and inject as context"),
+                (
+                    "<url> -- <question>",
+                    "Fetch URL then ask the agent <question> about it",
+                ),
+            ),
+        ),
+        handler_method="_handle_web_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/tracefile",
+            "TraceFile v1 — export, import, verify content-addressed signed "
+            "traces. Designed as an open format other agent CLIs can read + write.",
+            "tracefile export import verify ed25519 merkle signed portable causal",
+            "general",
+            available=True,
+            subcommands=(
+                ("export <session-id|latest>", "Sign + write a TraceFile"),
+                ("import <path>", "Verify and render a TraceFile"),
+                ("verify <path>", "Verify only; no render"),
+                ("keygen [--out PATH]", "Mint an Ed25519 keypair"),
+                ("help", "Usage"),
+            ),
+        ),
+        handler_method="_handle_tracefile_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/compliance",
+            "Compliance auditor — run a YAML audit pack against the loaded "
+            "rules + causal traces; produces a signed SOC2-aligned report",
+            "audit compliance soc2 iso nist controls invariant evidence report seal pack",
+            "general",
+            available=True,
+            subcommands=(
+                ("run <pack>", "Run an audit pack (project-local or bundled)"),
+                ("list", "List saved audit reports newest-first"),
+                ("show <filename>", "Read a saved report; verifies the seal"),
+                ("packs", "List available audit packs"),
+                ("help", "Usage + YAML schema"),
+            ),
+        ),
+        handler_method="_handle_compliance_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/postmortem",
+            "Causal-replay postmortem — analyse a session, propose remediations "
+            "(rule / skill / config)",
+            "postmortem analyse review trace causal remediation rule skill",
+            "general",
+            available=True,
+            subcommands=(
+                ("<session-id>", "Analyse a specific causal session"),
+                ("latest", "Newest session"),
+                ("latest <note>", "Add free-text context for the model"),
+                ("list", "List saved postmortems"),
+            ),
+        ),
+        handler_method="_handle_postmortem_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/prove-invariant",
+            "Formally prove a safety invariant against the loaded expert rules "
+            "(e.g. 'no PII tool may run after git push to main')",
+            "prove invariant formal verification z3 smt policy guarantee safety",
+            "general",
+            available=True,
+            subcommands=(
+                ("<path.yaml>", "Prove an invariant from a YAML file"),
+                ("list", "List invariants/*.yaml in this project"),
+                ("--z3", "Prefer the Z3-backed prover (optional flag)"),
+                ("help", "Show usage + YAML schema"),
+            ),
+        ),
+        handler_method="_handle_prove_invariant_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/trace-mind",
+            "Trace-mind — see the proof tree behind any agent decision, "
+            "tool call, or final answer (was: /causal)",
+            "trace mind causal replay debug provenance ancestry why-did graph history",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show recording state + counts"),
+                ("on|off", "Toggle recording for this cwd"),
+                ("last [N]", "Show the last N events (default 20)"),
+                ("why <event_id>", "Render the causal-ancestry tree of one event"),
+                ("graph [N]", "Render the whole session as a tree"),
+                ("sessions [id]", "List recorded sessions (or render one by id)"),
+                ("replay <id> [flags]", "Time-travel rule replay (Q3)"),
+            ),
+        ),
+        handler_method="_handle_trace_mind_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/search",
             "Hybrid codebase search — ripgrep exact + fuzzy filename + semantic",
             "ripgrep rg find grep vector embeddings semantic hybrid",

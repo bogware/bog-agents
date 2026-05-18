@@ -41,7 +41,12 @@ class TestDetectContextWindow:
     """``detect_context_window`` resolves correctly across the lookup chain."""
 
     def test_direct_hit_in_curated_table(self) -> None:
-        assert detect_context_window("claude-sonnet-4-6") == 200_000
+        # Upstream langchain-anthropic now reports 1M for sonnet-4-6
+        # since Anthropic flipped the 1M beta on by default. Haiku 4.5
+        # is the current-generation 200K-window canary — swap to
+        # whichever Claude generation is still 200K if upstream moves
+        # this one too. (Don't use claude-3-haiku — that's deprecated.)
+        assert detect_context_window("claude-haiku-4-5") == 200_000
 
     def test_opus_4_7_resolves_to_at_least_1m(self) -> None:
         """The flagged regression: opus-4-7 must not silently degrade to 200K.
@@ -70,9 +75,10 @@ class TestDetectContextWindow:
 
     def test_provider_prefix_is_stripped(self) -> None:
         assert detect_context_window("anthropic:claude-opus-4-7") >= 1_000_000
-        # Sonnet 4.6 is still a 200K model — pinned exactly because no
-        # 1M variant exists and the upstream profile is stable.
-        assert detect_context_window("anthropic:claude-sonnet-4-6") == 200_000
+        # Haiku 4.5 is a current-generation 200K-window model.
+        # Demonstrates that the provider prefix is stripped before
+        # the curated/profile lookup.
+        assert detect_context_window("anthropic:claude-haiku-4-5") == 200_000
 
     def test_unknown_model_uses_default(self) -> None:
         assert detect_context_window("fictional-mega-llm-9000", default=42) == 42
@@ -91,7 +97,10 @@ class TestCostTrackerRoutesThroughDetect:
         assert tracker.context_window_size == 1_000_000
 
     def test_known_200k_model_resolves_to_200k(self) -> None:
-        tracker = CostTracker(model_name="claude-sonnet-4-6")
+        # See note on test_direct_hit_in_curated_table — sonnet-4-6
+        # moved to 1M upstream. Haiku 4.5 is the current canary for
+        # the "routing handles 200K" path.
+        tracker = CostTracker(model_name="claude-haiku-4-5")
         assert tracker.context_window_size == 200_000
 
     def test_unknown_model_uses_curated_fallback_default(self) -> None:

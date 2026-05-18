@@ -79,6 +79,60 @@ logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 _monotonic = time.monotonic
 
+
+_DEFAULT_TURN_TIMEOUT_SECONDS = 3600.0
+"""H1: default cap on one agent turn (model + tool calls + streaming).
+
+One hour is generous — legitimate long-running turns (deep research,
+large refactors) need headroom, but a literally-hung worker would
+otherwise lock the TUI indefinitely.
+"""
+
+
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
+    """H4: done-callback that surfaces task failures through the logger.
+
+    ``asyncio.create_task`` doesn't print or log unhandled exceptions
+    in fire-and-forget tasks; they only surface at GC time as a
+    "task exception was never retrieved" warning, which most
+    operators never see. We retrieve the exception explicitly so the
+    failure shows up in the log with a full stack trace.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    logger.error(
+        "Background task '%s' failed: %s",
+        task.get_name() if hasattr(task, "get_name") else "<unnamed>",
+        exc,
+        exc_info=exc,
+    )
+
+
+def _resolve_turn_timeout() -> float | None:
+    """Read ``BOG_AGENTS_TURN_TIMEOUT_SECONDS`` for the per-turn cap.
+
+    Returns:
+        Float seconds, or ``None`` to mean "no cap" (env var set to
+        ``0`` or ``none``). Invalid values fall back silently to the
+        default.
+    """
+    raw = (os.environ.get("BOG_AGENTS_TURN_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_TURN_TIMEOUT_SECONDS
+    if raw.lower() in ("0", "none", "off", "false"):
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_TURN_TIMEOUT_SECONDS
+    if value <= 0:
+        return None
+    return value
+
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -679,6 +733,19 @@ List what you captured and where you stored it:
 """
 
 
+# Conversation-buffer widget → role map (J4 cleanup). Built once at
+# module load instead of running isinstance chains on every mounted
+# message. Unknown widgets fall through to "app" in _buffer_message.
+_WIDGET_ROLE_MAP: dict[type, str] = {
+    UserMessage: "user",
+    QueuedUserMessage: "user",
+    AssistantMessage: "assistant",
+    ToolCallMessage: "tool",
+    ErrorMessage: "app",
+    AppMessage: "app",
+}
+
+
 class BogAgentsApp(App):
     """Main Textual application for bog-agents-cli."""
 
@@ -1005,6 +1072,16 @@ class BogAgentsApp(App):
             },
         )
 
+        # K2: resume the /expert watcher if a state file is present
+        # under .bog-agents/. Non-fatal — a stale or unreadable state
+        # file just means no resume happens; the user can /expert watch
+        # start manually.
+        self.run_worker(
+            self._resume_expert_watcher,
+            exclusive=True,
+            group="startup-expert-watch-resume",
+        )
+
         # Seed default prompts and pipelines to ~/.bog-agents/ (additive, non-fatal)
         self.run_worker(
             self._seed_defaults,
@@ -1081,10 +1158,17 @@ class BogAgentsApp(App):
         running loop, so a fire-and-forget task can be garbage-collected
         before completion. Tasks routed through this helper survive until
         they finish.
+
+        H4: in addition to the strong-ref bookkeeping, every task gets
+        a done callback that surfaces unhandled exceptions through the
+        logger. Without this, a fire-and-forget worker that raises
+        produces no output at all — silently dropping the failure on
+        the floor.
         """
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(_log_task_exception)
         return task
 
     def _install_termination_signal_handlers(self) -> None:
@@ -1133,17 +1217,33 @@ class BogAgentsApp(App):
 
         if not self._background_tasks:
             return
+        # H3: cancel first, then wait. If the 2s grace period elapses
+        # with tasks still alive, name them in the log so a hung
+        # task gets a paper trail instead of silently leaking.
         for task in list(self._background_tasks):
             if not task.done():
                 task.cancel()
-        # Give cancelled tasks a chance to settle so we don't lose log lines.
         try:
             await asyncio.wait_for(
                 asyncio.gather(*self._background_tasks, return_exceptions=True),
                 timeout=2.0,
             )
         except TimeoutError:
-            logger.warning("Background tasks did not settle within 2s of unmount")
+            unfinished = [t for t in self._background_tasks if not t.done()]
+            if unfinished:
+                names = ", ".join(
+                    (t.get_name() if hasattr(t, "get_name") else repr(t))
+                    for t in unfinished[:10]
+                )
+                logger.warning(
+                    "Background tasks did not settle within 2s of unmount "
+                    "(%d unfinished: %s%s). They will be abandoned.",
+                    len(unfinished),
+                    names,
+                    "…" if len(unfinished) > 10 else "",
+                )
+            else:
+                logger.warning("Background tasks did not settle within 2s of unmount")
 
     def _init_agent_adapter(self) -> None:
         """Create the UI adapter and kick off background cache prewarming."""
@@ -6883,7 +6983,10 @@ class BogAgentsApp(App):
             if self._recording_state is None:
                 await self._mount_message(AppMessage("No replay recording is active."))
                 return
-            from bog_agents_cli.replay import save_replay_session
+            from bog_agents_cli.replay import (
+                save_drive_script_for_session,
+                save_replay_session,
+            )
 
             state = self._recording_state
             recorder = state.recorder
@@ -6914,6 +7017,11 @@ class BogAgentsApp(App):
                 settings.user_agents_dir,
                 session,
             )
+            drive_path = await asyncio.to_thread(
+                save_drive_script_for_session,
+                settings.user_agents_dir,
+                session,
+            )
             self._recording_state = None
             var_count = len(session.vars_spec)
             tool_calls = sum(1 for s in session.steps if s.kind == "tool_call")
@@ -6921,8 +7029,11 @@ class BogAgentsApp(App):
                 AppMessage(
                     f"Saved replay `{session.name}` with {len(session.steps)} step(s) "
                     f"({tool_calls} tool call(s)) and {var_count} auto-detected "
-                    f"variable(s) to {file_path}.\n"
-                    "Open the YAML file to refine variable names, types, or defaults."
+                    f"variable(s).\n"
+                    f"  YAML recording: {file_path}\n"
+                    f"  Drive script:   {drive_path}\n"
+                    "Re-run via /replay run <id> (drives the script through the TUI) "
+                    "or `bog-agents --drive {drive_file}` from a shell."
                 )
             )
             return
@@ -6933,7 +7044,10 @@ class BogAgentsApp(App):
 
     async def _handle_replay_command(self, command: str) -> None:
         """Handle `/replay` for inspecting and rerunning recorded sessions."""
-        from bog_agents_cli.replay import build_replay_prompt, list_replay_sessions
+        from bog_agents_cli.replay import (
+            list_replay_sessions,
+            save_drive_script_for_session,
+        )
         from bog_agents_cli.vars import VarBundle
         from bog_agents_cli.vault import get_default_vault
 
@@ -7059,15 +7173,32 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"Replay cancelled: {exc}"))
                 return
 
-            prompt = build_replay_prompt(session, bundle)
-            if extra_context:
-                prompt += f"\n\n## Extra Context\n\n{extra_context}\n"
+            # Re-execute each recorded user message through the same chat
+            # input the live user uses. Variables resolved on the bundle
+            # are substituted at submit-time. The /record session captured
+            # tool calls and AI replies too, but those belong to the
+            # original LLM — the new run drives only the user side and
+            # lets the current agent decide tool calls and replies.
+            drive_path = await asyncio.to_thread(
+                save_drive_script_for_session,
+                settings.user_agents_dir,
+                session,
+            )
             await self._mount_message(
                 AppMessage(
-                    f"Replaying session `{session.name or session.session_id}`..."
+                    f"Replaying session `{session.name or session.session_id}`...\n"
+                    f"(Drive script: {drive_path}; run "
+                    f"`bog-agents --drive {drive_path}` to replay it "
+                    "headlessly outside the TUI.)"
                 )
             )
-            await self._send_prompt_to_agent(prompt)
+            user_steps = [s for s in session.steps if s.kind == "user_message"]
+            for user_step in user_steps:
+                rendered = bundle.substitute(user_step.content)
+                if extra_context:
+                    rendered = f"{rendered}\n\n## Extra Context\n\n{extra_context}\n"
+                    extra_context = ""  # Only attach on the first step.
+                await self._send_prompt_to_agent(rendered)
             return
 
         await self._mount_message(
@@ -7881,7 +8012,11 @@ class BogAgentsApp(App):
             # Read PID for the header
             pid_file = Path.home() / ".bog-agents" / "daemon" / "daemon.pid"
             try:
-                pid_str = pid_file.read_text().strip() if pid_file.exists() else "?"
+                pid_str = (
+                    pid_file.read_text(encoding="utf-8").strip()
+                    if pid_file.exists()
+                    else "?"
+                )
             except OSError:
                 pid_str = "?"
 
@@ -10827,6 +10962,329 @@ class BogAgentsApp(App):
             )
         )
 
+    async def _handle_expert_command(self, command: str) -> None:
+        """Handle `/expert` — rule engine for policy gates and constraints.
+
+        See ``expert_controller.handle_expert`` for subcommand semantics.
+        Also registers a watcher-summary callback so ``/expert watch``
+        proposals surface as Textual notifications. (Wave J1.)
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.expert_controller import get_controller
+
+        spec = self._model_override or settings.model_name
+
+        def model_factory() -> Any:  # noqa: ANN401 — boundary into LangChain's BaseChatModel
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = get_controller(self._cwd, model_factory=model_factory)
+        # Register the TUI notification surface for /expert watch. The
+        # callback runs on the same asyncio loop as the watcher task,
+        # so we can call ``self.notify`` directly from it.
+
+        async def _surface_watch_summary(summary: str) -> None:  # noqa: RUF029 — async signature required by expert_watch
+            # Trim to fit a toast nicely; full text already lives in
+            # /expert watch (status).
+            short = summary.replace("\n", " ")
+            short = short[:140] + ("…" if len(summary) > 140 else "")
+            severity = "warning" if "error" in summary.lower() else "information"
+            try:
+                self.notify(
+                    f"💡 expert watcher: {short}",
+                    severity=severity,
+                    timeout=8,
+                )
+            except Exception:
+                logger.debug("expert watcher notification failed", exc_info=True)
+
+        controller.set_watch_summary_callback(_surface_watch_summary)
+        args = command.strip()[len("/expert") :].strip()
+        output = await asyncio.to_thread(controller.handle_expert, args)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_browser_command(self, command: str) -> None:
+        """Handle ``/browser …`` — Computer Use session control.
+
+        Today the slash command only manages the session lifecycle
+        (status / close). The actual browser tools are wired into
+        agents via ``computer_use.build_browser_tools()`` from
+        agent.py when the user opts in.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.computer_use import (
+            render_browser_status,
+            shutdown_browser,
+        )
+
+        rest = command.strip()[len("/browser") :].strip().lower()
+        if rest in ("", "status"):
+            output = render_browser_status()
+        elif rest in ("close", "stop", "shutdown"):
+            await shutdown_browser()
+            output = "Browser session closed."
+        else:
+            output = (
+                f"Unknown /browser subcommand: '{rest}'.\n\n"
+                "Usage:\n"
+                "  /browser           — show status\n"
+                "  /browser close     — close the active session"
+            )
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_web_command(self, command: str) -> None:
+        """Handle ``/web <url> [-- <question>]`` — fetch a URL into context.
+
+        Parses the rest of the slash command into ``url`` and an
+        optional follow-up question (separated by ``--``). The fetch
+        runs on a worker thread so the TUI loop stays responsive,
+        then the cleaned content is fed to the agent as if the user
+        had pasted it — letting the rest of the agent surface
+        (citations middleware, expert rules, trace-mind) treat the
+        web content as a normal turn.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.web_fetch import (
+            WebFetchError,
+            fetch_url,
+            render_prompt_block,
+        )
+
+        rest = command.strip()[len("/web") :].strip()
+        if not rest:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: /web <url> [-- <question>]\n"
+                    "  Example: /web https://docs.python.org/3/library/asyncio.html\n"
+                    "  Example: /web https://example.com/foo -- summarize the first section"
+                )
+            )
+            return
+        if " -- " in rest:
+            url_part, _, intent = rest.partition(" -- ")
+        else:
+            url_part, intent = rest, ""
+        url = url_part.strip()
+        intent = intent.strip()
+        await self._mount_message(AppMessage(f"Fetching {url} …"))
+        try:
+            result = await asyncio.to_thread(fetch_url, url)
+        except WebFetchError as exc:
+            await self._mount_message(ErrorMessage(f"/web failed: {exc}"))
+            return
+        body_chars = len(result.body)
+        await self._mount_message(
+            AppMessage(
+                f"Fetched [bold]{result.final_url}[/bold]  "
+                f"({result.status_code}, {body_chars} chars"
+                + (", truncated)" if result.truncated else ")")
+            )
+        )
+        prompt_block = render_prompt_block(result, intent=intent)
+        await self._send_prompt_to_agent(prompt_block)
+
+    async def _handle_tracefile_command(self, command: str) -> None:
+        """Handle ``/trace …`` — TraceFile v1 export/import/verify/keygen.
+
+        Heavy paths (parse, hash, sign/verify) run on a worker thread.
+        Verification of an imported TraceFile is mandatory — the
+        controller never renders unverified content.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.tracefile.controller import dispatch as _trace_dispatch
+
+        output = await asyncio.to_thread(_trace_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_compliance_command(self, command: str) -> None:
+        """Handle ``/compliance …`` — Wave R compliance auditor.
+
+        Slow paths (YAML parse + invariant proofs + trace IO) run on
+        a worker thread so the TUI stays responsive even when the
+        audit walks a large causal log. The renamed surface avoids
+        clashing with the pre-existing ``/audit`` dependency-scan
+        command in commands/quality.py.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.compliance.controller import dispatch as _audit_dispatch
+
+        # The controller dispatcher recognises "/compliance" alongside the
+        # legacy "/audit" prefix it was written against, so the user's
+        # raw command flows straight through.
+        output = await asyncio.to_thread(_audit_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_postmortem_command(self, command: str) -> None:
+        """Handle ``/postmortem …`` — Q2 causal-replay postmortem.
+
+        Builds a synchronous ``model_invoke`` callable that resolves
+        the active model and runs the postmortem on a worker thread.
+        The model is built fresh each call (no per-session caching
+        here) because the system prompt is short and the LLM call
+        dominates wall-clock time anyway.
+        """
+        await self._mount_message(UserMessage(command))
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.postmortem import dispatch as _postmortem_dispatch
+
+        spec = self._model_override or settings.model_name
+
+        def model_invoke(system_prompt: str, user_prompt: str) -> str:
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            response = resolved.model.invoke(
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ]
+            )
+            content = getattr(response, "content", "")
+            if isinstance(content, list):
+                parts: list[str] = []
+                for p in content:
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        parts.append(str(p.get("text", "")))
+                    elif isinstance(p, str):
+                        parts.append(p)
+                content = "".join(parts)
+            return str(content or "")
+
+        output = await asyncio.to_thread(
+            _postmortem_dispatch,
+            command,
+            working_dir=self._cwd,
+            model_invoke=model_invoke,
+        )
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_prove_invariant_command(self, command: str) -> None:
+        """Handle ``/prove-invariant …`` — Q1 formal-proof entry point.
+
+        Heavy lifting (YAML parse + rule walk + proof) runs on a
+        worker thread so a slow proof can't stall the TUI loop.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.policy_prove.controller import dispatch as _prove_dispatch
+
+        output = await asyncio.to_thread(_prove_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_trace_mind_command(self, command: str) -> None:
+        """Handle ``/trace-mind`` — causal-replay (Wave V renamed from /causal).
+
+        Thin wrapper that mounts the user's command, hands off to
+        :mod:`bog_agents_cli.causal.controller` on a worker thread so
+        the TUI loop stays responsive, then mounts the rendered output.
+        See ``causal.controller.CausalController.handle`` for the
+        subcommand vocabulary.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.causal.controller import dispatch as _trace_mind_dispatch
+
+        output = await asyncio.to_thread(_trace_mind_dispatch, command, self._cwd)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_why_command(self, command: str) -> None:
+        """Handle `/why <fact_type> [k=v ...]` — backward-chain explanation."""
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.expert_controller import get_controller
+
+        controller = get_controller(self._cwd)
+        args = command.strip()[len("/why") :].strip()
+        output = await asyncio.to_thread(controller.handle_why, args)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_prove_command(self, command: str) -> None:
+        """Handle `/prove <fact_type> [k=v ...]` — backward-chain goal query."""
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.expert_controller import get_controller
+
+        controller = get_controller(self._cwd)
+        args = command.strip()[len("/prove") :].strip()
+        output = await asyncio.to_thread(controller.handle_prove, args)
+        await self._mount_message(AppMessage(output))
+
+    async def _handle_orchestrate_command(self, command: str) -> None:
+        """Handle `/orchestrate <goal>` — Roo Boomerang Tasks parity.
+
+        LLM decomposes the goal into mode-typed subtasks (code / test /
+        review / doc / research), each runs in its own one-shot read-
+        only worker, results boomerang back as a tree summary into the
+        parent transcript. The parent's plan, todos, and uncommitted
+        edits are untouched. Implements REVIEW.md T-8.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.orchestrator import render_result
+        from bog_agents_cli.orchestrator_controller import (
+            OrchestratorController,
+        )
+
+        spec = self._model_override or settings.model_name
+        tail = command.strip()[len("/orchestrate") :].strip()
+        # K1: accept --parallel anywhere in the goal string so users
+        # can opt in to concurrent subtask execution. Default stays
+        # sequential — parallel changes the failure mode (one subtask
+        # crashing no longer short-circuits the rest) and the output
+        # is the same shape so we don't want it to be a silent default.
+        parallel = False
+        goal_tokens: list[str] = []
+        for tok in tail.split():
+            if tok in ("--parallel", "--concurrent"):
+                parallel = True
+            else:
+                goal_tokens.append(tok)
+        goal = " ".join(goal_tokens)
+
+        def model_factory() -> Any:  # noqa: ANN401 — LangChain BaseChatModel
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = OrchestratorController(
+            working_dir=Path(self._cwd),
+            model_factory=model_factory,
+            parallel=parallel,
+        )
+        result = await asyncio.to_thread(controller.run, goal)
+        await self._mount_message(AppMessage(render_result(result)))
+
+    async def _handle_sidecar_command(self, command: str) -> None:
+        """Handle `/sidecar <question>` — isolated read-only Q&A subagent.
+
+        Spawns a fresh agent with a read-only tool surface
+        (read_file / glob / grep / web_search), feeds it a one-time
+        summary of the parent's recent turns as background, and drops
+        the answer back into the parent transcript as a quoted block.
+        The parent's plan, todos, and uncommitted edits are untouched.
+
+        Implements REVIEW.md T-1.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.sidecar_controller import SidecarController
+
+        spec = self._model_override or settings.model_name
+        question = command.strip()[len("/sidecar") :].strip()
+
+        def model_factory() -> Any:  # noqa: ANN401 — boundary into LangChain's BaseChatModel
+            resolved = create_model(spec, profile_overrides=self._profile_override)
+            return resolved.model
+
+        controller = SidecarController(
+            working_dir=Path(self._cwd),
+            model_factory=model_factory,
+        )
+        # v1: no auto-summary of parent messages. The TUI stores
+        # conversation as Textual widgets, not a flat LangChain message
+        # list, so a clean extractor needs careful work. Users who want
+        # the sidecar to know about parent state can paste relevant
+        # context into the question. See REVIEW.md T-1 for the eventual
+        # parent-context auto-summary plan.
+        result = await asyncio.to_thread(controller.run, question)
+        await self._mount_message(AppMessage(result.quote_for_parent()))
+
     async def _handle_search_command(self, command: str) -> None:
         """Handle `/search` hybrid codebase search.
 
@@ -11811,6 +12269,91 @@ class BogAgentsApp(App):
             )
         except RuntimeError as exc:
             await self._mount_message(AppMessage(f"Error: {exc}"))
+
+    async def _handle_async_command(self, command: str) -> None:
+        """Handle ``/async …`` — fire-and-forget agent tasks (Gap 4).
+
+        Thin alias over the existing /background machinery with one
+        net-new verb: ``/async wait <id> [timeout]`` blocks the user
+        until the task finishes, then mounts the result inline. The
+        rest of the surface (list, status, cancel, submit) delegates
+        to the same BackgroundAgentManager.
+        """
+        await self._mount_message(UserMessage(command))
+        rest = command.strip()[len("/async") :].strip()
+        if not rest or rest.lower() == "list":
+            await self._handle_background_command("/background list")
+            return
+        head, _, tail = rest.partition(" ")
+        head = head.lower()
+        if head in ("status", "cancel"):
+            await self._handle_background_command(f"/background {head} {tail.strip()}")
+            return
+        if head == "wait":
+            await self._async_wait(tail.strip())
+            return
+        # Anything else is a prompt to submit — same dispatch as
+        # /background <prompt>, then show the task id as the immediate
+        # reply (the on_complete callback will mount the result when
+        # the task lands).
+        await self._handle_background_command(f"/background {rest}")
+
+    async def _async_wait(self, args: str) -> None:
+        """Implement ``/async wait <id> [timeout-seconds]``.
+
+        Polls the background manager once a second up to *timeout*
+        (default 600s) and mounts the result inline when the task
+        reaches a terminal status. Polling rather than callback-based
+        because the user explicitly opted to *wait* — the callback
+        infrastructure already toasts on completion regardless.
+        """
+        await self._ensure_background_manager()
+        tokens = args.strip().split()
+        if not tokens:
+            await self._mount_message(
+                AppMessage("Usage: /async wait <task-id> [timeout-seconds]")
+            )
+            return
+        task_id = tokens[0]
+        timeout_seconds = 600.0
+        if len(tokens) > 1:
+            try:
+                timeout_seconds = max(1.0, float(tokens[1]))
+            except ValueError:
+                await self._mount_message(AppMessage(f"Invalid timeout: {tokens[1]!r}"))
+                return
+        from bog_agents_cli.background_agents import BackgroundStatus
+
+        deadline = _monotonic() + timeout_seconds
+        last_status: str = ""
+        while _monotonic() < deadline:
+            task = self._bg_manager.get_status(task_id)
+            if task is None:
+                await self._mount_message(
+                    AppMessage(f"No background task with id {task_id!r}.")
+                )
+                return
+            status = getattr(task, "status", "")
+            if status != last_status:
+                last_status = str(status)
+                logger.debug("/async wait %s: status=%s", task_id, last_status)
+            if status in (
+                BackgroundStatus.COMPLETED,
+                BackgroundStatus.FAILED,
+                BackgroundStatus.CANCELLED,
+            ):
+                await self._mount_message(
+                    AppMessage(self._format_background_task_detail(task))
+                )
+                return
+            await asyncio.sleep(1.0)
+        await self._mount_message(
+            AppMessage(
+                f"/async wait timed out after {timeout_seconds:.0f}s "
+                f"(task {task_id} still {last_status or 'unknown'}). "
+                "Use /async status to check again, or /async cancel to stop it."
+            )
+        )
 
     async def _notify_background_complete(self, task: object) -> None:
         """Show a notification when a background task finishes.
@@ -13202,8 +13745,16 @@ class BogAgentsApp(App):
         if self._ui_adapter is None:
             return
         turn_stats: SessionStats | None = None
+        # H1: cap the per-turn agent execution. Without this, a hung
+        # remote (model stall, network outage, runaway tool loop)
+        # freezes the entire TUI. The cap is generous (default 1h)
+        # because legitimate long-running turns exist; users can
+        # override via BOG_AGENTS_TURN_TIMEOUT_SECONDS=N or =0/none for
+        # no cap. On timeout we surface a recovery-aware error and
+        # leave the thread state intact so the user can resume.
+        turn_timeout_seconds = _resolve_turn_timeout()
         try:
-            turn_stats = await execute_task_textual(
+            agent_coro = execute_task_textual(
                 user_input=message,
                 agent=self._agent,
                 assistant_id=self._assistant_id,
@@ -13213,6 +13764,34 @@ class BogAgentsApp(App):
                 image_tracker=self._image_tracker,
                 context=self._build_cli_context(),
             )
+            if turn_timeout_seconds is None:
+                turn_stats = await agent_coro
+            else:
+                turn_stats = await asyncio.wait_for(
+                    agent_coro, timeout=turn_timeout_seconds
+                )
+        except TimeoutError:
+            logger.warning(
+                "Agent turn exceeded %.0fs timeout; cancelled",
+                turn_timeout_seconds,
+            )
+            if self._ui_adapter:
+                self._ui_adapter.finalize_pending_tools_with_error(
+                    f"Turn exceeded {turn_timeout_seconds:.0f}s"
+                )
+            await self._mount_message(
+                ErrorMessage(
+                    f"Agent turn exceeded {turn_timeout_seconds:.0f}s and was "
+                    "cancelled. Thread state is preserved on the server — "
+                    "send another message to continue, or set "
+                    "BOG_AGENTS_TURN_TIMEOUT_SECONDS=N (or 0 for no cap) to "
+                    "extend the budget."
+                )
+            )
+            self._agent_running = False
+            if self._chat_input:
+                self._chat_input.set_cursor_active(active=True)
+            return
         except Exception as e:  # Resilient tool rendering
             logger.exception("Agent execution failed")
             # Ensure any in-flight tool calls don't remain stuck in "Running..."
@@ -13856,6 +14435,15 @@ class BogAgentsApp(App):
             except Exception:
                 logger.warning("recorder feed failed; continuing", exc_info=True)
 
+        # Wave H: also tap the conversation_buffer so /sidecar and
+        # /expert propose can auto-summarise the parent context without
+        # the user having to paste anything. Cheap + thread-safe — never
+        # raises out of this codepath.
+        try:
+            self._buffer_message(widget)
+        except Exception:
+            logger.debug("conversation_buffer tap failed", exc_info=True)
+
         # Store message data for virtualization
         message_data = MessageData.from_widget(widget)
         # Ensure the widget's DOM id matches the store id so that
@@ -13880,6 +14468,27 @@ class BogAgentsApp(App):
             input_container.scroll_visible()
         except NoMatches:
             pass
+
+    def _buffer_message(self, widget: Any) -> None:  # noqa: ANN401 — duck-typed widget
+        """Record the widget's text into the per-cwd conversation buffer.
+
+        Used by /sidecar (Wave H) and /expert propose to auto-summarise
+        the parent conversation. The widget→role lookup uses
+        :data:`_WIDGET_ROLE_MAP` (built lazily on first call) so the
+        hot path is an ``id(type(widget))`` dict lookup instead of a
+        chain of ``isinstance`` checks. Unknown widget classes fall
+        through to ``"app"`` (filtered out by default consumers).
+        """
+        from bog_agents_cli.conversation_buffer import get_buffer
+
+        text_source = getattr(widget, "renderable", None) or getattr(
+            widget, "content", None
+        )
+        text = str(text_source) if text_source is not None else ""
+        if not text:
+            return
+        role = _WIDGET_ROLE_MAP.get(type(widget), "app")
+        get_buffer(self._cwd).record(role=role, content=text)
 
     def _feed_recorder(self, recorder: Any, widget: Any) -> None:  # noqa: ANN401, PLR6301 — duck-typed; method form mirrors siblings
         """Translate a mounted message widget into a recorder event.
@@ -14454,9 +15063,25 @@ class BogAgentsApp(App):
                 AppMessage(f"Step [{step_index + 1}/{len(pipeline.steps)}]: {step_id}")
             )
             await self._send_prompt_to_agent(rendered_text)
-            # Wait for the agent to finish before moving to the next step
+            # Wait for the agent to finish before moving to the next step.
+            # L2: cap the wait — without this, a hung agent (network
+            # outage, model stall, runaway loop) freezes the entire
+            # pipeline. The cap is generous (30 minutes) because some
+            # legitimate steps run long; the goal is to escape only
+            # genuinely hung calls. On timeout we surface an error
+            # message and let execute_pipeline mark the step as failed.
             if self._agent_worker is not None:
-                await self._agent_worker.wait()
+                import asyncio as _asyncio
+
+                try:
+                    await _asyncio.wait_for(self._agent_worker.wait(), timeout=1800.0)
+                except TimeoutError:
+                    await self._mount_message(
+                        ErrorMessage(
+                            f"Step '{step_id}' exceeded 30 minutes — moving on. "
+                            "Agent worker may still be running in the background."
+                        )
+                    )
 
         result = await execute_pipeline(pipeline, variable_values, on_step=on_step)
 
@@ -14470,6 +15095,49 @@ class BogAgentsApp(App):
                     f"({result.completed_steps} step{'s' if result.completed_steps != 1 else ''} run)."
                 )
             )
+
+    async def _resume_expert_watcher(self) -> None:
+        """Resume the /expert watcher if a persistence file exists (K2).
+
+        Runs as a startup worker so a stale state file or a missing
+        model factory can't block the TUI from coming up. Logs at info
+        on success, debug on no-op, warning on error.
+        """
+        try:
+            from bog_agents_cli.config import create_model, settings
+            from bog_agents_cli.expert_controller import get_controller
+
+            spec = self._model_override or settings.model_name
+
+            def model_factory() -> Any:  # noqa: ANN401
+                resolved = create_model(spec, profile_overrides=self._profile_override)
+                return resolved.model
+
+            controller = get_controller(self._cwd, model_factory=model_factory)
+            # Register the notification surface so resumed watcher
+            # proposals still toast.
+
+            async def _surface(summary: str) -> None:  # noqa: RUF029
+                short = summary.replace("\n", " ")
+                short = short[:140] + ("…" if len(summary) > 140 else "")
+                with suppress(Exception):
+                    self.notify(f"💡 expert watcher: {short}", timeout=8)
+
+            controller.set_watch_summary_callback(_surface)
+            resumed, message = controller.resume_watcher_if_persisted()
+            if resumed:
+                logger.info("Resumed expert watcher: %s", message)
+                try:
+                    self.notify(
+                        f"💡 expert watcher resumed: {message[:140]}",
+                        timeout=6,
+                    )
+                except Exception:
+                    logger.debug("watcher-resume notify failed", exc_info=True)
+            else:
+                logger.debug("expert watcher resume skipped: %s", message)
+        except Exception:
+            logger.warning("Expert watcher resume worker failed", exc_info=True)
 
     async def _seed_defaults(self) -> None:  # noqa: PLR6301
         """Seed built-in default prompts and pipelines (runs once per version, additive)."""

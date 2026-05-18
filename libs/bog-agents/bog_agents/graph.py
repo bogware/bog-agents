@@ -37,7 +37,10 @@ from bog_agents.middleware.subagents import (
     SubAgent,
     SubAgentMiddleware,
 )
-from bog_agents.middleware.summarization import create_summarization_middleware
+from bog_agents.middleware.summarization import (
+    _BogAgentsSummarizationMiddleware,
+    create_summarization_middleware,
+)
 
 BASE_AGENT_PROMPT = """You are a Bog Agents agent, an AI assistant that helps users accomplish tasks using tools. You respond with text and tool calls. The user can see your responses and tool outputs in real time.
 
@@ -81,6 +84,41 @@ Keep working until the task is fully complete. Don't stop partway and explain wh
 ## Progress Updates
 
 For longer tasks, provide brief progress updates at reasonable intervals — a concise sentence recapping what you've done and what's next."""  # noqa: E501
+
+
+_PROVENANCE_LOOP_PROMPT = """## Citations & Verification (D-5 provenance loop)
+
+You have access to provenance tools provided by the citations,
+hallucination_detection, and fact_check middleware. Use them by default
+so every factual claim you emit carries traceable evidence:
+
+1. **Register your sources.** When you read a file, fetch a web page,
+   or pull data from a database, call ``register_data_source`` (or the
+   equivalent for the active middleware) with the source's type, name,
+   and excerpt. Do this BEFORE you cite from it.
+2. **Cite inline.** When you make a factual claim drawn from a source,
+   call ``add_citation`` (or your output should include bracket
+   citations like ``[1]``, ``[2]``) that map to registered sources.
+   Label each citation's relationship as ``supports``,
+   ``contradicts``, or ``mentions``.
+3. **Verify numbers.** When you produce a numerical claim
+   (statistic, percentage, dollar amount, date), call
+   ``register_fact`` and ``verify_claim`` so the
+   hallucination-detection middleware can flag unsourced or
+   contradicted numbers before they reach the user.
+4. **Submit uncertain claims for fact-checking.** When you're less
+   than confident about a claim or when you couldn't find a primary
+   source, use ``submit_claim`` to log it for follow-up review rather
+   than asserting it.
+5. **Surface the bibliography.** At the end of substantive responses,
+   call the active middleware's ``generate_bibliography`` /
+   ``verification_report`` / ``factcheck_report`` so the user can see
+   the evidence trail at a glance.
+
+When you cannot find a source for a claim, SAY SO explicitly rather
+than guessing. Unsourced claims marked as such are far more useful
+than confident-sounding hallucinations.
+"""
 
 
 def get_default_model() -> ChatAnthropic:
@@ -158,9 +196,18 @@ def _resolve_feature_config(
 
     import warnings as _warnings
 
+    # P1-6: This deprecation shim will be removed in bog-agents 1.0.
+    # Users still hitting it should migrate to ``config=FeatureConfig(...)``
+    # — the kwarg backdoor makes ``FeatureConfig`` evolution backwards-
+    # incompatible (renaming a field silently rejects what used to be
+    # valid kwargs). When you bump the major version, delete the
+    # ``**legacy_feature_flags`` parameter and the call to
+    # ``_resolve_feature_config`` that supplies it, and raise immediately
+    # on any unknown kwargs.
     _warnings.warn(
         "Passing individual feature flags as kwargs to create_agent() is "
-        "deprecated; pass `config=FeatureConfig(...)` instead. Affected "
+        "deprecated and will be removed in bog-agents 1.0; pass "
+        "`config=FeatureConfig(...)` instead. Affected "
         f"flags: {sorted(legacy_flags)}",
         DeprecationWarning,
         stacklevel=3,
@@ -198,6 +245,38 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     """Create a bog-agents agent.
 
     !!! warning "Bog Agents agents require a LLM that supports tool calling!"
+
+    ## Middleware execution order
+
+    Middleware runs in **declaration order** within the stack. The default
+    stack composed by ``create_agent`` is, in this order:
+
+    1. Lifecycle / observability — ``LifecycleHooksMiddleware``,
+       ``HttpHooksMiddleware``, ``LangSmithMiddleware``,
+       ``AuditTrailMiddleware``
+    2. Pre-prompt safety — ``DLPMiddleware``, ``RBACMiddleware``,
+       ``SafeToolsMiddleware``, ``ApprovalGatesMiddleware``,
+       ``ExpertRulesMiddleware``
+    3. Context preparation — ``RulesMiddleware``, ``MemoryMiddleware``,
+       ``SkillsMiddleware``, ``RepoMapMiddleware``,
+       ``CodeIntelligenceMiddleware``, ``ContextPackingMiddleware``
+    4. Tool & state surfaces — ``FilesystemMiddleware``,
+       ``GitToolsMiddleware``, ``WorktreeMiddleware``,
+       ``SubAgentMiddleware``, ``PlanModeMiddleware``,
+       ``ThinkingMiddleware``, ``CheckpointingMiddleware``
+    5. Token / cost management — ``SummarizationMiddleware``,
+       ``IntelligentCompactionMiddleware``, ``CostTrackerMiddleware``
+    6. Anything you pass via ``middleware=`` — appended at the very end.
+
+    The order matters for soft conflicts the static
+    ``_validate_middleware_ordering`` check can't catch. For example
+    ``DLPMiddleware`` must run before ``AuditTrailMiddleware`` if you want
+    redacted values to land in audit logs; both fire in pre-prompt safety,
+    in declaration order. When adding new built-in middleware, place it
+    in the section that matches its concern. When passing user middleware
+    via ``middleware=`` you control its position relative to the defaults
+    only by being appended after them; an ``after=`` / ``before=`` API is
+    a deliberate TODO.
 
     By default, this agent has access to the following tools:
 
@@ -546,7 +625,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(AuditTrailMiddleware(session_id=f.audit_session_id, advisor_id=f.audit_advisor_id))
 
-    if f.enable_citations:
+    # D-5 provenance loop: composes citations + hallucination_detection
+    # + fact_check so every claim the agent emits has a registered
+    # source and the model is told to use the citation tools by default.
+    # The umbrella flag ORs into each individual flag — callers can
+    # still flip any of the three independently for granular control.
+    provenance_active = f.enable_provenance_loop or f.enable_citations or f.enable_hallucination_detection or f.enable_fact_check
+    if f.enable_provenance_loop or f.enable_citations:
         from bog_agents.middleware.citations import CitationsMiddleware
 
         agents_middleware.append(CitationsMiddleware())
@@ -556,15 +641,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ReasoningChainMiddleware())
 
-    if f.enable_hallucination_detection:
+    if f.enable_provenance_loop or f.enable_hallucination_detection:
         from bog_agents.middleware.hallucination_detection import HallucinationDetectionMiddleware
 
         agents_middleware.append(HallucinationDetectionMiddleware())
-
-    if f.enable_meeting_prep:
-        from bog_agents.middleware.meeting_prep import MeetingPrepMiddleware
-
-        agents_middleware.append(MeetingPrepMiddleware())
 
     if f.enable_enhanced_skills:
         if not f.enhanced_skills_sources:
@@ -591,17 +671,8 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(SavedPromptsMiddleware(backend=backend, sources=f.saved_prompts_sources))
 
-    # Batch 2 financial advisor middleware
-    if f.enable_portfolio_analysis:
-        from bog_agents.middleware.portfolio_analysis import PortfolioAnalysisMiddleware
-
-        agents_middleware.append(PortfolioAnalysisMiddleware(risk_free_rate=f.portfolio_risk_free_rate))
-
-    if f.enable_client_reports:
-        from bog_agents.middleware.client_reports import ClientReportsMiddleware
-
-        agents_middleware.append(ClientReportsMiddleware(firm_name=f.client_reports_firm_name, advisor_name=f.client_reports_advisor_name))
-
+    # Vertical-market batch (deep_research, dlp, version_control, nl_query, …)
+    # — Wave V removed the financial-advisor stubs that lived here.
     if f.enable_deep_research:
         from bog_agents.middleware.deep_research import DeepResearchMiddleware
 
@@ -617,41 +688,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(VersionControlMiddleware())
 
-    if f.enable_scenario_engine:
-        from bog_agents.middleware.scenario_engine import ScenarioEngineMiddleware
-
-        agents_middleware.append(ScenarioEngineMiddleware())
-
-    if f.enable_tax_optimization:
-        from bog_agents.middleware.tax_optimization import TaxOptimizationMiddleware
-
-        agents_middleware.append(TaxOptimizationMiddleware())
-
     if f.enable_nl_query:
         from bog_agents.middleware.nl_query import NLQueryMiddleware
 
         agents_middleware.append(NLQueryMiddleware())
 
-    if f.enable_peer_comparison:
-        from bog_agents.middleware.peer_comparison import PeerComparisonMiddleware
-
-        agents_middleware.append(PeerComparisonMiddleware())
-
-    # Batch 3 financial advisor middleware
     if f.enable_code_review:
         from bog_agents.middleware.code_review import CodeReviewMiddleware
 
         agents_middleware.append(CodeReviewMiddleware())
-
-    if f.enable_financial_data:
-        from bog_agents.middleware.financial_data import FinancialDataMiddleware
-
-        agents_middleware.append(FinancialDataMiddleware())
-
-    if f.enable_regulatory_alerts:
-        from bog_agents.middleware.regulatory_alerts import RegulatoryAlertsMiddleware
-
-        agents_middleware.append(RegulatoryAlertsMiddleware())
 
     if f.enable_model_portfolio:
         from bog_agents.middleware.model_portfolio import ModelPortfolioMiddleware
@@ -663,17 +708,12 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(KnowledgeGraphMiddleware())
 
-    if f.enable_client_knowledge_base:
-        from bog_agents.middleware.client_knowledge_base import ClientKnowledgeBaseMiddleware
-
-        agents_middleware.append(ClientKnowledgeBaseMiddleware())
-
     if f.enable_rbac:
         from bog_agents.middleware.rbac import RBACMiddleware
 
         agents_middleware.append(RBACMiddleware())
 
-    if f.enable_fact_check:
+    if f.enable_provenance_loop or f.enable_fact_check:
         from bog_agents.middleware.fact_check import FactCheckMiddleware
 
         agents_middleware.append(FactCheckMiddleware())
@@ -683,26 +723,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ApprovalGatesMiddleware())
 
-    if f.enable_earnings_analysis:
-        from bog_agents.middleware.earnings_analysis import EarningsAnalysisMiddleware
-
-        agents_middleware.append(EarningsAnalysisMiddleware())
-
-    if f.enable_regulatory_impact:
-        from bog_agents.middleware.regulatory_impact import RegulatoryImpactMiddleware
-
-        agents_middleware.append(RegulatoryImpactMiddleware())
-
-    # Batch 4 (final) middleware
+    # Browser + remote-execution batch
     if f.enable_browser_agent_fa:
         from bog_agents.middleware.browser_agent_fa import BrowserAgentFAMiddleware
 
         agents_middleware.append(BrowserAgentFAMiddleware())
-
-    if f.enable_agent_teams:
-        from bog_agents.middleware.agent_teams import AgentTeamsMiddleware
-
-        agents_middleware.append(AgentTeamsMiddleware())
 
     if f.enable_automations:
         from bog_agents.middleware.automations import AutomationsMiddleware
@@ -729,20 +754,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(OpenSearchRAGMiddleware())
 
-    if f.enable_firm_deployment:
-        from bog_agents.middleware.firm_deployment import FirmDeploymentMiddleware
-
-        agents_middleware.append(FirmDeploymentMiddleware())
-
     if f.enable_air_gapped:
         from bog_agents.middleware.air_gapped import AirGappedMiddleware
 
         agents_middleware.append(AirGappedMiddleware())
-
-    if f.enable_sso_auth:
-        from bog_agents.middleware.sso_auth import SSOAuthMiddleware
-
-        agents_middleware.append(SSOAuthMiddleware())
 
     if f.enable_dashboard:
         from bog_agents.middleware.dashboard import DashboardMiddleware
@@ -769,16 +784,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(VoiceIOMiddleware())
 
-    if f.enable_due_diligence:
-        from bog_agents.middleware.due_diligence import DueDiligenceMiddleware
-
-        agents_middleware.append(DueDiligenceMiddleware())
-
-    if f.enable_market_sentiment:
-        from bog_agents.middleware.market_sentiment import MarketSentimentMiddleware
-
-        agents_middleware.append(MarketSentimentMiddleware())
-
     if f.enable_competitive_intel:
         from bog_agents.middleware.competitive_intel import CompetitiveIntelMiddleware
 
@@ -796,22 +801,29 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             agents_middleware.append(parallel_mw)
         agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
 
-    agents_middleware.extend(
-        [
-            FilesystemMiddleware(backend=backend),
-            SubAgentMiddleware(
-                backend=backend,
-                subagents=all_subagents,
-            ),
-            create_summarization_middleware(model, backend),
-            PatchToolCallsMiddleware(),
-        ]
-    )
+    # P1-4: don't double-append defaults the user has already supplied
+    # via ``middleware=``. The previous behavior appended both, which
+    # ran the same middleware twice per request. We check by class
+    # identity (covers subclasses too) so a user who has subclassed
+    # FilesystemMiddleware for custom behavior takes precedence.
+    user_middleware = list(middleware) if middleware else []
+    user_supplied_filesystem = any(isinstance(m, FilesystemMiddleware) for m in user_middleware)
+    user_supplied_summarization = any(isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware)
+
+    defaults_to_append: list[Any] = []
+    if not user_supplied_filesystem:
+        defaults_to_append.append(FilesystemMiddleware(backend=backend))
+    defaults_to_append.append(SubAgentMiddleware(backend=backend, subagents=all_subagents))
+    if not user_supplied_summarization:
+        defaults_to_append.append(create_summarization_middleware(model, backend))
+    defaults_to_append.append(PatchToolCallsMiddleware())
+
+    agents_middleware.extend(defaults_to_append)
     if async_subagents:
         agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
 
-    if middleware:
-        agents_middleware.extend(middleware)
+    if user_middleware:
+        agents_middleware.extend(user_middleware)
     agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     if memory is not None:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
@@ -821,14 +833,23 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # Validate middleware dependency ordering before compiling the graph.
     _validate_middleware_ordering(agents_middleware)
 
-    # Combine system_prompt with BASE_AGENT_PROMPT
+    # Combine system_prompt with BASE_AGENT_PROMPT, plus an optional
+    # provenance-loop addendum (D-5) that tells the model to use the
+    # citation / hallucination-detection / fact-check tools by default
+    # when those middleware are active. We only inject the addendum
+    # when the loop is active — otherwise the model would be told to
+    # call tools that aren't bound.
+    base_prompt = BASE_AGENT_PROMPT
+    if provenance_active:
+        base_prompt = base_prompt + "\n\n" + _PROVENANCE_LOOP_PROMPT
+
     if system_prompt is None:
-        final_system_prompt: str | SystemMessage = BASE_AGENT_PROMPT
+        final_system_prompt: str | SystemMessage = base_prompt
     elif isinstance(system_prompt, SystemMessage):
-        final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{BASE_AGENT_PROMPT}"}])
+        final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{base_prompt}"}])
     else:
         # String: simple concatenation
-        final_system_prompt = system_prompt + "\n\n" + BASE_AGENT_PROMPT
+        final_system_prompt = system_prompt + "\n\n" + base_prompt
 
     return _langchain_create_agent(
         model,

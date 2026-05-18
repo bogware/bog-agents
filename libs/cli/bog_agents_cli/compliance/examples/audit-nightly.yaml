@@ -1,0 +1,34 @@
+# Daemon-job recipe: nightly compliance audit.
+#
+# Copy this into your daemon config (typically `~/.bog-agents/daemon/jobs.yaml`)
+# or use:  bog-agents-daemon add audit-nightly.yaml
+#
+# The daemon fires the entrypoint `bog_agents_cli.compliance.cron:run`
+# once per night and dispatches the report via the configured channel
+# (Slack / email / GitHub-comment / log file).
+
+name: nightly-soc2-audit
+description: Run the SOC 2 baseline audit pack every night at 02:30.
+
+triggers:
+  - type: cron
+    cron: "30 2 * * *"     # 02:30 every day (local time)
+
+# The daemon invokes this Python entrypoint with `working_dir` resolved
+# from the daemon's per-job CWD. ``pack`` may be a path inside the
+# project (./audit_packs/foo.yaml) OR a bundled name
+# ("soc2-baseline.yaml"); the controller resolves both.
+entrypoint: bog_agents_cli.compliance.cron:run
+
+config:
+  pack: soc2-baseline.yaml
+  # Fail the daemon job (non-zero exit) when the overall verdict
+  # isn't PASS. Surfaces failures via daemon's standard dispatch.
+  fail_on_non_pass: true
+
+# Optional: where to send the rendered report.
+dispatch:
+  - type: log     # always log the verdict line
+  - type: slack
+    channel: "#compliance"
+    only_on: ["fail", "inconclusive"]   # quiet on green

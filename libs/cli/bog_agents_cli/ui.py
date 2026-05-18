@@ -203,6 +203,24 @@ def show_help() -> None:
     console.print("  --acp                      Run as ACP server over stdio")
     console.print()
 
+    # --- Scripted TUI Driver ---
+    console.print("[bold]Scripted TUI Driver:[/bold]", style=COLORS["primary"])
+    console.print(
+        "  --drive PATH               Run a YAML script that emulates a TUI user"
+    )
+    console.print(
+        "  --drive-stdin              Read the drive script from stdin instead of a path"
+    )
+    console.print(
+        "  --drive-var NAME=VALUE     Override a ${var} value (may be repeated)"
+    )
+    console.print("  --drive-artifacts DIR      Directory for snapshot artefacts")
+    console.print(
+        "  --drive-output PATH        Write JSONL transcript to PATH instead of stdout"
+    )
+    console.print("  --drive-stop-on-failure    Abort at the first failed assertion")
+    console.print()
+
     # --- Slash Commands ---
     console.print(
         "[bold]Slash Commands (inside interactive session):[/bold]",

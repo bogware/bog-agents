@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "multi_edit_file", "execute"})
 
 
+__all__ = [
+    "Checkpoint",
+    "CheckpointState",
+    "CheckpointingMiddleware",
+]
+
+
 @dataclass
 class Checkpoint:
     """A single checkpoint representing a point-in-time snapshot."""
@@ -105,18 +112,41 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         )
 
     def _ensure_initialized(self) -> None:
-        """Initialize the shadow git tracking if not already done."""
+        """Initialize the shadow git tracking if not already done.
+
+        Logs warnings on git failures so an operator can tell when
+        checkpointing has silently disabled itself (disk full,
+        permission denied, missing git). Previously these failures were
+        swallowed and users believed undo/rewind worked when it didn't.
+        """
         if self._initialized or not self._enabled:
             return
 
-        # Check if working dir is a git repo
+        # Check if working dir is a git repo. A non-zero exit here is
+        # the normal "not a repo yet" case — followed by ``git init``,
+        # which IS load-bearing and should be loud on failure.
         result = self._run_git("rev-parse", "--is-inside-work-tree")
         if result.returncode != 0:
-            # Initialize git repo for tracking
-            self._run_git("init")
+            init_result = self._run_git("init")
+            if init_result.returncode != 0:
+                logger.warning(
+                    "Checkpointing disabled: `git init` failed in %s (exit %d). stderr: %s",
+                    self._working_dir,
+                    init_result.returncode,
+                    (init_result.stderr or "").strip()[:200],
+                )
+                self._enabled = False
+                self._initialized = True
+                return
 
         # Create initial checkpoint
-        self._run_git("add", "-A")
+        add_result = self._run_git("add", "-A")
+        if add_result.returncode != 0:
+            logger.warning(
+                "Checkpointing baseline `git add -A` failed: exit %d. stderr: %s",
+                add_result.returncode,
+                (add_result.stderr or "").strip()[:200],
+            )
         result = self._run_git("stash", "create", "bog-agents-checkpoint-init")
         if result.returncode == 0 and result.stdout.strip():
             self._checkpoints.append(
@@ -125,6 +155,12 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
                     message="Initial checkpoint before agent modifications",
                     tool_call_id="init",
                 )
+            )
+        elif result.returncode != 0:
+            logger.warning(
+                "Checkpointing initial `git stash create` failed: exit %d. stderr: %s",
+                result.returncode,
+                (result.stderr or "").strip()[:200],
             )
         self._initialized = True
 

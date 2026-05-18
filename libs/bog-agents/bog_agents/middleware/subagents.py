@@ -18,6 +18,12 @@ from langgraph.types import Command
 from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 from bog_agents.middleware._utils import append_to_system_message
 
+__all__ = [
+    "CompiledSubAgent",
+    "SubAgent",
+    "SubAgentMiddleware",
+]
+
 
 class SubAgent(TypedDict):
     """Specification for an agent.

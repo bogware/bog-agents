@@ -1779,10 +1779,18 @@ class TestCommandSurfaceEnhancements:
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with patch(
-                "bog_agents_cli.replay.save_replay_session",
-                return_value=app_module.Path(
-                    "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
+            with (
+                patch(
+                    "bog_agents_cli.replay.save_replay_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.yaml"
+                    ),
+                ),
+                patch(
+                    "bog_agents_cli.replay.save_drive_script_for_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.drive.yaml"
+                    ),
                 ),
             ):
                 await app._handle_command("/record start bugfix-flow")
@@ -1801,6 +1809,12 @@ class TestCommandSurfaceEnhancements:
                     "bog_agents_cli.replay.list_replay_sessions",
                     return_value=[replay_session],
                 ),
+                patch(
+                    "bog_agents_cli.replay.save_drive_script_for_session",
+                    return_value=app_module.Path(
+                        "E:/Code/bog-agents/.tmp/replays/replay-abc123.drive.yaml"
+                    ),
+                ),
                 patch.object(
                     app, "_send_prompt_to_agent", new=AsyncMock()
                 ) as mock_send,
@@ -1808,9 +1822,14 @@ class TestCommandSurfaceEnhancements:
                 await app._handle_command("/replay run bugfix-flow")
                 await pilot.pause()
 
+            # /replay run now drives each recorded user message
+            # individually through the agent rather than baking the
+            # session into a single prose prompt (the old
+            # build_replay_prompt path). One user_message in the
+            # fixture -> one send.
             mock_send.assert_awaited_once()
             assert mock_send.await_args is not None
-            assert "# Replay: bugfix-flow" in mock_send.await_args.args[0]
+            assert "Investigate the bug" in mock_send.await_args.args[0]
             app_msgs = app.query(AppMessage)
             assert any("Saved replay" in str(w._content) for w in app_msgs)
 
@@ -3289,3 +3308,125 @@ class TestRemoteAgent:
         app = BogAgentsApp()
         app._agent = MagicMock(spec=[])
         assert app._remote_agent() is None
+
+
+class TestWaveNTimeoutResolvers:
+    """H1/H2: env-driven timeout knobs used by the agent worker.
+
+    Pure function tests — no Textual app needed.
+    """
+
+    def test_turn_timeout_default(self, monkeypatch):
+        monkeypatch.delenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", raising=False)
+        from bog_agents_cli.app import (
+            _DEFAULT_TURN_TIMEOUT_SECONDS,
+            _resolve_turn_timeout,
+        )
+
+        assert _resolve_turn_timeout() == _DEFAULT_TURN_TIMEOUT_SECONDS
+
+    def test_turn_timeout_explicit_seconds(self, monkeypatch):
+        monkeypatch.setenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", "120")
+        from bog_agents_cli.app import _resolve_turn_timeout
+
+        assert _resolve_turn_timeout() == 120.0
+
+    def test_turn_timeout_disabled_via_zero(self, monkeypatch):
+        monkeypatch.setenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", "0")
+        from bog_agents_cli.app import _resolve_turn_timeout
+
+        assert _resolve_turn_timeout() is None
+
+    def test_turn_timeout_disabled_via_none(self, monkeypatch):
+        monkeypatch.setenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", "none")
+        from bog_agents_cli.app import _resolve_turn_timeout
+
+        assert _resolve_turn_timeout() is None
+
+    def test_turn_timeout_invalid_falls_back(self, monkeypatch):
+        monkeypatch.setenv("BOG_AGENTS_TURN_TIMEOUT_SECONDS", "not-a-number")
+        from bog_agents_cli.app import (
+            _DEFAULT_TURN_TIMEOUT_SECONDS,
+            _resolve_turn_timeout,
+        )
+
+        assert _resolve_turn_timeout() == _DEFAULT_TURN_TIMEOUT_SECONDS
+
+    def test_stream_chunk_timeout_default(self, monkeypatch):
+        monkeypatch.delenv("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS", raising=False)
+        from bog_agents_cli.non_interactive import (
+            _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS,
+            _resolve_stream_chunk_timeout,
+        )
+
+        assert _resolve_stream_chunk_timeout() == _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
+
+    def test_stream_chunk_timeout_disabled(self, monkeypatch):
+        monkeypatch.setenv("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS", "off")
+        from bog_agents_cli.non_interactive import _resolve_stream_chunk_timeout
+
+        assert _resolve_stream_chunk_timeout() is None
+
+
+class TestWaveNTaskExceptionLogging:
+    """H4: failed background tasks must surface via logging."""
+
+    def test_log_task_exception_logs_failure(self, caplog):
+        import asyncio
+
+        from bog_agents_cli.app import _log_task_exception
+
+        async def boom():
+            msg = "synthetic"
+            raise RuntimeError(msg)
+
+        loop = asyncio.new_event_loop()
+        try:
+            task = loop.create_task(boom(), name="probe")
+            with caplog.at_level("ERROR"):
+                with contextlib.suppress(RuntimeError):
+                    loop.run_until_complete(task)
+                _log_task_exception(task)
+            assert any(
+                "Background task 'probe' failed" in r.message for r in caplog.records
+            )
+        finally:
+            loop.close()
+
+    def test_log_task_exception_silent_on_success(self, caplog):
+        import asyncio
+
+        from bog_agents_cli.app import _log_task_exception
+
+        async def ok():
+            return 42
+
+        loop = asyncio.new_event_loop()
+        try:
+            task = loop.create_task(ok(), name="probe-ok")
+            loop.run_until_complete(task)
+            with caplog.at_level("ERROR"):
+                _log_task_exception(task)
+            assert not any("failed" in r.message for r in caplog.records)
+        finally:
+            loop.close()
+
+    def test_log_task_exception_silent_on_cancelled(self, caplog):
+        import asyncio
+
+        from bog_agents_cli.app import _log_task_exception
+
+        async def hangs():
+            await asyncio.sleep(60)
+
+        loop = asyncio.new_event_loop()
+        try:
+            task = loop.create_task(hangs(), name="probe-cancel")
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                loop.run_until_complete(task)
+            with caplog.at_level("ERROR"):
+                _log_task_exception(task)
+            assert not any("failed" in r.message for r in caplog.records)
+        finally:
+            loop.close()

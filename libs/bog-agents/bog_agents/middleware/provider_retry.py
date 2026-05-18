@@ -123,6 +123,11 @@ def _emit_retry(*, attempt: int, delay_s: float, error_type: str, model: str | N
         )
 
 
+__all__ = [
+    "ProviderRetryMiddleware",
+]
+
+
 class ProviderRetryMiddleware(AgentMiddleware[Any, Any, Any]):
     """Retry transient provider failures with bounded exponential backoff.
 

@@ -76,7 +76,7 @@ def append_to_memory(agent_md_path: Path, note: str) -> bool:
     try:
         existing = ""
         if agent_md_path.exists():
-            existing = agent_md_path.read_text()
+            existing = agent_md_path.read_text(encoding="utf-8")
 
         separator = (
             "\n\n"

@@ -19,7 +19,6 @@ stderr, leaving stdout exclusively for the agent's response text.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import sys
 import threading
@@ -84,6 +83,39 @@ _MESSAGE_DATA_LENGTH = 2
 _MAX_HITL_ITERATIONS = 50
 """Safety cap on the number of HITL interrupt round-trips to prevent infinite
 loops (e.g. when the agent keeps retrying rejected commands)."""
+
+
+_DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS = 600.0
+"""H2: default cap on the gap between agent-stream chunks.
+
+10 minutes is generous — a legitimate long-running tool call (lengthy
+LLM generation, large file scan) can take several minutes between
+chunks, but anything past that is almost certainly a hung remote.
+Distinct from total turn time so genuine long turns aren't penalised.
+"""
+
+
+def _resolve_stream_chunk_timeout() -> float | None:
+    """Read ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS``.
+
+    Returns:
+        Float seconds, or ``None`` (env var ``0`` / ``none`` / ``off``)
+        for no cap. Invalid values silently fall back to the default.
+    """
+    import os
+
+    raw = (os.environ.get("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
+    if raw.lower() in ("0", "none", "off", "false"):
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
+    if value <= 0:
+        return None
+    return value
 
 
 def _write_text(text: str) -> None:
@@ -705,14 +737,65 @@ async def _stream_agent(
         state: Shared stream state.
         console: Rich console for formatted output.
         file_op_tracker: Tracker for file-operation diffs.
+
+    Raises:
+        TimeoutError: When ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS``
+            elapses between chunks (default 600s, configurable, off
+            when set to ``0``). Surfaces the stall so CI pipelines
+            don't hang silently.
     """
-    async for chunk in agent.astream(
+    # H2: a hung remote streaming call would pin CI pipelines
+    # indefinitely. Cap the *gap between chunks* (rather than total
+    # turn time) so legitimate long runs proceed but a stalled stream
+    # gets cancelled and reported. Override via
+    # ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=N`` (or =0 / none for
+    # no cap).
+    import asyncio
+
+    chunk_timeout = _resolve_stream_chunk_timeout()
+    # Announce the chunk-timeout policy on every stream start. Without
+    # this, an operator hitting a stalled-and-cancelled stream had no
+    # way to correlate the eventual TimeoutError back to which knob
+    # was in play (default? env override? off entirely?). The log
+    # cost is trivial and the on-call signal is real.
+    if chunk_timeout is None:
+        logger.info(
+            "agent stream: per-chunk timeout disabled (BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0)"
+        )
+    else:
+        logger.info(
+            "agent stream: per-chunk timeout %.0fs (override via BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS)",
+            chunk_timeout,
+        )
+    stream_iter = agent.astream(
         stream_input,
         stream_mode=["messages", "updates"],
         subgraphs=True,
         config=config,
         durability="exit",
-    ):
+    )
+    iterator = aiter(stream_iter)
+    last_chunk_at = time.monotonic()
+    while True:
+        try:
+            if chunk_timeout is None:
+                chunk = await anext(iterator)
+            else:
+                chunk = await asyncio.wait_for(anext(iterator), timeout=chunk_timeout)
+        except StopAsyncIteration:
+            break
+        except TimeoutError as exc:
+            elapsed = time.monotonic() - last_chunk_at
+            msg = (
+                f"Agent stream stalled — no chunk received in "
+                f"{elapsed:.0f}s (timeout {chunk_timeout:.0f}s). "
+                f"The remote may be unreachable or the model may be "
+                f"hung. Set BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0 "
+                f"to disable, or to a larger value for slower paths."
+            )
+            logger.warning(msg)
+            raise TimeoutError(msg) from exc
+        last_chunk_at = time.monotonic()
         _process_stream_chunk(chunk, state, console, file_op_tracker)
 
 
@@ -976,6 +1059,24 @@ async def run_non_interactive(
     # need stdout reserved for the actual payload — chrome (server-ready,
     # thread headers, status line) must land on stderr.
     console = Console(stderr=True) if (quiet or output_format == "json") else Console()
+
+    # J2 fix: bail on always_ask BEFORE we instantiate any models.
+    # The combination is logically incompatible (non-interactive has no
+    # human to approve tool calls), so building a model first would be
+    # both wasteful and — for providers like Bedrock — failure-prone
+    # when the optional SDK isn't installed in the runtime that's
+    # asking for an early-exit return code.
+    if always_ask:
+        if not quiet:
+            console.print(
+                Text(
+                    "--always-ask requires an interactive TTY; refusing to run "
+                    "non-interactive task that would block waiting for approval.",
+                    style="bold red",
+                )
+            )
+        return 2
+
     try:
         result = create_model(
             model_name,
@@ -1039,29 +1140,18 @@ async def run_non_interactive(
                 )
             )
         except Exception:
+            # H9: if task *creation* failed (rare — usually an import
+            # error in _preload_session_mcp_server_info), make sure we
+            # don't end up awaiting an undefined/None task below. The
+            # local was already initialised to ``None`` at line 1105,
+            # but we reset explicitly here so the intent is obvious.
+            mcp_task = None
             logger.warning("MCP metadata preload task creation failed", exc_info=True)
 
-    if always_ask:
-        # Non-interactive mode has no human to approve tool calls, so
-        # always-ask would deadlock the run. Reject the combination loudly
-        # rather than hanging forever.
-        if not quiet:
-            console.print(
-                Text(
-                    "--always-ask requires an interactive TTY; refusing to run "
-                    "non-interactive task that would block waiting for approval.",
-                    style="bold red",
-                )
-            )
-        # Cancel the MCP preload task we just spawned — leaving it running
-        # produces a "coroutine was never awaited" RuntimeWarning at
-        # interpreter shutdown and may even fire a network call after the
-        # process has bailed.
-        if mcp_task is not None:
-            mcp_task.cancel()
-            with contextlib.suppress(BaseException):
-                await mcp_task
-        return 2
+    # ``always_ask`` is now rejected up-front (before create_model),
+    # so by the time we reach this point it's guaranteed False. The
+    # late-check branch used to also cancel a half-built MCP preload
+    # task; that's no longer reachable, so we drop it for clarity.
 
     try:
         # When the caller passes --auto-approve they're opting into headless

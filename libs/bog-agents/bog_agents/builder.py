@@ -641,8 +641,9 @@ class AgentBuilder:
         if ma.enabled:
             kwargs["enable_multi_agent"] = True
             kwargs["max_agent_threads"] = ma.max_threads
-        if ma.agent_teams:
-            kwargs["enable_agent_teams"] = True
+        # Wave V removed agent_teams (it was a STUB). ma.agent_teams
+        # is preserved on the config schema for back-compat reading
+        # of older YAML files but no longer translates to a flag.
 
         # Collections
         if self._config.tools:

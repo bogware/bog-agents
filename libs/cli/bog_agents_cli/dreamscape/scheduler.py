@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -49,6 +51,12 @@ if TYPE_CHECKING:
         DreamsConfig,
         LifecycleConfig,
     )
+
+# K5: callback shape. Receives (agent_id, dream_title); return is awaited
+# so the scheduler can detect blocking misbehavior, but the call itself
+# is dispatched on a fire-and-forget task so a slow callback never
+# delays the next dream-eligibility tick.
+DreamCompleteCallback = Callable[[str, str], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +101,24 @@ class DreamSchedulerStats:
     the durable record. We keep this in-memory for tests + the live
     integration data capture."""
 
+    completion_callbacks_dispatched: int = 0
+    """K5 observability: times the ``on_dream_complete`` callback was
+    fired (one per successful dream when wired)."""
+
+    completion_callbacks_failed: int = 0
+    """K5 observability: times the ``on_dream_complete`` callback
+    raised an exception. Non-zero values point at a misbehaving
+    proposer (or other consumer) — the scheduler itself keeps running."""
+
 
 # Module-level registry so re-imports don't spawn duplicate tasks.
 _GLOBAL_SCHEDULERS: dict[str, DreamScheduler] = {}
+# L4: guard registry mutation. ``ensure_scheduler`` is normally called
+# from the agent-build path (TUI thread), but the SDK can be driven
+# from worker threads. Without a lock, two concurrent calls for the
+# same agent_id could race past the dict-membership check and create
+# two scheduler tasks.
+_GLOBAL_SCHEDULERS_LOCK = threading.Lock()
 
 
 class DreamScheduler:
@@ -123,6 +146,7 @@ class DreamScheduler:
         lifecycle_cfg: LifecycleConfig,
         poll_seconds: float = _DEFAULT_POLL_SECONDS,
         max_fired_titles: int = 50,
+        on_dream_complete: DreamCompleteCallback | None = None,
     ) -> None:
         self._agent_id = agent_id or "default"
         self._model = model
@@ -131,7 +155,20 @@ class DreamScheduler:
         self._poll_seconds = max(0.5, poll_seconds)
         self._max_fired_titles = max(1, max_fired_titles)
         self._task: asyncio.Task[None] | None = None
+        # K5: optional per-dream callback. We hold a strong ref to each
+        # spawned task in ``_completion_tasks`` so the GC can't reap it
+        # mid-flight; tasks self-remove on completion.
+        self._on_dream_complete = on_dream_complete
+        self._completion_tasks: set[asyncio.Task[None]] = set()
         self.stats = DreamSchedulerStats()
+
+    def set_on_dream_complete(self, fn: DreamCompleteCallback | None) -> None:
+        """Install / replace the dream-completion callback (K5).
+
+        Used by the CLI when it wires the expert proposer in after
+        constructing the scheduler. Pass ``None`` to clear.
+        """
+        self._on_dream_complete = fn
 
     @property
     def agent_id(self) -> str:
@@ -188,30 +225,35 @@ class DreamScheduler:
     async def _run(self) -> None:
         """The hot loop. Catches every exception so a misbehaving dream
         cannot crash the asyncio task.
+
+        Restart strategy: a transient outage shouldn't permanently
+        disable dreaming, but recursive self-restart (the original
+        v1 behavior) was a latent stack-blow-up risk if the outage
+        persisted for hours. We now restart by re-entering the outer
+        ``while True`` instead — bounded stack, identical behavior.
+        ``CancelledError`` still propagates so ``stop()`` works.
         """
-        try:
-            while True:
-                self.stats.ticks += 1
-                self.stats.last_tick_at = time.time()
-                if is_emergency_disabled():
-                    self.stats.skipped_emergency_disable += 1
-                else:
-                    await self._tick_once()
-                await asyncio.sleep(self._poll_seconds)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "DreamScheduler loop crashed (agent=%s); restarting in 30s",
-                self._agent_id,
-            )
-            self.stats.errors += 1
-            with suppress(asyncio.CancelledError):
+        while True:
+            try:
+                while True:
+                    self.stats.ticks += 1
+                    self.stats.last_tick_at = time.time()
+                    if is_emergency_disabled():
+                        self.stats.skipped_emergency_disable += 1
+                    else:
+                        await self._tick_once()
+                    await asyncio.sleep(self._poll_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "DreamScheduler loop crashed (agent=%s); restarting in 30s",
+                    self._agent_id,
+                )
+                self.stats.errors += 1
+                # Iterative restart — sleep then loop back to the outer
+                # while to start a fresh inner loop.
                 await asyncio.sleep(30)
-                # Self-restart so a transient model outage doesn't
-                # permanently disable dreaming. The recursive call is
-                # safe because the outer task is the one re-entering.
-                await self._run()
 
     async def _tick_once(self) -> None:
         """One pass: check eligibility, optionally fire a dream."""
@@ -246,6 +288,41 @@ class DreamScheduler:
             self._agent_id,
             artifact.title,
         )
+        self._dispatch_completion(artifact.title)
+
+    def _dispatch_completion(self, title: str) -> None:
+        """K5: fire the dream-completion callback off the hot path.
+
+        We schedule the callback as a separate task so a slow proposer
+        (the typical user of this hook) cannot delay the next dream
+        eligibility check. Strong-ref'd in ``_completion_tasks`` so the
+        GC can't reap it before it runs; the task removes itself on
+        completion.
+        """
+        cb = self._on_dream_complete
+        if cb is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(
+            self._invoke_completion(cb, title),
+            name=f"dreamscape-on-complete-{self._agent_id}",
+        )
+        self._completion_tasks.add(task)
+        task.add_done_callback(self._completion_tasks.discard)
+        self.stats.completion_callbacks_dispatched += 1
+
+    async def _invoke_completion(self, cb: DreamCompleteCallback, title: str) -> None:
+        try:
+            await cb(self._agent_id, title)
+        except Exception:
+            self.stats.completion_callbacks_failed += 1
+            logger.exception(
+                "DreamScheduler on_dream_complete callback raised (agent=%s)",
+                self._agent_id,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -260,37 +337,46 @@ def ensure_scheduler(
     dreams_cfg: DreamsConfig,
     lifecycle_cfg: LifecycleConfig,
     poll_seconds: float = _DEFAULT_POLL_SECONDS,
+    on_dream_complete: DreamCompleteCallback | None = None,
 ) -> DreamScheduler:
     """Return the (singleton) scheduler for ``agent_id``, starting if needed.
 
     Idempotent. If a scheduler with this id already exists, returns
-    it without re-creating. The returned scheduler may or may not be
-    running yet — call ``ensure_running_started`` (below) when you
-    want to guarantee the task is live.
+    it without re-creating. When ``on_dream_complete`` is supplied on
+    a later call (typical pattern for the K5 propose-on-dream hook,
+    which is installed after the scheduler is already running), it
+    overwrites the existing callback in place so the user always gets
+    the most recent wiring.
     """
-    existing = _GLOBAL_SCHEDULERS.get(agent_id)
-    if existing is not None:
-        return existing
-    scheduler = DreamScheduler(
-        agent_id=agent_id,
-        model=model,
-        dreams_cfg=dreams_cfg,
-        lifecycle_cfg=lifecycle_cfg,
-        poll_seconds=poll_seconds,
-    )
-    _GLOBAL_SCHEDULERS[agent_id] = scheduler
-    return scheduler
+    with _GLOBAL_SCHEDULERS_LOCK:
+        existing = _GLOBAL_SCHEDULERS.get(agent_id)
+        if existing is not None:
+            if on_dream_complete is not None:
+                existing.set_on_dream_complete(on_dream_complete)
+            return existing
+        scheduler = DreamScheduler(
+            agent_id=agent_id,
+            model=model,
+            dreams_cfg=dreams_cfg,
+            lifecycle_cfg=lifecycle_cfg,
+            poll_seconds=poll_seconds,
+            on_dream_complete=on_dream_complete,
+        )
+        _GLOBAL_SCHEDULERS[agent_id] = scheduler
+        return scheduler
 
 
 def get_scheduler(agent_id: str) -> DreamScheduler | None:
     """Return the registered scheduler for ``agent_id`` or None."""
-    return _GLOBAL_SCHEDULERS.get(agent_id)
+    with _GLOBAL_SCHEDULERS_LOCK:
+        return _GLOBAL_SCHEDULERS.get(agent_id)
 
 
 async def stop_all_schedulers() -> None:
     """Cancel every registered scheduler. Useful in test teardown."""
-    schedulers = list(_GLOBAL_SCHEDULERS.values())
-    _GLOBAL_SCHEDULERS.clear()
+    with _GLOBAL_SCHEDULERS_LOCK:
+        schedulers = list(_GLOBAL_SCHEDULERS.values())
+        _GLOBAL_SCHEDULERS.clear()
     for scheduler in schedulers:
         with suppress(Exception):
             await scheduler.stop()
@@ -298,4 +384,5 @@ async def stop_all_schedulers() -> None:
 
 def clear_registry() -> None:
     """Drop the registry WITHOUT cancelling tasks. Tests only."""
-    _GLOBAL_SCHEDULERS.clear()
+    with _GLOBAL_SCHEDULERS_LOCK:
+        _GLOBAL_SCHEDULERS.clear()

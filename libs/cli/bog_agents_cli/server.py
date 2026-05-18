@@ -498,7 +498,7 @@ class ServerProcess:
             )
         # Mode "w" truncates on open per server start so logs from a
         # prior crashed run don't bleed into the next one.
-        self._log_file = log_path.open(  # closed in stop()
+        self._log_file = log_path.open(  # closed in stop() or on Popen failure below
             "w", encoding="utf-8", buffering=1, errors="replace"
         )
         # CRITICAL visibility: announce the log path so the user can
@@ -506,13 +506,27 @@ class ServerProcess:
         logger.info(
             "Starting langgraph dev server (log: %s): %s", log_path, " ".join(cmd)
         )
-        self._process = subprocess.Popen(  # noqa: S603, ASYNC220
-            cmd,
-            cwd=str(work_dir),
-            env=env,
-            stdout=self._log_file,
-            stderr=subprocess.STDOUT,
-        )
+        try:
+            self._process = subprocess.Popen(  # noqa: S603, ASYNC220
+                cmd,
+                cwd=str(work_dir),
+                env=env,
+                stdout=self._log_file,
+                stderr=subprocess.STDOUT,
+            )
+        except (OSError, ValueError):
+            # Popen can fail synchronously (missing binary, bad cwd, fd
+            # exhaustion). The log file handle has been opened but the
+            # process never started — stop() won't be called, so we'd
+            # leak the fd otherwise. Close eagerly and re-raise.
+            try:
+                self._log_file.close()
+            except OSError:
+                logger.debug(
+                    "Failed to close log file after Popen failure", exc_info=True
+                )
+            self._log_file = None
+            raise
 
         try:
             await wait_for_server_healthy(

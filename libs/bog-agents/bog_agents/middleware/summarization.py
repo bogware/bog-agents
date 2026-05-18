@@ -57,8 +57,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, cast
 
 from langchain.agents.middleware.summarization import (
-    _DEFAULT_MESSAGES_TO_KEEP,
-    _DEFAULT_TRIM_TOKEN_LIMIT,
     DEFAULT_SUMMARY_PROMPT,
     ContextSize,
     SummarizationMiddleware as LCSummarizationMiddleware,
@@ -74,6 +72,14 @@ from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from bog_agents.middleware._utils import append_to_system_message
+
+# Inlined from langchain.agents.middleware.summarization to avoid coupling
+# bog-agents to a private langchain symbol (leading underscore). The
+# upstream constants matched these values at langchain 1.2.x; if upstream
+# changes them we want our defaults to remain stable rather than break
+# on a langchain minor bump. See P0-J in REVIEW.md.
+_DEFAULT_MESSAGES_TO_KEEP = 20
+_DEFAULT_TRIM_TOKEN_LIMIT = 4000
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -96,6 +102,15 @@ You should use the tool when:
 - The user asks to move on to a completely new task for which previous context is likely irrelevant.
 - You have finished extracting or synthesizing a result and previous working context is no longer needed.
 """
+
+
+__all__ = [
+    "SummarizationDefaults",
+    "SummarizationEvent",
+    "SummarizationState",
+    "SummarizationToolMiddleware",
+    "TruncateArgsSettings",
+]
 
 
 class SummarizationEvent(TypedDict):

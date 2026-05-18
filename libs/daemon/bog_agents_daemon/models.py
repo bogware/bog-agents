@@ -194,3 +194,12 @@ class JobRun:
     error: str = ""
     trigger_type: TriggerType = TriggerType.MANUAL
     trigger_context: dict[str, Any] = field(default_factory=dict)
+    dispatch_errors: list[dict[str, str]] = field(default_factory=list)
+    """Per-target dispatch failures captured after the agent finished.
+
+    Each entry is ``{"target": "<email|slack|...>", "error": "..."}``.
+    The agent run can succeed while one or more output targets fail
+    (e.g. transient SMTP outage). Previously these were logged-and-
+    forgotten which meant operators could not tell from the run record
+    that delivery never happened.
+    """

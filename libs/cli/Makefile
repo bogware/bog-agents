@@ -58,11 +58,16 @@ lint: ## Run linters and type checker
 lint lint_diff lint_package lint_tests:
 	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff check $(PYTHON_FILES)
 	[ "$(PYTHON_FILES)" = "" ] || uv run --all-groups ruff format $(PYTHON_FILES) --diff
-	$(MAKE) type PYTHON_FILES="$(PYTHON_FILES)"
+	$(MAKE) type
 
+# Type-check the source package only — mirrors the SDK Makefile convention.
+# The test suite uses ``AsyncMock`` / ``MagicMock`` assignments that ty
+# cannot reason about against their typed targets; ruff + the test suite
+# itself are the correctness gates for tests. Running ``ty check .`` would
+# bury real source-level type errors under hundreds of test-mock noise.
 type: ## Run type checker
 type typecheck:
-	uv run --all-groups ty check $(PYTHON_FILES)
+	uv run --all-groups ty check bog_agents_cli
 
 format: ## Run code formatters
 format format_diff:

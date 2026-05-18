@@ -1,0 +1,93 @@
+# Bog Agents Expert Mode — starter rulebook.
+#
+# Copy this file to .bog-agents/expert_rules/starter.yaml in your project,
+# then run /expert on followed by /expert lint. Each rule fires once when
+# its conditions match a tool_call fact the middleware asserts before
+# every tool call. Adjust to taste — these are conservative defaults.
+#
+# Subcommand quick reference:
+#   /expert on|off                       — toggle the engine
+#   /expert list                         — show loaded rules
+#   /expert show <name>                  — see one rule's source
+#   /expert lint                         — static analysis
+#   /expert dry-run tool_call name=...    — simulate without firing actions
+#   /expert trace                        — last engine-run trace
+#   /why <fact_type>                     — backward-chain explanation
+#   /prove <fact_type>                   — backward-chain goal query
+#
+# Reach for /expert when you want deterministic, auditable behavior —
+# policy gates, budget caps, doctor-mode diagnostics. Reach for the LLM
+# alone for everything else.
+
+- name: block_force_push_to_main
+  description: Block force-pushes to main/master regardless of repo.
+  salience: 100
+  when:
+    - tool_call:
+        name: shell_execute
+        command:
+          matches: 'git push.*--force.*(main|master)\b'
+  then:
+    - deny: "Force-pushing to main/master is prohibited by policy."
+    - audit_log:
+        event: prod_force_push_blocked
+
+- name: budget_brake_warn
+  description: Warn when session spend crosses $5.
+  salience: 90
+  once: true
+  when:
+    - session:
+        cost_usd:
+          gt: 5.0
+  then:
+    - notify:
+        channel: tui
+        text: "Session spend has crossed $5.00 — consider /compact or wrap up."
+
+- name: budget_brake_hard
+  description: Require approval after $20 of spend.
+  salience: 100
+  once: true
+  when:
+    - session:
+        cost_usd:
+          gt: 20.0
+  then:
+    - require_approval:
+        gate: "Session over $20"
+        risk: high
+        reason: "Cost exceeded $20 — confirm intent before continuing."
+
+- name: prod_env_destructive_command_gate
+  description: Require approval for destructive commands when context.env is prod.
+  salience: 80
+  when:
+    - context:
+        env:
+          in: [prod, production]
+    - tool_call:
+        name: shell_execute
+        command:
+          matches: '\b(rm|drop\s+table|truncate|delete\s+from)\b'
+  then:
+    - require_approval:
+        gate: "Destructive command on prod"
+        risk: critical
+    - audit_log:
+        event: prod_destructive_command
+
+- name: redact_token_args
+  description: Strip obvious tokens from tool args before they hit the audit trail.
+  salience: 50
+  when:
+    - tool_call:
+        args:
+          matches: 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[A-Z0-9]{16}'
+  then:
+    - modify:
+        args_redacted: true
+    - notify:
+        channel: log
+        severity: high
+        text: "secret-shaped token detected in tool args — value redacted"

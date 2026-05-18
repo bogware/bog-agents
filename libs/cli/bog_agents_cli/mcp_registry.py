@@ -879,7 +879,7 @@ def fetch_remote_catalog(url: str | None = None, *, timeout: int = 5) -> dict[st
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if not isinstance(data, dict):
-            raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY003,TRY004,TRY301,EM102
+            raise ValueError(f"Expected dict, got {type(data).__name__}")  # noqa: TRY004, TRY301
     except Exception as exc:
         # Documented contract: ANY failure returns ``{}`` so callers
         # always have the local registry as a safe fallback. The

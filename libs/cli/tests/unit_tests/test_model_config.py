@@ -1421,7 +1421,16 @@ api_key_env = "BASETEN_API_KEY"
         )
 
     def test_explicit_models_list_skips_auto_discovery(self, tmp_path):
-        """Explicit models list bypasses auto-discovery even when profiles exist."""
+        """Explicit models list bypasses the class_path auto-discovery branch.
+
+        Note: baseten is now in the built-in provider-profiles
+        registry, so the registry-discovery pass at the top of
+        ``get_available_models`` also contributes models. The explicit
+        list is appended to those (the user's models are additive,
+        not exclusive). We assert the explicit model is present —
+        which proves the config branch fired — without requiring the
+        list to be *only* the explicit entry.
+        """
         config_path = tmp_path / "config.toml"
         config_path.write_text("""
 [models.providers.baseten]
@@ -1446,7 +1455,7 @@ models = ["my-explicit-model"]
             models = get_available_models()
 
         assert "baseten" in models
-        assert models["baseten"] == ["my-explicit-model"]
+        assert "my-explicit-model" in models["baseten"]
 
     def test_skips_builtin_registry_providers(self, tmp_path):
         """Does not double-load profiles for providers in the built-in registry."""
@@ -1995,7 +2004,7 @@ class TestGetBuiltinProviders:
         had_builtin = hasattr(base_module, "_BUILTIN_PROVIDERS")
         if had_builtin:
             saved = base_module._BUILTIN_PROVIDERS
-            delattr(base_module, "_BUILTIN_PROVIDERS")
+            del base_module._BUILTIN_PROVIDERS
 
         try:
             with patch.object(base_module, "_SUPPORTED_PROVIDERS", legacy, create=True):
@@ -2389,7 +2398,12 @@ recent = "openai:gpt-5.2"
         ):
             result = _get_default_model_spec()
 
-        assert result == "anthropic:claude-sonnet-4-6"
+        # The recommended Anthropic default rolls forward with the
+        # project's curated recommendations; today opus-4-7 is the
+        # flagship pick. If we bump the recommendation again,
+        # update this assertion alongside the change in
+        # ``_get_recommended_model_spec``.
+        assert result == "anthropic:claude-opus-4-7"
 
     def test_openai_env_uses_recommended_default(self, tmp_path: Path) -> None:
         """OpenAI auto-detection uses the curated recommended default."""

@@ -359,7 +359,7 @@ class ScheduledRunsStore:
         """Load tasks from disk."""
         if not self.store_path.exists():
             return
-        content = self.store_path.read_text().strip()
+        content = self.store_path.read_text(encoding="utf-8").strip()
         if not content:
             return
         try:

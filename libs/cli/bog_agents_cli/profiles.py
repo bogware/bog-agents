@@ -148,7 +148,7 @@ def load_profiles(config_dir: Path) -> dict[str, Profile]:
     profiles_file = config_dir / "profiles.json"
     if profiles_file.exists():
         try:
-            data = json.loads(profiles_file.read_text())
+            data = json.loads(profiles_file.read_text(encoding="utf-8"))
             for name, profile_data in data.items():
                 profiles[name] = Profile(
                     name=name,
@@ -204,7 +204,7 @@ def save_profile(config_dir: Path, profile: Profile) -> None:
 
     if profiles_file.exists():
         try:
-            existing = json.loads(profiles_file.read_text())
+            existing = json.loads(profiles_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
 

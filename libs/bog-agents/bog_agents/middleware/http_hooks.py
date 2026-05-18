@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -298,6 +300,97 @@ def _fire_webhook_sync(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Secret-shaped payload redaction (P1-1)
+# ---------------------------------------------------------------------------
+
+# Key names that imply the value is sensitive regardless of shape.
+_SECRET_LIKE_KEYS: frozenset[str] = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "api-key",
+        "secret",
+        "secret_key",
+        "token",
+        "access_token",
+        "refresh_token",
+        "bearer",
+        "authorization",
+        "auth",
+        "password",
+        "passwd",
+        "pwd",
+        "private_key",
+        "client_secret",
+        "credentials",
+        "creds",
+    }
+)
+
+# Regexes for values that "look like" common token formats. The
+# patterns intentionally match prefixes used by major providers — adding
+# new ones is cheap and the false-positive cost on a webhook payload is
+# negligible.
+_SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}\b"),  # OpenAI / Anthropic
+    re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"),  # Anthropic explicit
+    re.compile(r"\bghp_[A-Za-z0-9_]{20,}\b"),  # GitHub PAT
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),  # Slack
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),  # AWS access key id
+    re.compile(r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\b"),  # JWT
+    re.compile(r"\bglpat-[A-Za-z0-9_\-]{16,}\b"),  # GitLab PAT
+)
+
+_REDACTED = "[REDACTED]"
+
+
+def _redact_payload_dict(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a deep-copied dict with secret-shaped values redacted.
+
+    A value is replaced with ``"[REDACTED]"`` when EITHER its key is in
+    :data:`_SECRET_LIKE_KEYS` (case-insensitive) OR the value is a
+    string matching one of :data:`_SECRET_VALUE_PATTERNS`.
+
+    Nested dicts and lists are walked recursively. Non-string scalars
+    pass through unchanged. ``None`` in → ``None`` out (preserves the
+    "no metadata" signal).
+    """
+    if data is None:
+        return None
+    return _redact_value(data, in_secret_key=False)
+
+
+def _redact_value(value: Any, *, in_secret_key: bool) -> Any:
+    """Recursive helper for :func:`_redact_payload_dict`."""
+    if isinstance(value, dict):
+        return {
+            k: _redact_value(
+                v,
+                in_secret_key=in_secret_key or _is_secret_key(k),
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(v, in_secret_key=in_secret_key) for v in value]
+    if isinstance(value, str):
+        if in_secret_key:
+            return _REDACTED
+        for pat in _SECRET_VALUE_PATTERNS:
+            if pat.search(value):
+                return _REDACTED
+        return value
+    return value
+
+
+def _is_secret_key(key: Any) -> bool:
+    """Case-insensitive membership check against :data:`_SECRET_LIKE_KEYS`."""
+    if not isinstance(key, str):
+        return False
+    return key.lower() in _SECRET_LIKE_KEYS
+
+
 class HttpHooksMiddleware(AgentMiddleware):
     """Middleware that fires HTTP webhooks on agent lifecycle events.
 
@@ -336,15 +429,30 @@ class HttpHooksMiddleware(AgentMiddleware):
         *,
         endpoints: list[WebhookEndpoint] | None = None,
         session_id: str | None = None,
+        payload_filter: Callable[[WebhookPayload], WebhookPayload] | None = None,
+        redact_secret_shaped_args: bool = True,
     ) -> None:
         """Initialize HTTP hooks middleware.
 
         Args:
             endpoints: List of webhook endpoints to register.
             session_id: Optional session identifier included in payloads.
+            payload_filter: Optional callable that receives the
+                outgoing :class:`WebhookPayload` and returns a (possibly
+                modified) copy. Use this to redact, mask, or drop
+                sensitive fields before they hit a third-party endpoint.
+                Runs AFTER the built-in secret redactor when
+                ``redact_secret_shaped_args`` is true.
+            redact_secret_shaped_args: When True (default), the
+                middleware scans ``tool_args`` and ``metadata`` for
+                values that look like API keys / tokens / passwords and
+                replaces them with ``"[REDACTED]"`` before sending.
+                Fixes REVIEW.md P1-1.
         """
         self.endpoints = endpoints or []
         self.session_id = session_id
+        self._payload_filter = payload_filter
+        self._redact_secret_shaped_args = bool(redact_secret_shaped_args)
 
     def _endpoints_for_event(self, event: WebhookEvent) -> list[WebhookEndpoint]:
         """Get endpoints listening for a specific event."""
@@ -378,9 +486,14 @@ class HttpHooksMiddleware(AgentMiddleware):
             timestamp=time.time(),
             session_id=self.session_id,
             tool_name=tool_name,
-            tool_args=tool_args,
-            metadata=metadata or {},
+            tool_args=_redact_payload_dict(tool_args) if self._redact_secret_shaped_args else tool_args,
+            metadata=_redact_payload_dict(metadata or {}) if self._redact_secret_shaped_args else (metadata or {}),
         )
+        if self._payload_filter is not None:
+            try:
+                payload = self._payload_filter(payload)
+            except Exception:
+                logger.exception("http_hooks: payload_filter raised; sending payload unfiltered")
 
         tasks = [fire_webhook(ep, payload) for ep in endpoints]
         return list(await asyncio.gather(*tasks, return_exceptions=False))

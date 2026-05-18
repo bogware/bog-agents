@@ -1,19 +1,20 @@
 # Bog Agents
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
-**v0.8.0** — a production-ready AI agent framework built on LangGraph,
+**v0.8.7** — a production-ready AI agent framework built on LangGraph,
 deliberately calm by design.
 
 Three packages, one philosophy:
 
 - **[`bog-agents`](libs/bog-agents)** — the Python SDK. `create_agent()` returns a
   compiled LangGraph agent with file tools, a shell, sub-agents, plan mode,
-  retry-with-backoff, and 80+ composable middlewares.
+  retry-with-backoff, and ~80 composable middlewares.
 - **[`bog-agents-cli`](libs/cli)** — a coding agent that lives in your terminal.
-  80+ slash commands, any LLM, persistent memory, MCP marketplace, `/peat`
+  120+ slash commands, any LLM, persistent memory, MCP marketplace, `/peat`
   personal scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`,
-  in-memory secrets vault, matte-swamp / neon-green TUI.
+  in-memory secrets vault, `bog-agents drive` for non-interactive scripted
+  runs, matte-swamp / neon-green TUI.
 - **[`bog-agents-daemon`](libs/daemon)** — the patient watcher. Runs your
   agents on cron / file-change / webhook / git-push triggers; survives
   reboots; reports back via Slack / email / GitHub / file / webhook.
@@ -104,6 +105,32 @@ and the full provider matrix.
 
 ---
 
+## What's new since 0.8.0
+
+Successive waves have hardened the framework toward a credible 1.0:
+
+- **Wave Y (0.8.8)** — Release-readiness hardening. Audit-trail strict
+  hook warnings, first-run no-API-key actionable error, preview-server
+  cap + cleanup tool, OAuth structured observability, opt-in
+  `MessageStore` JSONL persistence for crash recovery, `__all__` on
+  headline middleware modules, refreshed docs.
+- **Wave X (0.8.7)** — `merge_worktree` ref-injection fix,
+  `start_preview_server` `shlex` parsing + DEVNULL, daemon
+  `dispatch_errors` capture.
+- **Wave W (0.8.6)** — `bog-agents drive` scripted TUI runner with
+  YAML grammar + Pilot harness; tool-bundle pattern; canonical
+  middleware-ordering test; comprehensive resilience pass.
+- **Wave V (0.8.5)** — Stub middleware cleanup, ~7,900 lines net
+  deletion; `/causal` → `/trace-mind` rename.
+- **Wave U–T (0.8.4–0.8.3)** — architect-audit surgical fixes,
+  postmortem → dreamscape proposer feedback loop.
+- **Wave S–Q (0.8.2–0.8.0)** — TraceFile v1 (Ed25519 signed open
+  trace format), `/compliance` auditor, provable policies +
+  postmortem + time-travel replay.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full history. The 0.8.0
+notes below cover the original flagship release.
+
 ## What's new in 0.8.0
 
 A genuine flagship release. Five top-line capabilities and a hundred small
@@ -186,12 +213,12 @@ See [CHANGELOG.md](CHANGELOG.md) for the full 0.8.0 entry.
 
 | Path | What |
 |---|---|
-| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, 80+ middlewares, pluggable backends. |
-| `libs/cli/` | The terminal CLI. Textual TUI, slash commands, MCP marketplace. |
+| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, ~80 middlewares, pluggable backends, tool bundles. |
+| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, `bog-agents drive` scripted runner. |
 | `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook triggers, REST API. |
 | `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |
 | `libs/harbor/` | Evaluation / benchmark harness (Terminal Bench 2.0). |
-| `libs/partners/` | Sandbox provider integrations (Daytona, Modal, RunLoop, QuickJS). |
+| `libs/partners/` | Sandbox provider integrations (today: Daytona). |
 | `libs/vscode-extension/` | VS Code integration. |
 
 Each package has its own `pyproject.toml`, `Makefile`, and version. SDK / CLI /
@@ -225,6 +252,26 @@ CI runs `make lint` + `make test` per package on every PR. See
 ---
 
 ## Documentation
+
+Start with **[`docs/`](docs/)** — the full documentation tree:
+
+- **[Getting Started](docs/getting-started.md)** — install, first
+  run, the five commands you'll use forever
+- **[Cookbook](docs/cookbook.md)** — fifteen task-shaped recipes
+- **[Troubleshooting](docs/troubleshooting.md)** — every common
+  error, what it means, how to fix it
+- **[Tips & Tricks](docs/tips-and-tricks.md)** — power-user moves
+- **[Security Model](docs/security.md)** — what's safe by default,
+  what isn't, threat boundaries
+- **CLI deep dives**: [Drive runner](docs/cli/drive.md) ·
+  [Slash commands](docs/cli/slash-commands.md)
+- **SDK guides**: [Quickstart](docs/sdk/quickstart.md) ·
+  [Middleware](docs/sdk/middleware.md) ·
+  [Tool bundles](docs/sdk/tool-bundles.md)
+- **Daemon**: [Quickstart](docs/daemon/quickstart.md)
+- **Advanced**: [Expert Rules](docs/advanced/expert-rules.md)
+
+Also:
 
 - **Per-package READMEs**: [SDK](libs/bog-agents/README.md) ·
   [CLI](libs/cli/README.md) · [Daemon](libs/daemon/README.md)

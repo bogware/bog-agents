@@ -8,12 +8,45 @@ and project-level locations.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+_MCP_STARTUP_TIMEOUT_ENV = "BOG_AGENTS_MCP_STARTUP_TIMEOUT"
+_DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS = 15.0
+"""How long ``load_mcp_tools`` may spend on one server before giving up.
+
+A stale or misbehaving ``npx -y …`` or OAuth-pending SSE server used to
+hang first-paint indefinitely. We now wrap each per-server call in
+``asyncio.wait_for`` and skip the offender on timeout. Override via the
+``BOG_AGENTS_MCP_STARTUP_TIMEOUT`` env var. Fixes P0-D.
+"""
+
+
+def _mcp_startup_timeout_seconds() -> float:
+    """Return the configured per-server startup timeout in seconds."""
+    raw = os.environ.get(_MCP_STARTUP_TIMEOUT_ENV)
+    if not raw:
+        return _DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid %s=%r; using default %.1fs",
+            _MCP_STARTUP_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS,
+        )
+        return _DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS
+    if value <= 0:
+        return _DEFAULT_MCP_STARTUP_TIMEOUT_SECONDS
+    return value
+
 
 if TYPE_CHECKING:
     from langchain_core.tools import BaseTool
@@ -34,11 +67,22 @@ class MCPToolInfo:
 
 @dataclass
 class MCPServerInfo:
-    """Metadata for a connected MCP server and its tools."""
+    """Metadata for a connected MCP server and its tools.
+
+    Attributes:
+        name: Configured server name.
+        transport: ``"stdio"`` | ``"sse"`` | ``"http"``.
+        tools: Tools discovered from the server.
+        error: Human-readable failure reason. Empty for healthy servers.
+            Populated when the server times out or raises during startup
+            so the welcome banner / ``/doctor`` can surface it without
+            blocking other servers from loading.
+    """
 
     name: str
     transport: str
     tools: list[MCPToolInfo] = field(default_factory=list)
+    error: str = ""
 
 
 _SUPPORTED_REMOTE_TYPES = {"sse", "http"}
@@ -470,6 +514,8 @@ async def _load_tools_from_config(
 
     install_safe_subprocess_stderr_default()
 
+    timeout_s = _mcp_startup_timeout_seconds()
+
     try:
         all_tools: list[BaseTool] = []
         server_infos: list[MCPServerInfo] = []
@@ -484,17 +530,62 @@ async def _load_tools_from_config(
             # hang on a dead anyio task group, which is exactly the
             # ``/init`` symptom we just chased.
             connection = connections[server_name]
-            tools = await load_mcp_tools(
-                None,
-                connection=connection,
-                server_name=server_name,
-                tool_name_prefix=True,
-            )
+            transport = _resolve_server_type(server_config)
+            try:
+                tools = await asyncio.wait_for(
+                    load_mcp_tools(
+                        None,
+                        connection=connection,
+                        server_name=server_name,
+                        tool_name_prefix=True,
+                    ),
+                    timeout=timeout_s,
+                )
+            except TimeoutError:
+                # A misbehaving stdio server (e.g. ``npx -y …`` doing a
+                # cold install, OAuth-pending SSE server) used to freeze
+                # the entire welcome banner. We log + record the failure
+                # on ``MCPServerInfo`` and move on — the agent can still
+                # use the servers that did come up. Fixes P0-D.
+                err = (
+                    f"timed out after {timeout_s:.1f}s "
+                    f"(override via {_MCP_STARTUP_TIMEOUT_ENV})"
+                )
+                logger.warning(
+                    "MCP server %r failed to start: %s",
+                    server_name,
+                    err,
+                )
+                server_infos.append(
+                    MCPServerInfo(
+                        name=server_name,
+                        transport=transport,
+                        error=err,
+                    )
+                )
+                continue
+            except Exception as per_server_exc:
+                # Same isolation strategy: a single broken server should
+                # never brick the rest of the rulebook.
+                err = f"startup failed: {per_server_exc}"
+                logger.warning(
+                    "MCP server %r failed to start: %s",
+                    server_name,
+                    per_server_exc,
+                )
+                server_infos.append(
+                    MCPServerInfo(
+                        name=server_name,
+                        transport=transport,
+                        error=err,
+                    )
+                )
+                continue
             all_tools.extend(tools)
             server_infos.append(
                 MCPServerInfo(
                     name=server_name,
-                    transport=_resolve_server_type(server_config),
+                    transport=transport,
                     tools=[
                         MCPToolInfo(name=t.name, description=t.description or "")
                         for t in tools

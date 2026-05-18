@@ -217,9 +217,25 @@ async def _run_one_juror(
         "Review the following unified-diff patch and return your JSON verdict.\n\n"
         f"```diff\n{diff_text.strip()}\n```"
     )
+    # L3: per-juror timeout. A hung model on one juror previously
+    # blocked the whole report; jurors run in parallel under
+    # gather() so each one needs its own cap.
+    juror_timeout_s = 300.0
     try:
-        response = await model.ainvoke(
-            [SystemMessage(content=JURY_SYSTEM_PROMPT), HumanMessage(content=user)]
+        response = await asyncio.wait_for(
+            model.ainvoke(
+                [SystemMessage(content=JURY_SYSTEM_PROMPT), HumanMessage(content=user)]
+            ),
+            timeout=juror_timeout_s,
+        )
+    except TimeoutError:
+        logger.warning("juror %s timed out after %.0fs", juror_id, juror_timeout_s)
+        return JurorVerdict(
+            juror=juror_id,
+            verdict="invalid",
+            summary=f"juror timed out after {juror_timeout_s:.0f}s",
+            issues=(),
+            score=0,
         )
     except Exception as exc:  # pragma: no cover — model errors are rare in tests
         logger.warning("juror %s failed: %s", juror_id, exc)

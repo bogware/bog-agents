@@ -188,6 +188,15 @@ class DreamsConfig:
     and forgetting to bound dormancy. Set to 0 to disable the cap
     (not recommended for unattended runs)."""
 
+    propose_rules_on_complete: bool = False
+    """K5: When True, fire the expert-rule proposer once after each
+    successful dream cycle. Default False keeps the existing
+    ``/expert watch`` timer-driven behavior — opt-in pairs the
+    proposer to actual dream activity instead of a separate poll. The
+    callback is installed by the CLI when it builds the scheduler
+    factory; runs as a fire-and-forget task so a slow proposer never
+    blocks the next dream cycle."""
+
 
 @dataclass
 class ImaginationConfig:

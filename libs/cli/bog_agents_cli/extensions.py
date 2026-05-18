@@ -98,7 +98,7 @@ def parse_manifest(manifest_path: Path) -> ExtensionManifest:
         ValueError: If the manifest is invalid.
     """
     try:
-        data = json.loads(manifest_path.read_text())
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         msg = f"Failed to read manifest: {e}"
         raise ValueError(msg) from e

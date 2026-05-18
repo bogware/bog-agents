@@ -26,6 +26,15 @@ from bog_agents_daemon.store import save_run, upsert_job
 
 logger = logging.getLogger(__name__)
 
+_MAX_DISPATCH_ERRORS = 20
+"""Cap on per-run dispatch_errors entries.
+
+A job with many output targets that all fail (e.g. a 100-recipient
+fanout during a Slack outage) used to inflate the JobRun JSON to
+megabytes. Beyond this cap, additional failures are collapsed to a
+single ``(overflow)`` entry recording the truncated count.
+"""
+
 
 async def run_job(
     job: AmbientJob,
@@ -83,17 +92,49 @@ async def run_job(
     upsert_job(job)
     save_run(run)
 
-    # Dispatch outputs best-effort
+    # Dispatch outputs best-effort. Capture per-target failures on the
+    # run so an operator can tell from the run record that delivery
+    # failed even though the agent itself completed successfully. The
+    # log line alone wasn't enough — silent dispatch outages turned
+    # into "why didn't the daily report arrive?" tickets with no
+    # paper trail in the runs table.
+    #
+    # Cap the captured errors at _MAX_DISPATCH_ERRORS so a job with
+    # hundreds of broken targets (e.g. a Slack webhook outage hitting
+    # a fanout job) doesn't bloat the JobRun record. Beyond the cap we
+    # collapse to a count so the JSON stays bounded.
     job_wd = Path(job.working_dir) if job.working_dir else None
+    overflow_count = 0
     for output_config in job.outputs:
         try:
             await _dispatch_output(run, output_config, working_dir=job_wd)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Output dispatch failed for job %s target %s",
                 job.job_id,
                 output_config.target,
             )
+            if len(run.dispatch_errors) < _MAX_DISPATCH_ERRORS:
+                run.dispatch_errors.append({"target": str(output_config.target), "error": str(exc)})
+            else:
+                overflow_count += 1
+    if overflow_count:
+        run.dispatch_errors.append(
+            {
+                "target": "(overflow)",
+                "error": f"{overflow_count} additional dispatch failure(s) truncated",
+            }
+        )
+
+    # If the agent run succeeded but dispatches failed, mark the run as
+    # COMPLETED but keep ``error`` populated so HTTP clients and the
+    # ``/runs`` CLI surface flag the partial failure. Status stays
+    # COMPLETED to reflect that the work was done — the failure is in
+    # delivery, not execution — but a non-empty ``error`` is the
+    # universal signal callers already check.
+    if run.dispatch_errors and run.status == JobStatus.COMPLETED and not run.error:
+        run.error = f"agent succeeded but {len(run.dispatch_errors)} output target(s) failed; see dispatch_errors for details"
+        save_run(run)
 
     return run
 

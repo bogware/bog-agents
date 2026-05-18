@@ -709,7 +709,7 @@ async def execute_task_textual(
                         "use read_file tool to view)"
                     )
                 else:
-                    content = file_path.read_text()
+                    content = file_path.read_text(encoding="utf-8")
                     context_parts.append(
                         f"\n### {file_path.name}\n"
                         f"Path: `{file_path}`\n```\n{content}\n```"

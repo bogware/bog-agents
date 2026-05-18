@@ -237,3 +237,8 @@ tmp-*
 # macOS
 .DS_Store
 */tmp/.DS_Store
+
+# Local dev-session ephemera (daemon logs, snapshot dirs, commit drafts)
+.workday-*
+*.daemon.log
+.drive-artifacts/

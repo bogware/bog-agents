@@ -65,7 +65,7 @@ def load_keybindings(config_dir: Path) -> KeybindingConfig:
 
     if keybindings_file.exists():
         try:
-            data = json.loads(keybindings_file.read_text())
+            data = json.loads(keybindings_file.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 user_bindings = {k: v for k, v in data.items() if isinstance(v, str)}
         except (json.JSONDecodeError, OSError) as e:

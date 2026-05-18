@@ -11,14 +11,17 @@ in the DOM and recreates older ones on demand.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from time import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from textual.widget import Widget
 
 logger = logging.getLogger(__name__)
@@ -317,17 +320,52 @@ class MessageStore:
             Provides enough buffer to avoid visible loading pauses.
     """
 
-    WINDOW_SIZE: int = 50
-    HYDRATE_BUFFER: int = 15
+    WINDOW_SIZE: ClassVar[int] = 50
+    HYDRATE_BUFFER: ClassVar[int] = 15
 
-    def __init__(self) -> None:
-        """Initialize the message store."""
+    def __init__(self, *, persist_path: Path | None = None) -> None:
+        """Initialize the message store.
+
+        Args:
+            persist_path: Optional path to a JSONL file. When set, every
+                :meth:`append` (and :meth:`update_message`) is mirrored
+                to disk so a crash mid-session doesn't lose the
+                transcript. The file is *append-only* and uses one JSON
+                object per line — replay/audit/causal-trace consumers
+                can ``cat`` it directly. Disabled by default for back-
+                compat; the daemon and ``bog-agents drive`` pass a path
+                explicitly because their failure mode (silent crash,
+                no TTY to re-open) is exactly the case persistence
+                exists for.
+        """
         self._messages: list[MessageData] = []
         self._visible_start: int = 0
         self._visible_end: int = 0
 
         # Track active streaming message - never archive this
         self._active_message_id: str | None = None
+
+        # Opt-in JSONL durability. The handle stays open for the life of
+        # the store and is closed explicitly via ``close_persist`` when
+        # the session ends. We use line-buffered text mode so each
+        # append is on-disk before the next call returns (the kernel
+        # decides exact fsync timing — good enough for crash recovery,
+        # not "atomic vs concurrent reader", which the chat surface
+        # doesn't need anyway).
+        self._persist_path: Path | None = persist_path
+        self._persist_fh: Any = None  # TextIO — kept as Any to dodge import cycles
+        if persist_path is not None:
+            try:
+                persist_path.parent.mkdir(parents=True, exist_ok=True)
+                self._persist_fh = persist_path.open("a", encoding="utf-8", buffering=1)
+            except OSError:
+                logger.warning(
+                    "MessageStore: could not open %s for transcript persistence; "
+                    "running in memory-only mode",
+                    persist_path,
+                    exc_info=True,
+                )
+                self._persist_path = None
 
     @property
     def total_count(self) -> int:
@@ -357,6 +395,84 @@ class MessageStore:
         """
         self._messages.append(message)
         self._visible_end = len(self._messages)
+        self._persist_event("append", message)
+
+    def _persist_event(self, event: str, message: MessageData) -> None:
+        """Write one transcript line to the persistence file, if enabled.
+
+        Errors are logged at warning and otherwise swallowed — a broken
+        disk should not crash the chat surface.
+        """
+        if self._persist_fh is None:
+            return
+        try:
+            record = {"event": event, "data": _message_to_jsonable(message)}
+            self._persist_fh.write(json.dumps(record, ensure_ascii=False))
+            self._persist_fh.write("\n")
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning(
+                "MessageStore: persist write failed (%s)", exc, exc_info=True
+            )
+
+    def close_persist(self) -> None:
+        """Close the persistence file handle. Idempotent.
+
+        Call this from the owner's shutdown hook (TUI on_unmount,
+        daemon job finalize, drive runner cleanup) so the OS doesn't
+        keep the descriptor around past the session.
+        """
+        if self._persist_fh is not None:
+            try:
+                self._persist_fh.close()
+            except OSError:
+                logger.debug("MessageStore: persist close failed", exc_info=True)
+            self._persist_fh = None
+
+    @classmethod
+    def replay_from_persist(cls, persist_path: Path) -> list[MessageData]:
+        """Load every persisted message from *persist_path*, in order.
+
+        Used by crash-recovery / resume flows: read the file the previous
+        session wrote, hydrate a fresh :class:`MessageStore`, hand the
+        new (or resumed) session those messages via :meth:`bulk_load`.
+
+        Args:
+            persist_path: Path to a JSONL transcript previously written
+                by an instance of this class.
+
+        Returns:
+            A list of :class:`MessageData` in the order they were
+            appended. Lines that fail to parse are skipped with a
+            warning so a single corrupt line doesn't kill recovery.
+        """
+        if not persist_path.is_file():
+            return []
+        out: list[MessageData] = []
+        try:
+            text = persist_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "MessageStore: cannot read persist file %s: %s", persist_path, exc
+            )
+            return []
+        for line_no, raw in enumerate(text.splitlines(), start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                data = record.get("data") if isinstance(record, dict) else None
+                if not isinstance(data, dict):
+                    continue
+                out.append(_message_from_jsonable(data))
+            except (json.JSONDecodeError, ValueError, KeyError) as exc:
+                logger.warning(
+                    "MessageStore: skipping corrupt line %s:%d (%s)",
+                    persist_path,
+                    line_no,
+                    exc,
+                )
+        return out
 
     def bulk_load(
         self, messages: list[MessageData]
@@ -621,3 +737,45 @@ class MessageStore:
             List of visible message data.
         """
         return self._messages[self._visible_start : self._visible_end]
+
+
+# ---------------------------------------------------------------------------
+# Persistence helpers (JSONL on-disk format)
+# ---------------------------------------------------------------------------
+#
+# We dump a tiny subset of ``MessageData`` to JSONL — just enough to
+# faithfully reconstruct the message on resume. ``height_hint`` and the
+# active-stream flag are not persisted because they're transient
+# render-time state.
+
+
+def _message_to_jsonable(message: MessageData) -> dict[str, Any]:
+    """Serialize a :class:`MessageData` to a JSON-safe dict."""
+    raw = asdict(message)
+    # ``type`` is an enum — emit its string value so the format stays
+    # human-readable without needing a custom decoder downstream.
+    raw["type"] = message.type.value
+    if message.tool_status is not None:
+        raw["tool_status"] = message.tool_status.value
+    return raw
+
+
+def _message_from_jsonable(data: dict[str, Any]) -> MessageData:
+    """Reverse of :func:`_message_to_jsonable`."""
+    msg_type = MessageType(data["type"])
+    tool_status_raw = data.get("tool_status")
+    tool_status = ToolStatus(tool_status_raw) if tool_status_raw else None
+    return MessageData(
+        type=msg_type,
+        content=data.get("content", ""),
+        id=data.get("id", f"msg-{uuid.uuid4().hex[:8]}"),
+        timestamp=data.get("timestamp", time()),
+        tool_name=data.get("tool_name"),
+        tool_args=data.get("tool_args"),
+        tool_status=tool_status,
+        tool_output=data.get("tool_output"),
+        tool_expanded=bool(data.get("tool_expanded")),
+        diff_file_path=data.get("diff_file_path"),
+        is_streaming=False,  # transient — never replay as in-flight
+        height_hint=data.get("height_hint"),
+    )

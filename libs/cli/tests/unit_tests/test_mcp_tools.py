@@ -583,19 +583,25 @@ class TestGetMCPTools:
         valid_config_data: dict,
         mock_mcp_client: tuple,
     ) -> None:
-        """Test handling of failure during load_mcp_tools call."""
+        """Per-server tool-load failures must NOT raise (P0-D).
+
+        Instead the failure is recorded on ``MCPServerInfo.error`` so the
+        welcome banner / ``/doctor`` can show it while the rest of the
+        rulebook keeps loading.
+        """
         path = write_config(valid_config_data)
 
-        # Setup mocks
         mock_client, _ = mock_mcp_client
         mock_client_class.return_value = mock_client
         mock_load_tools.side_effect = Exception("Server protocol error")
 
-        with pytest.raises(
-            RuntimeError,
-            match=r"Failed to load tools from MCP server.*Server protocol error",
-        ):
-            await get_mcp_tools(path)
+        tools, _manager, infos = await get_mcp_tools(path)
+        assert tools == []  # nothing loaded
+        assert len(infos) >= 1
+        assert any(info.error for info in infos), (
+            "expected at least one MCPServerInfo with error populated"
+        )
+        assert any("Server protocol error" in info.error for info in infos)
 
     @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
     async def test_get_mcp_tools_cleanup_called_on_client_init_failure(
@@ -616,7 +622,7 @@ class TestGetMCPTools:
 
     @patch("langchain_mcp_adapters.tools.load_mcp_tools")
     @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
-    async def test_get_mcp_tools_cleanup_called_on_tool_load_failure(
+    async def test_get_mcp_tools_per_server_failure_does_not_cleanup_manager(
         self,
         mock_client_class: MagicMock,
         mock_load_tools: AsyncMock,
@@ -624,7 +630,12 @@ class TestGetMCPTools:
         valid_config_data: dict,
         mock_mcp_client: tuple,
     ) -> None:
-        """Test that manager.cleanup() is called when tool loading fails."""
+        """Per-server tool-load failures must NOT teardown the manager (P0-D).
+
+        Cleanup is only triggered on whole-config failures (client init
+        crash). Individual server failures are recorded on
+        ``MCPServerInfo.error`` so successful sibling servers stay live.
+        """
         path = write_config(valid_config_data)
         mock_client, _ = mock_mcp_client
         mock_client_class.return_value = mock_client
@@ -633,9 +644,9 @@ class TestGetMCPTools:
         with patch.object(
             MCPSessionManager, "cleanup", new_callable=AsyncMock
         ) as mock_cleanup:
-            with pytest.raises(RuntimeError, match="Failed to load tools"):
-                await get_mcp_tools(path)
-            mock_cleanup.assert_awaited_once()
+            _tools, _manager, infos = await get_mcp_tools(path)
+            mock_cleanup.assert_not_called()
+        assert any(info.error for info in infos)
 
     @patch("langchain_mcp_adapters.tools.load_mcp_tools")
     @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
@@ -1493,3 +1504,107 @@ class TestFilterProjectStdioServers:
         config = {"mcpServers": {"a": {"command": "x", "args": []}}}
         result = _filter_project_stdio_servers(config)
         assert result["mcpServers"] == {}
+
+
+# ---------------------------------------------------------------------------
+# P0-D regression: per-server startup timeout
+# ---------------------------------------------------------------------------
+
+
+class TestMcpStartupTimeout:
+    """Guard against the "frozen first paint" P0-D regression in REVIEW.md.
+
+    A hanging stdio server (e.g. ``npx -y …`` doing a cold install on first
+    run, OAuth-pending SSE) used to deadlock the welcome banner forever.
+    The loader now wraps each per-server ``load_mcp_tools`` call in
+    ``asyncio.wait_for`` and records the failure on ``MCPServerInfo.error``
+    so the rest of the rulebook keeps loading.
+    """
+
+    def test_default_timeout_is_reasonable(self) -> None:
+        from bog_agents_cli.mcp_tools import _mcp_startup_timeout_seconds
+
+        assert _mcp_startup_timeout_seconds() == 15.0
+
+    def test_env_var_overrides_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents_cli.mcp_tools import _mcp_startup_timeout_seconds
+
+        monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "3.5")
+        assert _mcp_startup_timeout_seconds() == 3.5
+
+    def test_invalid_env_var_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli.mcp_tools import _mcp_startup_timeout_seconds
+
+        monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "not-a-number")
+        assert _mcp_startup_timeout_seconds() == 15.0
+
+    def test_zero_or_negative_falls_back_to_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli.mcp_tools import _mcp_startup_timeout_seconds
+
+        monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "0")
+        assert _mcp_startup_timeout_seconds() == 15.0
+        monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "-5")
+        assert _mcp_startup_timeout_seconds() == 15.0
+
+    async def test_hanging_server_is_skipped_not_fatal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A server that never completes ``load_mcp_tools`` is reported and skipped."""
+        import asyncio
+
+        from bog_agents_cli import mcp_tools
+
+        async def fake_load_mcp_tools(
+            _session: object,
+            *,
+            connection: object,
+            server_name: str,
+            **_kwargs: object,
+        ) -> list[object]:
+            if server_name == "hangs":
+                await asyncio.sleep(60)  # would block first paint
+            return []
+
+        # Patch where ``load_mcp_tools`` is *resolved* — it's an
+        # in-function import from ``langchain_mcp_adapters.tools``.
+        monkeypatch.setattr(
+            "langchain_mcp_adapters.tools.load_mcp_tools",
+            fake_load_mcp_tools,
+        )
+        monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "0.2")
+
+        # Stub the MCP client class so we don't try to open real subprocesses.
+        class _FakeClient:
+            def __init__(self, *, connections: dict[str, object]) -> None:
+                self.connections = connections
+
+        monkeypatch.setattr(
+            "langchain_mcp_adapters.client.MultiServerMCPClient",
+            _FakeClient,
+        )
+        monkeypatch.setattr(
+            "bog_agents_cli._subprocess_stderr.install_safe_subprocess_stderr_default",
+            lambda: None,
+        )
+
+        config = {
+            "mcpServers": {
+                "hangs": {"command": "noop", "args": []},
+                "fast": {"command": "echo", "args": ["ok"]},
+            }
+        }
+
+        _tools, _mgr, infos = await mcp_tools._load_tools_from_config(config)
+
+        names = {info.name: info for info in infos}
+        assert "hangs" in names and "fast" in names, names
+        assert names["hangs"].error, "hanging server should record an error"
+        assert "timed out" in names["hangs"].error.lower()
+        assert names["fast"].error == "", (
+            "the fast server should not be tarred by the slow one"
+        )

@@ -2562,3 +2562,30 @@ async def test_async_offload_and_summary_run_concurrently() -> None:
     assert isinstance(result, ExtendedModelResponse)
     # If sequential, elapsed >= 2 * delay (0.2s). If parallel, elapsed ~ delay (0.1s).
     assert elapsed < 2 * delay, f"Expected parallel execution (<{2 * delay}s) but took {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# Regression: inlined langchain default constants must match upstream values.
+# If upstream changes, we want to know — and to consciously update our copy
+# rather than silently drift. See P0-J in REVIEW.md.
+# ---------------------------------------------------------------------------
+
+
+def test_inlined_summarization_defaults_match_upstream() -> None:
+    """Guard against drift between our inlined defaults and langchain's."""
+    from langchain.agents.middleware.summarization import (
+        _DEFAULT_MESSAGES_TO_KEEP as UPSTREAM_MSGS,
+        _DEFAULT_TRIM_TOKEN_LIMIT as UPSTREAM_TRIM,
+    )
+
+    from bog_agents.middleware.summarization import (
+        _DEFAULT_MESSAGES_TO_KEEP,
+        _DEFAULT_TRIM_TOKEN_LIMIT,
+    )
+
+    assert UPSTREAM_MSGS == _DEFAULT_MESSAGES_TO_KEEP, (
+        "Inlined _DEFAULT_MESSAGES_TO_KEEP no longer matches langchain — either update our copy or remove this test."
+    )
+    assert UPSTREAM_TRIM == _DEFAULT_TRIM_TOKEN_LIMIT, (
+        "Inlined _DEFAULT_TRIM_TOKEN_LIMIT no longer matches langchain — either update our copy or remove this test."
+    )

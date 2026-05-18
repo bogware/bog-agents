@@ -12,16 +12,15 @@ from bog_agents_cli.replay import (
     ReplaySession,
     ReplayStep,
     SessionRecorder,
-    build_replay_prompt,
     find_replay_session,
     list_replay_sessions,
     load_replay_session,
+    save_drive_script_for_session,
     save_replay_session,
     session_from_dict,
     session_to_dict,
+    session_to_drive_yaml,
 )
-from bog_agents_cli.vars import VarBundle, VarSpec
-from bog_agents_cli.vault import SessionVault
 
 
 class TestRecorder:
@@ -218,52 +217,67 @@ class TestListAndFind:
         assert find_replay_session(tmp_path, "nope") is None
 
 
-class TestBuildReplayPrompt:
-    def _bundle(self, **decls: dict) -> VarBundle:
-        b = VarBundle(vault=SessionVault())
-        for name, kwargs in decls.items():
-            b.declare(VarSpec(name=name, **kwargs))
-        return b
+class TestSessionToDriveYaml:
+    """The /record -> drive script converter replaces build_replay_prompt.
 
-    def test_substitutes_string_var(self):
-        b = self._bundle(ticket={"default": "JIRA-200"})
+    The drive script is what /replay run executes via the drive runner;
+    the older prose-prompt approach asked the LLM to "follow these
+    steps as a reference" and never round-tripped tool calls.
+    """
+
+    def test_user_messages_become_submit_steps(self):
+        s = ReplaySession(
+            session_id="x",
+            steps=[
+                ReplayStep(kind="user_message", content="Look at JIRA-200"),
+                ReplayStep(kind="ai_message", content="Done"),
+                ReplayStep(kind="user_message", content="Also fix the typo"),
+            ],
+        )
+        out = session_to_drive_yaml(s)
+        loaded = yaml.safe_load(out)
+        submits = [step for step in loaded["steps"] if "submit" in step]
+        assert len(submits) == 2
+        assert submits[0]["submit"]["value"] == "Look at JIRA-200"
+        assert submits[1]["submit"]["value"] == "Also fix the typo"
+
+    def test_tool_calls_become_yaml_comments(self):
+        # Comments survive yaml.safe_dump? No — we hand-write them in
+        # session_to_drive_yaml so the output text contains them even
+        # though they vanish on a round-trip through safe_load.
+        s = ReplaySession(
+            session_id="x",
+            steps=[
+                ReplayStep(kind="tool_call", tool="open_pr", args={"repo": "o/r"}),
+                ReplayStep(kind="user_message", content="hi"),
+            ],
+        )
+        out = session_to_drive_yaml(s)
+        assert "open_pr" in out
+        assert "# " in out  # comment marker present
+
+    def test_includes_vars_block(self):
         s = ReplaySession(
             session_id="x",
             vars_spec={"ticket": {"type": "string", "default": "JIRA-200"}},
             steps=[ReplayStep(kind="user_message", content="Look at ${ticket}")],
         )
-        out = build_replay_prompt(s, b)
-        assert "JIRA-200" in out
-        assert "${ticket}" not in out
+        loaded = yaml.safe_load(session_to_drive_yaml(s))
+        assert loaded["vars"] == {"ticket": {"type": "string", "default": "JIRA-200"}}
 
-    def test_substitutes_in_tool_args(self):
-        b = self._bundle(repo={"default": "myorg/myrepo"})
+    def test_save_drive_script_writes_drive_yaml_file(self, tmp_path: Path):
         s = ReplaySession(
-            session_id="x",
-            vars_spec={"repo": {"type": "string", "default": "myorg/myrepo"}},
-            steps=[
-                ReplayStep(kind="tool_call", tool="open_pr", args={"repo": "${repo}"})
-            ],
+            session_id="abc",
+            name="t",
+            steps=[ReplayStep(kind="user_message", content="hello")],
         )
-        out = build_replay_prompt(s, b)
-        assert "myorg/myrepo" in out
-
-    def test_secret_var_listed_as_secret(self):
-        b = self._bundle(tok={"type": "secret"})
-        b.set("tok", "hunter2")
-        s = ReplaySession(
-            session_id="x",
-            vars_spec={"tok": {"type": "secret"}},
-        )
-        out = build_replay_prompt(s, b)
-        assert "<secret>" in out
-        assert "hunter2" not in out
-
-    def test_no_vars_section_when_none(self):
-        b = VarBundle(vault=SessionVault())
-        s = ReplaySession(session_id="x")
-        out = build_replay_prompt(s, b)
-        assert "(none)" in out
+        path = save_drive_script_for_session(tmp_path, s)
+        assert path.exists()
+        assert path.suffix == ".yaml"
+        assert ".drive" in path.stem
+        text = path.read_text(encoding="utf-8")
+        assert "# bog-agents drive script" in text
+        assert "submit" in text
 
 
 class TestLiveCapture:
@@ -305,3 +319,74 @@ class TestLiveCapture:
         s = r.finalize()
         assert len(s.steps) == 1
         assert s.steps[0].content == "real prompt"
+
+
+class TestL1CredentialRedaction:
+    """L1: ``record_tool_call`` must scrub credential-bearing fields.
+
+    Recordings land on disk under ``~/.bog-agents/replays/`` as plain
+    YAML, so any value we capture verbatim is a credential leak waiting
+    to happen. The recorder owns the denylist; callers should not have
+    to remember to redact.
+    """
+
+    def test_record_tool_call_redacts_obvious_secrets(self):
+        from bog_agents_cli.replay import SessionRecorder
+
+        r = SessionRecorder(name="redact")
+        r.start()
+        r.record_tool_call(
+            "http_get",
+            {
+                "url": "https://api.example.com/x",
+                "api_key": "sk-not-this-one",
+                "headers": {
+                    "Authorization": "Bearer 12345",
+                    "X-Trace": "ok-to-keep",
+                },
+            },
+        )
+        # Inspect the raw session before finalize() — the variabilizer
+        # rewrites benign fields (urls/paths) into ${var} placeholders,
+        # which would conflate "redacted" with "variabilized" here.
+        step = next(st for st in r._session.steps if st.kind == "tool_call")
+        assert step.args["url"] == "https://api.example.com/x"
+        assert step.args["api_key"] == "***REDACTED***"
+        assert step.args["headers"]["Authorization"] == "***REDACTED***"
+        assert step.args["headers"]["X-Trace"] == "ok-to-keep"
+        r.finalize()
+
+    def test_redact_secrets_handles_camelcase_keys(self):
+        from bog_agents_cli.replay import _redact_secrets
+
+        out = _redact_secrets(
+            {
+                "apiKey": "leak",
+                "passwordHash": "leak",
+                "client_secret": "leak",
+                "TOKEN": "leak",
+                "username": "ok",
+                "auth_header": "leak",
+            }
+        )
+        assert out["apiKey"] == "***REDACTED***"
+        assert out["passwordHash"] == "***REDACTED***"
+        assert out["client_secret"] == "***REDACTED***"
+        assert out["TOKEN"] == "***REDACTED***"
+        assert out["auth_header"] == "***REDACTED***"
+        assert out["username"] == "ok"
+
+    def test_redact_secrets_walks_lists(self):
+        from bog_agents_cli.replay import _redact_secrets
+
+        out = _redact_secrets(
+            {
+                "items": [
+                    {"name": "a", "api_key": "leak1"},
+                    {"name": "b", "api_key": "leak2"},
+                ],
+            }
+        )
+        assert out["items"][0]["api_key"] == "***REDACTED***"
+        assert out["items"][1]["api_key"] == "***REDACTED***"
+        assert out["items"][0]["name"] == "a"

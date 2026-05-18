@@ -28,7 +28,7 @@ def _no_lang_env() -> dict[str, str]:
     }
 
 
-class _FakeStdout:  # noqa: B903 — explicit class clarifies intent in tests
+class _FakeStdout:
     def __init__(self, encoding: str) -> None:
         self.encoding = encoding
 

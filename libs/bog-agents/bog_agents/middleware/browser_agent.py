@@ -8,8 +8,11 @@ Feature #27: Authenticated web fetching.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
+import shlex
+import socket
 import subprocess
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,6 +28,136 @@ from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# P0-C: SSRF + local-file-read gate
+# ---------------------------------------------------------------------------
+#
+# ``urllib.request`` happily follows ``file://``, ``ftp://``,
+# ``http://169.254.169.254/...`` (cloud metadata), RFC1918 ranges, and
+# loopback. A model that's been steered by adversarial content (poisoned
+# README, hostile MCP tool description, prompt-injected web search result)
+# could fetch AWS creds from the IMDS endpoint and exfil them through a
+# second call. We gate every URL passed to ``web_fetch`` / ``api_request``
+# unless the caller explicitly opts in via ``allow_private_ips=True``.
+# See P0-C in REVIEW.md.
+_SAFE_SCHEMES = frozenset({"http", "https"})
+
+_MAX_PREVIEW_SERVERS = 5
+"""Cap on simultaneously-running preview servers per middleware instance.
+
+A script that runs ``start_preview`` in a loop without ever calling
+``stop_preview`` would otherwise pin every port the model picks and
+leak subprocesses for the lifetime of the agent. The cap is per-
+instance; restart the agent or call ``stop_all_preview_servers`` to
+reset the slot count.
+"""
+
+
+def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, str]:
+    """Return ``(is_safe, reason)`` for a URL about to be fetched.
+
+    Args:
+        url: The URL the model is requesting.
+        allow_private_ips: When True (caller opt-in for legit internal
+            services), private + loopback IPs and ``.local`` hostnames
+            are permitted. Cloud metadata IPs are always rejected.
+
+    Rejects, in order:
+
+    1. ``file://``, ``ftp://``, ``data:``, ``gopher://`` and any other
+       non-``http(s)`` scheme — these read disk or route through
+       unexpected handlers in ``urllib.request``.
+    2. URLs whose host is a link-local IPv4 (``169.254.0.0/16``) or the
+       IPv6 equivalent — cloud metadata endpoints (AWS/GCP/Azure).
+    3. Unless ``allow_private_ips``: loopback (``127.0.0.0/8``, ``::1``),
+       RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``), unique-local
+       IPv6 (``fc00::/7``), site-local IPv6 (``fec0::/10``), and the
+       reserved ``0.0.0.0/8`` block.
+
+    Returns:
+        ``(True, "")`` when the URL is safe to fetch, else
+        ``(False, "<reason for caller / model>")``.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _SAFE_SCHEMES:
+        return (False, f"refusing non-http(s) scheme {scheme!r} (URL: {url!r})")
+
+    host = parsed.hostname
+    if not host:
+        return (False, f"refusing URL with no host: {url!r}")
+
+    # Strip IPv6 brackets if any.
+    host_stripped = host.strip("[]")
+
+    # Resolve the hostname to its address set; we evaluate every resolved
+    # address so a hostname that resolves to multiple addresses (some
+    # private, some public) is still blocked when ANY is private.
+    addresses: list[ipaddress._BaseAddress] = []
+    try:
+        ip = ipaddress.ip_address(host_stripped)
+        addresses.append(ip)
+    except ValueError:
+        # Not a literal IP — resolve.
+        try:
+            for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(host_stripped, None):
+                if family in (socket.AF_INET, socket.AF_INET6):
+                    # ``sockaddr[0]`` is typed broadly as ``str | int``
+                    # by typeshed across address families. For AF_INET
+                    # and AF_INET6 it's always a string in practice,
+                    # but we narrow explicitly to keep ``ty`` happy and
+                    # to guard against an exotic address family slipping
+                    # past the filter above.
+                    raw = sockaddr[0]
+                    if not isinstance(raw, str):
+                        continue
+                    addr_str: str = raw
+                    # Strip IPv6 scope id (``fe80::1%eth0`` → ``fe80::1``).
+                    if "%" in addr_str:
+                        addr_str = addr_str.split("%", 1)[0]
+                    try:
+                        addresses.append(ipaddress.ip_address(addr_str))
+                    except ValueError:
+                        continue
+        except socket.gaierror as exc:
+            # Hostname doesn't resolve — let urllib raise its own DNS error
+            # (we're not the right layer to swallow this).
+            return (False, f"DNS lookup failed for {host_stripped!r}: {exc}")
+
+    if not addresses:
+        return (False, f"could not resolve {host_stripped!r}")
+
+    for addr in addresses:
+        if addr.is_link_local:
+            # Always blocked — covers AWS/GCP/Azure cloud-metadata IMDS.
+            return (
+                False,
+                f"refusing link-local address {addr} (cloud-metadata IMDS endpoints are blocked unconditionally)",
+            )
+        if addr.is_multicast:
+            return (False, f"refusing multicast address {addr}")
+        if addr.is_unspecified:
+            return (False, f"refusing unspecified address {addr}")
+        if not allow_private_ips:
+            if addr.is_loopback:
+                return (
+                    False,
+                    f"refusing loopback address {addr} for {url!r}. "
+                    "Pass ``allow_private_ips=True`` on BrowserAgentMiddleware "
+                    "if you intend to talk to a local server.",
+                )
+            if addr.is_private:
+                return (
+                    False,
+                    f"refusing private address {addr} for {url!r}. "
+                    "Pass ``allow_private_ips=True`` on BrowserAgentMiddleware "
+                    "if you intend to talk to an internal service.",
+                )
+            if addr.is_reserved:
+                return (False, f"refusing reserved address {addr}")
+    return (True, "")
 
 
 class BrowserAgentState(TypedDict):
@@ -48,9 +181,15 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
         *,
         working_dir: Path | None = None,
         allowed_domains: list[str] | None = None,
+        allow_private_ips: bool = False,
     ) -> None:
         self._working_dir = working_dir or Path.cwd()
         self._allowed_domains = set(allowed_domains) if allowed_domains else None
+        # Opt-in: when True the SSRF gate permits loopback / RFC1918 / ULA
+        # so this middleware can talk to a developer-local server or an
+        # internal API. Cloud-metadata link-local addresses are always
+        # rejected regardless. See P0-C in REVIEW.md.
+        self._allow_private_ips = bool(allow_private_ips)
         self._preview_processes: dict[int, subprocess.Popen[str]] = {}
         self.tools = self._build_tools()
 
@@ -86,6 +225,11 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             """
             if not middleware._is_domain_allowed(url):
                 return f"Error: Domain not in allowed list for URL: {url}"
+
+            safe, reason = _is_url_safe(url, allow_private_ips=middleware._allow_private_ips)
+            if not safe:
+                logger.warning("browser_agent.web_fetch SSRF gate: %s", reason)
+                return f"Error: {reason}"
 
             try:
                 import urllib.request
@@ -129,6 +273,15 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             import urllib.request
 
             start = time.monotonic()
+
+            if not middleware._is_domain_allowed(url):
+                return f"Error: Domain not in allowed list for URL: {url}"
+
+            safe, reason = _is_url_safe(url, allow_private_ips=middleware._allow_private_ips)
+            if not safe:
+                logger.warning("browser_agent.api_request SSRF gate: %s", reason)
+                return f"Error: {reason}"
+
             try:
                 req = urllib.request.Request(url, method=method)
                 req.add_header("Content-Type", "application/json")
@@ -162,17 +315,55 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             port: Annotated[int, "Expected port number"] = 3000,
         ) -> str:
             """Start a local dev server for previewing changes."""
+            # Use shlex so quoted args (``npm run dev -- --port 3001``)
+            # and embedded whitespace parse the way a human shell would,
+            # not the way naive ``command.split()`` would. Refuse to
+            # spawn a server if the model passed shell metacharacters
+            # we can't safely interpret — pipes/redirects/backticks
+            # belong in the LocalShellBackend ``execute`` path, not in
+            # a tool that's supposed to start one process.
+            try:
+                argv = shlex.split(command, posix=True)
+            except ValueError as exc:
+                return f"Error: could not parse command ({exc})."
+            if not argv:
+                return "Error: empty command."
+            for token in argv:
+                if any(ch in token for ch in (";", "|", "&", "`", "$(", ">", "<")):
+                    return (
+                        "Error: refusing to start preview server with shell "
+                        "metacharacters in command. Use the shell execute "
+                        "tool instead for piped or redirected commands."
+                    )
+            # Reap completed processes so a script that started + stopped
+            # many servers gets the slot back. ``poll()`` is None while
+            # alive; any other value means the process exited.
+            for stale_port in list(middleware._preview_processes):
+                stale = middleware._preview_processes[stale_port]
+                if stale.poll() is not None:
+                    middleware._preview_processes.pop(stale_port, None)
+            if len(middleware._preview_processes) >= _MAX_PREVIEW_SERVERS:
+                ports = sorted(middleware._preview_processes)
+                return (
+                    f"Error: already running {len(ports)} preview server(s) "
+                    f"(cap {_MAX_PREVIEW_SERVERS}). Call stop_preview / "
+                    "stop_all_preview_servers before starting another. "
+                    f"Active ports: {ports}."
+                )
+            if port in middleware._preview_processes:
+                return f"Error: port {port} already has a running preview server; stop it first or pick a different port."
             try:
                 process = subprocess.Popen(
-                    command.split(),
+                    argv,
                     cwd=middleware._working_dir,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,  # interactive prompts must not block the agent
                     text=True,
                 )
                 middleware._preview_processes[port] = process
                 return f"Started preview server (PID={process.pid}) on port {port}.\nURL: http://localhost:{port}"
-            except Exception as e:
+            except (OSError, FileNotFoundError) as e:
                 return f"Error starting server: {e}"
 
         def stop_preview_server(
@@ -186,9 +377,33 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             process.terminate()
             return f"Stopped server on port {port}"
 
+        def stop_all_preview_servers(
+            runtime: ToolRuntime[None, BrowserAgentState],
+        ) -> str:
+            """Stop every preview server this middleware is tracking.
+
+            Useful as a cleanup step at the end of a multi-server
+            workflow, or before starting a fresh set when the cap has
+            been hit.
+            """
+            if not middleware._preview_processes:
+                return "No preview servers are running."
+            stopped: list[int] = []
+            for port, process in list(middleware._preview_processes.items()):
+                try:
+                    process.terminate()
+                except OSError as exc:
+                    logger.warning("preview server on port %d would not terminate: %s", port, exc)
+                stopped.append(port)
+                middleware._preview_processes.pop(port, None)
+            return f"Stopped {len(stopped)} preview server(s) on port(s): {sorted(stopped)}"
+
         return [
             StructuredTool.from_function(name="web_fetch", description="Fetch a URL with auth support.", func=web_fetch),
             StructuredTool.from_function(name="api_request", description="Send an API request with timing.", func=api_request),
             StructuredTool.from_function(name="start_preview", description="Start a local dev server.", func=start_preview_server),
             StructuredTool.from_function(name="stop_preview", description="Stop a preview server.", func=stop_preview_server),
+            StructuredTool.from_function(
+                name="stop_all_preview_servers", description="Stop every tracked preview server.", func=stop_all_preview_servers
+            ),
         ]

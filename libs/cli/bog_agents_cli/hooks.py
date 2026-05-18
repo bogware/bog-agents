@@ -64,7 +64,7 @@ def _load_hooks() -> list[dict[str, Any]]:
         return _hooks_config
 
     try:
-        data = json.loads(_HOOKS_PATH.read_text())
+        data = json.loads(_HOOKS_PATH.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             logger.warning(
                 "Hooks config at %s must be a JSON object, got %s",

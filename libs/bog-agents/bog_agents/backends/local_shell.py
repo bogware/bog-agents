@@ -36,17 +36,44 @@ tighter ceiling.
 # Patterns for commands that can cause catastrophic, irreversible damage.
 # Each entry is a (pattern, description) tuple. Blocked by default; pass
 # allow_dangerous=True to LocalShellBackend to downgrade to a warning.
+#
+# IMPORTANT — this gate is an ACCIDENT-CATCHER, not an adversary-catcher.
+# A determined LLM can bypass any regex (e.g. ``python -c 'shutil.rmtree("/")'``
+# from a long ago shell, base64-encoded payloads, novel rm-equivalent
+# binaries). The real safeguard for adversarial inputs is HITL +
+# SafeToolsMiddleware. The patterns here exist so the model doesn't
+# accidentally clobber a developer's home directory while interpreting a
+# README literally. P0-K in REVIEW.md expanded the pattern list to cover
+# the most common bypasses; do NOT treat the gate as a security boundary.
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # --- Linux-y file/disk destruction ------------------------------------
     (re.compile(r"rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/", re.IGNORECASE), "rm targeting root path"),
     (re.compile(r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f|rm\s+-[a-zA-Z]*f[a-zA-Z]*r", re.IGNORECASE), "recursive force remove (rm -rf)"),
     (re.compile(r"rm\s+--no-preserve-root", re.IGNORECASE), "rm with --no-preserve-root"),
+    (re.compile(r"rm\s+(--recursive\b|--force\b).*(--recursive\b|--force\b)", re.IGNORECASE), "rm with long-form --recursive --force"),
     (re.compile(r"rm\s+-[a-zA-Z]*r", re.IGNORECASE), "recursive remove (rm -r)"),
+    # ``find ... -delete`` was a documented P0-K bypass of the rm regex.
+    (re.compile(r"\bfind\b.*\s-delete\b", re.IGNORECASE), "find … -delete (rm bypass)"),
+    # ``git clean -fdx`` wipes untracked + ignored, which often includes the
+    # venv / build dir. Matches single-group flags (-fdx) and split flags
+    # (-f -d -x in any order).
+    (
+        re.compile(
+            r"\bgit\s+clean\b[^|]*-[a-zA-Z]*f[a-zA-Z]*[dx][a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx][a-zA-Z]*f[a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*f.*-[a-zA-Z]*[dx]|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx].*-[a-zA-Z]*f",
+            re.IGNORECASE,
+        ),
+        "git clean -fdx (untracked wipe)",
+    ),
+    # ``python -c 'shutil.rmtree(...)'`` is a documented bypass.
+    (re.compile(r"\bshutil\.rmtree\s*\(", re.IGNORECASE), "shutil.rmtree() inside python -c"),
+    (re.compile(r"\bos\.unlink\s*\(\s*['\"][^'\"]*\.(ssh|aws|kube)\b", re.IGNORECASE), "os.unlink against credentials dir"),
     (re.compile(r":\(\)\s*\{\s*:|:\s*&\s*\};\s*:|:\(\)\{:\|:&\};:", re.IGNORECASE), "fork bomb"),
     (re.compile(r"mkfs\b", re.IGNORECASE), "filesystem format (mkfs)"),
     (re.compile(r"dd\s+.*\bof=/dev/", re.IGNORECASE), "raw device write (dd)"),
     (re.compile(r">\s*/dev/(s?d[a-z]|nvme|xvd)", re.IGNORECASE), "redirect to block device"),
     (re.compile(r"shred\s+", re.IGNORECASE), "shred (irreversible file destruction)"),
     (re.compile(r"wipefs\s+", re.IGNORECASE), "wipefs (wipe filesystem signatures)"),
+    # --- Pipe-to-shell / pipe-to-interpreter ------------------------------
     (re.compile(r"curl\s+.*\|\s*(ba)?sh", re.IGNORECASE), "pipe URL to shell (curl|sh)"),
     (re.compile(r"wget\s+.*\|\s*(ba)?sh", re.IGNORECASE), "pipe URL to shell (wget|sh)"),
     (re.compile(r"curl\s+.*\|\s*python", re.IGNORECASE), "pipe URL to python"),
@@ -55,6 +82,14 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"nc\s+.*-e\s", re.IGNORECASE), "netcat exec shell"),
     (re.compile(r"\beval\s+.*base64", re.IGNORECASE), "eval base64 payload"),
     (re.compile(r"\bshutdown\b|\breboot\b|\bhalt\b|\bpoweroff\b", re.IGNORECASE), "system shutdown/reboot"),
+    # --- Windows equivalents (cmd.exe + PowerShell) -----------------------
+    # ``del /f /s /q`` is the cmd.exe rm-rf-like that bypassed the gate entirely.
+    (re.compile(r"\bdel\s+(/[fFsSqQaA]\s*)+", re.IGNORECASE), "del /f /s /q (Windows recursive delete)"),
+    (re.compile(r"\brmdir\s+/s\b", re.IGNORECASE), "rmdir /s (Windows recursive directory remove)"),
+    (re.compile(r"\bformat\s+[a-zA-Z]:\s*/", re.IGNORECASE), "format <drive>: (Windows disk format)"),
+    (re.compile(r"\bcipher\s+/w:", re.IGNORECASE), "cipher /w (Windows secure-wipe)"),
+    (re.compile(r"\bRemove-Item\b.*-Recurse.*-Force|\bRemove-Item\b.*-Force.*-Recurse", re.IGNORECASE), "PowerShell Remove-Item -Recurse -Force"),
+    (re.compile(r"\bClear-Disk\b", re.IGNORECASE), "PowerShell Clear-Disk"),
 ]
 
 

@@ -118,6 +118,86 @@ def _resolve_thinking_config() -> tuple[bool, int]:
     return enabled, budget
 
 
+def _build_propose_on_dream_callback(
+    cfg: Any,  # noqa: ANN401 — DreamscapeConfig
+) -> Any | None:  # noqa: ANN401 — returns Callable[[str, str], Awaitable[None]]
+    """K5: build the dream-completion → ``/expert propose`` callback.
+
+    Returns a coroutine function suitable for ``DreamScheduler``'s
+    ``on_dream_complete`` slot. Each successful dream triggers one
+    proposer pass on the controller for the current working
+    directory; the proposer either stages a YAML proposal under
+    ``.bog-agents/expert_rules/proposals/`` (the default) or
+    auto-applies one when the rules engine is otherwise configured to
+    accept it. Failures are caught and logged — a misbehaving
+    proposer must never destabilize the dream scheduler.
+
+    Args:
+        cfg: The active ``DreamscapeConfig`` (typed Any to avoid an
+            eager import in non-dreamscape paths). Only used here to
+            keep the signature aligned with the caller.
+    """
+    _ = cfg  # currently unused; future tuning can read agent_id from cfg
+
+    async def on_dream_complete(agent_id: str, dream_title: str) -> None:
+        # Imports deferred so the callback factory stays cheap on the
+        # non-dreamscape path.
+        try:
+            from bog_agents_cli.config import create_model, settings
+        except Exception:
+            logger.debug(
+                "propose-on-dream: settings unavailable; skipping (agent=%s)",
+                agent_id,
+            )
+            return
+
+        try:
+            from bog_agents_cli.expert_controller import get_controller
+        except Exception:
+            logger.debug("propose-on-dream: expert_controller import failed; skipping")
+            return
+
+        spec = (settings.model_name or "").strip()
+        if not spec:
+            logger.debug(
+                "propose-on-dream: no active model configured (agent=%s)",
+                agent_id,
+            )
+            return
+
+        def model_factory() -> Any:  # noqa: ANN401 — BaseChatModel
+            return create_model(spec).model
+
+        cwd = Path.cwd()
+        controller = get_controller(cwd, model_factory=model_factory)
+        # Run synchronously on a worker thread — propose_from_dreamscape
+        # is CPU/LLM bound and blocking; we don't want to stall the
+        # scheduler's asyncio loop.
+        import asyncio as _asyncio
+
+        try:
+            result = await _asyncio.to_thread(
+                controller.propose_from_dreamscape,
+                agent_id,
+                auto_activate=False,
+            )
+        except Exception:
+            logger.exception(
+                "propose-on-dream: proposer raised (agent=%s, dream=%r)",
+                agent_id,
+                dream_title,
+            )
+            return
+        logger.info(
+            "propose-on-dream: proposer finished (agent=%s, dream=%r): %s",
+            agent_id,
+            dream_title,
+            result.splitlines()[0] if result else "<no output>",
+        )
+
+    return on_dream_complete
+
+
 def _build_dream_scheduler_factory(
     *,
     cfg: Any,  # noqa: ANN401 — DreamscapeConfig; typed Any to avoid eager import
@@ -170,11 +250,23 @@ def _build_dream_scheduler_factory(
 
         from bog_agents_cli.dreamscape.scheduler import ensure_scheduler
 
+        # K5: when ``propose_rules_on_complete`` is on, install a
+        # callback that fires the expert proposer once per dream.
+        # Replaces the timer-driven ``/expert watch`` for users who
+        # want the proposer paced by actual dream activity instead of
+        # wall-clock polls.
+        on_complete = (
+            _build_propose_on_dream_callback(cfg)
+            if cfg.dreams.propose_rules_on_complete
+            else None
+        )
+
         scheduler = ensure_scheduler(
             agent_id=agent_id,
             model=result.model,
             dreams_cfg=cfg.dreams,
             lifecycle_cfg=cfg.lifecycle,
+            on_dream_complete=on_complete,
         )
         scheduler.start()
         return scheduler
@@ -590,7 +682,7 @@ def reset_agent(
             )
             return
 
-        source_content = source_md.read_text()
+        source_content = source_md.read_text(encoding="utf-8")
         action_desc = f"contents of agent '{source_agent}'"
     else:
         source_content = get_default_coding_instructions()
@@ -662,7 +754,7 @@ def get_system_prompt(
         ... {CONDITIONAL SECTIONS} ...
         ```
     """
-    template = (Path(__file__).parent / "system_prompt.md").read_text()
+    template = (Path(__file__).parent / "system_prompt.md").read_text(encoding="utf-8")
 
     skills_path = f"~/.bog-agents/{assistant_id}/skills"
 
@@ -1528,12 +1620,10 @@ def create_cli_agent(
         working_dir = effective_cwd or Path.cwd()
         agent_middleware.append(WorktreeMiddleware(working_dir=working_dir))
 
-    # Multi-agent orchestrator middleware (Features #2-6)
-    from bog_agents.middleware.multi_agent_orchestrator import (
-        MultiAgentOrchestratorMiddleware,
-    )
-
-    agent_middleware.append(MultiAgentOrchestratorMiddleware())
+    # Wave V removed MultiAgentOrchestratorMiddleware (it was a STUB
+    # whose import is no longer available). Multi-agent orchestration
+    # is handled today by /orchestrate + the sub-agent system, not by
+    # a dedicated middleware.
 
     # Smart context middleware (Features #13-18)
     from bog_agents.middleware.smart_context import SmartContextMiddleware

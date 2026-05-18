@@ -1,0 +1,10 @@
+# Smoke script: prove SVG + text snapshots are written.
+name: smoke-snapshot
+description: Capture screen artefacts after a slash command.
+session:
+  model: fake:ok
+  approval_mode: auto-all
+steps:
+  - "/help"
+  - wait_for_idle: 5
+  - snapshot: shot

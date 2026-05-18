@@ -99,7 +99,7 @@ def _save_fork(config_dir: Path, fork: SessionFork) -> None:
 
     if forks_file.exists():
         try:
-            existing = json.loads(forks_file.read_text())
+            existing = json.loads(forks_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -134,7 +134,7 @@ def list_forks(config_dir: Path, thread_id: str) -> list[SessionFork]:
         return []
 
     try:
-        data = json.loads(forks_file.read_text())
+        data = json.loads(forks_file.read_text(encoding="utf-8"))
         return [
             SessionFork(
                 fork_id=f["fork_id"],

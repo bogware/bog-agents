@@ -33,6 +33,11 @@ class Racer:
     label: str
     model: BaseChatModel
     system_prompt: str | None = None
+    timeout_seconds: float = 300.0
+    """L3: per-racer timeout. Default 5 minutes — generous enough for
+    a real model response, tight enough that one hung racer can't
+    block the report indefinitely. Overridable per-racer for slower
+    models."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,8 +128,23 @@ async def _run_one(
         messages.append(SystemMessage(content=racer.system_prompt))
     messages.append(HumanMessage(content=prompt))
 
+    # L3: a hung racer must not stall the whole race. Cap each
+    # racer individually so the loser-of-all-time can't keep us
+    # waiting forever — losing the race by timing out is itself
+    # useful signal.
     try:
-        response = await racer.model.ainvoke(messages)  # type: ignore[arg-type]
+        response = await asyncio.wait_for(
+            racer.model.ainvoke(messages),  # type: ignore[arg-type]
+            timeout=racer.timeout_seconds,
+        )
+    except TimeoutError:
+        elapsed = asyncio.get_event_loop().time() - started
+        return RaceResult(
+            label=racer.label,
+            output="",
+            duration_seconds=elapsed,
+            error=f"timeout after {racer.timeout_seconds:.0f}s",
+        )
     except Exception as exc:  # pragma: no cover — provider failures are runtime
         elapsed = asyncio.get_event_loop().time() - started
         return RaceResult(

@@ -32,6 +32,14 @@ logger = logging.getLogger(__name__)
 _PROGRESS_WIDTH = 20
 
 
+__all__ = [
+    "CompactionEvent",
+    "IntelligentCompactionMiddleware",
+    "IntelligentCompactionState",
+    "UsageInfo",
+]
+
+
 @dataclass
 class CompactionEvent:
     """Record of a single compaction operation.

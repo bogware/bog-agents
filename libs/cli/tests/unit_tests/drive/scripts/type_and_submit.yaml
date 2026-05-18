@@ -1,0 +1,11 @@
+# Smoke script: chat input -> submit -> assistant reply via FakeChatModel.
+name: smoke-type-submit
+description: Verify a typed prompt round-trips through the agent to the transcript.
+session:
+  model: "fake:Hello, drive!"
+  approval_mode: auto-all
+steps:
+  - type: "say hi"
+  - submit
+  - wait_for_idle: 15
+  - expect_transcript_contains: "Hello, drive!"

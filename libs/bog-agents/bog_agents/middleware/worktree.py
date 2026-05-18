@@ -91,6 +91,17 @@ def _default_agent_factory(prompt: str, working_dir: Path) -> str:
     return ""
 
 
+__all__ = [
+    "AgentThread",
+    "ParallelWorktreeMiddleware",
+    "ParallelWorktreeState",
+    "WorktreeInfo",
+    "WorktreeMiddleware",
+    "WorktreeState",
+    "WorktreeTask",
+]
+
+
 @dataclass
 class WorktreeInfo:
     """Information about a git worktree."""
@@ -104,6 +115,56 @@ class WorktreeInfo:
 
 class WorktreeState(TypedDict):
     """State for the worktree middleware."""
+
+
+# ---------------------------------------------------------------------------
+# Ref-name validation (P1-9)
+# ---------------------------------------------------------------------------
+#
+# Git's command-line parser treats leading ``-`` as flags. A model-supplied
+# branch name like ``--exec`` would be interpreted as a flag by older gits
+# and is just confusing in newer ones. We reject anything that doesn't pass
+# a conservative ref-name check BEFORE invoking git, and add ``--`` to the
+# argv where positional args follow options. Fixes REVIEW.md P1-9.
+
+# Git's own rules (man git-check-ref-format) plus our extra "no leading
+# dash" constraint. Allows alphanumerics, slashes, hyphens, dots, and
+# underscores. Rejects empty names, leading/trailing slashes, ``..``,
+# ``@{``, control chars, and anything that starts with ``-``.
+_GIT_REF_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./\-]*$")
+
+
+def _validate_git_ref(name: str, *, label: str = "ref") -> str:
+    """Return *name* if it looks like a safe git ref, else raise ValueError.
+
+    Args:
+        name: Candidate ref name.
+        label: Human-readable label for the error message.
+
+    Returns:
+        The (unchanged) name when safe.
+
+    Raises:
+        ValueError: When the name would be interpreted as a flag, contains
+            disallowed characters, or otherwise fails the conservative
+            check.
+    """
+    if not isinstance(name, str) or not name:
+        msg = f"{label} must be a non-empty string"
+        raise ValueError(msg)
+    if name.startswith("-"):
+        msg = f"{label} {name!r} starts with '-' — refusing (looks like a flag)"
+        raise ValueError(msg)
+    if ".." in name or "@{" in name or "//" in name or "\\" in name:
+        msg = f"{label} {name!r} contains disallowed sequence (.., @{{, //, or \\)"
+        raise ValueError(msg)
+    if name.endswith((".lock", "/")):
+        msg = f"{label} {name!r} ends with disallowed suffix"
+        raise ValueError(msg)
+    if not _GIT_REF_PATTERN.match(name):
+        msg = f"{label} {name!r} contains characters outside [A-Za-z0-9_./-]"
+        raise ValueError(msg)
+    return name
 
 
 def _run_git(working_dir: Path, *args: str, timeout: int = 30) -> str:
@@ -155,11 +216,18 @@ def create_worktree(
     if base_dir is None:
         base_dir = Path(tempfile.mkdtemp(prefix="bog-agents-worktree-"))
 
+    # P1-9: validate the model-supplied branch name before passing it to
+    # git so a hostile or typo'd ref can't be mistaken for a flag.
+    _validate_git_ref(branch, label="branch")
+
     worktree_path = base_dir / branch.replace("/", "-")
-    result = _run_git(repo_dir, "worktree", "add", "-b", branch, str(worktree_path))
+    # P1-9: also use ``--`` as the option terminator so any future
+    # positional-arg additions to ``git worktree add`` can't be tricked
+    # by a leading-dash branch / path.
+    result = _run_git(repo_dir, "worktree", "add", "-b", branch, "--", str(worktree_path))
     if result.startswith("[exit code"):
         # Branch might already exist, try without -b
-        result = _run_git(repo_dir, "worktree", "add", str(worktree_path), branch)
+        result = _run_git(repo_dir, "worktree", "add", "--", str(worktree_path), branch)
 
     commit = _run_git(worktree_path, "rev-parse", "HEAD") if worktree_path.exists() else None
     return WorktreeInfo(path=worktree_path, branch=branch, commit=commit)
@@ -303,10 +371,20 @@ class WorktreeMiddleware(AgentMiddleware[WorktreeState, ContextT, ResponseT]):
             target_branch: Annotated[str, "Branch to merge into"] = "main",
         ) -> str:
             """Merge changes from one worktree branch into another."""
-            result = _run_git(middleware._working_dir, "checkout", target_branch)
+            # P1-9 / flag-injection: model-supplied refs may look like
+            # ``--exec=…`` which git will interpret as a flag. Force a
+            # full ref-name validation pass and pass the ref after a
+            # ``--`` separator so it can never be re-parsed as an
+            # option, regardless of what the validator missed.
+            try:
+                source_branch = _validate_git_ref(source_branch, label="source_branch")
+                target_branch = _validate_git_ref(target_branch, label="target_branch")
+            except ValueError as exc:
+                return f"Error: {exc}"
+            result = _run_git(middleware._working_dir, "checkout", "--", target_branch)
             if result.startswith("[exit code"):
                 return f"Failed to checkout {target_branch}: {result}"
-            merge_result = _run_git(middleware._working_dir, "merge", source_branch)
+            merge_result = _run_git(middleware._working_dir, "merge", "--no-ff", "--", source_branch)
             return f"Merge result: {merge_result}"
 
         return [
@@ -673,6 +751,10 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         self._auto_cleanup = auto_cleanup
         self._tasks: dict[str, WorktreeTask] = {}
         self._semaphore: asyncio.Semaphore | None = None
+        # Strong references to in-flight background tasks. asyncio's docs
+        # explicitly warn that without a stable reference the task may be
+        # garbage-collected mid-execution. See P0-I in REVIEW.md.
+        self._background_tasks: set[asyncio.Task[Any]] = set()
         self._tools = self._build_tools()
 
     def _get_semaphore(self) -> asyncio.Semaphore:
@@ -797,15 +879,19 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 mw._tasks[task.task_id] = task
                 created_tasks.append(task)
 
-            # Fire and forget — tasks run in the background
+            # Fire and forget — tasks run in the background. Keep a strong
+            # reference on ``mw._background_tasks`` so asyncio doesn't GC the
+            # task mid-flight. The done-callback discards from the set so
+            # memory stays bounded over the session. (Fixes P0-I.)
             if created_tasks:
-                _bg = asyncio.ensure_future(
+                bg = asyncio.ensure_future(
                     asyncio.gather(
                         *(mw._run_task_in_worktree(t) for t in created_tasks),
                         return_exceptions=True,
                     )
                 )
-                _ = _bg  # suppress "local variable assigned but never used"
+                mw._background_tasks.add(bg)
+                bg.add_done_callback(mw._background_tasks.discard)
 
             ids = ", ".join(t.task_id for t in created_tasks)
             return f"Spawned {len(created_tasks)} parallel task(s): {ids}\nUse `worktree_status` to monitor progress."

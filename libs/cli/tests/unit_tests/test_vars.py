@@ -286,3 +286,127 @@ class TestAutoVariabilize:
             vault=SessionVault(),
         )
         assert b.substitute(text) == "Get details for JIRA-134 please"
+
+
+# ---------------------------------------------------------------------------
+# P0-E regression: Windows ACL honesty
+# ---------------------------------------------------------------------------
+
+
+class TestP0EWindowsPerms:
+    """The vars_store used to ``chmod 0600`` then swallow the OSError on
+    Windows, leaving the file at the default Windows ACL (Users group
+    readable). It now uses icacls on Windows and surfaces the truth in
+    its warning message. See P0-E in REVIEW.md.
+    """
+
+    def test_can_secure_owner_only_posix(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents_cli import vars_store
+
+        monkeypatch.setattr(vars_store.os, "name", "posix")
+        assert vars_store.can_secure_owner_only() is True
+
+    def test_can_secure_owner_only_windows_with_icacls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli import vars_store
+
+        monkeypatch.setattr(vars_store.os, "name", "nt")
+        # Force shutil.which to return a path.
+        import shutil
+
+        monkeypatch.setattr(
+            shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe"
+        )
+        assert vars_store.can_secure_owner_only() is True
+
+    def test_can_secure_owner_only_windows_without_icacls(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bog_agents_cli import vars_store
+
+        monkeypatch.setattr(vars_store.os, "name", "nt")
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        assert vars_store.can_secure_owner_only() is False
+
+    def test_secure_owner_only_invokes_icacls_on_windows(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from bog_agents_cli import vars_store
+
+        target = tmp_path / "secret.toml"
+        target.write_text("k='v'", encoding="utf-8")
+
+        called: list[list[str]] = []
+
+        class _Completed:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+
+        def fake_run(cmd, **_kwargs):
+            called.append(cmd)
+            return _Completed()
+
+        monkeypatch.setattr(vars_store.os, "name", "nt")
+        monkeypatch.setattr(
+            vars_store.os.environ,
+            "get",
+            lambda key, default=None: "tester" if key == "USERNAME" else default,
+        )
+        import shutil
+
+        monkeypatch.setattr(
+            shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe"
+        )
+        monkeypatch.setattr(vars_store.subprocess, "run", fake_run)
+
+        assert vars_store._secure_owner_only(target) is True
+        assert called, "icacls should have been invoked"
+        cmd = called[0]
+        assert any("icacls" in part for part in cmd)
+        assert "/inheritance:r" in cmd
+        assert any("tester:F" in part for part in cmd)
+
+    def test_secure_owner_only_returns_false_when_icacls_missing(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from bog_agents_cli import vars_store
+
+        target = tmp_path / "secret.toml"
+        target.write_text("k='v'", encoding="utf-8")
+
+        monkeypatch.setattr(vars_store.os, "name", "nt")
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+        assert vars_store._secure_owner_only(target) is False
+
+    def test_warning_includes_unprotected_note_on_windows_without_icacls(
+        self,
+        tmp_path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog,
+    ) -> None:
+        from bog_agents_cli import vars_store
+
+        # Reset the one-shot guard so the warning fires.
+        monkeypatch.setattr(vars_store, "_warned_fallback", False)
+        monkeypatch.setattr(vars_store.os, "name", "nt")
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents_cli.vars_store"):
+            vars_store._warn_fallback_once()
+        message = caplog.text
+        assert "icacls" in message.lower()
+        assert "readable" in message.lower() or "warning" in message.lower()
