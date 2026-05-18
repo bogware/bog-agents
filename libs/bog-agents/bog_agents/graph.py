@@ -630,12 +630,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # source and the model is told to use the citation tools by default.
     # The umbrella flag ORs into each individual flag — callers can
     # still flip any of the three independently for granular control.
-    provenance_active = (
-        f.enable_provenance_loop
-        or f.enable_citations
-        or f.enable_hallucination_detection
-        or f.enable_fact_check
-    )
+    provenance_active = f.enable_provenance_loop or f.enable_citations or f.enable_hallucination_detection or f.enable_fact_check
     if f.enable_provenance_loop or f.enable_citations:
         from bog_agents.middleware.citations import CitationsMiddleware
 
@@ -812,19 +807,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # identity (covers subclasses too) so a user who has subclassed
     # FilesystemMiddleware for custom behavior takes precedence.
     user_middleware = list(middleware) if middleware else []
-    user_supplied_filesystem = any(
-        isinstance(m, FilesystemMiddleware) for m in user_middleware
-    )
-    user_supplied_summarization = any(
-        isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware
-    )
+    user_supplied_filesystem = any(isinstance(m, FilesystemMiddleware) for m in user_middleware)
+    user_supplied_summarization = any(isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware)
 
     defaults_to_append: list[Any] = []
     if not user_supplied_filesystem:
         defaults_to_append.append(FilesystemMiddleware(backend=backend))
-    defaults_to_append.append(
-        SubAgentMiddleware(backend=backend, subagents=all_subagents)
-    )
+    defaults_to_append.append(SubAgentMiddleware(backend=backend, subagents=all_subagents))
     if not user_supplied_summarization:
         defaults_to_append.append(create_summarization_middleware(model, backend))
     defaults_to_append.append(PatchToolCallsMiddleware())

@@ -90,7 +90,9 @@ class TestDecompose:
         model = _SequenceModel(
             [_plan_json(("t1", "review", "look at it"), ("t2", "doc", "doc it"))]
         )
-        plan, raw, err = decompose_goal("review and document the auth flow", model=model)
+        plan, raw, err = decompose_goal(
+            "review and document the auth flow", model=model
+        )
         assert err == ""
         assert len(plan) == 2
         assert plan[0].mode is SubtaskMode.REVIEW
@@ -114,7 +116,11 @@ class TestDecompose:
 
     def test_unknown_mode_rejected(self) -> None:
         model = _SequenceModel(
-            [json.dumps({"plan": [{"id": "t1", "mode": "frobnicate", "description": "x"}]})]
+            [
+                json.dumps(
+                    {"plan": [{"id": "t1", "mode": "frobnicate", "description": "x"}]}
+                )
+            ]
         )
         plan, _, err = decompose_goal("x", model=model)
         assert plan == []
@@ -184,9 +190,7 @@ class TestRunOrchestration:
         assert "review notes here" in answers
         assert "doc notes here" in answers
 
-    def test_subtask_modes_get_distinct_system_prompts(
-        self, tmp_path: Path
-    ) -> None:
+    def test_subtask_modes_get_distinct_system_prompts(self, tmp_path: Path) -> None:
         responses = [
             _plan_json(("t1", "review", "rev"), ("t2", "test", "tst")),
             "rev-out",
@@ -203,8 +207,12 @@ class TestRunOrchestration:
         subtask_invocations = model.invocations[1:]
         from langchain_core.messages import SystemMessage
 
-        prompts = [m.content for inv in subtask_invocations
-                   for m in inv if isinstance(m, SystemMessage)]
+        prompts = [
+            m.content
+            for inv in subtask_invocations
+            for m in inv
+            if isinstance(m, SystemMessage)
+        ]
         # Review prompt mentions "review"; test prompt mentions "test".
         assert any("review" in p for p in prompts)
         assert any("test" in p for p in prompts)
@@ -339,9 +347,8 @@ class TestParallel:
 
             def invoke(self, messages: list) -> AIMessage:
                 from langchain_core.messages import HumanMessage
-                human = next(
-                    (m for m in messages if isinstance(m, HumanMessage)), None
-                )
+
+                human = next((m for m in messages if isinstance(m, HumanMessage)), None)
                 return AIMessage(content=str(human.content)[:80] if human else "ok")
 
         # Use the planner for the first call; subsequent worker calls

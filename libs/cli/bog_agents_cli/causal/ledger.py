@@ -156,7 +156,7 @@ class CausalLedger:
         # The id counter is monotonic. When resuming an existing file
         # we continue from max(id) + 1 so re-opens keep working.
         self._events: list[CausalEvent] = list(existing_events or [])
-        self._next_id: int = (max((e.id for e in self._events), default=0) + 1)
+        self._next_id: int = max((e.id for e in self._events), default=0) + 1
         self._lock = threading.Lock()
         self._closed = False
 
@@ -402,16 +402,12 @@ def load_session(
             data = json.loads(line)
         except json.JSONDecodeError:
             # Torn final line — stop reading.
-            logger.debug(
-                "causal: skipping unparseable line in %s", path.name
-            )
+            logger.debug("causal: skipping unparseable line in %s", path.name)
             continue
         try:
             events.append(CausalEvent.from_dict(data))
         except (KeyError, ValueError, TypeError):
-            logger.debug(
-                "causal: skipping malformed event in %s", path.name
-            )
+            logger.debug("causal: skipping malformed event in %s", path.name)
     return events
 
 

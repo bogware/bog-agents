@@ -262,7 +262,9 @@ class TestReloadAndExtraRules:
         c = get_controller(project_with_rules)
         before = c.list_rules()
         # Add a malformed file
-        (project_with_rules / ".bog-agents" / "expert_rules" / "broken.yaml").write_text(
+        (
+            project_with_rules / ".bog-agents" / "expert_rules" / "broken.yaml"
+        ).write_text(
             "not yaml: [\n",
             encoding="utf-8",
         )
@@ -308,7 +310,9 @@ class TestLintCommand:
 
 
 class TestDryRunCommand:
-    def test_dry_run_simulates_without_persisting(self, project_with_rules: Path) -> None:
+    def test_dry_run_simulates_without_persisting(
+        self, project_with_rules: Path
+    ) -> None:
         from bog_agents_cli.expert_controller import get_controller
 
         c = get_controller(project_with_rules)
@@ -350,8 +354,9 @@ class TestStarterRulesShip:
         from bog_agents.middleware.expert_engine import load_rule_file
 
         candidates = list(
-            (Path(__file__).resolve().parent.parent.parent / "bog_agents_cli")
-            .glob("built_in_skills/expert_starter_rules/*.yaml")
+            (Path(__file__).resolve().parent.parent.parent / "bog_agents_cli").glob(
+                "built_in_skills/expert_starter_rules/*.yaml"
+            )
         )
         assert candidates, "starter.yaml is missing"
         rules = load_rule_file(candidates[0])
@@ -387,9 +392,7 @@ class TestExpertWrite:
     def test_write_with_empty_intent_shows_usage(self, tmp_path: Path) -> None:
         from bog_agents_cli.expert_controller import get_controller
 
-        c = get_controller(
-            tmp_path, model_factory=lambda: _ScriptedModel("ignored")
-        )
+        c = get_controller(tmp_path, model_factory=lambda: _ScriptedModel("ignored"))
         assert "Usage" in c.write("")
 
     def test_write_full_flow(self, tmp_path: Path) -> None:
@@ -428,21 +431,13 @@ class TestExpertWrite:
     def test_write_save_without_pending_proposal(self, tmp_path: Path) -> None:
         from bog_agents_cli.expert_controller import get_controller
 
-        c = get_controller(
-            tmp_path, model_factory=lambda: _ScriptedModel("ignored")
-        )
+        c = get_controller(tmp_path, model_factory=lambda: _ScriptedModel("ignored"))
         assert "No pending proposal" in c.write_save("rule.yaml")
 
     def test_write_cancel_clears_proposal(self, tmp_path: Path) -> None:
         from bog_agents_cli.expert_controller import dispatch
 
-        yaml = (
-            "- name: x\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            "    - audit_log\n"
-        )
+        yaml = "- name: x\n  when:\n    - tool_call: {}\n  then:\n    - audit_log\n"
         dispatch_factory = lambda: _ScriptedModel(yaml)  # noqa: E731
 
         # Place a proposal by going through the dispatcher.
@@ -459,13 +454,7 @@ class TestExpertWrite:
     def test_write_dispatch_routes_correctly(self, tmp_path: Path) -> None:
         from bog_agents_cli.expert_controller import dispatch, get_controller
 
-        yaml = (
-            "- name: x\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            "    - audit_log\n"
-        )
+        yaml = "- name: x\n  when:\n    - tool_call: {}\n  then:\n    - audit_log\n"
         get_controller(tmp_path, model_factory=lambda: _ScriptedModel(yaml))
         out = dispatch("/expert write block X", tmp_path)
         assert "Expert rule proposal" in out

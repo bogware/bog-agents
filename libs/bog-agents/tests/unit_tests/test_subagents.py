@@ -875,6 +875,7 @@ class TestSubAgents:
         # at the test level rather than masking real issues with a
         # blanket suppression.
         import warnings as _warnings
+
         with _warnings.catch_warnings():
             # Match the multi-line Pydantic serializer warning that
             # fires during langgraph's tool-node context propagation.

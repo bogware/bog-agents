@@ -805,9 +805,7 @@ class TestV5SlowRunWarning:
         assert result.elapsed_ms >= 0.0
         assert isinstance(result.elapsed_ms, float)
 
-    def test_slow_run_emits_warning_when_threshold_breached(
-        self, monkeypatch, caplog
-    ):
+    def test_slow_run_emits_warning_when_threshold_breached(self, monkeypatch, caplog):
         """Force a slow run by setting an absurdly low threshold."""
         import logging
 
@@ -819,9 +817,7 @@ class TestV5SlowRunWarning:
         engine.assert_fact(Fact(fact_type="tool_call", data={"name": "ls"}))
         with caplog.at_level(logging.WARNING, logger="bog_agents.middleware.expert_engine.engine"):
             engine.run()
-        assert any(
-            "expert_engine slow run" in rec.message for rec in caplog.records
-        )
+        assert any("expert_engine slow run" in rec.message for rec in caplog.records)
 
     def test_threshold_zero_disables_warning(self, monkeypatch, caplog):
         import logging
@@ -834,13 +830,9 @@ class TestV5SlowRunWarning:
         engine.assert_fact(Fact(fact_type="tool_call", data={"name": "ls"}))
         with caplog.at_level(logging.WARNING, logger="bog_agents.middleware.expert_engine.engine"):
             engine.run()
-        assert not any(
-            "expert_engine slow run" in rec.message for rec in caplog.records
-        )
+        assert not any("expert_engine slow run" in rec.message for rec in caplog.records)
 
-    def test_threshold_invalid_value_falls_back_to_default(
-        self, monkeypatch
-    ):
+    def test_threshold_invalid_value_falls_back_to_default(self, monkeypatch):
         from bog_agents.middleware.expert_engine.engine import (
             _DEFAULT_SLOW_RUN_WARN_MS,
             _resolve_slow_warn_ms,

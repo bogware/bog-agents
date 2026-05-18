@@ -34,14 +34,20 @@ _NON_PROVIDER_KEYS: dict[str, tuple[str, str]] = {
 # extended) we keep the entry keyed by env-var so users find what they expect.
 _PROVIDER_KEY_METADATA: dict[str, tuple[str, str]] = {
     "ANTHROPIC_API_KEY": ("Anthropic API key", "https://console.anthropic.com"),
-    "AZURE_OPENAI_API_KEY": ("Azure OpenAI API key", "https://azure.microsoft.com/en-us/products/ai-services/openai-service"),
+    "AZURE_OPENAI_API_KEY": (
+        "Azure OpenAI API key",
+        "https://azure.microsoft.com/en-us/products/ai-services/openai-service",
+    ),
     "BASETEN_API_KEY": ("Baseten API key", "https://www.baseten.co"),
     "AWS_ACCESS_KEY_ID": ("AWS access key (Bedrock)", "https://aws.amazon.com/bedrock"),
     "COHERE_API_KEY": ("Cohere API key", "https://dashboard.cohere.com"),
     "DEEPSEEK_API_KEY": ("DeepSeek API key", "https://platform.deepseek.com"),
     "FIREWORKS_API_KEY": ("Fireworks AI API key", "https://fireworks.ai"),
     "GOOGLE_API_KEY": ("Google AI API key", "https://aistudio.google.com"),
-    "GOOGLE_CLOUD_PROJECT": ("Google Cloud project (Vertex AI)", "https://cloud.google.com/vertex-ai"),
+    "GOOGLE_CLOUD_PROJECT": (
+        "Google Cloud project (Vertex AI)",
+        "https://cloud.google.com/vertex-ai",
+    ),
     "GROQ_API_KEY": ("Groq API key", "https://console.groq.com"),
     "HUGGINGFACEHUB_API_TOKEN": ("Hugging Face Hub token", "https://huggingface.co"),
     "WATSONX_APIKEY": ("IBM watsonx.ai API key", "https://www.ibm.com/watsonx"),

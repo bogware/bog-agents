@@ -1526,9 +1526,7 @@ class TestMcpStartupTimeout:
 
         assert _mcp_startup_timeout_seconds() == 15.0
 
-    def test_env_var_overrides_timeout(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_var_overrides_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from bog_agents_cli.mcp_tools import _mcp_startup_timeout_seconds
 
         monkeypatch.setenv("BOG_AGENTS_MCP_STARTUP_TIMEOUT", "3.5")
@@ -1607,4 +1605,6 @@ class TestMcpStartupTimeout:
         assert "hangs" in names and "fast" in names, names
         assert names["hangs"].error, "hanging server should record an error"
         assert "timed out" in names["hangs"].error.lower()
-        assert names["fast"].error == "", "the fast server should not be tarred by the slow one"
+        assert names["fast"].error == "", (
+            "the fast server should not be tarred by the slow one"
+        )

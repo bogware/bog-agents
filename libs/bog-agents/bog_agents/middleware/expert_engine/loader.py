@@ -217,10 +217,7 @@ def _patterns_from_list(
     out: list[Pattern] = []
     for idx, item in enumerate(raw):
         if not isinstance(item, dict) or len(item) != 1:
-            msg = (
-                f"{source}: rule '{rule_name}': when[{idx}] must be a single-key dict "
-                "(e.g. - tool_call: ...)"
-            )
+            msg = f"{source}: rule '{rule_name}': when[{idx}] must be a single-key dict (e.g. - tool_call: ...)"
             raise RuleLoadError(msg)
         ((fact_type, body),) = item.items()
         if not isinstance(fact_type, str):
@@ -310,10 +307,7 @@ def _actions_from_list(
             out.append(action)
             continue
         if not isinstance(item, dict) or len(item) != 1:
-            msg = (
-                f"{source}: rule '{rule_name}': then[{idx}] must be a single-key dict "
-                "(e.g. - deny: ...) or a bare verb string"
-            )
+            msg = f"{source}: rule '{rule_name}': then[{idx}] must be a single-key dict (e.g. - deny: ...) or a bare verb string"
             raise RuleLoadError(msg)
         ((verb, params),) = item.items()
         if not isinstance(verb, str):
@@ -329,9 +323,7 @@ def _actions_from_list(
             params_dict["reason"] = params
         else:
             params_dict["value"] = params
-        out.append(
-            _action_from_verb(verb, params_dict, source=source, rule_name=rule_name, idx=idx)
-        )
+        out.append(_action_from_verb(verb, params_dict, source=source, rule_name=rule_name, idx=idx))
     return tuple(out)
 
 
@@ -345,9 +337,6 @@ def _action_from_verb(
 ) -> Action:
     kind = _ACTIONS.get(verb)
     if kind is None:
-        msg = (
-            f"{source}: rule '{rule_name}': then[{idx}] '{verb}' is not a known action "
-            f"({sorted(_ACTIONS)})"
-        )
+        msg = f"{source}: rule '{rule_name}': then[{idx}] '{verb}' is not a known action ({sorted(_ACTIONS)})"
         raise RuleLoadError(msg)
     return Action(kind=kind, params=params)

@@ -89,13 +89,7 @@ class TestWizardRun:
 
     def test_safety_intent_routes_through_authoring(self) -> None:
         yaml = (
-            "- name: block_rm_home\n"
-            "  when:\n"
-            "    - tool_call:\n"
-            "        command:\n"
-            "          matches: 'rm -rf .*~'\n"
-            "  then:\n"
-            "    - deny: 'no rm home'\n"
+            "- name: block_rm_home\n  when:\n    - tool_call:\n        command:\n          matches: 'rm -rf .*~'\n  then:\n    - deny: 'no rm home'\n"
         )
         model = _StubModel(yaml)
         run = run_wizard(

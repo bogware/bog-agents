@@ -163,11 +163,7 @@ class AuditLog:
         but emit a one-time warning so operators know to opt in
         deliberately. The warning fires once per AuditLog instance.
         """
-        if (
-            self.on_entry_recorded is not None
-            and not self.strict_hooks
-            and not self._strict_warning_emitted
-        ):
+        if self.on_entry_recorded is not None and not self.strict_hooks and not self._strict_warning_emitted:
             logger.warning(
                 "audit_trail: on_entry_recorded is wired but strict_hooks=False. "
                 "A sink exception will increment hook_failure_count and log to "
@@ -222,8 +218,7 @@ class AuditLog:
                 except Exception:
                     self.hook_failure_count += 1
                     logger.exception(
-                        "audit_trail.on_entry_recorded raised on entry #%d "
-                        "(failure_count=%d, strict_hooks=%s)",
+                        "audit_trail.on_entry_recorded raised on entry #%d (failure_count=%d, strict_hooks=%s)",
                         entry.entry_id,
                         self.hook_failure_count,
                         self.strict_hooks,

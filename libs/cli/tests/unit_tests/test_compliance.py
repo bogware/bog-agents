@@ -114,9 +114,7 @@ def _make_invariant_pack_dict(name: str = "test-pack") -> dict:
                     },
                     "forbidden": {
                         "fact_type": "tool_call",
-                        "predicates": [
-                            {"field": "name", "op": "eq", "value": "leak"}
-                        ],
+                        "predicates": [{"field": "name", "op": "eq", "value": "leak"}],
                     },
                 },
             }
@@ -130,9 +128,7 @@ def _guard_rule(name: str = "block_leak") -> Rule:
         when=(
             Pattern(
                 fact_type="tool_call",
-                predicates=(
-                    Predicate(field="name", op=PredicateOp.EQ, value="leak"),
-                ),
+                predicates=(Predicate(field="name", op=PredicateOp.EQ, value="leak"),),
             ),
         ),
         then=(Action(kind=ActionKind.DENY, params={"reason": "block"}),),
@@ -371,7 +367,8 @@ class TestEvidenceCollectors:
         ledger.close()
         # Hour-from-now window — old event filtered out.
         future_window = window_for_lookback(
-            0.0001, now=time.time() + 3600,
+            0.0001,
+            now=time.time() + 3600,
         )
         slice_ = load_trace_slice(tmp_path, future_window)
         assert len(slice_.events) == 0
@@ -438,7 +435,9 @@ class TestRunner:
         }
         pack = load_pack_from_dict(d)
         report = run_audit(
-            pack, working_dir=tmp_path, rules=[_guard_rule()],
+            pack,
+            working_dir=tmp_path,
+            rules=[_guard_rule()],
         )
         assert report.results[0].verdict == Verdict.PASS
         assert report.results[1].verdict == Verdict.FAIL
@@ -464,7 +463,9 @@ class TestRunner:
         }
         pack = load_pack_from_dict(d)
         report = run_audit(
-            pack, working_dir=tmp_path, rules=[_guard_rule()],
+            pack,
+            working_dir=tmp_path,
+            rules=[_guard_rule()],
         )
         assert report.results[0].verdict == Verdict.PASS
         assert report.results[1].verdict == Verdict.FAIL
@@ -490,9 +491,7 @@ class TestRunner:
             ],
         }
         pack = load_pack_from_dict(d)
-        report = run_audit(
-            pack, working_dir=tmp_path, rules=[_guard_rule()]
-        )
+        report = run_audit(pack, working_dir=tmp_path, rules=[_guard_rule()])
         assert report.overall == Verdict.FAIL
 
     def test_overall_inconclusive_when_no_fail_but_some_inconclusive(
@@ -518,9 +517,7 @@ class TestRunner:
             ],
         }
         pack = load_pack_from_dict(d)
-        report = run_audit(
-            pack, working_dir=tmp_path, rules=[_guard_rule()]
-        )
+        report = run_audit(pack, working_dir=tmp_path, rules=[_guard_rule()])
         assert report.overall == Verdict.INCONCLUSIVE
 
     def test_records_sessions_audited(self, tmp_path: Path):
@@ -552,9 +549,7 @@ class TestRenderer:
         ):
             assert header in md
 
-    def test_seal_round_trip(
-        self, tmp_path: Path, deterministic_key: bytes
-    ):
+    def test_seal_round_trip(self, tmp_path: Path, deterministic_key: bytes):
         pack = load_pack_from_dict(_make_invariant_pack_dict())
         report = run_audit(pack, working_dir=tmp_path, rules=[_guard_rule()])
         body = render_markdown(report, pack=pack)
@@ -562,9 +557,7 @@ class TestRenderer:
         ok, msg = verify_seal(sealed, key=deterministic_key)
         assert ok is True, msg
 
-    def test_seal_detects_tampering(
-        self, tmp_path: Path, deterministic_key: bytes
-    ):
+    def test_seal_detects_tampering(self, tmp_path: Path, deterministic_key: bytes):
         pack = load_pack_from_dict(_make_invariant_pack_dict())
         report = run_audit(pack, working_dir=tmp_path, rules=[_guard_rule()])
         body = render_markdown(report, pack=pack)
@@ -585,24 +578,16 @@ class TestRenderer:
         ok, _msg = verify_seal(broken, key=deterministic_key)
         assert ok is False
 
-    def test_seal_is_deterministic(
-        self, tmp_path: Path, deterministic_key: bytes
-    ):
+    def test_seal_is_deterministic(self, tmp_path: Path, deterministic_key: bytes):
         body = "stable body\n"
         s1 = seal_report(body, key=deterministic_key)
         s2 = seal_report(body, key=deterministic_key)
         # Sealed_at differs by epoch second — strip and compare bodies.
-        digest1 = [
-            line for line in s1.splitlines() if line.startswith("- digest:")
-        ]
-        digest2 = [
-            line for line in s2.splitlines() if line.startswith("- digest:")
-        ]
+        digest1 = [line for line in s1.splitlines() if line.startswith("- digest:")]
+        digest2 = [line for line in s2.splitlines() if line.startswith("- digest:")]
         assert digest1 == digest2
 
-    def test_json_sidecar_round_trip(
-        self, tmp_path: Path
-    ):
+    def test_json_sidecar_round_trip(self, tmp_path: Path):
         pack = load_pack_from_dict(_make_invariant_pack_dict())
         report = run_audit(pack, working_dir=tmp_path, rules=[])
         payload = report_to_json(report)
@@ -675,9 +660,7 @@ class TestController:
         assert "Pack file not found" in out
 
     def test_run_bundled_by_name(self, tmp_path: Path):
-        out = audit_dispatch(
-            "/audit run soc2-baseline.yaml", tmp_path
-        )
+        out = audit_dispatch("/audit run soc2-baseline.yaml", tmp_path)
         assert "Audit complete" in out
 
     def test_show_unknown(self, tmp_path: Path):
@@ -715,9 +698,7 @@ class TestController:
 
 class TestCron:
     @pytest.fixture
-    def passing_project(
-        self, tmp_path: Path, deterministic_key: bytes
-    ) -> Path:
+    def passing_project(self, tmp_path: Path, deterministic_key: bytes) -> Path:
         # Use the bundled pack but inject a passing setup: a session
         # with a user_message + a rule that satisfies the invariant.
         ledger = open_session(tmp_path)
@@ -736,9 +717,7 @@ class TestCron:
                 pack="soc2-baseline.yaml",
             )
 
-    def test_cron_fail_on_non_pass_disabled(
-        self, passing_project: Path
-    ):
+    def test_cron_fail_on_non_pass_disabled(self, passing_project: Path):
         outcome = cron_run(
             working_dir=passing_project,
             pack="soc2-baseline.yaml",
@@ -769,9 +748,7 @@ class TestCron:
         }
         pack_dir = tmp_path / "audit_packs"
         pack_dir.mkdir()
-        (pack_dir / "tiny.yaml").write_text(
-            yaml.safe_dump(d), encoding="utf-8"
-        )
+        (pack_dir / "tiny.yaml").write_text(yaml.safe_dump(d), encoding="utf-8")
         outcome = cron_run(
             working_dir=tmp_path,
             pack="tiny.yaml",

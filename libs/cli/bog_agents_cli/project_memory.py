@@ -164,7 +164,11 @@ def _collect_memory_files(
             seen.add(resolved)
             try:
                 relative_dir = directory.relative_to(project_root)
-                where = "repo root" if not relative_dir.parts else f"{relative_dir.as_posix()}/"
+                where = (
+                    "repo root"
+                    if not relative_dir.parts
+                    else f"{relative_dir.as_posix()}/"
+                )
             except ValueError:
                 where = str(directory)
             out.append((candidate, f"{filename} ({where})"))

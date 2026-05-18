@@ -40,9 +40,7 @@ def _block_rule() -> Rule:
         when=(
             Pattern(
                 fact_type="tool_call",
-                predicates=(
-                    Predicate(field="name", op=PredicateOp.EQ, value="leak"),
-                ),
+                predicates=(Predicate(field="name", op=PredicateOp.EQ, value="leak"),),
             ),
         ),
         then=(Action(kind=ActionKind.DENY, params={"reason": "block leak"}),),
@@ -56,9 +54,7 @@ def _audit_rule() -> Rule:
         when=(
             Pattern(
                 fact_type="tool_call",
-                predicates=(
-                    Predicate(field="name", op=PredicateOp.EQ, value="leak"),
-                ),
+                predicates=(Predicate(field="name", op=PredicateOp.EQ, value="leak"),),
             ),
         ),
         then=(Action(kind=ActionKind.AUDIT_LOG, params={"event": "leaked"}),),
@@ -97,9 +93,7 @@ class TestReplayHappy:
         result = replay(
             session_id=sid,
             working_dir=tmp_path,
-            input=ReplayInput(
-                anchor_event_id=tc_id, drop_rules=("block_leak",)
-            ),
+            input=ReplayInput(anchor_event_id=tc_id, drop_rules=("block_leak",)),
             rules=[_block_rule()],
         )
         assert result.error == ""
@@ -123,9 +117,7 @@ class TestReplayHappy:
         result = replay(
             session_id=sid,
             working_dir=tmp_path,
-            input=ReplayInput(
-                anchor_event_id=tc_id, add_rules_yaml=add_yaml
-            ),
+            input=ReplayInput(anchor_event_id=tc_id, add_rules_yaml=add_yaml),
             rules=[_audit_rule()],
         )
         assert result.error == ""
@@ -140,9 +132,7 @@ class TestReplayHappy:
             session_id=sid,
             working_dir=tmp_path,
             # Drop a rule that doesn't exist → effectively no change.
-            input=ReplayInput(
-                anchor_event_id=tc_id, drop_rules=("does_not_exist",)
-            ),
+            input=ReplayInput(anchor_event_id=tc_id, drop_rules=("does_not_exist",)),
             rules=[_block_rule()],
         )
         assert result.error == ""
@@ -210,9 +200,7 @@ class TestReplayErrors:
         result = replay(
             session_id=sid,
             working_dir=tmp_path,
-            input=ReplayInput(
-                anchor_event_id=tc_id, add_rules_yaml=add_yaml
-            ),
+            input=ReplayInput(anchor_event_id=tc_id, add_rules_yaml=add_yaml),
             rules=[_block_rule()],
         )
         assert "collides" in result.error
@@ -244,9 +232,7 @@ class TestRenderer:
         result = replay(
             session_id=sid,
             working_dir=tmp_path,
-            input=ReplayInput(
-                anchor_event_id=tc_id, drop_rules=("ghost-rule",)
-            ),
+            input=ReplayInput(anchor_event_id=tc_id, drop_rules=("ghost-rule",)),
             rules=[_block_rule()],
         )
         out = render_result(result)
@@ -397,9 +383,7 @@ class TestCausalIntegration:
             ctl = get_controller(tmp_path)
             ctl.ensure_active()
             assert ctl.active is not None
-            u = ctl.active.record(
-                EventKind.USER_MESSAGE, actor="user", summary="hi"
-            )
+            u = ctl.active.record(EventKind.USER_MESSAGE, actor="user", summary="hi")
             tc = ctl.active.record(
                 EventKind.TOOL_CALL,
                 actor="leak",

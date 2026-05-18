@@ -44,9 +44,7 @@ def status(controller: ExpertController) -> str:
         for rule in mw.engine.rules:
             src = Path(rule.source_file).name if rule.source_file else "<programmatic>"
             desc = f" — {rule.description}" if rule.description else ""
-            lines.append(
-                f"  {rule.name}  [salience={rule.salience}]  ({src}){desc}"
-            )
+            lines.append(f"  {rule.name}  [salience={rule.salience}]  ({src}){desc}")
     else:
         lines.append("")
         lines.append(f"Create a rule file in {rules_dir} to get started.")
@@ -103,9 +101,10 @@ def show_rule(controller: ExpertController, name: str) -> str:
     lines.append("")
     lines.append(f"When ({len(match.when)} pattern(s)):")
     for pat in match.when:
-        preds = ", ".join(
-            f"{p.field}.{p.op.value}={p.value!r}" for p in pat.predicates
-        ) or "(no predicates)"
+        preds = (
+            ", ".join(f"{p.field}.{p.op.value}={p.value!r}" for p in pat.predicates)
+            or "(no predicates)"
+        )
         neg = " NOT" if pat.negated else ""
         bind = f" $bind={pat.bind}" if pat.bind else ""
         lines.append(f"  -{neg} {pat.fact_type}({preds}){bind}")

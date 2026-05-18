@@ -68,7 +68,7 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     text = command_text.strip()
     for prefix in ("/tracefile", "/trace"):
         if text.startswith(prefix):
-            text = text[len(prefix):].strip()
+            text = text[len(prefix) :].strip()
             break
     if not text or text.lower() in ("help", "?"):
         return _help_text()
@@ -79,7 +79,9 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
         tokens = shlex.split(text, posix=False)
         # Strip surrounding quotes that ``posix=False`` preserves.
         tokens = [
-            tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"') else tok
+            tok[1:-1]
+            if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"')
+            else tok
             for tok in tokens
         ]
     except ValueError as exc:
@@ -130,9 +132,7 @@ def _export(args: list[str], working_dir: Path) -> str:
     if session_id == "latest":
         sessions = list_sessions(working_dir)
         if not sessions:
-            return (
-                "No causal sessions to export. Run /causal on and a turn first."
-            )
+            return "No causal sessions to export. Run /causal on and a turn first."
         resolved_id = sessions[0]
     events = load_session(working_dir, resolved_id)
     if not events:

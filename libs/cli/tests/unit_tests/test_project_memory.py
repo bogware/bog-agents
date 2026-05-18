@@ -93,7 +93,9 @@ class TestCascade:
         _write(repo / ".bog-agents.md", "bog root\n")
         out = load_project_memory(cwd=repo)
         # Order within one directory: AGENTS → CLAUDE → .bog-agents
-        assert out.index("AGENTS root") < out.index("CLAUDE root") < out.index("bog root")
+        assert (
+            out.index("AGENTS root") < out.index("CLAUDE root") < out.index("bog root")
+        )
 
     def test_subdir_only_doesnt_pull_root(self, repo: Path) -> None:
         sub = repo / "src"

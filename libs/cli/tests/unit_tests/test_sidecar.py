@@ -231,8 +231,12 @@ class TestReadOnlyTools:
             assert forbidden not in names, f"sidecar must not expose {forbidden!r}"
 
     def test_web_search_toggle(self, tmp_path: Path) -> None:
-        with_web = {t.name for t in build_readonly_tools(working_dir=tmp_path, web_search=True)}
-        without_web = {t.name for t in build_readonly_tools(working_dir=tmp_path, web_search=False)}
+        with_web = {
+            t.name for t in build_readonly_tools(working_dir=tmp_path, web_search=True)
+        }
+        without_web = {
+            t.name for t in build_readonly_tools(working_dir=tmp_path, web_search=False)
+        }
         assert "web_search" in with_web
         assert "web_search" not in without_web
 

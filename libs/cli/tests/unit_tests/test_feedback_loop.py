@@ -317,9 +317,7 @@ class TestRunPostmortemEnrollment:
         )
         assert run.enrollment is None
 
-    def test_enroll_true_stages_rule(
-        self, tmp_path: Path, session_with_event: str
-    ):
+    def test_enroll_true_stages_rule(self, tmp_path: Path, session_with_event: str):
         def stub(_s, _u):
             return _FAKE_POSTMORTEM_RESPONSE
 
@@ -339,9 +337,7 @@ class TestRunPostmortemEnrollment:
         rel = run.enrollment.rule_saved_path.relative_to(tmp_path)
         assert ".bog-agents/expert_rules/proposals" in rel.as_posix()
 
-    def test_enroll_apply_writes_active(
-        self, tmp_path: Path, session_with_event: str
-    ):
+    def test_enroll_apply_writes_active(self, tmp_path: Path, session_with_event: str):
         def stub(_s, _u):
             return _FAKE_POSTMORTEM_RESPONSE
 
@@ -411,9 +407,7 @@ class TestSlashDispatch:
         assert "Postmortem enrolled" in out
         assert "STAGED" in out
         # Verify the rule actually landed.
-        proposals_dir = (
-            tmp_path / ".bog-agents" / "expert_rules" / "proposals"
-        )
+        proposals_dir = tmp_path / ".bog-agents" / "expert_rules" / "proposals"
         assert any(proposals_dir.glob("postmortem-*"))
 
     def test_dispatch_with_apply_flag(self, tmp_path: Path, session: str):
@@ -429,9 +423,7 @@ class TestSlashDispatch:
         assert "ACTIVE" in out
         # The rule landed in the *active* dir, not staging.
         active_dir = tmp_path / ".bog-agents" / "expert_rules"
-        files = [
-            p for p in active_dir.glob("postmortem-*") if p.is_file()
-        ]
+        files = [p for p in active_dir.glob("postmortem-*") if p.is_file()]
         assert files
 
     def test_flags_can_be_mixed_with_note(self, tmp_path: Path, session: str):
@@ -450,9 +442,7 @@ class TestSlashDispatch:
         assert any("my custom note" in p for p in captured_prompts)
         assert "Postmortem enrolled" in out
 
-    def test_only_flags_with_no_session_id_returns_usage(
-        self, tmp_path: Path
-    ):
+    def test_only_flags_with_no_session_id_returns_usage(self, tmp_path: Path):
         def stub(_s, _u):
             return _FAKE_POSTMORTEM_RESPONSE
 

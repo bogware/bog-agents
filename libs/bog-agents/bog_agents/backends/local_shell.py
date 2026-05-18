@@ -57,7 +57,13 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # ``git clean -fdx`` wipes untracked + ignored, which often includes the
     # venv / build dir. Matches single-group flags (-fdx) and split flags
     # (-f -d -x in any order).
-    (re.compile(r"\bgit\s+clean\b[^|]*-[a-zA-Z]*f[a-zA-Z]*[dx][a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx][a-zA-Z]*f[a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*f.*-[a-zA-Z]*[dx]|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx].*-[a-zA-Z]*f", re.IGNORECASE), "git clean -fdx (untracked wipe)"),
+    (
+        re.compile(
+            r"\bgit\s+clean\b[^|]*-[a-zA-Z]*f[a-zA-Z]*[dx][a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx][a-zA-Z]*f[a-zA-Z]*|\bgit\s+clean\b[^|]*-[a-zA-Z]*f.*-[a-zA-Z]*[dx]|\bgit\s+clean\b[^|]*-[a-zA-Z]*[dx].*-[a-zA-Z]*f",
+            re.IGNORECASE,
+        ),
+        "git clean -fdx (untracked wipe)",
+    ),
     # ``python -c 'shutil.rmtree(...)'`` is a documented bypass.
     (re.compile(r"\bshutil\.rmtree\s*\(", re.IGNORECASE), "shutil.rmtree() inside python -c"),
     (re.compile(r"\bos\.unlink\s*\(\s*['\"][^'\"]*\.(ssh|aws|kube)\b", re.IGNORECASE), "os.unlink against credentials dir"),

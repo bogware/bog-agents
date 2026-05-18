@@ -45,7 +45,9 @@ class EvidenceWindow:
     now: float
 
 
-def window_for_lookback(lookback_hours: float, *, now: float | None = None) -> EvidenceWindow:
+def window_for_lookback(
+    lookback_hours: float, *, now: float | None = None
+) -> EvidenceWindow:
     """Build an :class:`EvidenceWindow` from a lookback in hours."""
     current = time.time() if now is None else now
     return EvidenceWindow(
@@ -83,13 +85,12 @@ def load_trace_slice(working_dir: Path, window: EvidenceWindow) -> TraceSlice:
             events = load_session(working_dir, sid)
         except Exception:
             logger.warning(
-                "compliance: could not load session %s; skipping", sid,
+                "compliance: could not load session %s; skipping",
+                sid,
                 exc_info=True,
             )
             continue
-        in_window = [
-            e for e in events if e.timestamp >= window.oldest_allowed
-        ]
+        in_window = [e for e in events if e.timestamp >= window.oldest_allowed]
         if in_window:
             kept_sessions.append(sid)
             all_events.extend(in_window)
@@ -125,9 +126,7 @@ class EvidenceFinding:
 # ---------------------------------------------------------------------------
 
 
-def collect_event_count(
-    slice_: TraceSlice, params: dict[str, Any]
-) -> EvidenceFinding:
+def collect_event_count(slice_: TraceSlice, params: dict[str, Any]) -> EvidenceFinding:
     """``trace_assertion`` with ``kind: event_count``.
 
     Params:
@@ -192,8 +191,7 @@ def collect_no_event_with_actor(
         )
     actor_clean = actor.strip()
     matches = [
-        e for e in slice_.events
-        if e.kind == fact_kind and e.actor == actor_clean
+        e for e in slice_.events if e.kind == fact_kind and e.actor == actor_clean
     ]
     observed = (
         f"{len(matches)} event(s) of kind {fact_kind.value!r} "
@@ -254,11 +252,7 @@ def _parse_bounds(
             max_bound = int(params["max"])
         except (ValueError, TypeError):
             return None, None, f"evidence.max must be an integer, got {params['max']!r}"
-    if (
-        min_bound is not None
-        and max_bound is not None
-        and min_bound > max_bound
-    ):
+    if min_bound is not None and max_bound is not None and min_bound > max_bound:
         return (
             None,
             None,

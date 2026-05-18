@@ -6,12 +6,12 @@ related PreToolUse / UserPromptSubmit / SubagentStop /
 SessionStart events). The payload shape, as of Claude Code v0.8.x::
 
     {
-      "session_id": "abc123",
-      "transcript_path": "/.../session.jsonl",
-      "hook_event_name": "PostToolUse",
-      "tool_name": "Bash",
-      "tool_input": {"command": "ls"},
-      "tool_response": {"output": "file.txt\\n", "is_error": false}
+        "session_id": "abc123",
+        "transcript_path": "/.../session.jsonl",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "ls"},
+        "tool_response": {"output": "file.txt\\n", "is_error": false},
     }
 
 This module converts those payloads (one per hook fire) into
@@ -138,9 +138,15 @@ def claude_code_hook_to_frames(
             )
         )
     if event_name == "PostToolUse" and tool_response:
-        is_error = bool(tool_response.get("is_error", False)) if isinstance(tool_response, dict) else False
+        is_error = (
+            bool(tool_response.get("is_error", False))
+            if isinstance(tool_response, dict)
+            else False
+        )
         output_text = (
-            tool_response.get("output", "") if isinstance(tool_response, dict) else str(tool_response)
+            tool_response.get("output", "")
+            if isinstance(tool_response, dict)
+            else str(tool_response)
         )
         if not isinstance(output_text, str):
             output_text = json.dumps(output_text, default=str)
@@ -218,7 +224,9 @@ def _iter_transcript(text: str) -> Iterator[TraceFrame]:
 
 
 def _entry_to_frame(
-    entry: Any, next_id: int, prev_id: int | None,
+    entry: Any,
+    next_id: int,
+    prev_id: int | None,
 ) -> TraceFrame | None:
     if not isinstance(entry, dict):
         return None
@@ -227,10 +235,7 @@ def _entry_to_frame(
     if event_kind is None:
         return None
     actor = str(
-        entry.get("model")
-        or entry.get("tool_name")
-        or entry.get("role")
-        or event_kind
+        entry.get("model") or entry.get("tool_name") or entry.get("role") or event_kind
     )
     summary = _entry_summary(entry, event_kind)
     timestamp = entry.get("timestamp")

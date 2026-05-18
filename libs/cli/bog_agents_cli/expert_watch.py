@@ -50,7 +50,11 @@ _STATE_SUBDIR = ".bog-agents"
 
 def _effective_floor() -> float:
     """Return the active interval floor (production or test-overridden)."""
-    return float(_min_interval_override) if _min_interval_override is not None else float(_MIN_INTERVAL_SECONDS)
+    return (
+        float(_min_interval_override)
+        if _min_interval_override is not None
+        else float(_MIN_INTERVAL_SECONDS)
+    )
 
 
 def _state_path(working_dir: Path | str) -> Path:
@@ -200,7 +204,9 @@ def status(working_dir: Path | str) -> str:
         )
     s = handle.stats
     next_run = (
-        s.last_run_at + s.interval_seconds if s.last_run_at else s.started_at + s.interval_seconds
+        s.last_run_at + s.interval_seconds
+        if s.last_run_at
+        else s.started_at + s.interval_seconds
     )
     next_in = max(0, int(next_run - time.time()))
     mode = "AUTO-APPLY" if s.auto_activate else "STAGED"
@@ -345,13 +351,19 @@ def start(
     key = _key(working_dir)
     existing = _HANDLES.get(key)
     if existing is not None and not existing.task.done():
-        return (False, "Expert watcher is already running. Stop it first with /expert watch stop.")
+        return (
+            False,
+            "Expert watcher is already running. Stop it first with /expert watch stop.",
+        )
 
     interval = max(_effective_floor(), float(interval_seconds))
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
-        return (False, "No running event loop — /expert watch needs an active asyncio loop.")
+        return (
+            False,
+            "No running event loop — /expert watch needs an active asyncio loop.",
+        )
     stats = WatcherStats(interval_seconds=interval, auto_activate=auto_activate)
     stop_event = asyncio.Event()
     task = loop.create_task(

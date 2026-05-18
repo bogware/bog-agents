@@ -576,5 +576,3 @@ class TestApprovalGatesMiddleware:
         assert "Approval Gates Status" in status
         assert "compliance" in status
         assert "Pending Submissions" in status
-
-

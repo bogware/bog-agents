@@ -98,10 +98,7 @@ class EnrolledProposal:
     @property
     def ok(self) -> bool:
         """True iff at least one artefact landed on disk."""
-        return (
-            self.rule_saved_path is not None
-            or self.skill_saved_path is not None
-        )
+        return self.rule_saved_path is not None or self.skill_saved_path is not None
 
 
 # ---------------------------------------------------------------------------
@@ -204,8 +201,7 @@ def enroll_postmortem_proposal(
                 notes.append(f"Rule staged at {rule_path}")
             elif lint_errors:
                 rule_skipped = (
-                    f"rule lint errors prevented save: "
-                    f"{'; '.join(lint_errors)[:200]}"
+                    f"rule lint errors prevented save: {'; '.join(lint_errors)[:200]}"
                 )
         except RuleLoadError as exc:
             rule_skipped = f"rule parse failed: {exc}"
@@ -305,22 +301,17 @@ def _iter_lint_errors(report) -> list[str]:  # noqa: ANN001 — LintReport
     errors: list[str] = []
     # LintReport exposes either ``errors`` (list[LintIssue]) or, in
     # older revisions, ``items`` we filter by severity. Cover both.
-    candidates = (
-        getattr(report, "errors", None)
-        or [
-            item
-            for item in getattr(report, "items", ())
-            if getattr(item, "severity", "").lower() == "error"
-        ]
-    )
+    candidates = getattr(report, "errors", None) or [
+        item
+        for item in getattr(report, "items", ())
+        if getattr(item, "severity", "").lower() == "error"
+    ]
     for item in candidates or ():
         message = getattr(item, "message", None) or getattr(item, "text", None)
         if not message:
             message = str(item)
         rule_name = getattr(item, "rule_name", "") or getattr(item, "rule", "")
-        errors.append(
-            f"{rule_name}: {message}" if rule_name else str(message)
-        )
+        errors.append(f"{rule_name}: {message}" if rule_name else str(message))
     return errors
 
 
@@ -422,7 +413,11 @@ def render_enrollment(enrolled: EnrolledProposal) -> str:
     """Format an :class:`EnrolledProposal` for the TUI."""
     lines = ["== Postmortem enrolled =="]
     if enrolled.rule_saved_path is not None:
-        state = "ACTIVE (will fire on next reload)" if enrolled.active else "STAGED for review"
+        state = (
+            "ACTIVE (will fire on next reload)"
+            if enrolled.active
+            else "STAGED for review"
+        )
         lines.append(f"  Rule:     {enrolled.rule_saved_path}  [{state}]")
         lines.append(f"            ({enrolled.rules_parsed} rule(s) parsed)")
     if enrolled.skill_saved_path is not None:
@@ -440,9 +435,7 @@ def render_enrollment(enrolled: EnrolledProposal) -> str:
         for note in enrolled.notes:
             lines.append(f"    · {note}")
     if not (
-        enrolled.rule_saved_path
-        or enrolled.skill_saved_path
-        or enrolled.skipped_reason
+        enrolled.rule_saved_path or enrolled.skill_saved_path or enrolled.skipped_reason
     ):
         lines.append("  (nothing enrolled — postmortem produced no usable artefacts)")
     return "\n".join(lines)

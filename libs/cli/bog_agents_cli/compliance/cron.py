@@ -30,6 +30,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from bog_agents_cli.compliance.audit_pack import (
     PackParseError,
@@ -151,7 +152,9 @@ def _resolve_pack(pack: str, working_dir: Path) -> Path:
 
 
 def _persist_report(
-    report: AuditReport, pack_obj, working_dir: Path,  # noqa: ANN001 — AuditPack
+    report: AuditReport,
+    pack_obj: Any,  # AuditPack — typed Any here to avoid an import cycle
+    working_dir: Path,
 ) -> tuple[Path, Path]:
     """Render + seal the report and write both the markdown and the JSON."""
     by_id = _build_event_index(report, working_dir)

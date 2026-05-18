@@ -314,16 +314,13 @@ class DreamScheduler:
         task.add_done_callback(self._completion_tasks.discard)
         self.stats.completion_callbacks_dispatched += 1
 
-    async def _invoke_completion(
-        self, cb: DreamCompleteCallback, title: str
-    ) -> None:
+    async def _invoke_completion(self, cb: DreamCompleteCallback, title: str) -> None:
         try:
             await cb(self._agent_id, title)
         except Exception:
             self.stats.completion_callbacks_failed += 1
             logger.exception(
-                "DreamScheduler on_dream_complete callback raised "
-                "(agent=%s)",
+                "DreamScheduler on_dream_complete callback raised (agent=%s)",
                 self._agent_id,
             )
 

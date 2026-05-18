@@ -78,8 +78,10 @@ class TestBuildIntent:
         # Most-recent-first input → output puts oldest first
         text = build_intent(
             agent_id="x",
-            dreams=[(d2, d2.read_text(encoding="utf-8")),
-                    (d1, d1.read_text(encoding="utf-8"))],
+            dreams=[
+                (d2, d2.read_text(encoding="utf-8")),
+                (d1, d1.read_text(encoding="utf-8")),
+            ],
             tool_history=[],
             existing_rules=[],
         )
@@ -100,7 +102,7 @@ class TestProposeRules:
         # Pretend dreamscape has no dreams — we'll feed history only.
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: []  # noqa: ARG005,
+            lambda _agent_id, *, limit=20: [],
         )
         yaml = textwrap.dedent(
             """
@@ -135,7 +137,7 @@ class TestProposeRules:
     ) -> None:
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: []  # noqa: ARG005,
+            lambda _agent_id, *, limit=20: [],
         )
         run = propose_rules(
             agent_id="test",
@@ -153,7 +155,7 @@ class TestProposeRules:
     ) -> None:
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: []  # noqa: ARG005,
+            lambda _agent_id, *, limit=20: [],
         )
         run = propose_rules(
             agent_id="test",
@@ -171,15 +173,9 @@ class TestProposeRules:
     ) -> None:
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: []  # noqa: ARG005,
+            lambda _agent_id, *, limit=20: [],
         )
-        yaml = (
-            "- name: r\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            "    - audit_log\n"
-        )
+        yaml = "- name: r\n  when:\n    - tool_call: {}\n  then:\n    - audit_log\n"
         run = propose_rules(
             agent_id="x",
             model=_StubModel(yaml),
@@ -200,7 +196,7 @@ class TestProposeRules:
         dream_file.write_text("session noted X happening 3 times", encoding="utf-8")
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: [dream_file],  # noqa: ARG005
+            lambda _agent_id, *, limit=20: [dream_file],
         )
         yaml = (
             "- name: r\n"
@@ -221,9 +217,7 @@ class TestProposeRules:
         assert run.saved_path is not None
         # Verify the dream content was forwarded to the model.
         seen_text = " ".join(
-            str(getattr(m, "content", ""))
-            for msgs in model.invocations
-            for m in msgs
+            str(getattr(m, "content", "")) for msgs in model.invocations for m in msgs
         )
         assert "X happening 3 times" in seen_text
 
@@ -238,8 +232,12 @@ class TestProposalManagement:
         assert list_pending_proposals(tmp_path) == []
 
     def test_list_returns_yamls_sorted(self, tmp_path: Path) -> None:
-        (tmp_path / "b.yaml").write_text("- name: b\n  when:\n    - x: {}\n  then:\n    - audit_log\n")
-        (tmp_path / "a.yaml").write_text("- name: a\n  when:\n    - x: {}\n  then:\n    - audit_log\n")
+        (tmp_path / "b.yaml").write_text(
+            "- name: b\n  when:\n    - x: {}\n  then:\n    - audit_log\n"
+        )
+        (tmp_path / "a.yaml").write_text(
+            "- name: a\n  when:\n    - x: {}\n  then:\n    - audit_log\n"
+        )
         names = [p.name for p in list_pending_proposals(tmp_path)]
         assert names == ["a.yaml", "b.yaml"]
 
@@ -271,7 +269,9 @@ class TestProposalManagement:
         rules = tmp_path / "active"
         prop.mkdir()
         rules.mkdir()
-        (prop / "r.yaml").write_text("- name: r\n  when:\n    - x: {}\n  then:\n    - audit_log\n")
+        (prop / "r.yaml").write_text(
+            "- name: r\n  when:\n    - x: {}\n  then:\n    - audit_log\n"
+        )
         (rules / "r.yaml").write_text("# existing\n")
         with pytest.raises(ValueError, match="already exists"):
             approve_proposal(proposals_dir=prop, rules_dir=rules, name="r.yaml")
@@ -328,7 +328,7 @@ class TestControllerProposalFlow:
 
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: []  # noqa: ARG005,
+            lambda _agent_id, *, limit=20: [],
         )
         reset_controllers()
         yaml = (
@@ -401,7 +401,7 @@ class TestAutoActivate:
     ) -> None:
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+            lambda _agent_id, *, limit=20: [],
         )
         yaml = (
             "- name: gate_x\n"
@@ -436,14 +436,10 @@ class TestAutoActivate:
     ) -> None:
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+            lambda _agent_id, *, limit=20: [],
         )
         yaml_first = (
-            "- name: gate\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            "    - deny: 'first'\n"
+            "- name: gate\n  when:\n    - tool_call: {}\n  then:\n    - deny: 'first'\n"
         )
         yaml_second = (
             "- name: gate\n"
@@ -484,7 +480,7 @@ class TestAutoActivate:
 
         monkeypatch.setattr(
             "bog_agents_cli.dreamscape.dream_engine.list_agent_dreams",
-            lambda _agent_id, *, limit=20: [],  # noqa: ARG005
+            lambda _agent_id, *, limit=20: [],
         )
         reset_controllers()
         yaml = (

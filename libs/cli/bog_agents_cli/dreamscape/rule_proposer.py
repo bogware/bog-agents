@@ -291,15 +291,11 @@ def propose_rules(
     if not save:
         return run
     if not proposal.ok_to_save:
-        run.error = (
-            "proposal parse / lint failed — see proposal.parse_error and lint"
-        )
+        run.error = "proposal parse / lint failed — see proposal.parse_error and lint"
         return run
 
     if auto_activate:
-        target_dir = rules_dir or (
-            Path.cwd() / ".bog-agents" / "expert_rules"
-        )
+        target_dir = rules_dir or (Path.cwd() / ".bog-agents" / "expert_rules")
     else:
         target_dir = proposals_dir or (
             Path.cwd() / ".bog-agents" / "expert_rules" / "proposals"

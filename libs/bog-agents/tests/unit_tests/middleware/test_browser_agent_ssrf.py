@@ -11,6 +11,7 @@ unconditionally even when the caller opts into private IPs.
 
 from __future__ import annotations
 
+from typing import ClassVar, Self
 from unittest.mock import patch
 
 import pytest
@@ -71,9 +72,7 @@ class TestUrlSafeGate:
         # Even with allow_private_ips=True the cloud-metadata IPs must stay blocked.
         for allow in (False, True):
             safe, reason = _is_url_safe(url, allow_private_ips=allow)
-            assert not safe, (
-                f"link-local URL {url!r} must be blocked (allow_private_ips={allow})"
-            )
+            assert not safe, f"link-local URL {url!r} must be blocked (allow_private_ips={allow})"
             assert "link-local" in reason.lower() or "metadata" in reason.lower()
 
     @pytest.mark.parametrize(
@@ -111,9 +110,7 @@ class TestUrlSafeGate:
         assert "host" in reason.lower() or "resolve" in reason.lower()
 
     def test_unresolvable_hostname_blocked(self) -> None:
-        safe, reason = _is_url_safe(
-            "https://this-host-does-not-exist-zzzz-test-12345.invalid/"
-        )
+        safe, reason = _is_url_safe("https://this-host-does-not-exist-zzzz-test-12345.invalid/")
         assert not safe
         assert "DNS" in reason or "resolve" in reason.lower()
 
@@ -169,16 +166,16 @@ class TestMiddlewareIntegration:
         fn = self._get_callable(mw, "web_fetch")
 
         class _FakeResponse:
-            status = 200
-            headers = {"Content-Type": "text/plain"}
+            status: ClassVar[int] = 200
+            headers: ClassVar[dict[str, str]] = {"Content-Type": "text/plain"}
 
-            def __enter__(self):
+            def __enter__(self) -> Self:
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(self, *args: object) -> bool:
                 return False
 
-            def read(self):
+            def read(self) -> bytes:
                 return b"hello"
 
         with patch("urllib.request.urlopen", return_value=_FakeResponse()):

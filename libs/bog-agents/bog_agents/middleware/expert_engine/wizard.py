@@ -73,15 +73,11 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
     WizardCategory(
         key="safety",
         title="Safety / destructive commands",
-        description=(
-            "Block or require approval for commands that can cause "
-            "irreversible damage (rm -rf, format, drop table, force-push)."
-        ),
+        description=("Block or require approval for commands that can cause irreversible damage (rm -rf, format, drop table, force-push)."),
         questions=(
             "Which command shape(s) should be blocked or gated?",
             "Block entirely or require human approval first?",
-            "Should the rule apply everywhere or only in specific "
-            "environments (e.g. prod)?",
+            "Should the rule apply everywhere or only in specific environments (e.g. prod)?",
         ),
         intent_examples=(
             "Block any `rm -rf` that targets the home directory",
@@ -99,10 +95,7 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
     WizardCategory(
         key="budget",
         title="Cost / budget caps",
-        description=(
-            "Warn or gate when the running session spend (cost_tracker) "
-            "crosses configurable thresholds."
-        ),
+        description=("Warn or gate when the running session spend (cost_tracker) crosses configurable thresholds."),
         questions=(
             "At what session spend (USD) should a warning fire?",
             "At what spend should new tool calls require approval (or stop)?",
@@ -125,14 +118,9 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
     WizardCategory(
         key="prod",
         title="Prod-env gates",
-        description=(
-            "Restrict what the agent can do when working in a "
-            "production-like environment (env=prod context, sensitive "
-            "repos, etc.)."
-        ),
+        description=("Restrict what the agent can do when working in a production-like environment (env=prod context, sensitive repos, etc.)."),
         questions=(
-            "What signal identifies prod? (context.env value, repo name, "
-            "branch, …)",
+            "What signal identifies prod? (context.env value, repo name, branch, …)",
             "Which actions should be restricted on prod?",
             "Block entirely or require approval?",
         ),
@@ -153,21 +141,15 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
     WizardCategory(
         key="testing",
         title="Testing / CI policy",
-        description=(
-            "Enforce test/lint/CI conventions — e.g. tests must run "
-            "before push, lint failures must be approved, etc."
-        ),
+        description=("Enforce test/lint/CI conventions — e.g. tests must run before push, lint failures must be approved, etc."),
         questions=(
             "Which tool calls trigger the rule (git push, deploy, etc.)?",
-            "What evidence indicates tests/lint passed (a tool_call "
-            "name, a context fact)?",
+            "What evidence indicates tests/lint passed (a tool_call name, a context fact)?",
             "Block or warn?",
         ),
         intent_examples=(
-            "Require approval before `git push` if the last `pytest` "
-            "tool call had a non-zero exit",
-            "Warn when shell_execute runs a deploy script without a "
-            "preceding test run",
+            "Require approval before `git push` if the last `pytest` tool call had a non-zero exit",
+            "Warn when shell_execute runs a deploy script without a preceding test run",
         ),
         framing=(
             "The user is describing a testing/CI workflow rule. "
@@ -181,10 +163,7 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
     WizardCategory(
         key="custom",
         title="Custom policy (free-form)",
-        description=(
-            "Anything else — describe what you want in plain English and "
-            "the LLM will draft the rule with no category bias."
-        ),
+        description=("Anything else — describe what you want in plain English and the LLM will draft the rule with no category bias."),
         questions=(
             "What event or condition should trigger the rule?",
             "What should happen when it triggers?",
@@ -192,13 +171,9 @@ _DEFAULT_CATALOG: tuple[WizardCategory, ...] = (
         ),
         intent_examples=(
             "Audit-log every tool call that touches the .ssh directory",
-            "Route any task containing 'database migration' to a "
-            "subagent named db-specialist",
+            "Route any task containing 'database migration' to a subagent named db-specialist",
         ),
-        framing=(
-            "No category bias — let the user's intent drive every "
-            "decision (action verb, salience, once flag)."
-        ),
+        framing=("No category bias — let the user's intent drive every decision (action verb, salience, once flag)."),
     ),
 )
 
@@ -257,14 +232,10 @@ def menu_text(catalog: Sequence[WizardCategory] = _DEFAULT_CATALOG) -> str:
         lines.append(f"  {cat.key:<8} — {cat.title}")
         lines.append(f"           {cat.description}")
         lines.append("")
-    lines.append(
-        "Usage: /expert wizard <category> [your intent in plain English]"
-    )
+    lines.append("Usage: /expert wizard <category> [your intent in plain English]")
     lines.append("Example: /expert wizard safety block rm -rf on prod hosts")
     lines.append("")
-    lines.append(
-        "Sample intents you can copy:"
-    )
+    lines.append("Sample intents you can copy:")
     for cat in catalog:
         for example in cat.intent_examples[:1]:
             lines.append(f"  /expert wizard {cat.key} {example}")
@@ -295,12 +266,7 @@ def run_wizard(
     """
     category = find_category(category_key, catalog=catalog)
     if category is None:
-        return WizardRun(
-            error=(
-                f"Unknown wizard category: {category_key!r}. "
-                f"Choose from: {', '.join(c.key for c in catalog)}"
-            )
-        )
+        return WizardRun(error=(f"Unknown wizard category: {category_key!r}. Choose from: {', '.join(c.key for c in catalog)}"))
     if not intent.strip():
         return WizardRun(
             category=category,

@@ -33,9 +33,7 @@ def _rule(
     "not passed" with "passed empty" and broke the no-actions lint test.
     """
     then_value = (
-        (Action(kind=ActionKind.AUDIT_LOG, params={}),)
-        if then is _SENTINEL
-        else tuple(then)  # type: ignore[arg-type]
+        (Action(kind=ActionKind.AUDIT_LOG, params={}),) if then is _SENTINEL else tuple(then)  # type: ignore[arg-type]
     )
     return Rule(
         name=name,
@@ -196,6 +194,4 @@ class TestStarterRulebook:
         report = lint(rules)
         # Starter rules should have no errors. Warnings/infos are OK
         # (e.g. always-fires for bootstrap rules).
-        assert report.errors == [], (
-            "starter rulebook has lint errors:\n" + render_report(report)
-        )
+        assert report.errors == [], "starter rulebook has lint errors:\n" + render_report(report)

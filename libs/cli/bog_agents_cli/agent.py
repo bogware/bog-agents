@@ -154,9 +154,7 @@ def _build_propose_on_dream_callback(
         try:
             from bog_agents_cli.expert_controller import get_controller
         except Exception:
-            logger.debug(
-                "propose-on-dream: expert_controller import failed; skipping"
-            )
+            logger.debug("propose-on-dream: expert_controller import failed; skipping")
             return
 
         spec = (settings.model_name or "").strip()
@@ -257,7 +255,11 @@ def _build_dream_scheduler_factory(
         # Replaces the timer-driven ``/expert watch`` for users who
         # want the proposer paced by actual dream activity instead of
         # wall-clock polls.
-        on_complete = _build_propose_on_dream_callback(cfg) if cfg.dreams.propose_rules_on_complete else None
+        on_complete = (
+            _build_propose_on_dream_callback(cfg)
+            if cfg.dreams.propose_rules_on_complete
+            else None
+        )
 
         scheduler = ensure_scheduler(
             agent_id=agent_id,

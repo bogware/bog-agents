@@ -143,9 +143,7 @@ def dispatch_proposals(controller: ExpertController, rest: str) -> str:
         return approve_proposal_file(controller, tail.strip())
     if head in ("discard", "delete", "reject"):
         return discard_proposal_file(controller, tail.strip())
-    return (
-        "Usage: /expert proposals [approve <name> | discard <name>]"
-    )
+    return "Usage: /expert proposals [approve <name> | discard <name>]"
 
 
 __all__ = [

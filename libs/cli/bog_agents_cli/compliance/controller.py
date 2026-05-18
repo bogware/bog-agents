@@ -52,7 +52,7 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     rest = command_text.strip()
     for prefix in ("/compliance", "/audit"):
         if rest.startswith(prefix):
-            rest = rest[len(prefix):].strip()
+            rest = rest[len(prefix) :].strip()
             break
     if not rest or rest.lower() in ("help", "?"):
         return _help_text()
@@ -79,7 +79,9 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
 def _run(tail: str, working_dir: Path) -> str:
     if not tail:
         return "Usage: /audit run <pack-path>"
-    pack_path = (working_dir / tail).resolve() if not Path(tail).is_absolute() else Path(tail)
+    pack_path = (
+        (working_dir / tail).resolve() if not Path(tail).is_absolute() else Path(tail)
+    )
     if not pack_path.is_file():
         # Try the bundled examples directory.
         examples = _examples_dir()
@@ -107,10 +109,7 @@ def _run(tail: str, working_dir: Path) -> str:
 def _list(working_dir: Path) -> str:
     target_dir = working_dir / _AUDITS_SUBDIR
     if not target_dir.is_dir():
-        return (
-            "No audits saved yet.\n"
-            "Run /audit run <pack> to create one."
-        )
+        return "No audits saved yet.\nRun /audit run <pack> to create one."
     files = sorted(target_dir.glob("*.md"), reverse=True)
     if not files:
         return f"No audit files under {target_dir}."
@@ -139,9 +138,7 @@ def _show(tail: str, working_dir: Path) -> str:
     except OSError as exc:
         return f"Could not read {path}: {exc}"
     ok, message = verify_seal(text)
-    seal_line = (
-        f"\n[seal: {'OK' if ok else 'INVALID'} — {message}]\n"
-    )
+    seal_line = f"\n[seal: {'OK' if ok else 'INVALID'} — {message}]\n"
     return text + seal_line
 
 
@@ -193,9 +190,7 @@ def _help_text() -> str:
     )
 
 
-def _persist(
-    report: AuditReport, sealed: str, working_dir: Path
-) -> tuple[Path, Path]:
+def _persist(report: AuditReport, sealed: str, working_dir: Path) -> tuple[Path, Path]:
     """Write the sealed markdown + JSON sidecar; return both paths."""
     target_dir = working_dir / _AUDITS_SUBDIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -209,23 +204,21 @@ def _persist(
 
 
 def _build_event_index(
-    report: AuditReport, working_dir: Path,
+    report: AuditReport,
+    working_dir: Path,
 ) -> dict[int, CausalEvent]:
     """Re-load the trace slice so the renderer can resolve sample ids."""
     slice_ = load_trace_slice(working_dir, report.window)
     return {e.id: e for e in slice_.events}
 
 
-def _render_run_summary(
-    report: AuditReport, saved_md: Path, saved_json: Path
-) -> str:
+def _render_run_summary(report: AuditReport, saved_md: Path, saved_json: Path) -> str:
     counts = report.counts
     from bog_agents_cli.compliance.report import _VERDICT_ICON, Verdict
 
     lines = [
         f"== Audit complete: {report.pack_name} (v{report.pack_version}) ==",
-        f"  Overall:  {_VERDICT_ICON[report.overall]} "
-        f"{report.overall.value.upper()}",
+        f"  Overall:  {_VERDICT_ICON[report.overall]} {report.overall.value.upper()}",
         f"  Pass:     {counts[Verdict.PASS]}",
         f"  Fail:     {counts[Verdict.FAIL]}",
         f"  Inconcl.: {counts[Verdict.INCONCLUSIVE]}",

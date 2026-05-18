@@ -14,9 +14,10 @@ generation.
 Example::
 
     from bog_agents.middleware.expert_rules import ExpertRulesMiddleware
+
     agent = create_agent(
         model="claude-opus-4-7",
-        middleware=[ExpertRulesMiddleware(working_dir=Path(".") )],
+        middleware=[ExpertRulesMiddleware(working_dir=Path("."))],
     )
 """
 
@@ -360,9 +361,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
                     gate_name = str(params.get("gate") or "expert-rule")
                     risk = str(params.get("risk") or params.get("severity") or "medium")
                     action_desc = str(
-                        params.get("reason")
-                        or params.get("description")
-                        or f"expert rule fired: {gate_name}",
+                        params.get("reason") or params.get("description") or f"expert rule fired: {gate_name}",
                     )
                     try:
                         if gate_name not in self._approval_store.gates:
@@ -377,10 +376,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
                             risk_level=risk,
                         )
                     except Exception:
-                        logger.exception(
-                            "expert_rules: failed to register approval submission "
-                            "on approval_store"
-                        )
+                        logger.exception("expert_rules: failed to register approval submission on approval_store")
             return _APPROVAL
         mods = result.actions.merged_modification()
         if mods:

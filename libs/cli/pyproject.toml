@@ -297,8 +297,14 @@ ignore-var-parameters = true
     "ANN202",   # Missing return type annotation — not needed in tests
     "ARG001",   # Unused arg — common in stub callbacks for ask/prompt tests
     "ARG002",   # Unused method argument — fixture params (e.g. tmp_path) may be unused in some tests
+    "ARG005",   # Unused lambda argument — stub callbacks intentionally drop args
+    "B903",     # "class could be dataclass" — concise fixture helpers don't need dataclass machinery
+    "D205",     # 1-blank-line-between-summary-and-description — test docstrings are often one-liners
     "PT012",    # pytest.raises with multiple statements — fine in test scaffolding
+    "PT018",    # "break down compound assertion" — composite asserts read better than several lines in tests
+    "PT019",    # fixture-without-value injected as parameter — old-style fixture wiring is fine in tests
     "RUF029",   # Async function w/o await — required to satisfy async callback signatures
+    "RUF069",   # Float equality — exact == is fine when comparing to known constants in tests
     "TRY301",   # `raise` inside try — fine in tests that exercise excepthook flows
     "F841",     # Local variable assigned but unused — common in test setup
     "PT011",    # pytest.raises match= not required in tests — intent is clear from test name

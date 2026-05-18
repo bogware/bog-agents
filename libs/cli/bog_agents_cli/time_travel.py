@@ -196,9 +196,7 @@ def replay(
     )
 
 
-def _find_anchor(
-    events: list[CausalEvent], event_id: int
-) -> CausalEvent | None:
+def _find_anchor(events: list[CausalEvent], event_id: int) -> CausalEvent | None:
     for e in events:
         if e.id == event_id:
             return e
@@ -320,7 +318,11 @@ def _error(
 ) -> ReplayResult:
     """Build a ReplayResult with the error filled in."""
     empty = ReplayOutcome(
-        activations=(), denials=0, deny_reasons=(), modifications=0, approvals_required=0
+        activations=(),
+        denials=0,
+        deny_reasons=(),
+        modifications=0,
+        approvals_required=0,
     )
     return ReplayResult(
         anchor=anchor
@@ -403,9 +405,7 @@ def _render_diff(
     if removed:
         lines.append(f"{indent}- activations: {', '.join(removed)}")
     if before.denials != after.denials:
-        lines.append(
-            f"{indent}denials: {before.denials} → {after.denials}"
-        )
+        lines.append(f"{indent}denials: {before.denials} → {after.denials}")
     if before.modifications != after.modifications:
         lines.append(
             f"{indent}modifications: {before.modifications} → {after.modifications}"
@@ -451,7 +451,7 @@ def dispatch(
         "/causal-replay",
     ):
         if rest.startswith(prefix):
-            rest = rest[len(prefix):].strip()
+            rest = rest[len(prefix) :].strip()
             break
     if not rest or rest.lower() in ("help", "?"):
         return _help_text()
@@ -465,9 +465,7 @@ def dispatch(
 
         sessions = list_sessions(working_dir)
         if not sessions:
-            return (
-                "No causal sessions found. Run /trace-mind on and a turn first."
-            )
+            return "No causal sessions found. Run /trace-mind on and a turn first."
         resolved_id = sessions[0]
     try:
         rules = list(rules_provider())
@@ -493,7 +491,9 @@ def _parse_args(
     """Parse ``<event-id> [--no-rule X]* [--with-rule <yaml-or-path>]``."""
     tokens = rest.split()
     if not tokens:
-        return "Usage: /trace-mind replay <event_id> [--no-rule NAME] [--with-rule PATH]"
+        return (
+            "Usage: /trace-mind replay <event_id> [--no-rule NAME] [--with-rule PATH]"
+        )
     try:
         anchor = int(tokens[0])
     except ValueError:
@@ -512,7 +512,7 @@ def _parse_args(
         if flag == "--with-rule":
             if i + 1 >= len(tokens):
                 return "Missing value after --with-rule."
-            value = " ".join(tokens[i + 1:])
+            value = " ".join(tokens[i + 1 :])
             # Treat as a path first; fall back to literal YAML.
             path = Path(value)
             if path.is_file() and path.suffix in (".yaml", ".yml"):

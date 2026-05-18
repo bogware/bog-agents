@@ -486,20 +486,14 @@ class HttpHooksMiddleware(AgentMiddleware):
             timestamp=time.time(),
             session_id=self.session_id,
             tool_name=tool_name,
-            tool_args=_redact_payload_dict(tool_args)
-            if self._redact_secret_shaped_args
-            else tool_args,
-            metadata=_redact_payload_dict(metadata or {})
-            if self._redact_secret_shaped_args
-            else (metadata or {}),
+            tool_args=_redact_payload_dict(tool_args) if self._redact_secret_shaped_args else tool_args,
+            metadata=_redact_payload_dict(metadata or {}) if self._redact_secret_shaped_args else (metadata or {}),
         )
         if self._payload_filter is not None:
             try:
                 payload = self._payload_filter(payload)
             except Exception:
-                logger.exception(
-                    "http_hooks: payload_filter raised; sending payload unfiltered"
-                )
+                logger.exception("http_hooks: payload_filter raised; sending payload unfiltered")
 
         tasks = [fire_webhook(ep, payload) for ep in endpoints]
         return list(await asyncio.gather(*tasks, return_exceptions=False))

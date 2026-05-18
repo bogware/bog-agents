@@ -259,6 +259,7 @@ def can_secure_owner_only() -> bool:
     """
     if os.name == "nt":
         import shutil
+
         return shutil.which("icacls") is not None
     return True
 

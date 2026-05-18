@@ -94,9 +94,7 @@ class TestBuildProposal:
                 - deny: "no rm"
             """
         )
-        proposal = build_proposal(
-            "block rm commands", model=_ScriptedModel(yaml)
-        )
+        proposal = build_proposal("block rm commands", model=_ScriptedModel(yaml))
         assert proposal.parse_error == ""
         assert len(proposal.rules) == 1
         # underscores in the rule name are preserved; only invalid chars are replaced
@@ -105,9 +103,7 @@ class TestBuildProposal:
         assert proposal.lint is not None
 
     def test_parse_error_recorded(self) -> None:
-        proposal = build_proposal(
-            "bad", model=_ScriptedModel("not: real yaml: [\n")
-        )
+        proposal = build_proposal("bad", model=_ScriptedModel("not: real yaml: [\n"))
         assert proposal.parse_error
         assert not proposal.rules
         assert not proposal.ok_to_save
@@ -134,9 +130,7 @@ class TestBuildProposal:
             {"name": "shell_execute", "command": "ls", "args": {}},
             {"name": "edit", "command": "", "args": {}},
         ]
-        proposal = build_proposal(
-            "block rm", model=_ScriptedModel(yaml), history=history
-        )
+        proposal = build_proposal("block rm", model=_ScriptedModel(yaml), history=history)
         assert len(proposal.replay) == 3
         assert proposal.replay_count_denied == 1
         # Find the rm snapshot in the outcomes.
@@ -152,13 +146,7 @@ class TestBuildProposal:
 
 class TestRenderProposal:
     def test_render_includes_yaml_and_lint(self) -> None:
-        yaml = (
-            "- name: x\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            "    - audit_log\n"
-        )
+        yaml = "- name: x\n  when:\n    - tool_call: {}\n  then:\n    - audit_log\n"
         proposal = build_proposal("any", model=_ScriptedModel(yaml))
         text = render_proposal(proposal)
         assert "Expert rule proposal" in text
@@ -179,13 +167,7 @@ class TestRenderProposal:
 
 class TestSaveProposal:
     def _good_proposal(self):
-        yaml = (
-            "- name: gate\n"
-            "  when:\n"
-            "    - tool_call: {}\n"
-            "  then:\n"
-            '    - deny: "no"\n'
-        )
+        yaml = '- name: gate\n  when:\n    - tool_call: {}\n  then:\n    - deny: "no"\n'
         return build_proposal("any", model=_ScriptedModel(yaml))
 
     def test_writes_yaml_file(self, tmp_path: Path) -> None:

@@ -172,9 +172,7 @@ class CausalMiddleware(AgentMiddleware[CausalState, ContextT, ResponseT]):
     def wrap_model_call(
         self,
         request: ModelRequest[ContextT],
-        call_next: Callable[
-            [ModelRequest[ContextT]], ModelResponse[ResponseT]
-        ],
+        call_next: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT]:
         if not self._enabled:
             return call_next(request)
@@ -228,9 +226,7 @@ class CausalMiddleware(AgentMiddleware[CausalState, ContextT, ResponseT]):
                     parent_ids=(model_event_id,),
                     payload={
                         "tool_call_id": tc_id,
-                        "args_keys": sorted(
-                            (tc.get("args") or {}).keys()
-                        ),
+                        "args_keys": sorted((tc.get("args") or {}).keys()),
                     },
                 )
                 if tc_id:

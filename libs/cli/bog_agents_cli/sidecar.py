@@ -383,7 +383,9 @@ def run_sidecar_query(
             )
 
     result.ok = False
-    result.error = f"max_iterations={max_iterations} hit before sidecar produced an answer"
+    result.error = (
+        f"max_iterations={max_iterations} hit before sidecar produced an answer"
+    )
     return result
 
 

@@ -220,22 +220,13 @@ def generate_yaml(
 
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(
-            content=(
-                "Write the YAML for the rule(s) that implement this policy:\n\n"
-                f"{intent.strip()}"
-            )
-        ),
+        HumanMessage(content=(f"Write the YAML for the rule(s) that implement this policy:\n\n{intent.strip()}")),
     ]
     response = model.invoke(messages)
     raw = getattr(response, "content", response)
     if isinstance(raw, list):
         # Multi-block content list → join text parts.
-        text = "".join(
-            b.get("text", "")
-            for b in raw
-            if isinstance(b, dict) and b.get("type") == "text"
-        )
+        text = "".join(b.get("text", "") for b in raw if isinstance(b, dict) and b.get("type") == "text")
     else:
         text = str(raw)
     return _strip_yaml_fences(text)
@@ -302,9 +293,7 @@ def build_proposal(
     proposal.suggested_filename = _suggest_filename(proposal.rules)
     proposal.replay = _replay_against_history(proposal.rules, history)
     proposal.replay_count_denied = sum(1 for r in proposal.replay if r.denied)
-    proposal.replay_count_modified = sum(
-        1 for r in proposal.replay if r.modifications
-    )
+    proposal.replay_count_modified = sum(1 for r in proposal.replay if r.modifications)
     return proposal
 
 
@@ -375,8 +364,7 @@ def render_proposal(proposal: AuthoringProposal) -> str:
             lines.append("---")
         return "\n".join(lines)
 
-    lines.append(f"Generated {len(proposal.rules)} rule(s); "
-                 f"suggested file: {proposal.suggested_filename}")
+    lines.append(f"Generated {len(proposal.rules)} rule(s); suggested file: {proposal.suggested_filename}")
     lines.append("")
     lines.append("YAML:")
     lines.append("---")
@@ -393,28 +381,16 @@ def render_proposal(proposal: AuthoringProposal) -> str:
             f"{proposal.replay_count_modified} modified."
         )
         for i, r in enumerate(proposal.replay, start=1):
-            mark = "deny" if r.denied else (
-                "modify" if r.modifications else (
-                    "approve" if r.approvals else "pass"
-                )
-            )
+            mark = "deny" if r.denied else ("modify" if r.modifications else ("approve" if r.approvals else "pass"))
             ident = r.snapshot.get("name", "?")
-            lines.append(
-                f"  [{i:>3}] {mark:<8} tool={ident!r} "
-                f"fired={r.fired_rules}"
-            )
+            lines.append(f"  [{i:>3}] {mark:<8} tool={ident!r} fired={r.fired_rules}")
     else:
         lines.append("Replay: no history provided.")
     lines.append("")
     if proposal.ok_to_save:
-        lines.append(
-            "Approve with: /expert write save "
-            f"{proposal.suggested_filename}"
-        )
+        lines.append(f"Approve with: /expert write save {proposal.suggested_filename}")
     else:
-        lines.append(
-            "Cannot save: fix the errors above (rerun /expert write to retry)."
-        )
+        lines.append("Cannot save: fix the errors above (rerun /expert write to retry).")
     return "\n".join(lines)
 
 

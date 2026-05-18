@@ -371,11 +371,11 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     controller = get_controller(working_dir)
     text = command_text.strip()
     if text.startswith("/expert"):
-        return controller.handle_expert(text[len("/expert"):].strip())
+        return controller.handle_expert(text[len("/expert") :].strip())
     if text.startswith("/why"):
-        return controller.handle_why(text[len("/why"):].strip())
+        return controller.handle_why(text[len("/why") :].strip())
     if text.startswith("/prove"):
-        return controller.handle_prove(text[len("/prove"):].strip())
+        return controller.handle_prove(text[len("/prove") :].strip())
     return f"Unknown expert command: {text}"
 
 

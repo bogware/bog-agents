@@ -21,12 +21,13 @@ When the order intentionally changes:
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from bog_agents import create_agent
 from bog_agents.feature_config import FeatureConfig
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def _capture_middleware_list(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> list[str]:
@@ -74,9 +75,7 @@ class TestCanonicalMiddlewareOrder:
         # after Summarization compresses it.
         assert names[-1] == "AnthropicPromptCachingMiddleware", names
 
-    def test_summarization_runs_before_prompt_caching(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_summarization_runs_before_prompt_caching(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Summarization must compress messages before caching sees them.
 
         If PromptCaching wrapped Summarization (i.e. ran outside),
@@ -84,13 +83,9 @@ class TestCanonicalMiddlewareOrder:
         miss every cache hit after a summarization event.
         """
         names = _capture_middleware_list(monkeypatch)
-        assert names.index("_BogAgentsSummarizationMiddleware") < names.index(
-            "AnthropicPromptCachingMiddleware"
-        )
+        assert names.index("_BogAgentsSummarizationMiddleware") < names.index("AnthropicPromptCachingMiddleware")
 
-    def test_cost_tracker_before_default_summarization(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_cost_tracker_before_default_summarization(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """CostTracker wraps Summarization so it observes the full request size.
 
         With CostTracker outside (earlier in the list), its before/after
@@ -98,34 +93,24 @@ class TestCanonicalMiddlewareOrder:
         Summarization outside, the cost log records compressed counts
         and operators can't audit pre-summarization spend.
         """
-        names = _capture_middleware_list(
-            monkeypatch, config=FeatureConfig(enable_cost_tracking=True)
-        )
+        names = _capture_middleware_list(monkeypatch, config=FeatureConfig(enable_cost_tracking=True))
         assert "CostTrackerMiddleware" in names
-        assert names.index("CostTrackerMiddleware") < names.index(
-            "_BogAgentsSummarizationMiddleware"
-        )
+        assert names.index("CostTrackerMiddleware") < names.index("_BogAgentsSummarizationMiddleware")
 
-    def test_feature_middleware_runs_before_default_filesystem(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_feature_middleware_runs_before_default_filesystem(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Optional feature middleware are appended before the default tail.
 
         Anything in the `enable_*` block of graph.py needs to wrap the
         default FilesystemMiddleware/SubAgentMiddleware so feature-level
         approvals/rules/observability see file-operation traffic.
         """
-        names = _capture_middleware_list(
-            monkeypatch, config=FeatureConfig(enable_plan_mode=True)
-        )
+        names = _capture_middleware_list(monkeypatch, config=FeatureConfig(enable_plan_mode=True))
         assert "PlanModeMiddleware" in names
         # PlanMode must appear before FilesystemMiddleware to intercept
         # mutating tools before the filesystem backend executes them.
         assert names.index("PlanModeMiddleware") < names.index("FilesystemMiddleware")
 
-    def test_user_middleware_runs_after_defaults(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_user_middleware_runs_after_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """User-supplied middleware is appended after the default tail.
 
         The contract is: user middleware sees a fully-built agent
@@ -150,9 +135,7 @@ class TestCanonicalMiddlewareOrder:
         assert names.index("_UserMW") > names.index("FilesystemMiddleware")
         assert names.index("_UserMW") > names.index("SubAgentMiddleware")
 
-    def test_memory_middleware_appears_after_user_middleware(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_memory_middleware_appears_after_user_middleware(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Memory middleware reads/writes persistent storage and should run
         after user middleware so any user-defined message transforms are
         captured in memory rather than missed.
@@ -172,8 +155,6 @@ class TestCanonicalMiddlewareOrder:
 
         # Provide an empty sources list so MemoryMiddleware is added
         # but doesn't actually try to load anything from disk.
-        names = _capture_middleware_list(
-            monkeypatch, middleware=[_UserMW()], memory=[]
-        )
+        names = _capture_middleware_list(monkeypatch, middleware=[_UserMW()], memory=[])
         if "MemoryMiddleware" in names:
             assert names.index("_UserMW") < names.index("MemoryMiddleware")

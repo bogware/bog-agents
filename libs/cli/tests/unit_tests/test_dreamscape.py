@@ -777,6 +777,7 @@ class TestDreamCompleteCallback:
             await orig_sleep(min(delay, 0.05))
 
         import bog_agents_cli.dreamscape.scheduler as sched_mod
+
         sched_mod.asyncio.sleep = fast_sleep  # type: ignore[assignment]
         try:
             depth_before = sys.getrecursionlimit()

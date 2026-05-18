@@ -130,8 +130,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
             init_result = self._run_git("init")
             if init_result.returncode != 0:
                 logger.warning(
-                    "Checkpointing disabled: `git init` failed in %s "
-                    "(exit %d). stderr: %s",
+                    "Checkpointing disabled: `git init` failed in %s (exit %d). stderr: %s",
                     self._working_dir,
                     init_result.returncode,
                     (init_result.stderr or "").strip()[:200],

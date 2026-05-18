@@ -27,9 +27,7 @@ def dispatch_watch(controller: ExpertController, rest: str) -> str:
         return dispatch_watch_stop(controller)
     if head == "start":
         return dispatch_watch_start(controller, tail)
-    return (
-        "Usage: /expert watch [status | start [interval-seconds] [--apply] | stop]"
-    )
+    return "Usage: /expert watch [status | start [interval-seconds] [--apply] | stop]"
 
 
 def set_watch_summary_callback(controller: ExpertController, fn: Any | None) -> None:

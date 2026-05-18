@@ -214,15 +214,11 @@ def show_help() -> None:
     console.print(
         "  --drive-var NAME=VALUE     Override a ${var} value (may be repeated)"
     )
-    console.print(
-        "  --drive-artifacts DIR      Directory for snapshot artefacts"
-    )
+    console.print("  --drive-artifacts DIR      Directory for snapshot artefacts")
     console.print(
         "  --drive-output PATH        Write JSONL transcript to PATH instead of stdout"
     )
-    console.print(
-        "  --drive-stop-on-failure    Abort at the first failed assertion"
-    )
+    console.print("  --drive-stop-on-failure    Abort at the first failed assertion")
     console.print()
 
     # --- Slash Commands ---

@@ -59,9 +59,7 @@ class TestWizardControllerWiring:
             "  then:\n"
             "    - deny: 'no rm'\n"
         )
-        c = get_controller(
-            tmp_path, model_factory=lambda: _StubModel(yaml)
-        )
+        c = get_controller(tmp_path, model_factory=lambda: _StubModel(yaml))
         out = c.wizard("safety block rm commands")
         assert "Wizard" in out
         assert "block_rm" in out

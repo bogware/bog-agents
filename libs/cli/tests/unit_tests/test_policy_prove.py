@@ -94,9 +94,7 @@ class TestParser:
 
     def test_missing_precondition_raises(self):
         with pytest.raises(InvariantParseError, match="precondition"):
-            load_invariant_from_dict(
-                {"name": "i", "forbidden": {"fact_type": "y"}}
-            )
+            load_invariant_from_dict({"name": "i", "forbidden": {"fact_type": "y"}})
 
     def test_pattern_missing_fact_type_raises(self):
         with pytest.raises(InvariantParseError, match="fact_type"):
@@ -431,9 +429,7 @@ class TestController:
         out = prove_dispatch("/prove-invariant list", tmp_path)
         assert "[parse error" in out or "broken.yaml" in out
 
-    def test_inline_yaml_with_no_rules_returns_counterexample(
-        self, tmp_path: Path
-    ):
+    def test_inline_yaml_with_no_rules_returns_counterexample(self, tmp_path: Path):
         out = prove_dispatch(f"/prove-invariant\n{_GOOD_YAML}", tmp_path)
         assert "COUNTEREXAMPLE" in out
 
@@ -442,17 +438,13 @@ class TestController:
         d.mkdir()
         path = d / "x.yaml"
         path.write_text(_GOOD_YAML, encoding="utf-8")
-        out = prove_dispatch(
-            "/prove-invariant invariants/x.yaml", tmp_path
-        )
+        out = prove_dispatch("/prove-invariant invariants/x.yaml", tmp_path)
         # No rules loaded → counterexample expected.
         assert "COUNTEREXAMPLE" in out
 
     def test_unparseable_body_reports_error(self, tmp_path: Path):
         # Not a path, not a valid YAML doc.
-        out = prove_dispatch(
-            "/prove-invariant name-only-no-precondition", tmp_path
-        )
+        out = prove_dispatch("/prove-invariant name-only-no-precondition", tmp_path)
         assert "Could not parse invariant" in out
 
     def test_legacy_z3_flag_silently_ignored(self, tmp_path: Path):
@@ -464,7 +456,5 @@ class TestController:
         prover runs.
         """
         body = "\n".join([_GOOD_YAML, ""])
-        out = prove_dispatch(
-            f"/prove-invariant --z3\n{body}", tmp_path
-        )
+        out = prove_dispatch(f"/prove-invariant --z3\n{body}", tmp_path)
         assert "COUNTEREXAMPLE" in out or "INCONCLUSIVE" in out

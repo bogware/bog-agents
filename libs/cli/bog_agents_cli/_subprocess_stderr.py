@@ -384,7 +384,7 @@ def install_safe_subprocess_stderr_default() -> bool:
 
 
 @contextlib.asynccontextmanager
-async def asafe_subprocess_stderr() -> Any:  # noqa: ANN401, RUF029  # async context manager wrapper around the sync version; runtime-typed yield
+async def asafe_subprocess_stderr() -> Any:  # noqa: ANN401  # async context manager wrapper around the sync version; runtime-typed yield
     """Async variant of :func:`safe_subprocess_stderr`.
 
     Mirrors the sync version exactly — no async work happens in the

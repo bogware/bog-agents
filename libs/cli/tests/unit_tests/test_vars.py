@@ -314,7 +314,10 @@ class TestP0EWindowsPerms:
         monkeypatch.setattr(vars_store.os, "name", "nt")
         # Force shutil.which to return a path.
         import shutil
-        monkeypatch.setattr(shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe")
+
+        monkeypatch.setattr(
+            shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe"
+        )
         assert vars_store.can_secure_owner_only() is True
 
     def test_can_secure_owner_only_windows_without_icacls(
@@ -324,6 +327,7 @@ class TestP0EWindowsPerms:
 
         monkeypatch.setattr(vars_store.os, "name", "nt")
         import shutil
+
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         assert vars_store.can_secure_owner_only() is False
 
@@ -349,9 +353,16 @@ class TestP0EWindowsPerms:
             return _Completed()
 
         monkeypatch.setattr(vars_store.os, "name", "nt")
-        monkeypatch.setattr(vars_store.os.environ, "get", lambda key, default=None: "tester" if key == "USERNAME" else default)
+        monkeypatch.setattr(
+            vars_store.os.environ,
+            "get",
+            lambda key, default=None: "tester" if key == "USERNAME" else default,
+        )
         import shutil
-        monkeypatch.setattr(shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe")
+
+        monkeypatch.setattr(
+            shutil, "which", lambda _name: r"C:\Windows\System32\icacls.exe"
+        )
         monkeypatch.setattr(vars_store.subprocess, "run", fake_run)
 
         assert vars_store._secure_owner_only(target) is True
@@ -373,6 +384,7 @@ class TestP0EWindowsPerms:
 
         monkeypatch.setattr(vars_store.os, "name", "nt")
         import shutil
+
         monkeypatch.setattr(shutil, "which", lambda _name: None)
         assert vars_store._secure_owner_only(target) is False
 
@@ -388,9 +400,11 @@ class TestP0EWindowsPerms:
         monkeypatch.setattr(vars_store, "_warned_fallback", False)
         monkeypatch.setattr(vars_store.os, "name", "nt")
         import shutil
+
         monkeypatch.setattr(shutil, "which", lambda _name: None)
 
         import logging
+
         with caplog.at_level(logging.WARNING, logger="bog_agents_cli.vars_store"):
             vars_store._warn_fallback_once()
         message = caplog.text

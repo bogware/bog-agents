@@ -56,7 +56,7 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     """Top-level entry point — called from the TUI handler."""
     text = command_text.strip()
     if text.startswith("/prove-invariant"):
-        text = text[len("/prove-invariant"):].strip()
+        text = text[len("/prove-invariant") :].strip()
     if not text:
         return _help_text()
     head = text.split(None, 1)[0].lower()
@@ -138,7 +138,9 @@ def _load_invariant_from_input(body: str, working_dir: Path) -> Invariant:
     if not body:
         msg = "Empty invariant body. Provide YAML inline or a file path."
         raise InvariantParseError(msg)
-    candidate = (working_dir / body).resolve() if not Path(body).is_absolute() else Path(body)
+    candidate = (
+        (working_dir / body).resolve() if not Path(body).is_absolute() else Path(body)
+    )
     if candidate.is_file() and candidate.suffix in (".yaml", ".yml"):
         return load_invariant_from_yaml(candidate)
     # Treat as YAML body. If it parses, we accept it.
@@ -154,9 +156,7 @@ def _list_examples(working_dir: Path) -> str:
             "Create one and drop YAML files in to share invariants "
             "with the team."
         )
-    files = sorted(invariants_dir.glob("*.yaml")) + sorted(
-        invariants_dir.glob("*.yml")
-    )
+    files = sorted(invariants_dir.glob("*.yaml")) + sorted(invariants_dir.glob("*.yml"))
     if not files:
         return f"No invariant files found under {invariants_dir}."
     lines = [f"{len(files)} invariant file(s) under {invariants_dir.name}/:", ""]
@@ -194,7 +194,8 @@ def _help_text() -> str:
 
 
 def prove_dict(
-    data: dict, working_dir: Path | str,
+    data: dict,
+    working_dir: Path | str,
 ) -> InvariantProof:
     """Programmatic entry point for tests + scripts."""
     invariant = load_invariant_from_dict(data)

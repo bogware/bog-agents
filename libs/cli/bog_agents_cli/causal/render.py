@@ -43,9 +43,7 @@ def _format_event_line(event: CausalEvent, *, indent: int = 0) -> str:
     prefix = "  " * indent
     label = _KIND_LABELS.get(event.kind, event.kind.value.upper())
     parents = (
-        f" ← {','.join(str(p) for p in event.parent_ids)}"
-        if event.parent_ids
-        else ""
+        f" ← {','.join(str(p) for p in event.parent_ids)}" if event.parent_ids else ""
     )
     return (
         f"{prefix}#{event.id:>4}  [{label:<6}] {event.actor:<24} "
@@ -68,9 +66,7 @@ def render_status(ledger: CausalLedger) -> str:
         ((k, v) for k, v in counts.items() if v > 0),
         key=lambda kv: -kv[1],
     )
-    histogram = "  ".join(
-        f"{_KIND_LABELS.get(k, k.value)}={v}" for k, v in nonzero
-    )
+    histogram = "  ".join(f"{_KIND_LABELS.get(k, k.value)}={v}" for k, v in nonzero)
     return (
         f"Causal session: {ledger.session_id}\n"
         f"Recorded events: {total}\n"
@@ -80,17 +76,14 @@ def render_status(ledger: CausalLedger) -> str:
     )
 
 
-def render_recent(
-    ledger: CausalLedger, *, limit: int = 20
-) -> str:
+def render_recent(ledger: CausalLedger, *, limit: int = 20) -> str:
     """Render the last *limit* events in append order."""
     events = ledger.events()
     if not events:
         return f"No events recorded in session {ledger.session_id}."
-    selected = events[-max(1, limit):]
+    selected = events[-max(1, limit) :]
     lines = [
-        f"Last {len(selected)} of {len(events)} events "
-        f"(session {ledger.session_id}):",
+        f"Last {len(selected)} of {len(events)} events (session {ledger.session_id}):",
         "",
     ]
     for e in selected:
@@ -118,9 +111,7 @@ def render_ancestry(
         _format_event_line(root),
     ]
     seen: set[int] = {root.id}
-    queue: deque[tuple[int, int]] = deque(
-        (p, 1) for p in root.parent_ids
-    )
+    queue: deque[tuple[int, int]] = deque((p, 1) for p in root.parent_ids)
     while queue:
         cur_id, depth = queue.popleft()
         if cur_id in seen:
@@ -128,9 +119,7 @@ def render_ancestry(
         seen.add(cur_id)
         cur = by_id.get(cur_id)
         if cur is None:
-            lines.append(
-                "  " * depth + f"#{cur_id} (missing — event dropped from log)"
-            )
+            lines.append("  " * depth + f"#{cur_id} (missing — event dropped from log)")
             continue
         lines.append(_format_event_line(cur, indent=depth))
         for parent in cur.parent_ids:
@@ -157,10 +146,7 @@ def render_graph(ledger: CausalLedger, *, limit: int = 60) -> str:
             f"— session {ledger.session_id}:"
         )
     else:
-        header = (
-            f"Causal graph ({len(events)} events) — "
-            f"session {ledger.session_id}:"
-        )
+        header = f"Causal graph ({len(events)} events) — session {ledger.session_id}:"
 
     by_id = {e.id: e for e in events}
     children: dict[int, list[int]] = {e.id: [] for e in events}

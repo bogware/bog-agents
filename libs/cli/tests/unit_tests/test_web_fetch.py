@@ -106,9 +106,9 @@ class TestFetchHappyPath:
         resp = MagicMock()
         resp.geturl.return_value = final_url
         resp.status = status
-        resp.headers.get_content_type.return_value = (
-            content_type.split(";", 1)[0].strip()
-        )
+        resp.headers.get_content_type.return_value = content_type.split(";", 1)[
+            0
+        ].strip()
         # We need 'in' membership on content_type for charset detection.
         resp.headers.__contains__ = lambda _self, _k: False
         resp.read.return_value = body
@@ -124,7 +124,7 @@ class TestFetchHappyPath:
         monkeypatch.setattr(
             wf.urllib.request,
             "urlopen",
-            lambda _req, timeout=None: self._stub_response(body=body),  # noqa: ARG005
+            lambda _req, timeout=None: self._stub_response(body=body),
         )
         result = fetch_url("https://example.com/page")
         assert result.status_code == 200
@@ -140,11 +140,9 @@ class TestFetchHappyPath:
         monkeypatch.setattr(
             wf.urllib.request,
             "urlopen",
-            lambda _req, timeout=None: self._stub_response(body=body),  # noqa: ARG005
+            lambda _req, timeout=None: self._stub_response(body=body),
         )
-        result = fetch_url(
-            "https://example.com/page", max_bytes=10
-        )
+        result = fetch_url("https://example.com/page", max_bytes=10)
         assert result.truncated is True
         # Body holds the truncated, cleaned text — 10 'a's stripped of tags.
         assert "a" in result.body
@@ -156,7 +154,7 @@ class TestFetchHappyPath:
         monkeypatch.setattr(
             wf.urllib.request,
             "urlopen",
-            lambda _req, timeout=None: self._stub_response(  # noqa: ARG005
+            lambda _req, timeout=None: self._stub_response(
                 body=body, content_type="text/plain; charset=utf-8"
             ),
         )

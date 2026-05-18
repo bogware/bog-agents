@@ -522,7 +522,9 @@ class ServerProcess:
             try:
                 self._log_file.close()
             except OSError:
-                logger.debug("Failed to close log file after Popen failure", exc_info=True)
+                logger.debug(
+                    "Failed to close log file after Popen failure", exc_info=True
+                )
             self._log_file = None
             raise
 

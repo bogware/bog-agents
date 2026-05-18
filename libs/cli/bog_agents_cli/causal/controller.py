@@ -209,9 +209,8 @@ class CausalController:
                 "Start with /trace-mind on — the next prompt will be traced "
                 "and saved under .bog-agents/causal/."
             )
-        return (
-            f"Recording: {'ON' if self._enabled else 'OFF'}\n"
-            + render_status(self._active)
+        return f"Recording: {'ON' if self._enabled else 'OFF'}\n" + render_status(
+            self._active
         )
 
     def _recent(self, tail: str) -> str:
@@ -276,9 +275,7 @@ def dispatch(command_text: str, working_dir: Path | str) -> str:
     text = command_text.strip()
     for prefix in ("/trace-mind", "/causal"):
         if text.startswith(prefix):
-            return get_controller(working_dir).handle(
-                text[len(prefix):].strip()
-            )
+            return get_controller(working_dir).handle(text[len(prefix) :].strip())
     return f"Unknown trace-mind command: {text}"
 
 

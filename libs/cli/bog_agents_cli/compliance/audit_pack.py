@@ -288,8 +288,7 @@ def _parse_window(data: Any) -> AuditWindow:
         lookback = float(raw_lookback)
     except (ValueError, TypeError) as exc:
         msg = (
-            f"AuditPack 'window.lookback_hours' must be a number, "
-            f"got {raw_lookback!r}."
+            f"AuditPack 'window.lookback_hours' must be a number, got {raw_lookback!r}."
         )
         raise PackParseError(msg) from exc
     if lookback <= 0:
@@ -344,9 +343,7 @@ def _parse_check(data: Any) -> Check:
         try:
             rule_name = str(data["rule_name"]).strip()
         except KeyError as exc:
-            msg = (
-                f"Check {check_id!r}: kind={kind.value} requires 'rule_name'."
-            )
+            msg = f"Check {check_id!r}: kind={kind.value} requires 'rule_name'."
             raise PackParseError(msg) from exc
         if not rule_name:
             msg = f"Check {check_id!r}: 'rule_name' must be non-empty."
@@ -377,10 +374,7 @@ def _parse_evidence(data: Any, *, check_id: str) -> EvidenceSpec:
         kind = EvidenceKind(kind_raw)
     except ValueError as exc:
         valid = ", ".join(k.value for k in EvidenceKind)
-        msg = (
-            f"Check {check_id!r}: unknown evidence kind {kind_raw!r}. "
-            f"Valid: {valid}."
-        )
+        msg = f"Check {check_id!r}: unknown evidence kind {kind_raw!r}. Valid: {valid}."
         raise PackParseError(msg) from exc
     params = {k: v for k, v in data.items() if k != "kind"}
     return EvidenceSpec(kind=kind, params=params)

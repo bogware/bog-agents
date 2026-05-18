@@ -133,8 +133,7 @@ async def test_async_with_no_args_lists(harness: _Harness):
     await BogAgentsApp._handle_async_command(harness, "/async")  # type: ignore[arg-type]
     # First message is the UserMessage echo; second is the delegation.
     assert any(
-        isinstance(m, tuple) and m[1] == "/background list"
-        for m in harness.messages
+        isinstance(m, tuple) and m[1] == "/background list" for m in harness.messages
     )
 
 
@@ -144,8 +143,7 @@ async def test_async_list_alias(harness: _Harness):
 
     await BogAgentsApp._handle_async_command(harness, "/async list")  # type: ignore[arg-type]
     assert any(
-        isinstance(m, tuple) and m[1] == "/background list"
-        for m in harness.messages
+        isinstance(m, tuple) and m[1] == "/background list" for m in harness.messages
     )
 
 

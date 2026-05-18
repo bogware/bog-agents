@@ -759,7 +759,9 @@ async def _stream_agent(
     # was in play (default? env override? off entirely?). The log
     # cost is trivial and the on-call signal is real.
     if chunk_timeout is None:
-        logger.info("agent stream: per-chunk timeout disabled (BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0)")
+        logger.info(
+            "agent stream: per-chunk timeout disabled (BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS=0)"
+        )
     else:
         logger.info(
             "agent stream: per-chunk timeout %.0fs (override via BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS)",
@@ -779,9 +781,7 @@ async def _stream_agent(
             if chunk_timeout is None:
                 chunk = await anext(iterator)
             else:
-                chunk = await asyncio.wait_for(
-                    anext(iterator), timeout=chunk_timeout
-                )
+                chunk = await asyncio.wait_for(anext(iterator), timeout=chunk_timeout)
         except StopAsyncIteration:
             break
         except TimeoutError as exc:

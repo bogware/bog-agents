@@ -229,9 +229,7 @@ async def _run_one_juror(
             timeout=juror_timeout_s,
         )
     except TimeoutError:
-        logger.warning(
-            "juror %s timed out after %.0fs", juror_id, juror_timeout_s
-        )
+        logger.warning("juror %s timed out after %.0fs", juror_id, juror_timeout_s)
         return JurorVerdict(
             juror=juror_id,
             verdict="invalid",

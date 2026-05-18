@@ -2574,8 +2574,8 @@ async def test_async_offload_and_summary_run_concurrently() -> None:
 def test_inlined_summarization_defaults_match_upstream() -> None:
     """Guard against drift between our inlined defaults and langchain's."""
     from langchain.agents.middleware.summarization import (
-        _DEFAULT_MESSAGES_TO_KEEP as upstream_msgs,
-        _DEFAULT_TRIM_TOKEN_LIMIT as upstream_trim,
+        _DEFAULT_MESSAGES_TO_KEEP as UPSTREAM_MSGS,
+        _DEFAULT_TRIM_TOKEN_LIMIT as UPSTREAM_TRIM,
     )
 
     from bog_agents.middleware.summarization import (
@@ -2583,11 +2583,9 @@ def test_inlined_summarization_defaults_match_upstream() -> None:
         _DEFAULT_TRIM_TOKEN_LIMIT,
     )
 
-    assert upstream_msgs == _DEFAULT_MESSAGES_TO_KEEP, (
-        "Inlined _DEFAULT_MESSAGES_TO_KEEP no longer matches langchain — "
-        "either update our copy or remove this test."
+    assert UPSTREAM_MSGS == _DEFAULT_MESSAGES_TO_KEEP, (
+        "Inlined _DEFAULT_MESSAGES_TO_KEEP no longer matches langchain — either update our copy or remove this test."
     )
-    assert upstream_trim == _DEFAULT_TRIM_TOKEN_LIMIT, (
-        "Inlined _DEFAULT_TRIM_TOKEN_LIMIT no longer matches langchain — "
-        "either update our copy or remove this test."
+    assert UPSTREAM_TRIM == _DEFAULT_TRIM_TOKEN_LIMIT, (
+        "Inlined _DEFAULT_TRIM_TOKEN_LIMIT no longer matches langchain — either update our copy or remove this test."
     )

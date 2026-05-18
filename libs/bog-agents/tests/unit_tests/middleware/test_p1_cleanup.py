@@ -25,9 +25,7 @@ class TestP11WebhookRedaction:
     """``tool_args`` and ``metadata`` are redacted before payloads leave the agent."""
 
     @pytest.mark.asyncio
-    async def test_secret_shaped_values_redacted(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_secret_shaped_values_redacted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from bog_agents.middleware.http_hooks import (
             HttpHooksMiddleware,
             WebhookEndpoint,
@@ -69,9 +67,7 @@ class TestP11WebhookRedaction:
         assert payload.metadata["safe"] == "value"
 
     @pytest.mark.asyncio
-    async def test_redaction_can_be_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_redaction_can_be_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from bog_agents.middleware.http_hooks import (
             HttpHooksMiddleware,
             WebhookEndpoint,
@@ -100,9 +96,7 @@ class TestP11WebhookRedaction:
         assert captured[0].tool_args["api_key"] == "plaintext"
 
     @pytest.mark.asyncio
-    async def test_payload_filter_runs_after_redaction(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_payload_filter_runs_after_redaction(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from bog_agents.middleware.http_hooks import (
             HttpHooksMiddleware,
             WebhookEndpoint,
@@ -121,11 +115,7 @@ class TestP11WebhookRedaction:
             return payload
 
         mw = HttpHooksMiddleware(
-            endpoints=[
-                WebhookEndpoint(
-                    url="http://x/", events=[WebhookEvent.ON_AGENT_START]
-                )
-            ],
+            endpoints=[WebhookEndpoint(url="http://x/", events=[WebhookEvent.ON_AGENT_START])],
             payload_filter=filter_fn,
         )
         await mw._fire_event(WebhookEvent.ON_AGENT_START)

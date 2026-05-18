@@ -382,9 +382,7 @@ def pattern_from_shorthand(fact_type: str, **fields: Any) -> Pattern:
 
         pattern_from_shorthand("tool_call", name="shell_execute", session_id=7)
     """
-    preds = tuple(
-        Predicate(field=k, op=PredicateOp.EQ, value=v) for k, v in fields.items()
-    )
+    preds = tuple(Predicate(field=k, op=PredicateOp.EQ, value=v) for k, v in fields.items())
     return Pattern(fact_type=fact_type, predicates=preds)
 
 

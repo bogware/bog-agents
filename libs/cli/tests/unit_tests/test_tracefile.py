@@ -272,9 +272,7 @@ class TestBuildAndRoundTrip:
 class TestVerify:
     def test_happy_path(self, tmp_path: Path):
         key = generate_keypair()
-        tf = build_tracefile(
-            _sample_frames(), key=key, session_id="sess-V"
-        )
+        tf = build_tracefile(_sample_frames(), key=key, session_id="sess-V")
         path = tmp_path / "x.trace"
         write_tracefile(tf, path)
         loaded = read_tracefile(path)
@@ -333,9 +331,7 @@ class TestVerify:
         key = generate_keypair()
         tf = build_tracefile(_sample_frames(), key=key, session_id="s")
         text = trace_to_text(tf)
-        bumped = text.replace(
-            f'"version":{SPEC_VERSION}', '"version":99'
-        )
+        bumped = text.replace(f'"version":{SPEC_VERSION}', '"version":99')
         with pytest.raises(TraceFileError):
             parse_tracefile(bumped)
 
@@ -392,9 +388,7 @@ _CLAUDE_HOOK_PAYLOAD_USER = {
 
 class TestClaudeCodeAdapter:
     def test_hook_post_yields_call_and_result(self):
-        frames = claude_code_hook_to_frames(
-            _CLAUDE_HOOK_PAYLOAD_POST, next_id=1
-        )
+        frames = claude_code_hook_to_frames(_CLAUDE_HOOK_PAYLOAD_POST, next_id=1)
         kinds = [f.event_kind for f in frames]
         assert "tool_call" in kinds
         assert "tool_result" in kinds
@@ -404,9 +398,7 @@ class TestClaudeCodeAdapter:
         assert call_frame.id in result_frame.parents
 
     def test_hook_user_prompt(self):
-        frames = claude_code_hook_to_frames(
-            _CLAUDE_HOOK_PAYLOAD_USER, next_id=1
-        )
+        frames = claude_code_hook_to_frames(_CLAUDE_HOOK_PAYLOAD_USER, next_id=1)
         assert len(frames) == 1
         assert frames[0].event_kind == "user_message"
         assert "2+2" in frames[0].summary
@@ -497,9 +489,7 @@ class TestClaudeCodeAdapter:
 
 
 @pytest.fixture
-def isolated_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Path:
+def isolated_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Pin the default key location to a tmp file.
 
     So /tracefile export doesn't touch the developer's
@@ -523,32 +513,22 @@ class TestSlashDispatch:
         out = trace_dispatch("/tracefile wibble", tmp_path)
         assert "Unknown /tracefile subcommand" in out
 
-    def test_keygen_creates_key(
-        self, tmp_path: Path, isolated_key: Path
-    ):
-        out = trace_dispatch(
-            f"/tracefile keygen --out {tmp_path / 'k.key'}", tmp_path
-        )
+    def test_keygen_creates_key(self, tmp_path: Path, isolated_key: Path):
+        out = trace_dispatch(f"/tracefile keygen --out {tmp_path / 'k.key'}", tmp_path)
         assert "Generated Ed25519 keypair" in out
         assert (tmp_path / "k.key").is_file()
 
     def test_keygen_refuses_overwrite(self, tmp_path: Path):
         target = tmp_path / "k.key"
         target.write_text("existing", encoding="utf-8")
-        out = trace_dispatch(
-            f"/tracefile keygen --out {target}", tmp_path
-        )
+        out = trace_dispatch(f"/tracefile keygen --out {target}", tmp_path)
         assert "Refusing to overwrite" in out
 
-    def test_export_no_sessions(
-        self, tmp_path: Path, isolated_key: Path
-    ):
+    def test_export_no_sessions(self, tmp_path: Path, isolated_key: Path):
         out = trace_dispatch("/tracefile export latest", tmp_path)
         assert "No causal sessions" in out
 
-    def test_export_round_trip(
-        self, tmp_path: Path, isolated_key: Path
-    ):
+    def test_export_round_trip(self, tmp_path: Path, isolated_key: Path):
         ledger = open_session(tmp_path)
         ledger.record(EventKind.USER_MESSAGE, actor="user", summary="hi")
         ledger.record(
@@ -558,9 +538,7 @@ class TestSlashDispatch:
             parent_ids=(1,),
         )
         ledger.close()
-        out = trace_dispatch(
-            f"/tracefile export {ledger.session_id}", tmp_path
-        )
+        out = trace_dispatch(f"/tracefile export {ledger.session_id}", tmp_path)
         assert "TraceFile exported" in out
         # Find the file we just wrote.
         files = list((tmp_path / ".bog-agents" / "tracefiles").glob("*.trace"))
@@ -574,9 +552,7 @@ class TestSlashDispatch:
         assert "TraceFile (verified)" in import_out
         assert "hi" in import_out
 
-    def test_import_refuses_tampered(
-        self, tmp_path: Path, isolated_key: Path
-    ):
+    def test_import_refuses_tampered(self, tmp_path: Path, isolated_key: Path):
         ledger = open_session(tmp_path)
         ledger.record(EventKind.USER_MESSAGE, actor="user", summary="hi")
         ledger.close()
@@ -628,9 +604,7 @@ class TestHeader:
 
     def test_default_header_includes_zero_notes_when_none(self, tmp_path: Path):
         key = generate_keypair()
-        tf = build_tracefile(
-            _sample_frames(), key=key, session_id="x"
-        )
+        tf = build_tracefile(_sample_frames(), key=key, session_id="x")
         assert tf.header.notes == ()
 
 

@@ -79,7 +79,9 @@ def _coerce_value(raw: str) -> Any:
 
 def _pattern_from_kv(fact_type: str, fields: dict[str, Any]) -> Pattern:
     """Build an equality :class:`Pattern` from keyword-arg fields."""
-    preds = tuple(Predicate(field=k, op=PredicateOp.EQ, value=v) for k, v in fields.items())
+    preds = tuple(
+        Predicate(field=k, op=PredicateOp.EQ, value=v) for k, v in fields.items()
+    )
     return Pattern(fact_type=fact_type, predicates=preds)
 
 

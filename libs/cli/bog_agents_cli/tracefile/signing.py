@@ -140,19 +140,15 @@ def load_keypair_from_path(path: Path) -> KeyMaterial:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith(_PRIVATE_PREFIX):
-            private_b64 = stripped[len(_PRIVATE_PREFIX):]
+            private_b64 = stripped[len(_PRIVATE_PREFIX) :]
         elif stripped.startswith(_PUBLIC_PREFIX):
-            public_b64 = stripped[len(_PUBLIC_PREFIX):]
+            public_b64 = stripped[len(_PUBLIC_PREFIX) :]
     if not private_b64 or not public_b64:
         msg = f"Key file {path} is malformed (missing private or public line)."
         raise SigningError(msg)
     try:
-        sk = Ed25519PrivateKey.from_private_bytes(
-            base64.urlsafe_b64decode(private_b64)
-        )
-        pk = Ed25519PublicKey.from_public_bytes(
-            base64.urlsafe_b64decode(public_b64)
-        )
+        sk = Ed25519PrivateKey.from_private_bytes(base64.urlsafe_b64decode(private_b64))
+        pk = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(public_b64))
     except (ValueError, TypeError) as exc:
         msg = f"Key file {path} contains malformed key material: {exc}"
         raise SigningError(msg) from exc
@@ -186,9 +182,7 @@ def load_keypair_from_path(path: Path) -> KeyMaterial:
 def material_from_public_b64(public_b64: str) -> KeyMaterial:
     """Build verify-only :class:`KeyMaterial` from a base64 public key."""
     try:
-        pk = Ed25519PublicKey.from_public_bytes(
-            base64.urlsafe_b64decode(public_b64)
-        )
+        pk = Ed25519PublicKey.from_public_bytes(base64.urlsafe_b64decode(public_b64))
     except (ValueError, TypeError) as exc:
         msg = f"Invalid public key blob: {exc}"
         raise SigningError(msg) from exc

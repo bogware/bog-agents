@@ -305,12 +305,7 @@ class TestAsyncInterception:
             seen.append(dict(r.tool_call["args"]))
             return "ok"
 
-        await asyncio.gather(
-            *(
-                mw.awrap_tool_call(_make_request("x", {"i": i}, call_id=f"c{i}"), handler)
-                for i in range(10)
-            )
-        )
+        await asyncio.gather(*(mw.awrap_tool_call(_make_request("x", {"i": i}, call_id=f"c{i}"), handler) for i in range(10)))
         # Engine retracts each tool_call fact after its run; memory should be clean.
         assert mw.engine.memory.stats().get("tool_call", 0) == 0
         assert len(seen) == 10
@@ -340,9 +335,7 @@ class TestExplain:
         )
         mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
         # Make the fact world look real so explain has something to walk.
-        mw.engine.assert_fact(
-            Fact(fact_type="tool_call", data={"name": "shell", "command": "rm -rf /tmp/x"})
-        )
+        mw.engine.assert_fact(Fact(fact_type="tool_call", data={"name": "shell", "command": "rm -rf /tmp/x"}))
         tree = mw.explain(Pattern(fact_type="tool_call"))
         assert tree["root"]["proven"] is True
 

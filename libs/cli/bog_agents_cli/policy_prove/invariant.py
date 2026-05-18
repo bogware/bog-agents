@@ -203,9 +203,7 @@ def _parse_predicate(data: Any) -> PredicateSpec:
         op = PredicateOp(op_raw)
     except ValueError as exc:
         valid = ", ".join(o.value for o in PredicateOp)
-        msg = (
-            f"Unknown predicate op {op_raw!r}. Valid: {valid}."
-        )
+        msg = f"Unknown predicate op {op_raw!r}. Valid: {valid}."
         raise InvariantParseError(msg) from exc
     value = data.get("value")
     return PredicateSpec(field=field, op=op, value=value)

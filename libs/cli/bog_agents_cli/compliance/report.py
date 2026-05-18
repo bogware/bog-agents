@@ -245,7 +245,12 @@ def render_markdown(
         "| Verdict | Count |",
         "| --- | --- |",
     ]
-    for verdict in (Verdict.PASS, Verdict.FAIL, Verdict.INCONCLUSIVE, Verdict.NOT_APPLICABLE):
+    for verdict in (
+        Verdict.PASS,
+        Verdict.FAIL,
+        Verdict.INCONCLUSIVE,
+        Verdict.NOT_APPLICABLE,
+    ):
         lines.append(f"| {verdict.value} | {counts[verdict]} |")
 
     lines.extend(
@@ -270,8 +275,7 @@ def render_markdown(
         ctrl = r.control or "—"
         icon = _VERDICT_ICON[r.verdict]
         lines.append(
-            f"| `{r.check_id}` | `{ctrl}` | {icon} {r.verdict.value} | "
-            f"{r.title} |"
+            f"| `{r.check_id}` | `{ctrl}` | {icon} {r.verdict.value} | {r.title} |"
         )
 
     lines.extend(["", "## Per-check detail", ""])
@@ -351,7 +355,7 @@ def verify_seal(sealed: str, *, key: bytes | None = None) -> tuple[bool, str]:
     if idx < 0:
         return (False, "no seal footer found")
     body = sealed[:idx]
-    footer = sealed[idx + len(marker):]
+    footer = sealed[idx + len(marker) :]
     digest = _parse_seal_digest(footer)
     if digest is None:
         return (False, "seal footer is malformed")

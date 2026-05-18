@@ -224,9 +224,7 @@ def create_worktree(
     # P1-9: also use ``--`` as the option terminator so any future
     # positional-arg additions to ``git worktree add`` can't be tricked
     # by a leading-dash branch / path.
-    result = _run_git(
-        repo_dir, "worktree", "add", "-b", branch, "--", str(worktree_path)
-    )
+    result = _run_git(repo_dir, "worktree", "add", "-b", branch, "--", str(worktree_path))
     if result.startswith("[exit code"):
         # Branch might already exist, try without -b
         result = _run_git(repo_dir, "worktree", "add", "--", str(worktree_path), branch)

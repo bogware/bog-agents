@@ -59,14 +59,9 @@ def write_save(controller: ExpertController, filename: str = "") -> str:
     the rule is live in the same session.
     """
     if controller._pending_proposal is None:
-        return (
-            "No pending proposal — run /expert write <intent> first."
-        )
+        return "No pending proposal — run /expert write <intent> first."
     if not controller._pending_proposal.ok_to_save:
-        return (
-            "Pending proposal has errors; fix them and rerun "
-            "/expert write <intent>."
-        )
+        return "Pending proposal has errors; fix them and rerun /expert write <intent>."
     rules_dir = controller._working_dir / ".bog-agents" / "expert_rules"
     try:
         written = save_authoring_proposal(

@@ -116,8 +116,7 @@ def test_middleware_package_does_not_pull_aiohttp() -> None:
     )
     count = int(result.stdout.strip())
     assert count == 0, (
-        f"importing bog_agents.middleware pulled aiohttp ({count} modules) — "
-        "P0-B regression. Run __getattr__ probe to find the offender."
+        f"importing bog_agents.middleware pulled aiohttp ({count} modules) — P0-B regression. Run __getattr__ probe to find the offender."
     )
 
 
@@ -134,9 +133,5 @@ def test_attribute_access_resolves_lazily() -> None:
 def test_unknown_attribute_raises_attribute_error() -> None:
     import bog_agents.middleware as m
 
-    try:
+    with pytest.raises(AttributeError, match="DefinitelyNotARealMiddleware"):
         _ = m.DefinitelyNotARealMiddleware
-    except AttributeError as exc:
-        assert "DefinitelyNotARealMiddleware" in str(exc)
-    else:
-        raise AssertionError("expected AttributeError for unknown lazy export")

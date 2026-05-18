@@ -89,12 +89,14 @@ class TestVaultInjection:
         assert "OPENAI_API_KEY" in injected
 
         import os
+
         assert os.environ.get("OPENAI_API_KEY") == "from-vault"
 
     def test_does_not_overwrite_existing_env(
         self, _isolated_env: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import os
+
         os.environ["OPENAI_API_KEY"] = "from-shell"
         try:
             from bog_agents_cli import api_keys
@@ -130,6 +132,7 @@ class TestPerplexityAlias:
         assert "PPLX_API_KEY" in injected
 
         import os
+
         assert os.environ.get("PPLX_API_KEY") == "alias-key"
 
     def test_alias_env_var_resolves_to_canonical(
@@ -137,6 +140,7 @@ class TestPerplexityAlias:
     ) -> None:
         """An exported ``PERPLEXITY_API_KEY`` should also resolve to ``PPLX_API_KEY``."""
         import os
+
         os.environ["PERPLEXITY_API_KEY"] = "from-shell-alias"
         try:
             from bog_agents_cli import api_keys
@@ -156,6 +160,7 @@ class TestPerplexityAlias:
     ) -> None:
         """If both PPLX_API_KEY and PERPLEXITY_API_KEY are set, the canonical wins."""
         import os
+
         os.environ["PPLX_API_KEY"] = "canonical"
         os.environ["PERPLEXITY_API_KEY"] = "alias"
         try:

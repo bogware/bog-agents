@@ -214,7 +214,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("watch start [N] [--apply]", "Start the scheduled proposer"),
                 ("watch stop", "Stop the scheduled proposer"),
                 ("propose [agent]", "Mine dreams + history → stage a proposed rule"),
-                ("propose [agent] --apply", "Mine dreams + apply the rule directly (skip staging)"),
+                (
+                    "propose [agent] --apply",
+                    "Mine dreams + apply the rule directly (skip staging)",
+                ),
                 ("proposals", "List pending dream-mined proposals"),
                 ("proposals approve <name>", "Promote a proposal to active rules"),
                 ("proposals discard <name>", "Delete a pending proposal"),
@@ -233,9 +236,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "explain trace reason proof backward expert why",
             "general",
             available=True,
-            subcommands=(
-                ("<fact_type> [k=v ...]", "Fact-type pattern to explain"),
-            ),
+            subcommands=(("<fact_type> [k=v ...]", "Fact-type pattern to explain"),),
         ),
         handler_method="_handle_why_command",
     ),
@@ -247,9 +248,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "question ask isolated subagent read-only sidecar parallel side aside",
             "general",
             available=True,
-            subcommands=(
-                ("<question>", "What you want the sidecar to answer"),
-            ),
+            subcommands=(("<question>", "What you want the sidecar to answer"),),
         ),
         handler_method="_handle_sidecar_command",
     ),
@@ -263,7 +262,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
             subcommands=(
                 ("<goal>", "Plain-English goal to decompose and run"),
-                ("--parallel <goal>", "Run subtasks concurrently (each gets a fresh model)"),
+                (
+                    "--parallel <goal>",
+                    "Run subtasks concurrently (each gets a fresh model)",
+                ),
             ),
         ),
         handler_method="_handle_orchestrate_command",
@@ -275,9 +277,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
             "prove goal derive backward chain target",
             "general",
             available=True,
-            subcommands=(
-                ("<fact_type> [k=v ...]", "Goal pattern to prove"),
-            ),
+            subcommands=(("<fact_type> [k=v ...]", "Goal pattern to prove"),),
         ),
         handler_method="_handle_prove_command",
     ),
@@ -304,7 +304,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
             subcommands=(
                 ("<url>", "Fetch URL and inject as context"),
-                ("<url> -- <question>", "Fetch URL then ask the agent <question> about it"),
+                (
+                    "<url> -- <question>",
+                    "Fetch URL then ask the agent <question> about it",
+                ),
             ),
         ),
         handler_method="_handle_web_command",

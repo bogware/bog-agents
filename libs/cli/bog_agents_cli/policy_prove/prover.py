@@ -157,9 +157,7 @@ def _prove_heuristic(
     for rule in rules:
         if not _rule_has_blocking_action(rule):
             continue
-        matching = [
-            p for p in rule.when if _pattern_subsumes(p, forbidden)
-        ]
+        matching = [p for p in rule.when if _pattern_subsumes(p, forbidden)]
         if not matching:
             continue
         # Check that the OTHER patterns in `when` are satisfiable
@@ -231,7 +229,9 @@ def _pattern_subsumes(guard_pattern: Pattern, forbidden: PatternSpec) -> bool:
     """
     if guard_pattern.fact_type != forbidden.fact_type:
         return False
-    forbidden_preds = {(p.field, p.op, _stable_value(p.value)) for p in forbidden.predicates}
+    forbidden_preds = {
+        (p.field, p.op, _stable_value(p.value)) for p in forbidden.predicates
+    }
     for guard_pred in guard_pattern.predicates:
         key = (guard_pred.field, guard_pred.op, _stable_value(guard_pred.value))
         # The trivial "exists/missing" guards subsume anything that
@@ -279,9 +279,7 @@ def _others_compatible_with_precondition(
     return True
 
 
-def _synthesize_counterexample(
-    invariant: Invariant, rules: list[Rule]
-) -> str:
+def _synthesize_counterexample(invariant: Invariant, rules: list[Rule]) -> str:
     """Build a human-readable counterexample, or return ``""`` if none.
 
     The counterexample is a fact-set example showing how the

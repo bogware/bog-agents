@@ -410,7 +410,9 @@ class MessageStore:
             self._persist_fh.write(json.dumps(record, ensure_ascii=False))
             self._persist_fh.write("\n")
         except (OSError, ValueError, TypeError) as exc:
-            logger.warning("MessageStore: persist write failed (%s)", exc, exc_info=True)
+            logger.warning(
+                "MessageStore: persist write failed (%s)", exc, exc_info=True
+            )
 
     def close_persist(self) -> None:
         """Close the persistence file handle. Idempotent.
@@ -449,7 +451,9 @@ class MessageStore:
         try:
             text = persist_path.read_text(encoding="utf-8")
         except OSError as exc:
-            logger.warning("MessageStore: cannot read persist file %s: %s", persist_path, exc)
+            logger.warning(
+                "MessageStore: cannot read persist file %s: %s", persist_path, exc
+            )
             return []
         for line_no, raw in enumerate(text.splitlines(), start=1):
             line = raw.strip()

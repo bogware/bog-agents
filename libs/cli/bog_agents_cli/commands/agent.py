@@ -53,7 +53,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
             subcommands=(
                 ("<prompt>", "Submit a prompt to run in the background"),
                 ("list", "Show all async tasks (alias for /background list)"),
-                ("wait <id> [timeout]", "Block until <id> finishes, then show the result inline"),
+                (
+                    "wait <id> [timeout]",
+                    "Block until <id> finishes, then show the result inline",
+                ),
                 ("status <id>", "Show one task's status"),
                 ("cancel <id>", "Cancel a running task"),
             ),

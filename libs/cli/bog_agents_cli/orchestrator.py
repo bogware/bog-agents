@@ -134,6 +134,7 @@ You have read-only tools + web_search.
 
 def _make_default_profiles(working_dir: Path) -> dict[SubtaskMode, ModeProfile]:
     """Build the default mode → :class:`ModeProfile` map."""
+
     def _readonly(*, web: bool = False) -> Callable[[], list[BaseTool]]:
         def _builder() -> list[BaseTool]:
             return build_readonly_tools(working_dir=working_dir, web_search=web)
@@ -305,7 +306,10 @@ def _parse_plan(text: str) -> tuple[list[Subtask], str]:
     except json.JSONDecodeError as exc:
         return [], f"planner did not emit valid JSON: {exc}"
     if not isinstance(payload, dict):
-        return [], f"planner JSON top-level must be an object, got {type(payload).__name__}"
+        return (
+            [],
+            f"planner JSON top-level must be an object, got {type(payload).__name__}",
+        )
     plan = payload.get("plan")
     if not isinstance(plan, list):
         return [], "planner JSON missing 'plan' list"
@@ -532,8 +536,7 @@ def _run_subtasks_parallel(
                         output="",
                         elapsed_seconds=outer_cap_seconds,
                         error=(
-                            f"subtask timed out (outer cap "
-                            f"{outer_cap_seconds:.0f}s)"
+                            f"subtask timed out (outer cap {outer_cap_seconds:.0f}s)"
                         ),
                     )
                 )
@@ -576,23 +579,21 @@ def render_result(result: OrchestrationResult) -> str:
     if not result.plan:
         lines.append("> _(no plan)_")
         return "\n".join(lines)
-    lines.append(f"_{len(result.plan)} subtask(s); status: {'ok' if result.ok else 'partial'}_")
+    lines.append(
+        f"_{len(result.plan)} subtask(s); status: {'ok' if result.ok else 'partial'}_"
+    )
     lines.append("")
     for st_result in result.subtasks:
         st = st_result.subtask
         mark = "✓" if st_result.ok else "✗"
-        lines.append(
-            f"### {mark} {st.id} [{st.mode.value}] — {st.description[:100]}"
-        )
+        lines.append(f"### {mark} {st.id} [{st.mode.value}] — {st.description[:100]}")
         if st_result.duration_seconds:
             lines.append(f"_(took {st_result.duration_seconds:.1f}s)_")
         if not st_result.ok:
             lines.append(f"> ⚠ {st_result.error}")
             continue
         if st_result.tool_calls_made:
-            lines.append(
-                f"_(consulted: {', '.join(st_result.tool_calls_made)})_"
-            )
+            lines.append(f"_(consulted: {', '.join(st_result.tool_calls_made)})_")
         lines.append("")
         lines.append(st_result.answer.strip() or "_(no output)_")
         lines.append("")

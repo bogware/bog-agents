@@ -115,9 +115,7 @@ async def run_job(
                 output_config.target,
             )
             if len(run.dispatch_errors) < _MAX_DISPATCH_ERRORS:
-                run.dispatch_errors.append(
-                    {"target": str(output_config.target), "error": str(exc)}
-                )
+                run.dispatch_errors.append({"target": str(output_config.target), "error": str(exc)})
             else:
                 overflow_count += 1
     if overflow_count:
@@ -135,10 +133,7 @@ async def run_job(
     # delivery, not execution — but a non-empty ``error`` is the
     # universal signal callers already check.
     if run.dispatch_errors and run.status == JobStatus.COMPLETED and not run.error:
-        run.error = (
-            f"agent succeeded but {len(run.dispatch_errors)} output "
-            f"target(s) failed; see dispatch_errors for details"
-        )
+        run.error = f"agent succeeded but {len(run.dispatch_errors)} output target(s) failed; see dispatch_errors for details"
         save_run(run)
 
     return run

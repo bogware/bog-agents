@@ -484,9 +484,7 @@ def parse_tracefile(text: str) -> TraceFile:
     for idx, line in enumerate(frame_lines):
         data = _parse_object(line, f"frame[{idx}]")
         if data.get("kind") != LineKind.FRAME.value:
-            msg = (
-                f"Line {idx + 2} must have kind=frame, got {data.get('kind')!r}."
-            )
+            msg = f"Line {idx + 2} must have kind=frame, got {data.get('kind')!r}."
             raise TraceFileError(msg)
         frames.append(_dict_to_frame(data))
 

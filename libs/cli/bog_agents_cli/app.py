@@ -1229,9 +1229,7 @@ class BogAgentsApp(App):
                 timeout=2.0,
             )
         except TimeoutError:
-            unfinished = [
-                t for t in self._background_tasks if not t.done()
-            ]
+            unfinished = [t for t in self._background_tasks if not t.done()]
             if unfinished:
                 names = ", ".join(
                     (t.get_name() if hasattr(t, "get_name") else repr(t))
@@ -1245,9 +1243,7 @@ class BogAgentsApp(App):
                     "…" if len(unfinished) > 10 else "",
                 )
             else:
-                logger.warning(
-                    "Background tasks did not settle within 2s of unmount"
-                )
+                logger.warning("Background tasks did not settle within 2s of unmount")
 
     def _init_agent_adapter(self) -> None:
         """Create the UI adapter and kick off background cache prewarming."""
@@ -8016,7 +8012,11 @@ class BogAgentsApp(App):
             # Read PID for the header
             pid_file = Path.home() / ".bog-agents" / "daemon" / "daemon.pid"
             try:
-                pid_str = pid_file.read_text(encoding="utf-8").strip() if pid_file.exists() else "?"
+                pid_str = (
+                    pid_file.read_text(encoding="utf-8").strip()
+                    if pid_file.exists()
+                    else "?"
+                )
             except OSError:
                 pid_str = "?"
 
@@ -11018,7 +11018,7 @@ class BogAgentsApp(App):
             shutdown_browser,
         )
 
-        rest = command.strip()[len("/browser"):].strip().lower()
+        rest = command.strip()[len("/browser") :].strip().lower()
         if rest in ("", "status"):
             output = render_browser_status()
         elif rest in ("close", "stop", "shutdown"):
@@ -11051,7 +11051,7 @@ class BogAgentsApp(App):
             render_prompt_block,
         )
 
-        rest = command.strip()[len("/web"):].strip()
+        rest = command.strip()[len("/web") :].strip()
         if not rest:
             await self._mount_message(
                 AppMessage(
@@ -11135,7 +11135,10 @@ class BogAgentsApp(App):
         def model_invoke(system_prompt: str, user_prompt: str) -> str:
             resolved = create_model(spec, profile_overrides=self._profile_override)
             response = resolved.model.invoke(
-                [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+                [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ]
             )
             content = getattr(response, "content", "")
             if isinstance(content, list):
@@ -12277,7 +12280,7 @@ class BogAgentsApp(App):
         to the same BackgroundAgentManager.
         """
         await self._mount_message(UserMessage(command))
-        rest = command.strip()[len("/async"):].strip()
+        rest = command.strip()[len("/async") :].strip()
         if not rest or rest.lower() == "list":
             await self._handle_background_command("/background list")
             return
@@ -12308,9 +12311,7 @@ class BogAgentsApp(App):
         tokens = args.strip().split()
         if not tokens:
             await self._mount_message(
-                AppMessage(
-                    "Usage: /async wait <task-id> [timeout-seconds]"
-                )
+                AppMessage("Usage: /async wait <task-id> [timeout-seconds]")
             )
             return
         task_id = tokens[0]
@@ -12319,9 +12320,7 @@ class BogAgentsApp(App):
             try:
                 timeout_seconds = max(1.0, float(tokens[1]))
             except ValueError:
-                await self._mount_message(
-                    AppMessage(f"Invalid timeout: {tokens[1]!r}")
-                )
+                await self._mount_message(AppMessage(f"Invalid timeout: {tokens[1]!r}"))
                 return
         from bog_agents_cli.background_agents import BackgroundStatus
 
@@ -12337,9 +12336,7 @@ class BogAgentsApp(App):
             status = getattr(task, "status", "")
             if status != last_status:
                 last_status = str(status)
-                logger.debug(
-                    "/async wait %s: status=%s", task_id, last_status
-                )
+                logger.debug("/async wait %s: status=%s", task_id, last_status)
             if status in (
                 BackgroundStatus.COMPLETED,
                 BackgroundStatus.FAILED,
@@ -14484,7 +14481,9 @@ class BogAgentsApp(App):
         """
         from bog_agents_cli.conversation_buffer import get_buffer
 
-        text_source = getattr(widget, "renderable", None) or getattr(widget, "content", None)
+        text_source = getattr(widget, "renderable", None) or getattr(
+            widget, "content", None
+        )
         text = str(text_source) if text_source is not None else ""
         if not text:
             return
@@ -15075,9 +15074,7 @@ class BogAgentsApp(App):
                 import asyncio as _asyncio
 
                 try:
-                    await _asyncio.wait_for(
-                        self._agent_worker.wait(), timeout=1800.0
-                    )
+                    await _asyncio.wait_for(self._agent_worker.wait(), timeout=1800.0)
                 except TimeoutError:
                     await self._mount_message(
                         ErrorMessage(

@@ -297,7 +297,8 @@ def _redact_secrets(args: dict[str, Any]) -> dict[str, Any]:
             return {k: _redact_value(k, v) for k, v in value.items()}
         if isinstance(value, list):
             return [
-                _redact_value(key, item) if not isinstance(item, dict)
+                _redact_value(key, item)
+                if not isinstance(item, dict)
                 else {k: _redact_value(k, v) for k, v in item.items()}
                 for item in value
             ]

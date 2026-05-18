@@ -106,9 +106,7 @@ class TestProvenanceInjection:
 
         import bog_agents.graph as graph_module
 
-        monkeypatch.setattr(
-            graph_module, "_langchain_create_agent", fake_create_agent
-        )
+        monkeypatch.setattr(graph_module, "_langchain_create_agent", fake_create_agent)
         return captures
 
     @pytest.mark.parametrize(
@@ -120,23 +118,17 @@ class TestProvenanceInjection:
             "enable_hallucination_detection",
         ],
     )
-    def test_any_provenance_flag_injects_addendum(
-        self, flag: str, captured: dict
-    ) -> None:
+    def test_any_provenance_flag_injects_addendum(self, flag: str, captured: dict) -> None:
         cfg = FeatureConfig(**{flag: True})
         create_agent(model=_fake_model(), config=cfg)
         system_prompt = captured.get("system_prompt", "")
-        assert "Citations & Verification" in str(system_prompt), (
-            f"provenance addendum missing from system_prompt when {flag} is True"
-        )
+        assert "Citations & Verification" in str(system_prompt), f"provenance addendum missing from system_prompt when {flag} is True"
 
     def test_no_flag_no_addendum(self, captured: dict) -> None:
         cfg = FeatureConfig()
         create_agent(model=_fake_model(), config=cfg)
         system_prompt = captured.get("system_prompt", "")
-        assert "Citations & Verification" not in str(system_prompt), (
-            "provenance addendum injected when no flag was set"
-        )
+        assert "Citations & Verification" not in str(system_prompt), "provenance addendum injected when no flag was set"
 
 
 _ = (CitationsMiddleware, HallucinationDetectionMiddleware, FactCheckMiddleware)

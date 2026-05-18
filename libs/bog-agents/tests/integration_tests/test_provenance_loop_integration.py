@@ -56,10 +56,7 @@ _PROVENANCE_TOOL_NAMES = frozenset(
 
 @pytest.mark.skipif(
     _API_KEY is None,
-    reason=(
-        "No Anthropic API key found in environment "
-        "(ANTHROPIC_API_KEY or ANTHROPIC_API_KEP). Opt-in test."
-    ),
+    reason=("No Anthropic API key found in environment (ANTHROPIC_API_KEY or ANTHROPIC_API_KEP). Opt-in test."),
 )
 class TestProvenanceLoopWithRealModel:
     """End-to-end: ask a question that demands a sourced answer, assert
@@ -89,12 +86,8 @@ class TestProvenanceLoopWithRealModel:
             },
             config={"configurable": {"thread_id": "k3-provenance-1"}},
         )
-        ai_messages = [
-            m for m in result.get("messages", []) if m.type == "ai"
-        ]
-        tool_calls = [
-            call for m in ai_messages for call in getattr(m, "tool_calls", []) or []
-        ]
+        ai_messages = [m for m in result.get("messages", []) if m.type == "ai"]
+        tool_calls = [call for m in ai_messages for call in getattr(m, "tool_calls", []) or []]
         called = {call.get("name", "") for call in tool_calls}
         assert called & _PROVENANCE_TOOL_NAMES, (
             "Expected the LLM to call at least one provenance tool when "
@@ -112,24 +105,11 @@ class TestProvenanceLoopWithRealModel:
             config=FeatureConfig(),  # all flags default off
         )
         result = agent.invoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content=(
-                            "In what year was Python first released? "
-                            "Answer in one sentence."
-                        )
-                    )
-                ]
-            },
+            {"messages": [HumanMessage(content=("In what year was Python first released? Answer in one sentence."))]},
             config={"configurable": {"thread_id": "k3-provenance-2"}},
         )
-        ai_messages = [
-            m for m in result.get("messages", []) if m.type == "ai"
-        ]
-        tool_calls = [
-            call for m in ai_messages for call in getattr(m, "tool_calls", []) or []
-        ]
+        ai_messages = [m for m in result.get("messages", []) if m.type == "ai"]
+        tool_calls = [call for m in ai_messages for call in getattr(m, "tool_calls", []) or []]
         called = {call.get("name", "") for call in tool_calls}
         assert not (called & _PROVENANCE_TOOL_NAMES), (
             "Expected the LLM to NOT call provenance tools when the loop "

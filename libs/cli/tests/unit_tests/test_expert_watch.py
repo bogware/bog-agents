@@ -247,9 +247,7 @@ class TestSlashSpec:
 class TestControllerCallback:
     """set_watch_summary_callback should flow into expert_watch.start."""
 
-    async def test_callback_fires_when_set_via_controller(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_callback_fires_when_set_via_controller(self, tmp_path: Path) -> None:
         from bog_agents_cli.expert_controller import (
             get_controller,
             reset_controllers,
@@ -265,7 +263,9 @@ class TestControllerCallback:
         c.set_watch_summary_callback(cb)
         # Stub the controller's propose so the loop has something fast
         # to call.
-        c.propose_from_dreamscape = lambda _a, *, auto_activate=False: "Saved proposal: x.yaml"  # noqa: ARG005
+        c.propose_from_dreamscape = lambda _a, *, auto_activate=False: (
+            "Saved proposal: x.yaml"
+        )
 
         out = c._dispatch_watch_start("0.05")
         assert "Started" in out
@@ -383,7 +383,9 @@ def test_resume_without_state_is_noop(tmp_path: Path) -> None:
 def test_resume_handles_malformed_state(tmp_path: Path) -> None:
     state_dir = tmp_path / ".bog-agents"
     state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "watch-state.toml").write_text("not = ::: valid toml\n[", encoding="utf-8")
+    (state_dir / "watch-state.toml").write_text(
+        "not = ::: valid toml\n[", encoding="utf-8"
+    )
     resumed, _ = expert_watch.resume_if_persisted(
         working_dir=tmp_path,
         propose=_dummy_propose_x,

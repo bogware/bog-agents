@@ -102,9 +102,7 @@ def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, st
     except ValueError:
         # Not a literal IP — resolve.
         try:
-            for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(
-                host_stripped, None
-            ):
+            for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(host_stripped, None):
                 if family in (socket.AF_INET, socket.AF_INET6):
                     addr_str = sockaddr[0]
                     # Strip IPv6 scope id (``fe80::1%eth0`` → ``fe80::1``).
@@ -127,8 +125,7 @@ def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, st
             # Always blocked — covers AWS/GCP/Azure cloud-metadata IMDS.
             return (
                 False,
-                f"refusing link-local address {addr} (cloud-metadata IMDS endpoints "
-                "are blocked unconditionally)",
+                f"refusing link-local address {addr} (cloud-metadata IMDS endpoints are blocked unconditionally)",
             )
         if addr.is_multicast:
             return (False, f"refusing multicast address {addr}")
@@ -220,9 +217,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             if not middleware._is_domain_allowed(url):
                 return f"Error: Domain not in allowed list for URL: {url}"
 
-            safe, reason = _is_url_safe(
-                url, allow_private_ips=middleware._allow_private_ips
-            )
+            safe, reason = _is_url_safe(url, allow_private_ips=middleware._allow_private_ips)
             if not safe:
                 logger.warning("browser_agent.web_fetch SSRF gate: %s", reason)
                 return f"Error: {reason}"
@@ -273,9 +268,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             if not middleware._is_domain_allowed(url):
                 return f"Error: Domain not in allowed list for URL: {url}"
 
-            safe, reason = _is_url_safe(
-                url, allow_private_ips=middleware._allow_private_ips
-            )
+            safe, reason = _is_url_safe(url, allow_private_ips=middleware._allow_private_ips)
             if not safe:
                 logger.warning("browser_agent.api_request SSRF gate: %s", reason)
                 return f"Error: {reason}"
@@ -349,10 +342,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                     f"Active ports: {ports}."
                 )
             if port in middleware._preview_processes:
-                return (
-                    f"Error: port {port} already has a running preview server; "
-                    "stop it first or pick a different port."
-                )
+                return f"Error: port {port} already has a running preview server; stop it first or pick a different port."
             try:
                 process = subprocess.Popen(
                     argv,
@@ -363,10 +353,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                     text=True,
                 )
                 middleware._preview_processes[port] = process
-                return (
-                    f"Started preview server (PID={process.pid}) on port {port}.\n"
-                    f"URL: http://localhost:{port}"
-                )
+                return f"Started preview server (PID={process.pid}) on port {port}.\nURL: http://localhost:{port}"
             except (OSError, FileNotFoundError) as e:
                 return f"Error starting server: {e}"
 
@@ -407,5 +394,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             StructuredTool.from_function(name="api_request", description="Send an API request with timing.", func=api_request),
             StructuredTool.from_function(name="start_preview", description="Start a local dev server.", func=start_preview_server),
             StructuredTool.from_function(name="stop_preview", description="Stop a preview server.", func=stop_preview_server),
-            StructuredTool.from_function(name="stop_all_preview_servers", description="Stop every tracked preview server.", func=stop_all_preview_servers),
+            StructuredTool.from_function(
+                name="stop_all_preview_servers", description="Stop every tracked preview server.", func=stop_all_preview_servers
+            ),
         ]

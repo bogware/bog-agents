@@ -3387,7 +3387,9 @@ class TestWaveNTaskExceptionLogging:
                 with contextlib.suppress(RuntimeError):
                     loop.run_until_complete(task)
                 _log_task_exception(task)
-            assert any("Background task 'probe' failed" in r.message for r in caplog.records)
+            assert any(
+                "Background task 'probe' failed" in r.message for r in caplog.records
+            )
         finally:
             loop.close()
 

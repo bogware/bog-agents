@@ -200,9 +200,7 @@ class TestMiddleware:
         mw = CausalMiddleware(ledger=ledger, enabled=True, actor_label="m")
         mw.record_user_message("hi")
         # Simulate a model response: no tool calls → FINAL_ANSWER.
-        response = SimpleNamespace(
-            content="done", tool_calls=[]
-        )
+        response = SimpleNamespace(content="done", tool_calls=[])
         mw._post_model_call(response, model_event_id=mw._head_id or 1)
         kinds = [e.kind for e in ledger.events()]
         assert EventKind.FINAL_ANSWER in kinds
@@ -219,9 +217,7 @@ class TestMiddleware:
             ],
         )
         mw._post_model_call(response, model_event_id=mw._head_id or 1)
-        tc_events = [
-            e for e in ledger.events() if e.kind == EventKind.TOOL_CALL
-        ]
+        tc_events = [e for e in ledger.events() if e.kind == EventKind.TOOL_CALL]
         assert len(tc_events) == 2
         assert {e.actor for e in tc_events} == {"shell", "read"}
         # tool_call_id → event id mapping populated.
@@ -305,17 +301,13 @@ class TestRenderers:
         out = render_ancestry(ledger, 9999)
         assert "No event with id 9999" in out
 
-    def test_render_graph_renders_all_events_with_indent(
-        self, tmp_path: Path
-    ) -> None:
+    def test_render_graph_renders_all_events_with_indent(self, tmp_path: Path) -> None:
         ledger = self._populate(tmp_path)
         out = render_graph(ledger)
         assert "Causal graph" in out
         # The TOOL_RESULT is two levels deep from USER → MODEL → TOOL_CALL → TOOL_RESULT,
         # so the TOOL < line must be indented at least once.
-        result_line = next(
-            line for line in out.splitlines() if "TOOL <" in line
-        )
+        result_line = next(line for line in out.splitlines() if "TOOL <" in line)
         assert result_line.startswith(" ")
 
 

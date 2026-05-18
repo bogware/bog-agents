@@ -18,8 +18,8 @@ from bog_agents_cli.replay import (
     save_drive_script_for_session,
     save_replay_session,
     session_from_dict,
-    session_to_drive_yaml,
     session_to_dict,
+    session_to_drive_yaml,
 )
 
 
@@ -263,9 +263,7 @@ class TestSessionToDriveYaml:
             steps=[ReplayStep(kind="user_message", content="Look at ${ticket}")],
         )
         loaded = yaml.safe_load(session_to_drive_yaml(s))
-        assert loaded["vars"] == {
-            "ticket": {"type": "string", "default": "JIRA-200"}
-        }
+        assert loaded["vars"] == {"ticket": {"type": "string", "default": "JIRA-200"}}
 
     def test_save_drive_script_writes_drive_yaml_file(self, tmp_path: Path):
         s = ReplaySession(

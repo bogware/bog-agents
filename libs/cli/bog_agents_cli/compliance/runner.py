@@ -104,9 +104,7 @@ def run_audit(
 # ---------------------------------------------------------------------------
 
 
-def _run_one(
-    check: Check, *, rules: list[Rule], slice_: TraceSlice
-) -> CheckResult:
+def _run_one(check: Check, *, rules: list[Rule], slice_: TraceSlice) -> CheckResult:
     if check.kind == CheckKind.INVARIANT:
         return _run_invariant(check, rules=rules)
     if check.kind == CheckKind.TRACE_ASSERTION:
@@ -150,9 +148,7 @@ def _run_invariant(check: Check, *, rules: list[Rule]) -> CheckResult:
         )
     else:
         verdict = Verdict.INCONCLUSIVE
-        observed = (
-            f"Invariant {check.invariant.name!r} could not be decided"
-        )
+        observed = f"Invariant {check.invariant.name!r} could not be decided"
     evidence = Evidence(
         observed=observed,
         rationale=proof.rationale,
@@ -168,9 +164,7 @@ def _run_invariant(check: Check, *, rules: list[Rule]) -> CheckResult:
     )
 
 
-def _run_trace_assertion(
-    check: Check, *, slice_: TraceSlice
-) -> CheckResult:
+def _run_trace_assertion(check: Check, *, slice_: TraceSlice) -> CheckResult:
     if check.evidence is None:  # pragma: no cover — loader enforces
         return CheckResult(
             check_id=check.id,
@@ -216,16 +210,11 @@ def _run_trace_assertion(
     )
 
 
-def _run_rule_presence(
-    check: Check, *, rules: list[Rule]
-) -> CheckResult:
+def _run_rule_presence(check: Check, *, rules: list[Rule]) -> CheckResult:
     names = {r.name for r in rules}
     present = check.rule_name in names
     verdict = Verdict.PASS if present else Verdict.FAIL
-    observed = (
-        f"Rule {check.rule_name!r} is "
-        f"{'loaded' if present else 'NOT loaded'}"
-    )
+    observed = f"Rule {check.rule_name!r} is {'loaded' if present else 'NOT loaded'}"
     return CheckResult(
         check_id=check.id,
         title=check.title,
@@ -235,9 +224,7 @@ def _run_rule_presence(
     )
 
 
-def _run_rule_absence(
-    check: Check, *, rules: list[Rule]
-) -> CheckResult:
+def _run_rule_absence(check: Check, *, rules: list[Rule]) -> CheckResult:
     names = {r.name for r in rules}
     absent = check.rule_name not in names
     verdict = Verdict.PASS if absent else Verdict.FAIL
@@ -259,9 +246,7 @@ def _run_rule_absence(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_rules(
-    rules: Iterable[Rule] | None, working_dir: Path
-) -> list[Rule]:
+def _resolve_rules(rules: Iterable[Rule] | None, working_dir: Path) -> list[Rule]:
     if rules is not None:
         return list(rules)
     try:

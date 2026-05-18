@@ -11,9 +11,10 @@ emitted tool surface.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestGitToolsBundle:
@@ -34,9 +35,7 @@ class TestGitToolsBundle:
         mw = GitToolsMiddleware(working_dir=tmp_path)
         mw_names = {t.name for t in mw.tools}
         assert bundle_names == mw_names, (
-            f"Drift between bundle and middleware: "
-            f"bundle-only={bundle_names - mw_names}, "
-            f"middleware-only={mw_names - bundle_names}"
+            f"Drift between bundle and middleware: bundle-only={bundle_names - mw_names}, middleware-only={mw_names - bundle_names}"
         )
 
     def test_default_working_dir_is_cwd(self) -> None:

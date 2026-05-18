@@ -109,11 +109,7 @@ class LintReport:
         rule_name: str,
         message: str,
     ) -> None:
-        self.findings.append(
-            LintFinding(
-                severity=severity, code=code, rule_name=rule_name, message=message
-            )
-        )
+        self.findings.append(LintFinding(severity=severity, code=code, rule_name=rule_name, message=message))
 
 
 # ---------------------------------------------------------------------------
@@ -147,10 +143,7 @@ def _check_duplicate_names(rules: list[Rule], report: LintReport) -> None:
                 severity="error",
                 code="duplicate-name",
                 rule_name=name,
-                message=(
-                    f"rule name {name!r} is used by {n} rules — conflict resolution "
-                    "depends on file/load order which is fragile"
-                ),
+                message=(f"rule name {name!r} is used by {n} rules — conflict resolution depends on file/load order which is fragile"),
             )
 
 
@@ -160,10 +153,7 @@ def _check_no_actions(rule: Rule, report: LintReport) -> None:
             severity="warning",
             code="no-actions",
             rule_name=rule.name,
-            message=(
-                "rule has no ``then`` actions — matching costs CPU but has "
-                "no observable effect. Probably a typo; remove or add an action."
-            ),
+            message=("rule has no ``then`` actions — matching costs CPU but has no observable effect. Probably a typo; remove or add an action."),
         )
 
 
@@ -278,11 +268,7 @@ def render_report(report: LintReport) -> str:
     """Render *report* as plain text for the ``/expert lint`` slash output."""
     if not report.findings:
         return "Lint: no issues found."
-    lines = [
-        f"Lint: {len(report.errors)} error(s), "
-        f"{len(report.warnings)} warning(s), "
-        f"{len(report.infos)} info"
-    ]
+    lines = [f"Lint: {len(report.errors)} error(s), {len(report.warnings)} warning(s), {len(report.infos)} info"]
     for f in report.findings:
         prefix = {"error": "✗", "warning": "⚠", "info": "ℹ"}.get(f.severity, "•")  # noqa: RUF001
         scope = f" {f.rule_name}" if f.rule_name else ""

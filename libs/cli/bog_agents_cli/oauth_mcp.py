@@ -167,7 +167,9 @@ def load_stored_token(config_dir: Path, server_name: str) -> OAuthToken | None:
                 server_name,
             )
         else:
-            seconds_remaining = max(0.0, token.expires_at - time.time()) if token.expires_at else 0
+            seconds_remaining = (
+                max(0.0, token.expires_at - time.time()) if token.expires_at else 0
+            )
             logger.debug(
                 "oauth: loaded valid token for server=%s (%.0fs remaining)",
                 server_name,
@@ -175,7 +177,9 @@ def load_stored_token(config_dir: Path, server_name: str) -> OAuthToken | None:
             )
         return token
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("oauth: failed to read stored token for server=%s: %s", server_name, exc)
+        logger.warning(
+            "oauth: failed to read stored token for server=%s: %s", server_name, exc
+        )
         return None
 
 
@@ -335,6 +339,8 @@ async def exchange_code_for_token(
         )
         return token
     except Exception as e:
-        logger.warning("oauth: token exchange failed against %s: %s", config.token_url, e)
+        logger.warning(
+            "oauth: token exchange failed against %s: %s", config.token_url, e
+        )
         msg = f"Token exchange failed: {e}"
         raise ValueError(msg) from e

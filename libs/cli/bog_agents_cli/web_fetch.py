@@ -45,9 +45,7 @@ _DEFAULT_TIMEOUT_SECONDS = 15.0
 
 # User-agent identifies the request as ours; some sites return a
 # javascript-only page to default Python urllib UAs.
-_USER_AGENT = (
-    "Mozilla/5.0 (compatible; bog-agents-cli/0.8; +https://bog-agents)"
-)
+_USER_AGENT = "Mozilla/5.0 (compatible; bog-agents-cli/0.8; +https://bog-agents)"
 
 
 class WebFetchError(RuntimeError):
@@ -114,9 +112,7 @@ def fetch_url(
         },
     )
     try:
-        with urllib.request.urlopen(
-            request, timeout=timeout_seconds
-        ) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             final_url = response.geturl()
             status = response.status
             content_type = response.headers.get_content_type() or ""
@@ -194,7 +190,9 @@ def _decode_body(raw: bytes, content_type: str) -> str:
     charset = "utf-8"
     if "charset=" in content_type.lower():
         try:
-            charset = content_type.lower().split("charset=", 1)[1].split(";", 1)[0].strip()
+            charset = (
+                content_type.lower().split("charset=", 1)[1].split(";", 1)[0].strip()
+            )
         except IndexError:
             pass
     try:

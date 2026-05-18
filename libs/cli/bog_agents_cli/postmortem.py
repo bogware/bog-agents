@@ -237,8 +237,7 @@ def build_postmortem_prompt(
 
     lines.append("")
     lines.append(
-        "Now produce the three-section remediation proposal. "
-        "Start with `## Rule`."
+        "Now produce the three-section remediation proposal. Start with `## Rule`."
     )
     return "\n".join(lines)
 
@@ -295,7 +294,7 @@ def _sanitise_for_prompt(text: str) -> str:
             # Break the marker by replacing the first delimiter char.
             # The LLM still sees the textual content but the framing
             # cue is dropped, which kills most injection patterns.
-            broken = "·" + truncated[idx + 1:]
+            broken = "·" + truncated[idx + 1 :]
             truncated = truncated[:idx] + broken
             lower = truncated.lower()
             idx = lower.find(needle, idx + 1)
@@ -304,9 +303,7 @@ def _sanitise_for_prompt(text: str) -> str:
 
 def _render_event(event: CausalEvent) -> str:
     parent = (
-        f" ← {','.join(str(p) for p in event.parent_ids)}"
-        if event.parent_ids
-        else ""
+        f" ← {','.join(str(p) for p in event.parent_ids)}" if event.parent_ids else ""
     )
     payload = ""
     if event.payload:
@@ -420,9 +417,7 @@ def run_postmortem(
         )
 
     failure = find_failure_point(events)
-    prompt = build_postmortem_prompt(
-        resolved_id, events, failure, user_note=user_note
-    )
+    prompt = build_postmortem_prompt(resolved_id, events, failure, user_note=user_note)
     try:
         raw = model_invoke(_POSTMORTEM_SYSTEM_PROMPT, prompt)
     except Exception as exc:
@@ -460,9 +455,7 @@ def run_postmortem(
             logger.exception("postmortem: enrollment failed")
             from bog_agents_cli.feedback_loop import EnrolledProposal
 
-            enrollment = EnrolledProposal(
-                skipped_reason=f"enrollment failed: {exc}"
-            )
+            enrollment = EnrolledProposal(skipped_reason=f"enrollment failed: {exc}")
 
     return PostmortemRun(
         session_id=resolved_id,
@@ -495,9 +488,7 @@ def save_proposal(
     return target
 
 
-def render_markdown(
-    session_id: str, failure: FailurePoint, proposal: Proposal
-) -> str:
+def render_markdown(session_id: str, failure: FailurePoint, proposal: Proposal) -> str:
     """Render the proposal as a standalone markdown file."""
     lines = [
         f"# Postmortem — session {session_id}",
@@ -581,7 +572,7 @@ def dispatch(
     """
     text = command_text.strip()
     if text.startswith("/postmortem"):
-        text = text[len("/postmortem"):].strip()
+        text = text[len("/postmortem") :].strip()
     if not text or text.lower() in ("help", "?"):
         return _help_text()
     if text.lower() in ("list", "ls"):
