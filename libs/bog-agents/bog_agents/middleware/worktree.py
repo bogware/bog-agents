@@ -362,10 +362,20 @@ class WorktreeMiddleware(AgentMiddleware[WorktreeState, ContextT, ResponseT]):
             target_branch: Annotated[str, "Branch to merge into"] = "main",
         ) -> str:
             """Merge changes from one worktree branch into another."""
-            result = _run_git(middleware._working_dir, "checkout", target_branch)
+            # P1-9 / flag-injection: model-supplied refs may look like
+            # ``--exec=…`` which git will interpret as a flag. Force a
+            # full ref-name validation pass and pass the ref after a
+            # ``--`` separator so it can never be re-parsed as an
+            # option, regardless of what the validator missed.
+            try:
+                source_branch = _validate_git_ref(source_branch, label="source_branch")
+                target_branch = _validate_git_ref(target_branch, label="target_branch")
+            except ValueError as exc:
+                return f"Error: {exc}"
+            result = _run_git(middleware._working_dir, "checkout", "--", target_branch)
             if result.startswith("[exit code"):
                 return f"Failed to checkout {target_branch}: {result}"
-            merge_result = _run_git(middleware._working_dir, "merge", source_branch)
+            merge_result = _run_git(middleware._working_dir, "merge", "--no-ff", "--", source_branch)
             return f"Merge result: {merge_result}"
 
         return [

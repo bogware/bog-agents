@@ -11,6 +11,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import shlex
 import socket
 import subprocess
 from pathlib import Path
@@ -302,17 +303,41 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             port: Annotated[int, "Expected port number"] = 3000,
         ) -> str:
             """Start a local dev server for previewing changes."""
+            # Use shlex so quoted args (``npm run dev -- --port 3001``)
+            # and embedded whitespace parse the way a human shell would,
+            # not the way naive ``command.split()`` would. Refuse to
+            # spawn a server if the model passed shell metacharacters
+            # we can't safely interpret — pipes/redirects/backticks
+            # belong in the LocalShellBackend ``execute`` path, not in
+            # a tool that's supposed to start one process.
+            try:
+                argv = shlex.split(command, posix=True)
+            except ValueError as exc:
+                return f"Error: could not parse command ({exc})."
+            if not argv:
+                return "Error: empty command."
+            for token in argv:
+                if any(ch in token for ch in (";", "|", "&", "`", "$(", ">", "<")):
+                    return (
+                        "Error: refusing to start preview server with shell "
+                        "metacharacters in command. Use the shell execute "
+                        "tool instead for piped or redirected commands."
+                    )
             try:
                 process = subprocess.Popen(
-                    command.split(),
+                    argv,
                     cwd=middleware._working_dir,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,  # interactive prompts must not block the agent
                     text=True,
                 )
                 middleware._preview_processes[port] = process
-                return f"Started preview server (PID={process.pid}) on port {port}.\nURL: http://localhost:{port}"
-            except Exception as e:
+                return (
+                    f"Started preview server (PID={process.pid}) on port {port}.\n"
+                    f"URL: http://localhost:{port}"
+                )
+            except (OSError, FileNotFoundError) as e:
                 return f"Error starting server: {e}"
 
         def stop_preview_server(

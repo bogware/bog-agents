@@ -26,6 +26,15 @@ from bog_agents_daemon.store import save_run, upsert_job
 
 logger = logging.getLogger(__name__)
 
+_MAX_DISPATCH_ERRORS = 20
+"""Cap on per-run dispatch_errors entries.
+
+A job with many output targets that all fail (e.g. a 100-recipient
+fanout during a Slack outage) used to inflate the JobRun JSON to
+megabytes. Beyond this cap, additional failures are collapsed to a
+single ``(overflow)`` entry recording the truncated count.
+"""
+
 
 async def run_job(
     job: AmbientJob,
@@ -89,7 +98,13 @@ async def run_job(
     # log line alone wasn't enough — silent dispatch outages turned
     # into "why didn't the daily report arrive?" tickets with no
     # paper trail in the runs table.
+    #
+    # Cap the captured errors at _MAX_DISPATCH_ERRORS so a job with
+    # hundreds of broken targets (e.g. a Slack webhook outage hitting
+    # a fanout job) doesn't bloat the JobRun record. Beyond the cap we
+    # collapse to a count so the JSON stays bounded.
     job_wd = Path(job.working_dir) if job.working_dir else None
+    overflow_count = 0
     for output_config in job.outputs:
         try:
             await _dispatch_output(run, output_config, working_dir=job_wd)
@@ -99,9 +114,19 @@ async def run_job(
                 job.job_id,
                 output_config.target,
             )
-            run.dispatch_errors.append(
-                {"target": str(output_config.target), "error": str(exc)}
-            )
+            if len(run.dispatch_errors) < _MAX_DISPATCH_ERRORS:
+                run.dispatch_errors.append(
+                    {"target": str(output_config.target), "error": str(exc)}
+                )
+            else:
+                overflow_count += 1
+    if overflow_count:
+        run.dispatch_errors.append(
+            {
+                "target": "(overflow)",
+                "error": f"{overflow_count} additional dispatch failure(s) truncated",
+            }
+        )
 
     # If the agent run succeeded but dispatches failed, mark the run as
     # COMPLETED but keep ``error`` populated so HTTP clients and the
