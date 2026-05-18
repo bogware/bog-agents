@@ -339,6 +339,12 @@ uv run bog-agents
 ## Documentation
 
 - This README + `bog-agents --help`
+- **Full docs**: <https://github.com/bogware/bog-agents/tree/main/docs>
+  — [getting started](https://github.com/bogware/bog-agents/blob/main/docs/getting-started.md),
+  [cookbook](https://github.com/bogware/bog-agents/blob/main/docs/cookbook.md),
+  [troubleshooting](https://github.com/bogware/bog-agents/blob/main/docs/troubleshooting.md),
+  [drive deep dive](https://github.com/bogware/bog-agents/blob/main/docs/cli/drive.md),
+  [tips & tricks](https://github.com/bogware/bog-agents/blob/main/docs/tips-and-tricks.md)
 - Architecture overview: [`CLAUDE.md`](https://github.com/bogware/bog-agents/blob/main/CLAUDE.md)
 - Repo: <https://github.com/bogware/bog-agents>
 - Issues: <https://github.com/bogware/bog-agents/issues>

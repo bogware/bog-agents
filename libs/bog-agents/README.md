@@ -245,9 +245,13 @@ for the full release history.
 
 ## Documentation
 
+- **Full docs**: <https://github.com/bogware/bog-agents/tree/main/docs>
+  — [SDK quickstart](https://github.com/bogware/bog-agents/blob/main/docs/sdk/quickstart.md),
+  [middleware guide](https://github.com/bogware/bog-agents/blob/main/docs/sdk/middleware.md),
+  [tool bundles](https://github.com/bogware/bog-agents/blob/main/docs/sdk/tool-bundles.md),
+  [security model](https://github.com/bogware/bog-agents/blob/main/docs/security.md)
 - Architecture overview: [`CLAUDE.md`](https://github.com/bogware/bog-agents/blob/main/CLAUDE.md)
 - Middleware index: read the docstrings under `bog_agents.middleware`
-- Sample agents: `bog_agents/bundled_agents/`
 - Repo: <https://github.com/bogware/bog-agents>
 - Issues: <https://github.com/bogware/bog-agents/issues>
 

@@ -253,6 +253,26 @@ CI runs `make lint` + `make test` per package on every PR. See
 
 ## Documentation
 
+Start with **[`docs/`](docs/)** — the full documentation tree:
+
+- **[Getting Started](docs/getting-started.md)** — install, first
+  run, the five commands you'll use forever
+- **[Cookbook](docs/cookbook.md)** — fifteen task-shaped recipes
+- **[Troubleshooting](docs/troubleshooting.md)** — every common
+  error, what it means, how to fix it
+- **[Tips & Tricks](docs/tips-and-tricks.md)** — power-user moves
+- **[Security Model](docs/security.md)** — what's safe by default,
+  what isn't, threat boundaries
+- **CLI deep dives**: [Drive runner](docs/cli/drive.md) ·
+  [Slash commands](docs/cli/slash-commands.md)
+- **SDK guides**: [Quickstart](docs/sdk/quickstart.md) ·
+  [Middleware](docs/sdk/middleware.md) ·
+  [Tool bundles](docs/sdk/tool-bundles.md)
+- **Daemon**: [Quickstart](docs/daemon/quickstart.md)
+- **Advanced**: [Expert Rules](docs/advanced/expert-rules.md)
+
+Also:
+
 - **Per-package READMEs**: [SDK](libs/bog-agents/README.md) ·
   [CLI](libs/cli/README.md) · [Daemon](libs/daemon/README.md)
 - **Architecture** — [`CLAUDE.md`](CLAUDE.md)

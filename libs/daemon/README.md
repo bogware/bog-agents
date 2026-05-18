@@ -244,6 +244,10 @@ when you want an agent that wakes itself.
 
 ## Documentation
 
+- **Full docs**: <https://github.com/bogware/bog-agents/tree/main/docs>
+  — [daemon quickstart](https://github.com/bogware/bog-agents/blob/main/docs/daemon/quickstart.md),
+  [security model](https://github.com/bogware/bog-agents/blob/main/docs/security.md),
+  [troubleshooting](https://github.com/bogware/bog-agents/blob/main/docs/troubleshooting.md)
 - Repo: <https://github.com/bogware/bog-agents>
 - Issues: <https://github.com/bogware/bog-agents/issues>
 - Changelog: [`CHANGELOG.md`](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
