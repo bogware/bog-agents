@@ -14,6 +14,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+__all__ = [
+    "SafeToolRule",
+    "SafeToolsConfig",
+]
+
+
 @dataclass
 class SafeToolRule:
     """A rule defining which tool calls can be auto-approved."""

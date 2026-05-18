@@ -192,4 +192,9 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_LAZY_IMPORTS))
 
 
-__all__ = sorted(_LAZY_IMPORTS.keys())
+# ruff's PLE0605 wants ``__all__`` to be a tuple/list LITERAL — a
+# ``sorted()`` call resolves to a list at runtime but the static
+# analyzer can't see that. Materialize the sorted keys into a list
+# literal at import time so the static check passes without losing
+# the alphabetical surface order users see in IDE autocomplete.
+__all__ = [*sorted(_LAZY_IMPORTS.keys())]  # see comment above

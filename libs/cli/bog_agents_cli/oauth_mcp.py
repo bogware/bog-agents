@@ -139,6 +139,7 @@ def load_stored_token(config_dir: Path, server_name: str) -> OAuthToken | None:
         data = json.loads(token_path.read_text(encoding="utf-8"))
         token_data = data.get(server_name)
         if not token_data:
+            logger.debug("oauth: no stored token for server=%s", server_name)
             return None
 
         token = OAuthToken(
@@ -150,10 +151,31 @@ def load_stored_token(config_dir: Path, server_name: str) -> OAuthToken | None:
         )
 
         if token.expired and not token.refresh_token:
+            logger.info(
+                "oauth: stored token for server=%s expired (exp=%.0f, now=%.0f) "
+                "and no refresh_token available — re-auth required",
+                server_name,
+                token.expires_at,
+                time.time(),
+            )
             return None
 
+        if token.expired:
+            logger.info(
+                "oauth: stored token for server=%s expired but refresh_token "
+                "available; caller should refresh before use",
+                server_name,
+            )
+        else:
+            seconds_remaining = max(0.0, token.expires_at - time.time()) if token.expires_at else 0
+            logger.debug(
+                "oauth: loaded valid token for server=%s (%.0fs remaining)",
+                server_name,
+                seconds_remaining,
+            )
         return token
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("oauth: failed to read stored token for server=%s: %s", server_name, exc)
         return None
 
 
@@ -188,6 +210,17 @@ def save_token(config_dir: Path, server_name: str, token: OAuthToken) -> None:
     from bog_agents_cli.io_utils import atomic_write_text
 
     atomic_write_text(token_path, json.dumps(existing, indent=2), mode=0o600)
+    if token.expires_at:
+        logger.info(
+            "oauth: saved token for server=%s (expires in %.0fs)",
+            server_name,
+            max(0.0, token.expires_at - time.time()),
+        )
+    else:
+        logger.info(
+            "oauth: saved token for server=%s (no explicit expiry)",
+            server_name,
+        )
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -273,6 +306,12 @@ async def exchange_code_for_token(
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
 
+    logger.info(
+        "oauth: initiating code-for-token exchange (token_url=%s, client_id_prefix=%s, pkce=%s)",
+        config.token_url,
+        (config.client_id[:8] + "...") if config.client_id else "<none>",
+        bool(code_verifier and config.use_pkce),
+    )
     try:
         response = await asyncio.to_thread(urllib.request.urlopen, req, timeout=30)
         result = json.loads(response.read())
@@ -280,13 +319,22 @@ async def exchange_code_for_token(
         expires_in = result.get("expires_in", 0)
         expires_at = time.time() + expires_in if expires_in else 0
 
-        return OAuthToken(
+        token = OAuthToken(
             access_token=result["access_token"],
             refresh_token=result.get("refresh_token", ""),
             token_type=result.get("token_type", "Bearer"),
             expires_at=expires_at,
             scopes=result.get("scope", "").split(),
         )
+        logger.info(
+            "oauth: token issued (token_type=%s, expires_in=%ss, has_refresh_token=%s, scopes=%s)",
+            token.token_type,
+            expires_in or "unknown",
+            bool(token.refresh_token),
+            token.scopes,
+        )
+        return token
     except Exception as e:
+        logger.warning("oauth: token exchange failed against %s: %s", config.token_url, e)
         msg = f"Token exchange failed: {e}"
         raise ValueError(msg) from e

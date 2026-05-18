@@ -36,6 +36,13 @@ logger = logging.getLogger(__name__)
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "multi_edit_file", "execute"})
 
 
+__all__ = [
+    "Checkpoint",
+    "CheckpointState",
+    "CheckpointingMiddleware",
+]
+
+
 @dataclass
 class Checkpoint:
     """A single checkpoint representing a point-in-time snapshot."""

@@ -1598,10 +1598,33 @@ def _run_setup_wizard() -> str:
         Model specification string (e.g. ``"anthropic:claude-sonnet-4-6"``).
 
     Raises:
-        ModelConfigError: If the user cancels or the credential test fails.
+        ModelConfigError: If the user cancels, the credential test fails,
+            or stdin is not a TTY (the wizard would otherwise hang
+            waiting for input in non-interactive contexts like ``-p``
+            / ``-n`` / scripted runs).
     """
     from rich.panel import Panel
     from rich.prompt import Prompt
+
+    # First-run friendliness: in non-interactive mode (-p, -n, piped
+    # stdin, daemon, CI) the wizard cannot prompt for a provider
+    # choice — Prompt.ask would either block forever or read garbage
+    # from a piped input stream. Fail fast with the most actionable
+    # message we can give: name an env var the user can set right now,
+    # and point at /init for the full setup walk-through.
+    if not sys.stdin.isatty():
+        msg = (
+            "No AI provider credentials detected and stdin is not a TTY, "
+            "so the interactive setup wizard cannot run.\n"
+            "\n"
+            "Quick fix — export a provider API key in your shell and re-run:\n"
+            "  export ANTHROPIC_API_KEY=sk-ant-...    # for Anthropic\n"
+            "  export OPENAI_API_KEY=sk-...           # for OpenAI\n"
+            "  export GOOGLE_API_KEY=AI...            # for Google AI\n"
+            "\n"
+            "Or run `bog-agents` (no args) interactively to get the setup wizard."
+        )
+        raise ModelConfigError(msg)
 
     con = Console()
 

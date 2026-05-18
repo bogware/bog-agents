@@ -145,6 +145,38 @@ class AuditLog:
     # stay consistent under concurrent agent turns (e.g. parallel-worktree
     # multi-agent runs that share an AuditLog instance).
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    # Internal flag — once we've warned about the "durable sink with
+    # strict_hooks=False" misconfiguration we don't repeat the message.
+    _strict_warning_emitted: bool = field(default=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Warn when a durable sink is wired without strict hook semantics.
+
+        ``on_entry_recorded`` is the integration point compliance teams
+        use to flush each entry to a database / append-only log file.
+        Pairing that sink with ``strict_hooks=False`` means a transient
+        sink failure (DB hiccup, disk full) silently drops the entry
+        from the durable store while still letting the agent proceed —
+        which is exactly the failure mode regulators care about.
+
+        We default ``strict_hooks=False`` for backwards compatibility,
+        but emit a one-time warning so operators know to opt in
+        deliberately. The warning fires once per AuditLog instance.
+        """
+        if (
+            self.on_entry_recorded is not None
+            and not self.strict_hooks
+            and not self._strict_warning_emitted
+        ):
+            logger.warning(
+                "audit_trail: on_entry_recorded is wired but strict_hooks=False. "
+                "A sink exception will increment hook_failure_count and log to "
+                "stderr but the agent will continue. For compliance contexts "
+                "(FINRA, SOC 2, audit-of-record), pass strict_hooks=True so a "
+                "failing durable sink aborts the entry instead of diverging "
+                "from in-memory state."
+            )
+            self._strict_warning_emitted = True
 
     def add_entry(
         self,

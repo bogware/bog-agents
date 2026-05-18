@@ -8,9 +8,9 @@ SDK in its own right when you want to build agents that aren't a CLI.
 
 One `create_agent()` call gets you a compiled LangGraph agent with file tools, a shell,
 git, sub-agents, plan mode, auto-quality checks, retry-with-backoff against transient
-provider failures, and 80-something composable middlewares. Pluggable backends. Any
-tool-calling LLM. The defaults are deliberate — you ship something that works on day
-one without writing scaffolding.
+provider failures, and ~80 composable middlewares. Pluggable backends. Tool bundles
+for callers who don't want middleware overhead. Any tool-calling LLM. The defaults
+are deliberate — you ship something that works on day one without writing scaffolding.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents)](https://pypi.org/project/bog-agents/)
 [![Python](https://img.shields.io/pypi/pyversions/bog-agents)](https://pypi.org/project/bog-agents/)
@@ -31,8 +31,10 @@ what you actually need.
   vault, structured logging at every chokepoint, panic dumps on uncaught exceptions.
 - **No ceremony.** `create_agent()` returns a compiled `CompiledStateGraph` you can
   invoke. Plug it into your app. Done.
-- **Composable.** 80+ middlewares snap on or off. Subagents nest. Backends swap. The
-  framework gets out of your way.
+- **Composable.** ~80 middlewares snap on or off. Subagents nest. Backends swap. The
+  framework gets out of your way. New in 0.8.6: **tool bundles** —
+  free-function factories that return `list[BaseTool]` for callers who
+  only want a set of tools without the middleware machinery.
 
 The bog is calm, deep, and unhurried. So is the agent.
 
@@ -138,9 +140,30 @@ Pluggable filesystems and shells. Pick one or compose them.
 - **`AuditTrailMiddleware`** — structured records of every agent decision.
 - **`RBACMiddleware`** / **`DLPMiddleware`** — access control + data-loss prevention.
 
-Plus 60+ more for cost tracking, citations, hooks, MCP tools, agent teams, parallel
-worktrees, hot-reload skills, regulatory alerts, and more. Browse them under
-`bog_agents.middleware`.
+Plus 60+ more for cost tracking, citations, hooks, MCP tools, parallel
+worktrees, hot-reload skills, browser automation, compliance auditing, and
+more. Browse them under `bog_agents.middleware`. **Ordering is
+load-bearing** — the canonical sequence is locked by
+`tests/unit_tests/test_middleware_canonical_order.py`; touch it
+deliberately.
+
+### Tool bundles (alternative to middleware for tool-only features)
+
+```python
+from bog_agents import create_agent
+from bog_agents.tools import git_tools_bundle
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-7",
+    tools=[*git_tools_bundle(working_dir=".")],
+)
+```
+
+A bundle is a free function that returns `list[BaseTool]`. No middleware
+class to construct, no wrap-stack overhead. Bundles available:
+`git_tools_bundle`, `multi_edit_tool`, `read_many_files_tool`. The
+corresponding middleware classes (`GitToolsMiddleware`, etc.) are kept
+as thin backwards-compatible shims that delegate to the bundles.
 
 ### Providers
 
@@ -176,6 +199,18 @@ Streaming is supported via the standard LangGraph stream APIs.
 
 ---
 
+## What's new since 0.8.0
+
+- **0.8.7 (Wave X)** — `merge_worktree` ref-injection fix,
+  `start_preview_server` shlex parsing + interactive-command DEVNULL,
+  daemon `JobRun.dispatch_errors` per-target failure capture.
+- **0.8.6 (Wave W)** — **Tool bundles** (`bog_agents.tools.bundles`),
+  canonical middleware-ordering test that locks `graph.py`'s
+  sequence, `AuditTrailMiddleware.strict_hooks` flag + hook-failure
+  counter, fixed server log handle leak on `Popen` failure.
+- **0.8.5 (Wave V)** — Stub middleware cleanup: 17 modules deleted,
+  ~7,900 lines net deletion.
+
 ## What's new in 0.8.0
 
 - **`ProviderRetryMiddleware`** — bounded retries on transient provider failures.
@@ -191,7 +226,7 @@ Streaming is supported via the standard LangGraph stream APIs.
   `</agent_memory>` close-tags (prompt-injection defense).
 
 See [`CHANGELOG.md`](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
-for the full 0.8.0 entry.
+for the full release history.
 
 ---
 

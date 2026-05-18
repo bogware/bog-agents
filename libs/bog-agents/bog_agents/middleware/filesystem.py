@@ -73,6 +73,12 @@ READ_FILE_TRUNCATION_MSG = (
 NUM_CHARS_PER_TOKEN = 4
 
 
+__all__ = [
+    "FilesystemMiddleware",
+    "FilesystemState",
+]
+
+
 class FileData(TypedDict):
     """Data structure for storing file contents with metadata."""
 

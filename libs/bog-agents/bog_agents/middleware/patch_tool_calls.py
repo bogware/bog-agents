@@ -7,6 +7,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Overwrite
 
+__all__ = [
+    "PatchToolCallsMiddleware",
+]
+
 
 class PatchToolCallsMiddleware(AgentMiddleware):
     """Middleware to patch dangling tool calls in the messages history."""

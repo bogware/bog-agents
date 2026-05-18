@@ -137,7 +137,18 @@ class TestBrowserAgentMiddleware:
         from bog_agents.middleware.browser_agent import BrowserAgentMiddleware
 
         mw = BrowserAgentMiddleware(working_dir=tmp_path)
-        assert len(mw.tools) == 4
+        # Wave Y added stop_all_preview_servers as a cleanup tool —
+        # 4 became 5. If we add more, bump this assertion alongside
+        # the addition rather than letting count drift.
+        assert len(mw.tools) == 5
+        tool_names = {t.name for t in mw.tools}
+        assert tool_names == {
+            "web_fetch",
+            "api_request",
+            "start_preview",
+            "stop_preview",
+            "stop_all_preview_servers",
+        }
 
     def test_domain_filtering(self, tmp_path):
         from bog_agents.middleware.browser_agent import BrowserAgentMiddleware

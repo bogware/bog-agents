@@ -119,6 +119,13 @@ def _model_supports_native_thinking(model_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+__all__ = [
+    "ThinkingConfig",
+    "ThinkingMiddleware",
+    "ThinkingState",
+]
+
+
 @dataclass
 class ThinkingConfig:
     """Configuration for extended thinking.

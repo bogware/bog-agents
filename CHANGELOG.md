@@ -2,7 +2,180 @@
 
 All notable changes to bog-agents (SDK), bog-agents-cli, and
 bog-agents-daemon are documented here. The three packages are released
-together with synchronised version numbers.
+together with synchronised version numbers. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased] — Wave Y (release-readiness)
+
+### Added
+
+- **Audit-trail strict-hook safety net.** When `on_entry_recorded` is
+  wired with `strict_hooks=False`, the middleware emits a one-time
+  warning so compliance contexts (FINRA, SOC 2) don't silently retain
+  in-memory entries that never flushed to durable storage. Default
+  remains `False` for backwards compatibility.
+- **`MessageStore` opt-in JSONL persistence.** Pass `persist_path=` to
+  the constructor and every `append()` mirrors to disk line-by-line.
+  `MessageStore.replay_from_persist()` rebuilds the transcript after
+  a crash or session restart. Off by default for back-compat; on for
+  daemon and crash-recovery paths.
+- **`stop_all_preview_servers` tool.** New `browser_agent` tool that
+  terminates every preview server the middleware is tracking — useful
+  before starting a fresh set when the per-instance cap has been hit.
+- **Structured OAuth observability.** `oauth_mcp.py` now logs token
+  load (with seconds-remaining), token expiry, token issuance (with
+  `expires_in`, `has_refresh_token`, `scopes`), and exchange failures
+  at `INFO` level. Token values are never logged.
+- **`__all__` declarations** on the headline middleware modules
+  (filesystem, cost_tracker, summarization, subagents, worktree,
+  safe_tools, memory, expert_rules, provider_retry, checkpointing,
+  plan_mode, patch_tool_calls, thinking, intelligent_compaction,
+  context_packing, adaptive_context). IDE autocomplete and
+  `from foo import *` users now see a stable public surface.
+
+### Changed
+
+- **`start_preview_server` capped at 5 simultaneous servers** per
+  middleware instance. Refuses duplicate ports. Stale exited
+  processes are reaped on each call.
+- **First-run setup wizard refuses to run when stdin is not a TTY.**
+  In non-interactive contexts (`-p`, `-n`, piped stdin, daemon, CI),
+  the wizard previously hung waiting for input; now it raises a
+  `ModelConfigError` that names the relevant env vars (`ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `GOOGLE_API_KEY`) and points at the interactive
+  wizard as the alternative.
+- **Daemon `JobRun.dispatch_errors` capped at 20 entries** with an
+  `(overflow)` summary so a wide-fanout outage doesn't blow up the
+  run record JSON.
+- **CHANGELOG.md restructured** to follow Keep-a-Changelog conventions
+  with explicit `Added` / `Changed` / `Fixed` / `Removed` /
+  `Documentation` / `Security` sections.
+
+### Documentation
+
+- `CLAUDE.md` brought up to date with current middleware count, the
+  Wave W tool-bundle pattern, and the canonical-order test contract.
+- READMEs refreshed across the repo root, `libs/bog-agents/`,
+  `libs/cli/`, and `libs/daemon/` so a fresh OSS user can install and
+  run with current accurate info.
+- Console-script entry points (`bog-agents` canonical,
+  `bog-agents-cli` alias) documented in `libs/cli/pyproject.toml`.
+
+## [0.8.7] — 2026-05-17 — Wave X (production-readiness hardening)
+
+### Security
+
+- **`merge_worktree` ref injection.** Validate `source_branch` /
+  `target_branch` via `_validate_git_ref` and pass them after a `--`
+  separator so a model can't disguise a flag as a branch name.
+- **`start_preview_server` command parsing.** Replaced naive
+  `command.split()` with `shlex.split`; refuses shell metacharacters
+  (`|`, `>`, `<`, `` ` ``, `$(`, `;`, `&`) with an actionable redirect
+  to the shell-execute tool; pipes stdin to `DEVNULL` so interactive
+  prompts can't block the agent forever.
+
+### Fixed
+
+- **Daemon per-target dispatch failures.** Output dispatch failures
+  (email, webhook, Slack) were logged-and-forgotten. Captured on
+  `JobRun.dispatch_errors` so operators can tell from the runs table
+  that delivery failed even when the agent completed.
+
+### Documentation
+
+- `CLAUDE.md` STUB-middleware paragraph removed (Wave V deleted the
+  modules). Added Wave W tool-bundle and ordering-test sections.
+- `.gitignore` extended to cover `.workday-*`, `*.daemon.log`, and
+  `.drive-artifacts/`.
+
+## [0.8.6] — Wave W (drive runner + audit pass)
+
+### Added
+
+- **`bog-agents drive` — non-interactive scripted TUI runner.** YAML
+  grammar describes slash commands, typed prompts, modal interactions,
+  approval responses, snapshots, and assertions. The runner boots a
+  real `BogAgentsApp` under Textual's `Pilot` and emits a JSONL
+  transcript. 14 action types. New CLI flags: `--drive`,
+  `--drive-stdin`, `--drive-var`, `--drive-artifacts`,
+  `--drive-output`, `--drive-stop-on-failure`.
+- **Deterministic chat-model shims.** `fake:<text>`, `replay:<jsonl>`,
+  `record:<fixture>:<provider>` model schemes for CI-friendly scripted
+  runs without network access.
+- **Snapshot capture.** SVG (Textual `export_screenshot`) + text grid
+  side by side, diff-friendly artifacts for PR review.
+- **Tool-bundle pattern** (`bog_agents.tools.bundles`). Free-function
+  factories return `list[BaseTool]` — the right shape for "middleware
+  whose only job is delivering tools". `git_tools_bundle`,
+  `multi_edit_tool`, `read_many_files_tool` exposed publicly.
+  `GitToolsMiddleware` refactored to a thin shim that delegates.
+- **Canonical middleware-ordering test.** Locks in the load-bearing
+  middleware sequence in `graph.py` so a future refactor that
+  reorders blocks fails CI rather than silently shifting
+  cost-accounting or caching semantics.
+
+### Fixed
+
+- Server log file handle leaked when `subprocess.Popen` failed.
+- Audit-trail hook exception silently dropped entries; added
+  `strict_hooks` flag + `hook_failure_count` counter.
+- Stream chunk timeout now logs the configured value at startup and
+  reports actual elapsed time on the error.
+- Checkpointing `git` failures now log at warning level and
+  self-disable on critical failure so users aren't fooled into
+  thinking undo works when it doesn't.
+- Vault `KeyringError` warns once per process so a misconfigured
+  keychain surfaces visibly.
+
+### Changed
+
+- `/record stop` now writes both the existing replay YAML and a
+  drive-compatible script alongside it.
+- `/replay run` drives each user message individually instead of
+  building a single prose prompt.
+- Removed the unwired `build_replay_prompt` API.
+
+## [0.8.5] — Wave V (STUB cleanup)
+
+### Removed
+
+- **17 STUB middleware modules deleted.** Sixteen vertical-market
+  scaffolds (`financial_data`, `due_diligence`, `earnings_analysis`,
+  `tax_optimization`, `portfolio_analysis`, `market_sentiment`,
+  `peer_comparison`, `meeting_prep`, `regulatory_alerts`,
+  `regulatory_impact`, `scenario_engine`, `client_knowledge_base`,
+  `client_reports`, `firm_deployment`, `agent_teams`,
+  `multi_agent_orchestrator`) plus the demo `sso_auth` module. ~7,900
+  lines net deletion.
+- Z3 prover removed from `/prove` — heuristic prover is the only path.
+
+### Changed
+
+- `/causal` renamed to `/trace-mind` (legacy alias preserved).
+- Lint policy consolidated; user-facing-string rules (`TRY003`,
+  `EM101`, `EM102`) hoisted to global ignores.
+
+## [0.8.4] — Wave U (architect-audit fixes)
+
+Six surgical fixes (U1–U6) addressing edge cases in the model picker,
+Bedrock inference-profile detection, and the HITL approval flow.
+
+## [0.8.3] — Wave T (postmortem feedback loop)
+
+- **Postmortem → dreamscape proposer feedback loop.** Every postmortem
+  emits a structured signal the dreamscape proposer consumes to draft
+  new expert rules, closing the trace-to-policy circle.
+
+## [0.8.2] — Wave S (TraceFile v1)
+
+- **TraceFile v1.** Ed25519-signed, Merkle-chained open trace format
+  for cross-vendor observability. Includes a Claude Code adapter.
+
+## [0.8.1] — Wave R (compliance auditor)
+
+- **`/compliance` slash command + daemon cron trigger** emit
+  HMAC-SHA-256 sealed reports.
 
 ## [0.8.0] — 2026-05-03
 

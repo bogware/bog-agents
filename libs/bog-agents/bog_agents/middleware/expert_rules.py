@@ -67,6 +67,12 @@ _DEFAULT_RELOAD_INTERVAL = 30.0
 # ---------------------------------------------------------------------------
 
 
+__all__ = [
+    "ExpertRulesMiddleware",
+    "ExpertRulesState",
+]
+
+
 class ExpertRulesState(TypedDict, total=False):
     """LangGraph state for the expert rules middleware.
 

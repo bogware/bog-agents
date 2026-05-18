@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 # See P0-C in REVIEW.md.
 _SAFE_SCHEMES = frozenset({"http", "https"})
 
+_MAX_PREVIEW_SERVERS = 5
+"""Cap on simultaneously-running preview servers per middleware instance.
+
+A script that runs ``start_preview`` in a loop without ever calling
+``stop_preview`` would otherwise pin every port the model picks and
+leak subprocesses for the lifetime of the agent. The cap is per-
+instance; restart the agent or call ``stop_all_preview_servers`` to
+reset the slot count.
+"""
+
 
 def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, str]:
     """Return ``(is_safe, reason)`` for a URL about to be fetched.
@@ -323,6 +333,26 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                         "metacharacters in command. Use the shell execute "
                         "tool instead for piped or redirected commands."
                     )
+            # Reap completed processes so a script that started + stopped
+            # many servers gets the slot back. ``poll()`` is None while
+            # alive; any other value means the process exited.
+            for stale_port in list(middleware._preview_processes):
+                stale = middleware._preview_processes[stale_port]
+                if stale.poll() is not None:
+                    middleware._preview_processes.pop(stale_port, None)
+            if len(middleware._preview_processes) >= _MAX_PREVIEW_SERVERS:
+                ports = sorted(middleware._preview_processes)
+                return (
+                    f"Error: already running {len(ports)} preview server(s) "
+                    f"(cap {_MAX_PREVIEW_SERVERS}). Call stop_preview / "
+                    "stop_all_preview_servers before starting another. "
+                    f"Active ports: {ports}."
+                )
+            if port in middleware._preview_processes:
+                return (
+                    f"Error: port {port} already has a running preview server; "
+                    "stop it first or pick a different port."
+                )
             try:
                 process = subprocess.Popen(
                     argv,
@@ -351,9 +381,31 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
             process.terminate()
             return f"Stopped server on port {port}"
 
+        def stop_all_preview_servers(
+            runtime: ToolRuntime[None, BrowserAgentState],
+        ) -> str:
+            """Stop every preview server this middleware is tracking.
+
+            Useful as a cleanup step at the end of a multi-server
+            workflow, or before starting a fresh set when the cap has
+            been hit.
+            """
+            if not middleware._preview_processes:
+                return "No preview servers are running."
+            stopped: list[int] = []
+            for port, process in list(middleware._preview_processes.items()):
+                try:
+                    process.terminate()
+                except OSError as exc:
+                    logger.warning("preview server on port %d would not terminate: %s", port, exc)
+                stopped.append(port)
+                middleware._preview_processes.pop(port, None)
+            return f"Stopped {len(stopped)} preview server(s) on port(s): {sorted(stopped)}"
+
         return [
             StructuredTool.from_function(name="web_fetch", description="Fetch a URL with auth support.", func=web_fetch),
             StructuredTool.from_function(name="api_request", description="Send an API request with timing.", func=api_request),
             StructuredTool.from_function(name="start_preview", description="Start a local dev server.", func=start_preview_server),
             StructuredTool.from_function(name="stop_preview", description="Stop a preview server.", func=stop_preview_server),
+            StructuredTool.from_function(name="stop_all_preview_servers", description="Stop every tracked preview server.", func=stop_all_preview_servers),
         ]

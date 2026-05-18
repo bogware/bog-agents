@@ -91,6 +91,17 @@ def _default_agent_factory(prompt: str, working_dir: Path) -> str:
     return ""
 
 
+__all__ = [
+    "AgentThread",
+    "ParallelWorktreeMiddleware",
+    "ParallelWorktreeState",
+    "WorktreeInfo",
+    "WorktreeMiddleware",
+    "WorktreeState",
+    "WorktreeTask",
+]
+
+
 @dataclass
 class WorktreeInfo:
     """Information about a git worktree."""

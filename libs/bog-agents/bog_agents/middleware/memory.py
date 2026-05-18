@@ -78,6 +78,13 @@ from bog_agents.middleware._utils import append_to_system_message
 logger = logging.getLogger(__name__)
 
 
+__all__ = [
+    "MemoryMiddleware",
+    "MemoryState",
+    "MemoryStateUpdate",
+]
+
+
 class MemoryState(AgentState):
     """State schema for `MemoryMiddleware`.
 

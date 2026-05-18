@@ -134,6 +134,14 @@ all = [
     "bog-agents-cli[all-providers,sandbox,web-search,acp]",
 ]
 
+# Console-script entry points.
+#
+# ``bog-agents`` is canonical. ``bog-agents-cli`` is retained as an
+# alias because early adopters scripted against the longer name; it
+# is identical and is documented in the README as "the same thing".
+# When we cut a major version we will deprecate the alias and emit a
+# one-time warning before falling through to ``cli_main``. Until then
+# both stay wired up so existing CI/launcher scripts keep working.
 [project.scripts]
 bog-agents = "bog_agents_cli:cli_main"
 bog-agents-cli = "bog_agents_cli:cli_main"
