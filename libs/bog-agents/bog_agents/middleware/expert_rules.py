@@ -23,13 +23,14 @@ Example::
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -460,10 +461,14 @@ def _request_with_modified_args(
     old_args = old_call.get("args") or {}
     new_args = {**old_args, **modifications}
     new_call = {**old_call, "args": new_args}
-    # ``ToolCallRequest`` is a dataclass with ``__replace__`` (Python 3.13+).
-    # Fall back to construction if needed.
-    if hasattr(request, "__replace__"):
-        return cast(ToolCallRequest, request.__replace__(tool_call=new_call))
+    # ``dataclasses.replace`` is the public-API equivalent of the
+    # ``__replace__`` dunder added in Python 3.13. Using the function
+    # form keeps the typing predictable (``ty`` sees ``__replace__`` as
+    # ``object``, not a callable) and preserves every other field on
+    # ``ToolCallRequest`` even if upstream adds new ones we haven't
+    # listed in the fallback constructor.
+    if dataclasses.is_dataclass(request):
+        return dataclasses.replace(request, tool_call=new_call)
     return ToolCallRequest(
         tool_call=new_call,
         tool=request.tool,

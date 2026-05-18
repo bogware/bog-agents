@@ -104,7 +104,16 @@ def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, st
         try:
             for family, _type, _proto, _canon, sockaddr in socket.getaddrinfo(host_stripped, None):
                 if family in (socket.AF_INET, socket.AF_INET6):
-                    addr_str = sockaddr[0]
+                    # ``sockaddr[0]`` is typed broadly as ``str | int``
+                    # by typeshed across address families. For AF_INET
+                    # and AF_INET6 it's always a string in practice,
+                    # but we narrow explicitly to keep ``ty`` happy and
+                    # to guard against an exotic address family slipping
+                    # past the filter above.
+                    raw = sockaddr[0]
+                    if not isinstance(raw, str):
+                        continue
+                    addr_str: str = raw
                     # Strip IPv6 scope id (``fe80::1%eth0`` → ``fe80::1``).
                     if "%" in addr_str:
                         addr_str = addr_str.split("%", 1)[0]

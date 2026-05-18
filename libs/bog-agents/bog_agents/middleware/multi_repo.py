@@ -22,7 +22,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -150,18 +150,25 @@ def load_workspace(project_root: Path) -> dict[str, RepoConfig]:
         logger.warning("MultiRepo: could not read %s", workspace_path)
         return {}
 
-    # Attempt stdlib tomllib (3.11+), then tomli back-port, then regex fallback
+    # Attempt stdlib tomllib (3.11+), then tomli back-port, then regex
+    # fallback. Capture the parser as a plain callable so ``ty`` doesn't
+    # have to reconcile two different module types under a single name.
+    _toml_loads: Any = None
     try:
         import tomllib
+
+        _toml_loads = tomllib.loads
     except ImportError:
         try:
-            import tomli as tomllib  # type: ignore[import-not-found,no-redef]
-        except ImportError:
-            tomllib = None  # type: ignore[assignment]
+            import tomli  # type: ignore[import-not-found]
 
-    if tomllib is not None:
+            _toml_loads = tomli.loads
+        except ImportError:
+            _toml_loads = None
+
+    if _toml_loads is not None:
         try:
-            data = tomllib.loads(text)
+            data = _toml_loads(text)
         except Exception:
             logger.warning("MultiRepo: failed to parse %s with tomllib", workspace_path, exc_info=True)
             return {}
