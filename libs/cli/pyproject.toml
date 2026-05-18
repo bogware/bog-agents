@@ -45,7 +45,8 @@ dependencies = [
 
     # Observability
     # GHSA-rr7j-v2q5-chgv — fix landed in 0.7.31
-    "langsmith>=0.7.31,<1.0.0",
+    # CVE-2026-45134 — fix landed in 0.8.0
+    "langsmith>=0.8.0,<1.0.0",
 
     # UI/Terminal
     "textual>=8.0.0,<9.0.0",
@@ -88,6 +89,8 @@ dependencies = [
     "pygments>=2.20.0",
     # CVE-2026-30922 — pyasn1 DoS fix
     "pyasn1>=0.6.3",
+    # CVE-2026-44431 + CVE-2026-44432 — urllib3 SSRF/cookie fixes
+    "urllib3>=2.7.0",
 ]
 
 [project.optional-dependencies]

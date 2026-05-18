@@ -26,6 +26,19 @@ dependencies = [
     "uvicorn>=0.30.0,<1.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "aiofiles>=23.0.0,<25.0.0",
+
+    # ─── transitive-CVE floors (mirror libs/bog-agents and libs/cli so
+    # bog-agents-daemon resolves a patched set on a clean install) ───
+    # CVE-2026-44431 + CVE-2026-44432 — urllib3 SSRF/cookie fixes
+    "urllib3>=2.7.0",
+    # CVE-2026-40347 — python-multipart DoS fix via starlette/uvicorn chain
+    "python-multipart>=0.0.26",
+    # CVE-2026-45134 — langsmith stale-token bug (langchain pulls it transitively)
+    "langsmith>=0.8.0",
+    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes
+    "cryptography>=46.0.7",
+    # CVE-2026-25645 — requests CRLF fix
+    "requests>=2.33.0",
 ]
 
 [project.optional-dependencies]

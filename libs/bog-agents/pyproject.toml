@@ -44,6 +44,8 @@ dependencies = [
     "requests>=2.33.0",
     # CVE-2026-4539 — pygments ReDoS fix
     "pygments>=2.20.0",
+    # CVE-2026-44431 + CVE-2026-44432 — urllib3 SSRF/cookie fixes
+    "urllib3>=2.7.0",
 ]
 
 [project.optional-dependencies]
@@ -84,7 +86,8 @@ serve = [
 ]
 
 evals = [
-  "langsmith",
+  # CVE-2026-45134 — langsmith fix landed in 0.8.0
+  "langsmith>=0.8.0",
   "langchain-xai",
   "langchain-mistralai",
   "langchain-deepseek",
@@ -93,8 +96,15 @@ evals = [
   "langchain-fireworks",
   "langchain-baseten",
   "datasets>=3.0.0",
-  "nltk>=3.9.0",
+  # CVE-2026-33230 + CVE-2026-33231 + GHSA-rf74-v2fm-23pw — nltk fix landed in 3.9.4
+  "nltk>=3.9.4",
   "tiktoken>=0.8.0",
+  # CVE-2026-22815, CVE-2026-34514–34525 series — aiohttp HTTP-smuggling fixes
+  # landed in 3.13.4 (pulled in via langsmith/sandbox + tavily evals chain)
+  "aiohttp>=3.13.4",
+  # CVE-2026-40192 / 42308 / 42309 / 42310 / 42311 — pillow image-decoder fixes
+  # in 12.2.0 (pulled in via tavily + datasets transitives)
+  "pillow>=12.2.0",
 ]
 
 [build-system]
