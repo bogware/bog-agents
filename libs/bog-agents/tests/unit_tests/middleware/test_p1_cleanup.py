@@ -166,7 +166,15 @@ class TestP12PathTraversal:
 
 @dataclass
 class _StubBackend:
-    """Minimal in-memory backend mimicking BackendProtocol surface."""
+    """Minimal in-memory backend mimicking BackendProtocol surface.
+
+    ``download_files`` returns one ``FileDownloadResponse(error="file_not_found")``
+    per requested path so the production code's ``zip(..., strict=True)``
+    invariant holds. The test only inspects which paths were requested
+    via ``self.downloaded_paths`` — it doesn't care that downloads
+    fail, only that the symlink-filter happened upstream of the
+    download step.
+    """
 
     items_response: list
     downloaded_paths: list = None  # type: ignore[assignment]
@@ -178,8 +186,15 @@ class _StubBackend:
         return self.items_response
 
     def download_files(self, paths: list) -> list:
+        from bog_agents.backends.protocol import FileDownloadResponse
+
         self.downloaded_paths.extend(paths)
-        return []
+        # Production code does ``zip(skill_md_paths, responses,
+        # strict=True)`` — return exactly one response per input path
+        # so the strict zip doesn't raise. Marking them as
+        # file_not_found makes the production loop ``continue`` past
+        # the parsing step, which is what we want for this assertion.
+        return [FileDownloadResponse(path=p, content=None, error="file_not_found") for p in paths]
 
 
 class TestP18SkillSymlinks:
