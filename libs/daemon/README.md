@@ -32,8 +32,8 @@ something matters.
 - **Cross-platform**: POSIX systemd, Windows Task Scheduler, or just
   `bog-agents-daemon run` in a shell. Same config either way.
 
-If the CLI is *patient as still water*, the daemon is the still water that
-keeps watch overnight.
+If the CLI *passes through in harmony*, the daemon is what keeps watch
+through the night.
 
 ---
 

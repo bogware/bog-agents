@@ -1,6 +1,6 @@
 # Bog Agents CLI
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
 A coding agent that lives in your terminal. Point it at the work, step back,
 let it run.

@@ -1,6 +1,6 @@
 # Bog Agents — Documentation
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
 The READMEs at the top of each package answer "what is this and how do
 I install it." Everything in this tree answers "how do I actually use

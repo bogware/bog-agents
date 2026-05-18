@@ -1,6 +1,6 @@
 # Bog Agents
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
 The Python SDK underneath [`bog-agents-cli`](https://pypi.org/project/bog-agents-cli/) and
 [`bog-agents-daemon`](https://pypi.org/project/bog-agents-daemon/) — and an

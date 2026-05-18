@@ -1,6 +1,6 @@
 # Bog Agents
 
-> *Patient as still water. Opinionated where it matters. Pass through in harmony.*
+> *Pass through in harmony. Opinionated where it matters.*
 
 **v0.8.7** — a production-ready AI agent framework built on LangGraph,
 deliberately calm by design.
