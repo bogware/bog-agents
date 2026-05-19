@@ -1,5 +1,5 @@
 {
-  "libs/bog-agents": "0.8.7",
-  "libs/cli": "0.8.7",
-  "libs/daemon": "0.8.7"
+  "libs/bog-agents": "0.9.0",
+  "libs/cli": "0.9.0",
+  "libs/daemon": "0.9.0"
 }
