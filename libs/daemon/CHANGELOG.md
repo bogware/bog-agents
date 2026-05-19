@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.0](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.8.7...bog-agents-daemon==0.9.0) (2026-05-19)
+
+
+* force 0.9.0 release after PR [#82](https://github.com/bogware/bog-agents/issues/82) squash-merge ([64e7726](https://github.com/bogware/bog-agents/commit/64e772666d46d86c9d9e873e09a0aba85837b6a3))
+
+
+### Features
+
+* **cli:** scriptable TUI, compliance, and security sweep ([df94b67](https://github.com/bogware/bog-agents/commit/df94b67cc0aa6cdcd9b21aa896364532f3d9463e))
+
 ## [0.8.7](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.8.6...bog-agents-daemon==0.8.7) (2026-05-16)
 
 
