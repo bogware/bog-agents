@@ -37,6 +37,14 @@ from bog_agents_cli.provider_catalog import (
 logger = logging.getLogger(__name__)
 
 
+# Tracks which Bedrock model specs have been probed in this process. The
+# picker uses this to switch the Ctrl+T hint between "press to test" and
+# "tested this session" so users see the diagnostic state at a glance
+# without having to remember whether they already ran the probe. Cleared
+# on process restart — a fresh `bog-agents` invocation gets fresh hints.
+_BEDROCK_PROBED_SPECS: set[str] = set()
+
+
 class ModelOption(Static):
     """A clickable model option in the selector."""
 
@@ -814,6 +822,25 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
         except Exception:  # Resilient footer rendering
             logger.debug("Failed to format footer for %s", spec, exc_info=True)
             text = "[dim]Could not load profile details[/dim]\n\n\n"
+        # Bedrock-specific hint: surface the deep probe affordance so the
+        # 6-step diagnostic ([Package, Credentials, Region, Identity,
+        # ListModels, Inference]) is one keystroke away when the user has
+        # a Bedrock model highlighted. The Ctrl+T binding is also in the
+        # bottom help bar; this line makes it obvious where it leads.
+        if spec.startswith(("bedrock:", "bedrock_converse:")):
+            if spec in _BEDROCK_PROBED_SPECS:
+                hint = (
+                    "[bold cyan]Bedrock[/bold cyan] [dim]·[/dim]"
+                    " [green]✓[/green] tested this session"
+                    " [dim](Ctrl+T to re-run)[/dim]"
+                )
+            else:
+                hint = (
+                    "[bold cyan]Bedrock[/bold cyan] [dim]·[/dim] press"
+                    " [bold]Ctrl+T[/bold] to run the 6-step probe"
+                    " [dim](creds → region → identity → access → inference)[/dim]"
+                )
+            text = f"{text}\n{hint}"
         footer.update(text)
 
     def _move_selection(self, delta: int) -> None:
@@ -1094,6 +1121,12 @@ class ModelSelectorScreen(ModalScreen[tuple[str, str] | None]):
 
             result = await asyncio.to_thread(smoketest_model, model_spec)
             help_widget.update(result.summary_markup())
+            # Record that this Bedrock spec has been probed in this
+            # session so the next focus on the same model shows the
+            # ✓-tested hint instead of the press-to-test hint.
+            if model_spec.startswith(("bedrock:", "bedrock_converse:")):
+                _BEDROCK_PROBED_SPECS.add(model_spec)
+                self._update_footer()
         except Exception as exc:
             logger.warning("Smoketest failed for %s", model_spec, exc_info=True)
             help_widget.update(f"[bold red]Smoketest crashed: {exc}[/bold red]")

@@ -36,6 +36,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
             subcommands=(
                 ("test", "Run the Bedrock connection probe"),
                 ("status", "Same as `test` — quick view of credentials + region"),
+                (
+                    "fix",
+                    "Probe + show one copy-paste command per failure (set region, sso login, request model access, …)",
+                ),
+                (
+                    "config",
+                    "Show active Bedrock settings (auth mode, profile, region, config path)",
+                ),
             ),
         ),
         handler_method="_handle_bedrock_command",

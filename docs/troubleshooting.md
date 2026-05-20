@@ -88,6 +88,10 @@ aws sts get-caller-identity   # confirms credentials work
 The CLI uses boto3's credential chain (env vars, profile, SSO,
 instance role). Anything boto3 finds, bog-agents finds.
 
+For anything beyond credentials — model access, inference profiles,
+region selection, the SSO/static fallback chain — see the dedicated
+walkthrough at **[providers/bedrock.md](providers/bedrock.md)**.
+
 ### "MCP server `foo` did not start in 15s — disabled"
 
 A stdio MCP server (typically `npx -y something`) didn't initialize

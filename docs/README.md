@@ -35,6 +35,12 @@ examples wherever possible.
 | [Tool bundles](sdk/tool-bundles.md) | The W4 alternative to "middleware that only ships tools" |
 | [Backends](sdk/backends.md) | Filesystem, shell, sandbox; safe defaults explained |
 
+## Providers
+
+| | |
+|---|---|
+| [AWS Bedrock](providers/bedrock.md) | Inference profiles, model access, six-step probe, `/bedrock fix` |
+
 ## Daemon (`bog-agents-daemon`)
 
 | | |
