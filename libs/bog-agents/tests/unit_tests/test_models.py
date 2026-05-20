@@ -2,9 +2,12 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from langchain_core.language_models import BaseChatModel
 
 from bog_agents._models import (
+    _normalize_bedrock_model_id,
+    _resolve_bedrock_region_prefix,
     _string_value,
     get_model_identifier,
     model_matches_spec,
@@ -133,3 +136,103 @@ class TestStringValue:
 
     def test_non_string(self) -> None:
         assert _string_value({"key": 42}, "key") is None
+
+
+class TestBedrockRegionPrefix:
+    """Tests for _resolve_bedrock_region_prefix."""
+
+    @pytest.mark.parametrize(
+        ("region", "expected"),
+        [
+            ("us-east-1", "us"),
+            ("us-east-2", "us"),
+            ("us-west-2", "us"),
+            ("ca-central-1", "us"),
+            ("eu-west-1", "eu"),
+            ("eu-central-1", "eu"),
+            ("ap-northeast-1", "jp"),
+            ("ap-northeast-2", "apac"),
+            ("ap-southeast-1", "apac"),
+            ("ap-southeast-2", "apac"),
+            ("sa-east-1", "sa"),
+            ("US-EAST-1", "us"),
+            ("", "us"),
+            (None, "us"),
+            ("af-south-1", "us"),
+        ],
+    )
+    def test_region_to_prefix(self, region: str | None, expected: str) -> None:
+        assert _resolve_bedrock_region_prefix(region) == expected
+
+
+class TestNormalizeBedrockModelId:
+    """Tests for _normalize_bedrock_model_id (the AccessDenied trap fix)."""
+
+    def test_non_bedrock_spec_unchanged(self) -> None:
+        assert _normalize_bedrock_model_id("anthropic:claude-opus-4-7") == "anthropic:claude-opus-4-7"
+
+    def test_bedrock_already_prefixed_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        spec = "bedrock_converse:us.anthropic.claude-opus-4-7"
+        assert _normalize_bedrock_model_id(spec) == spec
+
+    def test_bedrock_nova_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Nova works bare on Bedrock — must not be rewritten.
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        spec = "bedrock_converse:amazon.nova-pro-v1:0"
+        assert _normalize_bedrock_model_id(spec) == spec
+
+    def test_bedrock_llama_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        spec = "bedrock_converse:meta.llama4-scout-17b-instruct-v1:0"
+        assert _normalize_bedrock_model_id(spec) == spec
+
+    def test_claude_3_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Older Claude 3 IDs still accept on-demand throughput — leave them alone.
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        spec = "bedrock_converse:anthropic.claude-3-5-sonnet-20241022-v2:0"
+        assert _normalize_bedrock_model_id(spec) == spec
+
+    def test_claude_4_us_region_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        assert _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-opus-4-7") == "bedrock_converse:us.anthropic.claude-opus-4-7"
+
+    def test_claude_4_eu_region_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "eu-west-1")
+        assert _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-sonnet-4-6") == "bedrock_converse:eu.anthropic.claude-sonnet-4-6"
+
+    def test_claude_4_japan_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+        assert _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-opus-4-7") == "bedrock_converse:jp.anthropic.claude-opus-4-7"
+
+    def test_claude_4_apac_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_REGION", "ap-southeast-2")
+        assert (
+            _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-haiku-4-5-20251001-v1:0")
+            == "bedrock_converse:apac.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+    def test_no_region_falls_back_to_us(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        assert _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-opus-4-7") == "bedrock_converse:us.anthropic.claude-opus-4-7"
+
+    def test_aws_default_region_honored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-central-1")
+        assert _normalize_bedrock_model_id("bedrock_converse:anthropic.claude-opus-4-7") == "bedrock_converse:eu.anthropic.claude-opus-4-7"
+
+    def test_legacy_bedrock_provider_also_rewritten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The legacy `bedrock:` (InvokeModel) provider needs the same fix.
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        assert _normalize_bedrock_model_id("bedrock:anthropic.claude-opus-4-7") == "bedrock:us.anthropic.claude-opus-4-7"
+
+    def test_resolve_model_applies_rewrite(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """End-to-end: resolve_model() passes the rewritten id to init_chat_model."""
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        with patch("bog_agents._models.init_chat_model") as mock:
+            mock.return_value = MagicMock(spec=BaseChatModel)
+            resolve_model("bedrock_converse:anthropic.claude-opus-4-7")
+        # First positional arg is the rewritten spec.
+        call_args = mock.call_args
+        assert call_args.args[0] == "bedrock_converse:us.anthropic.claude-opus-4-7"

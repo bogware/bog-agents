@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -1681,6 +1682,18 @@ def create_cli_agent(
     from bog_agents.middleware.notifications import NotificationsMiddleware
 
     agent_middleware.append(NotificationsMiddleware())
+
+    # Bedrock credential auto-refresh — only attached when a Bedrock
+    # model is in use, to keep the middleware list lean for everyone
+    # else. Detects ExpiredTokenException / SSOTokenLoadError on model
+    # calls and runs `aws sso login` to refresh, then retries. See
+    # docs/providers/bedrock.md and bog_agents_cli.bedrock_refresh.
+    if isinstance(model, str) and model.startswith(("bedrock:", "bedrock_converse:")):
+        from bog_agents_cli.bedrock_refresh import BedrockRefreshMiddleware
+
+        agent_middleware.append(
+            BedrockRefreshMiddleware(interactive=sys.stdin.isatty())
+        )
 
     # Create the agent
     agent = create_agent(

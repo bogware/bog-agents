@@ -82,41 +82,18 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "gpt-5",
         ),
         "bedrock": (
-            # AWS Bedrock model IDs as of 2026-04-30. The us.* / eu.* /
-            # apac.* prefixes are cross-region inference profile IDs;
-            # use those when calling from a region that supports them.
-            # Anthropic (latest first)
-            "us.anthropic.claude-opus-4-7",
-            "anthropic.claude-opus-4-7",
-            "us.anthropic.claude-sonnet-4-6",
-            "anthropic.claude-sonnet-4-6",
-            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "anthropic.claude-haiku-4-5-20251001-v1:0",
-            "us.anthropic.claude-opus-4-6-v1",
-            "anthropic.claude-opus-4-6-v1",
-            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "us.anthropic.claude-opus-4-5-20251101-v1:0",
-            "anthropic.claude-opus-4-5-20251101-v1:0",
-            "us.anthropic.claude-opus-4-1-20250805-v1:0",
-            "anthropic.claude-opus-4-1-20250805-v1:0",
-            # Amazon Nova
-            "us.amazon.nova-premier-v1:0",
-            "us.amazon.nova-pro-v1:0",
-            "us.amazon.nova-lite-v1:0",
-            "us.amazon.nova-micro-v1:0",
-            # Meta Llama 4 + 3.3
-            "us.meta.llama4-maverick-17b-instruct-v1:0",
-            "us.meta.llama4-scout-17b-instruct-v1:0",
-            "us.meta.llama3-3-70b-instruct-v1:0",
-            # Mistral
-            "us.mistral.mistral-large-3-2411-v1:0",
-            "us.mistral.pixtral-large-2502-v1:0",
-        ),
-        # bedrock_converse is the modern wrapper; recommends the same IDs.
-        "bedrock_converse": (
-            # Cross-region inference profile IDs (preferred — higher quota,
-            # on-demand throughput is being deprecated for newer Anthropic models).
+            # AWS Bedrock model IDs, refreshed 2026-05-19.
+            #
+            # Anthropic Claude 4.x on Bedrock REQUIRES a cross-region
+            # inference profile prefix (us./eu./apac./...); the bare
+            # `anthropic.claude-opus-4-7` IDs return AccessDenied even
+            # when the account has model access granted. The auto-
+            # resolver in `bog_agents._models` rewrites bare→regional
+            # based on AWS_REGION as a safety net, but the catalog lists
+            # the regional profile IDs directly so the picker surfaces
+            # them as first-class entries. See docs/providers/bedrock.md.
+            #
+            # ─── ANTHROPIC CLAUDE (inference profiles required) ─────
             "us.anthropic.claude-opus-4-7",
             "eu.anthropic.claude-opus-4-7",
             "apac.anthropic.claude-opus-4-7",
@@ -126,26 +103,51 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "us.anthropic.claude-haiku-4-5-20251001-v1:0",
             "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
             "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "us.anthropic.claude-opus-4-6-v1",
             "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "us.anthropic.claude-opus-4-1-20250805-v1:0",
-            # Base IDs (work in single-region calls without an inference profile).
-            "anthropic.claude-opus-4-7",
-            "anthropic.claude-sonnet-4-6",
-            "anthropic.claude-haiku-4-5-20251001-v1:0",
-            "anthropic.claude-sonnet-4-5-20250929-v1:0",
-            # Amazon Nova
+            # ─── AMAZON NOVA ─────────────────────────────────────────
             "us.amazon.nova-premier-v1:0",
             "us.amazon.nova-pro-v1:0",
             "us.amazon.nova-lite-v1:0",
             "us.amazon.nova-micro-v1:0",
-            # Meta / Mistral / DeepSeek
+            # ─── META LLAMA ──────────────────────────────────────────
             "us.meta.llama4-maverick-17b-instruct-v1:0",
             "us.meta.llama4-scout-17b-instruct-v1:0",
             "us.meta.llama3-3-70b-instruct-v1:0",
+            # ─── MISTRAL ─────────────────────────────────────────────
             "us.mistral.mistral-large-3-2411-v1:0",
             "us.mistral.pixtral-large-2502-v1:0",
+        ),
+        # bedrock_converse is the modern Converse API wrapper. Same model
+        # IDs as bedrock (above) plus DeepSeek which is converse-only.
+        "bedrock_converse": (
+            # ─── ANTHROPIC CLAUDE (inference profiles required) ─────
+            "us.anthropic.claude-opus-4-7",
+            "eu.anthropic.claude-opus-4-7",
+            "apac.anthropic.claude-opus-4-7",
+            "us.anthropic.claude-sonnet-4-6",
+            "eu.anthropic.claude-sonnet-4-6",
+            "apac.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "us.anthropic.claude-opus-4-1-20250805-v1:0",
+            # ─── AMAZON NOVA ─────────────────────────────────────────
+            "us.amazon.nova-premier-v1:0",
+            "us.amazon.nova-pro-v1:0",
+            "us.amazon.nova-lite-v1:0",
+            "us.amazon.nova-micro-v1:0",
+            # ─── META LLAMA ──────────────────────────────────────────
+            "us.meta.llama4-maverick-17b-instruct-v1:0",
+            "us.meta.llama4-scout-17b-instruct-v1:0",
+            "us.meta.llama3-3-70b-instruct-v1:0",
+            # ─── MISTRAL ─────────────────────────────────────────────
+            "us.mistral.mistral-large-3-2411-v1:0",
+            "us.mistral.pixtral-large-2502-v1:0",
+            # ─── DEEPSEEK (converse-only) ────────────────────────────
             "us.deepseek.deepseek-r1-v1:0",
         ),
         "google_genai": (

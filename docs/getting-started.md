@@ -31,6 +31,10 @@ export GOOGLE_API_KEY=AI...           # Gemini
 # or: GROQ_API_KEY, MISTRAL_API_KEY, DEEPSEEK_API_KEY, ...
 ```
 
+For Bedrock — the AWS-hosted path — see the dedicated walkthrough at
+**[providers/bedrock.md](providers/bedrock.md)**. Inference profiles,
+model access, the six-step probe.
+
 Running with no key launches an interactive setup wizard. Running in
 a non-TTY context (CI, daemon, piped stdin) with no key gives you an
 actionable error pointing at the env vars above — no hangs.

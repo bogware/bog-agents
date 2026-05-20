@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
 
 from bog_agents_cli._bedrock import (
     BedrockErrorKind,
+    ProbeStep,
     categorize_bedrock_error,
     probe_bedrock,
+    render_fix_report,
     render_probe_report,
+    render_settings_report,
 )
 
 
@@ -115,8 +120,6 @@ class TestProbeBedrock:
 
     def test_render_report_lists_each_step(self) -> None:
         """The renderer produces a recognisable header + per-step rows."""
-        from bog_agents_cli._bedrock import ProbeStep
-
         steps = [
             ProbeStep(name="Package", ok=True, detail="boto3 available"),
             ProbeStep(
@@ -137,3 +140,144 @@ class TestProbeBedrock:
         # Failure section must include the actionable hint.
         assert "Failure details" in report
         assert "aws configure" in report.lower()
+
+
+class TestRenderFixReport:
+    """``render_fix_report`` produces copy-paste actions, not banners."""
+
+    def test_all_ok_short_circuits(self) -> None:
+        steps = [
+            ProbeStep(name="Package", ok=True, detail="boto3 available"),
+            ProbeStep(name="Credentials", ok=True, detail="env"),
+            ProbeStep(name="Region", ok=True, detail="us-east-1"),
+        ]
+        report = render_fix_report(steps)
+        assert "All probe steps passed" in report
+        assert "no action needed" in report.lower()
+
+    def test_missing_credentials_emits_aws_configure(self) -> None:
+        steps = [
+            ProbeStep(name="Package", ok=True, detail="boto3 available"),
+            ProbeStep(
+                name="Credentials",
+                ok=False,
+                detail="None found",
+                error=categorize_bedrock_error(
+                    Exception("Unable to locate credentials")
+                ),
+            ),
+        ]
+        report = render_fix_report(steps)
+        # Numbered failure block.
+        assert "[1] Credentials" in report
+        # Concrete command, not a paragraph.
+        assert "aws configure" in report
+        assert "aws sso login" in report
+        # Tail invitation to re-run.
+        assert "Ctrl+T" in report or "/bedrock test" in report
+
+    def test_model_access_denied_emits_console_link(self) -> None:
+        steps = [
+            ProbeStep(
+                name="Inference",
+                ok=False,
+                detail="converse() failed",
+                error=categorize_bedrock_error(
+                    Exception(
+                        "An error occurred (AccessDeniedException): "
+                        "You don't have access to the model"
+                    )
+                ),
+            ),
+        ]
+        report = render_fix_report(steps)
+        assert "console.aws.amazon.com/bedrock" in report
+        assert "Model access" in report or "model access" in report.lower()
+
+    def test_region_invalid_emits_export(self) -> None:
+        steps = [
+            ProbeStep(
+                name="Region",
+                ok=False,
+                detail="No region",
+                error=categorize_bedrock_error(Exception("You must specify a region")),
+            ),
+        ]
+        report = render_fix_report(steps)
+        assert "AWS_REGION" in report
+        assert "us-east-1" in report
+
+    def test_validation_emits_inference_profile_hint(self) -> None:
+        steps = [
+            ProbeStep(
+                name="Inference",
+                ok=False,
+                detail="converse() failed",
+                error=categorize_bedrock_error(
+                    Exception(
+                        "An error occurred (ValidationException): "
+                        "The provided model identifier is invalid"
+                    )
+                ),
+            ),
+        ]
+        report = render_fix_report(steps)
+        # The fix should steer them to the inference-profile-prefixed id.
+        assert "us." in report
+        assert "claude" in report.lower()
+
+    def test_multiple_failures_numbered_independently(self) -> None:
+        steps = [
+            ProbeStep(name="Package", ok=True, detail="boto3 available"),
+            ProbeStep(
+                name="Credentials",
+                ok=False,
+                detail="None",
+                error=categorize_bedrock_error(
+                    Exception("Unable to locate credentials")
+                ),
+            ),
+            ProbeStep(
+                name="Region",
+                ok=False,
+                detail="None",
+                error=categorize_bedrock_error(Exception("You must specify a region")),
+            ),
+        ]
+        report = render_fix_report(steps)
+        assert "[1]" in report
+        assert "[2]" in report
+        assert report.index("[1]") < report.index("[2]")
+
+
+class TestRenderSettingsReport:
+    """``render_settings_report`` surfaces the active Bedrock config."""
+
+    def test_default_auth_mode_visible(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("BOG_AGENTS_BEDROCK_AUTH_MODE", raising=False)
+        monkeypatch.delenv("BOG_AGENTS_BEDROCK_PROFILE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        monkeypatch.delenv("AWS_PROFILE", raising=False)
+        report = render_settings_report()
+        assert "Bedrock settings" in report
+        assert "auth_mode" in report
+        # Default auth mode when nothing configured is "auto".
+        assert "auto" in report
+        assert "<unset>" in report  # region / profile
+
+    def test_env_overrides_visible(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("BOG_AGENTS_BEDROCK_AUTH_MODE", "sso")
+        monkeypatch.setenv("BOG_AGENTS_BEDROCK_PROFILE", "my-team-sso")
+        monkeypatch.setenv("AWS_REGION", "eu-west-1")
+        report = render_settings_report()
+        assert "sso" in report
+        assert "my-team-sso" in report
+        assert "eu-west-1" in report
+
+    def test_includes_toml_example_block(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        report = render_settings_report()
+        assert "[models.providers.bedrock_converse]" in report
+        assert "auth_mode" in report
+        # Env-var alternatives are also shown.
+        assert "BOG_AGENTS_BEDROCK_AUTH_MODE" in report

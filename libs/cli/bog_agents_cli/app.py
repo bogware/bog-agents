@@ -3742,25 +3742,37 @@ class BogAgentsApp(App):
         user wants a structured diagnosis instead of a one-line
         ``RuntimeError`` from the welcome banner.
         """
-        from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
+        from bog_agents_cli._bedrock import (
+            probe_bedrock,
+            render_fix_report,
+            render_probe_report,
+            render_settings_report,
+        )
 
         await self._mount_message(UserMessage(command))
 
-        # Optional: ``/bedrock test <model_id>`` lets the user pin the
-        # inference probe to a specific model id. Bare ``/bedrock`` or
-        # ``/bedrock test`` runs steps 1-5 (no inference).
+        # Subcommand parsing — the picker shows these via SlashCommandSpec.
+        # ``test`` / ``status`` → probe + render_probe_report
+        # ``fix``               → probe + render_fix_report (numbered actions)
+        # ``config``            → render_settings_report (no probe)
         raw_arg = command.strip()[len("/bedrock") :].strip()
-        # Drop a leading ``test`` / ``status`` keyword so users can write
-        # either ``/bedrock test`` or ``/bedrock test <model-id>``.
-        for prefix in ("test", "status"):
+        mode = "test"
+        for prefix in ("test", "status", "fix", "config"):
             if raw_arg.lower().startswith(prefix):
+                mode = prefix
                 raw_arg = raw_arg[len(prefix) :].strip()
                 break
+        if mode == "config":
+            # No probe — just print the resolved settings.
+            await self._mount_message(AppMessage(render_settings_report()))
+            return
         model_id = raw_arg or None
         # Probe runs synchronously (boto3 is sync); offload to a thread
         # so the TUI's event loop stays responsive.
         steps = await asyncio.to_thread(probe_bedrock, model_id, None)
-        report = render_probe_report(steps)
+        report = (
+            render_fix_report(steps) if mode == "fix" else render_probe_report(steps)
+        )
         await self._mount_message(AppMessage(report))
 
     async def _handle_review_command(self, command: str) -> None:

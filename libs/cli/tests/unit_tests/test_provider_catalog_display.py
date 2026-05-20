@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from bog_agents_cli.provider_catalog import (
+    DEFAULT_MODEL_CANDIDATES,
     ModelDisplay,
     clear_cached_catalog,
     derive_model_display,
@@ -188,6 +189,46 @@ class TestCachedCatalog:
         assert not cache_file.exists()
         # Second clear is a no-op.
         assert clear_cached_catalog(path=cache_file) is False
+
+
+class TestBedrockCatalogIntegrity:
+    """Guard rails on the curated Bedrock model lists.
+
+    Claude 4.x on Bedrock requires a cross-region inference profile
+    prefix (us./eu./apac.). The bare ``anthropic.claude-4*`` ids return
+    AccessDenied even when model access is granted, so they must NOT
+    appear in either Bedrock catalog — otherwise the model picker
+    surfaces a guaranteed-failure entry. The SDK has a runtime auto-
+    resolver that rewrites bare → regional for users who hand-type
+    the bare id, but the catalog itself only lists working ids.
+    """
+
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse"])
+    def test_no_bare_claude_4_ids(self, provider: str) -> None:
+        models = DEFAULT_MODEL_CANDIDATES[provider]
+        offenders = [
+            m
+            for m in models
+            if m.startswith("anthropic.claude-")
+            and any(f"claude-{v}-4-" in m for v in ("opus", "sonnet", "haiku"))
+        ]
+        assert not offenders, (
+            f"{provider} catalog contains bare Claude 4.x ids that return "
+            f"AccessDenied on Bedrock: {offenders}. Add a regional prefix "
+            f"(us./eu./apac.) or drop the entry entirely."
+        )
+
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse"])
+    def test_us_inference_profiles_present(self, provider: str) -> None:
+        models = DEFAULT_MODEL_CANDIDATES[provider]
+        # Every Bedrock catalog must offer at least one us-prefixed
+        # Anthropic option so a fresh user on us-east-1 can pick a
+        # working model without diagnostics.
+        us_anthropic = [m for m in models if m.startswith("us.anthropic.claude-")]
+        assert us_anthropic, (
+            f"{provider} catalog has no us.anthropic.* entries — a fresh "
+            f"user on us-east-1 won't find a working Claude model."
+        )
 
 
 class TestModelDisplayDataclass:

@@ -643,6 +643,192 @@ def iter_probe_lines(steps: list[ProbeStep]) -> Iterator[str]:
     yield from render_probe_report(steps).splitlines()
 
 
+# ---------------------------------------------------------------------------
+# /bedrock fix — turn each probe failure into a copy-paste command
+# ---------------------------------------------------------------------------
+
+# Maps each BedrockErrorKind to (one-line headline, command(s) the user
+# can copy-paste). The commands are intentionally minimal — the goal is
+# "press Ctrl+C, run this, try again" rather than a 6-step recipe. The
+# bedrock URLs and CLI commands are stable enough that hardcoding them
+# is fine; if AWS reorganises a console URL we update one constant.
+_FIX_ACTIONS: dict[BedrockErrorKind, tuple[str, tuple[str, ...]]] = {
+    BedrockErrorKind.PACKAGE_MISSING: (
+        "Install the AWS extra.",
+        ("pip install --upgrade 'bog-agents-cli[bedrock]'",),
+    ),
+    BedrockErrorKind.CREDENTIALS_MISSING: (
+        "Set up AWS credentials (pick the one that matches your account).",
+        (
+            "aws configure                  # long-lived keys",
+            "aws sso login                  # AWS SSO",
+            "export AWS_ACCESS_KEY_ID=...   # one-shot env vars",
+            "export AWS_SECRET_ACCESS_KEY=...",
+        ),
+    ),
+    BedrockErrorKind.CREDENTIALS_EXPIRED: (
+        "Refresh your AWS session.",
+        (
+            "aws sso login                  # if SSO",
+            "# or re-export AWS_SESSION_TOKEN with a fresh value",
+        ),
+    ),
+    BedrockErrorKind.REGION_INVALID: (
+        "Set an AWS region (Bedrock requires one).",
+        (
+            "export AWS_REGION=us-east-1    # or your target region",
+            "# or: aws configure set region us-east-1",
+        ),
+    ),
+    BedrockErrorKind.MODEL_ACCESS_DENIED: (
+        "Request model access in the Bedrock console (per region).",
+        (
+            "# 1. open https://console.aws.amazon.com/bedrock/",
+            "# 2. switch to your target region (top-right)",
+            "# 3. left sidebar → 'Model access' → 'Modify model access'",
+            "# 4. tick the model(s), submit, wait ~1 minute",
+        ),
+    ),
+    BedrockErrorKind.MODEL_ID_INVALID: (
+        "The model id was rejected — try the cross-region inference profile id.",
+        (
+            "# Claude 4.x on Bedrock requires a prefix: us. / eu. / apac.",
+            "/model bedrock_converse:us.anthropic.claude-opus-4-7",
+            "# or list what your account can invoke:",
+            "bog-agents test-bedrock",
+        ),
+    ),
+    BedrockErrorKind.THROTTLED: (
+        "Bedrock is throttling — retry, switch model, or request a quota bump.",
+        (
+            "# Service Quotas → Amazon Bedrock → request increase",
+            "# https://console.aws.amazon.com/servicequotas/home/services/bedrock/",
+        ),
+    ),
+    BedrockErrorKind.NETWORK: (
+        "Network or TLS error — check connectivity and system clock.",
+        (
+            "curl -v https://bedrock-runtime.us-east-1.amazonaws.com",
+            "# if behind a corp proxy: export HTTPS_PROXY=http://proxy.corp:8080",
+        ),
+    ),
+    BedrockErrorKind.UNKNOWN: (
+        "Unrecognised error — capture the raw message and open an issue.",
+        ("bog-agents test-bedrock        # structured probe with verbose output",),
+    ),
+}
+
+
+def render_settings_report() -> str:
+    """Render a human-readable view of the active Bedrock configuration.
+
+    Surfaces the effective auth mode, AWS profile, region, and the
+    config file path so a user can see at a glance what's wired up
+    before they call `/bedrock test`. Renders an example ``config.toml``
+    block at the bottom so a user can copy-paste the minimum settings
+    they need to change.
+
+    Returns:
+        Multi-line report.
+    """
+    # Lazy imports to keep _bedrock importable in envs where the heavier
+    # model_config module isn't ready (e.g. unit tests for fix_report).
+    try:
+        from bog_agents_cli.model_config import (
+            DEFAULT_CONFIG_PATH,
+            _bedrock_auth_mode,
+        )
+    except ImportError:
+        return "Bedrock settings unavailable (model_config import failed)."
+
+    try:
+        mode, profile = _bedrock_auth_mode()
+    except Exception as exc:  # diagnostic only
+        return f"Bedrock settings: error reading config — {exc}"
+
+    region = (
+        os.environ.get("AWS_REGION")
+        or os.environ.get("AWS_DEFAULT_REGION")
+        or "<unset>"
+    )
+    aws_profile_env = os.environ.get("AWS_PROFILE", "<unset>")
+    config_path = DEFAULT_CONFIG_PATH
+
+    lines = [
+        "",
+        "Bedrock settings",
+        "=" * 40,
+        f"  auth_mode      : {mode}",
+        f"  aws_profile    : {profile or '<unset>'}",
+        f"  AWS_PROFILE env: {aws_profile_env}",
+        f"  region         : {region}",
+        f"  config file    : {config_path}",
+        "",
+        "To change, edit the config file above and add:",
+        "",
+        "  [models.providers.bedrock_converse]",
+        '  auth_mode   = "auto"        # auto | iam | profile | sso | env',
+        '  aws_profile = "my-profile"  # only when auth_mode = profile',
+        "",
+        "Or set the equivalent env vars:",
+        "",
+        "  export BOG_AGENTS_BEDROCK_AUTH_MODE=sso",
+        "  export BOG_AGENTS_BEDROCK_PROFILE=my-profile",
+        "  export AWS_REGION=us-east-1",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_fix_report(steps: list[ProbeStep]) -> str:
+    """Render probe failures as a list of copy-paste actions.
+
+    Sister to :func:`render_probe_report`, but optimised for the "I'm
+    stuck, what do I run next?" path. Successful steps are summarised in
+    one line; each failure gets a numbered block with a headline and
+    one or more shell commands the user can copy verbatim.
+
+    Args:
+        steps: Probe steps from :func:`probe_bedrock`.
+
+    Returns:
+        Multi-line report with shell-ready commands. When no failures
+        occurred, returns a short "All clear" block instead.
+    """
+    failures = [s for s in steps if not s.ok and s.error is not None]
+    if not failures:
+        return (
+            "\n"
+            "Bedrock /bedrock fix\n"
+            "=" * 40 + "\n"
+            "All probe steps passed — no action needed.\n"
+            f"Steps OK: {', '.join(s.name for s in steps if s.ok)}\n"
+        )
+
+    lines: list[str] = ["", "Bedrock /bedrock fix", "=" * 40, ""]
+    # Brief summary line up top so the user knows the scope.
+    ok_names = [s.name for s in steps if s.ok]
+    if ok_names:
+        lines.append(f"OK: {', '.join(ok_names)}")
+    lines.append(f"Failed: {', '.join(s.name for s in failures)}")
+    lines.append("")
+    for idx, step in enumerate(failures, start=1):
+        err = step.error
+        if err is None:  # defensive — already filtered above
+            continue
+        headline, commands = _FIX_ACTIONS.get(
+            err.kind,
+            _FIX_ACTIONS[BedrockErrorKind.UNKNOWN],
+        )
+        lines.append(f"[{idx}] {step.name} — {err.title}")
+        lines.append(f"    {headline}")
+        for cmd in commands:
+            lines.append(f"      {cmd}")
+        lines.append("")
+    lines.append("After the fix, re-run /bedrock test (or press Ctrl+T in /model).")
+    return "\n".join(lines)
+
+
 __all__ = [
     "BedrockError",
     "BedrockErrorKind",
@@ -650,5 +836,7 @@ __all__ = [
     "categorize_bedrock_error",
     "iter_probe_lines",
     "probe_bedrock",
+    "render_fix_report",
     "render_probe_report",
+    "render_settings_report",
 ]

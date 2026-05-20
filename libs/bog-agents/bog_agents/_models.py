@@ -46,6 +46,124 @@ def _resolve_model_read_timeout() -> float | None:
     return value
 
 
+# ---------------------------------------------------------------------------
+# Bedrock inference-profile auto-resolver
+# ---------------------------------------------------------------------------
+#
+# Anthropic Claude 4.x on AWS Bedrock requires a cross-region inference
+# profile prefix (`us.`, `eu.`, `apac.`, ...). The bare model id
+# `anthropic.claude-opus-4-7` returns `AccessDeniedException` even when
+# the account has model access granted in the console — AWS treats the
+# bare id as a request for on-demand throughput, which has been deprecated
+# for the Claude 4.x line.
+#
+# The auto-resolver below rewrites a bare `anthropic.*` id to the correct
+# regional prefix based on `AWS_REGION` / `AWS_DEFAULT_REGION` so users
+# who paste the platform.claude.com name into their config still land
+# on a working model. A warning is logged so the rewrite is visible in
+# `--debug` output and the user can switch to the explicit form.
+
+_BEDROCK_REGION_PROFILE_MAP: dict[str, str] = {
+    # US / Canada → us. profiles (work from us-east-1, us-east-2, us-west-2,
+    # ca-central-1).
+    "us": "us",
+    "ca": "us",
+    # Europe → eu. profiles (eu-west-1, eu-west-3, eu-central-1, eu-north-1).
+    "eu": "eu",
+    # Asia-Pacific → apac., with Japan as a separate `jp.` family.
+    "ap-northeast-1": "jp",  # Tokyo
+    "ap": "apac",
+    # South America → sa. (sa-east-1).
+    "sa": "sa",
+}
+
+
+def _resolve_bedrock_region_prefix(region: str | None) -> str:
+    """Map an AWS region to the matching inference-profile prefix.
+
+    Falls back to ``us`` when the region is missing or unknown — `us.` profiles
+    are available in the most regions and are the safest default.
+
+    Args:
+        region: AWS region string like ``us-east-1`` or ``None``.
+
+    Returns:
+        The profile prefix without the trailing dot (e.g. ``"us"``).
+    """
+    if not region:
+        return "us"
+    region = region.lower().strip()
+    # Try most specific first (full region match).
+    if region in _BEDROCK_REGION_PROFILE_MAP:
+        return _BEDROCK_REGION_PROFILE_MAP[region]
+    # Then the geo prefix (first segment before the first dash).
+    geo = region.split("-", 1)[0]
+    return _BEDROCK_REGION_PROFILE_MAP.get(geo, "us")
+
+
+_BEDROCK_PROFILE_PREFIXES: tuple[str, ...] = (
+    "us.",
+    "eu.",
+    "apac.",
+    "jp.",
+    "sa.",
+    "global.",
+)
+"""Recognised cross-region inference profile prefixes."""
+
+
+def _normalize_bedrock_model_id(model: str) -> str:
+    """Rewrite a bare Anthropic Claude Bedrock id to a regional profile id.
+
+    Only applies when:
+    1. The spec uses the ``bedrock:`` or ``bedrock_converse:`` provider.
+    2. The model id starts with ``anthropic.`` (bare, no regional prefix).
+    3. The model id matches Claude 4.x / 4.5+ (the family that requires
+       inference profiles on Bedrock).
+
+    All other inputs are returned unchanged. Logs the rewrite at WARNING
+    level so it's visible in `--debug` output.
+
+    Args:
+        model: Full spec like ``bedrock_converse:anthropic.claude-opus-4-7``.
+
+    Returns:
+        Possibly-rewritten spec.
+    """
+    if not model.startswith(("bedrock:", "bedrock_converse:")):
+        return model
+    provider, _, model_id = model.partition(":")
+    if not model_id:
+        return model
+    # Already has a regional / global profile prefix — nothing to do.
+    if model_id.lower().startswith(_BEDROCK_PROFILE_PREFIXES):
+        return model
+    # Only rewrite Anthropic Claude 4.x / 4.5+ family — those are the
+    # ones AWS gates behind inference profiles. Nova/Llama/Mistral
+    # bare ids still work for on-demand throughput.
+    if not model_id.lower().startswith("anthropic.claude-"):
+        return model
+    # Coarse Claude-4-or-newer check: matches `claude-opus-4-*`,
+    # `claude-sonnet-4-*`, `claude-haiku-4-*`, `claude-opus-5-*` (future).
+    # Older `claude-3-*` IDs still work bare on Bedrock and are left alone.
+    lowered = model_id.lower()
+    is_modern = any(f"claude-{variant}-{major}" in lowered for variant in ("opus", "sonnet", "haiku") for major in ("4", "5", "6", "7", "8", "9"))
+    if not is_modern:
+        return model
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    prefix = _resolve_bedrock_region_prefix(region)
+    rewritten = f"{provider}:{prefix}.{model_id}"
+    logger.warning(
+        "Bedrock: rewrote bare Claude id %r to %r (AWS_REGION=%s). "
+        "Claude 4.x on Bedrock requires a cross-region inference profile; "
+        "pass the explicit form to silence this warning.",
+        model,
+        rewritten,
+        region or "<unset>",
+    )
+    return rewritten
+
+
 def _bedrock_config_kwarg(timeout_secs: float | None) -> dict[str, Any]:
     """Build a `config=` kwarg for a Bedrock-flavored chat model.
 
@@ -119,6 +237,7 @@ def resolve_model(model: str | BaseChatModel) -> BaseChatModel:
     """
     if isinstance(model, BaseChatModel):
         return model
+    model = _normalize_bedrock_model_id(model)
     timeout_secs = _resolve_model_read_timeout()
     kwargs = _model_init_kwargs(model, timeout_secs)
     try:
