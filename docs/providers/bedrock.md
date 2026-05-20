@@ -175,9 +175,32 @@ bog-agents test-bedrock --model us.anthropic.claude-opus-4-7
 
 ### `ExpiredTokenException` — SSO refresh
 
+In interactive mode (TTY), bog-agents detects this and runs `aws sso
+login` for you automatically. A browser tab opens; approve; the model
+call retries once. The session is capped at three auto-refreshes; past
+that, the categorized error banner takes over so you can investigate.
+
+In headless mode (`bog-agents -p`, CI, the daemon), no subprocess
+spawns — the actionable banner goes to stderr and the call fails fast
+so the caller can decide what to do:
+
 ```bash
 aws sso login
 ```
+
+Disable auto-refresh entirely via the SDK by omitting
+`BedrockRefreshMiddleware` from your middleware list.
+
+### `bedrock` vs `bedrock_converse` — which to use
+
+| | `bedrock:` | `bedrock_converse:` |
+|---|---|---|
+| AWS API | InvokeModel (legacy) | Converse (recommended) |
+| Tool calling | Per-vendor formats | Unified schema |
+| Multimodal | Inconsistent | First-class |
+| What to pick | Only for a few legacy Cohere variants without Converse adapters | Everything else |
+
+Use `bedrock_converse:` unless you have a specific reason not to.
 
 ### `Could not connect to the endpoint`
 
