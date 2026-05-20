@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.0...bog-agents==0.9.1) (2026-05-20)
+
+
+### Features
+
+* **sdk,cli:** Bedrock seamless — auto inference-profile resolver, /bedrock fix + config, auto SSO refresh, docs ([#84](https://github.com/bogware/bog-agents/issues/84)) ([66f7338](https://github.com/bogware/bog-agents/commit/66f7338aa7b1283549ca7e876f6e452ec55d2847))
+
 ## [0.9.0](https://github.com/bogware/bog-agents/compare/bog-agents==0.8.7...bog-agents==0.9.0) (2026-05-19)
 
 
