@@ -3353,13 +3353,26 @@ class TestWaveNTimeoutResolvers:
         assert _resolve_turn_timeout() == _DEFAULT_TURN_TIMEOUT_SECONDS
 
     def test_stream_chunk_timeout_default(self, monkeypatch):
+        # The headless per-chunk cap is DISABLED by default: a long tool
+        # call legitimately produces no stream chunks for its duration,
+        # so any finite cap kills real work. The model-layer read
+        # deadline + the remote liveness watchdog are the genuine-hang
+        # backstops.
         monkeypatch.delenv("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS", raising=False)
         from bog_agents_cli.non_interactive import (
             _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS,
             _resolve_stream_chunk_timeout,
         )
 
-        assert _resolve_stream_chunk_timeout() == _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS
+        assert _DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS is None
+        assert _resolve_stream_chunk_timeout() is None
+
+    def test_stream_chunk_timeout_explicit_override(self, monkeypatch):
+        # A user who wants a hard per-chunk cap back can set one.
+        monkeypatch.setenv("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS", "300")
+        from bog_agents_cli.non_interactive import _resolve_stream_chunk_timeout
+
+        assert _resolve_stream_chunk_timeout() == 300.0
 
     def test_stream_chunk_timeout_disabled(self, monkeypatch):
         monkeypatch.setenv("BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS", "off")

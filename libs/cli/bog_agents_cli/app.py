@@ -80,12 +80,16 @@ configure_debug_logging(logger)
 _monotonic = time.monotonic
 
 
-_DEFAULT_TURN_TIMEOUT_SECONDS = 3600.0
+_DEFAULT_TURN_TIMEOUT_SECONDS = 21600.0
 """H1: default cap on one agent turn (model + tool calls + streaming).
 
-One hour is generous — legitimate long-running turns (deep research,
-large refactors) need headroom, but a literally-hung worker would
-otherwise lock the TUI indefinitely.
+Six hours. This is a backstop against a literally-hung worker locking
+the TUI forever — not a budget for normal work. The previous one-hour
+cap cut off legitimate long turns: a deep-research run or a multi-agent
+refactor with long builds can genuinely exceed an hour. Six hours sits
+comfortably above any plausible single turn while still guaranteeing
+the TUI eventually recovers from a wedged worker. Override with
+``BOG_AGENTS_TURN_TIMEOUT_SECONDS`` (``0``/``none`` removes the cap).
 """
 
 

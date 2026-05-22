@@ -85,13 +85,27 @@ _MAX_HITL_ITERATIONS = 50
 loops (e.g. when the agent keeps retrying rejected commands)."""
 
 
-_DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS = 600.0
-"""H2: default cap on the gap between agent-stream chunks.
+_DEFAULT_STREAM_CHUNK_TIMEOUT_SECONDS: float | None = None
+"""H2: cap on the gap between agent-stream chunks — DISABLED by default.
 
-10 minutes is generous — a legitimate long-running tool call (lengthy
-LLM generation, large file scan) can take several minutes between
-chunks, but anything past that is almost certainly a hung remote.
-Distinct from total turn time so genuine long turns aren't penalised.
+This is the headless (`-p`) counterpart of the SSE read deadline, and
+it has the same flaw a finite value cannot escape: a long tool call
+(a 30-minute build, a deep-research subagent) legitimately emits no
+stream chunks for its whole duration, so any per-chunk cap shorter
+than the longest tool call cancels real work — and `asyncio.wait_for`
+cancels the stream destructively when it fires.
+
+Disabled by default. The genuine-hang backstops still apply:
+
+- The remote path (`RemoteAgent.astream`) carries a liveness watchdog
+  that side-channels the server during silence and aborts only when
+  the server is confirmed unreachable.
+- The model HTTP call keeps its own read deadline at the httpx layer,
+  so a wedged provider still surfaces.
+- CI runners impose their own job-level timeout.
+
+Set ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS`` to a positive number to
+re-impose a hard per-chunk cap (useful for tightly-bounded CI jobs).
 """
 
 
@@ -739,10 +753,10 @@ async def _stream_agent(
         file_op_tracker: Tracker for file-operation diffs.
 
     Raises:
-        TimeoutError: When ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS``
-            elapses between chunks (default 600s, configurable, off
-            when set to ``0``). Surfaces the stall so CI pipelines
-            don't hang silently.
+        TimeoutError: When ``BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS`` is
+            set to a positive value and that many seconds elapse between
+            chunks. Disabled by default — set the env var to re-impose a
+            hard per-chunk cap (e.g. for tightly-bounded CI jobs).
     """
     # H2: a hung remote streaming call would pin CI pipelines
     # indefinitely. Cap the *gap between chunks* (rather than total
