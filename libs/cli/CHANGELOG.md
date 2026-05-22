@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.1...bog-agents-cli==0.9.2) (2026-05-22)
+
+
+### Bug Fixes
+
+* **cli:** disable per-chunk SSE timeout, add liveness watchdog for long jobs ([#86](https://github.com/bogware/bog-agents/issues/86)) ([f9347bc](https://github.com/bogware/bog-agents/commit/f9347bc85f550441302a25b9ad4264dc42196990))
+
 ## [0.9.1](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.0...bog-agents-cli==0.9.1) (2026-05-20)
 
 
