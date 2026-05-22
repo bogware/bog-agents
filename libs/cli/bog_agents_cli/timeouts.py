@@ -6,8 +6,13 @@ Three pieces of work fight against premature ReadTimeoutError on long turns:
   the LLM HTTP client will wait for the provider to respond.
 - The **remote** layer (``BOG_AGENTS_REMOTE_READ_TIMEOUT``) controls how
   long the CLI's ``RemoteGraph`` SSE stream will wait between chunks before
-  it gives up. NB: this is a per-chunk read deadline — a healthy stream
-  with regular keepalives stays alive forever under it.
+  it gives up. NB: this is a per-chunk read deadline. It is **disabled by
+  default** — a long tool call (a 30-minute build, a deep-research
+  subagent) legitimately emits no SSE events for its whole duration, so
+  any finite per-chunk deadline shorter than the longest tool call kills
+  real work. Dead connections are caught by a liveness watchdog in
+  ``remote_client.py`` instead. Set this to a positive number to re-impose
+  a finite deadline.
 - The **tool** layer (``LocalShellBackend(timeout=...)``) controls how
   long a single shell command can run before being killed.
 
@@ -21,13 +26,13 @@ Cascade precedence (highest first):
 1. The env var itself, if it was already set in the user's shell.
 2. ``<project>/.bog-agents/settings.json`` ``timeouts`` section.
 3. ``~/.bog-agents/settings.json`` ``timeouts`` section.
-4. Built-in defaults (2 hours for model + remote, 2 hours for tools).
+4. Built-in defaults: model read 10 min, remote SSE disabled, tools 2 hours.
 
 A value of ``"none"``, ``"off"``, or ``0`` disables that timeout entirely.
 
 Example ``settings.json``::
 
-    {"timeouts": {"model_read_seconds": 7200, "remote_read_seconds": 7200, "tool_seconds": "none"}}
+    {"timeouts": {"model_read_seconds": 600, "remote_read_seconds": 1800, "tool_seconds": "none"}}
 """
 
 from __future__ import annotations
@@ -56,17 +61,25 @@ logger = logging.getLogger(__name__)
 #   high-effort responses) while still giving the user a visible
 #   ``ReadTimeout`` rather than an open-ended stall.
 #
-# - ``remote_read_seconds`` is the SSE deadline between the CLI and
-#   the langgraph dev server. Same reasoning, same value.
+# - ``remote_read_seconds`` is the SSE deadline between the CLI and the
+#   langgraph dev server. DISABLED by default (``None``). Unlike a model
+#   HTTP stream — which sends tokens continuously once flowing — the SSE
+#   stream goes genuinely silent for the entire duration of a long tool
+#   call (the graph node is blocked inside the tool). Any finite per-chunk
+#   deadline therefore kills legitimate long-running work. ``remote_client``
+#   substitutes a liveness watchdog: when the stream is quiet it
+#   side-channels the server to confirm it is alive, and aborts only when
+#   the server is genuinely unreachable. Set a positive value here to
+#   re-impose a hard per-chunk deadline on top of the watchdog.
 #
 # - ``tool_seconds`` covers shell-tool execution. Long builds and
 #   test suites are legitimate; we keep this generous.
 #
-# Override any of these via env (``BOG_AGENTS_MODEL_READ_TIMEOUT=7200``
-# restores the previous behaviour) or per-project settings.json.
-_DEFAULT_MODEL_READ_SECS = 600
-_DEFAULT_REMOTE_READ_SECS = 600
-_DEFAULT_TOOL_SECS = 7200
+# Override any of these via env (e.g. ``BOG_AGENTS_REMOTE_READ_TIMEOUT=1800``
+# to re-impose a 30-minute SSE deadline) or per-project settings.json.
+_DEFAULT_MODEL_READ_SECS: int | None = 600
+_DEFAULT_REMOTE_READ_SECS: int | None = None
+_DEFAULT_TOOL_SECS: int | None = 7200
 
 _MODEL_ENV = "BOG_AGENTS_MODEL_READ_TIMEOUT"
 _REMOTE_ENV = "BOG_AGENTS_REMOTE_READ_TIMEOUT"

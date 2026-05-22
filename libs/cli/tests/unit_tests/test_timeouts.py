@@ -21,19 +21,22 @@ class TestTimeoutSettingsMerge:
     """Direct merge_dict semantics on a single layer."""
 
     def test_defaults_match_baseline(self) -> None:
-        # 0.8.5: model/remote read defaults dropped from 7200s (2h) to
-        # 600s (10 min) so a hung stream surfaces as ReadTimeout in
-        # bounded time. Tool remains 7200s for long builds/tests.
+        # Model read stays at 600s — a model HTTP stream sends tokens
+        # continuously, so a multi-minute gap is a genuine stall.
+        # Remote read is DISABLED by default: a long tool call emits no
+        # SSE events for its whole duration, so any finite per-chunk cap
+        # kills real work; the liveness watchdog in remote_client.py
+        # catches dead connections instead. Tool stays 7200s.
         settings = TimeoutSettings()
         assert settings.model_read_seconds == 600
-        assert settings.remote_read_seconds == 600
+        assert settings.remote_read_seconds is None
         assert settings.tool_seconds == 7200
 
     def test_int_override_replaces_default(self) -> None:
         settings = TimeoutSettings().merge_dict({"model_read_seconds": 300})
         assert settings.model_read_seconds == 300
-        # other fields unchanged
-        assert settings.remote_read_seconds == 600
+        # other fields unchanged — remote stays disabled by default
+        assert settings.remote_read_seconds is None
 
     def test_zero_disables_timeout(self) -> None:
         settings = TimeoutSettings().merge_dict({"tool_seconds": 0})
@@ -86,8 +89,8 @@ class TestLoadCascade:
         monkeypatch.setattr(Path, "home", lambda: home)
         settings = load_timeout_settings()
         assert settings.model_read_seconds == 1234
-        # Defaults preserved for unset fields.
-        assert settings.remote_read_seconds == 600
+        # Defaults preserved for unset fields — remote stays disabled.
+        assert settings.remote_read_seconds is None
 
     def test_project_overrides_user(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -137,6 +140,22 @@ class TestApplyToEnv:
         settings = TimeoutSettings(tool_seconds=None)
         apply_to_env(settings, env=env)
         assert env["BOG_AGENTS_TOOL_TIMEOUT"] == "none"
+
+    def test_default_remote_renders_as_none(self) -> None:
+        # The default TimeoutSettings has remote_read_seconds=None, so the
+        # env the SDK consumes must say "none" — that's what disables the
+        # per-chunk SSE deadline in remote_client._resolve_read_timeout.
+        env: dict[str, str] = {}
+        apply_to_env(TimeoutSettings(), env=env)
+        assert env["BOG_AGENTS_REMOTE_READ_TIMEOUT"] == "none"
+        # Model layer keeps its finite default.
+        assert env["BOG_AGENTS_MODEL_READ_TIMEOUT"] == "600"
+
+    def test_remote_positive_override_survives(self) -> None:
+        # A user who wants a hard SSE cap back can set a positive number.
+        env: dict[str, str] = {}
+        apply_to_env(TimeoutSettings(remote_read_seconds=1800), env=env)
+        assert env["BOG_AGENTS_REMOTE_READ_TIMEOUT"] == "1800"
 
 
 class TestResolveToolTimeout:

@@ -137,25 +137,56 @@ bog-agents --shell-allow-list "git,npm,pytest,uv"
 bog-agents --shell-allow-list all          # disables the gate
 ```
 
-### Agent hangs on a long tool call
+### `ReadTimeout` on a long deep-research / multi-agent run
 
-Two timeouts at play:
+This was the most common long-job failure before 0.9.2. The fix
+shipped with the release — if you still hit it, read on.
 
-- **Per-tool**: shell commands hit a 60s default. Set
-  `BOG_AGENTS_SHELL_TIMEOUT_SECONDS` to extend.
-- **Per-chunk**: streaming chunks from the model hit a 600s default.
-  Set `BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS` (=0 disables).
+**Why it happened.** A "read timeout" is an *inter-event* timeout: it
+fires when no data arrives for N seconds, and resets every time data
+*does* arrive. On a healthy token stream it never fires. But during a
+long tool call — a 30-minute build, a deep-research subagent, a slow
+init — the agent is *blocked inside the tool* and the stream emits
+zero events for the tool's whole duration. Any finite per-chunk
+deadline shorter than the longest tool call therefore killed
+legitimate work. There was no "correct" finite value.
 
-When the chunk timeout fires you'll see in the log:
+**What changed.** The per-chunk SSE deadline is now **disabled by
+default**. In its place, a *liveness watchdog* runs: when the stream
+goes quiet for a few minutes, the CLI side-channels the server to
+confirm it is still alive. A live server (busy in a tool) is left
+alone; an unreachable one aborts the run with a clear error. So long
+jobs run uninterrupted, and a genuinely dead connection is still
+caught — within ~5 minutes — instead of hanging forever.
 
+**The timeout layers, and their defaults:**
+
+| Env var | Governs | Default |
+|---|---|---|
+| `BOG_AGENTS_REMOTE_READ_TIMEOUT` | per-event SSE gap (CLI ↔ server) | disabled |
+| `BOG_AGENTS_MODEL_READ_TIMEOUT` | per-chunk gap on the model HTTP call | 600s |
+| `BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS` | per-chunk gap in headless `-p` mode | disabled |
+| `BOG_AGENTS_TURN_TIMEOUT_SECONDS` | wall-clock cap on one whole turn | 21600s (6h) |
+| `BOG_AGENTS_TOOL_TIMEOUT` | a single shell command | 7200s (2h) |
+
+All are tunable. Set any to a positive number to impose a hard cap,
+or to `none` / `0` to disable. They also live in
+`~/.bog-agents/settings.json` under a `timeouts` block:
+
+```json
+{"timeouts": {"model_read_seconds": 600, "remote_read_seconds": 1800, "tool_seconds": "none"}}
 ```
-Agent stream stalled — no chunk received in 605s (timeout 600s).
-The remote may be unreachable or the model may be hung.
-```
 
-If your model genuinely needs more than 600s between chunks, raise
-the env var. If chunks should arrive faster, you've got a network
-problem.
+**When to re-impose a finite SSE deadline.** If you run in a tightly
+bounded CI job and want a hard ceiling rather than the watchdog's
+liveness behaviour, set `BOG_AGENTS_REMOTE_READ_TIMEOUT` to a positive
+number of seconds.
+
+### Agent hangs on a long shell command
+
+Shell commands hit `BOG_AGENTS_TOOL_TIMEOUT` (2h default). A genuine
+long build/test suite is fine; raise the env var if you need more, or
+set it to `none` to disable the per-command cap entirely.
 
 ### "Cost exceeded $X — continue?" but you set no budget
 

@@ -1,7 +1,8 @@
 """Tests for RemoteAgent, _convert_message_data, and helpers."""
 
+import asyncio
 import uuid
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -602,17 +603,20 @@ class TestRemoteAgentInit:
             assert g1 is g2
             mock_cls.assert_called_once()
 
-    def test_extended_read_timeout_applied_to_clients(self) -> None:
-        """Default 600s read timeout is configured on the underlying httpx clients.
+    def test_read_timeout_disabled_by_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The per-chunk SSE read deadline is DISABLED by default.
 
-        0.8.5: the default dropped from 7200s (2h) to 600s (10 min). A
-        2-hour per-chunk read deadline made hung Anthropic streams
-        effectively permanent — the user always killed the run before
-        the timeout fired, leaving them with the cancel cascade as the
-        only signal. 600s is well above any legitimate inter-chunk gap
-        (extended thinking, slow tool) but tight enough to surface a
-        real ``ReadTimeout`` to the user.
+        A long tool call (a 30-minute build, a deep-research subagent)
+        legitimately emits no SSE events for its whole duration, so any
+        finite per-chunk deadline kills real work. The deadline is off
+        by default; the liveness watchdog catches genuinely dead
+        connections instead. The connect timeout stays finite (5s) so an
+        unreachable server still fails fast.
         """
+        # Ensure no env override leaks in from the test environment.
+        monkeypatch.delenv("BOG_AGENTS_REMOTE_READ_TIMEOUT", raising=False)
         agent = RemoteAgent(url="http://localhost:8123")
         with (
             patch("langgraph.pregel.remote.RemoteGraph"),
@@ -624,7 +628,9 @@ class TestRemoteAgentInit:
                 _, kwargs = mock.call_args
                 timeout = kwargs.get("timeout")
                 assert timeout is not None
-                assert timeout.read == 600.0
+                assert timeout.read is None
+                # Connect timeout is still finite — fast-fail unreachable.
+                assert timeout.connect == 5.0
 
     def test_read_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """BOG_AGENTS_REMOTE_READ_TIMEOUT overrides the default."""
@@ -780,6 +786,153 @@ class TestRemoteAgentTransientRetry:
         ):
             async for _ in agent.astream({}, config=config):
                 pass
+
+
+class TestLivenessWatchdog:
+    """The watchdog that replaces the per-chunk read deadline.
+
+    When the SSE stream goes quiet, the watchdog side-channels the
+    server: a live server (busy in a long tool call) lets the stream
+    continue untouched; a dead server aborts it with ConnectionError.
+    """
+
+    @pytest.mark.asyncio
+    async def test_idle_stream_with_live_server_keeps_streaming(self) -> None:
+        """A quiet-but-alive stream is never killed by the watchdog."""
+        from bog_agents_cli import remote_client as rc
+
+        async def _slow_gen() -> Any:  # noqa: ANN401 - test async generator
+            # Each event is preceded by a gap longer than the (patched)
+            # idle window, so the watchdog health-checks before every one.
+            for i in range(3):
+                await asyncio.sleep(0.12)
+                yield ((), "updates", {"n": i})
+
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        agent._server_alive = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        with patch.object(rc, "_IDLE_HEALTHCHECK_SECS", 0.04):
+            events = [ev async for ev in agent._iter_with_watchdog(_slow_gen())]
+
+        assert events == [((), "updates", {"n": i}) for i in range(3)]
+        # The watchdog actually fired (server got health-checked).
+        assert agent._server_alive.await_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_idle_stream_with_dead_server_aborts(self) -> None:
+        """A quiet stream + unreachable server aborts with ConnectionError."""
+        from bog_agents_cli import remote_client as rc
+
+        async def _stalls_forever() -> Any:  # noqa: ANN401 - test async generator
+            yield ((), "updates", {"first": True})
+            # Second read never completes — simulates a dead connection.
+            await asyncio.Event().wait()
+            yield ((), "updates", {"never": True})  # pragma: no cover
+
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        agent._server_alive = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        collected: list[Any] = []
+        with patch.object(rc, "_IDLE_HEALTHCHECK_SECS", 0.04):
+            with pytest.raises(ConnectionError, match="stopped responding"):
+                async for ev in agent._iter_with_watchdog(_stalls_forever()):
+                    collected.append(ev)
+
+        # The event that did arrive before the stall was still delivered.
+        assert collected == [((), "updates", {"first": True})]
+
+    @pytest.mark.asyncio
+    async def test_watchdog_does_not_cancel_a_live_slow_read(self) -> None:
+        """A passing health check must not tear down the in-flight read.
+
+        This is the asyncio.wait (not wait_for) invariant: the single
+        slow event must survive multiple health-check cycles and still
+        be delivered intact.
+        """
+        from bog_agents_cli import remote_client as rc
+
+        async def _one_very_slow_event() -> Any:  # noqa: ANN401 - test async generator
+            # One event after a gap spanning several idle windows.
+            await asyncio.sleep(0.25)
+            yield ((), "updates", {"slow": True})
+
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        agent._server_alive = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        with patch.object(rc, "_IDLE_HEALTHCHECK_SECS", 0.04):
+            events = [
+                ev async for ev in agent._iter_with_watchdog(_one_very_slow_event())
+            ]
+
+        assert events == [((), "updates", {"slow": True})]
+        # Multiple health checks ran during the single slow read.
+        assert agent._server_alive.await_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_watchdog_connectionerror_flows_into_retry(self) -> None:
+        """A watchdog abort is transient, so the retry loop re-streams it.
+
+        ConnectionError is in the transient-marker set, so a watchdog
+        abort gets the same checkpoint-resume retry treatment as a raw
+        network blip — giving a briefly-unreachable server a chance to
+        recover before the run finally fails.
+        """
+        from bog_agents_cli import remote_client as rc
+
+        assert rc._is_transient_stream_error(
+            ConnectionError("langgraph server stopped responding")
+        )
+
+
+class _FakeHttpxClient:
+    """Minimal async-context-manager httpx.AsyncClient stand-in.
+
+    `get` either raises a transport error or returns a response with the
+    configured status code — used to drive `_server_alive` both ways.
+    """
+
+    def __init__(self, *, raises: bool = False, status_code: int = 200) -> None:
+        self._raises = raises
+        self._status_code = status_code
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *_exc: object) -> bool:
+        return False
+
+    async def get(self, _url: str) -> Any:  # noqa: ANN401 — test stub
+        if self._raises:
+            msg = "connection refused"
+            raise ConnectionError(msg)
+        return MagicMock(status_code=self._status_code)
+
+
+class TestServerAlive:
+    """The side-channel liveness probe."""
+
+    @pytest.mark.asyncio
+    async def test_alive_when_server_answers(self) -> None:
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        with patch("httpx.AsyncClient", return_value=_FakeHttpxClient(raises=False)):
+            assert await agent._server_alive() is True
+
+    @pytest.mark.asyncio
+    async def test_alive_even_on_http_error_status(self) -> None:
+        # Any HTTP *response* (404, 401, 500) means the server is up —
+        # only a transport-level failure counts as dead.
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        with patch(
+            "httpx.AsyncClient",
+            return_value=_FakeHttpxClient(raises=False, status_code=500),
+        ):
+            assert await agent._server_alive() is True
+
+    @pytest.mark.asyncio
+    async def test_dead_on_connection_error(self) -> None:
+        agent = RemoteAgent(url="http://localhost:8123", graph_name="agent")
+        with patch("httpx.AsyncClient", return_value=_FakeHttpxClient(raises=True)):
+            assert await agent._server_alive() is False
 
 
 class TestTransientErrorClassifier:

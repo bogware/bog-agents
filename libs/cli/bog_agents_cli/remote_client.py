@@ -9,8 +9,10 @@ Textual adapter expects.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -22,19 +24,41 @@ logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 
 # Default per-chunk read timeout for the langgraph SDK's underlying httpx
-# client. NB: httpx ``read`` is per-chunk, not total — a healthy SSE stream
-# that emits keepalives or token-streaming events stays alive indefinitely
-# under this deadline; only a *stall* longer than ``read`` fails. We pick
-# 600s (10 min): well above any legitimate inter-chunk gap (slow tool,
-# extended thinking) but tight enough that a hung stream surfaces as a
-# visible ``ReadTimeout`` rather than an open-ended stall. The previous
-# default of 7200s (2h) made a wedged subagent's model call effectively
-# permanent — the user always killed the run before the deadline fired,
-# leaving them with the cancel cascade as their only signal. Aligned with
-# ``BOG_AGENTS_MODEL_READ_TIMEOUT`` so the SSE side never fires before the
-# underlying model call has had its full budget. Override with
-# ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds, or ``none``/``0`` to disable).
-_DEFAULT_READ_TIMEOUT_SECS: float = 600.0
+# client. ``None`` = DISABLED by default.
+#
+# Why disabled: httpx ``read`` is a per-chunk (inter-event) deadline, not a
+# total one. On a long tool call — a 30-minute build, a deep-research
+# subagent, a slow init — the graph node is *blocked inside the tool* and
+# the SSE stream emits zero events for the tool's entire duration. Any
+# finite read deadline shorter than the longest tool call therefore fires
+# on legitimate work, killing the run. There is no "correct" finite value:
+# the inter-event gap during a long tool call simply equals the tool's
+# runtime.
+#
+# Disabling the deadline removes that cliff. The cost — a genuinely dead
+# connection (server crash, host sleep, network drop) would otherwise hang
+# forever — is covered by the liveness watchdog below
+# (``_IDLE_HEALTHCHECK_SECS``): after a stretch of silence the client
+# side-channels the server to confirm it is still alive, and aborts only
+# when the server is confirmed unreachable. So a quiet-but-working stream
+# is never killed, while a dead one still surfaces a clear error.
+#
+# Override with ``BOG_AGENTS_REMOTE_READ_TIMEOUT`` (seconds) to re-impose a
+# finite per-chunk deadline; ``none``/``0`` keeps it disabled (the default).
+_DEFAULT_READ_TIMEOUT_SECS: float | None = None
+
+# Liveness watchdog. When the SSE stream emits no event for this many
+# seconds, the client runs a cheap side-channel health check against the
+# server before deciding whether to keep waiting. A live server (busy in a
+# long tool call) passes the check and the stream continues untouched; an
+# unreachable server fails it and the stream aborts with a clear error.
+# This is what makes a disabled read deadline safe — see the note above.
+_IDLE_HEALTHCHECK_SECS: float = 300.0
+
+# Timeout for the side-channel health-check request itself. Short, because
+# a healthy server answers a bare GET in milliseconds; anything slower than
+# this is itself a symptom of a dead/wedged server.
+_HEALTHCHECK_REQUEST_TIMEOUT_SECS: float = 15.0
 
 # Number of times to re-issue an astream() call when the SSE stream raises a
 # transient error *before any events have flowed*. The server has not yet
@@ -71,6 +95,7 @@ def _resolve_read_timeout() -> float | None:
 
     Returns:
         Read timeout in seconds, or `None` to disable the read deadline.
+        The default is `None` (disabled) — see `_DEFAULT_READ_TIMEOUT_SECS`.
     """
     raw = os.environ.get("BOG_AGENTS_REMOTE_READ_TIMEOUT")
     if raw is None:
@@ -81,9 +106,11 @@ def _resolve_read_timeout() -> float | None:
         value = float(raw)
     except ValueError:
         logger.warning(
-            "Invalid BOG_AGENTS_REMOTE_READ_TIMEOUT=%r, using default %ss",
+            "Invalid BOG_AGENTS_REMOTE_READ_TIMEOUT=%r, using default (%s)",
             raw,
-            _DEFAULT_READ_TIMEOUT_SECS,
+            "disabled"
+            if _DEFAULT_READ_TIMEOUT_SECS is None
+            else f"{_DEFAULT_READ_TIMEOUT_SECS}s",
         )
         return _DEFAULT_READ_TIMEOUT_SECS
     if value <= 0:
@@ -191,14 +218,20 @@ class RemoteAgent:
                 the environment.
             headers: Extra HTTP headers to include in every request
                 (e.g. bearer tokens, proxy headers).
-            read_timeout: Per-chunk SSE read timeout in seconds. When `None`,
-                the value from `BOG_AGENTS_REMOTE_READ_TIMEOUT` is used,
-                falling back to `_DEFAULT_READ_TIMEOUT_SECS` (7200s, i.e.
-                2 hours) when that env var is unset. Set the env var to
-                `none`/`0` to disable the deadline entirely.
+            read_timeout: Per-chunk SSE read timeout in seconds, or `None`
+                to disable the per-chunk deadline. When the argument itself
+                is `None`, the value from `BOG_AGENTS_REMOTE_READ_TIMEOUT`
+                is used, which itself defaults to disabled
+                (`_DEFAULT_READ_TIMEOUT_SECS`). To distinguish "use the
+                env/default" from "explicitly disabled", pass a positive
+                float to force a finite deadline; the disabled state is the
+                resolved default.
 
-                NB: this is a per-chunk read deadline, not a total
-                stream deadline — healthy streams stay alive indefinitely.
+                NB: this is a per-chunk read deadline, not a total stream
+                deadline. It is disabled by default because a long tool
+                call legitimately produces no SSE events for its whole
+                duration; dead connections are caught by the liveness
+                watchdog instead (see `_IDLE_HEALTHCHECK_SECS`).
         """
         self._url = url
         self._graph_name = graph_name
@@ -301,13 +334,14 @@ class RemoteAgent:
 
         while True:
             try:
-                async for ns, mode, data in graph.astream(
+                raw_stream = graph.astream(
                     input,
                     stream_mode=modes,
                     subgraphs=subgraphs,
                     config=config,
                     context=context,
-                ):
+                )
+                async for ns, mode, data in self._iter_with_watchdog(raw_stream):
                     async for converted in RemoteAgent._process_chunk(
                         ns, mode, data, BaseMessage
                     ):
@@ -376,6 +410,124 @@ class RemoteAgent:
                 "Dropped %d message(s) during stream due to conversion failures",
                 dropped_count,
             )
+
+    async def _iter_with_watchdog(self, agen: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        """Yield from `agen`, health-checking the server when it goes quiet.
+
+        This is the safety net that makes a disabled per-chunk read deadline
+        sound. A long tool call legitimately emits no SSE events for its
+        whole duration, so we cannot tell "server busy in a 30-minute build"
+        apart from "connection dead" by silence alone — we have to ask.
+
+        Every `_IDLE_HEALTHCHECK_SECS` of silence, the watchdog side-channels
+        the server with a cheap GET. A live server (busy in a tool) passes;
+        the stream keeps waiting on the *same* in-flight read. A dead server
+        fails the check and we raise `ConnectionError`, which the caller's
+        retry loop treats as transient — giving a briefly-unreachable server
+        a chance to recover before the run finally surfaces the failure.
+
+        Crucially this uses `asyncio.wait` (not `asyncio.wait_for`): a
+        passing health check must NEVER cancel the pending stream read, or
+        we would tear down a perfectly healthy SSE connection every five
+        minutes. `wait` returns on timeout without touching the task.
+
+        Args:
+            agen: The raw `RemoteGraph.astream` async iterator.
+
+        Yields:
+            Items from `agen`, unchanged.
+
+        Raises:
+            ConnectionError: When the stream goes silent and the server
+                fails the side-channel health check.
+        """
+        ait = aiter(agen)
+        try:
+            while True:
+                next_task: asyncio.Task[Any] = asyncio.ensure_future(anext(ait))
+                try:
+                    while True:
+                        done, _pending = await asyncio.wait(
+                            {next_task}, timeout=_IDLE_HEALTHCHECK_SECS
+                        )
+                        if next_task in done:
+                            break
+                        # Silence longer than the idle window — is the
+                        # server actually still there?
+                        alive = await self._server_alive()
+                        if not alive:
+                            next_task.cancel()
+                            with contextlib.suppress(Exception, asyncio.CancelledError):
+                                await next_task
+                            msg = (
+                                f"langgraph server at {self._url} stopped "
+                                f"responding: no SSE events for "
+                                f"{_IDLE_HEALTHCHECK_SECS:.0f}s and the "
+                                f"liveness check could not reach it"
+                            )
+                            raise ConnectionError(msg)  # noqa: TRY301 — must raise inside the wait loop; outer try is for stream cleanup
+                        # Server healthy — a long tool call is in flight.
+                        # Keep waiting on the same read; do not disturb it.
+                        logger.debug(
+                            "remote stream idle %.0fs; server healthy, "
+                            "continuing to wait",
+                            _IDLE_HEALTHCHECK_SECS,
+                        )
+                except BaseException:
+                    # Caller cancelled us, or the health check failed —
+                    # tear down the in-flight read so we don't leak it.
+                    next_task.cancel()
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await next_task
+                    raise
+                try:
+                    yield next_task.result()
+                except StopAsyncIteration:
+                    return
+        finally:
+            # Close the underlying RemoteGraph stream on any exit path so
+            # the SSE connection is released promptly.
+            aclose = getattr(agen, "aclose", None)
+            if aclose is not None:
+                with contextlib.suppress(Exception):
+                    await aclose()
+
+    async def _server_alive(self) -> bool:
+        """Side-channel liveness check — is the langgraph server reachable?
+
+        Issues a bare GET against the server root with a short timeout.
+        ANY HTTP response — 200, 401, 404, 500 — means the server process
+        is up and answering, so the stream silence is a busy tool call,
+        not a dead connection. Only a connection error or timeout counts
+        as dead.
+
+        Returns:
+            True when the server answered with any HTTP status; False on a
+            connection error or timeout.
+        """
+        import httpx
+
+        started = time.monotonic()
+        try:
+            async with httpx.AsyncClient(
+                timeout=_HEALTHCHECK_REQUEST_TIMEOUT_SECS
+            ) as client:
+                await client.get(self._url)
+        except Exception as exc:
+            logger.warning(
+                "remote liveness check FAILED for %s after %.1fs: %s: %s",
+                self._url,
+                time.monotonic() - started,
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        logger.debug(
+            "remote liveness check OK for %s (%.0fms)",
+            self._url,
+            (time.monotonic() - started) * 1000,
+        )
+        return True
 
     @staticmethod
     async def _process_chunk(
