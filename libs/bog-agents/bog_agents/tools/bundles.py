@@ -87,16 +87,26 @@ def git_tools_bundle(
     def _git(*args: str, timeout: int = 30) -> str:
         return _run_git(wd, *args, timeout=timeout)
 
-    def git_status(_runtime: ToolRuntime[None, Any]) -> str:
+    # NB: every tool below takes ``runtime: ToolRuntime[None, Any]`` as its
+    # first parameter because LangChain identifies the runtime-injection
+    # slot by the *parameter's type annotation* — and pydantic only sees
+    # the parameter if its name does NOT start with an underscore. The
+    # closures here don't actually need the runtime value (they bind ``wd``
+    # at construction time), so each body opens with ``del runtime`` to
+    # silence the unused-argument warning without hiding the contract.
+
+    def git_status(runtime: ToolRuntime[None, Any]) -> str:
         """Show the working tree status including staged, unstaged, and untracked files."""
+        del runtime
         return _git("status", "--short", "--branch")
 
     def git_diff(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         staged: bool = False,
         path: str | None = None,
     ) -> str:
         """Show changes in the working directory. Use staged=True for staged changes only."""
+        del runtime
         args: list[str] = ["diff"]
         if staged:
             args.append("--cached")
@@ -105,18 +115,19 @@ def git_tools_bundle(
         return _git(*args)
 
     def git_log(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         count: int = 10,
         oneline: bool = True,
     ) -> str:
         """Show recent commit history. Default 10 commits in oneline format."""
+        del runtime
         args = ["log", f"-{count}"]
         if oneline:
             args.append("--oneline")
         return _git(*args)
 
     def git_commit(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         message: Annotated[str, "Commit message following Conventional Commits format"],
         files: Annotated[
             list[str] | None,
@@ -124,16 +135,18 @@ def git_tools_bundle(
         ] = None,
     ) -> str:
         """Create a git commit. Optionally specify files to stage first."""
+        del runtime
         if files:
             for fp in files:
                 _git("add", fp)
         return _git("commit", "-m", message)
 
     def git_add(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         paths: Annotated[list[str], "File paths to stage"],
     ) -> str:
         """Stage files for commit."""
+        del runtime
         results: list[str] = []
         for path in paths:
             result = _git("add", path)
@@ -142,11 +155,12 @@ def git_tools_bundle(
         return "\n".join(results) if results else f"Staged {len(paths)} file(s)"
 
     def git_branch(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         name: str | None = None,
         checkout: bool = False,
     ) -> str:
         """List branches, create a new branch, or checkout an existing one."""
+        del runtime
         if name is not None:
             from bog_agents.middleware.worktree import _validate_git_ref
 
@@ -163,11 +177,12 @@ def git_tools_bundle(
         return _git("branch", "-a", "--sort=-committerdate")
 
     def git_stash(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         action: str = "list",
         message: str | None = None,
     ) -> str:
         """Manage git stash. action: 'push', 'pop', 'list', 'show', 'drop'."""
+        del runtime
         if action == "push":
             args = ["stash", "push"]
             if message:
@@ -182,12 +197,13 @@ def git_tools_bundle(
         return _git("stash", "list")
 
     def git_blame(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         path: Annotated[str, "File path to blame"],
         start_line: int | None = None,
         end_line: int | None = None,
     ) -> str:
         """Show who last modified each line of a file."""
+        del runtime
         args = ["blame", "--no-pager"]
         if start_line and end_line:
             args.append(f"-L{start_line},{end_line}")
@@ -195,10 +211,11 @@ def git_tools_bundle(
         return _git(*args)
 
     def git_show(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         ref: str = "HEAD",
     ) -> str:
         """Show details of a commit. Default shows the latest commit."""
+        del runtime
         return _git("show", "--stat", ref)
 
     return [
