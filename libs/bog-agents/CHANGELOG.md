@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.2...bog-agents==0.9.3) (2026-05-23)
+
+
+### Bug Fixes
+
+* **sdk:** git_tools_bundle — rename `_runtime` → `runtime` for ToolRuntime injection ([#89](https://github.com/bogware/bog-agents/issues/89)) ([e000b36](https://github.com/bogware/bog-agents/commit/e000b364afdc8ed91d25f9406ecb0657cb1d5fc7))
+
 ## [0.9.2](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.1...bog-agents==0.9.2) (2026-05-22)
 
 
