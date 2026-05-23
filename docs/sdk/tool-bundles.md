@@ -81,14 +81,16 @@ def vegetable_tools_bundle(
     """Return tools that talk to a vegetable database bound to ``db_path``."""
 
     def add_vegetable(
-        _runtime: ToolRuntime[None, Any],
+        runtime: ToolRuntime[None, Any],
         name: Annotated[str, "Vegetable name"],
         color: Annotated[str, "Hex color"] = "#3a5",
     ) -> str:
+        del runtime  # closure uses db_path; runtime present for injection
         # ... write to db_path ...
         return f"Added {name}."
 
-    def list_vegetables(_runtime: ToolRuntime[None, Any]) -> str:
+    def list_vegetables(runtime: ToolRuntime[None, Any]) -> str:
+        del runtime
         # ... read from db_path ...
         return "carrot, beet, parsnip"
 
@@ -107,9 +109,10 @@ def vegetable_tools_bundle(
 
     if include_destructive:
         def delete_vegetable(
-            _runtime: ToolRuntime[None, Any],
+            runtime: ToolRuntime[None, Any],
             name: Annotated[str, "Vegetable to delete"],
         ) -> str:
+            del runtime
             # ... delete from db_path ...
             return f"Deleted {name}."
 
@@ -145,9 +148,14 @@ That's it. No class, no `__init__`, no hooks, no state schema.
 - **Bundles are pure.** Two calls with the same arguments return
   independent tool lists with equivalent behavior. No shared
   mutable state between invocations.
-- **Use `ToolRuntime[None, Any]` for the first parameter.** That's
-  the LangChain convention. Pyright will accept it. The agent
-  injects the runtime automatically.
+- **Name the runtime parameter exactly `runtime`** — `ToolRuntime`
+  injection in LangGraph/LangChain identifies the slot by the
+  parameter **name** (not just the type). Underscore-prefixed names
+  like `_runtime` are silently dropped from the args schema by
+  pydantic AND not injected by LangGraph's `ToolNode`, so the tool
+  fails at invocation time with a misleading `missing positional
+  argument` error. If your closure doesn't actually use the runtime
+  value, follow the bundle pattern: `def my_tool(runtime: ToolRuntime[None, Any], ...): del runtime; ...`
 
 ## When to keep a middleware class instead
 
