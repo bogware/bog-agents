@@ -148,6 +148,7 @@ def show_help() -> None:
     console.print("  -q, --quiet                Suppress chrome, pipe-friendly output")
     console.print("  --no-stream                Buffer full response (don't stream)")
     console.print("  --json                     Machine-readable JSON output")
+    console.print("  --jsonl                    Stream newline-delimited JSON events")
     console.print(
         "  --prompt NAME              Run a saved prompt from prompt_library.toml"
     )

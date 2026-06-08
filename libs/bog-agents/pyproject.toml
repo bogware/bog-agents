@@ -55,6 +55,19 @@ serve = [
     "sse-starlette>=2.0.0",
 ]
 
+# ─── provider extras ────────────────────────────────────────────────
+# `resolve_model` dispatches through langchain's `init_chat_model`, which
+# requires the provider's integration package to be installed. Anthropic
+# and Google GenAI ship in the core dependencies above; the rest are opt-in
+# so a default install stays lean. Install e.g. `bog-agents[bedrock]` to use
+# AWS Bedrock, or `bog-agents[all-providers]` for the full set.
+bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
+openai = ["langchain-openai>=1.1.14,<2.0.0"]
+all-providers = [
+    "langchain-aws>=1.0.0,<2.0.0",
+    "langchain-openai>=1.1.14,<2.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/bogware/bog-agents"
 Repository = "https://github.com/bogware/bog-agents"

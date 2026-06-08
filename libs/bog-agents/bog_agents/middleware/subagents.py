@@ -7,6 +7,7 @@ from typing import Annotated, Any, NotRequired, TypedDict, Unpack, cast
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
 from langchain.agents.middleware.types import AgentMiddleware, ContextT, ModelRequest, ModelResponse, ResponseT
+from langchain.agents.structured_output import ResponseFormat
 from langchain.chat_models import init_chat_model
 from langchain.tools import BaseTool, ToolRuntime
 from langchain_core.language_models import BaseChatModel
@@ -17,6 +18,7 @@ from langgraph.types import Command
 
 from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 from bog_agents.middleware._utils import append_to_system_message
+from bog_agents.middleware.permissions import FilesystemPermission
 
 __all__ = [
     "CompiledSubAgent",
@@ -82,6 +84,16 @@ class SubAgent(TypedDict):
 
     skills: NotRequired[list[str]]
     """Skill source paths for SkillsMiddleware."""
+
+    permissions: NotRequired[list[FilesystemPermission]]
+    """Filesystem permission rules for this subagent.
+
+    When set, replaces the parent agent's `permissions` entirely (rules are
+    not merged). When omitted, the subagent inherits the parent's rules. See
+    `create_agent`'s `permissions` parameter for rule semantics."""
+
+    response_format: NotRequired[ResponseFormat]
+    """Structured-output response format for this subagent."""
 
 
 class CompiledSubAgent(TypedDict):

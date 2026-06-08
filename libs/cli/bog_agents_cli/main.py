@@ -350,6 +350,16 @@ def parse_args() -> argparse.Namespace:
         help="AWS region override (defaults to AWS_REGION env / profile config)",
     )
 
+    command_parser = subparsers.add_parser(
+        "command",
+        help="Run a slash command non-interactively (e.g. 'command \"/help\"')",
+    )
+    command_parser.add_argument(
+        "slash",
+        help="The slash command to run, e.g. '/help', '/commands', '/model'",
+    )
+    add_json_output_arg(command_parser)
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -543,6 +553,18 @@ def parse_args() -> argparse.Namespace:
     )
 
     add_json_output_arg(parser, default="text")
+    parser.add_argument(
+        "--jsonl",
+        dest="output_format",
+        action="store_const",
+        const="jsonl",
+        help=(
+            "Stream newline-delimited JSON events (stream-json) for "
+            "non-interactive runs: one object per line for start, text "
+            "deltas, tool_call, tool_result, and a terminal final event "
+            "with thread_id, response, tool_calls, and usage stats."
+        ),
+    )
 
     parser.add_argument(
         "--auto-approve",
@@ -1825,6 +1847,10 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_call import cmd_call
 
             sys.exit(cmd_call(args))
+        elif args.command == "command":
+            from bog_agents_cli.headless_commands import run_headless_command
+
+            sys.exit(run_headless_command(args.slash, output_format=output_format))
         elif args.command == "test-bedrock":
             from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
 
