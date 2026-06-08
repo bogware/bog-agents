@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.4](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.3...bog-agents==0.9.4) (2026-06-08)
+
+
+### Features
+
+* **sdk,cli:** deepagents parity, headless driving, provider resilience ([#91](https://github.com/bogware/bog-agents/issues/91)) ([165c5cb](https://github.com/bogware/bog-agents/commit/165c5cbc17a28fac8e15026914dfd7b0da3b02f2))
+
 ## [0.9.3](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.2...bog-agents==0.9.3) (2026-05-23)
 
 
