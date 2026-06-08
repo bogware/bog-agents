@@ -21,10 +21,8 @@ examples wherever possible.
 | | |
 |---|---|
 | [Drive runner](cli/drive.md) | Scripted non-interactive TUI runs. The whole point. |
-| [Modes](cli/modes.md) | Interactive, `-p`, `-n`, `--serve`, `--acp`, `--drive`, when to use which |
-| [Slash commands](cli/slash-commands.md) | The 120+ slash command surface, grouped by intent |
-| [MCP](cli/mcp.md) | Marketplace, custom servers, trust, OAuth |
-| [Observability](cli/observability.md) | Logs, panic dumps, structured events, `--doctor-deep` |
+| [Slash command reference](../libs/cli/README.md#day-to-day-commands) | The 120+ slash command surface, grouped by intent (in the CLI README) |
+| [Headless driving](../libs/cli/README.md#driving-it-headless) | `-n` / `-p`, `--json` / `--jsonl`, `bog-agents command`, when to use which |
 
 ## SDK (`bog-agents`)
 
@@ -32,8 +30,8 @@ examples wherever possible.
 |---|---|
 | [Quickstart](sdk/quickstart.md) | `create_agent()` in five minutes |
 | [Middleware](sdk/middleware.md) | Writing your own. Wraps, hooks, state. When not to. |
-| [Tool bundles](sdk/tool-bundles.md) | The W4 alternative to "middleware that only ships tools" |
-| [Backends](sdk/backends.md) | Filesystem, shell, sandbox; safe defaults explained |
+| [Tool bundles](sdk/tool-bundles.md) | The alternative to "middleware that only ships tools" |
+| [deepagents compatibility](../libs/bog-agents/README.md#deepagents-compatibility) | `create_deep_agent`, permissions, harness/provider profiles (in the SDK README) |
 
 ## Providers
 
@@ -46,17 +44,14 @@ examples wherever possible.
 | | |
 |---|---|
 | [Quickstart](daemon/quickstart.md) | Install, run, first scheduled job |
-| [Triggers + outputs](daemon/triggers-and-outputs.md) | cron / file / webhook / git-push × log / Slack / email / webhook / GitHub |
-| [Deploy](daemon/deploy.md) | systemd / launchd / Windows Task Scheduler |
+| [Triggers + outputs](../libs/daemon/README.md#triggers) | cron / file / webhook / git-push × log / Slack / email / webhook / GitHub (in the daemon README) |
+| [Deploy](../libs/daemon/README.md#running-as-a-service) | systemd / launchd / Windows Task Scheduler (in the daemon README) |
 
 ## Advanced
 
 | | |
 |---|---|
 | [Expert Rules](advanced/expert-rules.md) | Forward+backward chaining rule engine, `/expert`, `/why`, `/prove` |
-| [Compliance](advanced/compliance.md) | `/compliance` auditor, HMAC-sealed reports, FINRA / SOC 2 |
-| [TraceFile v1](advanced/tracefile.md) | Ed25519-signed open trace format |
-| [Dreamscape](advanced/dreamscape.md) | Long-term memory + nightly proposer |
 | [Security model](security.md) | Threat boundaries, sandbox options, what the agent can and cannot do |
 
 ## Filing a bug

@@ -26,19 +26,20 @@ You can have an agent in your terminal in under a minute. You can also build
 one out from there for years. The CLI is shaped to support both.
 
 - **Patient by default.** Provider hiccups retry. Hung commands time out.
-  Mouse-tracking escape sequences don't leak into your input box. Crashes
-  drop a redacted panic dump for easy bug reports.
+  Mouse-tracking escape sequences don't leak into your input box. A crash
+  drops a redacted panic dump so a bug report writes itself.
 - **Secure-by-default.** Filesystem confined to the project root unless you
   explicitly opt out. Secrets live in an in-memory vault that's never
-  persisted to disk. OAuth tokens written atomically with `0o600` mode
-  set before the rename — no world-readable race window.
+  persisted to disk. OAuth tokens written atomically at `0o600` mode set
+  before the rename — no world-readable race window.
 - **Discoverable.** Type `/` and a fuzzy menu shows you 120+ commands. The
   MCP marketplace browses 35+ servers across 9 categories. `--doctor-deep`
   probes every external dependency in under a second.
-- **Scriptable.** `bog-agents drive <script.yaml>` runs the TUI
-  non-interactively against a YAML grammar — slash commands, typed
-  prompts, modal interactions, snapshots, assertions — so you can
-  exercise every TUI surface in CI without a human at the keyboard.
+- **Drivable by machines.** Run it without a human at the keyboard:
+  one-shot prompts, `--json` / `--jsonl` structured output, a headless
+  slash-command surface (`bog-agents command`), and `bog-agents drive`
+  for scripting the whole TUI. Built so an AI agent or CI job can operate
+  the CLI end to end.
 - **A *bog* aesthetic.** Matte swamp palette — muted moss, lichen-grey,
   firefly-amber warnings, heather-rust errors. Ultima-inspired heavy-serif
   splash banner with rune anchors. A still pool, not a neon arcade.
@@ -50,6 +51,9 @@ one out from there for years. The CLI is shaped to support both.
 ```bash
 # pipx is recommended (isolates dependencies, gives you a clean PATH entry)
 pipx install bog-agents-cli
+
+# or with uv
+uv tool install bog-agents-cli
 
 # or plain pip
 pip install bog-agents-cli
@@ -98,32 +102,62 @@ bog-agents -n "fix the failing test in tests/test_auth.py" --auto-approve
 
 ---
 
-## What's new since 0.8.0
+## Driving it headless
 
-The most recent waves (post-flagship) have hardened the CLI toward a
-credible 1.0:
+When the operator is another program, you want clean exits and machine-readable
+output. The CLI gives you three levels of that.
 
-- **Wave Y (0.8.8)** — Audit-trail strict-hook warnings, first-run
-  no-API-key actionable error, preview-server cap (5/instance) +
-  `stop_all_preview_servers` tool, OAuth structured observability,
-  opt-in `MessageStore` JSONL persistence for crash recovery,
-  `__all__` declarations on headline middleware modules.
-- **Wave X (0.8.7)** — `merge_worktree` ref-injection fix,
-  `start_preview_server` shlex parsing + DEVNULL, daemon dispatch
-  errors captured on the run record.
-- **Wave W (0.8.6)** — **`bog-agents drive`** scripted TUI runner
-  (YAML grammar, Pilot harness, deterministic `fake:`/`replay:` model
-  shims, SVG + text snapshots); tool-bundle pattern; canonical
-  middleware-ordering test.
+### One-shot agent runs
+
+```bash
+bog-agents -n "summarize the diff on this branch" --json
+```
+
+`--json` wraps the run in a single envelope (final text + tool calls);
+`--jsonl` streams one event per line (`start`, `text`, `tool_call`,
+`tool_result`, `final`) so a caller can follow the run live.
+
+### Headless slash commands
+
+Informational and configuration slash commands run without booting the TUI:
+
+```bash
+bog-agents command "/help"          # full command reference
+bog-agents command "/commands"      # list commands; * marks headless-capable
+bog-agents command "/version" --json
+bog-agents command "/model"         # show the configured model
+bog-agents command "/config"        # resolved config + file path
+```
+
+Exit codes: `0` success, `1` ran-but-failed, `2` unknown or not-available-headless.
+Commands that are inherently interactive return a clear message listing the ones that
+aren't — no silent hangs.
+
+### Scripted TUI (`bog-agents drive`)
+
+For exercising the *interactive* surface non-interactively — typed prompts,
+modal interactions, snapshots, assertions — see [Drive](#bog-agents-drive-example) below.
+
+---
+
+## What's new in 0.9.x
+
+- **0.9.4 — headless driving + provider resilience.** A headless
+  slash-command surface (`bog-agents command "/help"`), `--jsonl`
+  structured streaming with tool-call events, and deepagents parity
+  carried up from the SDK. Live-tested across Anthropic, AWS Bedrock,
+  and OpenAI.
+- **0.9.1 — Bedrock, seamless.** Automatic inference-profile resolution,
+  `/bedrock fix` + `/bedrock config`, auto SSO-credential refresh. Point
+  at a model id and ride.
+- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents drive`
+  graduated to a full Pilot-backed runner; `/compliance` auditor with
+  HMAC-sealed reports; a repo-wide security pass.
 
 See [CHANGELOG.md](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
-for the full history. The 0.8.0 notes below cover the original
-flagship release.
+for the full history. The flagship 0.8.0 capabilities below are all still here.
 
-## What's new in 0.8.0
-
-A genuine flagship release. Five top-line capabilities and a hundred small
-refinements.
+## Flagship capabilities (0.8.0, carried forward)
 
 ### `/peat` — your personal assistant
 
@@ -206,6 +240,7 @@ discord, kubernetes, datadog, sentry — and more.
 |---|---|
 | `/help` | Full command reference |
 | `/model` | Switch model on the fly |
+| `/bedrock` | Bedrock inference-profile status, `fix`, `config` |
 | `/profile` | Apply a saved configuration preset |
 | `/plan` | Toggle plan-mode (think-then-act) |
 | `/effort` | Adjust thinking budget for the current model |
@@ -220,6 +255,7 @@ discord, kubernetes, datadog, sentry — and more.
 | `/audit` | Dependency vulnerability audit |
 | `/test` | Test generation, coverage, audit |
 | `/build` | Pipeline / recipe builder |
+| `/compliance` | Compliance auditor with HMAC-sealed reports |
 | `/peat` | Personal assistant + scheduler (see above) |
 | `/qa` | Acceptance-criteria QA harness (see above) |
 | `/record` / `/replay` | Capture and re-run sessions (see above) |
@@ -271,19 +307,21 @@ bog-agents --sandbox runloop     # RunLoop sandbox (when installed)
 bog-agents --sandbox langsmith   # LangSmith hosted sandbox
 ```
 
-Today's first-party sandbox is **Daytona** (`libs/partners/daytona/`).
-The other providers are configurable via their respective extras; see
-the SDK docs for credentials and limits.
+The first-party sandbox shipped as source today is **Daytona**
+(`libs/partners/daytona/`). The other providers are configurable via their
+respective extras; see the SDK docs for credentials and limits.
 
 ---
 
-## Headless modes
+## Headless modes at a glance
 
-| Flag | Use when |
+| Flag / subcommand | Use when |
 |---|---|
 | `-n MSG` | Run a task and exit. Great for CI / scripts. |
 | `-p MSG` | Same as `-n` but quiet — clean stdout for pipes. |
-| `--json` | Emit the result as a JSON envelope. |
+| `--json` | Emit the result as a single JSON envelope (text + tool calls). |
+| `--jsonl` | Stream one JSON event per line (start / text / tool_call / tool_result / final). |
+| `command "/…"` | Run a headless-capable slash command (`/help`, `/version`, `/model`, `/config`, `/commands`, `/changelog`). |
 | `--prompt NAME` | Run a saved prompt from your prompt library. |
 | `--prompt-vars JSON` | Pass variable bindings to a saved prompt. |
 | `--pipeline NAME` | Run a saved pipeline from `.bog-agents/pipelines/`. |

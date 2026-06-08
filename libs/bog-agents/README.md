@@ -9,8 +9,10 @@ SDK in its own right when you want to build agents that aren't a CLI.
 One `create_agent()` call gets you a compiled LangGraph agent with file tools, a shell,
 git, sub-agents, plan mode, auto-quality checks, retry-with-backoff against transient
 provider failures, and ~80 composable middlewares. Pluggable backends. Tool bundles
-for callers who don't want middleware overhead. Any tool-calling LLM. The defaults
-are deliberate — you ship something that works on day one without writing scaffolding.
+for callers who don't want middleware overhead. Drop-in
+[deepagents](https://github.com/langchain-ai/deepagents) compatibility. Any
+tool-calling LLM. The defaults are deliberate — you ship something that works on
+day one without writing scaffolding.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents)](https://pypi.org/project/bog-agents/)
 [![Python](https://img.shields.io/pypi/pyversions/bog-agents)](https://pypi.org/project/bog-agents/)
@@ -21,9 +23,9 @@ are deliberate — you ship something that works on day one without writing scaf
 
 ## Philosophy
 
-Most agent frameworks make you assemble the kit. We don't. Bog Agents starts you
-with a working agent and lets you peel away or bolt on layers as you understand
-what you actually need.
+A careful hand beats a fast one. Most agent frameworks make you assemble the
+kit. We don't. Bog Agents starts you with a working agent and lets you peel
+away or bolt on layers as you understand what the job actually asks for.
 
 - **Patient by default.** Failures retry with bounded backoff. Hung commands time out.
   Provider hiccups don't kill the run.
@@ -32,9 +34,9 @@ what you actually need.
 - **No ceremony.** `create_agent()` returns a compiled `CompiledStateGraph` you can
   invoke. Plug it into your app. Done.
 - **Composable.** ~80 middlewares snap on or off. Subagents nest. Backends swap. The
-  framework gets out of your way. New in 0.8.6: **tool bundles** —
-  free-function factories that return `list[BaseTool]` for callers who
-  only want a set of tools without the middleware machinery.
+  framework gets out of your way. **Tool bundles** — free-function factories
+  that return `list[BaseTool]` — serve callers who only want a set of tools
+  without the middleware machinery.
 
 The bog is calm, deep, and unhurried. So is the agent.
 
@@ -110,6 +112,44 @@ agent = create_agent(
 
 ---
 
+## deepagents compatibility
+
+Coming from [deepagents](https://github.com/langchain-ai/deepagents)? You can
+switch over without rewriting — and switch back if you ever want to. We ship a
+compatibility surface that speaks the same dialect.
+
+```python
+from bog_agents import create_deep_agent, DeepAgentState, FilesystemPermission
+
+agent = create_deep_agent(
+    model="anthropic:claude-sonnet-4-6",
+    tools=[...],
+    # Confine the agent's filesystem reach with allow/deny/interrupt rules
+    permissions=[
+        FilesystemPermission(operations=["write", "delete"], paths=["./src/**"], mode="allow"),
+        FilesystemPermission(operations=["write"], paths=["./secrets/**"], mode="deny"),
+    ],
+)
+```
+
+What's in the box:
+
+| Symbol | What it gives you |
+|---|---|
+| `create_deep_agent` | `create_agent` with `state_schema=DeepAgentState` defaulted on. |
+| `DeepAgentState` | The deepagents state shape, backed by a `DeltaChannel` messages reducer (O(N) checkpoints, not O(N²)). |
+| `FilesystemPermission` | Per-operation, per-path `allow` / `deny` / `interrupt` rules. `deny` is enforced in `wrap_tool_call`; `interrupt` routes through human-in-the-loop. |
+| `RubricMiddleware` | The grader self-evaluation loop — score the agent's own output against a rubric and retry. |
+| `HarnessProfile` / `HarnessProfileConfig` | Per-`provider:model` overlays: prompt, extra middleware, tool-description overrides, excluded tools/middleware, general-purpose subagent. |
+| `ProviderProfile` | Per-provider `init_kwargs` / `pre_init` / `init_kwargs_factory`, applied during model resolution. |
+| `register_harness_profile` / `register_provider_profile` | Register your own profiles. |
+
+Permissions and a typed `response_format` are also accepted on `SubAgent`
+specs, so sub-agents can be sandboxed independently of their parent. Every
+addition is opt-in: existing `create_agent` callers see no behavior change.
+
+---
+
 ## What's in the box
 
 ### Backends
@@ -119,15 +159,18 @@ Pluggable filesystems and shells. Pick one or compose them.
 | Backend | Use when |
 |---|---|
 | `StateBackend` (default) | Agent reads / writes happen in graph state. Great for sandboxed tests. |
-| `FilesystemBackend` | Real filesystem. Path traversal blocked by `virtual_mode=True` (the default since 0.8.0). |
+| `FilesystemBackend` | Real filesystem. Path traversal blocked by `virtual_mode=True` (the default). |
 | `LocalShellBackend` | Filesystem + shell execution on the host. UTF-8 stdout decoding, configurable timeouts, `stdin=/dev/null` so interactive prompts can't hang the agent. |
 | `CompositeBackend` | Route different path prefixes to different backends. |
-| `SandboxBackend` | Modal / Daytona / RunLoop / LangSmith remote sandboxes. |
+| `SandboxBackend` | Daytona / Modal / RunLoop / LangSmith remote sandboxes. |
 
 ### Middlewares (selected)
 
 - **`ProviderRetryMiddleware`** — bounded exponential backoff with jitter on transient
   provider errors (5xx, timeouts, connection resets). Never retries tool calls.
+- **`FilesystemPermissionsMiddleware`** — enforce `FilesystemPermission` rules
+  (allow / deny / interrupt) on file tools.
+- **`RubricMiddleware`** — grade the agent's output against a rubric and loop.
 - **`MemoryMiddleware`** — load `AGENTS.md` files into the system prompt. 64 KiB cap;
   `</agent_memory>` close-tags neutralized to prevent prompt-injection forgery.
 - **`SkillsMiddleware`** — bundle reusable agent skills with metadata.
@@ -154,7 +197,7 @@ from bog_agents import create_agent
 from bog_agents.tools import git_tools_bundle
 
 agent = create_agent(
-    model="anthropic:claude-sonnet-4-7",
+    model="anthropic:claude-sonnet-4-6",
     tools=[*git_tools_bundle(working_dir=".")],
 )
 ```
@@ -169,9 +212,9 @@ as thin backwards-compatible shims that delegate to the bundles.
 
 | Provider | Extra | Notes |
 |---|---|---|
-| Anthropic | `anthropic` | Default. Claude 4.6 / 4.7 with prompt caching. |
+| Anthropic | `anthropic` | Default. Claude 4.x with prompt caching. |
 | OpenAI | `openai` | Responses API by default. |
-| AWS Bedrock | `bedrock` | Claude / Llama / Titan via `bedrock:` prefix. |
+| AWS Bedrock | `bedrock` | Claude / Llama / Titan via `bedrock:` prefix. Auto inference-profile resolution + SSO refresh. |
 | Google | `google-genai` | Gemini family. |
 | Mistral | `mistralai` | |
 | Groq | `groq` | |
@@ -182,6 +225,7 @@ as thin backwards-compatible shims that delegate to the bundles.
 | Ollama | `ollama` | Local models. |
 
 Pass `model="provider:model-id"` and `create_agent` does the rest.
+Per-provider initialization can be tuned with a `ProviderProfile`.
 
 ---
 
@@ -199,31 +243,20 @@ Streaming is supported via the standard LangGraph stream APIs.
 
 ---
 
-## What's new since 0.8.0
+## What's new in 0.9.x
 
-- **0.8.7 (Wave X)** — `merge_worktree` ref-injection fix,
-  `start_preview_server` shlex parsing + interactive-command DEVNULL,
-  daemon `JobRun.dispatch_errors` per-target failure capture.
-- **0.8.6 (Wave W)** — **Tool bundles** (`bog_agents.tools.bundles`),
-  canonical middleware-ordering test that locks `graph.py`'s
-  sequence, `AuditTrailMiddleware.strict_hooks` flag + hook-failure
-  counter, fixed server log handle leak on `Popen` failure.
-- **0.8.5 (Wave V)** — Stub middleware cleanup: 17 modules deleted,
-  ~7,900 lines net deletion.
-
-## What's new in 0.8.0
-
-- **`ProviderRetryMiddleware`** — bounded retries on transient provider failures.
-- **`virtual_mode=True` is now the default** for `FilesystemBackend` (and
-  `LocalShellBackend`). Path traversal blocked unless explicitly opted out.
-- **Subprocess `stdin=/dev/null`** in `LocalShellBackend.execute()` — interactive
-  commands like Windows `date` get an immediate EOF instead of hanging.
-- **Typed subagent validation** at `create_agent()` — typo'd `name` /
-  `description` / `system_prompt` fails fast instead of surfacing as a
-  `KeyError` later.
-- **`FileOperationError` Literal** extended with `parent_not_found`.
-- **`MemoryMiddleware`** caps each AGENTS.md source at 64 KiB and neutralizes
-  `</agent_memory>` close-tags (prompt-injection defense).
+- **0.9.4** — **deepagents parity**: `create_deep_agent`, `DeepAgentState`
+  (with an O(N) `DeltaChannel` messages reducer), `FilesystemPermission`,
+  `RubricMiddleware`, `HarnessProfile` / `ProviderProfile`, plus
+  `SubAgent.permissions` / `response_format`. Provider resilience
+  live-tested across Anthropic, AWS Bedrock, and OpenAI; `bedrock` /
+  `openai` / `all-providers` extras added.
+- **0.9.1** — **Bedrock, seamless**: automatic inference-profile resolution
+  and auto SSO-credential refresh in `resolve_model`.
+- **0.9.0** — scriptable TUI groundwork, compliance auditing, repo-wide
+  security sweep.
+- **0.8.6** — **tool bundles** (`bog_agents.tools.bundles`) and the
+  canonical middleware-ordering test that locks `graph.py`'s sequence.
 
 See [`CHANGELOG.md`](https://github.com/bogware/bog-agents/blob/main/CHANGELOG.md)
 for the full release history.

@@ -2,19 +2,24 @@
 
 > *Pass through in harmony. Opinionated where it matters.*
 
-**v0.8.7** — a production-ready AI agent framework built on LangGraph,
-deliberately calm by design.
+**v0.9.4** — a production-ready AI agent framework built on LangGraph.
+Patient by design, watchful by default. It does the careful work so you
+don't have to wire it up yourself.
 
 Three packages, one philosophy:
 
 - **[`bog-agents`](libs/bog-agents)** — the Python SDK. `create_agent()` returns a
-  compiled LangGraph agent with file tools, a shell, sub-agents, plan mode,
-  retry-with-backoff, and ~80 composable middlewares.
+  compiled LangGraph agent with file tools, a shell, git, sub-agents, plan mode,
+  retry-with-backoff, and ~80 composable middlewares. Drop-in
+  [deepagents](https://github.com/langchain-ai/deepagents) compatibility, too —
+  `create_deep_agent`, `DeepAgentState`, filesystem permissions, harness/provider
+  profiles.
 - **[`bog-agents-cli`](libs/cli)** — a coding agent that lives in your terminal.
   120+ slash commands, any LLM, persistent memory, MCP marketplace, `/peat`
   personal scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`,
-  in-memory secrets vault, `bog-agents drive` for non-interactive scripted
-  runs, matte-swamp / neon-green TUI.
+  in-memory secrets vault, `bog-agents drive` for scripted runs, and a full
+  **headless surface** so an AI agent or CI job can drive it without a human
+  at the keyboard. Matte-swamp TUI.
 - **[`bog-agents-daemon`](libs/daemon)** — the patient watcher. Runs your
   agents on cron / file-change / webhook / git-push triggers; survives
   reboots; reports back via Slack / email / GitHub / file / webhook.
@@ -25,22 +30,23 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT.
 
 ## Philosophy
 
-Most agent frameworks make you assemble the kit. We don't. Bog Agents starts
-you with a working agent — and lets you peel away or bolt on layers as you
-understand what you actually need.
+Out on the frontier a careful hand beats a fast one. Most agent frameworks
+hand you the parts and wish you luck. Bog Agents hands you a working agent —
+then lets you peel away or bolt on layers as you learn what the job actually
+asks for.
 
 - **Patient by default.** Failures retry with bounded backoff. Hung commands
-  time out. Provider hiccups don't kill the run. Crashes drop a redacted
-  panic dump for easy bug reports.
+  time out. Provider hiccups don't kill the run. A crash drops a redacted
+  panic dump so a bug report writes itself.
 - **Opinionated where it matters.** Secure-by-default backends. A
   memory-only secrets vault that never touches disk. Structured event
-  logging at every chokepoint. Tokens written atomically with `0o600`
+  logging at every chokepoint. Tokens written atomically at `0o600`
   before the rename — no world-readable race window.
-- **No ceremony.** `pipx install bog-agents-cli && bog-agents` and you have
-  a working agent in under a minute. `pip install bog-agents` and one
-  function call gets you a compiled agent.
-- **Composable.** 80+ middlewares snap on or off. Subagents nest.
-  Backends swap. The framework gets out of your way.
+- **No ceremony.** `pipx install bog-agents-cli && bog-agents` and you have a
+  working agent in under a minute. `pip install bog-agents` and one function
+  call gets you a compiled agent.
+- **Composable.** 80+ middlewares snap on or off. Subagents nest. Backends
+  swap. The framework gets out of your way.
 
 The bog is calm, deep, and unhurried. So is the agent.
 
@@ -48,7 +54,7 @@ The bog is calm, deep, and unhurried. So is the agent.
 
 ## Quick install
 
-### CLI (most users start here)
+### CLI (most folks start here)
 
 ```bash
 # pipx is recommended — isolated install, clean PATH
@@ -66,16 +72,21 @@ Provider extras:
 ```bash
 pip install 'bog-agents-cli[anthropic]'        # Claude
 pip install 'bog-agents-cli[openai]'           # GPT
+pip install 'bog-agents-cli[bedrock]'          # AWS Bedrock
 pip install 'bog-agents-cli[all-providers]'    # everything
 ```
 
-Then run:
+Set one provider key and ride:
 
 ```bash
-bog-agents --doctor-deep      # one-page health summary
-bog-agents                    # interactive TUI
+export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_API_KEY, GOOGLE_API_KEY, AWS creds, ...
+bog-agents --doctor-deep                # one-page health check
+bog-agents                              # interactive TUI
 bog-agents -p "explain this module" < src/agent.py   # one-shot
 ```
+
+No key handy? Point it at a local [Ollama](https://ollama.com/) model and
+nothing leaves the machine.
 
 ### Daemon (ambient runner)
 
@@ -85,7 +96,7 @@ bog-agents-daemon run --port 7878
 ```
 
 See the [daemon README](libs/daemon/README.md) for systemd / Windows-task /
-launchd installation, REST API, trigger types, and output targets.
+launchd installation, the REST API, trigger types, and output targets.
 
 ### SDK only (for embedding agents in your own app)
 
@@ -101,40 +112,38 @@ result = await agent.ainvoke({"messages": [{"role": "user", "content": "hi"}]})
 ```
 
 See the [SDK README](libs/bog-agents/README.md) for backends, middlewares,
-and the full provider matrix.
+deepagents compatibility, and the full provider matrix.
 
 ---
 
-## What's new since 0.8.0
+## What's new in 0.9.x
 
-Successive waves have hardened the framework toward a credible 1.0:
+The 0.9 line is the run from a credible flagship toward 1.0. Each release
+hardened a different stretch of trail.
 
-- **Wave Y (0.8.8)** — Release-readiness hardening. Audit-trail strict
-  hook warnings, first-run no-API-key actionable error, preview-server
-  cap + cleanup tool, OAuth structured observability, opt-in
-  `MessageStore` JSONL persistence for crash recovery, `__all__` on
-  headline middleware modules, refreshed docs.
-- **Wave X (0.8.7)** — `merge_worktree` ref-injection fix,
-  `start_preview_server` `shlex` parsing + DEVNULL, daemon
-  `dispatch_errors` capture.
-- **Wave W (0.8.6)** — `bog-agents drive` scripted TUI runner with
-  YAML grammar + Pilot harness; tool-bundle pattern; canonical
-  middleware-ordering test; comprehensive resilience pass.
-- **Wave V (0.8.5)** — Stub middleware cleanup, ~7,900 lines net
-  deletion; `/causal` → `/trace-mind` rename.
-- **Wave U–T (0.8.4–0.8.3)** — architect-audit surgical fixes,
-  postmortem → dreamscape proposer feedback loop.
-- **Wave S–Q (0.8.2–0.8.0)** — TraceFile v1 (Ed25519 signed open
-  trace format), `/compliance` auditor, provable policies +
-  postmortem + time-travel replay.
+- **0.9.4 — deepagents parity, headless driving, provider resilience.**
+  A first-class [deepagents](https://github.com/langchain-ai/deepagents)
+  compatibility surface — `create_deep_agent`, `DeepAgentState`,
+  `FilesystemPermission`, `RubricMiddleware`, and `HarnessProfile` /
+  `ProviderProfile` keyed by `provider:model` — so a deepagents user can
+  switch over without rewriting, and back again. A **headless command
+  surface** (`bog-agents command "/help"`) plus `--jsonl` structured
+  streaming so agents and CI can drive the CLI non-interactively. Live-tested
+  resilience across Anthropic, AWS Bedrock, and OpenAI.
+- **0.9.1 — Bedrock, seamless.** Automatic inference-profile resolution,
+  `/bedrock fix` + `/bedrock config`, and auto SSO-credential refresh. Point
+  at a model id; the SDK sorts out the rest.
+- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents drive`
+  graduated to a full Pilot-backed runner; `/compliance` auditor with
+  HMAC-sealed reports; a repo-wide security pass.
 
-See [CHANGELOG.md](CHANGELOG.md) for the full history. The 0.8.0
-notes below cover the original flagship release.
+See [CHANGELOG.md](CHANGELOG.md) for the full history, including the 0.8.x
+flagship features (`/peat`, `/qa`, `/record` + `/replay`, the MCP
+marketplace) carried forward below.
 
-## What's new in 0.8.0
+---
 
-A genuine flagship release. Five top-line capabilities and a hundred small
-refinements.
+## The 0.8 flagship features (still here, still sharp)
 
 ### `/peat` — your personal assistant
 
@@ -147,7 +156,6 @@ five-phase plan, builds personalized digests from your `/qa` results and
 /peat schedule "0 9 * * 1-5 | summarize yesterday's QA results"
 /peat research "vector databases" --focus pricing,perf
 /peat digest --days 7
-/peat metrics
 ```
 
 ### `/qa` — adaptive QA harness
@@ -160,10 +168,9 @@ mcp — with verdicts (`exit_code`, `status`, `contains`, `regex`,
 ### `/record` + `/replay` — sessions you can edit and re-run
 
 `/record` captures user prompts, AI responses, and tool calls live.
-`/record stop` finalizes to a YAML file with auto-detected variables
-(Jira IDs, repo URLs, file paths) replaced by `${var}` placeholders.
-`/replay run` prompts for any unfilled variables and dispatches to the
-agent.
+`/record stop` finalizes to a YAML file with auto-detected variables (Jira
+IDs, repo URLs, file paths) replaced by `${var}` placeholders. `/replay run`
+prompts for any unfilled variables and dispatches to the agent.
 
 ### Vault + Vars
 
@@ -171,7 +178,7 @@ Typed variable system shared by `/replay` and `/qa`: `string`, `secret`,
 `enum`, `int`, `bool`. Secrets live only in process memory; nothing
 persists to disk. Optional read-only OS-keychain bridge.
 
-### MCP marketplace, expanded
+### MCP marketplace
 
 35+ curated servers across 9 categories: github, jira, gitlab, slack,
 postgres, mongodb, redis, bigquery, snowflake, supabase, aws, azure-devops,
@@ -184,45 +191,23 @@ discord, kubernetes, datadog, sentry, and more.
 /mcp add my-tool ...      # custom server
 ```
 
-### Plus, under the hood
-
-- **`ProviderRetryMiddleware`** — bounded exponential backoff with jitter
-  on transient provider errors. Never retries tool calls.
-- **`virtual_mode=True` is now the default** for `FilesystemBackend` and
-  `LocalShellBackend`. Path traversal blocked unless explicitly opted out
-  via `BOG_AGENTS_FS_UNSANDBOXED=1`.
-- **Subprocess `stdin=/dev/null`** — interactive commands like Windows
-  `date` get an immediate EOF instead of hanging the agent forever.
-- **Panic dumps** — uncaught exceptions land at
-  `~/.bog-agents/crash/<ts>.log` with redacted host info, versions,
-  traceback, and recent metrics. Attach the file when you open an issue.
-- **Structured event logging** at every chokepoint, ready for shippers
-  (Splunk, Loki, journald). Stable event names, prefixed `evt_*` fields.
-- **Mouse-tracking escape-sequence swallower** so moving the mouse over
-  the terminal during a long agent run no longer leaks `[<35;16;41M`
-  garbage into your input box.
-- **`--doctor-deep`** — runtime probes of every external dependency
-  (Python, dirs writable, settings parseable, git, provider envs, network
-  reachability, MCP config, recent crashes) in under a second.
-
-See [CHANGELOG.md](CHANGELOG.md) for the full 0.8.0 entry.
-
 ---
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, ~80 middlewares, pluggable backends, tool bundles. |
-| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, `bog-agents drive` scripted runner. |
-| `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook triggers, REST API. |
+| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, ~80 middlewares, pluggable backends, tool bundles, deepagents compatibility. |
+| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents drive` scripted runner. |
+| `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook / git-push triggers, REST API. |
 | `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |
 | `libs/harbor/` | Evaluation / benchmark harness (Terminal Bench 2.0). |
-| `libs/partners/` | Sandbox provider integrations (today: Daytona). |
+| `libs/partners/` | Sandbox provider integrations (first-party source today: Daytona). |
 | `libs/vscode-extension/` | VS Code integration. |
 
 Each package has its own `pyproject.toml`, `Makefile`, and version. SDK / CLI /
-daemon are released together; the rest tag independently.
+daemon are released together on synchronized versions; the rest tag
+independently.
 
 ---
 
@@ -238,7 +223,7 @@ uv sync --reinstall
 uv run bog-agents
 ```
 
-Each package has the same Makefile targets:
+Every package answers the same Makefile targets:
 
 ```bash
 make test        # unit tests, no network
@@ -264,10 +249,11 @@ Start with **[`docs/`](docs/)** — the full documentation tree:
 - **[Security Model](docs/security.md)** — what's safe by default,
   what isn't, threat boundaries
 - **CLI deep dives**: [Drive runner](docs/cli/drive.md) ·
-  [Slash commands](docs/cli/slash-commands.md)
+  [Slash command reference](libs/cli/README.md#day-to-day-commands)
 - **SDK guides**: [Quickstart](docs/sdk/quickstart.md) ·
   [Middleware](docs/sdk/middleware.md) ·
   [Tool bundles](docs/sdk/tool-bundles.md)
+- **Providers**: [AWS Bedrock](docs/providers/bedrock.md)
 - **Daemon**: [Quickstart](docs/daemon/quickstart.md)
 - **Advanced**: [Expert Rules](docs/advanced/expert-rules.md)
 

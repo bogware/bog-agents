@@ -1,6 +1,8 @@
 # Bog Agents ACP integration
 
-This directory contains an [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) connector that allows you to run a Python [Bog Agents](https://github.com/bogware/bog-agents) within a text editor that supports ACP such as [Zed](https://zed.dev/).
+> *Pass through in harmony. Opinionated where it matters.*
+
+Bring the agent in off the trail and into your editor. This directory contains an [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction) connector that runs a Python [Bog Agents](https://github.com/bogware/bog-agents) agent inside any editor that speaks ACP — such as [Zed](https://zed.dev/).
 
 ![Bog Agents ACP Demo](./static/img/bog-agents-acp.gif)
 

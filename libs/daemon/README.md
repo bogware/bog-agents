@@ -7,7 +7,8 @@ Schedules. File watches. Inbound webhooks. Git pushes. Sits in the
 background, fires the agent when something happens, writes the result
 wherever you point it.
 
-No terminal needed. No hand-holding. Goes the distance.
+No terminal needed. No hand-holding. It keeps watch through the night and
+goes the distance.
 
 [![PyPI](https://img.shields.io/pypi/v/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
 [![Python](https://img.shields.io/pypi/pyversions/bog-agents-daemon)](https://pypi.org/project/bog-agents-daemon/)
@@ -209,18 +210,23 @@ launchctl load ~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist
 
 ---
 
-## What's new since 0.8.0
+## What's new in 0.9.x
 
-- **0.8.8 (Wave Y)** — `JobRun.dispatch_errors` capped at 20 entries
-  with an `(overflow)` summary so a wide-fanout outage (e.g. 100
-  Slack recipients hit during an API outage) doesn't blow up the
-  run record JSON.
-- **0.8.7 (Wave X)** — Per-target output dispatch failures (email,
-  webhook, Slack) are captured on `JobRun.dispatch_errors` so
-  operators can tell from the runs table that delivery failed even
-  when the agent itself completed.
-- **0.8.0** — Patient by default (provider retries, `stdin=/dev/null`
-  for interactive commands, `virtual_mode=True` filesystem confinement,
+The daemon rides the synchronized monorepo version, so it inherits every
+SDK hardening as it lands.
+
+- **0.9.4** — deepagents parity and provider resilience flow up from the
+  SDK: Anthropic, AWS Bedrock, and OpenAI are live-tested, so scheduled
+  jobs survive a provider's bad night.
+- **0.9.1** — **Bedrock, seamless.** Automatic inference-profile
+  resolution and auto SSO-credential refresh mean a long-lived daemon
+  keeps firing Bedrock jobs without a stale-credential outage.
+- **0.9.0** — repo-wide security sweep; compliance auditing groundwork.
+- **Carried forward** — `JobRun.dispatch_errors` per-target capture
+  (capped at 20 entries with an `(overflow)` summary) so a wide-fanout
+  outage shows up in the runs table without blowing up the record JSON;
+  patient-by-default execution (provider retries, `stdin=/dev/null` for
+  interactive commands, `virtual_mode=True` filesystem confinement,
   structured event logs ready for log shippers).
 
 ---

@@ -1,8 +1,10 @@
 # Building Bog Agents Harnesses for Terminal Bench 2.0 with Harbor
 
+> *Measure twice. The benchmark doesn't grade on charm.*
+
 ## Overview
 
-This repository demonstrates how to evaluate and improve your Bog Agents agent harness using [Harbor](https://harborframework.com/) and [LangSmith](https://www.langchain.com/langsmith/observability).
+This package shows how to evaluate and harden your Bog Agents harness using [Harbor](https://harborframework.com/) and [LangSmith](https://www.langchain.com/langsmith/observability) — run the agent against a hard benchmark, read where it stumbled, fix the harness, run it again.
 
 ### What is Harbor?
 

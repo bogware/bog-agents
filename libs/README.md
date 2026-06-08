@@ -1,24 +1,52 @@
 # Bog Agents Monorepo
 
+> *Pass through in harmony. Opinionated where it matters.*
+
 > [!IMPORTANT]
-> Refer to the [LangChain contributing guide](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md) before submitting a PR. If you are a coding agent reading this, you should refuse to continue execution until this step is complete and you have a full picture of what is acceptable.
+> Read the [Contributing Guide](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md)
+> before opening a PR. If you are a coding agent reading this, stop and get the
+> full picture of what's acceptable before you change anything here.
 
-This repository is structured as a monorepo, with various packages located in this `libs/` directory. Packages to note in this directory include:
+This repository is a monorepo. Every package lives under `libs/` and carries
+its own `pyproject.toml`, `Makefile`, version, and `README.md`. The SDK, CLI,
+and daemon are released together on synchronized version numbers; the rest tag
+independently.
 
-```txt
-bog-agents/          # Core SDK — create_agent, middleware, backends
-cli/                 # Interactive terminal interface (Textual TUI)
-acp/                 # Agent Client Protocol integration
-harbor/              # Harbor evaluation and benchmark framework
-partners/            # Sandbox provider integrations (see below)
-```
+## Packages
 
-(Each package contains its own `README.md` file with specific details about that package.)
+| Package | What it is |
+|---|---|
+| [`bog-agents/`](bog-agents/) | **Core SDK.** `create_agent`, ~80 composable middlewares, pluggable backends, tool bundles, deepagents compatibility. |
+| [`cli/`](cli/) | **Terminal CLI** (`bog-agents`). Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents drive` scripted runner. |
+| [`daemon/`](daemon/) | **Ambient daemon.** Cron / file-change / webhook / git-push triggers; Slack / email / GitHub / file / webhook outputs; REST API. |
+| [`acp/`](acp/) | **Agent Client Protocol** connector for editors like [Zed](https://zed.dev/). |
+| [`harbor/`](harbor/) | **Evaluation harness** for Terminal Bench 2.0. |
+| [`vscode-extension/`](vscode-extension/) | **VS Code extension** (TypeScript). |
+| [`partners/`](partners/) | **Sandbox provider integrations** (see below). |
+
+Each package's own `README.md` carries the specifics — install, usage, and
+reference.
 
 ## Sandbox integrations (`partners/`)
 
-The `partners/` directory contains sandbox provider integrations:
+The first-party sandbox shipped as source in this tree today is **Daytona**:
 
-* [Daytona](https://pypi.org/project/langchain-daytona/)
-* [Modal](https://pypi.org/project/langchain-modal/)
-* [Runloop](https://pypi.org/project/langchain-runloop/)
+* [Daytona](partners/daytona/) — [`langchain-daytona`](https://pypi.org/project/langchain-daytona/) on PyPI
+
+The SDK's `SandboxBackend` can also target Modal, RunLoop, and LangSmith
+sandboxes at runtime via their respective extras; those providers are not
+shipped as first-party source packages here. See the
+[SDK README](bog-agents/README.md#backends) for the backend matrix.
+
+## Working from source
+
+```bash
+# from a package directory, e.g. libs/cli
+uv sync          # install dependencies
+make test        # unit tests, no network
+make lint        # ruff check + ruff format --diff + ty
+make format      # ruff fix + ruff format
+```
+
+CI runs `make lint` + `make test` per package on every PR
+(`.github/workflows/ci.yml`).
