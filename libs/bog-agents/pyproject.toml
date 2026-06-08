@@ -1,6 +1,6 @@
 [project]
 name = "bog-agents"
-version = "0.9.3"
+version = "0.9.4"
 
 description = "Bog Agents — a still-water agent framework. Patient by default, opinionated where it matters, batteries included. Build agents on top of any major LLM provider (Anthropic, OpenAI, Bedrock, Google, Mistral, Groq, DeepSeek) or run local with Ollama. 80+ middlewares, real subagents, file-system + shell + sandbox backends, MCP tooling, a typed config surface. Built on LangGraph; pass through in harmony."
 readme = "README.md"
