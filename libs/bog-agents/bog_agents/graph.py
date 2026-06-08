@@ -4,31 +4,45 @@ import dataclasses
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Annotated, Any, Required, cast
 
-from langchain.agents import create_agent as _langchain_create_agent
+from langchain.agents import AgentState, create_agent as _langchain_create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig, TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain.agents.structured_output import ResponseFormat
 from langchain_anthropic import ChatAnthropic
 from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AnyMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.cache.base import BaseCache
+from langgraph.channels.delta import DeltaChannel
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 
+from bog_agents._excluded_middleware import (
+    _apply_excluded_middleware,
+    _validate_excluded_middleware_config,
+    _verify_excluded_middleware_coverage,
+)
+from bog_agents._messages_reducer import _messages_delta_reducer
 from bog_agents._models import resolve_model
+from bog_agents._tools import _apply_tool_description_overrides
 from bog_agents._version import __version__
 from bog_agents.backends import StateBackend
 from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 from bog_agents.feature_config import FeatureConfig
+from bog_agents.middleware._tool_exclusion import _ToolExclusionMiddleware
 from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from bog_agents.middleware.filesystem import FilesystemMiddleware
 from bog_agents.middleware.memory import MemoryMiddleware
 from bog_agents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+from bog_agents.middleware.permissions import (
+    FilesystemPermission,
+    FilesystemPermissionsMiddleware,
+    _build_interrupt_on_from_permissions,
+)
 from bog_agents.middleware.skills import SkillsMiddleware
 from bog_agents.middleware.subagents import (
     DEFAULT_SUBAGENT_PROMPT,
@@ -41,6 +55,58 @@ from bog_agents.middleware.summarization import (
     _BogAgentsSummarizationMiddleware,
     create_summarization_middleware,
 )
+from bog_agents.profiles.harness.harness_profiles import _apply_profile_prompt, _harness_profile_for_model
+
+
+class DeepAgentState(AgentState):
+    """`AgentState` with a `DeltaChannel` reducer on the `messages` key.
+
+    The delta reducer keeps checkpoint growth linear (O(N)) instead of
+    quadratic (O(N**2)) as the message history grows, by snapshotting the full
+    list only every `snapshot_frequency` writes and storing deltas in between.
+
+    This is opt-in for `create_agent` — pass `state_schema=DeepAgentState` (or a
+    subclass) to enable it. The deepagents-compatible `create_deep_agent`
+    wrapper uses it by default. Subclass this (not `AgentState`) for custom
+    state so the reducer is preserved:
+
+    ```python
+    from bog_agents import DeepAgentState
+
+
+    class MyState(DeepAgentState):
+        page_url: str
+    ```
+    """
+
+    messages: Required[Annotated[list[AnyMessage], DeltaChannel(_messages_delta_reducer, snapshot_frequency=50)]]  # ty: ignore[invalid-argument-type]
+
+
+def _merge_fs_interrupt_on(
+    fs_interrupt_on: dict[str, InterruptOnConfig],
+    user_interrupt_on: dict[str, bool | InterruptOnConfig] | None,
+) -> dict[str, bool | InterruptOnConfig] | None:
+    """Merge filesystem-permission-derived interrupt configs with user configs.
+
+    User-supplied entries override generated ones per tool name. Returns `None`
+    when both inputs are empty so callers can skip installing
+    `HumanInTheLoopMiddleware`.
+
+    Args:
+        fs_interrupt_on: Interrupt configs synthesized from `interrupt`-mode
+            filesystem permission rules.
+        user_interrupt_on: Caller-supplied `interrupt_on` mapping, if any.
+
+    Returns:
+        The merged mapping, or `None` when there is nothing to interrupt on.
+    """
+    if not fs_interrupt_on and not user_interrupt_on:
+        return None
+    merged: dict[str, bool | InterruptOnConfig] = {**fs_interrupt_on}
+    if user_interrupt_on:
+        merged.update(user_interrupt_on)
+    return merged
+
 
 BASE_AGENT_PROMPT = """You are a Bog Agents agent, an AI assistant that helps users accomplish tasks using tools. You respond with text and tool calls. The user can see your responses and tool outputs in real time.
 
@@ -234,6 +300,8 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     store: BaseStore | None = None,
     backend: BackendProtocol | BackendFactory | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
+    permissions: list[FilesystemPermission] | None = None,
+    state_schema: type[Any] | None = None,
     debug: bool = False,
     name: str | None = None,
     cache: BaseCache | None = None,
@@ -351,6 +419,22 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             Pass to pause agent execution at specified tool calls for human approval or modification.
 
             Example: `interrupt_on={"edit_file": True}` pauses before every edit.
+        permissions: Optional list of `FilesystemPermission` rules applied to the
+            built-in filesystem tools for the main agent and its subagents.
+
+            Rules are evaluated in declaration order; the first match wins, and
+            an unmatched call is allowed. Each rule's `mode` can be `"allow"`
+            (proceed), `"deny"` (the tool returns a permission-denied error), or
+            `"interrupt"` (the call pauses for human approval via
+            `HumanInTheLoopMiddleware`). Deny enforcement is exact and
+            path-aware; interrupt-mode rules install HITL on the affected
+            filesystem tools. Subagents inherit these rules unless their spec
+            sets its own `permissions`, which replaces the parent rules.
+        state_schema: Optional custom state schema for the agent graph. Pass
+            `DeepAgentState` (or a subclass) to enable the `DeltaChannel`
+            messages reducer for O(N) checkpoint growth. When `None` (default),
+            the underlying LangChain default state is used, preserving existing
+            behavior.
         debug: Whether to enable debug mode. Passed through to `create_agent`.
         name: The name of the agent. Passed through to `create_agent`.
         cache: The cache to use for the agent. Passed through to `create_agent`.
@@ -374,6 +458,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     """
     f = _resolve_feature_config(config=config, features=features, legacy_flags=legacy_feature_flags)
 
+    # Capture the raw model spec string (if any) before it is resolved to a
+    # `BaseChatModel`, so a registered `HarnessProfile` can be looked up by the
+    # exact `provider:model` key the caller passed.
+    _model_spec: str | None = model if isinstance(model, str) else None
+
     if model is None:
         _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
         if not any(os.environ.get(k) for k in _api_key_vars):
@@ -391,6 +480,27 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     else:
         model = resolve_model(model)
 
+    # Resolve the harness profile for this model (exact `provider:model` key,
+    # then provider prefix). Returns a null-object default when none is
+    # registered, so the prompt overlay and extra-middleware application below
+    # are no-ops out of the box.
+    _profile = _harness_profile_for_model(model, _model_spec)
+
+    # Apply harness-profile tool-description overrides up front, producing a
+    # copied tool list (caller-owned tools are never mutated). No-op when the
+    # profile registers no overrides, so `_tools` mirrors `tools` by default.
+    _tools = _apply_tool_description_overrides(tools, _profile.tool_description_overrides)
+
+    # Required scaffolding that `HarnessProfile.excluded_middleware` may never
+    # strip. Validated up front; coverage of every exclusion is verified after
+    # all stacks are assembled. The matched-sets accumulate across the main
+    # agent, the general-purpose subagent, and declarative subagents.
+    _required_mw_classes: frozenset[type[AgentMiddleware[Any, Any, Any]]] = frozenset({FilesystemMiddleware, SubAgentMiddleware})
+    _required_mw_names: frozenset[str] = frozenset({"FilesystemMiddleware", "SubAgentMiddleware"})
+    _validate_excluded_middleware_config(_profile, required_classes=_required_mw_classes, required_names=_required_mw_names)
+    _excl_matched_classes: set[type[AgentMiddleware[Any, Any, Any]]] = set()
+    _excl_matched_names: set[str] = set()
+
     # ``StateBackend`` is a class that doubles as a ``BackendFactory``
     # (i.e. callable taking a ToolRuntime). Pass the class itself so
     # downstream code which expects ``BackendProtocol | BackendFactory``
@@ -401,21 +511,37 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [
         TodoListMiddleware(),
         FilesystemMiddleware(backend=backend),
-        create_summarization_middleware(model, backend),
-        PatchToolCallsMiddleware(),
     ]
+    if permissions:
+        gp_middleware.append(FilesystemPermissionsMiddleware(permissions=permissions))
+    gp_middleware.extend(
+        [
+            create_summarization_middleware(model, backend),
+            PatchToolCallsMiddleware(),
+        ]
+    )
     if skills is not None:
         gp_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
+    gp_middleware.extend(_profile.materialize_extra_middleware())
+    if _profile.excluded_tools:
+        gp_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
     gp_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    gp_middleware = _apply_excluded_middleware(
+        gp_middleware,
+        _profile,
+        matched_classes=_excl_matched_classes,
+        matched_names=_excl_matched_names,
+    )
 
     general_purpose_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
         **GENERAL_PURPOSE_SUBAGENT,
         "model": model,
-        "tools": tools or [],
+        "tools": _tools or [],
         "middleware": gp_middleware,
     }
-    if interrupt_on is not None:
-        general_purpose_spec["interrupt_on"] = interrupt_on
+    gp_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
+    if gp_interrupt_on is not None:
+        general_purpose_spec["interrupt_on"] = gp_interrupt_on
 
     # Process user-provided subagents to fill in defaults for model, tools, and middleware
     processed_subagents: list[SubAgent | CompiledSubAgent] = []
@@ -444,20 +570,42 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             subagent_model = spec.get("model", model)
             subagent_model = resolve_model(subagent_model)
 
+            # Resolve permissions: a subagent's own rules replace the parent's
+            # entirely; otherwise it inherits the top-level rules.
+            subagent_permissions = spec.get("permissions", permissions)
+
             # Build middleware: base stack + skills (if specified) + user's middleware
             subagent_middleware: list[AgentMiddleware[Any, Any, Any]] = [
                 TodoListMiddleware(),
                 FilesystemMiddleware(backend=backend),
-                create_summarization_middleware(subagent_model, backend),
-                PatchToolCallsMiddleware(),
             ]
+            if subagent_permissions:
+                subagent_middleware.append(FilesystemPermissionsMiddleware(permissions=subagent_permissions))
+            subagent_middleware.extend(
+                [
+                    create_summarization_middleware(subagent_model, backend),
+                    PatchToolCallsMiddleware(),
+                ]
+            )
             subagent_skills = spec.get("skills")
             if subagent_skills:
                 subagent_middleware.append(SkillsMiddleware(backend=backend, sources=subagent_skills))
             subagent_middleware.extend(spec.get("middleware", []))
+            subagent_middleware.extend(_profile.materialize_extra_middleware())
+            if _profile.excluded_tools:
+                subagent_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
             subagent_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+            subagent_middleware = _apply_excluded_middleware(
+                subagent_middleware,
+                _profile,
+                matched_classes=_excl_matched_classes,
+                matched_names=_excl_matched_names,
+            )
 
-            subagent_interrupt_on = spec.get("interrupt_on", interrupt_on)
+            subagent_interrupt_on = _merge_fs_interrupt_on(
+                _build_interrupt_on_from_permissions(subagent_permissions or []),
+                spec.get("interrupt_on", interrupt_on),
+            )
 
             # Prepend the anti-fabrication preamble so every subagent (custom
             # or built-in) inherits the same honesty rules as the general-
@@ -465,10 +613,14 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             # AGENTS.md but still get told "run npm test"; without the rule
             # they hallucinate the output.
             user_prompt = spec.get("system_prompt", "") or ""
+            # A subagent inherits the main tools unless it declares its own;
+            # apply harness tool-description overrides to whichever set applies.
+            raw_subagent_tools = spec.get("tools") if "tools" in spec else tools
+            subagent_tools = _apply_tool_description_overrides(raw_subagent_tools, _profile.tool_description_overrides)
             processed_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
                 **spec,
                 "model": subagent_model,
-                "tools": spec.get("tools", tools or []),
+                "tools": subagent_tools or [],
                 "middleware": subagent_middleware,
                 "system_prompt": f"{DEFAULT_SUBAGENT_PROMPT}\n\n{user_prompt}".strip(),
             }
@@ -490,6 +642,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     ]
     if skills is not None:
         agents_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
+    # Enforce filesystem `deny` permissions as an early tool-call gate so denied
+    # reads/writes never reach the backend. Interrupt-mode rules are wired into
+    # HITL further down. Only installed when rules are supplied.
+    if permissions:
+        agents_middleware.append(FilesystemPermissionsMiddleware(permissions=permissions))
 
     # New feature middleware (#1-50)
     _wd = Path(f.working_dir) if f.working_dir else None
@@ -824,11 +981,37 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     if user_middleware:
         agents_middleware.extend(user_middleware)
+    # Harness-profile `extra_middleware` (no-op unless a profile is registered
+    # for this model). Placed after user middleware and before prompt caching so
+    # caller middleware retains precedence.
+    agents_middleware.extend(_profile.materialize_extra_middleware())
+    # Strip harness-profile excluded tools after every tool-injecting middleware
+    # has run, so it can remove both user-supplied and middleware-injected tools.
+    if _profile.excluded_tools:
+        agents_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
     agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     if memory is not None:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
-    if interrupt_on is not None:
-        agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on))
+    main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
+    if main_interrupt_on is not None:
+        agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
+
+    # Filter `HarnessProfile.excluded_middleware` from the fully assembled main
+    # stack, then verify every exclusion matched something across all stacks
+    # (main + GP + subagents). No-op when no profile is registered.
+    agents_middleware = _apply_excluded_middleware(
+        agents_middleware,
+        _profile,
+        matched_classes=_excl_matched_classes,
+        matched_names=_excl_matched_names,
+    )
+    _verify_excluded_middleware_coverage(
+        _profile,
+        _excl_matched_classes,
+        _excl_matched_names,
+        required_classes=_required_mw_classes,
+        required_names=_required_mw_names,
+    )
 
     # Validate middleware dependency ordering before compiling the graph.
     _validate_middleware_ordering(agents_middleware)
@@ -839,7 +1022,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # when those middleware are active. We only inject the addendum
     # when the loop is active — otherwise the model would be told to
     # call tools that aren't bound.
-    base_prompt = BASE_AGENT_PROMPT
+    # Apply harness-profile prompt overlay (base_system_prompt replacement
+    # and/or system_prompt_suffix). No-op when no profile is registered.
+    base_prompt = _apply_profile_prompt(_profile, BASE_AGENT_PROMPT)
     if provenance_active:
         base_prompt = base_prompt + "\n\n" + _PROVENANCE_LOOP_PROMPT
 
@@ -851,10 +1036,16 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         # String: simple concatenation
         final_system_prompt = system_prompt + "\n\n" + base_prompt
 
+    # Only forward `state_schema` when the caller opted in, so the default
+    # behavior (LangChain's built-in AgentState) is preserved unchanged.
+    _create_kwargs: dict[str, Any] = {}
+    if state_schema is not None:
+        _create_kwargs["state_schema"] = state_schema
+
     return _langchain_create_agent(
         model,
         system_prompt=final_system_prompt,
-        tools=tools,
+        tools=_tools,
         middleware=agents_middleware,
         response_format=response_format,
         context_schema=context_schema,
@@ -863,6 +1054,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         debug=debug,
         name=name,
         cache=cache,
+        **_create_kwargs,
     ).with_config(
         {
             "recursion_limit": max(10, min(max_turns, 1000)),

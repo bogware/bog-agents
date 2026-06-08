@@ -240,6 +240,14 @@ def resolve_model(model: str | BaseChatModel) -> BaseChatModel:
     model = _normalize_bedrock_model_id(model)
     timeout_secs = _resolve_model_read_timeout()
     kwargs = _model_init_kwargs(model, timeout_secs)
+    # Layer any registered `ProviderProfile` for this spec underneath the
+    # computed kwargs (caller/SDK kwargs win on conflicts). This runs the
+    # profile's `pre_init` hook and merges its `init_kwargs` /
+    # `init_kwargs_factory` output. Imported locally so `import bog_agents`
+    # stays cheap and to avoid any import-cycle through the profiles package.
+    from bog_agents.profiles.provider.provider_profiles import apply_provider_profile
+
+    kwargs = apply_provider_profile(model, kwargs)
     try:
         return init_chat_model(model, **kwargs)
     except TypeError as exc:
@@ -272,6 +280,31 @@ def get_model_identifier(model: BaseChatModel) -> str | None:
     """
     config = model.model_dump()
     return _string_value(config, "model_name") or _string_value(config, "model")
+
+
+def get_model_provider(model: BaseChatModel) -> str | None:
+    """Extract the LangChain provider identifier from a chat model.
+
+    Reads the model's LangSmith params (`ls_provider`), which providers
+    populate with their canonical short name (e.g. `anthropic`, `openai`,
+    `bedrock_converse`). Used by the harness-profile lookup to resolve a
+    `provider:model` key when the caller passes a pre-built `BaseChatModel`
+    instead of a `provider:model` string.
+
+    Args:
+        model: Chat model instance to inspect.
+
+    Returns:
+        The provider short name, or `None` when it cannot be determined.
+    """
+    try:
+        params = model._get_ls_params()
+    except Exception:  # noqa: BLE001 - best-effort; never fail model resolution over this
+        return None
+    provider = params.get("ls_provider")
+    if isinstance(provider, str) and provider:
+        return provider
+    return None
 
 
 def model_matches_spec(model: BaseChatModel, spec: str) -> bool:

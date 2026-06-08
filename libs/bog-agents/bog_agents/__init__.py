@@ -7,10 +7,21 @@ This keeps ``import bog_agents`` fast.
 from bog_agents._version import __version__
 from bog_agents.builder import AgentBuilder, AgentConfig
 from bog_agents.feature_config import FeatureConfig
-from bog_agents.graph import create_agent
+from bog_agents.graph import DeepAgentState, create_agent
 
 # Lazy-loaded symbols: maps exported name → (module_path, attribute_name)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # deepagents compatibility surface (see bog_agents.deepagents)
+    "create_deep_agent": ("bog_agents.deepagents", "create_deep_agent"),
+    "FilesystemPermission": ("bog_agents.middleware.permissions", "FilesystemPermission"),
+    "FilesystemPermissionsMiddleware": ("bog_agents.middleware.permissions", "FilesystemPermissionsMiddleware"),
+    "RubricMiddleware": ("bog_agents.middleware.rubric", "RubricMiddleware"),
+    "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),
+    "HarnessProfileConfig": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfileConfig"),
+    "GeneralPurposeSubagentProfile": ("bog_agents.profiles.harness.harness_profiles", "GeneralPurposeSubagentProfile"),
+    "register_harness_profile": ("bog_agents.profiles.harness.harness_profiles", "register_harness_profile"),
+    "ProviderProfile": ("bog_agents.profiles.provider.provider_profiles", "ProviderProfile"),
+    "register_provider_profile": ("bog_agents.profiles.provider.provider_profiles", "register_provider_profile"),
     "AdaptiveContextMiddleware": ("bog_agents.middleware.adaptive_context", "AdaptiveContextMiddleware"),
     "AgentReplayMiddleware": ("bog_agents.middleware.agent_replay", "AgentReplayMiddleware"),
     "AirGappedMiddleware": ("bog_agents.middleware.air_gapped", "AirGappedMiddleware"),
@@ -111,6 +122,7 @@ def __getattr__(name: str) -> object:
 __all__ = [  # noqa: PLE0604
     "AgentBuilder",
     "AgentConfig",
+    "DeepAgentState",
     "FeatureConfig",
     "__version__",
     "create_agent",

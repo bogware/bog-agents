@@ -152,6 +152,21 @@ def _write_newline() -> None:
     sys.stdout.flush()
 
 
+def _emit_jsonl(event: dict[str, Any]) -> None:
+    """Write a single JSON object to stdout as one line (newline-terminated).
+
+    Used by the `jsonl` (stream-json) output format so a programmatic driver
+    can consume one event per line as the agent runs.
+
+    Args:
+        event: The event payload to serialize. Must be JSON-serializable.
+    """
+    import json
+
+    sys.stdout.write(json.dumps(event, default=str) + "\n")
+    sys.stdout.flush()
+
+
 @dataclass
 class StreamState:
     """Mutable state accumulated while iterating over the agent stream."""
@@ -167,6 +182,10 @@ class StreamState:
     When `False`, text is buffered in `full_response` and flushed after the
     agent finishes.
     """
+
+    output_format: str = "text"
+    """Output format: `"text"` (human stream), `"json"` (single buffered
+    envelope), or `"jsonl"` (one JSON event per line as the run progresses)."""
 
     full_response: list[str] = field(default_factory=list)
     """Accumulated text fragments from the AI message stream."""
@@ -202,6 +221,17 @@ class StreamState:
 
     stats: SessionStats = field(default_factory=SessionStats)
     """Accumulated model usage stats for this stream."""
+
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    """Ordered, de-duplicated record of tool calls the agent made this run.
+
+    Each entry is `{"name": str, "args": dict}`. Populated from completed
+    `tool_calls` on each `AIMessage` and surfaced in the `--json` / `--jsonl`
+    output so programmatic drivers can see what the agent did, not just its
+    final text. De-duplicated by tool-call id."""
+
+    _seen_tool_call_ids: set[str] = field(default_factory=set)
+    """Internal: tool-call ids already recorded in `tool_calls` (dedupe)."""
 
 
 @dataclass
@@ -317,6 +347,27 @@ def _process_ai_message(
     # which is the only reliable place to read complete args (the per-chunk
     # tool_call_chunk blocks only carry partial JSON fragments).
     completed_tool_calls = getattr(message_obj, "tool_calls", None) or []
+    # Record every completed tool call (name + args) once, keyed by id, so the
+    # structured (`--json` / `--jsonl`) output can report the agent's actions.
+    for tc in completed_tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        tc_name = tc.get("name")
+        if not tc_name:
+            continue
+        tc_id = tc.get("id")
+        dedupe_key = (
+            tc_id
+            if isinstance(tc_id, str) and tc_id
+            else f"{tc_name}-{len(state.tool_calls)}"
+        )
+        if dedupe_key in state._seen_tool_call_ids:
+            continue
+        state._seen_tool_call_ids.add(dedupe_key)
+        tc_args = tc.get("args") if isinstance(tc.get("args"), dict) else {}
+        state.tool_calls.append({"name": tc_name, "args": tc_args})
+        if state.output_format == "jsonl":
+            _emit_jsonl({"type": "tool_call", "name": tc_name, "args": tc_args})
     for tc in completed_tool_calls:
         if not isinstance(tc, dict):
             continue
@@ -343,7 +394,9 @@ def _process_ai_message(
         if block_type == "text":
             text = block.get("text", "")
             if text:
-                if state.stream:
+                if state.output_format == "jsonl":
+                    _emit_jsonl({"type": "text", "text": text})
+                elif state.stream:
                     _write_text(text)
                 state.full_response.append(text)
         elif block_type in {"tool_call_chunk", "tool_call"}:
@@ -421,6 +474,18 @@ def _process_message_chunk(
     if isinstance(message_obj, AIMessage):
         _process_ai_message(message_obj, state, console)
     elif isinstance(message_obj, ToolMessage):
+        if state.output_format == "jsonl":
+            content = message_obj.content
+            if isinstance(content, list):
+                content = " ".join(str(c) for c in content)
+            _emit_jsonl(
+                {
+                    "type": "tool_result",
+                    "name": message_obj.name,
+                    "status": getattr(message_obj, "status", "success"),
+                    "content": str(content)[:4000],
+                }
+            )
         record = file_op_tracker.complete_with_message(message_obj)
         if record and record.diff:
             console.print(f"[dim]📝 {record.display_path}[/dim]")
@@ -850,12 +915,14 @@ async def _run_agent_loop(
     Raises:
         HITLIterationLimitError: If the HITL iteration limit is exceeded.
     """
-    state = StreamState(quiet=quiet, stream=stream)
+    state = StreamState(quiet=quiet, stream=stream, output_format=output_format)
     stream_input: dict[str, Any] | Command = {
         "messages": [{"role": "user", "content": message}]
     }
 
     thread_id = config.get("configurable", {}).get("thread_id", "")
+    if output_format == "jsonl":
+        _emit_jsonl({"type": "start", "thread_id": thread_id})
     await dispatch_hook("session.start", {"thread_id": thread_id})
 
     start_time = time.monotonic()
@@ -896,6 +963,7 @@ async def _run_agent_loop(
             "data": {
                 "thread_id": thread_id,
                 "response": "".join(state.full_response).strip(),
+                "tool_calls": state.tool_calls,
                 "stats": {
                     "wall_time_seconds": round(wall_time, 3),
                     "model": next(iter(state.stats.per_model), None),
@@ -906,12 +974,31 @@ async def _run_agent_loop(
             },
         }
         _write_text(_json.dumps(envelope) + "\n")
+    elif output_format == "jsonl":
+        # Per-event lines already streamed; emit a terminal `final` event with
+        # the assembled response, tool calls, and stats for consumers that want
+        # a single summary record at the end of the stream.
+        _emit_jsonl(
+            {
+                "type": "final",
+                "thread_id": thread_id,
+                "response": "".join(state.full_response).strip(),
+                "tool_calls": state.tool_calls,
+                "stats": {
+                    "wall_time_seconds": round(wall_time, 3),
+                    "model": next(iter(state.stats.per_model), None),
+                    "request_count": getattr(state.stats, "request_count", 0),
+                    "input_tokens": getattr(state.stats, "input_tokens", 0),
+                    "output_tokens": getattr(state.stats, "output_tokens", 0),
+                },
+            }
+        )
     elif state.full_response:
         if not state.stream:
             _write_text("".join(state.full_response))
         _write_newline()
 
-    if not quiet and output_format != "json":
+    if not quiet and output_format not in ("json", "jsonl"):
         console.print()
         if (
             thread_url_lookup is not None
@@ -1072,7 +1159,11 @@ async def run_non_interactive(
     # uses _write_text() -> sys.stdout directly. Both --quiet and --json
     # need stdout reserved for the actual payload — chrome (server-ready,
     # thread headers, status line) must land on stderr.
-    console = Console(stderr=True) if (quiet or output_format == "json") else Console()
+    console = (
+        Console(stderr=True)
+        if (quiet or output_format in ("json", "jsonl"))
+        else Console()
+    )
 
     # J2 fix: bail on always_ask BEFORE we instantiate any models.
     # The combination is logically incompatible (non-interactive has no
@@ -1240,7 +1331,9 @@ async def run_non_interactive(
             # JSON output: suppress mid-stream stdout writes so only the
             # envelope reaches stdout. Diagnostic chrome is already routed
             # via stderr console.
-            effective_stream = stream and output_format != "json"
+            effective_stream = (
+                stream and output_format != "json"
+            )  # jsonl streams per-event lines
             # Snapshot the working tree just before the agent runs so we
             # can diff against it after to compute the exact set of
             # files the run created or modified. This is the bulletproof
@@ -1254,7 +1347,7 @@ async def run_non_interactive(
                 config,
                 console,
                 file_op_tracker,
-                quiet=quiet or output_format == "json",
+                quiet=quiet or output_format in ("json", "jsonl"),
                 stream=effective_stream,
                 thread_url_lookup=thread_url_lookup,
                 output_format=output_format,
