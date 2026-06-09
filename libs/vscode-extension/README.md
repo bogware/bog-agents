@@ -1,6 +1,8 @@
 # Bog Agents for VS Code
 
-A VS Code extension that brings Bog Agents AI coding assistance directly into your editor.
+> *Pass through in harmony. Opinionated where it matters.*
+
+A VS Code extension that brings the Bog Agents coding agent right into your editor — chat, review, explain, and fix without leaving the file you're in.
 
 ## Features
 
