@@ -720,6 +720,24 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(SmartContextMiddleware(working_dir=_wd, max_context_tokens=f.max_context_tokens))
 
+    # Street sweeper — sits outer of the default SummarizationMiddleware (so it
+    # trims litter before summarization measures the threshold) and inner of
+    # CostTrackerMiddleware. It only edits message *content*, never count/order,
+    # so summarization's cutoff indices and prompt-caching's prefix stay aligned.
+    if f.enable_street_sweeper:
+        from bog_agents._models import get_model_identifier
+        from bog_agents.middleware.street_sweeper import StreetSweeperMiddleware
+
+        sweeper_model = get_model_identifier(model) or "" if isinstance(model, BaseChatModel) else str(model or "")
+        agents_middleware.append(
+            StreetSweeperMiddleware(
+                aggressive=f.street_sweeper_aggressive,
+                keep_recent=f.street_sweeper_keep_recent,
+                backend=backend,
+                model_name=sweeper_model,
+            )
+        )
+
     if f.enable_conversation_branching:
         from bog_agents.middleware.conversation_branch import ConversationBranchMiddleware
 

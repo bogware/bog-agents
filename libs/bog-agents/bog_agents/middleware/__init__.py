@@ -148,6 +148,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SkillsMiddleware": ("skills", "SkillsMiddleware"),
     "SmartApprovalsMiddleware": ("smart_approvals", "SmartApprovalsMiddleware"),
     "SmartContextMiddleware": ("smart_context", "SmartContextMiddleware"),
+    "StreetSweeperMiddleware": ("street_sweeper", "StreetSweeperMiddleware"),
     "SubAgent": ("subagents", "SubAgent"),
     "SubAgentMiddleware": ("subagents", "SubAgentMiddleware"),
     "SummarizationMiddleware": ("summarization", "SummarizationMiddleware"),

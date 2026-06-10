@@ -97,6 +97,24 @@ class TestCanonicalMiddlewareOrder:
         assert "CostTrackerMiddleware" in names
         assert names.index("CostTrackerMiddleware") < names.index("_BogAgentsSummarizationMiddleware")
 
+    def test_street_sweeper_position(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Street sweeper wraps inside CostTracker and outside Summarization.
+
+        It only edits message *content* (never count/order), so it must run
+        before the default SummarizationMiddleware (whose cutoff indices then
+        stay aligned) and before PromptCaching (whose prefix it must not
+        invalidate by running afterward). CostTracker stays outermost so its
+        accounting still observes the pre-sweep request.
+        """
+        names = _capture_middleware_list(
+            monkeypatch,
+            config=FeatureConfig(enable_street_sweeper=True, enable_cost_tracking=True),
+        )
+        assert "StreetSweeperMiddleware" in names
+        assert names.index("CostTrackerMiddleware") < names.index("StreetSweeperMiddleware")
+        assert names.index("StreetSweeperMiddleware") < names.index("_BogAgentsSummarizationMiddleware")
+        assert names.index("StreetSweeperMiddleware") < names.index("AnthropicPromptCachingMiddleware")
+
     def test_feature_middleware_runs_before_default_filesystem(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Optional feature middleware are appended before the default tail.
 

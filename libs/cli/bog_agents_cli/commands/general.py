@@ -18,6 +18,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/sweep",
+            "Street sweeper — continuously prune dead context (whitespace, duplicate/stale tool output) to cut token cost",
+            "sweep street sweeper prune trim context tokens cost compact noise dedupe stale",
+            "general",
+            available=True,
+            subcommands=(
+                ("on|off", "Toggle continuous context pruning"),
+                ("status", "Show state, mode, and session + lifetime tokens/$ saved"),
+                ("log", "Show recent sweep actions"),
+                (
+                    "aggressive on|off",
+                    "Toggle Tier 2 head/tail truncation of large old outputs",
+                ),
+                ("reset", "Zero the session and lifetime savings counters"),
+            ),
+        ),
+        handler_method="_handle_sweep_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/build",
             "Interactive wizard — create skills, prompts, and pipelines step by step",
             "wizard create new template scaffold variablize builder",
