@@ -5305,6 +5305,26 @@ class BogAgentsApp(App):
                 AppMessage("Auto mode OFF. Returning to interactive approval.")
             )
 
+    async def _handle_sweep_command(self, command: str) -> None:
+        """/sweep — toggle and inspect Street Sweeper context pruning.
+
+        Street sweeper mode continuously removes dead weight (ANSI/whitespace,
+        duplicate and stale-read tool outputs, and — when aggressive — large old
+        outputs truncated to head+tail) from the messages sent to the model, with
+        originals offloaded for the `recall_swept` tool. Disabled by default.
+
+        See `sweep_controller.SweepController.handle_sweep` for subcommand semantics.
+
+        Usage: /sweep [on|off|status|log|aggressive on|off]
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli.sweep_controller import get_sweep_controller
+
+        args = command.strip()[len("/sweep") :].strip()
+        controller = get_sweep_controller(self._cwd)
+        output = controller.handle_sweep(args)
+        await self._mount_message(AppMessage(output))
+
     async def _handle_standing_orders_command(self, command: str) -> None:
         """``/standing-orders`` — curated daemon-job catalog.
 

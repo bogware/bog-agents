@@ -46,6 +46,9 @@ class FeatureConfig:
         max_agent_threads: Max concurrent agent threads (default 10).
         enable_smart_context: Enable smart context window management.
         max_context_tokens: Token budget for smart context (default 200 000).
+        enable_street_sweeper: Continuously prune dead context each turn.
+        street_sweeper_aggressive: Enable Tier 2 head/tail truncation of large old outputs.
+        street_sweeper_keep_recent: Trailing messages the sweeper never touches.
         enable_conversation_branching: Enable conversation branching.
         enable_image_input: Enable image input processing.
         enable_browser: Enable browser-agent tools.
@@ -136,6 +139,14 @@ class FeatureConfig:
     max_agent_threads: int = 10
     enable_smart_context: bool = False
     max_context_tokens: int = 200000
+    # Street sweeper — continuous, lossless-first context pruning. Disabled by
+    # default; runs on every model call to strip dead weight (ANSI/whitespace,
+    # duplicate + stale-read tool results, and — when aggressive — head/tail
+    # truncation of large old outputs) from the request the model sees, with
+    # originals offloaded to the backend for `recall_swept`.
+    enable_street_sweeper: bool = False
+    street_sweeper_aggressive: bool = True
+    street_sweeper_keep_recent: int = 6
     enable_conversation_branching: bool = False
     enable_image_input: bool = False
     enable_browser: bool = False

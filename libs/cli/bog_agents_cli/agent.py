@@ -1172,6 +1172,9 @@ def create_cli_agent(
                 for execution
             - `composite_backend`: `CompositeBackend` for file operations
     """
+    # Preserve the original model spec string (used to price street-sweeper
+    # savings) before `model` is resolved to a BaseChatModel instance below.
+    model_spec_str = model if isinstance(model, str) else ""
     if isinstance(model, str):
         from bog_agents_cli.config import create_model as _create_model
 
@@ -1694,6 +1697,20 @@ def create_cli_agent(
         agent_middleware.append(
             BedrockRefreshMiddleware(interactive=sys.stdin.isatty())
         )
+
+    # Street sweeper (opt-in) — attach the per-cwd singleton instance, disabled
+    # by default. `/sweep on` flips it live without a rebuild. Pointing it at the
+    # live composite backend enables offload + the recall_swept tool. Wrapped so
+    # an attach failure can never block agent creation.
+    try:
+        from bog_agents_cli.sweep_controller import get_sweep_controller
+
+        sweeper = get_sweep_controller(effective_cwd or Path.cwd()).middleware
+        sweeper.set_backend(composite_backend)
+        sweeper.set_pricing(model_spec_str)
+        agent_middleware.append(sweeper)
+    except Exception:
+        logger.debug("street sweeper attach failed; skipping", exc_info=True)
 
     # Create the agent
     agent = create_agent(

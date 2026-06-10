@@ -86,6 +86,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SelfImprovingMiddleware": ("bog_agents.middleware.self_improving", "SelfImprovingMiddleware"),
     "SmartApprovalsMiddleware": ("bog_agents.middleware.smart_approvals", "SmartApprovalsMiddleware"),
     "SmartContextMiddleware": ("bog_agents.middleware.smart_context", "SmartContextMiddleware"),
+    "StreetSweeperMiddleware": ("bog_agents.middleware.street_sweeper", "StreetSweeperMiddleware"),
     "SubAgent": ("bog_agents.middleware.subagents", "SubAgent"),
     "SubAgentMiddleware": ("bog_agents.middleware.subagents", "SubAgentMiddleware"),
     "TestGenerationMiddleware": ("bog_agents.middleware.test_generation", "TestGenerationMiddleware"),
