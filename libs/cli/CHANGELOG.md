@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.4...bog-agents-cli==0.9.5) (2026-06-10)
+
+
+### Features
+
+* **sdk,cli:** add street sweeper context-pruning with savings metrics ([#94](https://github.com/bogware/bog-agents/issues/94)) ([0170d2f](https://github.com/bogware/bog-agents/commit/0170d2f5df2e27ff291e7239ee98efab1b4d9f72))
+
 ## [0.9.4](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.3...bog-agents-cli==0.9.4) (2026-06-08)
 
 
