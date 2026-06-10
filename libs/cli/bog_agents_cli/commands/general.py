@@ -27,7 +27,10 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("on|off", "Toggle continuous context pruning"),
                 ("status", "Show state, mode, and session + lifetime tokens/$ saved"),
                 ("log", "Show recent sweep actions"),
-                ("aggressive on|off", "Toggle Tier 2 head/tail truncation of large old outputs"),
+                (
+                    "aggressive on|off",
+                    "Toggle Tier 2 head/tail truncation of large old outputs",
+                ),
                 ("reset", "Zero the session and lifetime savings counters"),
             ),
         ),
