@@ -907,6 +907,14 @@ class BogAgentsApp(App):
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
         self._model_params_override: dict[str, Any] | None = None
+        # Operator mode (judge-model routing) + JTBD session state. The
+        # turn-scoped model/effort overrides are staged by the operator
+        # seam in _handle_user_message and cleared after every turn.
+        self._operator_session: Any | None = None
+        self._operator_turn_model: str | None = None
+        self._operator_turn_effort: str | None = None
+        self._jtbd_pending: Any | None = None
+        self._jtbd_active_spec: Any | None = None
         self._mcp_tool_count = sum(len(s.tools) for s in (mcp_server_info or []))
         self._status_bar: StatusBar | None = None
         self._chat_input: ChatInput | None = None
@@ -2368,9 +2376,11 @@ class BogAgentsApp(App):
             parts.append(team_ctx)
 
         return CLIContext(
-            model=self._model_override,
+            # Operator routing stages a one-turn override that outranks the
+            # session-level /model choice; cleared in _run_agent_task.
+            model=self._operator_turn_model or self._model_override,
             model_params=self._model_params_override or {},
-            effort_level=self._effort_level,
+            effort_level=self._operator_turn_effort or self._effort_level,
             plan_mode=self._plan_mode_enabled,
             system_prompt_append="\n\n".join(parts) if parts else None,
         )
@@ -10392,6 +10402,69 @@ class BogAgentsApp(App):
             logger.exception("/scratch failed")
             await self._mount_message(ErrorMessage(f"/scratch failed: {exc}"))
 
+    async def _handle_operator_command(self, command: str) -> None:
+        """``/operator`` — judge-model prompt routing across model tiers."""
+        from bog_agents_cli.operator_mode import handle_operator_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_operator_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/operator failed")
+            await self._mount_message(ErrorMessage(f"/operator failed: {exc}"))
+
+    async def _handle_butcher_command(self, command: str) -> None:
+        """``/butcher`` — slice a job into foolproof cuts, run on workers."""
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        head = raw_arg.split(" ", 1)[0].lower() if raw_arg else ""
+        if not raw_arg or head in {"list", "show", "config"}:
+            from bog_agents_cli.butcher import handle_butcher_subcommand
+
+            try:
+                await handle_butcher_subcommand(self, raw_arg)
+            except Exception as exc:
+                logger.exception("/butcher failed")
+                await self._mount_message(ErrorMessage(f"/butcher failed: {exc}"))
+            return
+        if self._agent_running:
+            await self._mount_message(
+                ErrorMessage("Cannot start a butcher job while the agent is busy.")
+            )
+            return
+        # Jobs are long-running (plan + N worker slices); run in a worker
+        # so the TUI stays responsive, mirroring normal agent turns.
+        self.run_worker(self._run_butcher_task(raw_arg), exclusive=False)
+
+    async def _run_butcher_task(self, prompt: str) -> None:
+        """Run one butcher job in a background worker."""
+        from bog_agents_cli.butcher import start_butcher_job
+
+        self._agent_running = True
+        try:
+            await start_butcher_job(self, prompt)
+        except Exception as exc:
+            logger.exception("/butcher job failed")
+            await self._mount_message(ErrorMessage(f"/butcher failed: {exc}"))
+        finally:
+            self._agent_running = False
+
+    async def _handle_jtbd_command(self, command: str) -> None:
+        """``/jtbd`` — Jobs To Be Done interview → spec → outcome-driven run."""
+        from bog_agents_cli.jtbd import handle_jtbd_subcommand
+
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        raw_arg = command.strip()[len(prefix) :].strip()
+        try:
+            await handle_jtbd_subcommand(self, raw_arg)
+        except Exception as exc:
+            logger.exception("/jtbd failed")
+            await self._mount_message(ErrorMessage(f"/jtbd failed: {exc}"))
+
     async def _handle_proxy_command(self, command: str) -> None:
         """``/proxy`` — register shell commands as agent tools."""
         from bog_agents_cli.proxy_tools import handle_proxy_subcommand
@@ -13746,6 +13819,78 @@ class BogAgentsApp(App):
         except Exception:
             logger.debug("Mention resolution failed", exc_info=True)
 
+        # JTBD interview answers: when a /jtbd interview is pending, this
+        # message answers it — synthesize the Job Spec and execute against
+        # the outcome brief instead of the raw text. Otherwise, when
+        # operator mode is on, judge the prompt and stage the tier routing.
+        # Both paths are best-effort: any failure proceeds unrouted.
+        if self._jtbd_pending is not None:
+            from bog_agents_cli.jtbd import consume_interview_answers
+
+            await self._set_spinner("Synthesizing Job Spec")
+            try:
+                brief = await consume_interview_answers(self, effective_message)
+            except Exception:
+                logger.exception("JTBD answer consumption failed")
+                brief = None
+            await self._set_spinner("")
+            if brief is not None:
+                effective_message = brief
+        else:
+            operator_decision = None
+            try:
+                from bog_agents_cli.operator_mode import (
+                    apply_operator_routing,
+                    is_emergency_disabled,
+                )
+
+                if not is_emergency_disabled():
+                    session = getattr(self, "_operator_session", None)
+                    pre_active = bool(getattr(session, "active", False))
+                    if session is None or pre_active:
+                        if pre_active:
+                            await self._set_spinner("Operator routing")
+                        operator_decision = await apply_operator_routing(
+                            self, effective_message
+                        )
+                        if pre_active:
+                            await self._set_spinner("")
+            except Exception:
+                logger.exception("Operator routing failed; proceeding unrouted")
+                operator_decision = None
+            if operator_decision is not None:
+                target = (
+                    operator_decision.model
+                    if operator_decision.route == "direct"
+                    else operator_decision.route
+                )
+                reason = (
+                    f" — {operator_decision.reason}" if operator_decision.reason else ""
+                )
+                await self._mount_message(
+                    AppMessage(
+                        f"[dim]operator: {operator_decision.tier} → {target}{reason}[/dim]"
+                    )
+                )
+                if operator_decision.route == "butcher":
+                    if self._agent_running:
+                        await self._mount_message(
+                            ErrorMessage(
+                                "Operator chose butcher, but the agent is busy — "
+                                "retry when the current turn finishes."
+                            )
+                        )
+                        return
+                    self.run_worker(
+                        self._run_butcher_task(effective_message), exclusive=False
+                    )
+                    return
+                if operator_decision.route == "jtbd":
+                    from bog_agents_cli.jtbd import start_jtbd_interview
+
+                    await start_jtbd_interview(self, effective_message)
+                    return
+
         # Scroll to bottom when user sends a new message
         try:
             chat = self.query_one("#chat", VerticalScroll)
@@ -13983,6 +14128,9 @@ class BogAgentsApp(App):
         finally:
             # Clean up loading widget and agent state
             await self._cleanup_agent_task()
+            # Operator routing is per-turn; never let it leak into the next.
+            self._operator_turn_model = None
+            self._operator_turn_effort = None
 
         # Accumulate stats across all turns; printed once at session end
         if isinstance(turn_stats, SessionStats):

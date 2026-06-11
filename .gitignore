@@ -242,3 +242,7 @@ tmp-*
 .workday-*
 *.daemon.log
 .drive-artifacts/
+
+# Butcher job dirs and JTBD specs (per-run agent artifacts, never source)
+.bog-agents/butcher/
+.bog-agents/jtbd/
