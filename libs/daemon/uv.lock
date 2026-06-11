@@ -287,7 +287,7 @@ wheels = [
 
 [[package]]
 name = "bog-agents"
-version = "0.9.5"
+version = "0.9.6"
 source = { editable = "../bog-agents" }
 dependencies = [
     { name = "anyio" },
@@ -396,7 +396,7 @@ test = [
 
 [[package]]
 name = "bog-agents-daemon"
-version = "0.9.5"
+version = "0.9.6"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
