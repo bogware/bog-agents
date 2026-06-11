@@ -415,7 +415,7 @@ def render_daemon_job_yaml(*, cron: str = "0 3 * * *", working_dir: str = ".") -
 
 async def handle_dream_subcommand(app: object, raw_arg: str) -> None:
     """Dispatch ``/dream <sub>`` subcommands."""
-    from bog_agents_cli.widgets.chat_messages import AppMessage, ErrorMessage
+    from bog_agents_cli.widgets.messages import AppMessage, ErrorMessage
 
     arg = raw_arg.strip()
     head, _, rest = arg.partition(" ")

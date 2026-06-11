@@ -165,7 +165,7 @@ def collect_transcript(
     Returns:
         A list of :class:`TranscriptEntry`, oldest first.
     """
-    from bog_agents_cli.widgets.chat_messages import (
+    from bog_agents_cli.widgets.messages import (
         AppMessage,
         ErrorMessage,
         UserMessage,

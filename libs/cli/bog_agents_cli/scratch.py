@@ -375,7 +375,7 @@ async def handle_scratch_subcommand(app: object, raw_arg: str) -> None:
     """Dispatch ``/scratch <sub>`` subcommands."""
     import asyncio
 
-    from bog_agents_cli.widgets.chat_messages import AppMessage, ErrorMessage
+    from bog_agents_cli.widgets.messages import AppMessage, ErrorMessage
 
     arg = raw_arg.strip()
     head, _, rest = arg.partition(" ")
