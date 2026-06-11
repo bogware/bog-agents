@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.5...bog-agents-cli==0.9.6) (2026-06-11)
+
+
+### Features
+
+* **cli:** add operator routing, butcher decomposition, and jtbd workflow ([#97](https://github.com/bogware/bog-agents/issues/97)) ([4f91594](https://github.com/bogware/bog-agents/commit/4f915941b5decf708fc2dab1c6de26509db984d9))
+
 ## [0.9.5](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.4...bog-agents-cli==0.9.5) (2026-06-10)
 
 
