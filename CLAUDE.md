@@ -50,9 +50,11 @@ make lint
 # Format
 make format
 
-# From repo root: lint/format all packages
+# From repo root: lint/format all packages, refresh/verify lockfiles
 make lint
 make format
+make lock
+make lock-check
 ```
 
 SDK type checking: `uv run --all-groups ty check bog_agents` (from `libs/bog-agents/`)
@@ -63,13 +65,15 @@ SDK type checking: `uv run --all-groups ty check bog_agents` (from `libs/bog-age
 
 The entry point is `create_agent()` which returns a compiled LangGraph graph. The agent ships with base tools (filesystem, shell, planning, sub-agents) and a composable **middleware stack**.
 
-**Middleware** (`bog_agents/middleware/`) is the primary extension mechanism. ~80 middleware implementations handle concerns like git tools, repo mapping, cost tracking, checkpointing, plan mode, auto-quality checks, context packing, summarization, memory, skills, and the **Expert Mode** rule engine (`expert_rules.py` + `expert_engine/`). All middleware inherits from `AgentMiddleware`.
+**Middleware** (`bog_agents/middleware/`) is the primary extension mechanism. ~90 middleware implementations handle concerns like git tools, repo mapping, cost tracking, checkpointing, plan mode, auto-quality checks, context packing, summarization, street-sweeper context pruning, memory, skills, and the **Expert Mode** rule engine (`expert_rules.py` + `expert_engine/`). All middleware inherits from `AgentMiddleware`.
 
 **Tool bundles vs. middleware** (W4, Wave W): a *bundle* is a free function in `bog_agents/tools/bundles.py` that returns `list[BaseTool]` — the right shape for "middleware whose only job is delivering tools". `git_tools_bundle`, `multi_edit_tool`, and `read_many_files_tool` are the canonical examples. New tool-only features should ship as bundles, not middleware. The corresponding middleware classes (`GitToolsMiddleware`, etc.) are kept as thin compatibility shims that delegate to the bundles.
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
 **Middleware ordering** (Wave W): the order of middleware in `graph.py` is load-bearing for correctness (CostTracker must wrap before Summarization, Summarization must run before PromptCaching, etc.). The canonical order is locked by `tests/unit_tests/test_middleware_canonical_order.py` — when an intentional reorder is needed, audit the affected interactions and update the test assertions in the same commit. Hard ordering constraints (e.g. ResultSynthesis requires ParallelWorktree earlier in the list) are also declared via `requires: ClassVar` and enforced at build time by `_validate_middleware_ordering`.
+
+**Street Sweeper (`street_sweeper.py`)** — continuous, lossless-first context pruning that runs on *every* model call (vs. `SummarizationMiddleware`'s one-shot compaction at ~85% full). It is a **view transformation**: canonical history stays untouched in LangGraph state; the sweeper reshapes only the per-call request via `request.override(messages=...)`, offloading dropped content to the backend (recoverable via the `recall_swept` tool). Invariant to preserve when touching it: the sweep **never changes message count or order** — only message text — which is what keeps it composable with `SummarizationMiddleware` (cutoff indices stay aligned) and `AnthropicPromptCachingMiddleware` (stable prefix).
 
 **Lazy loading**: Both `bog_agents/__init__.py` AND `bog_agents/middleware/__init__.py` use `_LAZY_IMPORTS` dicts and `__getattr__` so `import bog_agents.middleware` does NOT eagerly pull every submodule. Follow this pattern when adding new middleware: append to `_LAZY_IMPORTS`, do NOT add a top-level `from … import …` line.
 
@@ -86,10 +90,15 @@ Built with Textual. Key patterns:
 - Heavy imports deferred to runtime (never at module level in entry points)
 - Help screen hand-maintained in `ui.show_help()` with drift-detection test against argparse
 - SDK version constraint in `libs/cli/pyproject.toml` is currently `bog-agents>=0.7.0,<1.0.0` (range, not exact pin). When this is tightened back to `==`, this paragraph should be updated and a CI smoketest added that the latest SDK still satisfies the constraint.
+- **Headless command surface** (`headless_commands.py`): `bog-agents command "/help"` runs a curated subset of slash commands without the TUI. Headless handlers are standalone functions `(args: str) -> HeadlessResult` registered in `HEADLESS_COMMANDS` — when adding an informational/config slash command, consider registering a headless twin.
+
+**Prompt-routing family** — three composable modes that intercept a plain user prompt in `_handle_user_message` (after @-mention resolution, before the agent worker launches): (1) **Operator** (`operator_mode.py`, `/operator`) — a judge model classifies each prompt `easy/medium/hard/max` and stages a one-turn model+effort override via `app._operator_turn_model` / `_operator_turn_effort` (consumed by `_build_cli_context`, cleared in `_run_agent_task`'s finally); presets (anthropic default, bedrock, local, hybrid) + user presets live in `~/.bog-agents/operator.toml`; the judge may also escalate a prompt to butcher or jtbd. Judge failures must never block a turn — every path falls through to the user's active model. (2) **Butcher** (`butcher.py`, `/butcher`) — a strong model slices a job into self-contained instruction files under `.bog-agents/butcher/<job-id>/` (manifest.json + slice-NN.md + report.md), then weak workers (sidecar-style async model→tool loop with scoped write tools) execute slices sequentially in-place, each verified by the butcher with a retry→escalation ladder. (3) **JTBD** (`jtbd.py`, `/jtbd`) — interview → Job Spec artifact (`.bog-agents/jtbd/<id>/job-spec.md`) → outcome-driven execution brief → outcome verification (`/jtbd verify`). All three are pure-logic modules with injected `invoke` callables; chat widgets import from `bog_agents_cli.widgets.messages` (NOT `widgets.chat_messages`, which never existed).
+
+**Dreamscape (`libs/cli/bog_agents_cli/dreamscape/`)** — agent lifecycle (Awake/Idle/Dormant/Dreaming/Imagining), dormancy-triggered dream generation, imagination injection, and two-tier laws (`.bog-agents/laws.md` hard-reject vs `.bog-agents/constitution.md` soft/log-only). Two invariants: (1) opt-in by design — without `~/.bog-agents/dreamscape.toml` setting `enabled = true`, every dreamscape middleware must be a no-op; (2) dreamscape errors must never reach the user's prompt path — fall through to underlying agent behavior (see the `_safe` pattern in each middleware). `dreamscape/config.py:load_dreamscape_config()` is the single source of truth for toggles. Long-term effectiveness snapshots live in `docs/dreamscape-runs/` — consult them before changing dream/imagination behavior.
 
 ### Daemon (`libs/daemon/`)
 
-A long-running FastAPI service that fires agents on cron, interval, file-change, webhook, or git-push triggers and dispatches results to log, stdout, file, Slack, webhook, email, or GitHub-comment targets. Currently the healthiest satellite (v0.8.7, Beta) — keep its 6 test files passing when touching the SDK's `create_agent` signature.
+A long-running FastAPI service that fires agents on cron, interval, file-change, webhook, or git-push triggers and dispatches results to log, stdout, file, Slack, webhook, email, or GitHub-comment targets. Currently the healthiest satellite — keep its tests (flat `tests/` directory, no unit/integration split) passing when touching the SDK's `create_agent` signature.
 
 ## Code Conventions
 
