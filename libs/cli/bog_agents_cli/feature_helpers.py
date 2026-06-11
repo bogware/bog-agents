@@ -23,7 +23,7 @@ import os
 import subprocess  # noqa: S404 — only used for read-only git introspection
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -108,6 +108,34 @@ def _normalise_response(response: object) -> str:
     return text
 
 
+def extract_json_object(text: str) -> dict[str, Any] | None:
+    """Best-effort: pull one JSON object out of a model reply.
+
+    Accepts strict JSON or an object embedded in surrounding prose (models
+    love to add a preamble despite "STRICT JSON only"). Returns None when
+    nothing parseable is found — callers decide their own fallback.
+    """
+    import json
+    import re
+
+    body = text.strip()
+    try:
+        loaded = json.loads(body)
+        if isinstance(loaded, dict):
+            return loaded
+    except (json.JSONDecodeError, ValueError):
+        pass
+    match = re.search(r"\{.*\}", body, flags=re.DOTALL)
+    if match:
+        try:
+            loaded = json.loads(match.group(0))
+            if isinstance(loaded, dict):
+                return loaded
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return None
+
+
 def resolve_active_model_spec(app: object) -> str:
     """Return the model spec the user would naturally consider 'active'.
 
@@ -165,7 +193,7 @@ def collect_transcript(
     Returns:
         A list of :class:`TranscriptEntry`, oldest first.
     """
-    from bog_agents_cli.widgets.chat_messages import (
+    from bog_agents_cli.widgets.messages import (
         AppMessage,
         ErrorMessage,
         UserMessage,

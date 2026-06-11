@@ -65,6 +65,25 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/butcher",
+            "Slice a big job into foolproof vertical cuts and run them on weak worker models",
+            "slice decompose vertical worker local ollama cheap delegate split carve",
+            "agent",
+            available=True,
+            subcommands=(
+                (
+                    "<job>",
+                    "Plan + execute the job (slices run sequentially, each verified)",
+                ),
+                ("list", "Show job directories under .bog-agents/butcher/"),
+                ("show", "Show a job's report (usage: /butcher show <job-id>)"),
+                ("config", "Show butcher/worker model configuration"),
+            ),
+        ),
+        handler_method="_handle_butcher_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/dashboard",
             "Show the multi-agent dashboard with status and costs",
             "agents monitor panel",
@@ -82,6 +101,50 @@ COMMANDS: tuple[SlashCommand, ...] = (
             available=True,
         ),
         handler_method="_handle_jobs_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/jtbd",
+            "Jobs To Be Done — uncover the real job, execute against measurable outcomes",
+            "jobs job-to-be-done outcome interview hire fire progress spec goal why",
+            "agent",
+            available=True,
+            subcommands=(
+                (
+                    "<request>",
+                    "Start the interview → Job Spec → outcome-driven execution",
+                ),
+                ("status", "Show the pending interview or active Job Spec"),
+                ("verify", "Score the session's work against the active Job Spec"),
+                ("cancel", "Abandon a pending interview"),
+            ),
+        ),
+        handler_method="_handle_jtbd_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/operator",
+            "Judge each prompt with an operator model and route it to easy/medium/hard/max tiers",
+            "route routing judge dispatch tier model cascade preset local bedrock cheap",
+            "agent",
+            available=True,
+            subcommands=(
+                ("on", "Enable routing (reloads operator.toml)"),
+                ("off", "Disable routing"),
+                ("status", "Show tier map and recent routing decisions"),
+                (
+                    "preset",
+                    "Switch preset (usage: /operator preset <anthropic|bedrock|local|hybrid|…>)",
+                ),
+                (
+                    "force",
+                    "Force the next prompt's tier (usage: /operator force <tier>)",
+                ),
+                ("test", "Dry-run the judge on a prompt without an agent turn"),
+                ("config", "Show (and bootstrap) ~/.bog-agents/operator.toml"),
+            ),
+        ),
+        handler_method="_handle_operator_command",
     ),
     SlashCommand(
         spec=SlashCommandSpec(
