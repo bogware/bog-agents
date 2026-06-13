@@ -421,7 +421,11 @@ class SharedMemoryMiddleware(AgentMiddleware):
         try:
             from bog_agents.middleware._utils import append_to_system_message
 
-            return append_to_system_message(request, "\n".join(lines))  # type: ignore[return-value]
+            return request.override(
+                system_message=append_to_system_message(
+                    request.system_message, "\n".join(lines)
+                )
+            )
         except Exception:
             logger.exception("SharedMemoryMiddleware: append_to_system_message failed")
             return request

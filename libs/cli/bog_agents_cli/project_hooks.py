@@ -84,6 +84,58 @@ def _discover_hooks_dir(project_root: Path) -> Path | None:
     return candidate if candidate.is_dir() else None
 
 
+# Env escape hatch for CI / headless / containers where a human cannot
+# answer a trust prompt but the environment is known-good.
+_TRUST_ENV = "BOG_AGENTS_TRUST_PROJECT_HOOKS"
+
+# Remember which (root, fingerprint) pairs we've already warned about so an
+# untrusted project doesn't spam the log on every prompt/tool call.
+_warned_untrusted: set[tuple[str, str]] = set()
+
+
+def hooks_fingerprint(project_root: Path) -> str:
+    """Fingerprint every hook script under ``.bog-agents/hooks/**``.
+
+    Reuses the MCP-trust fingerprint so any added/edited/removed hook script
+    changes the fingerprint and forces a re-prompt.
+    """
+    from bog_agents_cli.mcp_trust import compute_config_fingerprint
+
+    base = _discover_hooks_dir(project_root)
+    if base is None:
+        return compute_config_fingerprint([])
+    scripts = sorted(p for p in base.rglob("*") if p.is_file() and not p.is_symlink())
+    return compute_config_fingerprint(scripts)
+
+
+def is_hooks_execution_allowed(project_root: Path) -> bool:
+    """Return True if this project's hook scripts are trusted to execute.
+
+    Deny-by-default (REVIEW.md v2 P0-8): hooks in a freshly-cloned repo must
+    NOT run until the user explicitly trusts them. The ``BOG_AGENTS_TRUST_PROJECT_HOOKS``
+    env var ("1"/"true"/"yes"/"on") is an opt-in escape hatch for CI/headless.
+    """
+    if os.environ.get(_TRUST_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    from bog_agents_cli.mcp_trust import is_project_hooks_trusted
+
+    root = str(project_root.resolve())
+    fingerprint = hooks_fingerprint(project_root)
+    if is_project_hooks_trusted(root, fingerprint):
+        return True
+    key = (root, fingerprint)
+    if key not in _warned_untrusted:
+        _warned_untrusted.add(key)
+        logger.warning(
+            "Project-local hooks under %s/.bog-agents/hooks are NOT trusted and "
+            "were skipped (they run arbitrary code). Review them, then set %s=1 "
+            "to enable for this project.",
+            root,
+            _TRUST_ENV,
+        )
+    return False
+
+
 def _discover_event_dir(project_root: Path, event: str) -> Path | None:
     """Locate the directory of hook scripts for ``event``, if any."""
     base = _discover_hooks_dir(project_root)
@@ -248,6 +300,10 @@ async def run_hooks(
 
     scripts = _list_event_scripts(event_dir)
     if not scripts:
+        return HookDecision()
+
+    # Trust gate (P0-8): never execute hook scripts from an untrusted project.
+    if not is_hooks_execution_allowed(root):
         return HookDecision()
 
     current_payload = {"event": event, **payload}

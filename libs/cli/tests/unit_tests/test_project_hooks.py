@@ -14,10 +14,21 @@ from bog_agents_cli.project_hooks import (
     _discover_event_dir,
     _discover_hooks_dir,
     _list_event_scripts,
+    hooks_fingerprint,
+    is_hooks_execution_allowed,
     run_hooks,
 )
 
 WIN = sys.platform == "win32"
+
+
+@pytest.fixture(autouse=True)
+def _trust_hooks_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behavioral tests below exercise hook *execution*, not the trust gate;
+    opt in via the env escape hatch so the deny-by-default gate (P0-8) doesn't
+    skip them. The dedicated trust-gate tests clear this explicitly.
+    """
+    monkeypatch.setenv("BOG_AGENTS_TRUST_PROJECT_HOOKS", "1")
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -130,3 +141,86 @@ async def test_run_hooks_uses_bog_agents_project_root_env_for_default_root(
     decision = await run_hooks("pre-tool", {"x": 1})
     # Empty project — no hooks registered.
     assert decision.allowed
+
+
+# ---------------------------------------------------------------------------
+# Trust gate (REVIEW.md v2 P0-8) — hooks from an untrusted cloned repo must
+# NOT execute until the user trusts them.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(WIN, reason="POSIX shebang required for this test")
+async def test_untrusted_project_hooks_do_not_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clear the autouse trust env so the real deny-by-default gate applies.
+    monkeypatch.delenv("BOG_AGENTS_TRUST_PROJECT_HOOKS", raising=False)
+    # Point the trust store at an isolated, empty config.
+    from bog_agents_cli import mcp_trust
+
+    monkeypatch.setattr(mcp_trust, "_DEFAULT_CONFIG_PATH", tmp_path / "trust.toml")
+
+    base = tmp_path / ".bog-agents" / "hooks" / "pre-tool"
+    base.mkdir(parents=True)
+    _write_executable(
+        base / "01-deny.sh",
+        '#!/usr/bin/env bash\necho \'{"action":"block","reason":"evil"}\'\n',
+    )
+    # The malicious block hook must be SKIPPED (allowed passthrough), not run.
+    decision = await run_hooks(
+        "pre-tool", {"tool_name": "execute"}, project_root=tmp_path
+    )
+    assert decision.blocked is False
+    assert decision.allowed
+
+
+@pytest.mark.skipif(WIN, reason="POSIX shebang required for this test")
+async def test_trusted_project_hooks_execute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOG_AGENTS_TRUST_PROJECT_HOOKS", raising=False)
+    from bog_agents_cli import mcp_trust
+
+    cfg = tmp_path / "trust.toml"
+    monkeypatch.setattr(mcp_trust, "_DEFAULT_CONFIG_PATH", cfg)
+
+    base = tmp_path / ".bog-agents" / "hooks" / "pre-tool"
+    base.mkdir(parents=True)
+    _write_executable(
+        base / "01-deny.sh",
+        '#!/usr/bin/env bash\necho \'{"action":"block","reason":"policy"}\'\n',
+    )
+    # Trust the project at its current hook fingerprint, then the hook runs.
+    fp = hooks_fingerprint(tmp_path)
+    root = str(tmp_path.resolve())  # noqa: ASYNC240 — tmp_path in a test, not real async I/O
+    assert mcp_trust.trust_project_hooks(root, fp, config_path=cfg)
+    assert is_hooks_execution_allowed(tmp_path)
+    decision = await run_hooks(
+        "pre-tool", {"tool_name": "execute"}, project_root=tmp_path
+    )
+    assert decision.blocked is True
+    assert "policy" in decision.reason
+
+
+@pytest.mark.skipif(WIN, reason="POSIX shebang required for this test")
+async def test_editing_a_hook_revokes_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BOG_AGENTS_TRUST_PROJECT_HOOKS", raising=False)
+    from bog_agents_cli import mcp_trust
+
+    cfg = tmp_path / "trust.toml"
+    monkeypatch.setattr(mcp_trust, "_DEFAULT_CONFIG_PATH", cfg)
+
+    base = tmp_path / ".bog-agents" / "hooks" / "pre-tool"
+    base.mkdir(parents=True)
+    script = base / "01.sh"
+    _write_executable(script, '#!/usr/bin/env bash\necho \'{"action":"allow"}\'\n')
+    root = str(tmp_path.resolve())  # noqa: ASYNC240 — tmp_path in a test, not real async I/O
+    mcp_trust.trust_project_hooks(root, hooks_fingerprint(tmp_path), config_path=cfg)
+    assert is_hooks_execution_allowed(tmp_path)
+    # Tamper with the script — trust must no longer hold.
+    _write_executable(
+        script, '#!/usr/bin/env bash\necho \'{"action":"block","reason":"x"}\'\n'
+    )
+    assert is_hooks_execution_allowed(tmp_path) is False

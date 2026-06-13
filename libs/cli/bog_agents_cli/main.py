@@ -1798,12 +1798,12 @@ def cli_main() -> None:
 
             model_spec = args.default_model
             # Auto-detect provider for bare model names
-            from bog_agents_cli.config import detectprovider
+            from bog_agents_cli.config import detect_provider
             from bog_agents_cli.model_config import ModelSpec
 
             parsed = ModelSpec.try_parse(model_spec)
             if not parsed:
-                provider = detectprovider(model_spec)
+                provider = detect_provider(model_spec)
                 if provider:
                     model_spec = f"{provider}:{model_spec}"
 
@@ -1946,7 +1946,7 @@ def cli_main() -> None:
             # after the agent is already running.
             model_arg = getattr(args, "model", None)
             try:
-                from bog_agents_cli.config import detectprovider
+                from bog_agents_cli.config import detect_provider
                 from bog_agents_cli.model_config import (
                     PROVIDER_API_KEY_ENV,
                     ModelConfig,
@@ -1960,7 +1960,7 @@ def cli_main() -> None:
                     if ":" in spec_for_creds:
                         provider = spec_for_creds.split(":", 1)[0].lower()
                     else:
-                        provider = (detectprovider(spec_for_creds) or "").lower()
+                        provider = (detect_provider(spec_for_creds) or "").lower()
                     env_var = PROVIDER_API_KEY_ENV.get(provider)
                     # Local providers (ollama) don't need an API key; bedrock/
                     # vertexai use other auth flows. Skip the simple env-var
