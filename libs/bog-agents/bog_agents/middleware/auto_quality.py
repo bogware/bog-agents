@@ -343,7 +343,7 @@ class AutoQualityMiddleware(AgentMiddleware[AutoQualityState, ContextT, Response
                 info += f"\nLint: `{self._lint_command}`"
             if self._test_command:
                 info += f"\nTest: `{self._test_command}`"
-            request = append_to_system_message(request, info)
+            request = request.override(system_message=append_to_system_message(request.system_message, info))
 
         return call_next(request)
 
@@ -361,6 +361,6 @@ class AutoQualityMiddleware(AgentMiddleware[AutoQualityState, ContextT, Response
                 info += f"\nLint: `{self._lint_command}`"
             if self._test_command:
                 info += f"\nTest: `{self._test_command}`"
-            request = append_to_system_message(request, info)
+            request = request.override(system_message=append_to_system_message(request.system_message, info))
 
         return await call_next(request)

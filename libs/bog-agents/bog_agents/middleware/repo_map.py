@@ -633,7 +633,7 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
         call_next: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         repo_map = self._truncate_for_context(self._get_repo_map())
-        request = append_to_system_message(request, f"\n\n## Repository Map\n\n{repo_map}")
+        request = request.override(system_message=append_to_system_message(request.system_message, f"\n\n## Repository Map\n\n{repo_map}"))
         return call_next(request)
 
     async def awrap_model_call(
@@ -643,5 +643,5 @@ class RepoMapMiddleware(AgentMiddleware[RepoMapState, ContextT, ResponseT]):
     ) -> ModelResponse:
         repo_map = await asyncio.to_thread(self._get_repo_map)
         repo_map = self._truncate_for_context(repo_map)
-        request = append_to_system_message(request, f"\n\n## Repository Map\n\n{repo_map}")
+        request = request.override(system_message=append_to_system_message(request.system_message, f"\n\n## Repository Map\n\n{repo_map}"))
         return await call_next(request)

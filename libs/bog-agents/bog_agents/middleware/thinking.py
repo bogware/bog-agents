@@ -257,7 +257,19 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         Returns:
             Model name string, or empty string if not found.
         """
-        # Try common attributes
+        # request.model is a BaseChatModel instance, not a string; resolve its
+        # provider:model identifier via the SDK helper. Fall back to any string
+        # attribute for stub models used in tests.
+        model = getattr(request, "model", None)
+        if model is not None and not isinstance(model, str):
+            from bog_agents._models import get_model_identifier
+
+            try:
+                identifier = get_model_identifier(model)
+            except Exception:
+                identifier = None
+            if identifier:
+                return identifier
         for attr in ("model_name", "model", "_model_name"):
             val = getattr(request, attr, None)
             if isinstance(val, str):
@@ -289,11 +301,11 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
 
         if _model_supports_native_thinking(model_name):
             # Attempt to bind native thinking params to the model in the request
-            if hasattr(request, "model") and request.model is not None:
-                request = request.model_copy(update={"model": self._bind_thinking_params(request.model, model_name)})
+            if getattr(request, "model", None) is not None:
+                request = request.override(model=self._bind_thinking_params(request.model, model_name))
         else:
             # Fallback: chain-of-thought system prompt injection
-            request = append_to_system_message(request, self._fallback_prompt)
+            request = request.override(system_message=append_to_system_message(request.system_message, self._fallback_prompt))
 
         return call_next(request)
 
@@ -317,9 +329,9 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         model_name = self._get_model_name(request)
 
         if _model_supports_native_thinking(model_name):
-            if hasattr(request, "model") and request.model is not None:
-                request = request.model_copy(update={"model": self._bind_thinking_params(request.model, model_name)})
+            if getattr(request, "model", None) is not None:
+                request = request.override(model=self._bind_thinking_params(request.model, model_name))
         else:
-            request = append_to_system_message(request, self._fallback_prompt)
+            request = request.override(system_message=append_to_system_message(request.system_message, self._fallback_prompt))
 
         return await call_next(request)

@@ -242,12 +242,11 @@ class HotReloadSkillsMiddleware(AgentMiddleware):
         """Number of watched directories."""
         return len(self.watch_dirs)
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Check for skill changes before each model call."""
         self.check_for_changes()
-        return await call_next(request, runtime)
+        return await call_next(request)

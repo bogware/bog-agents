@@ -425,12 +425,11 @@ class OfflineModeMiddleware(AgentMiddleware):
 
         return "\n".join(lines)
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Refresh status and pass through model calls."""
         self._refresh_status()
-        return await call_next(request, runtime)
+        return await call_next(request)

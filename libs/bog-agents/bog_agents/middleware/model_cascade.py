@@ -395,11 +395,10 @@ class ModelCascadeMiddleware(AgentMiddleware):
         avg_actual = sum(actual_costs) / len(actual_costs)
         return max(0.0, (1.0 - avg_actual / frontier_cost) * 100)
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Pass through — routing decisions are made at the caller level."""
-        return await call_next(request, runtime)
+        return await call_next(request)

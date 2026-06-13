@@ -90,13 +90,13 @@ class TestRetryMiddleware:
         mw = ProviderRetryMiddleware(max_attempts=3, initial_delay_s=0.001, max_delay_s=0.01)
         attempts = {"count": 0}
 
-        async def call_next(_request: Any, _runtime: Any) -> str:
+        async def call_next(_request: Any) -> str:
             attempts["count"] += 1
             if attempts["count"] < 2:
                 raise _FakeAPITimeout
             return "ok"
 
-        result = await mw.awrap_model_call(object(), call_next, object())
+        result = await mw.awrap_model_call(object(), call_next)
         assert result == "ok"
         assert attempts["count"] == 2
 
@@ -104,56 +104,56 @@ class TestRetryMiddleware:
         mw = ProviderRetryMiddleware(max_attempts=5, initial_delay_s=0.001)
         attempts = {"count": 0}
 
-        async def call_next(_request: Any, _runtime: Any) -> str:
+        async def call_next(_request: Any) -> str:
             attempts["count"] += 1
             msg = "bad key"
             raise _FakeAuthError(msg)
 
         with pytest.raises(_FakeAuthError):
-            await mw.awrap_model_call(object(), call_next, object())
+            await mw.awrap_model_call(object(), call_next)
         assert attempts["count"] == 1
 
     async def test_exhausts_attempts_then_raises(self):
         mw = ProviderRetryMiddleware(max_attempts=3, initial_delay_s=0.001, max_delay_s=0.01)
         attempts = {"count": 0}
 
-        async def call_next(_request: Any, _runtime: Any) -> str:
+        async def call_next(_request: Any) -> str:
             attempts["count"] += 1
             raise _FakeAPITimeout
 
         with pytest.raises(_FakeAPITimeout):
-            await mw.awrap_model_call(object(), call_next, object())
+            await mw.awrap_model_call(object(), call_next)
         assert attempts["count"] == 3
 
     async def test_keyboard_interrupt_passes_through(self):
         mw = ProviderRetryMiddleware(max_attempts=5, initial_delay_s=0.001)
 
-        async def call_next(_request: Any, _runtime: Any) -> str:
+        async def call_next(_request: Any) -> str:
             raise KeyboardInterrupt
 
         with pytest.raises(KeyboardInterrupt):
-            await mw.awrap_model_call(object(), call_next, object())
+            await mw.awrap_model_call(object(), call_next)
 
     async def test_cancelled_error_passes_through(self):
         mw = ProviderRetryMiddleware(max_attempts=5, initial_delay_s=0.001)
 
-        async def call_next(_request: Any, _runtime: Any) -> str:
+        async def call_next(_request: Any) -> str:
             raise asyncio.CancelledError
 
         with pytest.raises(asyncio.CancelledError):
-            await mw.awrap_model_call(object(), call_next, object())
+            await mw.awrap_model_call(object(), call_next)
 
     def test_sync_path_retries(self):
         mw = ProviderRetryMiddleware(max_attempts=3, initial_delay_s=0.001, max_delay_s=0.01)
         attempts = {"count": 0}
 
-        def call_next(_request: Any, _runtime: Any) -> str:
+        def call_next(_request: Any) -> str:
             attempts["count"] += 1
             if attempts["count"] < 2:
                 raise _FakeAPITimeout
             return "ok"
 
-        result = mw.wrap_model_call(object(), call_next, object())
+        result = mw.wrap_model_call(object(), call_next)
         assert result == "ok"
         assert attempts["count"] == 2
 

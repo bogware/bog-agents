@@ -410,14 +410,13 @@ class SelfImprovingMiddleware(AgentMiddleware):
         """
         return generate_improvement_prompt(self.record)
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Track model calls and increment turn count."""
         if self.current_metrics:
             self.current_metrics.model_calls += 1
             self.current_metrics.total_turns += 1
-        return await call_next(request, runtime)
+        return await call_next(request)

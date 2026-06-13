@@ -498,11 +498,10 @@ class HttpHooksMiddleware(AgentMiddleware):
         tasks = [fire_webhook(ep, payload) for ep in endpoints]
         return list(await asyncio.gather(*tasks, return_exceptions=False))
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Wrap model calls with pre/post webhook events."""
         await self._fire_event(
@@ -511,7 +510,7 @@ class HttpHooksMiddleware(AgentMiddleware):
         )
 
         try:
-            response = await call_next(request, runtime)
+            response = await call_next(request)
         except Exception as exc:
             await self._fire_event(
                 WebhookEvent.ON_ERROR,
