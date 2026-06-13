@@ -178,7 +178,13 @@ class TestMiddlewareIntegration:
             def read(self) -> bytes:
                 return b"hello"
 
-        with patch("urllib.request.urlopen", return_value=_FakeResponse()):
+        # web_fetch now routes through a redirect-revalidating opener
+        # (build_opener().open()), so patch that rather than urlopen.
+        class _FakeOpener:
+            def open(self, _req, timeout=30):  # noqa: ANN001, ANN003, ARG002
+                return _FakeResponse()
+
+        with patch("urllib.request.build_opener", return_value=_FakeOpener()):
             result = fn(None, url="http://127.0.0.1:8000/health")  # type: ignore[arg-type]
         assert "Error" not in result
         assert "hello" in result

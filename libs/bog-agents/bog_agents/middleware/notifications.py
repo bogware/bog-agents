@@ -11,6 +11,7 @@ Feature #49: Command palette.
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
 import time
@@ -79,25 +80,33 @@ def send_desktop_notification(title: str, message: str) -> bool:
             )
             return True
         if system == "Darwin":
-            script = f'display notification "{message}" with title "{title}"'
+            # Pass title/message as argv to a STATIC script — never interpolate
+            # into the AppleScript source, or a `"` in the text could break out
+            # and run `do shell script "..."`. (REVIEW.md v2 P1-16.)
+            static_script = "on run argv\n  display notification (item 1 of argv) with title (item 2 of argv)\nend run"
             subprocess.run(
-                ["osascript", "-e", script],
+                ["osascript", "-e", static_script, message, title],
                 timeout=5,
                 check=False,
             )
             return True
         if system == "Windows":
-            # PowerShell notification
+            # Pass values via the environment and reference them with $env: so
+            # PowerShell never parses the text as code, and XML-escape them so
+            # they can't break the toast template either. (REVIEW.md v2 P1-16.)
             ps_script = (
-                f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
-                f"ContentType = WindowsRuntime] | Out-Null; "
-                f'$template = "<toast><visual><binding template=\\"ToastText02\\"><text id=\\"1\\">{title}</text>'
-                f'<text id=\\"2\\">{message}</text></binding></visual></toast>"'
+                "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
+                "ContentType = WindowsRuntime] | Out-Null; "
+                "$t = [System.Security.SecurityElement]::Escape($env:BOG_NOTIFY_TITLE); "
+                "$m = [System.Security.SecurityElement]::Escape($env:BOG_NOTIFY_MESSAGE); "
+                "$template = \"<toast><visual><binding template='ToastText02'>"
+                "<text id='1'>$t</text><text id='2'>$m</text></binding></visual></toast>\""
             )
             subprocess.run(
                 ["powershell", "-Command", ps_script],
                 timeout=5,
                 check=False,
+                env={**os.environ, "BOG_NOTIFY_TITLE": title, "BOG_NOTIFY_MESSAGE": message},
             )
             return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
