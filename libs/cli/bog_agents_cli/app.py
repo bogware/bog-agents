@@ -6946,7 +6946,11 @@ class BogAgentsApp(App):
         if spec.description:
             prompt_text += f" — {spec.description}"
         if spec.type == "secret":
-            prompt_text += "  (secret — kept in memory only, never saved)"
+            # Be honest: the value is substituted into the prompt and is
+            # therefore written into the conversation transcript on disk.
+            # (REVIEW.md v2 P1-28 — the old "kept in memory only, never
+            # saved" text was a false security promise.)
+            prompt_text += "  (secret — will be substituted into the prompt and saved in the transcript)"
         if spec.default is not None and spec.type != "secret":
             prompt_text += f"  [default: {spec.default}]"
         question: dict[str, Any] = {"question": prompt_text, "type": "text"}
