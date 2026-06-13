@@ -135,7 +135,7 @@ class FeatureConfig:
     # Advanced agent features
     enable_worktree: bool = False
     enable_parallel_worktree: bool = False
-    enable_multi_agent: bool = False
+    enable_multi_agent: bool = False  # DEPRECATED no-op: orchestrator module removed in V1 (REVIEW.md v2 P1-1)
     max_agent_threads: int = 10
     enable_smart_context: bool = False
     max_context_tokens: int = 200000

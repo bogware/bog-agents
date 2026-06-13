@@ -168,6 +168,19 @@ def test_cost_tracker_records_usage_from_response() -> None:
     assert mw.tracker.output_tokens == 200
 
 
+def test_enable_multi_agent_flag_does_not_crash() -> None:
+    # P1-1: enable_multi_agent=True used to import a deleted module and raise
+    # ModuleNotFoundError. The flag is now a deprecated no-op.
+    import warnings
+
+    from bog_agents import create_agent
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        agent = create_agent(model="anthropic:claude-sonnet-4-6", enable_multi_agent=True)
+    assert agent is not None
+
+
 def test_audit_trail_records_tool_calls_and_content() -> None:
     # Bug class C: audit_trail read response.tool_calls / response.content
     # (nonexistent), logging an empty tool list + has_content=False every time.

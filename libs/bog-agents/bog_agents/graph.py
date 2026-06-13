@@ -710,10 +710,12 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ParallelWorktreeMiddleware(working_dir=_wd))
 
-    if f.enable_multi_agent:
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        agents_middleware.append(MultiAgentOrchestratorMiddleware(max_threads=f.max_agent_threads))
+    # NOTE: the enable_multi_agent flag intentionally wires nothing. The
+    # MultiAgentOrchestratorMiddleware module was removed in the V1 stub purge
+    # because it never actually ran agents; the flag is kept only so existing
+    # callers passing it do not raise TypeError. It is now a deprecated no-op.
+    # The old wiring here imported the deleted module and hard-crashed any
+    # caller that enabled the flag. See REVIEW.md v2, finding P1-1.
 
     if f.enable_smart_context:
         from bog_agents.middleware.smart_context import SmartContextMiddleware

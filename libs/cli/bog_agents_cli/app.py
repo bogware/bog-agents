@@ -9848,7 +9848,14 @@ class BogAgentsApp(App):
                     AppMessage("Usage: /worktree create <branch>")
                 )
                 return
-            worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
+            # create_worktree validates the ref and raises ValueError on an
+            # invalid name (e.g. one with a space); surface it instead of
+            # crashing the TUI with an uncaught traceback. (REVIEW.md v2 P1-29.)
+            try:
+                worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
+            except (ValueError, OSError) as exc:
+                await self._mount_message(ErrorMessage(f"Invalid branch name: {exc}"))
+                return
             await self._mount_message(
                 AppMessage(
                     f"Created worktree on branch {worktree.branch}\n"
@@ -11552,10 +11559,13 @@ class BogAgentsApp(App):
             if task is None:
                 await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
                 return
-            if task.status != "done":
+            # ParallelWorktreeMiddleware sets status "completed" on success — it
+            # never sets "done", so the old check made /worktrees merge
+            # impossible to ever satisfy. (REVIEW.md v2 P1-31.)
+            if task.status != "completed":
                 await self._mount_message(
                     AppMessage(
-                        f"Task '{task_id}' is {task.status}, not done. Cannot merge yet."
+                        f"Task '{task_id}' is {task.status}, not completed. Cannot merge yet."
                     )
                 )
                 return
