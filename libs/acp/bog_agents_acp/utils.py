@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import TYPE_CHECKING
+
+# Sentinel command-type emitted for input we cannot statically decompose
+# (command substitution, unbalanced quotes, handler errors). It can never
+# appear in an allowlist, so its presence forces the human-approval path.
+_UNPARSEABLE = "__unparseable__"
 
 if TYPE_CHECKING:
     from acp.schema import (
@@ -98,7 +104,7 @@ def convert_embedded_resource_block_to_content_blocks(
     raise ValueError(msg)
 
 
-def extract_command_types(command: str) -> list[str]:  # noqa: C901, PLR0915  # Complex shell command parser with nested helper functions
+def extract_command_types(command: str) -> list[str]:  # noqa: C901, PLR0912, PLR0915  # Complex shell command parser with nested helper functions
     """Extract all command types from a shell command, handling && separators.
 
     For security-sensitive commands (python, node, npm, uv, etc.), includes the full
@@ -233,41 +239,57 @@ def extract_command_types(command: str) -> list[str]:  # noqa: C901, PLR0915  # 
 
     command_types: list[str] = []
 
-    # Split by && to handle chained commands
-    and_segments = command.split("&&")
+    # Command/process substitution can smuggle an arbitrary command past the
+    # allowlist (e.g. `echo $(rm -rf ~)`). We can't statically decompose it,
+    # so emit an unmatchable sentinel that forces the HITL approval path.
+    # (REVIEW.md v2 P1-58.) This is a deliberately conservative raw scan — a
+    # `$(` or backtick anywhere means "do not auto-approve".
+    if re.search(r"\$\(|`|\$\{|<\(|>\(", command):
+        return [_UNPARSEABLE]
 
-    for raw_segment in and_segments:
-        segment = raw_segment.strip()
-        if not segment:
+    # Quote-aware tokenization: ``punctuation_chars=True`` makes shlex group
+    # the shell operators ``;&|<>()`` into their own tokens (runs of & / |
+    # collapse to ``&&`` / ``||``) WHILE keeping a ``;`` or ``|`` that sits
+    # INSIDE quotes as ordinary data. The old ``split("&&")``+``split("|")``
+    # dropped everything after a ``;``/``&``/newline, so ``ls ; rm -rf ~``
+    # registered as only ``ls`` and was auto-approved. (REVIEW.md v2 P1-58.)
+    separators = {";", "&", "&&", "|", "||"}
+    # Subshell / redirection tokens can't be statically decomposed — force review.
+    blockers = {"(", ")", "<", ">"}
+
+    segments: list[list[str]] = [[]]
+    # A newline is a shell command separator but shlex treats it as plain
+    # whitespace, so tokenize line-by-line (an unbalanced-quote line fails
+    # closed to _UNPARSEABLE rather than hiding a trailing command).
+    for line in command.split("\n"):
+        if not line.strip():
             continue
-
         try:
-            # Split by pipes and process all segments
-            pipe_segments = segment.split("|")
+            lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return [_UNPARSEABLE]
+        for tok in tokens:
+            if tok in blockers:
+                return [_UNPARSEABLE]
+            if tok in separators:
+                segments.append([])
+            else:
+                segments[-1].append(tok)
+        segments.append([])  # newline ends the current command
 
-            for raw_pipe_segment in pipe_segments:
-                pipe_segment = raw_pipe_segment.strip()
-                if not pipe_segment:
-                    continue
-
-                # Parse the segment to get the command
-                tokens = shlex.split(pipe_segment)
-                if not tokens:
-                    continue
-
-                base_cmd = tokens[0]
-
-                # Use specific handler if available, otherwise just use base command
-                if base_cmd in command_handlers:
-                    signature = command_handlers[base_cmd](tokens)
-                    command_types.append(signature)
-                else:
-                    # Non-sensitive commands - just use the base command
-                    command_types.append(base_cmd)
-
-        except (ValueError, IndexError):
-            # If parsing fails, skip this segment
+    for seg_tokens in segments:
+        if not seg_tokens:
             continue
+        base_cmd = seg_tokens[0]
+        try:
+            if base_cmd in command_handlers:
+                command_types.append(command_handlers[base_cmd](seg_tokens))
+            else:
+                command_types.append(base_cmd)
+        except (ValueError, IndexError):
+            command_types.append(_UNPARSEABLE)
 
     return command_types
 
