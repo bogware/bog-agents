@@ -7,6 +7,8 @@ import dataclasses
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -33,10 +35,38 @@ _JOBS_FILE = _DAEMON_DIR / "jobs.json"
 _RUNS_DIR = _DAEMON_DIR / "runs"
 
 
+def _secure_owner_only(path: Path) -> None:
+    """Best-effort owner-only permissions on a secret-bearing file.
+
+    jobs.json stores SMTP passwords, GitHub tokens, and webhook HMAC secrets
+    in cleartext; at the default umask it lands world-readable (0644) on a
+    shared/multi-user host. (REVIEW.md v2 P1-54.)
+
+    chmod is effective on POSIX and a harmless no-op on Windows. The Windows
+    ACL tightening (icacls) is applied ONLY to regular files — never to the
+    containing directory, where `/inheritance:r` can strip the write access
+    the daemon needs to create run files underneath it.
+    """
+    is_file = path.is_file()
+    with contextlib.suppress(OSError):
+        path.chmod(0o600 if is_file else 0o700)
+    if sys.platform == "win32" and is_file:
+        user = os.environ.get("USERNAME") or os.environ.get("USER")
+        if user:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+
+
 def _ensure_dirs() -> None:
     """Create daemon directories if they do not exist."""
     _DAEMON_DIR.mkdir(parents=True, exist_ok=True)
     _RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    _secure_owner_only(_DAEMON_DIR)
 
 
 def _job_to_dict(job: AmbientJob) -> dict[str, Any]:
@@ -202,7 +232,11 @@ def _save_jobs_unlocked(jobs: list[AmbientJob]) -> None:
         f.flush()
         with contextlib.suppress(OSError, AttributeError):
             os.fsync(f.fileno())
+    # Lock down the temp file BEFORE the rename so the secrets are never
+    # briefly world-readable at the final path.
+    _secure_owner_only(tmp_path)
     Path(tmp_path).replace(_JOBS_FILE)
+    _secure_owner_only(_JOBS_FILE)
 
 
 def load_jobs() -> list[AmbientJob]:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+import pytest
+
 from bog_agents_daemon.models import (
     AmbientJob,
     JobRun,
@@ -59,6 +61,18 @@ class TestLoadSaveJobs:
         save_jobs([job])
         loaded = load_jobs()[0]
         assert loaded.outputs[0].github_token == "ghp_abc123"
+
+    def test_jobs_file_is_owner_only(self, tmp_daemon_dir: Path):
+        # jobs.json holds SMTP/GitHub/webhook secrets in cleartext; it must
+        # not be group/other readable. (REVIEW.md v2 P1-54.)
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX permission bits not honoured on Windows")
+        cfg = OutputConfig(target=OutputTarget.EMAIL, smtp_password="s3cret", to_addrs=["x@y.z"])
+        save_jobs([AmbientJob(name="secret-job", outputs=[cfg])])
+        mode = (tmp_daemon_dir / "jobs.json").stat().st_mode
+        assert mode & 0o077 == 0, f"jobs.json with secrets is group/other accessible: {oct(mode)}"
 
     def test_corrupt_file_returns_empty_list(self, tmp_daemon_dir: Path):
         jobs_file = tmp_daemon_dir / "jobs.json"
