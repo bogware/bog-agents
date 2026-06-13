@@ -56,6 +56,29 @@ class TestLoadAndSave:
         leftovers = [p for p in isolated_config.parent.iterdir() if p.suffix == ".tmp"]
         assert leftovers == []
 
+    def test_save_is_owner_only(self, isolated_config: Path):
+        # The config can embed resolved vault secrets; it must not be
+        # group/other readable. (REVIEW.md v2 P1-22.)
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX permission bits not honoured on Windows")
+        mcm.save_user_mcp_config(
+            {
+                "mcpServers": {
+                    "s": {
+                        "type": "sse",
+                        "url": "http://x",
+                        "headers": {"Authorization": "Bearer tok"},
+                    }
+                }
+            }
+        )
+        mode = isolated_config.stat().st_mode
+        assert mode & 0o077 == 0, (
+            f".mcp.json with secrets is group/other accessible: {oct(mode)}"
+        )
+
 
 class TestServerCRUD:
     def test_add_server_fresh(self, isolated_config: Path):

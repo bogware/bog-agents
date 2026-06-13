@@ -740,33 +740,28 @@ async def resolve_and_load_mcp_tools(
         if cfg is not None:
             configs.append(cfg)
 
-    # Project-level configs need trust gating for stdio servers
+    # Project-level configs need trust gating. The gate covers EVERY project
+    # server — stdio AND remote (SSE/HTTP). A remote server in a cloned repo
+    # would otherwise auto-load and stream the conversation (plus any
+    # configured Authorization header) to an attacker-controlled URL with no
+    # consent. When untrusted, ALL project servers are dropped, not just
+    # stdio. (REVIEW.md v2 P1-49; the earlier gate only covered stdio.)
     for path in project_configs:
         cfg = load_mcp_config_lenient(path)
         if cfg is None:
             continue
 
-        stdio_servers = extract_stdio_server_commands(cfg)
-        if not stdio_servers:
-            # No stdio servers — safe to load (remote only)
-            configs.append(cfg)
+        servers = cfg.get("mcpServers", {})
+        if not isinstance(servers, dict) or not servers:
+            # No servers to gate.
             continue
 
         if trust_project_mcp is True:
-            configs.append(cfg)
+            trusted = True
         elif trust_project_mcp is False:
-            filtered = _filter_project_stdio_servers(cfg)
-            if filtered.get("mcpServers"):
-                configs.append(filtered)
-            skipped = [
-                f"{name}: {cmd} {' '.join(args)}" for name, cmd, args in stdio_servers
-            ]
-            logger.warning(
-                "Skipped untrusted project stdio MCP servers: %s",
-                "; ".join(skipped),
-            )
+            trusted = False
         else:
-            # None — check trust store
+            # None — consult the persistent trust store.
             from bog_agents_cli.mcp_trust import (
                 compute_config_fingerprint,
                 is_project_mcp_trusted,
@@ -774,21 +769,21 @@ async def resolve_and_load_mcp_tools(
 
             project_root = str(_resolve_project_config_base(project_context).resolve())
             fingerprint = compute_config_fingerprint(project_configs)
-            if is_project_mcp_trusted(project_root, fingerprint):
-                configs.append(cfg)
-            else:
-                filtered = _filter_project_stdio_servers(cfg)
-                if filtered.get("mcpServers"):
-                    configs.append(filtered)
-                skipped = [
-                    f"{name}: {cmd} {' '.join(args)}"
-                    for name, cmd, args in stdio_servers
-                ]
-                logger.warning(
-                    "Skipped untrusted project stdio MCP servers "
-                    "(config changed or not yet approved): %s",
-                    "; ".join(skipped),
-                )
+            trusted = is_project_mcp_trusted(project_root, fingerprint)
+
+        if trusted:
+            configs.append(cfg)
+        else:
+            skipped = [
+                f"{name} ({_resolve_server_type(srv) if isinstance(srv, dict) else '?'})"
+                for name, srv in servers.items()
+            ]
+            logger.warning(
+                "Skipped %d untrusted project MCP server(s) — stdio and remote alike — "
+                "until the project is trusted (config changed or not yet approved): %s",
+                len(skipped),
+                "; ".join(skipped),
+            )
 
     # Explicit path is highest precedence — errors are fatal
     if explicit_config_path:
