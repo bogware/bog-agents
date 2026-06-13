@@ -22,7 +22,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerType,
 )
-from bog_agents_daemon.store import save_run, upsert_job
+from bog_agents_daemon.store import record_run_result, save_run
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +83,21 @@ async def run_job(
     finally:
         run.finished_at = time.time()
 
-    # Update job state
+    # Update job state. Merge ONLY run-state fields into the current on-disk
+    # record (read-modify-write) so a concurrent config edit (PATCH /jobs)
+    # isn't clobbered by this pre-run snapshot. (REVIEW.md v2 P1-56.) Mirror
+    # onto the local object too for callers that read the returned job.
     job.last_run_at = run.started_at
     job.last_status = run.status
     job.last_output = run.output[:500] if run.output else run.error[:500]
     job.run_count += 1
 
-    upsert_job(job)
+    record_run_result(
+        job,
+        last_run_at=run.started_at,
+        last_status=run.status,
+        last_output=job.last_output,
+    )
     save_run(run)
 
     # Dispatch outputs best-effort. Capture per-target failures on the

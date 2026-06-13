@@ -190,6 +190,9 @@ def _run_from_dict(d: dict[str, Any]) -> JobRun:
         error=d.get("error", ""),
         trigger_type=TriggerType(d.get("trigger_type", "manual")),
         trigger_context=d.get("trigger_context", {}),
+        # P1-52: without this the field silently reset to [] on every disk
+        # read-back, so dispatch failures vanished from `list_runs`.
+        dispatch_errors=d.get("dispatch_errors", []),
     )
 
 
@@ -291,6 +294,39 @@ def upsert_job(job: AmbientJob) -> None:
                 jobs[i] = job
                 _save_jobs_unlocked(jobs)
                 return
+        jobs.append(job)
+        _save_jobs_unlocked(jobs)
+
+
+def record_run_result(
+    job: AmbientJob,
+    *,
+    last_run_at: float,
+    last_status: JobStatus,
+    last_output: str,
+) -> None:
+    """Persist a job's run-state without clobbering concurrent config edits.
+
+    The runner holds a job snapshot captured before the (possibly long) agent
+    run. Writing that whole snapshot back via ``upsert_job`` would clobber any
+    config edit (PATCH /jobs) that landed meanwhile — a lost update. This
+    re-loads under the lock and, when the record already exists, merges ONLY
+    the run-state fields, leaving config fields (prompt, triggers, outputs, …)
+    intact. When the record does NOT exist (an ad-hoc/manual run of a job that
+    was never registered), it inserts the provided job so the run is still
+    recorded — matching the old upsert behaviour. (REVIEW.md v2 P1-56.)
+    """
+    with _jobs_lock:
+        jobs = _load_jobs_unlocked()
+        for existing in jobs:
+            if existing.job_id == job.job_id:
+                existing.last_run_at = last_run_at
+                existing.last_status = last_status
+                existing.last_output = last_output
+                existing.run_count += 1
+                _save_jobs_unlocked(jobs)
+                return
+        # Not previously registered — insert the snapshot (run-state already set).
         jobs.append(job)
         _save_jobs_unlocked(jobs)
 

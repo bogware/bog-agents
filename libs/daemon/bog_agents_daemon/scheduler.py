@@ -47,22 +47,31 @@ def _is_cron_due(cron_expr: str, last_run_at: float) -> bool:
     minute_field, hour_field, dom_field, month_field, dow_field = fields
 
     def _matches_field(field: str, value: int, min_val: int) -> bool:
-        """Return True when *value* is covered by a cron *field* expression."""
+        """Return True when *value* is covered by a cron *field* expression.
+
+        A malformed field (non-integer step/range/value) is treated as
+        'not matching' rather than raising — a single bad cron must not abort
+        the scheduler tick and starve every later job. (REVIEW.md v2 P1-53.)
+        """
         if field == "*":
             return True
-        for part in field.split(","):
-            if "/" in part:
-                base, step_str = part.split("/", 1)
-                step = int(step_str)
-                base_val = min_val if base == "*" else int(base)
-                if step > 0 and (value - base_val) >= 0 and (value - base_val) % step == 0:
+        try:
+            for part in field.split(","):
+                if "/" in part:
+                    base, step_str = part.split("/", 1)
+                    step = int(step_str)
+                    base_val = min_val if base == "*" else int(base)
+                    if step > 0 and (value - base_val) >= 0 and (value - base_val) % step == 0:
+                        return True
+                elif "-" in part:
+                    lo, hi = part.split("-", 1)
+                    if int(lo) <= value <= int(hi):
+                        return True
+                elif value == int(part):
                     return True
-            elif "-" in part:
-                lo, hi = part.split("-", 1)
-                if int(lo) <= value <= int(hi):
-                    return True
-            elif value == int(part):
-                return True
+        except ValueError:
+            logger.warning("Unparsable cron field %r in %r — treating as not due", field, cron_expr)
+            return False
         return False
 
     # Check if current time matches the cron fields
