@@ -77,17 +77,18 @@
     - audit_log:
         event: prod_destructive_command
 
-- name: redact_token_args
-  description: Strip obvious tokens from tool args before they hit the audit trail.
+- name: block_secret_in_tool_args
+  description: Block any tool call whose arguments carry a secret-shaped token.
   salience: 50
   when:
+    # Match the string view of ALL args (args_text), not the bare `args` dict —
+    # a string regex never matches a dict, which is why the old rule never
+    # fired. `deny` is also the honest action: there is no safe way to "redact"
+    # a secret out of an arg and still run the call, so block it outright.
     - tool_call:
-        args:
+        args_text:
           matches: 'sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[A-Z0-9]{16}'
   then:
-    - modify:
-        args_redacted: true
-    - notify:
-        channel: log
-        severity: high
-        text: "secret-shaped token detected in tool args — value redacted"
+    - deny: "A secret-shaped token (API key/token) was detected in the tool arguments — call blocked to avoid leaking it to the tool or the audit log."
+    - audit_log:
+        event: secret_in_tool_args_blocked

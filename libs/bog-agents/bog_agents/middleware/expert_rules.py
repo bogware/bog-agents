@@ -305,6 +305,10 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             "id": tool_call.get("id", ""),
             # Convenience flatten for common shell-execute pattern:
             "command": args.get("command", "") if isinstance(args, dict) else "",
+            # String view of ALL args so `matches`/`contains` predicates can
+            # scan the whole arg blob (the bare `args` field is a dict and a
+            # string-regex predicate never matches it). (REVIEW.md v2 P1-20.)
+            "args_text": json.dumps(args, default=str, ensure_ascii=False),
         }
         # Record into the ring buffer BEFORE asserting so /expert write
         # replay (Wave D) can see every call the agent has made, not
