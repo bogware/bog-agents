@@ -131,3 +131,65 @@ def test_auto_quality_injects_when_detection_present() -> None:
     request = _make_request()
     mw.wrap_model_call(request, _passthrough)
     assert "Project Detection" in _system_text(_passthrough.last_request)  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Bug class C — ModelResponse usage extraction
+# ---------------------------------------------------------------------------
+
+
+def test_cost_tracker_records_usage_from_response() -> None:
+    # Bug class C: cost_tracker read response.response_metadata (nonexistent on
+    # ModelResponse) and recorded nothing. Usage lives on the AIMessage in
+    # response.result via usage_metadata.
+    try:
+        from langchain.agents.middleware.types import ModelResponse
+    except ImportError:  # pragma: no cover
+        from langchain.agents.middleware import ModelResponse  # type: ignore[no-redef,attr-defined]
+
+    from bog_agents.middleware.cost_tracker import CostTrackerMiddleware
+
+    mw = CostTrackerMiddleware(model_name="anthropic:claude-sonnet-4-6", budget_usd=None)
+    ai = AIMessage(
+        content="hello",
+        usage_metadata={
+            "input_tokens": 1000,
+            "output_tokens": 200,
+            "total_tokens": 1200,
+            "input_token_details": {"cache_read": 100, "cache_creation": 50},
+        },
+    )
+
+    def handler(_request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[ai])
+
+    mw.wrap_model_call(_make_request(), handler)
+    assert mw.tracker.input_tokens == 1000
+    assert mw.tracker.output_tokens == 200
+
+
+def test_audit_trail_records_tool_calls_and_content() -> None:
+    # Bug class C: audit_trail read response.tool_calls / response.content
+    # (nonexistent), logging an empty tool list + has_content=False every time.
+    try:
+        from langchain.agents.middleware.types import ModelResponse
+    except ImportError:  # pragma: no cover
+        from langchain.agents.middleware import ModelResponse  # type: ignore[no-redef,attr-defined]
+
+    from bog_agents.middleware.audit_trail import AuditTrailMiddleware
+
+    mw = AuditTrailMiddleware()
+    ai = AIMessage(
+        content="doing it",
+        tool_calls=[{"name": "read_file", "args": {"path": "x"}, "id": "1", "type": "tool_call"}],
+    )
+
+    def handler(_request: ModelRequest) -> ModelResponse:
+        return ModelResponse(result=[ai])
+
+    mw.wrap_model_call(_make_request(), handler)
+    entries = [e for e in mw.audit_log.entries if e.action_type == "llm_response"]
+    assert entries, "no llm_response audit entry recorded"
+    meta = entries[-1].metadata
+    assert meta["tool_calls"] == ["read_file"]
+    assert meta["has_content"] is True

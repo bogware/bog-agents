@@ -456,18 +456,12 @@ class AuditTrailMiddleware(AgentMiddleware[AuditTrailState, ContextT, ResponseT]
         )
 
         response = call_next(request)
-
-        # Record the response
-        tool_calls = []
-        if hasattr(response, "tool_calls"):
-            tool_calls = [tc.get("name", "unknown") for tc in getattr(response, "tool_calls", [])]
-
+        tool_calls, has_content = _summarize_response(response)
         self.audit_log.add_entry(
             action_type="llm_response",
             description="LLM response received",
-            metadata={"tool_calls": tool_calls, "has_content": bool(getattr(response, "content", ""))},
+            metadata={"tool_calls": tool_calls, "has_content": has_content},
         )
-
         return response
 
     async def awrap_model_call(
@@ -492,17 +486,34 @@ class AuditTrailMiddleware(AgentMiddleware[AuditTrailState, ContextT, ResponseT]
 
         response = await call_next(request)
 
-        tool_calls = []
-        if hasattr(response, "tool_calls"):
-            tool_calls = [tc.get("name", "unknown") for tc in getattr(response, "tool_calls", [])]
-
+        tool_calls, has_content = _summarize_response(response)
         self.audit_log.add_entry(
             action_type="llm_response",
             description="LLM response received",
-            metadata={"tool_calls": tool_calls, "has_content": bool(getattr(response, "content", ""))},
+            metadata={"tool_calls": tool_calls, "has_content": has_content},
         )
-
         return response
+
+
+def _summarize_response(response: ModelResponse) -> tuple[list[str], bool]:
+    """Pull (tool_call names, has_content) from a langchain ModelResponse.
+
+    ``ModelResponse`` has no ``.tool_calls``/``.content`` — those live on the
+    AIMessage inside ``response.result``. Reading them off the response object
+    (as the original code did) always yielded an empty tool list and
+    has_content=False, defeating the audit trail.
+    """
+    messages = getattr(response, "result", None)
+    if not isinstance(messages, list):
+        return [], False
+    ai = next(
+        (m for m in reversed(messages) if getattr(m, "type", "") == "ai" or m.__class__.__name__ == "AIMessage"),
+        None,
+    )
+    if ai is None:
+        return [], False
+    tool_calls = [tc.get("name", "unknown") for tc in (getattr(ai, "tool_calls", None) or [])]
+    return tool_calls, bool(getattr(ai, "content", ""))
 
 
 __all__ = ["AuditEntry", "AuditLog", "AuditTrailMiddleware"]

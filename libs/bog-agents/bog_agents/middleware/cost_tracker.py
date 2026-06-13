@@ -410,19 +410,7 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
             logger.warning(msg)
 
         response = call_next(request)
-
-        # Extract usage from response if available
-        if hasattr(response, "response_metadata"):
-            metadata = getattr(response, "response_metadata", {})
-            usage = metadata.get("usage", {}) or metadata.get("token_usage", {})
-            if usage:
-                self.tracker.record_usage(
-                    input_tokens=usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
-                    output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
-                    cache_read=usage.get("cache_read_input_tokens", 0),
-                    cache_write=usage.get("cache_creation_input_tokens", 0),
-                )
-
+        self._record_usage_from_response(response)
         return response
 
     async def awrap_model_call(
@@ -442,16 +430,47 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
             logger.warning(msg)
 
         response = await call_next(request)
-
-        if hasattr(response, "response_metadata"):
-            metadata = getattr(response, "response_metadata", {})
-            usage = metadata.get("usage", {}) or metadata.get("token_usage", {})
-            if usage:
-                self.tracker.record_usage(
-                    input_tokens=usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0),
-                    output_tokens=usage.get("output_tokens", 0) or usage.get("completion_tokens", 0),
-                    cache_read=usage.get("cache_read_input_tokens", 0),
-                    cache_write=usage.get("cache_creation_input_tokens", 0),
-                )
-
+        self._record_usage_from_response(response)
         return response
+
+    def _record_usage_from_response(self, response: ModelResponse) -> None:
+        """Record token usage from a ModelResponse.
+
+        langchain's ``ModelResponse`` exposes ``.result`` (a list of messages),
+        NOT ``.response_metadata``. Token usage lives on the AIMessage's
+        standardized ``usage_metadata`` (``input_tokens``/``output_tokens`` plus
+        ``input_token_details`` for cache), with a fallback to the raw
+        ``response_metadata`` usage dict for providers that don't populate the
+        standard field.
+        """
+        messages = getattr(response, "result", None)
+        if not isinstance(messages, list):
+            return
+        ai = next(
+            (m for m in reversed(messages) if getattr(m, "type", "") == "ai" or m.__class__.__name__ == "AIMessage"),
+            None,
+        )
+        if ai is None:
+            return
+
+        usage = getattr(ai, "usage_metadata", None)
+        if isinstance(usage, dict) and usage:
+            details = usage.get("input_token_details") or {}
+            self.tracker.record_usage(
+                input_tokens=int(usage.get("input_tokens", 0) or 0),
+                output_tokens=int(usage.get("output_tokens", 0) or 0),
+                cache_read=int(details.get("cache_read", 0) or 0),
+                cache_write=int(details.get("cache_creation", 0) or 0),
+            )
+            return
+
+        # Fallback: raw provider response_metadata.
+        metadata = getattr(ai, "response_metadata", {}) or {}
+        raw = metadata.get("usage", {}) or metadata.get("token_usage", {})
+        if raw:
+            self.tracker.record_usage(
+                input_tokens=int(raw.get("input_tokens", 0) or raw.get("prompt_tokens", 0) or 0),
+                output_tokens=int(raw.get("output_tokens", 0) or raw.get("completion_tokens", 0) or 0),
+                cache_read=int(raw.get("cache_read_input_tokens", 0) or 0),
+                cache_write=int(raw.get("cache_creation_input_tokens", 0) or 0),
+            )
