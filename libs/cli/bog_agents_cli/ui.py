@@ -107,6 +107,9 @@ def show_help() -> None:
     console.print(
         "  call MESSAGE                        Talk to a running --serve instance"
     )
+    console.print(
+        "  mcp-server                          Serve bog-agents over MCP (delegate tasks to it)"
+    )
     console.print()
 
     # --- Core Options ---

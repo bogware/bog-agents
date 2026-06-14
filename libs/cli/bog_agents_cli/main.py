@@ -360,6 +360,41 @@ def parse_args() -> argparse.Namespace:
     )
     add_json_output_arg(command_parser)
 
+    # Expose bog-agents AS an MCP server (so other agents/IDEs can delegate to us)
+    mcp_server_parser = subparsers.add_parser(
+        "mcp-server",
+        help=(
+            "Run bog-agents as an MCP (Model Context Protocol) stdio server "
+            "exposing a `run_task` tool, so any MCP client (Claude Desktop, "
+            "Cursor, Zed, Copilot) can delegate a coding task to it."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "-M",
+        "--model",
+        metavar="MODEL",
+        default=None,
+        help="Model spec (e.g. anthropic:claude-sonnet-4-6). Auto-detects if omitted.",
+    )
+    mcp_server_parser.add_argument(
+        "--permission-mode",
+        choices=["acceptEdits", "bypass"],
+        default="acceptEdits",
+        metavar="MODE",
+        help=(
+            "Approval posture for delegated tasks. MCP has no human approver, so "
+            "only autonomous modes are allowed: 'acceptEdits' (smart rule-engine "
+            "auto-approval; default) or 'bypass' (approve everything)."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "--cwd",
+        dest="mcp_cwd",
+        metavar="PATH",
+        default=None,
+        help="Workspace root the agent operates in (default: current directory).",
+    )
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -1925,7 +1960,12 @@ def cli_main() -> None:
                 sys.stderr.flush()
                 sys.exit(2)
 
-        apply_stdin_pipe(args)
+        # Only slurp piped stdin as a prompt for the bare interactive/-n path.
+        # Subcommands own their own stdin semantics — most importantly
+        # `mcp-server`, whose stdin IS the MCP JSON-RPC channel; reading it here
+        # would consume the protocol handshake and break the server.
+        if getattr(args, "command", None) is None:
+            apply_stdin_pipe(args)
 
         if getattr(args, "no_mcp", False) and getattr(args, "mcp_config", None):
             from rich.console import Console as _Console
@@ -2037,6 +2077,19 @@ def cli_main() -> None:
             from bog_agents_cli.headless_commands import run_headless_command
 
             sys.exit(run_headless_command(args.slash, output_format=output_format))
+        elif args.command == "mcp-server":
+            from bog_agents_cli.mcp_server import run_mcp_server
+
+            sys.exit(
+                asyncio.run(
+                    run_mcp_server(
+                        model_name=getattr(args, "model", None),
+                        permission_mode=getattr(args, "permission_mode", None)
+                        or "acceptEdits",
+                        cwd=getattr(args, "mcp_cwd", None),
+                    )
+                )
+            )
         elif args.command == "test-bedrock":
             from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
 
