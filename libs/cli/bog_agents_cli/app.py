@@ -917,6 +917,9 @@ class BogAgentsApp(App):
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
         self._model_params_override: dict[str, Any] | None = None
+        # Repo/user `.prompt.md` files exposed as slash commands (#14). Loaded
+        # in on_mount; name -> PromptCommand.
+        self._prompt_commands: dict[str, Any] = {}
         # Operator mode (judge-model routing) + JTBD session state. The
         # turn-scoped model/effort overrides are staged by the operator
         # seam in _handle_user_message and cleared after every turn.
@@ -1037,6 +1040,21 @@ class BogAgentsApp(App):
         # paranoid seeded from --permission-mode / --auto-approve / --auto /
         # --always-ask) in the status-bar indicator.
         self._refresh_permission_mode_indicator()
+
+        # Discover repo/user `.prompt.md` slash commands (#14) and merge them
+        # into the autocomplete list. Best-effort — a bad prompt file must not
+        # block startup.
+        try:
+            from bog_agents_cli.prompt_commands import discover_prompt_commands
+
+            self._prompt_commands = discover_prompt_commands(self._cwd)
+            if self._prompt_commands:
+                self._refresh_slash_command_cache()
+                logger.info(
+                    "Loaded %d .prompt.md slash command(s)", len(self._prompt_commands)
+                )
+        except Exception:
+            logger.debug("prompt-command discovery failed", exc_info=True)
 
         # Set git branch in status bar
         self._status_bar.branch = _get_git_branch() or ""
@@ -2321,13 +2339,47 @@ class BogAgentsApp(App):
             return None
         return handler
 
-    @staticmethod
-    def _refresh_slash_command_cache() -> None:
-        """Refresh the shared slash-command cache used by autocomplete."""
+    async def _maybe_run_prompt_command(self, command: str) -> bool:
+        """Dispatch a repo/user `.prompt.md` slash command if one matches (#14).
+
+        Args:
+            command: The full slash-command string (including the leading /).
+
+        Returns:
+            True if a matching prompt command was found and sent to the agent.
+        """
+        name = self._command_name(command)
+        cmd = self._prompt_commands.get(name)
+        if cmd is None:
+            return False
+        from bog_agents_cli.prompt_commands import render_prompt_command
+
+        raw = command.strip()
+        args = raw[len(name) :].strip() if raw.startswith(name) else ""
+        prompt = render_prompt_command(cmd, args)
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(f"Running prompt command {name} (from {cmd.scope} .prompt.md)...")
+        )
+        await self._send_prompt_to_agent(prompt)
+        return True
+
+    def _refresh_slash_command_cache(self) -> None:
+        """Refresh the shared slash-command cache used by autocomplete.
+
+        Includes any discovered `.prompt.md` commands (#14) so they appear in
+        autocomplete alongside the built-ins.
+        """
         from bog_agents_cli.command_registry import get_slash_commands
         from bog_agents_cli.widgets import autocomplete
 
-        autocomplete.SLASH_COMMANDS[:] = get_slash_commands()
+        commands = list(get_slash_commands())
+        for cmd in self._prompt_commands.values():
+            hint = f" {cmd.argument_hint}" if cmd.argument_hint else ""
+            commands.append(
+                (cmd.name, f"{cmd.description}{hint}", "custom prompt command")
+            )
+        autocomplete.SLASH_COMMANDS[:] = commands
 
     async def _current_thread_metadata(self) -> dict[str, object]:
         """Load persisted metadata for the active thread, if available."""
@@ -12333,7 +12385,12 @@ class BogAgentsApp(App):
         """
         handler = self._resolve_command_handler(self._command_name(command))
         if handler is None:
-            await self._handle_unknown_command(command)
+            # Fall back to a repo/user `.prompt.md` slash command (#14) before
+            # giving up with "unknown command".
+            if await self._maybe_run_prompt_command(command):
+                pass
+            else:
+                await self._handle_unknown_command(command)
         else:
             await handler(command)
 
