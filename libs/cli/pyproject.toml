@@ -41,7 +41,7 @@ dependencies = [
 
     # Require at least one integration package
     # GHSA-r7w7-9xr2-qq2r — fix landed in 1.1.14
-    "langchain-openai>=1.1.14,<2.0.0",
+    "langchain-openai<2.0.0,>=1.1.8",
 
     # Observability
     # GHSA-rr7j-v2q5-chgv — fix landed in 0.7.31
