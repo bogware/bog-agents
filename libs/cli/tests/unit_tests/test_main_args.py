@@ -1,9 +1,11 @@
 """Tests for command-line argument parsing."""
 
 import argparse
+import contextlib
 import io
 import os
 import sys
+import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from unittest.mock import MagicMock, patch
@@ -452,3 +454,98 @@ class TestApplyStdinPipe:
         ):
             apply_stdin_pipe(args)
         assert args.non_interactive_message == "hello"
+
+
+class _PipeStdin:
+    """Minimal stdin stand-in backed by a real OS pipe fd.
+
+    Used to exercise the OS-level readiness probe in `_stdin_has_pending_data`
+    (StringIO/MagicMock have no real fd and can't reproduce the blocking-pipe
+    scenario the guard exists to defend against).
+    """
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+
+    def fileno(self) -> int:
+        return self._fd
+
+    def isatty(self) -> bool:
+        return False
+
+    def read(self, _size: int = -1) -> str:
+        return os.read(self._fd, 65536).decode("utf-8")
+
+
+class TestStdinHasPendingData:
+    """Tests for `_stdin_has_pending_data` — the no-hang stdin readiness guard.
+
+    Regression coverage for the CLI-wide hang where a non-tty pipe left open
+    by a parent process (service manager, IDE task runner, daemon, CI) blocked
+    `apply_stdin_pipe`'s `sys.stdin.read()` forever — manifesting as "the
+    provider hung" (most visibly Bedrock, the next startup step).
+    """
+
+    def test_in_memory_stream_is_safe(self) -> None:
+        """StringIO has no OS fd; a read can't block, so it's always safe."""
+        from bog_agents_cli.main import _stdin_has_pending_data
+
+        with patch.object(sys, "stdin", io.StringIO("data")):
+            assert _stdin_has_pending_data() is True
+
+    def test_mock_stream_is_safe(self) -> None:
+        """A mocked stream (non-int fileno) skips OS probing and reads."""
+        from bog_agents_cli.main import _stdin_has_pending_data
+
+        with patch.object(sys, "stdin", MagicMock()):
+            assert _stdin_has_pending_data() is True
+
+    def test_idle_pipe_reports_no_data(self) -> None:
+        """An open pipe with no data must report no-data (the hang case)."""
+        from bog_agents_cli.main import _stdin_has_pending_data
+
+        r_fd, w_fd = os.pipe()
+        reader = _PipeStdin(r_fd)
+        try:
+            with patch.object(sys, "stdin", reader):
+                # Write end held open, nothing written → never readable.
+                assert _stdin_has_pending_data(grace=0.1) is False
+        finally:
+            os.close(w_fd)
+            with contextlib.suppress(OSError):
+                os.close(r_fd)
+
+    def test_pipe_with_buffered_data_is_ready(self) -> None:
+        """A pipe with buffered bytes reports ready so the read proceeds."""
+        from bog_agents_cli.main import _stdin_has_pending_data
+
+        r_fd, w_fd = os.pipe()
+        reader = _PipeStdin(r_fd)
+        try:
+            os.write(w_fd, b"piped content\n")
+            with patch.object(sys, "stdin", reader):
+                assert _stdin_has_pending_data(grace=0.5) is True
+        finally:
+            os.close(w_fd)
+            with contextlib.suppress(OSError):
+                os.close(r_fd)
+
+    def test_apply_stdin_pipe_does_not_hang_on_idle_pipe(self) -> None:
+        """The core regression: an idle pipe must not block apply_stdin_pipe."""
+        args = _make_args()
+        r_fd, w_fd = os.pipe()
+        reader = _PipeStdin(r_fd)
+        try:
+            start = time.monotonic()
+            with patch.object(sys, "stdin", reader):
+                apply_stdin_pipe(args)
+            elapsed = time.monotonic() - start
+            # Args untouched (no piped input consumed) and bounded time —
+            # before the fix this blocked indefinitely.
+            assert args.non_interactive_message is None
+            assert args.initial_prompt is None
+            assert elapsed < 5
+        finally:
+            os.close(w_fd)
+            with contextlib.suppress(OSError):
+                os.close(r_fd)

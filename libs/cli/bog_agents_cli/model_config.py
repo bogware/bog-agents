@@ -783,10 +783,14 @@ def has_provider_credentials(provider: str) -> bool | None:
 
     Resolution order:
 
-    1. Config-file providers (`config.toml`) — takes priority so user
-        overrides (e.g., custom `api_key_env` or `base_url`) are respected.
-    2. Hardcoded `PROVIDER_API_KEY_ENV` mapping (anthropic, openai, etc.).
-    3. For any other provider (e.g., third-party langchain provider
+    1. Bedrock — uses the AWS credential chain or a Bedrock API key
+        (AWS_BEARER_TOKEN_BEDROCK); resolved by `_has_bedrock_credentials()`
+        ahead of the config-file check so a user-defined `api_key_env` can't
+        mask a valid profile/SSO/bearer-token credential.
+    2. Config-file providers (`config.toml`) — user overrides (e.g., custom
+        `api_key_env` or `base_url`) are respected.
+    3. Hardcoded `PROVIDER_API_KEY_ENV` mapping (anthropic, openai, etc.).
+    4. For any other provider (e.g., third-party langchain provider
         packages), credential status is unknown — the provider itself will
         report auth failures at model-creation time.
 
@@ -797,6 +801,15 @@ def has_provider_credentials(provider: str) -> bool | None:
         True if credentials are confirmed available, False if confirmed
             missing, or None if credential status cannot be determined.
     """
+    # Bedrock uses the AWS credential chain (SSO, profiles, instance roles)
+    # OR a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) — checking a single
+    # `api_key_env` is insufficient and would wrongly report "no creds" for
+    # a user authenticating purely via the bearer token or a profile. This
+    # takes priority over the config-file `api_key_env` check below so a
+    # `[models.providers.bedrock]` block doesn't mask the AWS-chain probe.
+    if provider in ("bedrock", "bedrock_converse"):
+        return _has_bedrock_credentials()
+
     # Config-file providers take priority when api_key_env is specified.
     config = ModelConfig.load()
     if config.providers.get(provider):
@@ -804,11 +817,6 @@ def has_provider_credentials(provider: str) -> bool | None:
         if result is not None:
             return result
         # No api_key_env in config — fall through to hardcoded map.
-
-    # Bedrock uses AWS credential chain (SSO, profiles, instance roles) —
-    # checking a single env var is insufficient.
-    if provider in ("bedrock", "bedrock_converse"):
-        return _has_bedrock_credentials()
 
     # Fall back to hardcoded well-known providers.
     env_var = PROVIDER_API_KEY_ENV.get(provider)
@@ -841,6 +849,11 @@ def _has_bedrock_credentials() -> bool:
     Returns:
         True if credentials are detected per the chosen strategy.
     """
+    # A Bedrock API key (bearer token) is sufficient on its own regardless of
+    # the configured check mode — short-circuit before any SigV4 probe.
+    if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+        return True
+
     config = ModelConfig.load()
     bedrock_cfg = config.providers.get("bedrock_converse") or config.providers.get(
         "bedrock", {}
@@ -1107,6 +1120,16 @@ def _check_bedrock_thorough() -> bool:
             if mode == "auto" and kind == "sso-expired" and label == "default-chain":
                 return False
             return None
+
+    # Bedrock API keys (the `ABSK...` bearer token) authenticate via the
+    # AWS_BEARER_TOKEN_BEDROCK env var and bypass the SigV4 credential chain
+    # entirely. A user with ONLY the bearer token (no ~/.aws, no
+    # AWS_ACCESS_KEY_ID) is fully able to call Bedrock, so treat the token as
+    # valid credentials and skip the SigV4 probe. (REVIEW.md v2 — live-test
+    # Bedrock CLI gap.) boto3>=1.39 / langchain-aws honour this token natively.
+    if os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip():
+        logger.debug("Bedrock bearer token (AWS_BEARER_TOKEN_BEDROCK) present")
+        return True
 
     try:
         import boto3  # noqa: F401 — only here to surface ImportError cleanly

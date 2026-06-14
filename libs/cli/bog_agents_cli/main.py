@@ -1040,6 +1040,92 @@ async def _run_acp_cli_async(
     return exit_code
 
 
+# Max time to wait for the first byte of piped stdin before concluding the
+# stream is an idle pipe with nothing coming. Real piped input (`echo x |`,
+# `cat file |`) is OS-buffered and ready immediately, so this grace is only
+# ever fully consumed when there is genuinely no piped data.
+_STDIN_PEEK_GRACE_SECONDS = 0.5
+
+
+def _stdin_has_pending_data(grace: float = _STDIN_PEEK_GRACE_SECONDS) -> bool:
+    """Best-effort, non-blocking check for pending data on a non-tty stdin.
+
+    A bare ``sys.stdin.read()`` deadlocks when stdin is a non-tty *pipe* that
+    a parent process keeps open without ever writing to or closing it. This is
+    common when the CLI is launched by a service manager, an IDE task runner,
+    the daemon, a CI executor, or any GUI app that wires up a child's stdin but
+    never feeds it. The blocking read then hangs the whole CLI at startup —
+    before the agent or model is ever touched — which superficially looks like
+    "the provider hung" (most visibly Bedrock, whose server boot is the next
+    step). We therefore peek before committing to the read.
+
+    Args:
+        grace: Max seconds to wait for the first byte to become available.
+
+    Returns:
+        True if stdin appears to have data (or EOF) ready, so a read will make
+        progress; False if stdin looks like an idle pipe with nothing coming
+        (in which case the caller should skip the read rather than hang). On
+        any detection failure we return False — degrading the stdin-prepend
+        convenience to a no-op is strictly preferable to an unbounded hang.
+    """
+    try:
+        fd = sys.stdin.fileno()
+    except (OSError, ValueError, AttributeError):
+        # In-memory / file-like stream (StringIO, a test double, embedded
+        # Python) with no backing OS fd — a read cannot block on an OS pipe,
+        # so it is always safe to proceed.
+        return True
+
+    if not isinstance(fd, int):
+        # Mocked or unusual stream object — skip OS-level readiness probing
+        # and let the read proceed (it cannot be a real blocking pipe).
+        return True
+
+    if os.name != "nt":
+        # POSIX: select works on pipes and regular files. Readable means data
+        # or EOF is available, so the subsequent read won't block.
+        try:
+            import select
+
+            return bool(select.select([fd], [], [], grace)[0])
+        except (OSError, ValueError):
+            return False
+
+    # Windows: select doesn't support pipes/files, so inspect the handle.
+    try:
+        import ctypes
+        import msvcrt
+        import time
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(fd)
+        file_type = ctypes.windll.kernel32.GetFileType(handle)
+        file_type_disk = 1  # `< file` redirect — read hits EOF, never blocks
+        file_type_pipe = 3
+        if file_type == file_type_disk:
+            return True
+        if file_type != file_type_pipe:
+            return False
+        # Pipe: poll for buffered bytes within the grace window. A closed
+        # (broken) pipe with no data reports failure → treat as no-data.
+        avail = wintypes.DWORD(0)
+        deadline = time.monotonic() + grace
+        while True:
+            ok = ctypes.windll.kernel32.PeekNamedPipe(
+                handle, None, 0, None, ctypes.byref(avail), None
+            )
+            if not ok:
+                return False
+            if avail.value > 0:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+    except Exception:  # detection must never raise into startup
+        return False
+
+
 def apply_stdin_pipe(args: argparse.Namespace) -> None:
     r"""Read piped stdin and merge it into the parsed CLI arguments.
 
@@ -1086,6 +1172,13 @@ def apply_stdin_pipe(args: argparse.Namespace) -> None:
         return
 
     if is_tty:
+        return
+
+    # stdin is a non-tty (pipe/redirect). Only commit to a blocking read once
+    # we've confirmed data (or EOF) is actually available — otherwise an idle
+    # pipe left open by a parent process would hang the CLI forever here. See
+    # `_stdin_has_pending_data` for the cross-platform rationale.
+    if not _stdin_has_pending_data():
         return
 
     max_stdin_bytes = 10 * 1024 * 1024  # 10 MiB
