@@ -48,6 +48,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/ci-fix",
+            "Read this branch's CI result and diagnose/fix failing jobs",
+            "ci continuous integration github actions fix logs green",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_ci_fix_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/test",
             "Run tests with coverage and generate test skeletons",
             "coverage pytest",

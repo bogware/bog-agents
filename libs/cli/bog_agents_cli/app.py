@@ -3890,6 +3890,74 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage(announce))
         await self._send_prompt_to_agent(prompt)
 
+    async def _handle_ci_fix_command(self, command: str) -> None:
+        """`/ci-fix` — read this branch's CI result and diagnose/fix failures (#1).
+
+        Fetches the latest GitHub Actions run for the current branch via `gh`.
+        If it failed, ingests the failing-job logs and hands the agent a
+        structured diagnose-and-fix task ("ship it while you sleep").
+        """
+        import asyncio as _asyncio
+        from pathlib import Path as _Path
+
+        from bog_agents_cli.ci_tools import (
+            GhUnavailableError,
+            generate_ci_fix_prompt,
+            get_ci_status,
+            get_failing_logs,
+            latest_run,
+        )
+
+        await self._mount_message(UserMessage(command))
+        branch = _get_git_branch()
+        if not branch:
+            await self._mount_message(
+                ErrorMessage("/ci-fix: not on a git branch (no CI to check).")
+            )
+            return
+        await self._mount_message(AppMessage(f"Checking CI for `{branch}`..."))
+        try:
+            runs = await _asyncio.to_thread(
+                get_ci_status, branch, cwd=_Path(self._cwd)
+            )
+        except GhUnavailableError as exc:
+            await self._mount_message(ErrorMessage(f"/ci-fix: {exc}"))
+            return
+
+        run = latest_run(runs)
+        if run is None:
+            await self._mount_message(
+                AppMessage(f"No CI runs found for `{branch}` yet.")
+            )
+            return
+        if run.is_pending:
+            await self._mount_message(
+                AppMessage(
+                    f"CI for `{branch}` is still running ({run.status}). "
+                    f"Re-run /ci-fix when it finishes: {run.url}"
+                )
+            )
+            return
+        if not run.is_failure:
+            await self._mount_message(
+                AppMessage(
+                    f"✓ CI for `{branch}` is green ({run.conclusion}). "
+                    "Nothing to fix."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(f"CI failed — fetching failing logs from {run.url} ...")
+        )
+        try:
+            logs = await _asyncio.to_thread(
+                get_failing_logs, run.run_id, cwd=_Path(self._cwd)
+            )
+        except GhUnavailableError as exc:
+            logs = f"(could not fetch logs: {exc})"
+        await self._send_prompt_to_agent(generate_ci_fix_prompt(branch, run, logs))
+
     async def _run_prompt_backed_command(
         self,
         command: str,
