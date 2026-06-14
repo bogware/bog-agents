@@ -3814,6 +3814,30 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage("Starting structured code review..."))
         await self._send_prompt_to_agent(prompt)
 
+    async def _handle_self_review_command(self, command: str) -> None:
+        """`/self-review` — fan the five reviewer lenses over the agent's own diff.
+
+        A pre-submit gate that reviews uncommitted work through correctness,
+        security, maintainability, test-coverage, and over-claims lenses and
+        emits a SHIP / FIX-FIRST verdict. Pass `--fix` to also fix blockers.
+        """
+        from bog_agents_cli.self_review_controller import (
+            generate_self_review_prompt,
+            parse_self_review_args,
+        )
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/self-review") :].strip()
+        target = parse_self_review_args(raw_arg)
+        prompt = generate_self_review_prompt(target)
+        announce = (
+            "Running self-review gate (5 lenses) and fixing blockers..."
+            if target.fix
+            else "Running self-review gate (5 lenses)..."
+        )
+        await self._mount_message(AppMessage(announce))
+        await self._send_prompt_to_agent(prompt)
+
     async def _run_prompt_backed_command(
         self,
         command: str,

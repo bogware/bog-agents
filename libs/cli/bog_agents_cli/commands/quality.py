@@ -38,6 +38,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/self-review",
+            "Pre-submit gate: review your own diff via 5 lenses (--fix to fix blockers)",
+            "self review gate diff blockers ship verdict",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_self_review_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/test",
             "Run tests with coverage and generate test skeletons",
             "coverage pytest",
