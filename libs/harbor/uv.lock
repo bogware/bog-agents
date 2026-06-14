@@ -401,7 +401,7 @@ requires-dist = [
     { name = "langchain-aws", marker = "extra == 'bedrock'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-baseten", marker = "extra == 'baseten'", specifier = ">=0.1.9,<1.0.0" },
     { name = "langchain-cohere", marker = "extra == 'cohere'", specifier = ">=0.5.0,<1.0.0" },
-    { name = "langchain-deepseek", marker = "extra == 'deepseek'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-deepseek", marker = "extra == 'deepseek'", specifier = ">=1.1.0,<2.0.0" },
     { name = "langchain-fireworks", marker = "extra == 'fireworks'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-google-genai", marker = "extra == 'google-genai'", specifier = ">=4.0.0,<5.0.0" },
     { name = "langchain-google-vertexai", marker = "extra == 'vertexai'", specifier = ">=3.0.0,<4.0.0" },
