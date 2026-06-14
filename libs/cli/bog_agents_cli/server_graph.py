@@ -665,7 +665,7 @@ except Exception as exc:
         "    `bog-agents --no-mcp` to start without MCP, then `/mcp remove <name>`.\n"
         "  - Missing API key: set ANTHROPIC_API_KEY (or run `/settings`).\n"
         "  - Sandbox provider not installed: pip install the missing extra,\n"
-        "    or run `bog-agents --sandbox-type none`.\n"
+        "    or run `bog-agents --sandbox none` (the default).\n"
         "================================================================\n"
     )
     print(msg, file=sys.stderr)  # noqa: T201  # stderr fallback — logger may not reach parent process

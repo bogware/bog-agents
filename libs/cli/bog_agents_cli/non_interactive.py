@@ -1527,8 +1527,9 @@ async def run_non_interactive(
             console.print(f"\n[red]Model not found ({err_name}): {e}[/red]")
             console.print(
                 f"[yellow]The model {model_name!r} was not recognized by the "
-                "provider. Verify the model id (run `bog-agents --list-models` "
-                "for available options).[/yellow]"
+                "provider. Verify the model id against the provider's catalog, "
+                "or browse models with the `/model` selector in the interactive "
+                "TUI.[/yellow]"
             )
         elif is_auth_error:
             console.print(f"\n[red]Authentication error ({err_name}): {e}[/red]")
