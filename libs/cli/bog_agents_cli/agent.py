@@ -1204,6 +1204,18 @@ def create_cli_agent(
     except Exception:
         logger.warning("Failed to build proxy tools; skipping", exc_info=True)
 
+    # Agent-written auto-memories (#13): a `remember` tool so the agent can
+    # proactively persist durable facts (conventions/gotchas/fix-patterns) to
+    # the AGENTS.md / ~/.bog-agents/memory.md cascade, auto-recalled next
+    # session. Only useful when memory loading is on.
+    if enable_memory:
+        try:
+            from bog_agents_cli.auto_memory import auto_memory_tools
+
+            tools.extend(auto_memory_tools(working_dir=effective_cwd or Path.cwd()))
+        except Exception:
+            logger.warning("Failed to build auto-memory tool; skipping", exc_info=True)
+
     # Setup agent directory for persistent memory (if enabled)
     if enable_memory or enable_skills:
         agent_dir = settings.ensure_agent_dir(assistant_id)
