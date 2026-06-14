@@ -301,6 +301,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     backend: BackendProtocol | BackendFactory | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     permissions: list[FilesystemPermission] | None = None,
+    guardrails: Sequence[Any] | None = None,
     state_schema: type[Any] | None = None,
     debug: bool = False,
     name: str | None = None,
@@ -1015,6 +1016,20 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # has run, so it can remove both user-supplied and middleware-injected tools.
     if _profile.excluded_tools:
         agents_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
+    # Guardrail tripwires (#18): validate the inbound user message and the model
+    # response, failing fast on a violation. Applied to both stages from the flat
+    # `guardrails=` list; for asymmetric input/output control pass a configured
+    # GuardrailMiddleware via `middleware=` instead. Placed near the model so it
+    # sees the assembled request and the raw response.
+    if guardrails:
+        from bog_agents.guardrails import GuardrailMiddleware
+
+        agents_middleware.append(
+            GuardrailMiddleware(
+                input_guardrails=list(guardrails), output_guardrails=list(guardrails)
+            )
+        )
+
     # Memory must be appended BEFORE AnthropicPromptCachingMiddleware (V3-2):
     # Memory.modify_request appends a new system content block; PromptCaching
     # tags the *last* system block with cache_control. If Memory ran after

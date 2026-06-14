@@ -187,6 +187,17 @@ ignore-var-parameters = true
     "EM102",   # f-string in exception — readable assert_pass_rate message
     "TRY003",  # Long exception message — the CI assert message is intentional
 ]
+# Guardrails: same shape as evals — protocol .check documented on the Protocol,
+# Any-typed judge model, intentional fail-open except for judge resilience.
+"bog_agents/guardrails/**" = [
+    "ANN401",  # Any — LLMGuardrail accepts any chat model
+    "BLE001",  # Blind except — a judge-model outage must fail open, not crash
+    "D102",    # .check documented on the Guardrail protocol
+    "D105",    # Dunder methods
+    "D107",    # __init__ docstring
+    "EM102",
+    "TRY003",
+]
 # Middleware: many interface methods have unused args, complex logic, blind excepts
 "bog_agents/middleware/**" = [
     "ANN401",  # Dynamically typed expressions (Any) — middleware often wraps unknown types
