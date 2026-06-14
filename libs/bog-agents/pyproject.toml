@@ -177,6 +177,16 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
+# Evals: task-agnostic primitives (arbitrary Any I/O) + intentional per-case
+# resilience (a task/scorer crash is a failed case, not a runner crash).
+"bog_agents/evals/**" = [
+    "ANN401",  # Any — eval task input/output is deliberately type-agnostic
+    "BLE001",  # Blind except — a crashing task/scorer must score as failed, not abort the run
+    "D102",    # Scorer .score is documented on the Scorer protocol
+    "D105",    # Dunder methods (__iter__/__len__)
+    "EM102",   # f-string in exception — readable assert_pass_rate message
+    "TRY003",  # Long exception message — the CI assert message is intentional
+]
 # Middleware: many interface methods have unused args, complex logic, blind excepts
 "bog_agents/middleware/**" = [
     "ANN401",  # Dynamically typed expressions (Any) — middleware often wraps unknown types
@@ -273,6 +283,9 @@ ignore-var-parameters = true
     "RUF029",  # Async function w/o await — required to satisfy async callback signatures
     "TRY002",  # Custom exception subclassing — fine for fakes in tests
     "TRY003",  # Long exception messages
+    "TC001",   # Type-checking-block import moves are noise for test files
+    "TC002",   # (pytest, pathlib, etc. imported at top of tests is fine)
+    "TC003",
     "EM101",   # Exception literal in raise
     "EM102",   # Exception f-string in raise
     "B904",    # raise from — not always meaningful in tests
