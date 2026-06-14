@@ -441,7 +441,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.0.0,<15.0.0" },
     { name = "runloop-api-client", marker = "extra == 'runloop-sandbox'", specifier = ">=0.69.0" },
     { name = "runloop-api-client", marker = "extra == 'sandbox'", specifier = ">=0.69.0" },
-    { name = "tavily-python", marker = "extra == 'web-search'", specifier = ">=0.7.21,<1.0.0" },
+    { name = "tavily-python", marker = "extra == 'web-search'", specifier = ">=0.7.26,<1.0.0" },
     { name = "textual", specifier = ">=8.0.0,<9.0.0" },
     { name = "textual-autocomplete", specifier = ">=3.0.0,<5.0.0" },
     { name = "tomli-w", specifier = ">=1.0.0,<2.0.0" },
