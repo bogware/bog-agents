@@ -152,7 +152,7 @@ async def create_checkpointer():
     async with AsyncSqliteSaver.from_conn_string(db_path) as saver:
         yield saver
 '''
-    (work_dir / "checkpointer.py").write_text(content)
+    (work_dir / "checkpointer.py").write_text(content, encoding="utf-8")
 
 
 def _write_pyproject(work_dir: Path) -> None:
@@ -180,7 +180,7 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 """
-    (work_dir / "pyproject.toml").write_text(content)
+    (work_dir / "pyproject.toml").write_text(content, encoding="utf-8")
 
 
 # ------------------------------------------------------------------

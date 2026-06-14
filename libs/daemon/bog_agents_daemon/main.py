@@ -54,9 +54,9 @@ def _ensure_token() -> str:
     """
     _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text().strip()
+        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
     token = _generate_token()
-    _TOKEN_FILE.write_text(token)
+    _TOKEN_FILE.write_text(token, encoding="utf-8")
     _TOKEN_FILE.chmod(0o600)
     # Windows-specific belt-and-suspenders: try icacls to grant only the
     # current user read/write, blocking inherited ACEs. Best-effort —
@@ -80,7 +80,7 @@ def _ensure_token() -> str:
 def _write_pid() -> None:
     """Write the current process PID to the PID file."""
     _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _PID_FILE.write_text(str(os.getpid()))
+    _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
 
 
 def _clear_pid() -> None:
@@ -189,7 +189,7 @@ def _read_pid() -> int | None:
     if not _PID_FILE.exists():
         return None
     try:
-        return int(_PID_FILE.read_text().strip())
+        return int(_PID_FILE.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
 
@@ -282,7 +282,7 @@ def _cmd_stop(port: int, *, force: bool, wait_seconds: float) -> int:
         print("No token file at", _TOKEN_FILE, "— is the daemon installed?")
         return 1
 
-    token = _TOKEN_FILE.read_text().strip()
+    token = _TOKEN_FILE.read_text(encoding="utf-8").strip()
     pid = _read_pid()
 
     # 1. Graceful shutdown via HTTP

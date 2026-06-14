@@ -196,7 +196,9 @@ class BogAgentsWrapper(BaseAgent):
             environment: Harbor environment (Docker, Modal, etc.)
             context: Context to populate with metrics
         """
-        configuration = json.loads(environment.trial_paths.config_path.read_text())
+        configuration = json.loads(
+            environment.trial_paths.config_path.read_text(encoding="utf-8")
+        )
         if not isinstance(configuration, dict):
             msg = f"Unexpected configuration format. Expected a dict got {type(configuration)}."
             raise TypeError(msg)
@@ -401,4 +403,6 @@ class BogAgentsWrapper(BaseAgent):
             final_metrics=metrics,
         )
         trajectory_path = self.logs_dir / "trajectory.json"
-        trajectory_path.write_text(json.dumps(trajectory.to_json_dict(), indent=2))
+        trajectory_path.write_text(
+            json.dumps(trajectory.to_json_dict(), indent=2), encoding="utf-8"
+        )

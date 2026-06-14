@@ -85,7 +85,9 @@ def append_to_memory(agent_md_path: Path, note: str) -> bool:
             if existing and not existing.endswith("\n")
             else ""
         )
-        agent_md_path.write_text(f"{existing}{separator}## Memory Note\n\n{note}\n")
+        agent_md_path.write_text(
+            f"{existing}{separator}## Memory Note\n\n{note}\n", encoding="utf-8"
+        )
         logger.info("Appended memory note to %s", agent_md_path)
         return True
     except OSError as e:

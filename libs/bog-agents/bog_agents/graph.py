@@ -796,6 +796,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(NotificationsMiddleware(session_name=f.session_name))
 
+    # DLP must be appended BEFORE AuditTrail (V3-3): DLP redacts sensitive
+    # values on the inbound path and must run *outer* (earlier) than Audit so
+    # the audit log records the redacted request, not the raw secrets. (Only
+    # the relative order matters; both are independently optional.)
+    if f.enable_dlp:
+        from bog_agents.middleware.dlp import DLPMiddleware
+
+        agents_middleware.append(DLPMiddleware(mode=f.dlp_mode))
+
     # Financial advisor middleware
     if f.enable_audit_trail:
         from bog_agents.middleware.audit_trail import AuditTrailMiddleware
@@ -855,10 +864,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(DeepResearchMiddleware())
 
-    if f.enable_dlp:
-        from bog_agents.middleware.dlp import DLPMiddleware
-
-        agents_middleware.append(DLPMiddleware(mode=f.dlp_mode))
+    # NOTE: DLPMiddleware is appended earlier (before AuditTrail) — see V3-3.
 
     if f.enable_version_control:
         from bog_agents.middleware.version_control import VersionControlMiddleware
@@ -1009,9 +1015,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # has run, so it can remove both user-supplied and middleware-injected tools.
     if _profile.excluded_tools:
         agents_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    # Memory must be appended BEFORE AnthropicPromptCachingMiddleware (V3-2):
+    # Memory.modify_request appends a new system content block; PromptCaching
+    # tags the *last* system block with cache_control. If Memory ran after
+    # caching, the injected memory text would fall outside the cached prefix
+    # (and per-thread memory variance would bust cache hits). Keeping Memory
+    # outer (earlier) and PromptCaching innermost preserves the cached prefix.
     if memory is not None:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
+    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))

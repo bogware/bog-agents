@@ -176,7 +176,7 @@ def _load_token() -> str | None:
         The token string, or None if the file does not exist.
     """
     if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text().strip()
+        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
     return None
 
 

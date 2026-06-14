@@ -176,3 +176,33 @@ class TestCanonicalMiddlewareOrder:
         names = _capture_middleware_list(monkeypatch, middleware=[_UserMW()], memory=[])
         if "MemoryMiddleware" in names:
             assert names.index("_UserMW") < names.index("MemoryMiddleware")
+
+    def test_memory_runs_before_prompt_caching(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Memory must run BEFORE PromptCaching (V3-2).
+
+        Memory.modify_request appends a new system content block; PromptCaching
+        tags the *last* system block with cache_control. If Memory ran after
+        caching, the injected memory text would fall outside the cached prefix.
+        Memory must therefore be the outer (earlier) middleware.
+        """
+        names = _capture_middleware_list(monkeypatch, memory=[])
+        assert "MemoryMiddleware" in names, names
+        assert names.index("MemoryMiddleware") < names.index(
+            "AnthropicPromptCachingMiddleware"
+        ), names
+
+    def test_dlp_runs_before_audit_trail(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """DLP must run BEFORE AuditTrail (V3-3, compliance hazard).
+
+        DLP redacts sensitive values on the inbound path; AuditTrail records the
+        request. If Audit ran first (outer), it would log unredacted secrets.
+        DLP must be the outer (earlier) middleware so the audit trail captures
+        the redacted request.
+        """
+        names = _capture_middleware_list(
+            monkeypatch,
+            config=FeatureConfig(enable_dlp=True, enable_audit_trail=True),
+        )
+        assert "DLPMiddleware" in names, names
+        assert "AuditTrailMiddleware" in names, names
+        assert names.index("DLPMiddleware") < names.index("AuditTrailMiddleware"), names

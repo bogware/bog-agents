@@ -373,6 +373,7 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
     """
     from bog_agents import create_agent
     from bog_agents.backends.local_shell import LocalShellBackend
+    from bog_agents.feature_config import FeatureConfig
 
     # Root the agent's filesystem and shell at the job's working_dir so
     # skills/pipelines that read or grep project files actually work. Without
@@ -383,8 +384,11 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
     # the project tree (mirrors how the CLI wires its LocalShellBackend).
     backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=False)
 
+    # V3-13: use the FeatureConfig path instead of the deprecated bare
+    # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and
+    # emits a DeprecationWarning on every job; removed at bog-agents 1.0).
     kwargs: dict[str, Any] = {
-        "enable_git_tools": True,
+        "config": FeatureConfig(enable_git_tools=True),
         "backend": backend,
         "working_dir": str(root_dir),
     }
