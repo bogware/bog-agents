@@ -1386,17 +1386,31 @@ async def execute_task_textual(
                             if isinstance(new_args, dict):
                                 req["args"] = new_args
 
-                    if blocked_indexes:
-                        decisions = []
-                        for i, _ in enumerate(action_requests):
-                            decisions.append(
-                                RejectDecision(
+                    # P1-75: a hook blocking ONE call in a parallel batch must
+                    # not auto-approve its siblings. If every call is blocked we
+                    # can short-circuit; otherwise fall through to the normal
+                    # approval flow and force the blocked indexes to reject after
+                    # the user/auto decision is made (via _force_blocked below).
+                    def _force_blocked(
+                        decisions: list[HITLDecision],
+                        _blocked: list[int] = blocked_indexes,
+                    ) -> list[HITLDecision]:
+                        for i in _blocked:
+                            if 0 <= i < len(decisions):
+                                decisions[i] = RejectDecision(
                                     type="reject",
                                     message="blocked by .bog-agents/hooks/pre-tool",
                                 )
-                                if i in blocked_indexes
-                                else ApproveDecision(type="approve")
+                        return decisions
+
+                    if blocked_indexes and len(blocked_indexes) >= len(action_requests):
+                        decisions = [
+                            RejectDecision(
+                                type="reject",
+                                message="blocked by .bog-agents/hooks/pre-tool",
                             )
+                            for _ in action_requests
+                        ]
                         resume_payload[interrupt_id] = {"decisions": decisions}
                         continue
 
@@ -1422,6 +1436,8 @@ async def execute_task_textual(
                         decisions: list[HITLDecision] = [
                             ApproveDecision(type="approve") for _ in action_requests
                         ]
+                        # P1-75: hook-blocked calls still reject even under auto-approve.
+                        decisions = _force_blocked(decisions)
                         resume_payload[interrupt_id] = {"decisions": decisions}
                         for tool_msg in list(adapter._current_tool_messages.values()):
                             tool_msg.set_running()
@@ -1532,6 +1548,11 @@ async def execute_task_textual(
                             adapter._current_tool_messages.clear()
                             any_rejected = True
 
+                        # P1-75: whatever the user/auto decided, hook-blocked
+                        # calls in this batch are forced to reject.
+                        decisions = _force_blocked(decisions)
+                        if blocked_indexes:
+                            any_rejected = True
                         resume_payload[interrupt_id] = {"decisions": decisions}
 
                         if any_rejected:
