@@ -1,3 +1,228 @@
+# REVIEW.md v3 — Current-State Audit (2026-06-14)
+
+> **Scope:** Whole monorepo — SDK (`libs/bog-agents`), CLI (`libs/cli`), daemon, ACP, harbor, partners/daytona, VS Code extension, CI/packaging, docs.
+> **Method:** 4 parallel Senior-Principal-Engineer auditors (SDK / CLI / satellites / engineering-quality), each cross-checking findings against the *installed* langchain + langgraph and the running source. All anchors below were spot-verified against current code on branch `fix/dependabot-vulns`.
+> **Builds on:** the v2 audit (June 12, 2026). The v2 Wave-0 correctness sweep largely landed — **bug classes A/B/C, the three default-reachable P0s (P0-1 AGENTS.md overwrite, P0-6 `--default-model`, P0-8 project-hook trust gate), and the first round of secret-at-rest/injection hardening are fixed** and are *not* re-litigated here. The v2 "shipped-but-dead" CLI cluster (`/think`, `/checkpoint load`, `/worktrees`) is likewise treated as resolved unless a finding below names a *new* regression.
+> **Already shipped on this branch (do NOT re-flag):** (1) unified Claude-Code-style permission mode — Shift+Tab cycles default→accept-edits→plan, `--permission-mode` flag, status indicator, headless parity; (2) the `apply_stdin_pipe` non-tty deadlock fix; (3) Bedrock via SigV4 **and** bearer-token API key.
+> **Verdict in one line:** The correctness crisis v2 diagnosed is over — the bug-class regressions are fixed and the headline features work on first use. What remains is a **maturity gap, not a stability gap**: the canonical-order safety net has two un-asserted holes that silently defeat prompt caching and audit-redaction, the `create_agent` docstring still advertises a safety stack that isn't wired (including a `SafeToolsMiddleware` class that does not exist), the v2 "highest-leverage" CI gate shipped as a 6-of-59 hand-picked test instead of the parametrized structural fix, and CI scope + dependency automation never caught up to the breadth of the codebase. None of these are hard; together they are exactly the seam through which the *next* silent regression will ship.
+
+---
+
+## 0. Executive summary — health by package
+
+| Package | State | One-line |
+|---|---|---|
+| **SDK** (`libs/bog-agents`) | **Healthy, two ordering hazards** | Lazy-loading, street-sweeper invariant, HITL filesystem-permission glue, and public-API discipline are all genuinely solid. But two un-asserted middleware-ordering bugs ship today (Memory-after-PromptCaching defeats caching; Audit-before-DLP writes unredacted secrets), and the `create_agent` docstring describes a safety stack that is largely fictional. |
+| **CLI** (`libs/cli`) | **Coherent, one real correctness bug** | The new permission-mode is well-wired with a single source of truth and defensive headless parity. The one live bug: Bedrock SSO auto-refresh's interactive `aws sso login` path is unreachable in the TUI because it derives interactivity from the server subprocess's stdin. The project's mandated encoding-safety lint (PLW1514) is disabled in this package's ruff config, with live regressions already present. God-class accretion continues. |
+| **daemon** | **Healthiest satellite, two posture gaps** | FastAPI/dispatch path is well-hardened (bounded errors, TOCTOU re-resolve, overlap protection). Gaps are runtime safety (`virtual_mode=False`, no HITL on an unattended runner reachable by webhook/git-push) and dependency surface (advertises unlanded modal/runloop sandbox extras; uses the deprecated legacy-feature-flag kwarg path). Never type-checked. |
+| **acp** | **Works for single-session, latent multi-session bug** | Clean ACP-error UX. But `_agent`/`_cwd` are effectively global, so a mode switch on one session can re-root another session's agent; client-supplied `mcp_servers` is silently dropped. |
+| **harbor** | **Functional, conventions drift** | Eval harness runs (70 tests). Trajectory write/read omit `encoding=utf-8` (P0-H violation, crashes on non-en-US Windows); hardcoded `version()="0.0.1"`; no CI. |
+| **partners/daytona** | **Build-broken** | Test suite cannot import at all — stale `uv.lock` pins langgraph 1.1.0 while the SDK now imports `langgraph.channels.delta.DeltaChannel` (needs ≥1.2.0). Verified: `graph.py:19` imports it, `daytona/uv.lock:1271` pins `1.1.0`. |
+| **vscode-extension** | **Cleanest satellite** | Strict CSP nonce, env allowlisting, absolute-path validation, spawn-without-shell. Only nit: `Math.random()` nonce. (v2's P0-9/P1-62/63/64 are separate, still-open items.) |
+| **CI / quality gates** | **Systematic holes** | The flagship "drive a fake turn through every middleware" gate is a 6-middleware regression test. CI lints/tests only sdk/cli/daemon — acp/harbor/daytona have none. No Dependabot despite hand-maintained CVE floors. Daemon never type-checked. ty is configured so permissively on SDK/CLI it would not have caught last cycle's outage. |
+
+The throughline: **v2 was about features that crash; v3 is about safety nets with holes.** Every P1 below is a place where a correct-looking change can regress silently because the test/lint/doc that should catch it is absent, scoped too narrowly, or actively disabled.
+
+---
+
+## 1. Issues — deduplicated, severity-ranked
+
+IDs are stable (`V3-N`). "v2 xref" links the lineage where relevant.
+
+### P0 — ship-blockers
+
+#### V3-1 — daytona partner is build-broken: stale `uv.lock` pins langgraph 1.1.0, SDK needs ≥1.2.0 (`DeltaChannel`)
+- **Why it matters:** `pytest --collect-only` fails for all three daytona test files with `ModuleNotFoundError: No module named 'langgraph.channels.delta'`. The SDK at `graph.py:19` does `from langgraph.channels.delta import DeltaChannel` (langgraph 1.2.0+) and declares `langgraph>=1.2.0,<2.0.0`, but the partner depends on the SDK editable and was never re-locked after the floor bump — `daytona/uv.lock:1271` still resolves `langgraph==1.1.0`. The published `langchain-daytona` integration cannot import. This is the *exact* lockfile-drift class V3-19 (no CI lock-check) guarantees will recur.
+- **Files:** `libs/partners/daytona/uv.lock`, `libs/partners/daytona/pyproject.toml`, `libs/bog-agents/bog_agents/graph.py:19`
+- **Fix:** `uv lock` in `libs/partners/daytona` to resolve `langgraph>=1.2.0`; add the package to `make lock-check` + CI (see V3-19). Re-lock `acp` in the same pass (its lock pins langgraph 1.1.6, also below floor — imports today by luck).
+
+---
+
+### P1 — serious
+
+#### V3-2 — `MemoryMiddleware` runs *after* `AnthropicPromptCachingMiddleware`, silently defeating prompt caching whenever `memory=` is set
+- **Why it matters:** Verified ordering in `create_agent`: PromptCaching appended at `graph.py:1012`, then Memory at `graph.py:1014`. Later list position = inner wrapper, so Memory runs **after** caching. Memory's `modify_request` appends a *new* system content block (`memory.py` → `append_to_system_message`, `_utils.py:6-23`); PromptCaching tags the *last* system block with `cache_control`. Net: the cache breakpoint is no longer on the last block and the injected memory text falls outside the cached prefix — and if memory varies per thread/run the marked prefix shifts and busts hits. This is precisely the invariant `test_middleware_canonical_order.py` exists to protect, but it only asserts `names[-1] == "AnthropicPromptCachingMiddleware"` on the *no-memory* stack, so the regression is untested. Same family as v2's "PromptCaching must be innermost" rule.
+- **Files:** `libs/bog-agents/bog_agents/graph.py:1012-1014`, `middleware/memory.py`, `middleware/_utils.py`, `tests/unit_tests/test_middleware_canonical_order.py`
+- **Fix:** Append `MemoryMiddleware` **before** `AnthropicPromptCachingMiddleware` (it's a context-preparation concern, exactly where the docstring at `graph.py:328` already places it); extend the canonical-order test to assert caching is last *with* `memory=[...]` supplied.
+
+#### V3-3 — `AuditTrailMiddleware` is wired *before* `DLPMiddleware`, contradicting the docstring's own DLP→Audit invariant (compliance hazard)
+- **Why it matters:** The `create_agent` docstring (`graph.py:341`) states "`DLPMiddleware` must run before `AuditTrailMiddleware` if you want redacted values to land in audit logs." The actual wiring appends Audit at `graph.py:803` and DLP at `graph.py:861` — Audit is outer, DLP inner — so on the inbound path Audit records the request **before** DLP redacts it, writing unredacted secrets to the audit trail: the exact failure the docstring warns against. `_validate_middleware_ordering` cannot catch it (no `requires=` declared between them). Either the wiring or the documented invariant is wrong; both ship today. Distinct from v2's P1-5 (audit logging empty tool-calls, fixed).
+- **Files:** `libs/bog-agents/bog_agents/graph.py:803,861`, `middleware/dlp.py`, `middleware/audit_trail.py`
+- **Fix:** Decide intended semantics, reorder the appends so DLP precedes Audit, and add a `requires=[DLPMiddleware]` on Audit (or a canonical-order assertion) so it can't regress.
+
+#### V3-4 — `create_agent` docstring documents a default middleware stack that does not exist; ~9 named middleware are never wired (incl. safety-relevant ones)
+- **Why it matters:** The "Middleware execution order" docstring (`graph.py:317-348`) enumerates `LifecycleHooksMiddleware`, `HttpHooksMiddleware`, `LangSmithMiddleware`, `SafeToolsMiddleware`, `ExpertRulesMiddleware`, `RulesMiddleware`, `ThinkingMiddleware`, `ContextPackingMiddleware`, `CodeIntelligenceMiddleware` (as unconditional), and `IntelligentCompactionMiddleware` as if installed by default. Grep of the assembly code shows **none** are referenced outside the docstring (CodeIntelligence is gated behind `enable_code_intelligence` at `graph.py:784`). A user reading the docstring will believe safety/observability middleware are active out of the box when they are not — dangerous because the list includes the safety-relevant `SafeToolsMiddleware`/`ExpertRulesMiddleware`.
+- **Files:** `libs/bog-agents/bog_agents/graph.py:317-348`
+- **Fix:** Rewrite the docstring to the real assembly: TodoList → optional skills/permissions → the `enable_*` feature block in append order → default tail (Filesystem/SubAgent/Summarization/PatchToolCalls) → user middleware → profile extras → PromptCaching → Memory → HITL. (Pairs with V3-2/V3-3 — fix the order, then document what's actually there.)
+
+#### V3-5 — Bedrock SSO auto-refresh's interactive `aws sso login` path is unreachable in the TUI (interactivity derived from server-subprocess stdin)
+- **Why it matters:** `BedrockRefreshMiddleware` is attached with `interactive=sys.stdin.isatty()` evaluated at graph-build time (`agent.py:1698`). But the graph is built by `make_graph()` inside the langgraph-dev **server subprocess** (`server_graph.py` → `create_cli_agent`), whose stdin is not a terminal and whose stderr is redirected to the per-port log. So `isatty()` is always False in the server process: the middleware always takes the non-interactive branch (banner to the server log + re-raise), and the feature's whole point — spawn `aws sso login`, open a browser, retry — never fires in the primary interactive flow. It only works when `create_agent` is built in-process (tests); the `-p` headless path is non-interactive by design anyway. (Note: the Bedrock dual-auth itself works — this is about the *refresh-on-expiry UX*, which is not in the "already shipped, don't re-flag" set.) This is a specific instance of the broader server-subprocess boundary smell in V3-themes.
+- **Files:** `libs/cli/bog_agents_cli/agent.py:1698`, `bedrock_refresh.py`, `server_graph.py`
+- **Fix:** Flow real client-side interactivity through `ServerConfig`/env (the way `auto_approve`/`interactive` already do) instead of re-deriving it from subprocess stdin; or surface the refresh prompt to the client process where the terminal/browser actually are.
+
+#### V3-6 — `PLW1514` (unspecified-encoding) is disabled in the CLI ruff config, contradicting CLAUDE.md and leaving the P0-H encoding sweep unenforced — with live regressions
+- **Why it matters:** CLAUDE.md's file-handling section mandates "ruff's `PLW1514` should be left enabled going forward" (the safety net for the Windows non-en-US cp1252/cp932/cp949 decode crashes closed by the P0-H sweep). But `libs/cli/pyproject.toml:275` lists `"PLW1514"` in `ignore`. The net is off in the most file-heavy package, and regressions already exist: `server_manager.py` `_write_checkpointer` (~line 155) and `_write_pyproject` (~line 184) call `Path.write_text(content)` with no `encoding=`. `_write_pyproject` interpolates `cli_dir.as_uri()` — on a machine whose install path contains non-ASCII (a non-ASCII Windows username) that content is non-ASCII and the bare write re-encodes through the locale codec: exactly the crash class P0-H closed. The documented invariant is enforced by neither lint nor review.
+- **Files:** `libs/cli/pyproject.toml:275`, `libs/cli/bog_agents_cli/server_manager.py`, `CLAUDE.md`
+- **Fix:** Remove `PLW1514` from CLI `ignore` (or add it to the CI gate) and fix the existing call sites with `encoding="utf-8"`. Sweep `harbor`/`daemon` for the same (see V3-12, V3-13).
+
+#### V3-7 — The flagship every-middleware fake-turn CI gate shipped as a narrow ~6-middleware regression test, not the parametrized structural fix v2 prescribed
+- **Why it matters:** v2 §2/§5 named "a CI gate that constructs every middleware and drives one fake-model turn" as "the single highest-leverage action" that "prevents the entire class from recurring." The implemented `test_model_call_smoke.py` hard-codes ~6 middleware (RepoMap, PlanMode, Thinking, AutoQuality, CostTracker, AuditTrail) — i.e. the modules already known broken last cycle. 59 middleware override `wrap_model_call`/`awrap_model_call`; the 12 former bug-class-B modules (`adaptive_context`, `agent_replay`, `hot_reload_skills`, `http_hooks`, `model_cascade`, `offline_mode`, `provider_retry`, `scheduled_runs`, `security_audit`, `self_improving`, `smart_approvals`) are exercised by no model-turn test, and ~60 of 86 middleware modules have no dedicated test file. The exact regression class — a future langchain/langgraph bump silently breaking a hook — can still ship green. This is the root cause v2 identified, left structurally open.
+- **Files:** `libs/bog-agents/tests/unit_tests/middleware/test_model_call_smoke.py`, `middleware/model_cascade.py`, `middleware/smart_approvals.py`
+- **Fix:** Replace the hand-picked list with a `pytest.mark.parametrize` enumerating every middleware (or every entry `create_agent` can wire), constructing each with minimal deps and driving one fake `wrap_model_call` + `awrap_model_call`, asserting no exception and the message-count/order invariant.
+
+#### V3-8 — CI does not lint or test acp, harbor, or partners/daytona; VS Code extension only builds on manual dispatch
+- **Why it matters:** `ci.yml`'s lint/test matrices enumerate only `{sdk, cli, daemon}`. `libs/acp` (ships to PyPI at 0.0.4), `libs/harbor` (the eval harness, py3.12+), and `libs/partners/daytona` (published, with unit+integration tests) get no PR/main CI. `.pre-commit-config.yaml` *does* wire harbor+acp into format+lint — so the only thing checking them is a developer's local hook, which CI cannot assume ran (and which has silently diverged from the CI matrix). The VS Code extension compiles/lints only on `workflow_dispatch`, so a TS regression in `extension.ts` lands on main unchecked (v2's P0-9/P1-63/64 live there). V3-1 (daytona build-broken) is the direct consequence: a CI job would have caught it the moment the SDK bumped its langgraph floor.
+- **Files:** `.github/workflows/ci.yml`, `.github/workflows/vscode-extension.yml`, `libs/acp/pyproject.toml`, `libs/harbor/pyproject.toml`, `libs/partners/daytona/pyproject.toml`
+- **Fix:** Add acp/harbor to the lint+test matrices (harbor on py3.12+ only), add a partners/daytona job, and add a push/PR-triggered compile+lint job for the extension (publish stays manual).
+
+#### V3-9 — No Dependabot/Renovate config — every CVE floor is hand-maintained, guaranteeing the manual sweep must be repeated each cycle
+- **Why it matters:** No `.github/dependabot.yml` (or `renovate.json`) exists (verified). The entire transitive-CVE hardening on *this* branch (cryptography, urllib3, requests, pyasn1, pygments, aiohttp, pillow, langsmith, python-multipart, pyjwt — each with an inline CVE id across the sdk/cli/daemon pyprojects) is hand-applied across five separate `uv.lock` files. Without automated dependency PRs + an advisory feed, the next wave of advisories ages silently until someone re-audits by hand — directly undercutting the value of the sweep that produced this branch. (The daytona `urllib3>=2.6.3` vs daemon `>=2.7.0` drift in the tech-debt list is a live example of floors already diverging.)
+- **Files:** `.github/dependabot.yml` (new), `libs/{bog-agents,cli,daemon}/pyproject.toml`
+- **Fix:** Add `dependabot.yml` covering pip/uv for all five package dirs + github-actions; group minor/patch bumps to cut PR noise.
+
+#### V3-10 — Daemon source is never type-checked, and daemon test-lint failures are swallowed with `|| true`
+- **Why it matters:** CLAUDE.md calls the daemon "the healthiest satellite" and asks contributors to keep it green when `create_agent` changes — but `libs/daemon/Makefile`'s `lint` target runs only `ruff check` with **no `ty`** (unlike sdk/cli/acp/harbor). A network-facing FastAPI service that handles secrets and dispatches to Slack/webhook/email/GitHub gets zero static type analysis. Worse, the test-lint line `ruff check tests/ --ignore=ANN,S,ARG || true` swallows any failure. The daemon also has only 6 test files for 8 source modules with the broadest blast radius in the repo.
+- **Files:** `libs/daemon/Makefile`, `libs/daemon/pyproject.toml`
+- **Fix:** Add a `type` target running `ty check bog_agents_daemon`, wire it into `make lint`, drop the `|| true`, add `ty` to the daemon test dependency group.
+
+#### V3-11 — daemon runs agents fully autonomously with `virtual_mode=False` (path guardrails disabled) and no HITL/permissions
+- **Why it matters:** `runner.py:384` builds `LocalShellBackend(..., virtual_mode=False)`, which emits a runtime DeprecationWarning: "disables path-based guardrails: absolute paths and `..` can bypass root_dir." The same `create_agent` call passes no `interrupt_on`, no permissions, no HITL (grep returns nothing). The daemon is unattended *by design* and can be triggered by webhook/git-push whose `trigger_context` (and, for skill/pipeline jobs, file contents) is partially attacker-influenced — so disabling the one remaining path-containment guardrail in an auto-approve runner is a real defense-in-depth gap. Related to V3-15 (the safeguard CLAUDE.md points operators at doesn't exist).
+- **Files:** `libs/daemon/bog_agents_daemon/runner.py:384`
+- **Fix:** Default `virtual_mode=True` (or gate `False` behind an explicit opt-in env var); document that operators must scope `working_dir` tightly.
+
+#### V3-12 — harbor trajectory write/read omit `encoding=utf-8` — P0-H violation, crashes eval on non-en-US Windows
+- **Why it matters:** `bog_agents_wrapper.py:404` does `trajectory_path.write_text(json.dumps(...))` with no encoding, and `:199` does `config_path.read_text()` with no encoding. Trajectory JSON embeds raw model output + the task instruction (arbitrary Unicode); the harbor config is user-authored. On a Windows non-en-US locale a single non-ASCII char aborts the eval with `UnicodeEncodeError`/`DecodeError`. Sibling files `reporter.py`/`export.py` already do this correctly, so it's an inconsistency — and `PLW1514` (mandated "left enabled," but see V3-6) would flag it.
+- **Files:** `libs/harbor/bog_agents_harbor/bog_agents_wrapper.py:199,404`
+- **Fix:** Add `encoding="utf-8"` to both calls; run a PLW1514 pass across harbor.
+
+#### V3-13 — Satellites depend on the SDK's deprecated legacy-feature-flag kwarg path (removed at bog-agents 1.0)
+- **Why it matters:** `daemon/runner.py:387` passes `enable_git_tools=True` as a bare `create_agent` kwarg; harbor passes `enable_memory`/`enable_skills`/`enable_shell` to `create_cli_agent`. In the SDK these flow through `**legacy_feature_flags` → `_resolve_feature_config` (`graph.py:259-285`), which emits a DeprecationWarning on every call (tagged P1-6) and is explicitly slated for deletion at 1.0. All satellites cap the SDK at `<1.0.0` so nothing breaks yet, but every daemon job run emits a deprecation warning today and the integration hard-breaks the moment the SDK majors — with no CI smoketest asserting the satellites still build against the latest SDK.
+- **Files:** `libs/daemon/bog_agents_daemon/runner.py:387`, `libs/harbor/bog_agents_harbor/bog_agents_wrapper.py`, `libs/bog-agents/bog_agents/graph.py:259-285`
+- **Fix:** Migrate satellites to `config=FeatureConfig(enable_git_tools=True, ...)` now; add a CI smoketest building satellites against the latest local SDK.
+
+#### V3-14 — Dead/aspirational sandbox deps: daemon advertises `modal` + `runloop-api-client` extras that were never landed
+- **Why it matters:** CLAUDE.md (P0-F) states only daytona exists; modal/runloop/quickjs "were never landed." Yet `daemon/pyproject.toml` exposes `sandbox=[...modal, runloop-api-client...]`, `modal-sandbox`, `runloop-sandbox`, and the daemon `uv.lock` carries both. No daemon code wires a modal/runloop backend, so these install heavyweight deps for a capability that does not exist — the same dead-feature class P0-F was meant to close, relocated into the daemon's dependency surface. (Note: the CLI's `--sandbox modal`/`runloop` extras *are* real and import-graceful — so CLAUDE.md's "only daytona" partners note is itself now stale; see docs-drift theme.)
+- **Files:** `libs/daemon/pyproject.toml`, `libs/daemon/uv.lock`
+- **Fix:** Drop modal/runloop extras from the daemon (keep `daytona-sandbox`), or only ship an extra once a corresponding partner package exists.
+
+#### V3-15 — `ACP` server is not multi-session safe: shared `self._agent`/`self._cwd` leak state across sessions
+- **Why it matters:** `AgentServerACP` keys cwd/mode by session (`_session_cwds`, `_session_modes`) but holds a single `self._agent` and `self._cwd`. `_reset_agent` (`server.py:429`) builds `AgentSessionContext(cwd=self._cwd, ...)` from the shared attribute, not `self._session_cwds[session_id]`. `prompt()` refreshes `self._cwd` first; `set_session_mode()` calls `_reset_agent(session_id)` **without** refreshing it — so a mode switch on session B rebuilds B's agent rooted at whichever session last ran `prompt()`. And `self._agent` is overwritten per prompt, so two interleaved sessions clobber one compiled graph. Fine for Zed's typical single-session use, latent correctness bug otherwise. (v2's P1-61 named the symptom; this is the verified mechanism + fix site.)
+- **Files:** `libs/acp/bog_agents_acp/server.py:429`
+- **Fix:** Key `_agent` by `session_id` and source cwd from `self._session_cwds` inside `_reset_agent`.
+
+---
+
+### P2 — important, not urgent
+
+#### V3-16 — `SafeToolsMiddleware` is cited as the primary adversarial safeguard in 3 places but the class does not exist
+- **Why it matters:** CLAUDE.md says the real safeguard is "HITL + SafeToolsMiddleware"; `backends/local_shell.py:43-44` repeats it; the `create_agent` docstring lists it in the safety section (`graph.py:326`). But `safe_tools.py` defines only `SafeToolRule`, `SafeToolsConfig`, `is_tool_safe()`, `load_safe_tools_config()` — **no `SafeToolsMiddleware` class** (verified: grep returns zero matches in the module). The documented safety story points users at a component that cannot be instantiated. Folds into V3-4 (fictional default stack) and V3-11 (daemon points operators here too).
+- **Files:** `libs/bog-agents/bog_agents/middleware/safe_tools.py`, `backends/local_shell.py`, `graph.py:326`
+- **Fix:** Either implement `SafeToolsMiddleware` (a `wrap_tool_call` middleware consuming `SafeToolsConfig` to auto-approve matched calls and gate the rest), or correct all three references to name the real mechanism (`HumanInTheLoopMiddleware` + `FilesystemPermissionsMiddleware` + `ExpertRulesMiddleware`).
+
+#### V3-17 — Permission-mode name drift across surfaces: `acceptEdits` (flag/help) vs `accept-edits` (TUI/indicator/`/permissions`), plus a wrong help string
+- **Why it matters:** The flag uses camelCase `acceptEdits` (`main.py:607`, echoed in help at `main.py:616` and `ui.py:123`); the TUI cycle, `_current_permission_mode`, status indicator, and `/permissions` all use kebab `accept-edits` (`app.py:815,9057,15039`; `widgets/status.py:281`). So `bog-agents --permission-mode accept-edits` errors even though every in-app surface shows `accept-edits`. Worse, `main.py:616` help claims "Shift+Tab cycles default → acceptEdits → plan" — a spelling the TUI never displays (it shows `accept-edits`/AUTO-EDIT). No test asserts flag↔TUI naming consistency. (This is *within* the just-shipped permission-mode feature — a polish gap, not a re-flag of the feature itself.) Note the borrowed `acceptEdits` here means the smart rule-engine auto-mode, not Claude Code's literal auto-approve-edits semantics.
+- **Files:** `libs/cli/bog_agents_cli/main.py:607,616`, `ui.py:123`, `app.py`, `widgets/status.py:281`
+- **Fix:** Pick one canonical spelling (accept the camelCase flag as Claude-Code-compatible *and* accept a kebab alias, or normalize everything to kebab); add a parity test walking the flag choices against the cycle + status label map; doc the semantic difference.
+
+#### V3-18 — `ty` is configured so permissively across SDK and CLI that it catches almost nothing
+- **Why it matters:** `libs/bog-agents/pyproject.toml [tool.ty.rules]` sets `invalid-argument-type`, `invalid-assignment`, `no-matching-overload`, `unresolved-attribute`, `missing-argument`, `invalid-return-type`, `not-iterable`, `unused-ignore-comment` (and more) all to `ignore`; CLI adds `possibly-missing-attribute`, `not-subscriptable`, `unsupported-operator`, `call-non-callable`, `unknown-argument`. With attribute/argument/overload checking off, ty would not have caught last cycle's bug-class-A `AttributeError` nor bug-class-B wrong-arity hook. Some suppressions are legitimately needed for `AgentMiddleware` generics, but the blanket disabling removed the safety that would have prevented the v2 outage.
+- **Files:** `libs/bog-agents/pyproject.toml`, `libs/cli/pyproject.toml`
+- **Fix:** Re-enable `unresolved-attribute` and `missing-argument` at minimum, scoped via per-file `ty: ignore` at the real generics false-positive sites; treat `unused-ignore-comment` as a warning so dead suppressions get cleaned.
+
+#### V3-19 — No coverage threshold, no CI lockfile-freshness check, and a `.coveragerc` referenced by a Makefile target that doesn't exist
+- **Why it matters:** Three gaps: (1) no package enforces a coverage floor (`make test` prints term-missing but gates nothing, so coverage erodes silently); (2) `make lock-check` exists at repo root but is never invoked by `ci.yml` — a PR editing a pyproject dependency without re-locking passes CI (this is exactly how V3-1's daytona drift shipped); (3) `libs/bog-agents/Makefile`'s `coverage` target passes `--cov-config=.coveragerc` but no such file exists anywhere.
+- **Files:** `.github/workflows/ci.yml`, `libs/bog-agents/Makefile`, root `Makefile`
+- **Fix:** Add a modest `fail_under`; run `make lock-check` as a CI job; create the `.coveragerc` or drop the flag.
+
+#### V3-20 — Composite action's `UV_VERSION` pin is a dead no-op; CI matrix omits the declared 3.11 floor and never tests harbor's 3.12 floor
+- **Why it matters:** (Re-confirmation of v2 P1-71, still open.) `.github/actions/uv_setup/action.yml` declares `env: UV_VERSION: "0.8.17"` at the action root and references `${{ env.UV_VERSION }}` in the step — a composite action's root `env:` is not exposed to step expressions, so `version:` resolves empty and setup-uv installs `latest`; every CI run can float to a new uv. Separately, all packages declare `requires-python >=3.11` but `ci.yml` tests only 3.12/3.13 ("3.11 temporarily disabled") — a 3.11-only regression ships to users on the supported floor — and harbor (`>=3.12`) is in no matrix.
+- **Files:** `.github/actions/uv_setup/action.yml`, `.github/workflows/ci.yml`, `libs/harbor/pyproject.toml`
+- **Fix:** Move the pin into the step's own `env:` (or hard-code it); restore 3.11 to the matrix (or raise the published floor to match reality); add harbor on 3.12.
+
+#### V3-21 — God-class handlers ignore the controller-delegation convention (`_handle_team_command` is ~700 lines inside `app.py`)
+- **Why it matters:** CLAUDE.md mandates thin handlers that delegate to a standalone controller (the `expert_controller.py` pattern). The pattern exists (expert/sidecar/orchestrator/sweep controllers) but most large handlers don't follow it: in `app.py` (~16.7k lines, 341 methods) the longest are inline business logic — `_handle_team_command` ~700, `_handle_mcp_command` ~417, `_handle_peat_command` ~400, `_handle_harbor_command` ~366, `_handle_agent_command` ~349, `_handle_qa_command` ~321. `_handle_team_command` has no `team_controller.py` even though `team_config.py`/`team_orchestration.py` already exist to delegate to. The deferred app.py-refactor (MEMORY.md) tracks the broad extraction; the near-term actionable is landing controllers for the handful of >300-line handlers.
+- **Files:** `libs/cli/bog_agents_cli/app.py`, `team_config.py`, `team_orchestration.py`
+- **Fix:** Extract `team_controller.py` first (modules exist), then the other >300-line handlers; logic becomes testable without the TUI.
+
+#### V3-22 — `/permissions` (the permission-mode inspector) has no headless twin
+- **Why it matters:** The permission-mode feature shipped with `--permission-mode` headless parity (sets the booleans) but no way to *inspect* the resolved posture non-interactively: `/permissions` is TUI-only and absent from `headless_commands.HEADLESS_COMMANDS`. CLAUDE.md's headless guidance says informational/config slash commands should get a headless twin — `/permissions` is exactly that. An agent driving the CLI via `bog-agents command "/permissions"` gets the generic not-headless error.
+- **Files:** `libs/cli/bog_agents_cli/headless_commands.py`, `app.py`
+- **Fix:** Add `_cmd_permissions(args)` reading `settings.shell_allow_list` + the resolved mode, mirroring `_cmd_config`.
+
+#### V3-23 — `PlanModeMiddleware` is effectively dead in the SDK default path: `enabled=False` with no `create_agent`-level toggle
+- **Why it matters:** `enable_plan_mode` wires `PlanModeMiddleware(enabled=False)` at `graph.py:679`. The only way to flip it is the model calling `toggle_plan_mode` or external code mutating `.enabled` — `create_agent` exposes no parameter to start in plan mode, and the instance is function-local so callers can't reach it. The CLI implements its own permission-mode `plan` independently (the v2-anticipated "two plan-mode impls"). Net: `enable_plan_mode=True` ships an extra tool but no actual plan-mode behavior for a programmatic SDK user.
+- **Files:** `libs/bog-agents/bog_agents/middleware/plan_mode.py`, `graph.py:679`, `libs/cli/bog_agents_cli/widgets/status.py`
+- **Fix:** Add a `start_in_plan_mode`/`plan_mode` kwarg threaded into `PlanModeMiddleware(enabled=...)`, or document that plan mode is model-/CLI-driven only and the flag controls only tool presence.
+
+#### V3-24 — User-supplied `ResultSynthesisMiddleware` via `middleware=` crashes the build with a `requires` ValueError that the flag path silently auto-fixes
+- **Why it matters:** `ResultSynthesisMiddleware` declares `requires=[ParallelWorktreeMiddleware]` (`result_synthesis.py:47`), enforced by `_validate_middleware_ordering`. The `enable_result_synthesis` flag path auto-creates a `ParallelWorktreeMiddleware` when absent (`graph.py:973-979`); a user passing `ResultSynthesisMiddleware()` directly via `middleware=` gets no such auto-fix and hits `ValueError` at `graph.py:1037` unless they also remembered to pass the dependency. Inconsistent contract between the two supported entry points for the same component.
+- **Files:** `libs/bog-agents/bog_agents/middleware/result_synthesis.py:47`, `graph.py:973-979,1037`
+- **Fix:** Apply the same auto-provisioning to user-supplied middleware, or document the requirement prominently on the class.
+
+#### V3-25 — ACP `new_session` accepts `mcp_servers` from the client and silently drops it
+- **Why it matters:** `server.py:new_session` (~139-156) takes `mcp_servers`, normalizes `None`→`[]`, then never references it — no MCP wiring, no warning. A Zed client that configures session MCP servers sees them accepted by the protocol but the agent has zero MCP tools.
+- **Files:** `libs/acp/bog_agents_acp/server.py:139-156`
+- **Fix:** Wire MCP registration into the agent, or log a clear "MCP servers not yet supported" notice so the gap isn't silent.
+
+#### V3-26 — daytona partner dependency floor `daytona>=0.1.0` is meaningless vs the API it uses (~0.148)
+- **Why it matters:** `partners/daytona/pyproject.toml` pins `daytona>=0.1.0` but `sandbox.py` uses `FileDownloadRequest`/`FileUpload`/`SessionExecuteRequest(run_async=True)`/`process.execute_session_command`/`process.get_session_command_logs` — APIs that exist only in a far newer daytona (lock resolves 0.148.0; the daemon pins `>=0.113.0,<1.0.0`). A clean install can resolve an ancient daytona lacking every symbol `sandbox.py` imports, producing a confusing `ImportError` instead of a clear version error.
+- **Files:** `libs/partners/daytona/pyproject.toml`, `libs/daemon/pyproject.toml`
+- **Fix:** Raise the floor to match the daemon (`>=0.113.0,<1.0.0`).
+
+#### V3-27 — Documentation count-drift: READMEs and CLAUDE.md disagree with each other and with the source on middleware count
+- **Why it matters:** `README.md` and `libs/bog-agents/README.md` say "80+ / ~80 middlewares," CLAUDE.md says "~90," and the source has 101 files in `bog_agents/middleware` (86 non-underscore modules; 59 override `wrap_model_call`). All wrong by different amounts, with no drift test (unlike the help-screen drift test the project maintains). Part of the broader doc-drift family (V3-14's stale partners note; V3-4's fictional stack; v2 P0-10/P1-86 daemon docs still open).
+- **Files:** `README.md`, `libs/bog-agents/README.md`, `CLAUDE.md`
+- **Fix:** Pick one source-of-truth count, or add a drift test asserting the README number matches `len(_LAZY_IMPORTS)`.
+
+#### V3-28 — daemon token-file read/write omit `encoding=utf-8` (secret-bearing file, convention/lint)
+- **Why it matters:** `main.py:57/59/285` and `api.py:179` read/write the daemon auth token with no encoding. Tokens are hex so no crash in practice, but CLAUDE.md mandates `encoding="utf-8"` on all `read_text`/`write_text` and PLW1514 should flag it. (The surrounding security handling — chmod 0600 + Windows `icacls /inheritance:r` — is otherwise solid and cross-platform.)
+- **Files:** `libs/daemon/bog_agents_daemon/main.py:57,59,285`, `api.py:179`
+- **Fix:** Add `encoding="utf-8"` for convention/lint compliance.
+
+#### V3-29 — Stale upstream metadata + leftover non-tracked `partners/runloop/` cruft
+- **Why it matters:** `acp/pyproject.toml:53` and `harbor/pyproject.toml:50` set `[project.urls] Twitter = "https://x.com/LangChain"` and harbor's description says "Harbor integration with LangChain Bog Agents" — copy-paste remnants that ship in the published wheel metadata of the bogware fork. Separately, `libs/partners/runloop/` exists on disk but is not git-tracked, containing only a stale `.venv` (editable `bog_agents 0.6.4`) + `.pytest_cache` — confusing cruft that makes it look like a second partner exists (corroborates P0-F that runloop was never landed).
+- **Files:** `libs/acp/pyproject.toml:53`, `libs/harbor/pyproject.toml:50`, `libs/partners/runloop` (delete)
+- **Fix:** Fix the URLs/description; delete the ignored `partners/runloop/` directory.
+
+---
+
+## 2. Systemic themes
+
+- **Safety nets with un-asserted holes (the v3 signature).** The canonical-order test, the model-call smoke test, and the PLW1514 lint all exist *as concepts* but are scoped narrowly enough (no-memory stack only; 6-of-59 middleware; disabled in the file-heaviest package) that the very regressions they're meant to catch — V3-2 caching-defeat, V3-3 audit/DLP order, V3-6/V3-12 encoding crashes, V3-7 next dependency-bump break — slip straight through. The fix everywhere is "widen the assertion to cover the real surface," not "write a new test."
+
+- **Docstring/doc vs. reality drift, now safety-relevant.** v2 was "shipped features don't work"; v3 is "docs describe a system that isn't built." The `create_agent` docstring advertises a 9-middleware safety/observability default stack that is never wired (V3-4) and names a `SafeToolsMiddleware` class that doesn't exist (V3-16) — cited in three places including a backend that tells operators it's their adversarial safeguard, and a daemon that runs with guardrails off (V3-11). Plus middleware-count drift (V3-27) and a stale partners inventory (V3-14). Doc-drift here is a security-posture lie, not a cosmetic one.
+
+- **CI scope never caught up to the codebase breadth.** Five Python packages + a TS extension, but CI gates only three of them (V3-8); no Dependabot (V3-9); daemon never type-checked (V3-10); no lock-check/coverage gate (V3-19); a dead uv pin and a too-narrow Python matrix (V3-20). The daytona build-break (V3-1) is the proof: a one-line SDK floor bump silently broke a published package because nothing tested it.
+
+- **ty is decorative on the two largest packages.** Attribute/argument/overload/assignment categories globally ignored on SDK + CLI (V3-18) — the suppression list grew to absorb `AgentMiddleware`-generics false positives but took genuine safety with it. Needs scoped per-file ignores so the global config can re-enable real checks.
+
+- **God-class accretion continues.** `app.py` at ~16.7k lines / 341 methods (V3-21) keeps absorbing inline handler logic against the project's own controller-delegation convention; the refactor is deferred (MEMORY.md) but the near-term controllers (team first) are landable now.
+
+- **Server-subprocess boundary smell.** Any client-side affordance (tty, browser, terminal prompts) computed inside the graph build will be wrong because the graph runs in the langgraph-dev subprocess — V3-5 (Bedrock interactive refresh) is the first concrete victim. Worth a documented rule + grep that client-interactivity must flow through `ServerConfig`/env, not be re-derived in `server_graph.py`.
+
+- **Headless/TUI parity is close but incomplete.** Permission-mode headless parity shipped well, but the inspector (`/permissions`, V3-22) and several informational commands have no headless twin, and the permission-mode spelling drifts across flag/TUI/help/inspector (V3-17). A registry-driven headless set + a single naming-parity test would close the family.
+
+---
+
+## 3. Quick wins (high-impact, low-effort)
+
+Ordered by impact-per-diff. Each is a small, high-confidence change.
+
+1. **V3-2 / V3-3 — reorder two middleware appends in `graph.py`** (Memory before PromptCaching; DLP before Audit) and extend `test_middleware_canonical_order.py` to assert both with a non-empty `memory=`/DLP+Audit stack. Two-line wiring fix that closes a silent cache-defeat and a compliance hazard, plus the test that locks them.
+2. **V3-1 + V3-19(2) — `uv lock` daytona (and re-lock acp), then wire `make lock-check` into CI.** Unbreaks a published package and prevents the whole lockfile-drift class with one CI job.
+3. **V3-6 / V3-12 / V3-28 — re-enable PLW1514 in the CLI ruff config and fix the handful of bare `write_text`/`read_text` sites** (server_manager, harbor wrapper, daemon token). Restores a documented invariant the lint will then enforce forever.
+4. **V3-9 — add `.github/dependabot.yml`** for pip/uv across the five package dirs + github-actions. One file; makes the CVE sweep self-sustaining.
+5. **V3-10 — add a `ty` target to the daemon Makefile and drop the `|| true`** on its test-lint line. Brings the secret-handling network service up to the repo's static-analysis baseline.
+6. **V3-4 / V3-16 — rewrite the `create_agent` docstring to the real assembly and fix the three `SafeToolsMiddleware` references.** Pure-text; removes a safety-posture lie. (Implementing the class is a larger follow-up.)
+7. **V3-14 + V3-29 — drop the daemon's modal/runloop extras, fix the two `x.com/LangChain` URLs, delete the untracked `partners/runloop/` directory.** Cosmetic/metadata cleanup that removes reviewer confusion and dead heavyweight deps.
+8. **V3-17 — accept a kebab `--permission-mode accept-edits` alias and fix the `main.py:616` help string**, plus a one-line parity test walking flag choices vs the status label map.
+9. **V3-22 — register a `_cmd_permissions` headless twin** mirroring `_cmd_config`.
+10. **V3-13 — migrate the daemon to `config=FeatureConfig(enable_git_tools=True)`** to stop the per-job DeprecationWarning ahead of the 1.0 break.
+
+> The single highest-leverage *non-trivial* item remains **V3-7**: replace the 6-middleware smoke test with the parametrized every-middleware fake-turn gate v2 prescribed. It is the only structural fix that stops the next silent regression — and it is the through-thread behind V3-1, V3-2, V3-3, and V3-8.
+
+---
+
 # Bog Agents — Holistic Review & Roadmap v2 (June 12, 2026)
 
 > **Scope:** Whole monorepo — SDK (`libs/bog-agents`), CLI (`libs/cli`), daemon, ACP, harbor, VS Code extension, partners, CI/packaging, docs.
