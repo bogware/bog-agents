@@ -34,7 +34,7 @@ jobs:
           - { name: cli, dir: libs/cli }
           - { name: daemon, dir: libs/daemon }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.11"
@@ -62,7 +62,7 @@ jobs:
           - { name: daemon, dir: libs/daemon }
         python: ["3.12", "3.13"]  # 3.11 temporarily disabled
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: ${{ matrix.python }}
