@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.7](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.6...bog-agents-cli==0.9.7) (2026-06-14)
+
+
+### Features
+
+* document 0.10 features + consolidate Dependabot into one grouped PR per package ([#134](https://github.com/bogware/bog-agents/issues/134)) ([4f00920](https://github.com/bogware/bog-agents/commit/4f009208c55270f5eb9c6d92628cab45670294b8))
+
 ## [0.9.6](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.5...bog-agents-cli==0.9.6) (2026-06-11)
 
 
