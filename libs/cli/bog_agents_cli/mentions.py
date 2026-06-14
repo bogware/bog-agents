@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # Matches @type:value or bare @path (legacy)
 _MENTION_RE = re.compile(
     r"@(?:"
-    r"(file|folder|symbol|url|memory|skill|search|repo):([^\s]+)"  # typed mention: @type:value
+    r"(file|folder|symbol|url|memory|skill|search|codebase|repo):([^\s]+)"  # typed mention: @type:value
     r"|"
     r"([^\s@:]+(?:/[^\s@:]+)*)"  # bare path: @src/main.py
     r")",
@@ -330,7 +330,7 @@ def _resolve_repo(name: str, cwd: Path) -> str:
 
 
 def _resolve_search(query: str, cwd: Path) -> str:
-    """Run hybrid codebase search and return formatted results."""
+    """Run hybrid codebase search (exact + fuzzy) and return formatted results."""
     try:
         from bog_agents.middleware.hybrid_search import (
             format_search_results,
@@ -341,6 +341,35 @@ def _resolve_search(query: str, cwd: Path) -> str:
         return f"Search results for `{query}`:\n\n{format_search_results(results)}"
     except Exception as exc:
         return f"[Search failed: {exc}]"
+
+
+def _resolve_codebase(query: str, cwd: Path) -> str:
+    """Semantic `@codebase` search — embeddings + exact + fuzzy (#5).
+
+    Builds/refreshes the incremental embedding index (`.bog-agents/embeddings.json`)
+    on demand — only changed files are re-embedded — then runs hybrid search with
+    the semantic lane enabled. Degrades gracefully to exact+fuzzy when no
+    embedding model is available, so it always returns useful results.
+    """
+    try:
+        from bog_agents.middleware.hybrid_search import (
+            build_embedding_index,
+            format_search_results,
+            hybrid_search,
+        )
+
+        # Best-effort incremental index build; no-op without an embedding model.
+        try:
+            build_embedding_index(cwd)
+        except Exception:
+            logger.debug("embedding index build skipped", exc_info=True)
+
+        results = hybrid_search(query, cwd, max_results=10, use_semantic=True)
+        if not results:
+            return f"[No codebase matches for `{query}`]"
+        return f"Semantic codebase results for `{query}`:\n\n{format_search_results(results)}"
+    except Exception as exc:
+        return f"[Codebase search failed: {exc}]"
 
 
 def _lang_hint(path: Path) -> str:
@@ -424,6 +453,8 @@ def resolve_mentions(
                     token.resolved = _resolve_skill(token.value, root)
                 case "search":
                     token.resolved = _resolve_search(token.value, root)
+                case "codebase":
+                    token.resolved = _resolve_codebase(token.value, root)
                 case "repo":
                     token.resolved = _resolve_repo(token.value, root)
                 case _:
@@ -501,6 +532,7 @@ def get_mention_type_suggestions() -> list[tuple[str, str]]:
         ("@folder:", "Inject directory listing"),
         ("@repo:", "Inject context from a workspace repo (.bog-agents/workspace.toml)"),
         ("@search:", "Hybrid codebase search (exact + fuzzy)"),
+        ("@codebase:", "Semantic codebase search (embeddings + exact + fuzzy)"),
         ("@symbol:", "Inject symbol definition from repo map"),
         ("@url:", "Fetch and inject webpage content"),
         ("@memory:", "Inject a memory entry"),

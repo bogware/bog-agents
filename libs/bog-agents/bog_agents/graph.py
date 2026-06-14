@@ -301,6 +301,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     backend: BackendProtocol | BackendFactory | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
     permissions: list[FilesystemPermission] | None = None,
+    guardrails: Sequence[Any] | None = None,
     state_schema: type[Any] | None = None,
     debug: bool = False,
     name: str | None = None,
@@ -710,10 +711,12 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(ParallelWorktreeMiddleware(working_dir=_wd))
 
-    if f.enable_multi_agent:
-        from bog_agents.middleware.multi_agent_orchestrator import MultiAgentOrchestratorMiddleware
-
-        agents_middleware.append(MultiAgentOrchestratorMiddleware(max_threads=f.max_agent_threads))
+    # NOTE: the enable_multi_agent flag intentionally wires nothing. The
+    # MultiAgentOrchestratorMiddleware module was removed in the V1 stub purge
+    # because it never actually ran agents; the flag is kept only so existing
+    # callers passing it do not raise TypeError. It is now a deprecated no-op.
+    # The old wiring here imported the deleted module and hard-crashed any
+    # caller that enabled the flag. See REVIEW.md v2, finding P1-1.
 
     if f.enable_smart_context:
         from bog_agents.middleware.smart_context import SmartContextMiddleware
@@ -794,6 +797,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(NotificationsMiddleware(session_name=f.session_name))
 
+    # DLP must be appended BEFORE AuditTrail (V3-3): DLP redacts sensitive
+    # values on the inbound path and must run *outer* (earlier) than Audit so
+    # the audit log records the redacted request, not the raw secrets. (Only
+    # the relative order matters; both are independently optional.)
+    if f.enable_dlp:
+        from bog_agents.middleware.dlp import DLPMiddleware
+
+        agents_middleware.append(DLPMiddleware(mode=f.dlp_mode))
+
     # Financial advisor middleware
     if f.enable_audit_trail:
         from bog_agents.middleware.audit_trail import AuditTrailMiddleware
@@ -853,10 +865,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
         agents_middleware.append(DeepResearchMiddleware())
 
-    if f.enable_dlp:
-        from bog_agents.middleware.dlp import DLPMiddleware
-
-        agents_middleware.append(DLPMiddleware(mode=f.dlp_mode))
+    # NOTE: DLPMiddleware is appended earlier (before AuditTrail) — see V3-3.
 
     if f.enable_version_control:
         from bog_agents.middleware.version_control import VersionControlMiddleware
@@ -1007,9 +1016,25 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # has run, so it can remove both user-supplied and middleware-injected tools.
     if _profile.excluded_tools:
         agents_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    # Guardrail tripwires (#18): validate the inbound user message and the model
+    # response, failing fast on a violation. Applied to both stages from the flat
+    # `guardrails=` list; for asymmetric input/output control pass a configured
+    # GuardrailMiddleware via `middleware=` instead. Placed near the model so it
+    # sees the assembled request and the raw response.
+    if guardrails:
+        from bog_agents.guardrails import GuardrailMiddleware
+
+        agents_middleware.append(GuardrailMiddleware(input_guardrails=list(guardrails), output_guardrails=list(guardrails)))
+
+    # Memory must be appended BEFORE AnthropicPromptCachingMiddleware (V3-2):
+    # Memory.modify_request appends a new system content block; PromptCaching
+    # tags the *last* system block with cache_control. If Memory ran after
+    # caching, the injected memory text would fall outside the cached prefix
+    # (and per-thread memory variance would bust cache hits). Keeping Memory
+    # outer (earlier) and PromptCaching innermost preserves the cached prefix.
     if memory is not None:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
+    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))

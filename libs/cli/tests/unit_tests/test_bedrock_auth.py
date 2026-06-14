@@ -18,6 +18,8 @@ from bog_agents_cli.model_config import (
     _bedrock_auth_mode,
     _check_bedrock_boto3,
     _check_bedrock_files,
+    _has_bedrock_credentials,
+    has_provider_credentials,
 )
 
 
@@ -31,6 +33,7 @@ def _clear_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "AWS_WEB_IDENTITY_TOKEN_FILE",
         "AWS_REGION",
         "AWS_DEFAULT_REGION",
+        "AWS_BEARER_TOKEN_BEDROCK",
         "BOG_AGENTS_BEDROCK_AUTH_MODE",
         "BOG_AGENTS_BEDROCK_PROFILE",
     ):
@@ -187,3 +190,49 @@ class TestBedrockAuthMode:
         monkeypatch.setenv("BOG_AGENTS_BEDROCK_AUTH_MODE", "  SSO  ")
         mode, _ = _bedrock_auth_mode()
         assert mode == "sso"
+
+
+class TestBedrockBearerToken:
+    """``AWS_BEARER_TOKEN_BEDROCK`` (Bedrock API key) is sufficient on its own.
+
+    The bearer token authenticates Bedrock without the SigV4 credential
+    chain, so the credential pre-flight must recognise it regardless of the
+    configured ``credential_check`` mode and even when no AWS profile,
+    access key, or ~/.aws files exist. Regression guard for the live-test
+    Bedrock gap (REVIEW.md v2).
+    """
+
+    def test_bearer_token_alone_is_sufficient(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_aws_env(monkeypatch)
+        # Empty home → no ~/.aws files; no access key / profile set.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSKtest-bearer-token")
+        assert _has_bedrock_credentials() is True
+
+    def test_blank_bearer_token_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_aws_env(monkeypatch)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # Whitespace-only token must NOT short-circuit to True — it should
+        # fall through to the real SigV4 chain. Stub that chain to False
+        # (boto3 ignores the mocked Path.home and may otherwise find the
+        # developer's real ~/.aws creds) so the assertion isolates the
+        # bearer-token decision rather than the host's AWS config.
+        monkeypatch.setattr(
+            "bog_agents_cli.model_config._check_bedrock_thorough",
+            lambda: False,
+        )
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "   ")
+        assert _has_bedrock_credentials() is False
+
+    def test_has_provider_credentials_sees_bearer_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _clear_aws_env(monkeypatch)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSKtest-bearer-token")
+        assert has_provider_credentials("bedrock") is True
+        assert has_provider_credentials("bedrock_converse") is True

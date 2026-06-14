@@ -781,8 +781,8 @@ class BogAgentsApp(App):
         Binding("ctrl+t", "toggle_auto_approve", "Toggle Auto-Approve", show=False),
         Binding(
             "shift+tab",
-            "toggle_auto_approve",
-            "Toggle Auto-Approve",
+            "cycle_permission_mode",
+            "Cycle Permission Mode",
             show=False,
             priority=True,
         ),
@@ -806,6 +806,13 @@ class BogAgentsApp(App):
         Binding("3", "approval_no", "No", show=False),
         Binding("n", "approval_no", "No", show=False),
     ]
+
+    # Ordered permission modes the shift+tab key cycles through (Claude-Code
+    # style). `bypass` (approve everything) and `paranoid` (ask for everything)
+    # are deliberately NOT in the cycle — they are explicit opt-ins (ctrl+t,
+    # --permission-mode, /always-ask) so a user can't accidentally cycle into
+    # "skip all permissions".
+    _PERMISSION_CYCLE: ClassVar[tuple[str, ...]] = ("default", "accept-edits", "plan")
     # Slash-command dispatch lives in ``bog_agents_cli/commands/`` — see the
     # COMMAND_HANDLER_MAP populated by ``commands._registry.discover``. This
     # class no longer carries a literal mapping so adding a slash command
@@ -841,6 +848,7 @@ class BogAgentsApp(App):
         auto_approve: bool = False,
         always_ask: bool = False,
         auto_mode: bool = False,
+        plan_mode: bool = False,
         auto_commit: bool = False,
         cwd: str | Path | None = None,
         thread_id: str | None = None,
@@ -866,6 +874,8 @@ class BogAgentsApp(App):
             auto_mode: Whether to start with smart auto-mode enabled — tool
                 calls are evaluated by the rule engine; only risky ones
                 surface an approval dialog. Overridden by ``always_ask``.
+            plan_mode: Whether to start in plan mode (read-only; mutating
+                tools stripped). Seeded by ``--permission-mode plan``.
             auto_commit: Whether to auto-commit after each agent turn
             cwd: Current working directory to display
             thread_id: Optional thread ID for session persistence
@@ -907,6 +917,9 @@ class BogAgentsApp(App):
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
         self._model_params_override: dict[str, Any] | None = None
+        # Repo/user `.prompt.md` files exposed as slash commands (#14). Loaded
+        # in on_mount; name -> PromptCommand.
+        self._prompt_commands: dict[str, Any] = {}
         # Operator mode (judge-model routing) + JTBD session state. The
         # turn-scoped model/effort overrides are staged by the operator
         # seam in _handle_user_message and cleared after every turn.
@@ -924,7 +937,7 @@ class BogAgentsApp(App):
         self._active_profile_prompt: str | None = None
         self._active_persona_id: str | None = None
         self._active_persona_addendum: str | None = None
-        self._plan_mode_enabled = False
+        self._plan_mode_enabled = plan_mode
         self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
         self._base_auto_approve = auto_approve
@@ -1023,9 +1036,25 @@ class BogAgentsApp(App):
         self._chat_input = self.query_one("#input-area", ChatInput)
         self._install_termination_signal_handlers()
 
-        # Set initial auto-approve state
-        if self._auto_approve:
-            self._status_bar.set_auto_approve(enabled=True)
+        # Reflect the initial permission mode (bypass / accept-edits / plan /
+        # paranoid seeded from --permission-mode / --auto-approve / --auto /
+        # --always-ask) in the status-bar indicator.
+        self._refresh_permission_mode_indicator()
+
+        # Discover repo/user `.prompt.md` slash commands (#14) and merge them
+        # into the autocomplete list. Best-effort — a bad prompt file must not
+        # block startup.
+        try:
+            from bog_agents_cli.prompt_commands import discover_prompt_commands
+
+            self._prompt_commands = discover_prompt_commands(self._cwd)
+            if self._prompt_commands:
+                self._refresh_slash_command_cache()
+                logger.info(
+                    "Loaded %d .prompt.md slash command(s)", len(self._prompt_commands)
+                )
+        except Exception:
+            logger.debug("prompt-command discovery failed", exc_info=True)
 
         # Set git branch in status bar
         self._status_bar.branch = _get_git_branch() or ""
@@ -2023,6 +2052,38 @@ class BogAgentsApp(App):
             exclusive=False,
         )
 
+    async def _record_shell_run_for_agent(
+        self, command: str, output: str, returncode: int | None
+    ) -> None:
+        """Inject a `!` shell pass-through run into the agent's thread.
+
+        Adds the command + output as a message in the conversation thread (via
+        ``aupdate_state``, without running the model) so the next agent turn can
+        see what was run in the shared session. Best-effort: a state-update
+        failure (or a local/agentless session) never affects the shell display.
+
+        Args:
+            command: The command that was run (without the leading ``!``).
+            output: Combined stdout/stderr the command produced.
+            returncode: Process exit code, or None.
+        """
+        agent = self._agent
+        thread_id = self._current_thread_id()
+        if agent is None or not hasattr(agent, "aupdate_state") or not thread_id:
+            return
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from bog_agents_cli.shell_passthrough import format_shell_context
+
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            message = HumanMessage(
+                content=format_shell_context(command, output, returncode)
+            )
+            await agent.aupdate_state(config, {"messages": [message]})
+        except Exception:
+            logger.debug("Failed to record shell run into agent thread", exc_info=True)
+
     async def _run_shell_task(self, command: str) -> None:
         """Run a shell command in a background worker.
 
@@ -2075,6 +2136,10 @@ class BogAgentsApp(App):
 
             if proc.returncode and proc.returncode != 0:
                 await self._mount_message(ErrorMessage(f"Exit code: {proc.returncode}"))
+
+            # Make the run visible to the agent: inject the command + output into
+            # the conversation thread so the next agent turn can use it as context.
+            await self._record_shell_run_for_agent(command, output, proc.returncode)
 
             # Scroll to show the output (user-initiated command, so scroll is expected)
             chat = self.query_one("#chat", VerticalScroll)
@@ -2310,13 +2375,49 @@ class BogAgentsApp(App):
             return None
         return handler
 
-    @staticmethod
-    def _refresh_slash_command_cache() -> None:
-        """Refresh the shared slash-command cache used by autocomplete."""
+    async def _maybe_run_prompt_command(self, command: str) -> bool:
+        """Dispatch a repo/user `.prompt.md` slash command if one matches (#14).
+
+        Args:
+            command: The full slash-command string (including the leading /).
+
+        Returns:
+            True if a matching prompt command was found and sent to the agent.
+        """
+        name = self._command_name(command)
+        cmd = self._prompt_commands.get(name)
+        if cmd is None:
+            return False
+        from bog_agents_cli.prompt_commands import render_prompt_command
+
+        raw = command.strip()
+        args = raw[len(name) :].strip() if raw.startswith(name) else ""
+        prompt = render_prompt_command(cmd, args)
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(
+                f"Running prompt command {name} (from {cmd.scope} .prompt.md)..."
+            )
+        )
+        await self._send_prompt_to_agent(prompt)
+        return True
+
+    def _refresh_slash_command_cache(self) -> None:
+        """Refresh the shared slash-command cache used by autocomplete.
+
+        Includes any discovered `.prompt.md` commands (#14) so they appear in
+        autocomplete alongside the built-ins.
+        """
         from bog_agents_cli.command_registry import get_slash_commands
         from bog_agents_cli.widgets import autocomplete
 
-        autocomplete.SLASH_COMMANDS[:] = get_slash_commands()
+        commands = list(get_slash_commands())
+        for cmd in self._prompt_commands.values():
+            hint = f" {cmd.argument_hint}" if cmd.argument_hint else ""
+            commands.append(
+                (cmd.name, f"{cmd.description}{hint}", "custom prompt command")
+            )
+        autocomplete.SLASH_COMMANDS[:] = commands
 
     async def _current_thread_metadata(self) -> dict[str, object]:
         """Load persisted metadata for the active thread, if available."""
@@ -3803,6 +3904,95 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage("Starting structured code review..."))
         await self._send_prompt_to_agent(prompt)
 
+    async def _handle_self_review_command(self, command: str) -> None:
+        """`/self-review` — fan the five reviewer lenses over the agent's own diff.
+
+        A pre-submit gate that reviews uncommitted work through correctness,
+        security, maintainability, test-coverage, and over-claims lenses and
+        emits a SHIP / FIX-FIRST verdict. Pass `--fix` to also fix blockers.
+        """
+        from bog_agents_cli.self_review_controller import (
+            generate_self_review_prompt,
+            parse_self_review_args,
+        )
+
+        await self._mount_message(UserMessage(command))
+        raw_arg = command.strip()[len("/self-review") :].strip()
+        target = parse_self_review_args(raw_arg)
+        prompt = generate_self_review_prompt(target)
+        announce = (
+            "Running self-review gate (5 lenses) and fixing blockers..."
+            if target.fix
+            else "Running self-review gate (5 lenses)..."
+        )
+        await self._mount_message(AppMessage(announce))
+        await self._send_prompt_to_agent(prompt)
+
+    async def _handle_ci_fix_command(self, command: str) -> None:
+        """`/ci-fix` — read this branch's CI result and diagnose/fix failures (#1).
+
+        Fetches the latest GitHub Actions run for the current branch via `gh`.
+        If it failed, ingests the failing-job logs and hands the agent a
+        structured diagnose-and-fix task ("ship it while you sleep").
+        """
+        import asyncio as _asyncio
+        from pathlib import Path as _Path
+
+        from bog_agents_cli.ci_tools import (
+            GhUnavailableError,
+            generate_ci_fix_prompt,
+            get_ci_status,
+            get_failing_logs,
+            latest_run,
+        )
+
+        await self._mount_message(UserMessage(command))
+        branch = _get_git_branch()
+        if not branch:
+            await self._mount_message(
+                ErrorMessage("/ci-fix: not on a git branch (no CI to check).")
+            )
+            return
+        await self._mount_message(AppMessage(f"Checking CI for `{branch}`..."))
+        try:
+            runs = await _asyncio.to_thread(get_ci_status, branch, cwd=_Path(self._cwd))
+        except GhUnavailableError as exc:
+            await self._mount_message(ErrorMessage(f"/ci-fix: {exc}"))
+            return
+
+        run = latest_run(runs)
+        if run is None:
+            await self._mount_message(
+                AppMessage(f"No CI runs found for `{branch}` yet.")
+            )
+            return
+        if run.is_pending:
+            await self._mount_message(
+                AppMessage(
+                    f"CI for `{branch}` is still running ({run.status}). "
+                    f"Re-run /ci-fix when it finishes: {run.url}"
+                )
+            )
+            return
+        if not run.is_failure:
+            await self._mount_message(
+                AppMessage(
+                    f"✓ CI for `{branch}` is green ({run.conclusion}). Nothing to fix."
+                )
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(f"CI failed — fetching failing logs from {run.url} ...")
+        )
+        try:
+            logs = await _asyncio.to_thread(
+                get_failing_logs, run.run_id, cwd=_Path(self._cwd)
+            )
+        except GhUnavailableError as exc:
+            logs = f"(could not fetch logs: {exc})"
+        await self._send_prompt_to_agent(generate_ci_fix_prompt(branch, run, logs))
+
     async def _run_prompt_backed_command(
         self,
         command: str,
@@ -5250,6 +5440,7 @@ class BogAgentsApp(App):
 
         self._session_state.always_ask = new_state
         self._always_ask = new_state
+        self._refresh_permission_mode_indicator()
         if new_state:
             await self._mount_message(
                 AppMessage(
@@ -5301,6 +5492,7 @@ class BogAgentsApp(App):
 
         self._session_state.auto_mode = new_state
         self._auto_mode = new_state
+        self._refresh_permission_mode_indicator()
         if new_state:
             await self._mount_message(
                 AppMessage(
@@ -6946,7 +7138,11 @@ class BogAgentsApp(App):
         if spec.description:
             prompt_text += f" — {spec.description}"
         if spec.type == "secret":
-            prompt_text += "  (secret — kept in memory only, never saved)"
+            # Be honest: the value is substituted into the prompt and is
+            # therefore written into the conversation transcript on disk.
+            # (REVIEW.md v2 P1-28 — the old "kept in memory only, never
+            # saved" text was a false security promise.)
+            prompt_text += "  (secret — will be substituted into the prompt and saved in the transcript)"
         if spec.default is not None and spec.type != "secret":
             prompt_text += f"  [default: {spec.default}]"
         question: dict[str, Any] = {"question": prompt_text, "type": "text"}
@@ -7289,8 +7485,7 @@ class BogAgentsApp(App):
             self._plan_mode_enabled = False
             self._effort_level = "high"
             self._auto_approve = self._base_auto_approve
-            if self._status_bar:
-                self._status_bar.auto_approve = self._auto_approve
+            self._refresh_permission_mode_indicator()
             if self._base_model_spec:
                 with suppress(Exception):
                     await self._apply_runtime_model_override(self._base_model_spec)
@@ -7318,12 +7513,11 @@ class BogAgentsApp(App):
         self._active_profile_prompt = profile.system_prompt_append
         if profile.auto_approve is not None:
             self._auto_approve = profile.auto_approve
-            if self._status_bar:
-                self._status_bar.auto_approve = self._auto_approve
         if profile.plan_mode is not None:
             self._plan_mode_enabled = profile.plan_mode
         if profile.effort_level:
             self._effort_level = profile.effort_level
+        self._refresh_permission_mode_indicator()
 
         lines = [
             f"Profile activated: {profile.name}",
@@ -7380,6 +7574,7 @@ class BogAgentsApp(App):
         # apply / act model with a stronger planner. When leaving plan
         # mode, restore the previous spec.
         await self._maybe_swap_plan_model()
+        self._refresh_permission_mode_indicator()
 
         state = "enabled" if self._plan_mode_enabled else "disabled"
         await self._mount_message(
@@ -9036,12 +9231,21 @@ class BogAgentsApp(App):
             suffix = f", +{remainder} more" if remainder > 0 else ""
             shell_detail = preview + suffix
 
+        mode_descriptions = {
+            "default": "default (prompt for every tool call)",
+            "accept-edits": "accept-edits (auto-approve edits + safe tools; "
+            "ask for risky shell)",
+            "plan": "plan (read-only; mutating tools stripped)",
+            "bypass": "bypass (approve everything — no prompts)",
+            "paranoid": "paranoid (force approval for every call)",
+        }
+        mode = self._current_permission_mode()
         lines = [
             "Permissions",
-            f"Auto-approve: {'on' if self._auto_approve else 'off'}",
+            f"Permission mode: {mode_descriptions.get(mode, mode)}",
             f"Shell allow-list: {shell_summary}",
             f"Shell detail: {shell_detail}",
-            "Shift+Tab toggles auto-approve for the current session.",
+            "Shift+Tab cycles default -> accept-edits -> plan; Ctrl+T toggles bypass.",
             (
                 "Tool approvals still appear when a command or tool is not "
                 "covered by the current policy."
@@ -9844,7 +10048,14 @@ class BogAgentsApp(App):
                     AppMessage("Usage: /worktree create <branch>")
                 )
                 return
-            worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
+            # create_worktree validates the ref and raises ValueError on an
+            # invalid name (e.g. one with a space); surface it instead of
+            # crashing the TUI with an uncaught traceback. (REVIEW.md v2 P1-29.)
+            try:
+                worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
+            except (ValueError, OSError) as exc:
+                await self._mount_message(ErrorMessage(f"Invalid branch name: {exc}"))
+                return
             await self._mount_message(
                 AppMessage(
                     f"Created worktree on branch {worktree.branch}\n"
@@ -11548,10 +11759,13 @@ class BogAgentsApp(App):
             if task is None:
                 await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
                 return
-            if task.status != "done":
+            # ParallelWorktreeMiddleware sets status "completed" on success — it
+            # never sets "done", so the old check made /worktrees merge
+            # impossible to ever satisfy. (REVIEW.md v2 P1-31.)
+            if task.status != "completed":
                 await self._mount_message(
                     AppMessage(
-                        f"Task '{task_id}' is {task.status}, not done. Cannot merge yet."
+                        f"Task '{task_id}' is {task.status}, not completed. Cannot merge yet."
                     )
                 )
                 return
@@ -12273,7 +12487,12 @@ class BogAgentsApp(App):
         """
         handler = self._resolve_command_handler(self._command_name(command))
         if handler is None:
-            await self._handle_unknown_command(command)
+            # Fall back to a repo/user `.prompt.md` slash command (#14) before
+            # giving up with "unknown command".
+            if await self._maybe_run_prompt_command(command):
+                pass
+            else:
+                await self._handle_unknown_command(command)
         else:
             await handler(command)
 
@@ -14984,29 +15203,99 @@ class BogAgentsApp(App):
         _write_iterm_escape(_ITERM_CURSOR_GUIDE_ON)
         super().exit(result=result, return_code=return_code, message=message)
 
-    def action_toggle_auto_approve(self) -> None:
-        """Toggle auto-approve mode for the current session.
+    def _current_permission_mode(self) -> str:
+        """Derive the active permission-mode label from the approval flags.
 
-        When enabled, all tool calls (shell execution, file writes/edits,
-        web search, URL fetch) run without prompting. Updates the status
-        bar indicator and session state.
+        Mirrors the approval decision priority (plan strips mutating tools;
+        otherwise always_ask > auto_mode > auto_approve > ask) so the status
+        indicator always reflects what will actually happen, regardless of
+        which slash command / flag / key set the flags.
+
+        Returns:
+            One of `plan`, `paranoid`, `accept-edits`, `bypass`, `default`.
         """
+        if self._plan_mode_enabled:
+            return "plan"
+        if self._always_ask:
+            return "paranoid"
+        if self._auto_mode:
+            return "accept-edits"
+        if self._auto_approve:
+            return "bypass"
+        return "default"
+
+    def _refresh_permission_mode_indicator(self) -> None:
+        """Push the current permission mode to the status-bar indicator."""
+        if self._status_bar:
+            self._status_bar.set_permission_mode(self._current_permission_mode())
+
+    def _apply_permission_mode(self, mode: str) -> None:
+        """Set the unified permission mode, deriving the legacy approval flags.
+
+        This is the single writer for the approval flags when the mode is
+        changed via the shift+tab cycle or ctrl+t. The per-call approval
+        adapter (`textual_adapter.py`) and the headless path keep reading the
+        individual booleans, so they need no changes.
+
+        Args:
+            mode: One of `default`, `accept-edits`, `plan`, `bypass`, `paranoid`.
+        """
+        plan_was = self._plan_mode_enabled
+        self._auto_approve = mode == "bypass"
+        self._auto_mode = mode == "accept-edits"
+        self._always_ask = mode == "paranoid"
+        self._plan_mode_enabled = mode == "plan"
+        if self._session_state is not None:
+            self._session_state.auto_approve = self._auto_approve
+            self._session_state.auto_mode = self._auto_mode
+            self._session_state.always_ask = self._always_ask
+        self._refresh_permission_mode_indicator()
+        # Entering/leaving plan optionally swaps to the configured plan model.
+        if self._plan_mode_enabled != plan_was:
+            self.run_worker(self._maybe_swap_plan_model(), exclusive=False)
+
+    def action_cycle_permission_mode(self) -> None:
+        """Cycle the permission mode (Claude-Code-style shift+tab).
+
+        Cycles `default -> accept-edits -> plan -> default`. When the session
+        is in an out-of-cycle mode (bypass/paranoid), the next press re-enters
+        the cycle at `default`.
+        """
+        # Preserve the modal/selector navigation semantics of the old binding.
         if isinstance(self.screen, ThreadSelectorScreen):
             self.screen.action_focus_previous_filter()
             return
         # shift+tab is reused for navigation inside modal screens (e.g.
-        # ModelSelectorScreen); skip the toggle so it doesn't fire through.
+        # ModelSelectorScreen); skip the cycle so it doesn't fire through.
         if isinstance(self.screen, ModalScreen):
             return
         # Delegate shift+tab to ask_user navigation when interview is active.
         if self._pending_ask_user_widget is not None:
             self._pending_ask_user_widget.action_previous_question()
             return
-        self._auto_approve = not self._auto_approve
-        if self._status_bar:
-            self._status_bar.set_auto_approve(enabled=self._auto_approve)
-        if self._session_state:
-            self._session_state.auto_approve = self._auto_approve
+        current = self._current_permission_mode()
+        cycle = self._PERMISSION_CYCLE
+        try:
+            nxt = cycle[(cycle.index(current) + 1) % len(cycle)]
+        except ValueError:
+            nxt = cycle[0]
+        self._apply_permission_mode(nxt)
+
+    def action_toggle_auto_approve(self) -> None:
+        """Quick-toggle bypass (approve-everything) — the legacy ctrl+t key.
+
+        Flips between `bypass` and `default`. shift+tab is the richer
+        Claude-Code-style mode cycle (`action_cycle_permission_mode`).
+        """
+        if isinstance(self.screen, ThreadSelectorScreen):
+            self.screen.action_focus_previous_filter()
+            return
+        if isinstance(self.screen, ModalScreen):
+            return
+        if self._pending_ask_user_widget is not None:
+            self._pending_ask_user_widget.action_previous_question()
+            return
+        self._apply_permission_mode("default" if self._auto_approve else "bypass")
 
     def action_toggle_tool_output(self) -> None:
         """Toggle expand/collapse of the most recent tool output."""
@@ -16523,6 +16812,7 @@ async def run_textual_app(
     auto_approve: bool = False,
     always_ask: bool = False,
     auto_mode: bool = False,
+    plan_mode: bool = False,
     auto_commit: bool = False,
     cwd: str | Path | None = None,
     thread_id: str | None = None,
@@ -16550,6 +16840,7 @@ async def run_textual_app(
         auto_mode: Smart auto-approval toggle — tool calls are evaluated by
             the rule engine; only risky ones surface an approval dialog.
             Overridden by ``always_ask``.
+        plan_mode: Whether to start in plan mode (read-only).
         auto_commit: Whether to auto-commit git changes after each agent turn.
         cwd: Current working directory to display.
         thread_id: Optional thread ID for session persistence.
@@ -16574,6 +16865,7 @@ async def run_textual_app(
         auto_approve=auto_approve,
         always_ask=always_ask,
         auto_mode=auto_mode,
+        plan_mode=plan_mode,
         auto_commit=auto_commit,
         cwd=cwd,
         thread_id=thread_id,

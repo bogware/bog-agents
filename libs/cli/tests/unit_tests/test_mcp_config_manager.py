@@ -29,17 +29,17 @@ class TestLoadAndSave:
 
     def test_load_recovers_from_non_dict_top_level(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text("[]")
+        isolated_config.write_text("[]", encoding="utf-8")
         assert mcm.load_user_mcp_config() == {"mcpServers": {}}
 
     def test_load_recovers_from_invalid_json(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text("{not json")
+        isolated_config.write_text("{not json", encoding="utf-8")
         assert mcm.load_user_mcp_config() == {"mcpServers": {}}
 
     def test_load_adds_mcp_servers_key_when_missing(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text(json.dumps({"otherField": 1}))
+        isolated_config.write_text(json.dumps({"otherField": 1}), encoding="utf-8")
         loaded = mcm.load_user_mcp_config()
         assert loaded["mcpServers"] == {}
         assert loaded["otherField"] == 1
@@ -55,6 +55,29 @@ class TestLoadAndSave:
         # No .tmp files should remain in the parent directory.
         leftovers = [p for p in isolated_config.parent.iterdir() if p.suffix == ".tmp"]
         assert leftovers == []
+
+    def test_save_is_owner_only(self, isolated_config: Path):
+        # The config can embed resolved vault secrets; it must not be
+        # group/other readable. (REVIEW.md v2 P1-22.)
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX permission bits not honoured on Windows")
+        mcm.save_user_mcp_config(
+            {
+                "mcpServers": {
+                    "s": {
+                        "type": "sse",
+                        "url": "http://x",
+                        "headers": {"Authorization": "Bearer tok"},
+                    }
+                }
+            }
+        )
+        mode = isolated_config.stat().st_mode
+        assert mode & 0o077 == 0, (
+            f".mcp.json with secrets is group/other accessible: {oct(mode)}"
+        )
 
 
 class TestServerCRUD:

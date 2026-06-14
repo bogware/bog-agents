@@ -87,10 +87,18 @@ class ConversationBranchMiddleware(AgentMiddleware[ConversationBranchState, Cont
         self._current_branch: str = "main"
         self._branch_counter = 0
 
-        # Initialize memory tiers
+        # Initialize memory tiers.
+        # The project tier persists to a DEDICATED managed file, never to the
+        # user's hand-authored AGENTS.md — _save_memory_tier rewrites the whole
+        # file as a key/value dump, which would destroy AGENTS.md prose/markdown
+        # on the first remember()/promote_memory() call. AGENTS.md stays
+        # read-only context owned by MemoryMiddleware. (REVIEW.md v2 P0-1.)
         self._memory = {
             "session": MemoryTier(name="session"),
-            "project": MemoryTier(name="project", source_path=self._working_dir / "AGENTS.md"),
+            "project": MemoryTier(
+                name="project",
+                source_path=self._working_dir / ".bog-agents" / "memory" / "project.md",
+            ),
             "global": MemoryTier(name="global", source_path=self._global_dir / "memory.md"),
         }
         self._load_memory_files()
@@ -124,7 +132,10 @@ class ConversationBranchMiddleware(AgentMiddleware[ConversationBranchState, Cont
                 lines = [f"# {tier.name} memory\n"]
                 for key, value in tier.entries.items():
                     lines.append(f"{key}: {value}")
-                tier.source_path.write_text("\n".join(lines), encoding="utf-8")
+                # Atomic write: a crash/Ctrl+C mid-write must not truncate the file.
+                tmp = tier.source_path.with_suffix(tier.source_path.suffix + ".tmp")
+                tmp.write_text("\n".join(lines), encoding="utf-8")
+                tmp.replace(tier.source_path)
             except OSError as e:
                 logger.warning("Failed to save %s memory: %s", tier_name, e)
 

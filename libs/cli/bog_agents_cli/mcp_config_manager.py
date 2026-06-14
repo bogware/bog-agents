@@ -89,7 +89,15 @@ def save_user_mcp_config(data: dict[str, Any]) -> bool:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, indent=2)
                 fh.write("\n")
+            # The config can embed resolved secret env values (API tokens
+            # pulled from the vault), so lock it down owner-only BEFORE the
+            # rename — never leave it briefly world-readable. (REVIEW.md v2
+            # P1-22.) Cross-platform per CLAUDE.md P0-E (chmod 0600 / icacls).
+            from bog_agents_cli.vars_store import _secure_owner_only
+
+            _secure_owner_only(Path(tmp))
             Path(tmp).replace(_USER_MCP_CONFIG)
+            _secure_owner_only(_USER_MCP_CONFIG)
         except BaseException:
             import contextlib
 

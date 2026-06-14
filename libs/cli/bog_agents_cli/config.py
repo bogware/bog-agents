@@ -1759,17 +1759,13 @@ def _run_setup_wizard() -> str:
         msg = "No API key provided. Run bog-agents again to retry."
         raise ModelConfigError(msg)
 
-    # Persist to ~/.bog-agents/.env so it's loaded on future runs
-    env_dir = Path.home() / ".bog-agents"
-    env_dir.mkdir(parents=True, exist_ok=True)
-    env_file = env_dir / ".env"
+    # Persist to the secret vault (owner-only file, not a world-readable
+    # plaintext ~/.bog-agents/.env). save_api_key routes through vars_store,
+    # which hardens the file via _secure_owner_only, and also sets os.environ.
+    # (REVIEW.md v2 P1-38.)
+    from bog_agents_cli import api_keys
 
-    # Append (don't overwrite) to preserve any existing keys
-    with env_file.open("a") as f:
-        f.write(f"\n{env_var}={api_key}\n")
-
-    # Load into current process
-    os.environ[env_var] = api_key
+    api_keys.save_api_key(env_var, api_key)
     settings.reload_from_environment()
 
     # Set as default model
@@ -1777,7 +1773,9 @@ def _run_setup_wizard() -> str:
 
     save_default_model(model_spec)
 
-    con.print(f"\n[green]Saved![/green] Key written to [dim]{env_file}[/dim]")
+    con.print(
+        "\n[green]Saved![/green] Key stored in the secret vault (OS keyring, or an owner-only file)."
+    )
     con.print(f"Default model set to [bold]{model_spec}[/bold]\n")
 
     return model_spec

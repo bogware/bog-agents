@@ -170,15 +170,13 @@ class ProviderRetryMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         request: ModelRequest,
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse:
-        return await self._call_with_retries(request, call_next, runtime)
+        return await self._call_with_retries(request, call_next)
 
     def wrap_model_call(  # type: ignore[override]
         self,
         request: ModelRequest,
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse:
         # Sync path: retry without backoff (we'd need an event loop to
         # await asyncio.sleep). Use ``time.sleep`` instead.
@@ -187,7 +185,7 @@ class ProviderRetryMiddleware(AgentMiddleware[Any, Any, Any]):
         model_name = self._extract_model_name(request)
         while attempt < self._max_attempts:
             try:
-                return call_next(request, runtime)
+                return call_next(request)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except BaseException as exc:
@@ -218,14 +216,13 @@ class ProviderRetryMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         request: ModelRequest,
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse:
         attempt = 0
         last_exc: BaseException | None = None
         model_name = self._extract_model_name(request)
         while attempt < self._max_attempts:
             try:
-                return await call_next(request, runtime)
+                return await call_next(request)
             except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
                 raise
             except BaseException as exc:

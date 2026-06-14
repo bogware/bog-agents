@@ -204,9 +204,19 @@ def categorize_bedrock_error(exc: BaseException) -> BedrockError:
     raw = str(exc)
 
     # Package missing — caller should detect this BEFORE calling us, but
-    # handle it gracefully if the import error leaks through.
-    if "no module named" in msg_lower and (
-        "langchain_aws" in msg_lower or "boto3" in msg_lower or "botocore" in msg_lower
+    # handle it gracefully if the import error leaks through. This covers
+    # both the raw ``ModuleNotFoundError`` and the SDK's wrapped
+    # ``ModelConfigError("Missing package for provider 'bedrock'. Install:
+    # pip install langchain-aws")`` so the user gets the CLI-specific extra
+    # hint instead of an UNKNOWN catch-all.
+    pkg_named = (
+        "langchain_aws" in msg_lower
+        or "langchain-aws" in msg_lower
+        or "boto3" in msg_lower
+        or "botocore" in msg_lower
+    )
+    if pkg_named and (
+        "no module named" in msg_lower or "missing package for provider" in msg_lower
     ):
         return BedrockError(
             kind=BedrockErrorKind.PACKAGE_MISSING,

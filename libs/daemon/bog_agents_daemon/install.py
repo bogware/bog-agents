@@ -195,9 +195,15 @@ def install_git_hook(repo_path: str, daemon_url: str = "http://localhost:7391", 
     hook_content = generate_git_hook(daemon_url=daemon_url, token=token)
     hook_path.write_text(hook_content, encoding="utf-8")
 
-    # Make executable (owner rwx, group rx, other rx)
-    current_mode = hook_path.stat().st_mode
-    hook_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    # The hook embeds the daemon API token. When a token is present, make it
+    # owner-only (0700) — NOT the umask-derived 0755, which leaves the token
+    # world-readable on a shared host. (REVIEW.md v2 P1-57.) Without a token
+    # the script is non-secret and can keep group/other execute.
+    if token:
+        hook_path.chmod(0o700)
+    else:
+        current_mode = hook_path.stat().st_mode
+        hook_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return textwrap.dedent(f"""\
         Git post-receive hook installed at: {hook_path}

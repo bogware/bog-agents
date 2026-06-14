@@ -360,6 +360,41 @@ def parse_args() -> argparse.Namespace:
     )
     add_json_output_arg(command_parser)
 
+    # Expose bog-agents AS an MCP server (so other agents/IDEs can delegate to us)
+    mcp_server_parser = subparsers.add_parser(
+        "mcp-server",
+        help=(
+            "Run bog-agents as an MCP (Model Context Protocol) stdio server "
+            "exposing a `run_task` tool, so any MCP client (Claude Desktop, "
+            "Cursor, Zed, Copilot) can delegate a coding task to it."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "-M",
+        "--model",
+        metavar="MODEL",
+        default=None,
+        help="Model spec (e.g. anthropic:claude-sonnet-4-6). Auto-detects if omitted.",
+    )
+    mcp_server_parser.add_argument(
+        "--permission-mode",
+        choices=["acceptEdits", "bypass"],
+        default="acceptEdits",
+        metavar="MODE",
+        help=(
+            "Approval posture for delegated tasks. MCP has no human approver, so "
+            "only autonomous modes are allowed: 'acceptEdits' (smart rule-engine "
+            "auto-approval; default) or 'bypass' (approve everything)."
+        ),
+    )
+    mcp_server_parser.add_argument(
+        "--cwd",
+        dest="mcp_cwd",
+        metavar="PATH",
+        default=None,
+        help="Workspace root the agent operates in (default: current directory).",
+    )
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -603,6 +638,29 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--permission-mode",
+        choices=["default", "acceptEdits", "plan", "bypass", "paranoid"],
+        default=None,
+        metavar="MODE",
+        help=(
+            "Permission mode (Claude-Code-style). 'default' prompts for each "
+            "tool call; 'acceptEdits' auto-approves file edits + safe tools and "
+            "asks only for risky shell (smart rule engine); 'plan' is read-only "
+            "(mutating tools stripped); 'bypass' approves everything; "
+            "'paranoid' forces approval for every call. In the TUI, Shift+Tab "
+            "cycles default -> acceptEdits -> plan. Maps onto --auto-approve / "
+            "--auto / --always-ask (do not combine with a conflicting flag)."
+        ),
+    )
+
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        default=False,
+        help="Alias for --permission-mode bypass (Claude-Code compatibility).",
+    )
+
+    parser.add_argument(
         "--sandbox",
         choices=["none", "docker", "modal", "daytona", "runloop", "langsmith"],
         default="none",
@@ -789,12 +847,73 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Unified --permission-mode -> legacy approval-flag mapping. The high-level
+# flag is the single Claude-Code-style knob; downstream code (TUI + headless)
+# reads the individual booleans, so we derive them here once.
+_PERMISSION_MODE_FLAGS: dict[str, dict[str, bool]] = {
+    "default": {},
+    "acceptEdits": {"auto_mode": True},
+    "plan": {"plan_mode": True},
+    "bypass": {"auto_approve": True},
+    "paranoid": {"always_ask": True},
+}
+
+
+def _normalize_permission_mode(args: argparse.Namespace) -> None:
+    """Translate ``--permission-mode`` / ``--dangerously-skip-permissions``.
+
+    Derives the legacy ``auto_approve`` / ``auto_mode`` / ``always_ask`` /
+    ``plan_mode`` flags from the unified mode, validates against contradictory
+    legacy flags (exit 2 on conflict), and always leaves an ``args.plan_mode``
+    attribute so downstream call sites can read it unconditionally. Mutates
+    ``args`` in place.
+    """
+    if not hasattr(args, "plan_mode"):
+        args.plan_mode = False
+
+    mode = getattr(args, "permission_mode", None)
+    if getattr(args, "dangerously_skip_permissions", False):
+        if mode is not None and mode != "bypass":
+            _exit_permission_conflict(
+                f"--dangerously-skip-permissions conflicts with "
+                f"--permission-mode {mode}"
+            )
+        mode = "bypass"
+
+    if mode is None:
+        return
+
+    target = _PERMISSION_MODE_FLAGS[mode]
+    # Reject a --permission-mode that contradicts an explicitly-set legacy flag.
+    legacy = {
+        "--auto-approve": ("auto_approve", bool(getattr(args, "auto_approve", False))),
+        "--auto": ("auto_mode", bool(getattr(args, "auto_mode", False))),
+        "--always-ask": ("always_ask", bool(getattr(args, "always_ask", False))),
+    }
+    for flag, (key, is_set) in legacy.items():
+        if is_set and not target.get(key, False):
+            _exit_permission_conflict(f"--permission-mode {mode} conflicts with {flag}")
+
+    args.auto_approve = target.get("auto_approve", False)
+    args.auto_mode = target.get("auto_mode", False)
+    args.always_ask = target.get("always_ask", False)
+    args.plan_mode = target.get("plan_mode", False)
+
+
+def _exit_permission_conflict(msg: str) -> None:
+    """Print a permission-flag conflict error and exit with code 2."""
+    sys.stderr.write(f"Error: {msg}.\n")
+    sys.stderr.flush()
+    sys.exit(2)
+
+
 async def run_textual_cli_async(
     assistant_id: str,
     *,
     auto_approve: bool = False,
     always_ask: bool = False,
     auto_mode: bool = False,
+    plan_mode: bool = False,
     auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
@@ -821,6 +940,7 @@ async def run_textual_cli_async(
         auto_mode: Smart auto-approval — tool calls are evaluated by the rule
             engine; only risky ones surface an approval dialog. Overridden by
             ``always_ask``.
+        plan_mode: Start in plan mode (read-only; mutating tools stripped).
         auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
@@ -903,6 +1023,7 @@ async def run_textual_cli_async(
             auto_approve=auto_approve,
             always_ask=always_ask,
             auto_mode=auto_mode,
+            plan_mode=plan_mode,
             auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
@@ -1040,6 +1161,92 @@ async def _run_acp_cli_async(
     return exit_code
 
 
+# Max time to wait for the first byte of piped stdin before concluding the
+# stream is an idle pipe with nothing coming. Real piped input (`echo x |`,
+# `cat file |`) is OS-buffered and ready immediately, so this grace is only
+# ever fully consumed when there is genuinely no piped data.
+_STDIN_PEEK_GRACE_SECONDS = 0.5
+
+
+def _stdin_has_pending_data(grace: float = _STDIN_PEEK_GRACE_SECONDS) -> bool:
+    """Best-effort, non-blocking check for pending data on a non-tty stdin.
+
+    A bare ``sys.stdin.read()`` deadlocks when stdin is a non-tty *pipe* that
+    a parent process keeps open without ever writing to or closing it. This is
+    common when the CLI is launched by a service manager, an IDE task runner,
+    the daemon, a CI executor, or any GUI app that wires up a child's stdin but
+    never feeds it. The blocking read then hangs the whole CLI at startup —
+    before the agent or model is ever touched — which superficially looks like
+    "the provider hung" (most visibly Bedrock, whose server boot is the next
+    step). We therefore peek before committing to the read.
+
+    Args:
+        grace: Max seconds to wait for the first byte to become available.
+
+    Returns:
+        True if stdin appears to have data (or EOF) ready, so a read will make
+        progress; False if stdin looks like an idle pipe with nothing coming
+        (in which case the caller should skip the read rather than hang). On
+        any detection failure we return False — degrading the stdin-prepend
+        convenience to a no-op is strictly preferable to an unbounded hang.
+    """
+    try:
+        fd = sys.stdin.fileno()
+    except (OSError, ValueError, AttributeError):
+        # In-memory / file-like stream (StringIO, a test double, embedded
+        # Python) with no backing OS fd — a read cannot block on an OS pipe,
+        # so it is always safe to proceed.
+        return True
+
+    if not isinstance(fd, int):
+        # Mocked or unusual stream object — skip OS-level readiness probing
+        # and let the read proceed (it cannot be a real blocking pipe).
+        return True
+
+    if os.name != "nt":
+        # POSIX: select works on pipes and regular files. Readable means data
+        # or EOF is available, so the subsequent read won't block.
+        try:
+            import select
+
+            return bool(select.select([fd], [], [], grace)[0])
+        except (OSError, ValueError):
+            return False
+
+    # Windows: select doesn't support pipes/files, so inspect the handle.
+    try:
+        import ctypes
+        import msvcrt
+        import time
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(fd)
+        file_type = ctypes.windll.kernel32.GetFileType(handle)
+        file_type_disk = 1  # `< file` redirect — read hits EOF, never blocks
+        file_type_pipe = 3
+        if file_type == file_type_disk:
+            return True
+        if file_type != file_type_pipe:
+            return False
+        # Pipe: poll for buffered bytes within the grace window. A closed
+        # (broken) pipe with no data reports failure → treat as no-data.
+        avail = wintypes.DWORD(0)
+        deadline = time.monotonic() + grace
+        while True:
+            ok = ctypes.windll.kernel32.PeekNamedPipe(
+                handle, None, 0, None, ctypes.byref(avail), None
+            )
+            if not ok:
+                return False
+            if avail.value > 0:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
+    except Exception:  # detection must never raise into startup
+        return False
+
+
 def apply_stdin_pipe(args: argparse.Namespace) -> None:
     r"""Read piped stdin and merge it into the parsed CLI arguments.
 
@@ -1086,6 +1293,13 @@ def apply_stdin_pipe(args: argparse.Namespace) -> None:
         return
 
     if is_tty:
+        return
+
+    # stdin is a non-tty (pipe/redirect). Only commit to a blocking read once
+    # we've confirmed data (or EOF) is actually available — otherwise an idle
+    # pipe left open by a parent process would hang the CLI forever here. See
+    # `_stdin_has_pending_data` for the cross-platform rationale.
+    if not _stdin_has_pending_data():
         return
 
     max_stdin_bytes = 10 * 1024 * 1024  # 10 MiB
@@ -1622,6 +1836,11 @@ def cli_main() -> None:
             args.non_interactive_message = args.print_message
             args.quiet = True
 
+        # Resolve the unified --permission-mode / --dangerously-skip-permissions
+        # into the legacy approval flags (auto_approve/auto_mode/always_ask/
+        # plan_mode) before any dispatch reads them. Exits 2 on conflicting flags.
+        _normalize_permission_mode(args)
+
         # --prompt and --pipeline expand into a non-interactive task.
         # Resolution: read the named prompt/pipeline from disk, substitute
         # variables for prompts, inline pipeline steps for pipelines.
@@ -1739,7 +1958,12 @@ def cli_main() -> None:
                 sys.stderr.flush()
                 sys.exit(2)
 
-        apply_stdin_pipe(args)
+        # Only slurp piped stdin as a prompt for the bare interactive/-n path.
+        # Subcommands own their own stdin semantics — most importantly
+        # `mcp-server`, whose stdin IS the MCP JSON-RPC channel; reading it here
+        # would consume the protocol handshake and break the server.
+        if getattr(args, "command", None) is None:
+            apply_stdin_pipe(args)
 
         if getattr(args, "no_mcp", False) and getattr(args, "mcp_config", None):
             from rich.console import Console as _Console
@@ -1798,12 +2022,12 @@ def cli_main() -> None:
 
             model_spec = args.default_model
             # Auto-detect provider for bare model names
-            from bog_agents_cli.config import detectprovider
+            from bog_agents_cli.config import detect_provider
             from bog_agents_cli.model_config import ModelSpec
 
             parsed = ModelSpec.try_parse(model_spec)
             if not parsed:
-                provider = detectprovider(model_spec)
+                provider = detect_provider(model_spec)
                 if provider:
                     model_spec = f"{provider}:{model_spec}"
 
@@ -1851,6 +2075,19 @@ def cli_main() -> None:
             from bog_agents_cli.headless_commands import run_headless_command
 
             sys.exit(run_headless_command(args.slash, output_format=output_format))
+        elif args.command == "mcp-server":
+            from bog_agents_cli.mcp_server import run_mcp_server
+
+            sys.exit(
+                asyncio.run(
+                    run_mcp_server(
+                        model_name=getattr(args, "model", None),
+                        permission_mode=getattr(args, "permission_mode", None)
+                        or "acceptEdits",
+                        cwd=getattr(args, "mcp_cwd", None),
+                    )
+                )
+            )
         elif args.command == "test-bedrock":
             from bog_agents_cli._bedrock import probe_bedrock, render_probe_report
 
@@ -1946,7 +2183,7 @@ def cli_main() -> None:
             # after the agent is already running.
             model_arg = getattr(args, "model", None)
             try:
-                from bog_agents_cli.config import detectprovider
+                from bog_agents_cli.config import detect_provider
                 from bog_agents_cli.model_config import (
                     PROVIDER_API_KEY_ENV,
                     ModelConfig,
@@ -1960,7 +2197,7 @@ def cli_main() -> None:
                     if ":" in spec_for_creds:
                         provider = spec_for_creds.split(":", 1)[0].lower()
                     else:
-                        provider = (detectprovider(spec_for_creds) or "").lower()
+                        provider = (detect_provider(spec_for_creds) or "").lower()
                     env_var = PROVIDER_API_KEY_ENV.get(provider)
                     # Local providers (ollama) don't need an API key; bedrock/
                     # vertexai use other auth flows. Skip the simple env-var
@@ -2026,6 +2263,8 @@ def cli_main() -> None:
                     resume_thread_id=resume_thread_id,
                     auto_approve=getattr(args, "auto_approve", False),
                     always_ask=getattr(args, "always_ask", False),
+                    auto_mode=getattr(args, "auto_mode", False),
+                    plan_mode=getattr(args, "plan_mode", False),
                 )
             )
             sys.exit(exit_code)
@@ -2119,6 +2358,7 @@ def cli_main() -> None:
                         auto_approve=args.auto_approve,
                         always_ask=getattr(args, "always_ask", False),
                         auto_mode=getattr(args, "auto_mode", False),
+                        plan_mode=getattr(args, "plan_mode", False),
                         auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,

@@ -427,6 +427,29 @@ def write_manifest(job: ButcherJob, job_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def screen_dangerous_command(command: str) -> str | None:
+    """Return a refusal reason if a butcher shell command is obviously destructive.
+
+    Butcher runs LLM/worker-authored shell via shell=True. This reuses the SDK
+    shell backend's accident-catcher patterns (rm -rf, mkfs, dd to a device,
+    fork bombs, curl|sh, etc.) so the most dangerous commands are refused
+    before execution rather than run blindly. It is an accident-catcher, not a
+    security boundary — the real safeguard is the job-level approval gate.
+    (REVIEW.md v2 P1-42.)
+    """
+    if not command or not isinstance(command, str):
+        return None
+    try:
+        # Reuse the SDK shell backend's accident-catcher patterns (same project).
+        from bog_agents.backends.local_shell import _DANGEROUS_PATTERNS  # noqa: PLC2701
+    except Exception:  # never let a screen import break execution
+        return None
+    for pattern, description in _DANGEROUS_PATTERNS:
+        if pattern.search(command):
+            return description
+    return None
+
+
 def build_worker_tools(working_dir: Path) -> list[BaseTool]:
     """Read tools (sidecar's trio) + scoped write/edit/run tools for workers.
 
@@ -494,6 +517,9 @@ def build_worker_tools(working_dir: Path) -> list[BaseTool]:
 
     def run_command(command: str, *, timeout_seconds: int = 120) -> str:
         """Run a shell command in the working directory; returns exit code + output."""
+        danger = screen_dangerous_command(command)
+        if danger is not None:
+            return f"Error: refused dangerous command ({danger}). Butcher workers cannot run this."
         timeout_seconds = max(1, min(int(timeout_seconds), int(_CHECK_TIMEOUT_SECONDS)))
         try:
             result = subprocess.run(  # noqa: S602 — slice-scoped check runner, local CLI context
@@ -738,6 +764,10 @@ def parse_verify_response(text: str) -> tuple[bool, str] | None:
 async def run_acceptance_check(command: str, working_dir: Path) -> tuple[bool, str]:
     """Run the slice's acceptance command. Returns ``(exit_ok, output)``."""
     import subprocess  # noqa: S404 — acceptance checks come from the butcher's own plan
+
+    danger = screen_dangerous_command(command)
+    if danger is not None:
+        return (False, f"acceptance check refused — dangerous command ({danger})")
 
     def _run() -> tuple[bool, str]:
         try:
@@ -1088,7 +1118,10 @@ async def start_butcher_job(app: object, prompt: str) -> None:
     job_dir = jobs_root(working_dir) / job.job_dir_name
     await app._mount_message(  # type: ignore[attr-defined]
         AppMessage(
-            f"[bold]{job.title}[/bold] — {len(job.slices)} slices → [cyan]{job_dir}[/cyan]\n{plan_lines}\n\nExecuting sequentially…"
+            f"[bold]{job.title}[/bold] — {len(job.slices)} slices → [cyan]{job_dir}[/cyan]\n{plan_lines}\n\n"
+            "[dim]Workers run shell commands in this directory; obviously-destructive "
+            "commands (rm -rf, curl|sh, dd, …) are screened and refused. "
+            "Executing sequentially…[/dim]"
         )
     )
 

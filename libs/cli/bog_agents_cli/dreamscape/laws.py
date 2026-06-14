@@ -424,7 +424,11 @@ class LawsMiddleware(AgentMiddleware):
             return request
         addendum = "\n\n".join(blocks)
         try:
-            return append_to_system_message(request, addendum)  # type: ignore[return-value]
+            return request.override(
+                system_message=append_to_system_message(
+                    request.system_message, addendum
+                )
+            )
         except Exception:
             logger.exception("LawsMiddleware: append_to_system_message failed")
             return request

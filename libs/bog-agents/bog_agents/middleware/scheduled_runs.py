@@ -564,11 +564,10 @@ class ScheduledRunsMiddleware(AgentMiddleware):
                 self.store.save()
                 return
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Pass through — scheduling is managed externally."""
-        return await call_next(request, runtime)
+        return await call_next(request)

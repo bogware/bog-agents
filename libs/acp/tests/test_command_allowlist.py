@@ -116,6 +116,28 @@ class TestExtractCommandTypes:
         cmd = "cd /Users/jacoblee/langchain/bog-agents/libs/acp && python -m pytest tests/test_agent.py -v"  # noqa: E501
         assert extract_command_types(cmd) == ["cd", "python -m pytest"]
 
+    def test_security_all_separators_decomposed(self):
+        """REVIEW.md v2 P1-58: `;`, `&`, `||`, and newlines must not hide a command.
+
+        The old parser split only on `&&` and `|`, so the trailing command after
+        a `;`/`&`/newline was dropped — registering as just the (allowlisted)
+        leading command and auto-approving. Every separator must surface the
+        hidden command so the allowlist check sees it.
+        """
+        assert "rm" in extract_command_types("ls ; rm -rf ~")
+        assert "rm" in extract_command_types("ls -la ; rm -rf ~")
+        assert "rm" in extract_command_types("ls\nrm -rf ~")
+        assert "rm" in extract_command_types("ls & rm -rf ~")
+        assert "rm" in extract_command_types("false || rm -rf ~")
+
+    def test_security_command_substitution_forces_review(self):
+        """REVIEW.md v2 P1-58: command/process substitution can't be auto-approved."""
+        for cmd in ("echo $(rm -rf ~)", "echo `rm -rf ~`", "cat <(rm -rf ~)", "echo ${EVIL}"):
+            types = extract_command_types(cmd)
+            # The unmatchable sentinel is present, so `all(... in allowlist)` is False.
+            assert "__unparseable__" in types, cmd
+            assert "rm" not in types or "__unparseable__" in types
+
     def test_security_python_different_modules(self):
         """Test that different python modules are treated as different command types."""
         # These should be different to prevent over-permissioning

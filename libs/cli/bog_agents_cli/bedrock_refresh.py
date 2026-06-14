@@ -203,7 +203,6 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
         self,
         request: ModelRequest,
         call_next: Any,  # noqa: ANN401 — langchain middleware contract
-        runtime: Any,  # noqa: ANN401 — langchain middleware contract
     ) -> ModelResponse:
         """Async wrap — catch expired creds, refresh, retry once.
 
@@ -213,7 +212,7 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
             asyncio.CancelledError: Propagated unchanged.
         """
         try:
-            return await call_next(request, runtime)
+            return await call_next(request)
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as exc:
@@ -223,13 +222,12 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
             if not refreshed:
                 raise
             logger.info("bedrock_refresh: SSO refreshed, retrying model call")
-            return await call_next(request, runtime)
+            return await call_next(request)
 
     def wrap_model_call(  # type: ignore[override]
         self,
         request: ModelRequest,
         call_next: Any,  # noqa: ANN401 — langchain middleware contract
-        runtime: Any,  # noqa: ANN401 — langchain middleware contract
     ) -> ModelResponse:
         """Sync wrap — catch expired creds, refresh, retry once.
 
@@ -238,7 +236,7 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
             SystemExit: Propagated unchanged.
         """
         try:
-            return call_next(request, runtime)
+            return call_next(request)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as exc:
@@ -247,7 +245,7 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
             if not self._refresh_credentials():
                 raise
             logger.info("bedrock_refresh: SSO refreshed, retrying model call (sync)")
-            return call_next(request, runtime)
+            return call_next(request)
 
     @staticmethod
     def _should_attempt_refresh(exc: BaseException) -> bool:

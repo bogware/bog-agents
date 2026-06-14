@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
+import pytest
+
 from bog_agents_daemon.models import (
     AmbientJob,
     JobRun,
@@ -17,6 +19,7 @@ from bog_agents_daemon.store import (
     get_job,
     list_runs,
     load_jobs,
+    record_run_result,
     save_jobs,
     save_run,
     upsert_job,
@@ -59,6 +62,18 @@ class TestLoadSaveJobs:
         save_jobs([job])
         loaded = load_jobs()[0]
         assert loaded.outputs[0].github_token == "ghp_abc123"
+
+    def test_jobs_file_is_owner_only(self, tmp_daemon_dir: Path):
+        # jobs.json holds SMTP/GitHub/webhook secrets in cleartext; it must
+        # not be group/other readable. (REVIEW.md v2 P1-54.)
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX permission bits not honoured on Windows")
+        cfg = OutputConfig(target=OutputTarget.EMAIL, smtp_password="s3cret", to_addrs=["x@y.z"])
+        save_jobs([AmbientJob(name="secret-job", outputs=[cfg])])
+        mode = (tmp_daemon_dir / "jobs.json").stat().st_mode
+        assert mode & 0o077 == 0, f"jobs.json with secrets is group/other accessible: {oct(mode)}"
 
     def test_corrupt_file_returns_empty_list(self, tmp_daemon_dir: Path):
         jobs_file = tmp_daemon_dir / "jobs.json"
@@ -107,6 +122,46 @@ class TestUpsertDeleteJob:
 
     def test_get_job_not_found(self, tmp_daemon_dir: Path):
         assert get_job("missing-id") is None
+
+    def test_record_run_result_preserves_concurrent_config_edit(self, tmp_daemon_dir: Path):
+        # P1-56: a run finishing must merge only run-state fields, not clobber
+        # a config edit (e.g. prompt) that landed while the run was in flight.
+        job = AmbientJob(name="j", prompt="original prompt")
+        upsert_job(job)
+        # Simulate a config edit committed mid-run (new prompt on disk).
+        edited = get_job(job.job_id)
+        assert edited is not None
+        edited.prompt = "edited mid-run"
+        upsert_job(edited)
+        # The runner finishes with its STALE snapshot (still has the old prompt).
+        record_run_result(
+            job,
+            last_run_at=123.0,
+            last_status=JobStatus.COMPLETED,
+            last_output="done",
+        )
+        merged = get_job(job.job_id)
+        assert merged is not None
+        assert merged.prompt == "edited mid-run"  # config edit survived
+        assert merged.last_status == JobStatus.COMPLETED  # run-state applied
+        assert merged.last_run_at == 123.0
+        assert merged.run_count == 1
+
+
+class TestRunDispatchErrors:
+    def test_dispatch_errors_survive_disk_round_trip(self, tmp_daemon_dir: Path):
+        # P1-52: dispatch_errors used to reset to [] on every read-back.
+        run = JobRun(
+            run_id="r1",
+            job_id="j1",
+            job_name="j",
+            status=JobStatus.COMPLETED,
+            dispatch_errors=[{"target": "slack", "error": "401 Unauthorized"}],
+        )
+        save_run(run)
+        loaded = list_runs("j1")
+        assert loaded
+        assert loaded[0].dispatch_errors == [{"target": "slack", "error": "401 Unauthorized"}]
 
 
 class TestConcurrentAccess:

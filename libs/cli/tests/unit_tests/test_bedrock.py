@@ -85,6 +85,21 @@ class TestCategorizeBedrockError:
         assert err.kind == BedrockErrorKind.PACKAGE_MISSING
         assert "pip install" in err.hint
 
+    def test_package_missing_sdk_wrapped_message(self) -> None:
+        # The SDK's create_model wraps the ImportError into a ModelConfigError
+        # whose text is "Missing package for provider 'bedrock'. Install: pip
+        # install langchain-aws" — no "no module named" substring. It must
+        # still categorise as PACKAGE_MISSING with the CLI extra hint, not
+        # fall through to UNKNOWN.
+        err = categorize_bedrock_error(
+            Exception(
+                "Missing package for provider 'bedrock'. "
+                "Install: pip install langchain-aws"
+            )
+        )
+        assert err.kind == BedrockErrorKind.PACKAGE_MISSING
+        assert "bog-agents-cli[bedrock]" in err.hint
+
     def test_unknown_falls_through(self) -> None:
         err = categorize_bedrock_error(Exception("absurd cosmic ray flip"))
         assert err.kind == BedrockErrorKind.UNKNOWN

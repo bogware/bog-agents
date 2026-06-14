@@ -181,3 +181,63 @@ def revoke_project_mcp_trust(
         return True
     del data["mcp_trust"]["projects"][project_root]
     return _save_config(data, config_path)
+
+
+# ---------------------------------------------------------------------------
+# Project-local hook trust (REVIEW.md v2 P0-8)
+#
+# Project-local `.bog-agents/hooks/` scripts auto-execute on the first user
+# prompt and before every tool call. Running the CLI inside a cloned repo
+# would otherwise execute attacker-controlled code with no consent. We reuse
+# the same fingerprint + per-project trust-store machinery as stdio MCP:
+# deny-by-default until the user trusts the project's current hook scripts,
+# and re-prompt whenever any hook script changes.
+# ---------------------------------------------------------------------------
+
+
+def is_project_hooks_trusted(
+    project_root: str,
+    fingerprint: str,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Return True if this project's hook scripts are trusted at this fingerprint."""
+    if config_path is None:
+        config_path = _DEFAULT_CONFIG_PATH
+    data = _load_config(config_path)
+    projects = data.get("hooks_trust", {}).get("projects", {})
+    return projects.get(project_root) == fingerprint
+
+
+def trust_project_hooks(
+    project_root: str,
+    fingerprint: str,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Persist trust for this project's hook scripts at the given fingerprint."""
+    if config_path is None:
+        config_path = _DEFAULT_CONFIG_PATH
+    data = _load_config(config_path)
+    if "hooks_trust" not in data:
+        data["hooks_trust"] = {}
+    if "projects" not in data["hooks_trust"]:
+        data["hooks_trust"]["projects"] = {}
+    data["hooks_trust"]["projects"][project_root] = fingerprint
+    return _save_config(data, config_path)
+
+
+def revoke_project_hooks_trust(
+    project_root: str,
+    *,
+    config_path: Path | None = None,
+) -> bool:
+    """Remove hook trust for a project."""
+    if config_path is None:
+        config_path = _DEFAULT_CONFIG_PATH
+    data = _load_config(config_path)
+    projects = data.get("hooks_trust", {}).get("projects", {})
+    if project_root not in projects:
+        return True
+    del data["hooks_trust"]["projects"][project_root]
+    return _save_config(data, config_path)

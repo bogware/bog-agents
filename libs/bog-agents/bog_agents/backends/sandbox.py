@@ -363,10 +363,13 @@ except PermissionError:
         # Build grep command to get structured output
         grep_opts = "-rHnF"  # recursive, with filename, with line number, fixed-strings (literal)
 
-        # Add glob pattern if specified
+        # Add glob pattern if specified. shlex.quote the value — a bare
+        # single-quoted f-string let a malicious glob like `x'; rm -rf ~ #`
+        # break out of the quoting and inject commands (the sibling path/
+        # pattern args are already quoted). See REVIEW.md v2 P1-2.
         glob_pattern = ""
         if glob:
-            glob_pattern = f"--include='{glob}'"
+            glob_pattern = f"--include={shlex.quote(glob)}"
 
         # Escape pattern for shell
         pattern_escaped = shlex.quote(pattern)

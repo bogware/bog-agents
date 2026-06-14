@@ -14,6 +14,9 @@ import logging
 import shlex
 import socket
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -160,6 +163,57 @@ def _is_url_safe(url: str, *, allow_private_ips: bool = False) -> tuple[bool, st
     return (True, "")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that refuses to follow — we re-vet each hop manually."""
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def safe_urlopen(
+    req: urllib.request.Request,
+    *,
+    allow_private_ips: bool,
+    timeout: float = 30.0,
+    max_redirects: int = 5,
+) -> Any:
+    """Urlopen that re-validates EVERY redirect hop against the SSRF gate.
+
+    The default opener follows 3xx redirects transparently, so a public URL
+    that 302-redirects to ``http://169.254.169.254/...`` (cloud metadata) or
+    an RFC1918 host would bypass the one-shot ``_is_url_safe`` check. This
+    opener refuses automatic redirects and re-runs the gate on each Location
+    before following it. (REVIEW.md v2 P1-6 / P1-74.)
+
+    Raises:
+        PermissionError: if any hop (initial or redirect target) is unsafe.
+        urllib.error.HTTPError / URLError: as urlopen would, for non-3xx errors.
+    """
+    opener = urllib.request.build_opener(_NoRedirect)
+    current = req
+    for _ in range(max_redirects + 1):
+        url = current.full_url
+        safe, reason = _is_url_safe(url, allow_private_ips=allow_private_ips)
+        if not safe:
+            raise PermissionError(reason)
+        try:
+            return opener.open(current, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (301, 302, 303, 307, 308) and "location" in {k.lower() for k in exc.headers}:
+                location = exc.headers["Location"] or exc.headers["location"]
+                target = urllib.parse.urljoin(url, location)
+                # 303 (and commonly 301/302) downgrade to GET; 307/308 preserve method/body.
+                method = "GET" if exc.code in (301, 302, 303) else current.get_method()
+                data = None if exc.code in (301, 302, 303) else current.data
+                current = urllib.request.Request(target, method=method, data=data)
+                for key, value in (req.headers or {}).items():
+                    current.add_header(key, value)
+                continue
+            raise
+    msg = f"too many redirects (> {max_redirects})"
+    raise PermissionError(msg)
+
+
 class BrowserAgentState(TypedDict):
     """State for the browser agent middleware."""
 
@@ -232,8 +286,6 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                 return f"Error: {reason}"
 
             try:
-                import urllib.request
-
                 req = urllib.request.Request(url, method=method)
                 if headers:
                     for key, value in headers.items():
@@ -241,7 +293,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                 if body:
                     req.data = body.encode("utf-8")
 
-                with urllib.request.urlopen(req, timeout=30) as response:
+                with safe_urlopen(req, allow_private_ips=middleware._allow_private_ips, timeout=30) as response:
                     content = response.read().decode("utf-8", errors="replace")
                     status = response.status
                     resp_headers = dict(response.headers)
@@ -270,7 +322,6 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
         ) -> str:
             """Send an API request and return the response with timing info."""
             import time
-            import urllib.request
 
             start = time.monotonic()
 
@@ -293,7 +344,7 @@ class BrowserAgentMiddleware(AgentMiddleware[BrowserAgentState, ContextT, Respon
                 if data:
                     req.data = data
 
-                with urllib.request.urlopen(req, timeout=30) as response:
+                with safe_urlopen(req, allow_private_ips=middleware._allow_private_ips, timeout=30) as response:
                     elapsed = (time.monotonic() - start) * 1000
                     content = response.read().decode("utf-8", errors="replace")
                     status = response.status

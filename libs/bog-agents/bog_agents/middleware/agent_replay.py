@@ -556,11 +556,10 @@ class AgentReplayMiddleware(AgentMiddleware):
         """
         return self.store.load(session_id)
 
-    async def wrap_model_call(
+    async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
-        runtime: Any,
     ) -> ModelResponse[ResponseT]:
         """Record model calls in the replay session."""
         if self.recording:
@@ -570,7 +569,7 @@ class AgentReplayMiddleware(AgentMiddleware):
             )
 
         try:
-            response = await call_next(request, runtime)
+            response = await call_next(request)
         except Exception as exc:
             if self.recording:
                 self.session.record(

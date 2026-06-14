@@ -162,7 +162,7 @@ def load_pipeline(path: Path) -> Pipeline:
     import yaml  # pyyaml — already a CLI dependency
 
     try:
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
     except Exception as exc:
         msg = f"Could not parse pipeline file {path}: {exc}"

@@ -107,6 +107,9 @@ def show_help() -> None:
     console.print(
         "  call MESSAGE                        Talk to a running --serve instance"
     )
+    console.print(
+        "  mcp-server                          Serve bog-agents over MCP (delegate tasks to it)"
+    )
     console.print()
 
     # --- Core Options ---
@@ -120,7 +123,13 @@ def show_help() -> None:
     )
     console.print("  -m, --message TEXT         Auto-submit this prompt on start")
     console.print(
-        "  --auto-approve             Auto-approve all tool calls (Shift+Tab to toggle)"
+        "  --permission-mode MODE     Permission mode: default | acceptEdits | plan | bypass | paranoid (Shift+Tab cycles in TUI)"
+    )
+    console.print(
+        "  --dangerously-skip-permissions  Alias for --permission-mode bypass"
+    )
+    console.print(
+        "  --auto-approve             Auto-approve all tool calls (Ctrl+T to toggle; = --permission-mode bypass)"
     )
     console.print(
         "  --always-ask               Paranoid mode: every tool call requires approval (overrides --auto-approve)"

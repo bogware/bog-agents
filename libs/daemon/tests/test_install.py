@@ -74,3 +74,14 @@ class TestInstallGitHook:
 
         with pytest.raises(FileNotFoundError):
             install_git_hook(str(tmp_path))  # no .git/hooks directory
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX perms not honoured on Windows")
+    def test_hook_with_token_is_owner_only(self, tmp_path: Path):
+        # The hook embeds the daemon token; with a token it must be 0700,
+        # not the world-readable 0755 the umask would otherwise yield. (P1-57)
+        git_hooks = tmp_path / ".git" / "hooks"
+        git_hooks.mkdir(parents=True)
+        install_git_hook(str(tmp_path), token="s3cret-daemon-token")
+        mode = (git_hooks / "post-receive").stat().st_mode
+        assert mode & stat.S_IXUSR, "owner must still be able to execute"
+        assert mode & 0o077 == 0, "token-bearing hook must not be group/other readable"

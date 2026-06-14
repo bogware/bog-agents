@@ -30,6 +30,10 @@ dependencies = [
     # CVE-2026-40087 (langchain-core 1.2.x): fix landed in 1.2.28
     "langchain-core>=1.2.28,<2.0.0",
     "langchain>=1.2.11,<2.0.0",
+    # graph.py and ~15 middleware modules import langgraph directly (BaseCache,
+    # channels, CompiledStateGraph, …); declare it explicitly instead of
+    # relying on it arriving transitively via langchain. (REVIEW.md v2 P1-72.)
+    "langgraph>=1.2.0,<2.0.0",
     "langchain-anthropic>=1.3.4,<2.0.0",
     "langchain-google-genai>=4.2.0,<5.0.0",
     "wcmatch>=6.0,<7.0",
@@ -173,6 +177,27 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
+# Evals: task-agnostic primitives (arbitrary Any I/O) + intentional per-case
+# resilience (a task/scorer crash is a failed case, not a runner crash).
+"bog_agents/evals/**" = [
+    "ANN401",  # Any — eval task input/output is deliberately type-agnostic
+    "BLE001",  # Blind except — a crashing task/scorer must score as failed, not abort the run
+    "D102",    # Scorer .score is documented on the Scorer protocol
+    "D105",    # Dunder methods (__iter__/__len__)
+    "EM102",   # f-string in exception — readable assert_pass_rate message
+    "TRY003",  # Long exception message — the CI assert message is intentional
+]
+# Guardrails: same shape as evals — protocol .check documented on the Protocol,
+# Any-typed judge model, intentional fail-open except for judge resilience.
+"bog_agents/guardrails/**" = [
+    "ANN401",  # Any — LLMGuardrail accepts any chat model
+    "BLE001",  # Blind except — a judge-model outage must fail open, not crash
+    "D102",    # .check documented on the Guardrail protocol
+    "D105",    # Dunder methods
+    "D107",    # __init__ docstring
+    "EM102",
+    "TRY003",
+]
 # Middleware: many interface methods have unused args, complex logic, blind excepts
 "bog_agents/middleware/**" = [
     "ANN401",  # Dynamically typed expressions (Any) — middleware often wraps unknown types
@@ -269,6 +294,9 @@ ignore-var-parameters = true
     "RUF029",  # Async function w/o await — required to satisfy async callback signatures
     "TRY002",  # Custom exception subclassing — fine for fakes in tests
     "TRY003",  # Long exception messages
+    "TC001",   # Type-checking-block import moves are noise for test files
+    "TC002",   # (pytest, pathlib, etc. imported at top of tests is fine)
+    "TC003",
     "EM101",   # Exception literal in raise
     "EM102",   # Exception f-string in raise
     "B904",    # raise from — not always meaningful in tests

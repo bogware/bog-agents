@@ -692,6 +692,58 @@ class TestModalScreenCtrlDHandling:
 class TestModalScreenShiftTabHandling:
     """Tests for app-level Shift+Tab behavior while modals are open."""
 
+    async def test_shift_tab_cycles_permission_modes(self) -> None:
+        """Shift+Tab cycles default -> accept-edits -> plan -> default."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._current_permission_mode() == "default"
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app._current_permission_mode() == "accept-edits"
+            assert app._auto_mode is True
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app._current_permission_mode() == "plan"
+            assert app._plan_mode_enabled is True
+            assert app._auto_mode is False
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app._current_permission_mode() == "default"
+            assert app._plan_mode_enabled is False
+
+    async def test_ctrl_t_toggles_bypass(self) -> None:
+        """Ctrl+T toggles the bypass (approve-everything) mode."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._auto_approve is False
+
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app._current_permission_mode() == "bypass"
+            assert app._auto_approve is True
+
+            await pilot.press("ctrl+t")
+            await pilot.pause()
+            assert app._current_permission_mode() == "default"
+            assert app._auto_approve is False
+
+    async def test_cycle_from_bypass_reenters_at_default(self) -> None:
+        """Cycling out of an out-of-cycle mode (bypass) returns to default."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._apply_permission_mode("bypass")
+            assert app._current_permission_mode() == "bypass"
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app._current_permission_mode() == "default"
+
     async def test_shift_tab_moves_backward_in_thread_selector(self) -> None:
         """Shift+Tab should move backward in the thread selector controls."""
         from bog_agents_cli.widgets.thread_selector import ThreadSelectorScreen
@@ -1392,7 +1444,7 @@ class TestCommandSurfaceEnhancements:
                 await pilot.pause()
 
             app_msgs = app.query(AppMessage)
-            assert any("Auto-approve: off" in str(w._content) for w in app_msgs)
+            assert any("Permission mode: default" in str(w._content) for w in app_msgs)
             assert any(
                 "Shell allow-list: disabled" in str(w._content) for w in app_msgs
             )

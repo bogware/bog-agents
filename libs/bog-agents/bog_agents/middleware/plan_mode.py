@@ -143,11 +143,10 @@ class PlanModeMiddleware(AgentMiddleware[PlanModeState, ContextT, ResponseT]):
     ) -> ModelResponse:
         """Inject plan mode context and filter tools."""
         if self._enabled:
-            request = append_to_system_message(request, PLAN_MODE_PROMPT)
-
-            # Filter out mutating tools from the request
-            if hasattr(request, "tools"):
-                request.tools = [t for t in request.tools if getattr(t, "name", "") not in _MUTATING_TOOLS]
+            request = request.override(
+                system_message=append_to_system_message(request.system_message, PLAN_MODE_PROMPT),
+                tools=[t for t in request.tools if getattr(t, "name", "") not in _MUTATING_TOOLS],
+            )
 
         return call_next(request)
 
@@ -158,9 +157,9 @@ class PlanModeMiddleware(AgentMiddleware[PlanModeState, ContextT, ResponseT]):
     ) -> ModelResponse:
         """Async version of wrap_model_call."""
         if self._enabled:
-            request = append_to_system_message(request, PLAN_MODE_PROMPT)
-
-            if hasattr(request, "tools"):
-                request.tools = [t for t in request.tools if getattr(t, "name", "") not in _MUTATING_TOOLS]
+            request = request.override(
+                system_message=append_to_system_message(request.system_message, PLAN_MODE_PROMPT),
+                tools=[t for t in request.tools if getattr(t, "name", "") not in _MUTATING_TOOLS],
+            )
 
         return await call_next(request)

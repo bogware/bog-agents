@@ -66,16 +66,15 @@ xai = ["langchain-xai>=1.0.0,<2.0.0"]
 all-providers = [
     "bog-agents-daemon[anthropic,baseten,bedrock,cohere,deepseek,fireworks,google-genai,groq,huggingface,ibm,litellm,mistralai,nvidia,ollama,openai,openrouter,perplexity,vertexai,xai]",
 ]
-# Sandbox integrations (heavy; install only if you submit jobs that target one)
+# Sandbox integrations (heavy; install only if you submit jobs that target one).
+# V3-14: only daytona + langsmith sandboxes are actually wired today; the modal
+# and runloop extras were never landed (no backend code references them), so they
+# are not advertised — re-add an extra only once a corresponding backend exists.
 sandbox = [
     "langsmith[sandbox]>=0.7.7",
     "daytona>=0.113.0,<1.0.0",
-    "modal>=0.65.0,<2.0.0",
-    "runloop-api-client>=0.69.0",
 ]
 daytona-sandbox = ["daytona>=0.113.0,<1.0.0"]
-modal-sandbox = ["modal>=0.65.0,<2.0.0"]
-runloop-sandbox = ["runloop-api-client>=0.69.0"]
 langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
 # Web search
 web-search = ["tavily-python>=0.7.21,<1.0.0"]

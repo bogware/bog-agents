@@ -38,6 +38,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/self-review",
+            "Pre-submit gate: review your own diff via 5 lenses (--fix to fix blockers)",
+            "self review gate diff blockers ship verdict",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_self_review_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/ci-fix",
+            "Read this branch's CI result and diagnose/fix failing jobs",
+            "ci continuous integration github actions fix logs green",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_ci_fix_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/test",
             "Run tests with coverage and generate test skeletons",
             "coverage pytest",
