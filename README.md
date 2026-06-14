@@ -2,7 +2,7 @@
 
 > *Pass through in harmony. Opinionated where it matters.*
 
-**v0.9.4** — a production-ready AI agent framework built on LangGraph.
+**v0.10** — a production-ready AI agent framework built on LangGraph.
 Patient by design, watchful by default. It does the careful work so you
 don't have to wire it up yourself.
 
@@ -10,7 +10,7 @@ Three packages, one philosophy:
 
 - **[`bog-agents`](libs/bog-agents)** — the Python SDK. `create_agent()` returns a
   compiled LangGraph agent with file tools, a shell, git, sub-agents, plan mode,
-  retry-with-backoff, and ~80 composable middlewares. Drop-in
+  retry-with-backoff, and 90+ composable middlewares. Drop-in
   [deepagents](https://github.com/langchain-ai/deepagents) compatibility, too —
   `create_deep_agent`, `DeepAgentState`, filesystem permissions, harness/provider
   profiles.
@@ -45,7 +45,7 @@ asks for.
 - **No ceremony.** `pipx install bog-agents-cli && bog-agents` and you have a
   working agent in under a minute. `pip install bog-agents` and one function
   call gets you a compiled agent.
-- **Composable.** 80+ middlewares snap on or off. Subagents nest. Backends
+- **Composable.** 90+ middlewares snap on or off. Subagents nest. Backends
   swap. The framework gets out of your way.
 
 The bog is calm, deep, and unhurried. So is the agent.
@@ -121,6 +121,30 @@ deepagents compatibility, and the full provider matrix.
 The 0.9 line is the run from a credible flagship toward 1.0. Each release
 hardened a different stretch of trail.
 
+- **0.10 — Claude-Code-style auto mode, MCP server, self-verification, and
+  two new SDK primitives.** The marquee batch:
+  - **Permission modes (auto mode).** Shift+Tab cycles `default → accept-edits
+    → plan`; Ctrl+T toggles bypass; a live status indicator; a
+    `--permission-mode {default,acceptEdits,plan,bypass,paranoid}` flag (plus
+    `--dangerously-skip-permissions`).
+  - **`bog-agents mcp-server`.** Expose the agent *as* an MCP server, so Claude
+    Desktop, Cursor, Zed, or Copilot can delegate a whole coding task to it.
+  - **`/self-review`.** Fan five reviewer lenses (correctness, security,
+    maintainability, tests, over-claims) over your own diff → `SHIP` /
+    `FIX-FIRST` verdict; `--fix` loops until clean.
+  - **`/ci-fix`.** Read the branch's CI via `gh`, ingest the failing-job logs,
+    and diagnose + fix.
+  - **`@codebase`** semantic search, **repo-committed `.prompt.md`** files that
+    auto-register as slash commands, **agent-written auto-memories** (a
+    `remember` tool that persists conventions/gotchas to the AGENTS.md cascade),
+    and **shell pass-through** (`!command` output now enters the agent's
+    context so it can see what you ran).
+  - **SDK:** `bog_agents.evals` (Dataset / scorers / `run_evals` /
+    `assert_pass_rate`) and `bog_agents.guardrails` (composable input/output
+    tripwire guardrails + `create_agent(guardrails=[...])`), plus a declarative
+    `.bog-agents/sandbox.toml`. Hardened by a fresh Senior-Principal-Engineer
+    audit (see [REVIEW.md](REVIEW.md)) and a competitive roadmap
+    ([ROADMAP.md](ROADMAP.md)).
 - **0.9.4 — deepagents parity, headless driving, provider resilience.**
   A first-class [deepagents](https://github.com/langchain-ai/deepagents)
   compatibility surface — `create_deep_agent`, `DeepAgentState`,
@@ -197,7 +221,7 @@ discord, kubernetes, datadog, sentry, and more.
 
 | Path | What |
 |---|---|
-| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, ~80 middlewares, pluggable backends, tool bundles, deepagents compatibility. |
+| `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, 90+ middlewares, pluggable backends, tool bundles, deepagents compatibility. |
 | `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents drive` scripted runner. |
 | `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook / git-push triggers, REST API. |
 | `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |

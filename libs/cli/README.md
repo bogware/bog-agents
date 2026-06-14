@@ -142,6 +142,19 @@ modal interactions, snapshots, assertions — see [Drive](#bog-agents-drive-exam
 
 ## What's new in 0.9.x
 
+- **0.10 — Claude-Code-style auto mode + self-verification.**
+  - **Permission modes:** Shift+Tab cycles `default → accept-edits → plan`,
+    Ctrl+T toggles bypass, with a live status indicator and a
+    `--permission-mode {default,acceptEdits,plan,bypass,paranoid}` flag (and
+    `--dangerously-skip-permissions`).
+  - **`bog-agents mcp-server`** — serve the agent over MCP so any MCP client
+    (Claude Desktop, Cursor, Zed, Copilot) can delegate a coding task to it.
+  - **`/self-review`** (five reviewer lenses over your own diff → SHIP/FIX-FIRST,
+    `--fix` to loop) and **`/ci-fix`** (read the branch's CI via `gh`, diagnose
+    and fix failures).
+  - **`@codebase`** semantic search, **repo `.bog-agents/prompts/*.prompt.md`**
+    that auto-register as slash commands, **auto-memories** (a `remember` tool),
+    and **shell pass-through** — `!command` output now enters the agent's context.
 - **0.9.4 — headless driving + provider resilience.** A headless
   slash-command surface (`bog-agents command "/help"`), `--jsonl`
   structured streaming with tool-call events, and deepagents parity
