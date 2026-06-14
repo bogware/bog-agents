@@ -1,99 +1,108 @@
-# Dependabot configuration (V3-9).
+# Dependabot configuration.
 #
-# Keeps the hand-maintained transitive-CVE floors (cryptography, urllib3,
-# requests, pyasn1, pygments, aiohttp, pillow, langsmith, python-multipart,
-# pyjwt, ...) self-sustaining across all Python packages + GitHub Actions,
-# instead of requiring a manual re-audit each cycle. Uses the native `uv`
-# ecosystem so uv.lock files are updated alongside pyproject.toml.
+# Goal: keep dependencies + the hand-maintained CVE floors current WITHOUT PR
+# spam. Each package/ecosystem produces at most ONE grouped PR per run — every
+# update (major, minor, patch) for that directory is bundled together — on a
+# monthly cadence. (Security advisories may still open their own PRs
+# immediately, by design, regardless of grouping.)
 #
-# Minor/patch bumps are grouped per package to keep PR noise low; majors come
-# as individual PRs so breaking changes are reviewed in isolation.
+# NOTE: Dependabot's parser does not support YAML anchors/merge keys, so each
+# block is written out in full.
 version: 2
 
 updates:
-  # ---- Python packages (uv) ----
   - package-ecosystem: "uv"
     directory: "/libs/bog-agents"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
   - package-ecosystem: "uv"
     directory: "/libs/cli"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
   - package-ecosystem: "uv"
     directory: "/libs/daemon"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
   - package-ecosystem: "uv"
     directory: "/libs/acp"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
   - package-ecosystem: "uv"
     directory: "/libs/harbor"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
   - package-ecosystem: "uv"
     directory: "/libs/partners/daytona"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
-  # ---- npm (VS Code extension) ----
   - package-ecosystem: "npm"
     directory: "/libs/vscode-extension"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    open-pull-requests-limit: 1
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
-  # ---- GitHub Actions ----
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      all-actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
     commit-message:
       prefix: "chore(ci)"

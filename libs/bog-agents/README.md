@@ -8,7 +8,7 @@ SDK in its own right when you want to build agents that aren't a CLI.
 
 One `create_agent()` call gets you a compiled LangGraph agent with file tools, a shell,
 git, sub-agents, plan mode, auto-quality checks, retry-with-backoff against transient
-provider failures, and ~80 composable middlewares. Pluggable backends. Tool bundles
+provider failures, and 90+ composable middlewares. Pluggable backends. Tool bundles
 for callers who don't want middleware overhead. Drop-in
 [deepagents](https://github.com/langchain-ai/deepagents) compatibility. Any
 tool-calling LLM. The defaults are deliberate — you ship something that works on
@@ -33,7 +33,7 @@ away or bolt on layers as you understand what the job actually asks for.
   vault, structured logging at every chokepoint, panic dumps on uncaught exceptions.
 - **No ceremony.** `create_agent()` returns a compiled `CompiledStateGraph` you can
   invoke. Plug it into your app. Done.
-- **Composable.** ~80 middlewares snap on or off. Subagents nest. Backends swap. The
+- **Composable.** 90+ middlewares snap on or off. Subagents nest. Backends swap. The
   framework gets out of your way. **Tool bundles** — free-function factories
   that return `list[BaseTool]` — serve callers who only want a set of tools
   without the middleware machinery.
@@ -245,6 +245,18 @@ Streaming is supported via the standard LangGraph stream APIs.
 
 ## What's new in 0.9.x
 
+- **0.10** — two new first-class primitives + safer middleware ordering:
+  - **`bog_agents.evals`** — evaluation as an importable primitive: `Dataset`,
+    rule-based + LLM-as-judge `Scorer`s, `run_evals(...)`, and
+    `EvalReport.assert_pass_rate()` to gate releases in CI.
+  - **`bog_agents.guardrails`** — composable input/output guardrails with
+    fail-fast tripwire semantics (`Blocklist` / `MaxLength` / `NoSecrets` /
+    `LLMGuardrail`), plus `create_agent(guardrails=[...])`.
+  - A declarative **`.bog-agents/sandbox.toml`** (preinstall / runner size /
+    snapshot / network egress allowlist) loader.
+  - Correctness fixes from a fresh SPE audit (see `REVIEW.md`): `MemoryMiddleware`
+    now runs before prompt caching (was defeating the cache) and `DLPMiddleware`
+    before `AuditTrailMiddleware` (was logging unredacted values).
 - **0.9.4** — **deepagents parity**: `create_deep_agent`, `DeepAgentState`
   (with an O(N) `DeltaChannel` messages reducer), `FilesystemPermission`,
   `RubricMiddleware`, `HarnessProfile` / `ProviderProfile`, plus
