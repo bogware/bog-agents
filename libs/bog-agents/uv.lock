@@ -219,19 +219,6 @@ wheels = [
 ]
 
 [[package]]
-name = "backrefs"
-version = "7.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/5e/a7/a7dd63622beef68cc0d3c3c36d472e143dd95443d5ebf14cd1a5b4dfbf11/backrefs-7.0.tar.gz", hash = "sha256:4989bb9e1e99eb23647c7160ed51fb21d0b41b5d200f2d3017da41e023097e82", size = 7012453, upload-time = "2026-04-28T16:28:04.215Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/39/39a31d7eae729ea14ed10c3ccef79371197177b9355a86cb3525709e8502/backrefs-7.0-py310-none-any.whl", hash = "sha256:b57cd227ea556b0aed3dc9b8da4628db4eabc0402c6d7fcfc69283a93955f7e9", size = 380824, upload-time = "2026-04-28T16:27:55.647Z" },
-    { url = "https://files.pythonhosted.org/packages/c9/b5/9302644225ba7dfa934a2ff2b9c7bb85701313a90dddb3dfaf693fa5bae2/backrefs-7.0-py311-none-any.whl", hash = "sha256:a0fa7360c63509e9e077e174ef4e6d3c21c8db94189b9d957289ae6d794b9475", size = 392626, upload-time = "2026-04-28T16:27:57.42Z" },
-    { url = "https://files.pythonhosted.org/packages/36/da/87912ddec6e06feffbaa3d7aa18fc6352bee2e8f1fee185d7d1690f8f4e8/backrefs-7.0-py312-none-any.whl", hash = "sha256:ca42ce6a49ace3d75684dfa9937f3373902a63284ecb385ce36d15e5dcb41c12", size = 398537, upload-time = "2026-04-28T16:27:58.913Z" },
-    { url = "https://files.pythonhosted.org/packages/00/bb/90ba423612b6aa0adccc6b1874bcd4a9b44b660c0c16f346611e00f64ac3/backrefs-7.0-py313-none-any.whl", hash = "sha256:f2c52955d631b9e1ac4cd56209f0a3a946d592b98e7790e77699339ae01c102a", size = 400491, upload-time = "2026-04-28T16:28:00.928Z" },
-    { url = "https://files.pythonhosted.org/packages/3e/5c/fb93d3092640a24dfb7bd7727a24016d7c01774ca013e60efd3f683c8002/backrefs-7.0-py314-none-any.whl", hash = "sha256:a6448b28180e3ca01134c9cf09dcebafad8531072e09903c5451748a05f24bc9", size = 412349, upload-time = "2026-04-28T16:28:02.412Z" },
-]
-
-[[package]]
 name = "baseten-performance-client"
 version = "0.1.8"
 source = { registry = "https://pypi.org/simple" }
@@ -357,7 +344,7 @@ requires-dist = [
     { name = "starlette", marker = "extra == 'serve'", specifier = ">=0.41.0" },
     { name = "urllib3", specifier = ">=2.7.0" },
     { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.34.0" },
-    { name = "wcmatch", specifier = ">=6.0,<7.0" },
+    { name = "wcmatch", specifier = ">=6.0,<11.0" },
 ]
 provides-extras = ["serve", "bedrock", "openai", "all-providers"]
 
@@ -3475,15 +3462,14 @@ wheels = [
 
 [[package]]
 name = "wcmatch"
-version = "6.1"
+version = "10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backrefs" },
     { name = "bracex" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b4/c8/fe4a924192414ba5f91665a7140adee45a7364d5a15f001a07045d5d75ba/wcmatch-6.1.tar.gz", hash = "sha256:b9840a643ce7af0b845a1a6933b34d18ef6649e4406024f13889a7620002cdd1", size = 91263, upload-time = "2020-06-30T17:04:24.426Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/3e/c0bdc27cf06f4e47680bd5803a07cb3dfd17de84cde92dd217dcb9e05253/wcmatch-10.1.tar.gz", hash = "sha256:f11f94208c8c8484a16f4f48638a85d771d9513f4ab3f37595978801cb9465af", size = 117421, upload-time = "2025-06-22T19:14:02.49Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/67/6c65105d8f72ec73a0fc260b19fb169cf687512d613f4136adad10beaea1/wcmatch-6.1-py3-none-any.whl", hash = "sha256:e30fa06e13f6c151d77b51d8105394db2d1fe24f323cbd61f3439c256388a45a", size = 35626, upload-time = "2020-06-30T17:04:50.441Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/d8/0d1d2e9d3fabcf5d6840362adcf05f8cf3cd06a73358140c3a97189238ae/wcmatch-10.1-py3-none-any.whl", hash = "sha256:5848ace7dbb0476e5e55ab63c6bbd529745089343427caa5537f230cc01beb8a", size = 39854, upload-time = "2025-06-22T19:14:00.978Z" },
 ]
 
 [[package]]
