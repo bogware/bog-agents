@@ -20,26 +20,26 @@ classifiers = [
 ]
 dependencies = [
     # Harbor runtime
-    "harbor>=0.1.12",
-    "langchain-anthropic>=1.0.0",
-    "langchain-openai>=1.0.0",
+    "harbor>=0.13.2",
+    "langchain-anthropic>=1.4.6",
+    "langchain-openai>=1.3.2",
     "bog-agents>=0.7.0,<1.0.0",
     # LangSmith for observability
-    "langsmith>=0.4.0",
-    "modal>=0.64.0",
+    "langsmith>=0.8.15",
+    "modal>=1.5.0",
     "bog-agents-cli>=0.7.0,<1.0.0",
 ]
 
 [dependency-groups]
 test = [
-    "pytest>=8.4.2",
-    "pytest-asyncio>=1.2.0",
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
     "pytest-watcher>=0.3.4,<1.0.0",
-    "ruff>=0.8.0",
-    "ty>=0.0.1,<1.0.0",
+    "ruff>=0.15.17",
+    "ty>=0.0.49,<1.0.0",
     "python-dotenv>=1.0.0",
-    "pytest-socket>=0.7.0",
-    "pytest-cov>=7.0.0",
+    "pytest-socket>=0.8.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [project.urls]
