@@ -2052,6 +2052,38 @@ class BogAgentsApp(App):
             exclusive=False,
         )
 
+    async def _record_shell_run_for_agent(
+        self, command: str, output: str, returncode: int | None
+    ) -> None:
+        """Inject a `!` shell pass-through run into the agent's thread.
+
+        Adds the command + output as a message in the conversation thread (via
+        ``aupdate_state``, without running the model) so the next agent turn can
+        see what was run in the shared session. Best-effort: a state-update
+        failure (or a local/agentless session) never affects the shell display.
+
+        Args:
+            command: The command that was run (without the leading ``!``).
+            output: Combined stdout/stderr the command produced.
+            returncode: Process exit code, or None.
+        """
+        agent = self._agent
+        thread_id = self._current_thread_id()
+        if agent is None or not hasattr(agent, "aupdate_state") or not thread_id:
+            return
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from bog_agents_cli.shell_passthrough import format_shell_context
+
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            message = HumanMessage(
+                content=format_shell_context(command, output, returncode)
+            )
+            await agent.aupdate_state(config, {"messages": [message]})
+        except Exception:
+            logger.debug("Failed to record shell run into agent thread", exc_info=True)
+
     async def _run_shell_task(self, command: str) -> None:
         """Run a shell command in a background worker.
 
@@ -2104,6 +2136,10 @@ class BogAgentsApp(App):
 
             if proc.returncode and proc.returncode != 0:
                 await self._mount_message(ErrorMessage(f"Exit code: {proc.returncode}"))
+
+            # Make the run visible to the agent: inject the command + output into
+            # the conversation thread so the next agent turn can use it as context.
+            await self._record_shell_run_for_agent(command, output, proc.returncode)
 
             # Scroll to show the output (user-initiated command, so scroll is expected)
             chat = self.query_one("#chat", VerticalScroll)
