@@ -181,7 +181,7 @@ class TestMiddlewareIntegration:
         # web_fetch now routes through a redirect-revalidating opener
         # (build_opener().open()), so patch that rather than urlopen.
         class _FakeOpener:
-            def open(self, _req, timeout=30):  # noqa: ANN001, ANN003, ARG002
+            def open(self, _req, timeout=30):
                 return _FakeResponse()
 
         with patch("urllib.request.build_opener", return_value=_FakeOpener()):

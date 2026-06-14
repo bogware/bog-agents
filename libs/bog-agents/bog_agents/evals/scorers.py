@@ -21,9 +21,7 @@ def _as_text(value: Any) -> str:
     """Best-effort stringify of a task output (handles message-like objects)."""
     content = getattr(value, "content", value)
     if isinstance(content, list):
-        parts = [
-            b.get("text", "") if isinstance(b, dict) else str(b) for b in content
-        ]
+        parts = [b.get("text", "") if isinstance(b, dict) else str(b) for b in content]
         return "\n".join(p for p in parts if p)
     return content if isinstance(content, str) else str(content)
 
@@ -105,9 +103,7 @@ class LLMJudge:
             + f"# Candidate output\n{_as_text(output)}\n"
         )
         try:
-            resp = await self.model.ainvoke(
-                [SystemMessage(content=system), HumanMessage(content=user)]
-            )
+            resp = await self.model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
             text = _as_text(resp).strip()
             start, end = text.find("{"), text.rfind("}")
             data = json.loads(text[start : end + 1]) if start != -1 else {}

@@ -94,7 +94,11 @@ def _load_prompt_file(path: Path, scope: str) -> PromptCommand | None:
     body = body.strip()
     if not body:
         return None
-    stem = path.name[: -len(_PROMPT_SUFFIX)] if path.name.endswith(_PROMPT_SUFFIX) else path.stem
+    stem = (
+        path.name[: -len(_PROMPT_SUFFIX)]
+        if path.name.endswith(_PROMPT_SUFFIX)
+        else path.stem
+    )
     name = "/" + stem.strip().lstrip("/")
     description = meta.get("description") or f"Custom prompt command from {path.name}"
     return PromptCommand(

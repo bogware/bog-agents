@@ -78,9 +78,7 @@ class TestLLMGuardrail:
 
 
 def _request(human_text: str) -> object:
-    return SimpleNamespace(
-        messages=[SimpleNamespace(type="human", content=human_text)]
-    )
+    return SimpleNamespace(messages=[SimpleNamespace(type="human", content=human_text)])
 
 
 def _response(ai_text: str) -> object:

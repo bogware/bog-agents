@@ -187,9 +187,7 @@ class TestCanonicalMiddlewareOrder:
         """
         names = _capture_middleware_list(monkeypatch, memory=[])
         assert "MemoryMiddleware" in names, names
-        assert names.index("MemoryMiddleware") < names.index(
-            "AnthropicPromptCachingMiddleware"
-        ), names
+        assert names.index("MemoryMiddleware") < names.index("AnthropicPromptCachingMiddleware"), names
 
     def test_dlp_runs_before_audit_trail(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """DLP must run BEFORE AuditTrail (V3-3, compliance hazard).

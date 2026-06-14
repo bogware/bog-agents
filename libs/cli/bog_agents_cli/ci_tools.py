@@ -53,7 +53,13 @@ class CIRun:
     @property
     def is_pending(self) -> bool:
         """True when the run is still queued or running."""
-        return self.status in {"queued", "in_progress", "waiting", "requested", "pending"}
+        return self.status in {
+            "queued",
+            "in_progress",
+            "waiting",
+            "requested",
+            "pending",
+        }
 
 
 class GhUnavailableError(RuntimeError):
@@ -118,20 +124,33 @@ def _run_gh(args: list[str], *, cwd: Path | None, timeout: float = 30.0) -> str:
     return proc.stdout
 
 
-def get_ci_status(branch: str, *, cwd: Path | None = None, limit: int = 10) -> list[CIRun]:
+def get_ci_status(
+    branch: str, *, cwd: Path | None = None, limit: int = 10
+) -> list[CIRun]:
     """Fetch recent CI runs for ``branch`` via `gh run list`.
 
     Propagates :class:`GhUnavailableError` from `_run_gh` when `gh` is missing,
     unauthenticated, or errors.
     """
     out = _run_gh(
-        ["run", "list", "--branch", branch, "--limit", str(limit), "--json", _RUN_FIELDS],
+        [
+            "run",
+            "list",
+            "--branch",
+            branch,
+            "--limit",
+            str(limit),
+            "--json",
+            _RUN_FIELDS,
+        ],
         cwd=cwd,
     )
     return parse_run_list(out)
 
 
-def get_failing_logs(run_id: int, *, cwd: Path | None = None, max_chars: int = 12000) -> str:
+def get_failing_logs(
+    run_id: int, *, cwd: Path | None = None, max_chars: int = 12000
+) -> str:
     """Fetch the failed-step logs for a run, truncated to ``max_chars`` (head+tail)."""
     out = _run_gh(["run", "view", str(run_id), "--log-failed"], cwd=cwd, timeout=60.0)
     out = out.strip()

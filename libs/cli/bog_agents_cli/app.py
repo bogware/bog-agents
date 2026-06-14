@@ -2359,7 +2359,9 @@ class BogAgentsApp(App):
         prompt = render_prompt_command(cmd, args)
         await self._mount_message(UserMessage(command))
         await self._mount_message(
-            AppMessage(f"Running prompt command {name} (from {cmd.scope} .prompt.md)...")
+            AppMessage(
+                f"Running prompt command {name} (from {cmd.scope} .prompt.md)..."
+            )
         )
         await self._send_prompt_to_agent(prompt)
         return True
@@ -3917,9 +3919,7 @@ class BogAgentsApp(App):
             return
         await self._mount_message(AppMessage(f"Checking CI for `{branch}`..."))
         try:
-            runs = await _asyncio.to_thread(
-                get_ci_status, branch, cwd=_Path(self._cwd)
-            )
+            runs = await _asyncio.to_thread(get_ci_status, branch, cwd=_Path(self._cwd))
         except GhUnavailableError as exc:
             await self._mount_message(ErrorMessage(f"/ci-fix: {exc}"))
             return
@@ -3941,8 +3941,7 @@ class BogAgentsApp(App):
         if not run.is_failure:
             await self._mount_message(
                 AppMessage(
-                    f"✓ CI for `{branch}` is green ({run.conclusion}). "
-                    "Nothing to fix."
+                    f"✓ CI for `{branch}` is green ({run.conclusion}). Nothing to fix."
                 )
             )
             return
@@ -9210,8 +9209,7 @@ class BogAgentsApp(App):
             f"Permission mode: {mode_descriptions.get(mode, mode)}",
             f"Shell allow-list: {shell_summary}",
             f"Shell detail: {shell_detail}",
-            "Shift+Tab cycles default -> accept-edits -> plan; "
-            "Ctrl+T toggles bypass.",
+            "Shift+Tab cycles default -> accept-edits -> plan; Ctrl+T toggles bypass.",
             (
                 "Tool approvals still appear when a command or tool is not "
                 "covered by the current policy."

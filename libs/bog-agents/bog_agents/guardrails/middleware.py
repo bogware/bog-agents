@@ -41,9 +41,7 @@ def _text_of(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(
-            b.get("text", "") if isinstance(b, dict) else str(b) for b in content
-        )
+        return "\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
     return str(content) if content is not None else ""
 
 
@@ -55,9 +53,7 @@ def _last_human_text(request: ModelRequest[ContextT]) -> str:
 
 
 def _response_text(response: ModelResponse[ResponseT]) -> str:
-    parts = [
-        _text_of(getattr(m, "content", "")) for m in (getattr(response, "result", None) or [])
-    ]
+    parts = [_text_of(getattr(m, "content", "")) for m in (getattr(response, "result", None) or [])]
     return "\n".join(p for p in parts if p)
 
 

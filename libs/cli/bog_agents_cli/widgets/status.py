@@ -300,9 +300,7 @@ class StatusBar(Horizontal):
         except NoMatches:
             return
         indicator.remove_class("on", "off", "bypass", "plan", "paranoid")
-        label, css_class = self._PERMISSION_MODE_BADGE.get(
-            new_value, ("ASK", "off")
-        )
+        label, css_class = self._PERMISSION_MODE_BADGE.get(new_value, ("ASK", "off"))
         indicator.update(label)
         indicator.add_class(css_class)
 

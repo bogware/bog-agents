@@ -74,7 +74,9 @@ def append_memory(path: Path, fact: str, category: str) -> bool:
         return True
 
     block = f"\n{_SECTION}\n{_PROVENANCE}\n\n{entry}\n"
-    new_text = (existing.rstrip() + "\n" + block) if existing.strip() else block.lstrip("\n")
+    new_text = (
+        (existing.rstrip() + "\n" + block) if existing.strip() else block.lstrip("\n")
+    )
     path.write_text(new_text, encoding="utf-8")
     return True
 

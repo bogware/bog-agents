@@ -6,15 +6,19 @@ fast on a tripwire (the OpenAI Agents SDK pattern)::
 
     from bog_agents import create_agent
     from bog_agents.guardrails import (
-        GuardrailMiddleware, NoSecretsGuardrail, MaxLengthGuardrail,
+        GuardrailMiddleware,
+        NoSecretsGuardrail,
+        MaxLengthGuardrail,
     )
 
     agent = create_agent(
         model="claude-sonnet-4-6",
-        middleware=[GuardrailMiddleware(
-            input_guardrails=[MaxLengthGuardrail(20000)],
-            output_guardrails=[NoSecretsGuardrail()],
-        )],
+        middleware=[
+            GuardrailMiddleware(
+                input_guardrails=[MaxLengthGuardrail(20000)],
+                output_guardrails=[NoSecretsGuardrail()],
+            )
+        ],
     )
 """
 

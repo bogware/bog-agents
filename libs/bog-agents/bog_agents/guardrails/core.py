@@ -51,9 +51,7 @@ class GuardrailTripwireError(RuntimeError):
     def __init__(self, result: GuardrailResult, *, stage: str) -> None:
         self.result = result
         self.stage = stage
-        super().__init__(
-            f"{stage} guardrail '{result.guardrail}' tripped: {result.reason}"
-        )
+        super().__init__(f"{stage} guardrail '{result.guardrail}' tripped: {result.reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -113,9 +111,7 @@ class NoSecretsGuardrail:
     def check(self, text: str) -> GuardrailResult:
         for pat in _SECRET_PATTERNS:
             if re.search(pat, text):
-                return GuardrailResult(
-                    self.name, tripped=True, reason="possible secret/credential detected"
-                )
+                return GuardrailResult(self.name, tripped=True, reason="possible secret/credential detected")
         return GuardrailResult(self.name, tripped=False)
 
 
@@ -139,14 +135,11 @@ class LLMGuardrail:
         from langchain_core.messages import HumanMessage, SystemMessage
 
         system = (
-            "You are a guardrail. Decide whether the text VIOLATES the policy. "
-            'Respond ONLY with JSON: {"violation": <bool>, "reason": "<short>"}.'
+            'You are a guardrail. Decide whether the text VIOLATES the policy. Respond ONLY with JSON: {"violation": <bool>, "reason": "<short>"}.'
         )
         user = f"# Policy\n{self.policy}\n\n# Text\n{text}"
         try:
-            resp = await self.model.ainvoke(
-                [SystemMessage(content=system), HumanMessage(content=user)]
-            )
+            resp = await self.model.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
             raw = getattr(resp, "content", resp)
             raw = raw if isinstance(raw, str) else str(raw)
             start, end = raw.find("{"), raw.rfind("}")
@@ -165,9 +158,7 @@ async def _await_maybe(value: Any) -> Any:
     return value
 
 
-async def run_guardrails(
-    text: str, guardrails: Sequence[Guardrail], *, stop_on_first: bool = True
-) -> list[GuardrailResult]:
+async def run_guardrails(text: str, guardrails: Sequence[Guardrail], *, stop_on_first: bool = True) -> list[GuardrailResult]:
     """Run guardrails over ``text`` and return their results.
 
     Args:

@@ -1024,11 +1024,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if guardrails:
         from bog_agents.guardrails import GuardrailMiddleware
 
-        agents_middleware.append(
-            GuardrailMiddleware(
-                input_guardrails=list(guardrails), output_guardrails=list(guardrails)
-            )
-        )
+        agents_middleware.append(GuardrailMiddleware(input_guardrails=list(guardrails), output_guardrails=list(guardrails)))
 
     # Memory must be appended BEFORE AnthropicPromptCachingMiddleware (V3-2):
     # Memory.modify_request appends a new system content block; PromptCaching

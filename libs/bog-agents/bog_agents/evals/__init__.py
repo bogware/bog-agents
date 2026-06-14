@@ -5,13 +5,15 @@ and gate releases on the pass rate::
 
     from bog_agents.evals import Dataset, Contains, run_evals
 
-    data = Dataset.from_list([
-        {"input": "2+2", "expected": "4"},
-        {"input": "capital of France", "expected": "Paris"},
-    ])
+    data = Dataset.from_list(
+        [
+            {"input": "2+2", "expected": "4"},
+            {"input": "capital of France", "expected": "Paris"},
+        ]
+    )
 
     report = await run_evals(my_agent_fn, data, [Contains()])
-    report.assert_pass_rate(0.9)   # raises in CI if below 90%
+    report.assert_pass_rate(0.9)  # raises in CI if below 90%
     print(report.summary())
 """
 

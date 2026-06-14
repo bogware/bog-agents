@@ -99,9 +99,7 @@ class TestRunEvals:
             report.assert_pass_rate(0.9)
 
     async def test_scorer_averages(self) -> None:
-        ds = Dataset.from_list(
-            [{"input": "a", "expected": "a"}, {"input": "b", "expected": "b"}]
-        )
+        ds = Dataset.from_list([{"input": "a", "expected": "a"}, {"input": "b", "expected": "b"}])
         report = await run_evals(lambda _i: "a", ds, [ExactMatch()])
         avgs = report.scorer_averages()
         assert avgs["exact_match"] == 0.5

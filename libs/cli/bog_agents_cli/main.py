@@ -892,9 +892,7 @@ def _normalize_permission_mode(args: argparse.Namespace) -> None:
     }
     for flag, (key, is_set) in legacy.items():
         if is_set and not target.get(key, False):
-            _exit_permission_conflict(
-                f"--permission-mode {mode} conflicts with {flag}"
-            )
+            _exit_permission_conflict(f"--permission-mode {mode} conflicts with {flag}")
 
     args.auto_approve = target.get("auto_approve", False)
     args.auto_mode = target.get("auto_mode", False)

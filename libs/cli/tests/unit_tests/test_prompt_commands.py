@@ -47,7 +47,9 @@ class TestDiscover:
         assert "ship.prompt.md" in cmds["/ship"].description
 
     def test_empty_body_skipped(self, tmp_path: Path) -> None:
-        _write(tmp_path / ".bog-agents" / "prompts", "empty.prompt.md", "---\nx: 1\n---\n")
+        _write(
+            tmp_path / ".bog-agents" / "prompts", "empty.prompt.md", "---\nx: 1\n---\n"
+        )
         assert discover_prompt_commands(tmp_path, include_user=False) == {}
 
     def test_no_dir_is_empty(self, tmp_path: Path) -> None:

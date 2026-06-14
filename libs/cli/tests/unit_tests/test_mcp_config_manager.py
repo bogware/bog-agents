@@ -29,17 +29,17 @@ class TestLoadAndSave:
 
     def test_load_recovers_from_non_dict_top_level(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text("[]")
+        isolated_config.write_text("[]", encoding="utf-8")
         assert mcm.load_user_mcp_config() == {"mcpServers": {}}
 
     def test_load_recovers_from_invalid_json(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text("{not json")
+        isolated_config.write_text("{not json", encoding="utf-8")
         assert mcm.load_user_mcp_config() == {"mcpServers": {}}
 
     def test_load_adds_mcp_servers_key_when_missing(self, isolated_config: Path):
         isolated_config.parent.mkdir(parents=True, exist_ok=True)
-        isolated_config.write_text(json.dumps({"otherField": 1}))
+        isolated_config.write_text(json.dumps({"otherField": 1}), encoding="utf-8")
         loaded = mcm.load_user_mcp_config()
         assert loaded["mcpServers"] == {}
         assert loaded["otherField"] == 1

@@ -1444,9 +1444,7 @@ class TestCommandSurfaceEnhancements:
                 await pilot.pause()
 
             app_msgs = app.query(AppMessage)
-            assert any(
-                "Permission mode: default" in str(w._content) for w in app_msgs
-            )
+            assert any("Permission mode: default" in str(w._content) for w in app_msgs)
             assert any(
                 "Shell allow-list: disabled" in str(w._content) for w in app_msgs
             )

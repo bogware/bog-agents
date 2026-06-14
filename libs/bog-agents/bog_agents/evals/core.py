@@ -57,9 +57,7 @@ class Dataset:
         return len(self.cases)
 
     @classmethod
-    def from_list(
-        cls, items: Iterable[dict[str, Any] | Case], *, name: str = "dataset"
-    ) -> Dataset:
+    def from_list(cls, items: Iterable[dict[str, Any] | Case], *, name: str = "dataset") -> Dataset:
         """Build a dataset from dicts (``input``/``expected``/``metadata``/``name``) or Cases."""
         cases: list[Case] = []
         for item in items:
@@ -157,17 +155,11 @@ class EvalReport:
     def assert_pass_rate(self, threshold: float) -> None:
         """Raise AssertionError if the pass rate is below ``threshold`` (for CI)."""
         if self.pass_rate < threshold:
-            raise AssertionError(
-                f"{self.dataset}: pass rate {self.pass_rate:.1%} < required {threshold:.1%} "
-                f"({self.passed}/{self.total} passed)"
-            )
+            raise AssertionError(f"{self.dataset}: pass rate {self.pass_rate:.1%} < required {threshold:.1%} ({self.passed}/{self.total} passed)")
 
     def summary(self) -> str:
         """A compact text summary of the report."""
-        lines = [
-            f"Eval '{self.dataset}': {self.passed}/{self.total} passed "
-            f"({self.pass_rate:.1%})"
-        ]
+        lines = [f"Eval '{self.dataset}': {self.passed}/{self.total} passed ({self.pass_rate:.1%})"]
         for name, avg in sorted(self.scorer_averages().items()):
             lines.append(f"  - {name}: avg {avg:.2f}")
         failed = [r for r in self.results if not r.passed]
@@ -175,9 +167,7 @@ class EvalReport:
             lines.append(f"  {len(failed)} failing case(s):")
             for r in failed[:10]:
                 label = r.case.name or repr(r.case.input)[:40]
-                reason = r.error or ", ".join(
-                    f"{s.name}={s.value:.2f}" for s in r.scores if not s.passed
-                )
+                reason = r.error or ", ".join(f"{s.name}={s.value:.2f}" for s in r.scores if not s.passed)
                 lines.append(f"    * {label}: {reason}")
         return "\n".join(lines)
 

@@ -127,9 +127,7 @@ class TestRefreshFlow:
         with patch(
             "bog_agents_cli.bedrock_refresh._attempt_sso_login", return_value=True
         ):
-            result = mw.wrap_model_call(
-                request=MagicMock(), call_next=call_next
-            )
+            result = mw.wrap_model_call(request=MagicMock(), call_next=call_next)
         assert result == "RECOVERED"
         assert call_next.call_count == 2
 
@@ -141,9 +139,7 @@ class TestRefreshFlow:
             "bog_agents_cli.bedrock_refresh._attempt_sso_login", return_value=False
         ):
             with pytest.raises(Exception, match="ExpiredTokenException"):
-                mw.wrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                mw.wrap_model_call(request=MagicMock(), call_next=call_next)
         # No retry attempted when subprocess failed.
         assert call_next.call_count == 1
 
@@ -155,9 +151,7 @@ class TestRefreshFlow:
         call_next = MagicMock(side_effect=original)
         with patch("bog_agents_cli.bedrock_refresh._attempt_sso_login") as mock_login:
             with pytest.raises(Exception, match="ExpiredTokenException"):
-                mw.wrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                mw.wrap_model_call(request=MagicMock(), call_next=call_next)
             # Headless mode must NEVER spawn the subprocess.
             mock_login.assert_not_called()
         # But it must print the actionable banner to stderr.
@@ -174,18 +168,14 @@ class TestRefreshFlow:
         ) as mock_login:
             for _ in range(3):
                 call_next = MagicMock(side_effect=[expired, "OK"])
-                result = mw.wrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                result = mw.wrap_model_call(request=MagicMock(), call_next=call_next)
                 assert result == "OK"
             # First three calls each spawned the subprocess.
             assert mock_login.call_count == 3
             # Fourth: budget exhausted, must NOT spawn, must re-raise.
             call_next = MagicMock(side_effect=expired)
             with pytest.raises(Exception, match="ExpiredTokenException"):
-                mw.wrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                mw.wrap_model_call(request=MagicMock(), call_next=call_next)
             # Subprocess count unchanged from the third refresh.
             assert mock_login.call_count == 3
 
@@ -204,9 +194,7 @@ class TestRefreshFlow:
         with patch(
             "bog_agents_cli.bedrock_refresh._attempt_sso_login", return_value=True
         ):
-            mw.wrap_model_call(
-                request=MagicMock(), call_next=call_next
-            )
+            mw.wrap_model_call(request=MagicMock(), call_next=call_next)
         captured = capsys.readouterr()
         assert "BEDROCK" in captured.err
         assert "aws sso login" in captured.err
@@ -216,9 +204,7 @@ class TestRefreshFlow:
         mw = BedrockRefreshMiddleware(interactive=True)
         call_next = MagicMock(side_effect=KeyboardInterrupt)
         with pytest.raises(KeyboardInterrupt):
-            mw.wrap_model_call(
-                request=MagicMock(), call_next=call_next
-            )
+            mw.wrap_model_call(request=MagicMock(), call_next=call_next)
 
     def test_non_credential_error_passes_through(self) -> None:
         # Unrelated errors must propagate unchanged — no refresh, no retry.
@@ -227,9 +213,7 @@ class TestRefreshFlow:
         call_next = MagicMock(side_effect=original)
         with patch("bog_agents_cli.bedrock_refresh._attempt_sso_login") as mock_login:
             with pytest.raises(RuntimeError, match="ServiceUnavailable"):
-                mw.wrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                mw.wrap_model_call(request=MagicMock(), call_next=call_next)
             mock_login.assert_not_called()
         # Single attempt — no retry on non-credential errors.
         assert call_next.call_count == 1
@@ -253,9 +237,7 @@ class TestAsyncRefreshFlow:
         with patch(
             "bog_agents_cli.bedrock_refresh._attempt_sso_login", return_value=True
         ):
-            result = await mw.awrap_model_call(
-                request=MagicMock(), call_next=call_next
-            )
+            result = await mw.awrap_model_call(request=MagicMock(), call_next=call_next)
         assert result == "RECOVERED"
         assert call_count == 2
 
@@ -269,6 +251,4 @@ class TestAsyncRefreshFlow:
             "bog_agents_cli.bedrock_refresh._attempt_sso_login", return_value=False
         ):
             with pytest.raises(Exception, match="ExpiredTokenException"):
-                await mw.awrap_model_call(
-                    request=MagicMock(), call_next=call_next
-                )
+                await mw.awrap_model_call(request=MagicMock(), call_next=call_next)

@@ -36,7 +36,9 @@ class TestResolveCodebase:
         assert "codebase" in out.lower() or "no codebase matches" in out.lower()
 
     def test_resolve_mentions_injects_codebase_block(self, tmp_path: Path) -> None:
-        (tmp_path / "thing.py").write_text("def banana():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "thing.py").write_text(
+            "def banana():\n    return 1\n", encoding="utf-8"
+        )
         res = resolve_mentions("explain @codebase:banana", cwd=tmp_path)
         assert any(t.kind == "codebase" for t in res.tokens)
         # The augmented message prepends a context block for the mention.

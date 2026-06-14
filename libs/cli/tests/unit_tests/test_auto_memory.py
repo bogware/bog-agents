@@ -14,7 +14,9 @@ from bog_agents_cli.auto_memory import (
 class TestAppendMemory:
     def test_creates_file_and_section(self, tmp_path: Path) -> None:
         p = tmp_path / "AGENTS.md"
-        assert append_memory(p, "Tests live under tests/unit_tests", "convention") is True
+        assert (
+            append_memory(p, "Tests live under tests/unit_tests", "convention") is True
+        )
         text = p.read_text(encoding="utf-8")
         assert _SECTION in text
         assert "auto-memories" in text  # provenance marker
@@ -35,7 +37,9 @@ class TestAppendMemory:
         assert "(gotcha) second fact" in text
         assert text.count(_SECTION) == 1  # one managed section
 
-    def test_preserves_existing_content_and_following_headings(self, tmp_path: Path) -> None:
+    def test_preserves_existing_content_and_following_headings(
+        self, tmp_path: Path
+    ) -> None:
         p = tmp_path / "AGENTS.md"
         p.write_text(
             "# Project\n\nSome user notes.\n\n## Other Section\nkeep me\n",

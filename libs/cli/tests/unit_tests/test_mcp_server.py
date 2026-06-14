@@ -25,7 +25,12 @@ class TestExtractFinalText:
     def test_anthropic_block_list_content(self) -> None:
         result = {
             "messages": [
-                _Msg([{"type": "text", "text": "part one"}, {"type": "text", "text": "part two"}])
+                _Msg(
+                    [
+                        {"type": "text", "text": "part one"},
+                        {"type": "text", "text": "part two"},
+                    ]
+                )
             ]
         }
         assert _extract_final_text(result) == "part one\npart two"

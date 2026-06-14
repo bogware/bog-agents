@@ -1773,7 +1773,9 @@ def _run_setup_wizard() -> str:
 
     save_default_model(model_spec)
 
-    con.print("\n[green]Saved![/green] Key stored in the secret vault (OS keyring, or an owner-only file).")
+    con.print(
+        "\n[green]Saved![/green] Key stored in the secret vault (OS keyring, or an owner-only file)."
+    )
     con.print(f"Default model set to [bold]{model_spec}[/bold]\n")
 
     return model_spec
