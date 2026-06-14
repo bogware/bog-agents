@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from rich.text import Text
 from textual.containers import Horizontal
@@ -123,6 +123,21 @@ class StatusBar(Horizontal):
         color: $text-muted;
     }
 
+    StatusBar .status-auto-approve.bypass {
+        background: $error;
+        color: #08131c;
+    }
+
+    StatusBar .status-auto-approve.plan {
+        background: $secondary;
+        color: #08131c;
+    }
+
+    StatusBar .status-auto-approve.paranoid {
+        background: $warning;
+        color: #08131c;
+    }
+
     StatusBar .status-message {
         width: auto;
         padding: 0 1;
@@ -173,6 +188,10 @@ class StatusBar(Horizontal):
     mode: reactive[str] = reactive("normal", init=False)
     status_message: reactive[str] = reactive("Ready", init=False)
     auto_approve: reactive[bool] = reactive(default=False, init=False)
+    # Unified permission mode (Claude-Code-style). This is the source of truth
+    # for the approval indicator; `auto_approve` is kept as a back-compat alias
+    # that delegates here (bypass/default).
+    permission_mode: reactive[str] = reactive("default", init=False)
     cwd: reactive[str] = reactive("", init=False)
     branch: reactive[str] = reactive("", init=False)
     tokens: reactive[int] = reactive(0, init=False)
@@ -254,20 +273,38 @@ class StatusBar(Horizontal):
             indicator.update("")
             indicator.add_class("normal")
 
+    # Mapping from unified permission mode -> (indicator label, CSS class).
+    # "default" reads as ASK; the rest get a distinct badge + colour so the
+    # active posture is always visible (closes the "plan mode is invisible" gap).
+    _PERMISSION_MODE_BADGE: ClassVar[dict[str, tuple[str, str]]] = {
+        "default": ("ASK", "off"),
+        "accept-edits": ("AUTO-EDIT", "on"),
+        "bypass": ("BYPASS", "bypass"),
+        "plan": ("PLAN", "plan"),
+        "paranoid": ("PARANOID", "paranoid"),
+    }
+
     def watch_auto_approve(self, new_value: bool) -> None:
-        """Update auto-approve indicator when state changes."""
+        """Back-compat: `auto_approve` is now an alias over `permission_mode`."""
+        # Don't clobber a richer mode (plan/accept-edits/paranoid) when something
+        # merely flips auto_approve off; only map the bypass<->default axis.
+        if new_value:
+            self.permission_mode = "bypass"
+        elif self.permission_mode == "bypass":
+            self.permission_mode = "default"
+
+    def watch_permission_mode(self, new_value: str) -> None:
+        """Update the approval indicator when the permission mode changes."""
         try:
             indicator = self.query_one("#auto-approve-indicator", Static)
         except NoMatches:
             return
-        indicator.remove_class("on", "off")
-
-        if new_value:
-            indicator.update("AUTO")
-            indicator.add_class("on")
-        else:
-            indicator.update("ASK")
-            indicator.add_class("off")
+        indicator.remove_class("on", "off", "bypass", "plan", "paranoid")
+        label, css_class = self._PERMISSION_MODE_BADGE.get(
+            new_value, ("ASK", "off")
+        )
+        indicator.update(label)
+        indicator.add_class(css_class)
 
     def watch_cwd(self, new_value: str) -> None:
         """Update cwd display when it changes."""
@@ -326,12 +363,20 @@ class StatusBar(Horizontal):
         self.mode = mode
 
     def set_auto_approve(self, *, enabled: bool) -> None:
-        """Set the auto-approve state.
+        """Set the auto-approve state (back-compat alias for permission mode).
 
         Args:
-            enabled: Whether auto-approve is enabled
+            enabled: Whether auto-approve (bypass) is enabled
         """
-        self.auto_approve = enabled
+        self.permission_mode = "bypass" if enabled else "default"
+
+    def set_permission_mode(self, mode: str) -> None:
+        """Set the unified permission mode shown in the approval indicator.
+
+        Args:
+            mode: One of `default`, `accept-edits`, `bypass`, `plan`, `paranoid`.
+        """
+        self.permission_mode = mode
 
     def set_status_message(self, message: str) -> None:
         """Set the status message.

@@ -1084,6 +1084,8 @@ async def run_non_interactive(
     resume_thread_id: str | None = None,
     auto_approve: bool = False,
     always_ask: bool = False,
+    auto_mode: bool = False,
+    plan_mode: bool = False,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -1151,6 +1153,14 @@ async def run_non_interactive(
             paranoid always-ask mode requires a human to approve every
             tool call, which is impossible in non-interactive mode; we
             refuse the combination loudly rather than hanging.
+        auto_mode: Smart auto-approval (acceptEdits). When `True` and no
+            explicit shell allow-list is set, the curated recommended
+            safe-command list is applied so edits auto-approve while risky
+            shell still requires an allow-list. Maps from `--auto` /
+            `--permission-mode acceptEdits`.
+        plan_mode: When `True` (from `--permission-mode plan`), refuse the
+            run with exit code 2 — plan-mode tool stripping is interactive
+            only and would not be enforced headless.
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
@@ -1181,6 +1191,40 @@ async def run_non_interactive(
                 )
             )
         return 2
+
+    # Plan mode strips mutating tools at the model level, which is only wired
+    # for the interactive TUI. Headless non-shell tools auto-approve, so
+    # running "plan" here without enforcement would let the agent write files
+    # despite the read-only contract. Refuse rather than silently violate it.
+    if plan_mode:
+        if not quiet:
+            console.print(
+                Text(
+                    "--permission-mode plan is interactive-only; run the TUI "
+                    "for read-only planning, or use 'default'/'acceptEdits' "
+                    "non-interactively.",
+                    style="bold red",
+                )
+            )
+        return 2
+
+    # acceptEdits (--auto / --permission-mode acceptEdits) headless: edits and
+    # other non-shell tools already auto-approve; gate shell with the curated
+    # recommended allow-list so risky commands still require an explicit list
+    # rather than silently running. Honour an explicit --shell-allow-list if
+    # the user already set one. (Fixes the previously-dropped headless --auto.)
+    if auto_mode and not auto_approve and not settings.shell_allow_list:
+        from bog_agents_cli.config import parse_shell_allow_list
+
+        settings.shell_allow_list = parse_shell_allow_list("recommended")
+        if not quiet:
+            console.print(
+                Text(
+                    "Auto mode (acceptEdits): edits auto-approved; shell gated "
+                    "by the recommended safe-command list.",
+                    style="dim",
+                )
+            )
 
     try:
         result = create_model(

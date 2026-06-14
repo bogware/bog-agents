@@ -603,6 +603,29 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--permission-mode",
+        choices=["default", "acceptEdits", "plan", "bypass", "paranoid"],
+        default=None,
+        metavar="MODE",
+        help=(
+            "Permission mode (Claude-Code-style). 'default' prompts for each "
+            "tool call; 'acceptEdits' auto-approves file edits + safe tools and "
+            "asks only for risky shell (smart rule engine); 'plan' is read-only "
+            "(mutating tools stripped); 'bypass' approves everything; "
+            "'paranoid' forces approval for every call. In the TUI, Shift+Tab "
+            "cycles default -> acceptEdits -> plan. Maps onto --auto-approve / "
+            "--auto / --always-ask (do not combine with a conflicting flag)."
+        ),
+    )
+
+    parser.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        default=False,
+        help="Alias for --permission-mode bypass (Claude-Code compatibility).",
+    )
+
+    parser.add_argument(
         "--sandbox",
         choices=["none", "docker", "modal", "daytona", "runloop", "langsmith"],
         default="none",
@@ -789,12 +812,75 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Unified --permission-mode -> legacy approval-flag mapping. The high-level
+# flag is the single Claude-Code-style knob; downstream code (TUI + headless)
+# reads the individual booleans, so we derive them here once.
+_PERMISSION_MODE_FLAGS: dict[str, dict[str, bool]] = {
+    "default": {},
+    "acceptEdits": {"auto_mode": True},
+    "plan": {"plan_mode": True},
+    "bypass": {"auto_approve": True},
+    "paranoid": {"always_ask": True},
+}
+
+
+def _normalize_permission_mode(args: argparse.Namespace) -> None:
+    """Translate ``--permission-mode`` / ``--dangerously-skip-permissions``.
+
+    Derives the legacy ``auto_approve`` / ``auto_mode`` / ``always_ask`` /
+    ``plan_mode`` flags from the unified mode, validates against contradictory
+    legacy flags (exit 2 on conflict), and always leaves an ``args.plan_mode``
+    attribute so downstream call sites can read it unconditionally. Mutates
+    ``args`` in place.
+    """
+    if not hasattr(args, "plan_mode"):
+        args.plan_mode = False
+
+    mode = getattr(args, "permission_mode", None)
+    if getattr(args, "dangerously_skip_permissions", False):
+        if mode is not None and mode != "bypass":
+            _exit_permission_conflict(
+                f"--dangerously-skip-permissions conflicts with "
+                f"--permission-mode {mode}"
+            )
+        mode = "bypass"
+
+    if mode is None:
+        return
+
+    target = _PERMISSION_MODE_FLAGS[mode]
+    # Reject a --permission-mode that contradicts an explicitly-set legacy flag.
+    legacy = {
+        "--auto-approve": ("auto_approve", bool(getattr(args, "auto_approve", False))),
+        "--auto": ("auto_mode", bool(getattr(args, "auto_mode", False))),
+        "--always-ask": ("always_ask", bool(getattr(args, "always_ask", False))),
+    }
+    for flag, (key, is_set) in legacy.items():
+        if is_set and not target.get(key, False):
+            _exit_permission_conflict(
+                f"--permission-mode {mode} conflicts with {flag}"
+            )
+
+    args.auto_approve = target.get("auto_approve", False)
+    args.auto_mode = target.get("auto_mode", False)
+    args.always_ask = target.get("always_ask", False)
+    args.plan_mode = target.get("plan_mode", False)
+
+
+def _exit_permission_conflict(msg: str) -> None:
+    """Print a permission-flag conflict error and exit with code 2."""
+    sys.stderr.write(f"Error: {msg}.\n")
+    sys.stderr.flush()
+    sys.exit(2)
+
+
 async def run_textual_cli_async(
     assistant_id: str,
     *,
     auto_approve: bool = False,
     always_ask: bool = False,
     auto_mode: bool = False,
+    plan_mode: bool = False,
     auto_commit: bool = False,
     sandbox_type: str = "none",  # str (not None) to match argparse choices
     sandbox_id: str | None = None,
@@ -821,6 +907,7 @@ async def run_textual_cli_async(
         auto_mode: Smart auto-approval — tool calls are evaluated by the rule
             engine; only risky ones surface an approval dialog. Overridden by
             ``always_ask``.
+        plan_mode: Start in plan mode (read-only; mutating tools stripped).
         auto_commit: Whether to auto-commit git changes after each agent turn
         sandbox_type: Type of sandbox
             ("none", "modal", "runloop", "daytona", "langsmith")
@@ -903,6 +990,7 @@ async def run_textual_cli_async(
             auto_approve=auto_approve,
             always_ask=always_ask,
             auto_mode=auto_mode,
+            plan_mode=plan_mode,
             auto_commit=auto_commit,
             cwd=Path.cwd(),
             thread_id=thread_id,
@@ -1715,6 +1803,11 @@ def cli_main() -> None:
             args.non_interactive_message = args.print_message
             args.quiet = True
 
+        # Resolve the unified --permission-mode / --dangerously-skip-permissions
+        # into the legacy approval flags (auto_approve/auto_mode/always_ask/
+        # plan_mode) before any dispatch reads them. Exits 2 on conflicting flags.
+        _normalize_permission_mode(args)
+
         # --prompt and --pipeline expand into a non-interactive task.
         # Resolution: read the named prompt/pipeline from disk, substitute
         # variables for prompts, inline pipeline steps for pipelines.
@@ -2119,6 +2212,8 @@ def cli_main() -> None:
                     resume_thread_id=resume_thread_id,
                     auto_approve=getattr(args, "auto_approve", False),
                     always_ask=getattr(args, "always_ask", False),
+                    auto_mode=getattr(args, "auto_mode", False),
+                    plan_mode=getattr(args, "plan_mode", False),
                 )
             )
             sys.exit(exit_code)
@@ -2212,6 +2307,7 @@ def cli_main() -> None:
                         auto_approve=args.auto_approve,
                         always_ask=getattr(args, "always_ask", False),
                         auto_mode=getattr(args, "auto_mode", False),
+                        plan_mode=getattr(args, "plan_mode", False),
                         auto_commit=getattr(args, "auto_commit", False),
                         sandbox_type=args.sandbox,
                         sandbox_id=args.sandbox_id,

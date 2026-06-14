@@ -456,6 +456,101 @@ class TestApplyStdinPipe:
         assert args.non_interactive_message == "hello"
 
 
+class TestPermissionModeNormalization:
+    """`_normalize_permission_mode` — unified --permission-mode -> legacy flags.
+
+    Covers the Claude-Code-style permission mode flag added alongside the
+    shift+tab cycle: each mode maps to the right legacy boolean, the
+    --dangerously-skip-permissions alias resolves to bypass, and contradictory
+    flag combinations exit with code 2.
+    """
+
+    @staticmethod
+    def _ns(**overrides: object) -> argparse.Namespace:
+        ns = argparse.Namespace(
+            permission_mode=None,
+            dangerously_skip_permissions=False,
+            auto_approve=False,
+            auto_mode=False,
+            always_ask=False,
+        )
+        for key, value in overrides.items():
+            setattr(ns, key, value)
+        return ns
+
+    def test_none_is_noop_but_sets_plan_false(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns()
+        _normalize_permission_mode(ns)
+        assert ns.plan_mode is False
+        assert ns.auto_approve is False
+        assert ns.auto_mode is False
+        assert ns.always_ask is False
+
+    def test_bypass_sets_auto_approve(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="bypass")
+        _normalize_permission_mode(ns)
+        assert ns.auto_approve is True
+        assert (ns.auto_mode, ns.always_ask, ns.plan_mode) == (False, False, False)
+
+    def test_accept_edits_sets_auto_mode(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="acceptEdits")
+        _normalize_permission_mode(ns)
+        assert ns.auto_mode is True
+        assert (ns.auto_approve, ns.always_ask, ns.plan_mode) == (False, False, False)
+
+    def test_plan_sets_plan_mode(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="plan")
+        _normalize_permission_mode(ns)
+        assert ns.plan_mode is True
+        assert (ns.auto_approve, ns.auto_mode, ns.always_ask) == (False, False, False)
+
+    def test_paranoid_sets_always_ask(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="paranoid")
+        _normalize_permission_mode(ns)
+        assert ns.always_ask is True
+
+    def test_dangerously_skip_is_bypass(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(dangerously_skip_permissions=True)
+        _normalize_permission_mode(ns)
+        assert ns.auto_approve is True
+
+    def test_consistent_legacy_flag_is_ok(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        # --permission-mode bypass + --auto-approve agree -> no error.
+        ns = self._ns(permission_mode="bypass", auto_approve=True)
+        _normalize_permission_mode(ns)
+        assert ns.auto_approve is True
+
+    def test_conflicting_flag_exits_2(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="plan", auto_approve=True)
+        with pytest.raises(SystemExit) as exc_info:
+            _normalize_permission_mode(ns)
+        assert exc_info.value.code == 2
+
+    def test_dangerous_skip_conflicts_with_nonbypass_mode(self) -> None:
+        from bog_agents_cli.main import _normalize_permission_mode
+
+        ns = self._ns(permission_mode="plan", dangerously_skip_permissions=True)
+        with pytest.raises(SystemExit) as exc_info:
+            _normalize_permission_mode(ns)
+        assert exc_info.value.code == 2
+
+
 class _PipeStdin:
     """Minimal stdin stand-in backed by a real OS pipe fd.
 
