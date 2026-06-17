@@ -173,7 +173,7 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
         from bog_agents_cli.bedrock_refresh import BedrockRefreshMiddleware
 
         agent = create_agent(
-            model="bedrock_converse:us.anthropic.claude-opus-4-7",
+            model="bedrock_converse:us.anthropic.claude-opus-4-8",
             middleware=[BedrockRefreshMiddleware(interactive=True)],
         )
 

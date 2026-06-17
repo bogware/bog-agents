@@ -1512,6 +1512,94 @@ def detect_provider(model_name: str) -> str | None:
     return None
 
 
+def _pick_default_bedrock_spec() -> str | None:
+    """Pick a Bedrock model the account can actually invoke (first run).
+
+    AWS Bedrock gates each model behind a per-account, per-region access
+    grant, so there is no single id we can hardcode that is guaranteed
+    hittable. Instead we probe the catalog's Claude-first -> Amazon-Nova
+    ladder against the live account and return the first invokable
+    `bedrock_converse:<id>` spec, persisting it as the default so later
+    launches are instant.
+
+    When nothing is reachable yet, the categorized reason is surfaced (e.g.
+    "model access not granted") and we fall back to the top catalog
+    candidate — the live-turn resilience middleware will diagnose again if
+    the user proceeds, so they are never left with a bare "internal server
+    error". Set `BOG_AGENTS_BEDROCK_NO_PROBE=1` to skip the probe and use the
+    static top candidate.
+
+    Returns:
+        A `bedrock_converse:<id>` spec, or `None` only if the catalog is
+        empty (callers treat `None` as "keep looking").
+    """
+    static = _get_recommended_model_spec("bedrock_converse")
+    if os.environ.get("BOG_AGENTS_BEDROCK_NO_PROBE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return static
+
+    try:
+        from bog_agents_cli._bedrock import pick_hittable_bedrock_model
+        from bog_agents_cli.bedrock_resilience import diverse_bedrock_candidates
+        from bog_agents_cli.model_config import (
+            resolve_aws_region,
+            save_default_model,
+        )
+    except Exception:
+        logger.debug("bedrock probe imports failed; using static default", exc_info=True)
+        return static
+
+    region = resolve_aws_region()  # us-east-1 fallback (broadest model set)
+    region_unset = resolve_aws_region(fallback=None) is None
+
+    # Family-diverse, region-preferred order (Opus -> Sonnet -> Haiku -> Nova,
+    # one per family) so the probe samples real alternatives instead of burning
+    # attempts on the same model in three regions / two versions.
+    candidates = diverse_bedrock_candidates(region)
+    if not candidates:
+        return static
+
+    try:
+        picked, err = pick_hittable_bedrock_model(candidates, region, max_attempts=8)
+    except Exception:
+        logger.debug(
+            "bedrock probe-and-pick failed; using static default", exc_info=True
+        )
+        return static
+
+    if region_unset and region:
+        console.print(
+            f"[yellow]No AWS region configured - using {region} for Bedrock. "
+            "Set AWS_REGION (or a profile region) to change it.[/yellow]"
+        )
+
+    if picked:
+        spec = f"bedrock_converse:{picked}"
+        try:
+            save_default_model(spec)
+        except Exception:
+            logger.debug("could not persist auto-picked bedrock default", exc_info=True)
+        console.print(f"[green]Bedrock ready: using {picked} (region {region}).[/green]")
+        logger.info("Auto-picked hittable Bedrock model: %s (region %s)", picked, region)
+        return spec
+
+    # Nothing invokable yet — show the real reason, return a best-effort spec.
+    if err is not None:
+        try:
+            console.print(f"[red]{err.banner()}[/red]")
+        except Exception:
+            logger.debug("bedrock banner render failed", exc_info=True)
+    console.print(
+        "[yellow]No Bedrock model was invokable yet. Grant model access in the "
+        "AWS console (per region), then restart — bog-agents will pick a "
+        "working model automatically.[/yellow]"
+    )
+    return static or f"bedrock_converse:{candidates[0]}"
+
+
 def _get_default_model_spec() -> str:
     """Get default model specification based on available credentials.
 
@@ -1557,7 +1645,13 @@ def _get_default_model_spec() -> str:
     for provider, is_available in provider_checks:
         if not is_available():
             continue
-        preferred = _get_recommended_model_spec(provider)
+        # Bedrock gates models behind per-account/per-region access grants,
+        # so probe the account and pick one we can actually invoke instead of
+        # blindly returning the most access-gated catalog entry.
+        if provider == "bedrock_converse":
+            preferred = _pick_default_bedrock_spec()
+        else:
+            preferred = _get_recommended_model_spec(provider)
         if preferred:
             return preferred
 
@@ -2037,9 +2131,21 @@ def _create_model_via_init(
             "ollama": "langchain-ollama",
         }
         package = package_map.get(provider, f"langchain-{provider}")
-        msg = (
-            f"Missing package for provider '{provider}'. Install: pip install {package}"
-        )
+        if provider in ("bedrock", "bedrock_converse"):
+            # Point CLI users at the packaged extra (which pulls langchain-aws
+            # AND boto3) rather than the bare SDK package. The phrase "Missing
+            # package for provider" is kept so _bedrock.categorize_bedrock_error
+            # still classifies this as PACKAGE_MISSING.
+            msg = (
+                f"Missing package for provider '{provider}'. Install the AWS "
+                "extra: pip install 'bog-agents-cli[bedrock]'  "
+                "(or: pip install langchain-aws)"
+            )
+        else:
+            msg = (
+                f"Missing package for provider '{provider}'. "
+                f"Install: pip install {package}"
+            )
         raise ModelConfigError(msg) from e
     except (ValueError, TypeError) as e:
         spec = f"{provider}:{model_name}" if provider else model_name
