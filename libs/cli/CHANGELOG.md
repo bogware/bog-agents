@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.8](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.7...bog-agents-cli==0.9.8) (2026-06-18)
+
+
+### Features
+
+* **cli:** resilient Bedrock fallback and hittable-model auto-default ([#145](https://github.com/bogware/bog-agents/issues/145)) ([bde713d](https://github.com/bogware/bog-agents/commit/bde713d1d6423ab4ec86298d24d437653bc5b2c2))
+
 ## [0.9.7](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.6...bog-agents-cli==0.9.7) (2026-06-14)
 
 
