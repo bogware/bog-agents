@@ -1549,7 +1549,9 @@ def _pick_default_bedrock_spec() -> str | None:
             save_default_model,
         )
     except Exception:
-        logger.debug("bedrock probe imports failed; using static default", exc_info=True)
+        logger.debug(
+            "bedrock probe imports failed; using static default", exc_info=True
+        )
         return static
 
     region = resolve_aws_region()  # us-east-1 fallback (broadest model set)
@@ -1582,8 +1584,12 @@ def _pick_default_bedrock_spec() -> str | None:
             save_default_model(spec)
         except Exception:
             logger.debug("could not persist auto-picked bedrock default", exc_info=True)
-        console.print(f"[green]Bedrock ready: using {picked} (region {region}).[/green]")
-        logger.info("Auto-picked hittable Bedrock model: %s (region %s)", picked, region)
+        console.print(
+            f"[green]Bedrock ready: using {picked} (region {region}).[/green]"
+        )
+        logger.info(
+            "Auto-picked hittable Bedrock model: %s (region %s)", picked, region
+        )
         return spec
 
     # Nothing invokable yet — show the real reason, return a best-effort spec.

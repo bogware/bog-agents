@@ -1708,8 +1708,7 @@ def create_cli_agent(
     from bog_agents_cli.bedrock_resilience import is_bedrock_chat_model
 
     model_is_bedrock = (
-        isinstance(model, str)
-        and model.startswith(("bedrock:", "bedrock_converse:"))
+        isinstance(model, str) and model.startswith(("bedrock:", "bedrock_converse:"))
     ) or (not isinstance(model, str) and is_bedrock_chat_model(model))
     if model_is_bedrock:
         from bog_agents_cli.bedrock_refresh import BedrockRefreshMiddleware

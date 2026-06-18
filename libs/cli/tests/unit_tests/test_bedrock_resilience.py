@@ -9,6 +9,8 @@ faked, and the model call is a local callable.
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import Any
 
 import pytest
@@ -92,7 +94,9 @@ class TestHelpers:
         assert is_bedrock_chat_model(ChatBedrockConverse()) is True
 
     def test_is_bedrock_chat_model_false_for_other(self) -> None:
-        assert is_bedrock_chat_model(_FakeModel("us.anthropic.claude-opus-4-8")) is False
+        assert (
+            is_bedrock_chat_model(_FakeModel("us.anthropic.claude-opus-4-8")) is False
+        )
 
     def test_bare_model_id_preserves_version_colon(self) -> None:
         # The ``…-v1:0`` suffix must NOT be treated as a provider separator.
@@ -264,6 +268,19 @@ class TestAsyncResilience:
         assert seen[0] == _OPUS
 
 
+def _install_fake_boto3(monkeypatch: pytest.MonkeyPatch, runtime: object) -> None:
+    """Inject a fake ``boto3`` module whose ``client()`` returns ``runtime``.
+
+    ``pick_hittable_bedrock_model`` does ``import boto3`` internally, but boto3
+    is only present with the ``[bedrock]`` extra (not in the base test env / CI).
+    Injecting a stub into ``sys.modules`` lets these tests run anywhere and also
+    overrides a real boto3 when present.
+    """
+    fake = types.ModuleType("boto3")
+    fake.client = lambda *_a, **_k: runtime  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "boto3", fake)
+
+
 class TestPickHittableModel:
     def test_returns_first_invokable_candidate(
         self, monkeypatch: pytest.MonkeyPatch
@@ -278,9 +295,7 @@ class TestPickHittableModel:
                     return {"usage": {"totalTokens": 1}}
                 raise _access_denied()
 
-        import boto3
-
-        monkeypatch.setattr(boto3, "client", lambda *a, **k: _FakeRuntime())
+        _install_fake_boto3(monkeypatch, _FakeRuntime())
         picked, err = pick_hittable_bedrock_model(
             ["us.anthropic.claude-opus-4-8", "us.amazon.nova-lite-v1:0"],
             "us-east-1",
@@ -299,9 +314,7 @@ class TestPickHittableModel:
                 calls.append(modelId)
                 raise Exception("Unable to locate credentials")  # noqa: TRY002
 
-        import boto3
-
-        monkeypatch.setattr(boto3, "client", lambda *a, **k: _FakeRuntime())
+        _install_fake_boto3(monkeypatch, _FakeRuntime())
         picked, err = pick_hittable_bedrock_model(
             ["us.anthropic.claude-opus-4-8", "us.amazon.nova-lite-v1:0"],
             "us-east-1",
