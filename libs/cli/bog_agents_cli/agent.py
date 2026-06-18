@@ -1698,16 +1698,35 @@ def create_cli_agent(
 
     agent_middleware.append(NotificationsMiddleware())
 
-    # Bedrock credential auto-refresh — only attached when a Bedrock
-    # model is in use, to keep the middleware list lean for everyone
-    # else. Detects ExpiredTokenException / SSOTokenLoadError on model
-    # calls and runs `aws sso login` to refresh, then retries. See
-    # docs/providers/bedrock.md and bog_agents_cli.bedrock_refresh.
-    if isinstance(model, str) and model.startswith(("bedrock:", "bedrock_converse:")):
-        from bog_agents_cli.bedrock_refresh import BedrockRefreshMiddleware
+    # Bedrock resilience — only attached when a Bedrock model is in use, to
+    # keep the middleware list lean for everyone else. NOTE: by this point
+    # `model` has already been resolved from a `provider:model` string to a
+    # `BaseChatModel` instance (above), so an `isinstance(model, str)` check
+    # is always False on the live path — detect Bedrock from the resolved
+    # model instead. (Previously the string check meant NEITHER Bedrock
+    # middleware ever attached on the live server path.)
+    from bog_agents_cli.bedrock_resilience import is_bedrock_chat_model
 
+    model_is_bedrock = (
+        isinstance(model, str) and model.startswith(("bedrock:", "bedrock_converse:"))
+    ) or (not isinstance(model, str) and is_bedrock_chat_model(model))
+    if model_is_bedrock:
+        from bog_agents_cli.bedrock_refresh import BedrockRefreshMiddleware
+        from bog_agents_cli.bedrock_resilience import BedrockResilienceMiddleware
+
+        bedrock_interactive = sys.stdin.isatty()
+        # Order is load-bearing: earlier in the list == OUTER wrapper.
+        # Resilience (outer) categorizes any failure and falls back to a
+        # hittable model / emits a friendly diagnosis. Refresh (inner) gets
+        # first crack at an expired-SSO failure (runs `aws sso login` and
+        # retries) before resilience would otherwise surface it. See
+        # docs/providers/bedrock.md, bog_agents_cli.bedrock_resilience, and
+        # bog_agents_cli.bedrock_refresh.
         agent_middleware.append(
-            BedrockRefreshMiddleware(interactive=sys.stdin.isatty())
+            BedrockResilienceMiddleware(interactive=bedrock_interactive)
+        )
+        agent_middleware.append(
+            BedrockRefreshMiddleware(interactive=bedrock_interactive)
         )
 
     # Street sweeper (opt-in) — attach the per-cwd singleton instance, disabled

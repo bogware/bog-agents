@@ -82,11 +82,11 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "gpt-5",
         ),
         "bedrock": (
-            # AWS Bedrock model IDs, refreshed 2026-05-19.
+            # AWS Bedrock model IDs, refreshed 2026-06-17.
             #
             # Anthropic Claude 4.x on Bedrock REQUIRES a cross-region
             # inference profile prefix (us./eu./apac./...); the bare
-            # `anthropic.claude-opus-4-7` IDs return AccessDenied even
+            # `anthropic.claude-opus-4-8` IDs return AccessDenied even
             # when the account has model access granted. The auto-
             # resolver in `bog_agents._models` rewrites bare→regional
             # based on AWS_REGION as a safety net, but the catalog lists
@@ -94,6 +94,9 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
             # them as first-class entries. See docs/providers/bedrock.md.
             #
             # ─── ANTHROPIC CLAUDE (inference profiles required) ─────
+            "us.anthropic.claude-opus-4-8",
+            "eu.anthropic.claude-opus-4-8",
+            "apac.anthropic.claude-opus-4-8",
             "us.anthropic.claude-opus-4-7",
             "eu.anthropic.claude-opus-4-7",
             "apac.anthropic.claude-opus-4-7",
@@ -123,6 +126,9 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
         # IDs as bedrock (above) plus DeepSeek which is converse-only.
         "bedrock_converse": (
             # ─── ANTHROPIC CLAUDE (inference profiles required) ─────
+            "us.anthropic.claude-opus-4-8",
+            "eu.anthropic.claude-opus-4-8",
+            "apac.anthropic.claude-opus-4-8",
             "us.anthropic.claude-opus-4-7",
             "eu.anthropic.claude-opus-4-7",
             "apac.anthropic.claude-opus-4-7",

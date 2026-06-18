@@ -30,7 +30,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -703,7 +703,7 @@ _FIX_ACTIONS: dict[BedrockErrorKind, tuple[str, tuple[str, ...]]] = {
         "The model id was rejected — try the cross-region inference profile id.",
         (
             "# Claude 4.x on Bedrock requires a prefix: us. / eu. / apac.",
-            "/model bedrock_converse:us.anthropic.claude-opus-4-7",
+            "/model bedrock_converse:us.anthropic.claude-opus-4-8",
             "# or list what your account can invoke:",
             "bog-agents test-bedrock",
         ),
@@ -839,12 +839,92 @@ def render_fix_report(steps: list[ProbeStep]) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Probe-and-pick — choose a model the account can actually invoke
+# ---------------------------------------------------------------------------
+
+
+def pick_hittable_bedrock_model(
+    candidates: Sequence[str],
+    region: str | None = None,
+    *,
+    max_attempts: int = 5,
+) -> tuple[str | None, BedrockError | None]:
+    """Return the first candidate Bedrock model id the account can invoke.
+
+    Each candidate is tested with a tiny (1-token) ``converse`` call in
+    preference order; the first that succeeds is returned. This is what lets
+    a fresh user "default to a model we KNOW is hittable" instead of being
+    pinned to the most access-gated model and seeing an opaque error on their
+    first prompt.
+
+    Account-wide failures (missing/expired credentials, no region, network,
+    package missing) abort the probe early — no candidate could overcome them
+    — and the categorized error is returned so the caller can show the real
+    next step. Per-model failures (access not granted, invalid id, throttled,
+    unknown) skip to the next candidate.
+
+    Args:
+        candidates: Ordered Bedrock model ids, most preferred first (e.g.
+            ``("us.anthropic.claude-opus-4-8", "us.amazon.nova-lite-v1:0")``).
+        region: AWS region for the probe. When ``None``, falls back to
+            ``AWS_REGION`` / ``AWS_DEFAULT_REGION``.
+        max_attempts: Cap on how many candidates to probe (bounds latency and
+            cost on a fully locked-down account).
+
+    Returns:
+        ``(model_id, None)`` for the first invokable candidate, or
+        ``(None, BedrockError)`` when none are reachable. Account-wide errors
+        take precedence over the first per-model failure in the returned
+        error.
+    """
+    try:
+        import boto3
+    except ImportError as exc:
+        return None, categorize_bedrock_error(exc)
+
+    resolved = (
+        region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    )
+    try:
+        client = boto3.client("bedrock-runtime", region_name=resolved)
+    except Exception as exc:  # diagnostic — never raise out of the probe
+        return None, categorize_bedrock_error(exc)
+
+    account_wide = {
+        BedrockErrorKind.CREDENTIALS_MISSING,
+        BedrockErrorKind.CREDENTIALS_EXPIRED,
+        BedrockErrorKind.REGION_INVALID,
+        BedrockErrorKind.NETWORK,
+        BedrockErrorKind.PACKAGE_MISSING,
+    }
+    first_error: BedrockError | None = None
+    for model_id in list(candidates)[:max_attempts]:
+        try:
+            client.converse(
+                modelId=model_id,
+                messages=[{"role": "user", "content": [{"text": "hi"}]}],
+                inferenceConfig={"maxTokens": 1, "temperature": 0.0},
+            )
+        except Exception as exc:
+            err = categorize_bedrock_error(exc)
+            if first_error is None:
+                first_error = err
+            if err.kind in account_wide:
+                return None, err
+            continue
+        else:
+            return model_id, None
+    return None, first_error
+
+
 __all__ = [
     "BedrockError",
     "BedrockErrorKind",
     "ProbeStep",
     "categorize_bedrock_error",
     "iter_probe_lines",
+    "pick_hittable_bedrock_model",
     "probe_bedrock",
     "render_fix_report",
     "render_probe_report",
