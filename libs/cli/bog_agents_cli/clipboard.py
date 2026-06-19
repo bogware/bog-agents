@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.app import App
 
 _PREVIEW_MAX_LENGTH = 40
@@ -108,14 +110,15 @@ def read_clipboard_text() -> str | None:
     return None
 
 
-def copy_selection_to_clipboard(app: App) -> bool:
-    """Copy selected text from app widgets to clipboard.
+def _gather_selection(app: App) -> tuple[str, str] | None:
+    """Collect selected text from app widgets and compose a notification.
 
-    Queries all widgets for their ``text_selection`` and copies any
-    selected text to the system clipboard. Emits *exactly one*
-    notification on success — earlier versions could fire one per
-    clipboard method tried (one good preview + several near-empty
-    ones if a method partially succeeded).
+    Walks the widget tree for every widget's ``text_selection`` and joins the
+    selected fragments. This MUST run on the UI thread — the Textual widget
+    tree is not safe to traverse from a worker thread.
+
+    Returns a ``(combined_text, notify_message)`` pair, or ``None`` when
+    nothing is selected.
     """
     selected_texts: list[str] = []
     seen: set[str] = set()
@@ -154,7 +157,7 @@ def copy_selection_to_clipboard(app: App) -> bool:
             selected_texts.append(selected_text)
 
     if not selected_texts:
-        return False
+        return None
 
     combined_text = "\n".join(selected_texts)
 
@@ -173,31 +176,57 @@ def copy_selection_to_clipboard(app: App) -> bool:
     else:
         notify_message = f"Copied! ({char_count} chars)"
 
-    # Try multiple clipboard methods
-    # Prefer pyperclip/app clipboard first (works reliably on local machines)
-    # OSC 52 is last resort (for SSH/remote where native clipboard unavailable)
-    copy_methods = [app.copy_to_clipboard]
+    return combined_text, notify_message
 
-    # Try pyperclip if available (preferred - uses pbcopy on macOS)
+
+def _clipboard_write_methods() -> list[Callable[[str], None]]:
+    """Return clipboard-write backends, most-reliable/fastest first.
+
+    `pyperclip` is preferred on every platform: on Windows it uses the native
+    Win32 API (ctypes, no subprocess) and writes ``CF_UNICODETEXT``, on macOS
+    it shells to ``pbcopy`` and on Linux to ``xclip``/``xsel``. The platform
+    helpers are *fallbacks* only:
+
+    * ``clip.exe`` for the rare Windows box where pyperclip's backend fails;
+    * OSC 52 (written to ``/dev/tty``) for headless / SSH POSIX sessions with
+      no native clipboard tool installed.
+
+    Earlier versions put ``clip.exe`` *first* on Windows. That made every copy
+    spawn a subprocess (hundreds of ms) on the UI thread — the source of the
+    select-to-copy lag — and routed text through the console code page, which
+    mangled non-ASCII. pyperclip is both faster and Unicode-correct, so it now
+    leads.
+    """
+    methods: list[Callable[[str], None]] = []
+
     try:
         import pyperclip
 
-        copy_methods.insert(0, pyperclip.copy)
+        methods.append(pyperclip.copy)
     except ImportError:
         pass
 
     if sys.platform == "win32":
-        copy_methods.insert(0, _copy_windows_clip)
+        methods.append(_copy_windows_clip)
+    else:
+        # OSC 52 covers remote/SSH POSIX sessions where pyperclip's backend
+        # (xclip/xsel/pbcopy) may be missing.
+        methods.append(_copy_osc52)
 
-    # OSC 52 as fallback for remote/SSH sessions
-    if os.name != "nt":
-        copy_methods.append(_copy_osc52)
+    return methods
 
+
+def _write_to_clipboard(text: str) -> tuple[bool, Exception | None]:
+    """Write ``text`` to the system clipboard, trying each backend in turn.
+
+    Pure I/O with no Textual app dependency, so it is safe to call from a
+    worker thread. Returns ``(succeeded, last_error)``.
+    """
     last_error: Exception | None = None
-    for copy_fn in copy_methods:
+    for copy_fn in _clipboard_write_methods():
         try:
-            copy_fn(combined_text)
-        except (OSError, RuntimeError, TypeError) as e:
+            copy_fn(text)
+        except (OSError, RuntimeError, TypeError, subprocess.SubprocessError) as e:
             last_error = e
             logger.debug(
                 "Clipboard copy method %s failed: %s",
@@ -206,29 +235,117 @@ def copy_selection_to_clipboard(app: App) -> bool:
                 exc_info=True,
             )
             continue
-        # Copy succeeded — fire ONE notification and bail out before any
-        # subsequent method is tried. Earlier versions emitted notify
-        # inside the try block, which made it possible (and was reported
-        # in the wild) to see a "good" notification followed by 2-3
-        # near-empty ones when extra methods accidentally re-fired.
-        try:
-            app.notify(
-                notify_message,
-                severity="information",
-                timeout=2,
-                markup=False,
-            )
-        except Exception:
-            # The clipboard write already succeeded — don't undo that
-            # if the notify call itself blew up for some reason.
-            logger.debug("clipboard notify failed", exc_info=True)
-        return True
+        return True, last_error
 
-    # If all methods fail, still notify but warn.
+    return False, last_error
+
+
+def _notify_copy_result(
+    app: App,
+    *,
+    success: bool,
+    last_error: Exception | None,
+    notify_message: str,
+) -> None:
+    """Emit exactly one toast describing the copy outcome.
+
+    `App.notify` is documented thread-safe, so this is safe to call from the
+    background worker that performed the write.
+    """
+    if success:
+        try:
+            app.notify(notify_message, severity="information", timeout=2, markup=False)
+        except Exception:
+            # The clipboard write already succeeded — don't surface a failure
+            # just because the notify call itself blew up for some reason.
+            logger.debug("clipboard notify failed", exc_info=True)
+        return
+
     app.notify(
         "Failed to copy - no clipboard method available"
         + (f" (last error: {last_error.__class__.__name__})" if last_error else ""),
         severity="warning",
         timeout=3,
     )
-    return False
+
+
+def copy_selection_to_clipboard(app: App) -> bool:
+    """Copy the current selection to the clipboard synchronously.
+
+    Gathers the selection, writes it, and emits exactly one notification. This
+    blocks until the clipboard write finishes, so the interactive TUI should
+    use `copy_selection_to_clipboard_async` instead (it keeps the event loop
+    free). Retained for headless callers and tests.
+    """
+    gathered = _gather_selection(app)
+    if gathered is None:
+        return False
+
+    combined_text, notify_message = gathered
+    success, last_error = _write_to_clipboard(combined_text)
+    _notify_copy_result(
+        app,
+        success=success,
+        last_error=last_error,
+        notify_message=notify_message,
+    )
+    return success
+
+
+def copy_selection_to_clipboard_async(app: App) -> bool:
+    """Copy the selection without blocking the UI event loop.
+
+    The selection is gathered on the calling (UI) thread — the widget tree is
+    not safe to walk from another thread — then the clipboard write and the
+    result toast run on a background thread worker.
+
+    This is what fixes the select-to-copy regression where the whole UI froze
+    for a beat on mouse-release and the "Copied" toast didn't appear until the
+    user alt-tabbed away and back: the freeze was the ``clip.exe`` subprocess
+    spawning on the asyncio event loop, and the toast couldn't paint until a
+    later refresh (which the focus change forced).
+
+    Returns True if a selection was found and a write dispatched, False if
+    there was nothing selected.
+    """
+    gathered = _gather_selection(app)
+    if gathered is None:
+        return False
+
+    combined_text, notify_message = gathered
+
+    def _write_and_notify() -> None:
+        success, last_error = _write_to_clipboard(combined_text)
+        _notify_copy_result(
+            app,
+            success=success,
+            last_error=last_error,
+            notify_message=notify_message,
+        )
+
+    try:
+        app.run_worker(
+            _write_and_notify,
+            thread=True,
+            exclusive=False,
+            exit_on_error=False,
+            group="clipboard",
+            name="copy-selection",
+        )
+    except Exception:
+        # If the worker can't be scheduled, fall back to a synchronous write so
+        # the copy still happens (at the cost of one brief blocking call). A
+        # copy attempt must never crash the app.
+        logger.debug(
+            "clipboard worker dispatch failed; copying synchronously",
+            exc_info=True,
+        )
+        success, last_error = _write_to_clipboard(combined_text)
+        _notify_copy_result(
+            app,
+            success=success,
+            last_error=last_error,
+            notify_message=notify_message,
+        )
+
+    return True

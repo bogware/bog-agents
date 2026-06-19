@@ -99,6 +99,51 @@ def _cmd_config(_args: str) -> HeadlessResult:
     return _ok("\n".join(lines), data)
 
 
+def _cmd_update(_args: str) -> HeadlessResult:
+    """Report whether a newer CLI release is available (status only).
+
+    The interactive `/update` (inside the TUI) is what actually downloads and
+    installs, since it asks for confirmation first. Headless callers get the
+    status plus the exact command to run — never an unattended upgrade.
+    """
+    try:
+        from bog_agents_cli.update_manager import (
+            build_plan,
+            get_suite_status,
+            render_status,
+        )
+
+        status = get_suite_status()
+        plan = build_plan(status)
+    except Exception as exc:  # update check must never raise
+        return _err(
+            f"Update check failed: {exc}",
+            {"error": "exception"},
+        )
+
+    data: dict[str, Any] = {
+        "method": status.method.value,
+        "current": plan.current,
+        "latest": plan.latest,
+        "update_available": plan.needs_update,
+        "command": plan.display_command,
+    }
+
+    if not plan.needs_update:
+        return _ok(
+            f"{render_status(status)}\n\nYou're on the latest bog-agents-cli "
+            f"(v{plan.current}).",
+            data,
+        )
+
+    return _ok(
+        f"{render_status(status)}\n\nUpdate available. Run `/update` inside the "
+        f"TUI to install with confirmation, or run manually:\n  "
+        f"{plan.display_command}\nThen restart.",
+        data,
+    )
+
+
 def _cmd_changelog(_args: str) -> HeadlessResult:
     """Print the CLI changelog."""
     path = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
@@ -173,6 +218,7 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "commands": ("List all slash commands and which run headlessly", _cmd_commands),
     "help": ("Show help for all or a specific slash command", _cmd_help),
     "version": ("Show CLI and SDK versions", _cmd_version),
+    "update": ("Check whether a newer CLI release is available", _cmd_update),
     "model": ("Show the configured model", _cmd_model),
     "config": ("Show resolved configuration", _cmd_config),
     "changelog": ("Show the CLI changelog", _cmd_changelog),

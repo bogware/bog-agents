@@ -28,7 +28,10 @@ from textual.message import Message
 from textual.screen import ModalScreen
 
 from bog_agents_cli._debug import configure_debug_logging
-from bog_agents_cli.clipboard import copy_selection_to_clipboard, read_clipboard_text
+from bog_agents_cli.clipboard import (
+    copy_selection_to_clipboard_async,
+    read_clipboard_text,
+)
 from bog_agents_cli.config import (
     DOCS_URL,
     SHELL_TOOL_NAMES,
@@ -157,6 +160,7 @@ if TYPE_CHECKING:
     from bog_agents_cli.pipeline import Pipeline
     from bog_agents_cli.remote_client import RemoteAgent
     from bog_agents_cli.server import ServerProcess
+    from bog_agents_cli.update_manager import UpdatePlan
     from bog_agents_cli.widgets.pipeline_screen import PipelineRunRequest
 
 # iTerm2 Cursor Guide Workaround
@@ -2975,6 +2979,120 @@ class BogAgentsApp(App):
             logger.warning("Unexpected error looking up SDK version", exc_info=True)
             sdk_line = "bog-agents (SDK) version: unknown"
         await self._mount_message(AppMessage(f"{cli_line}\n{sdk_line}"))
+
+    async def _handle_update_command(self, command: str) -> None:
+        """Check for a newer release and, with confirmation, upgrade the CLI.
+
+        Flow: probe PyPI for the suite status, show what's installed vs.
+        available, and — if a newer CLI exists and the install method supports
+        an automatic upgrade — ask the user to confirm before downloading. The
+        whole path is wrapped so a failed check or upgrade can never crash the
+        TUI; the worst case is a clear message plus the manual command.
+        """
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage("Checking for updates..."))
+
+        try:
+            from bog_agents_cli.update_manager import (
+                build_plan,
+                get_suite_status,
+                render_status,
+            )
+
+            status = await asyncio.to_thread(get_suite_status)
+            await self._mount_message(AppMessage(render_status(status)))
+            plan = build_plan(status)
+        except Exception:
+            logger.debug("update check failed", exc_info=True)
+            await self._mount_message(
+                ErrorMessage(
+                    "Couldn't check for updates right now (network or PyPI "
+                    "issue). Try again later, or update manually:\n"
+                    "  uv tool upgrade bog-agents-cli"
+                )
+            )
+            return
+
+        if not plan.needs_update:
+            extra = f"\n\n{plan.daemon_note}" if plan.daemon_note else ""
+            await self._mount_message(
+                AppMessage(
+                    f"You're on the latest bog-agents-cli (v{plan.current}).{extra}"
+                )
+            )
+            return
+
+        # A newer version exists but we can't safely auto-upgrade this install
+        # (source checkout / unknown method / missing package manager).
+        if not plan.can_auto_update:
+            note = f"\n\n{plan.daemon_note}" if plan.daemon_note else ""
+            await self._mount_message(AppMessage(f"{plan.guidance}{note}"))
+            return
+
+        from bog_agents_cli.widgets.update_confirm import UpdateConfirmScreen
+
+        def _on_confirm(confirmed: bool | None) -> None:
+            self.run_worker(
+                self._finish_update(plan, bool(confirmed)),
+                group="update",
+                exclusive=True,
+                exit_on_error=False,
+            )
+
+        self.push_screen(
+            UpdateConfirmScreen(
+                current=plan.current,
+                latest=plan.latest,
+                method_label=plan.method.value,
+                display_command=plan.display_command,
+            ),
+            _on_confirm,
+        )
+
+    async def _finish_update(self, plan: UpdatePlan, confirmed: bool) -> None:
+        """Run the confirmed upgrade off the event loop and report the result.
+
+        Always resilient: the upgrade runs in a worker thread, every failure is
+        caught and turned into a friendly message, and we never restart the
+        process — the user is told to restart so the new version takes effect.
+        """
+        from bog_agents_cli.update_manager import describe_failure, run_upgrade
+
+        if not confirmed:
+            await self._mount_message(
+                AppMessage("Update cancelled - nothing was changed.")
+            )
+            return
+
+        await self._mount_message(
+            AppMessage(
+                f"Updating bog-agents-cli...  running:  {plan.display_command}\n"
+                "This can take a minute. The app stays usable while it runs."
+            )
+        )
+
+        try:
+            outcome = await asyncio.to_thread(run_upgrade, plan.argv)
+        except Exception:
+            logger.debug("update worker crashed", exc_info=True)
+            await self._mount_message(
+                ErrorMessage(
+                    "Update failed unexpectedly. Your current install is "
+                    f"unchanged. You can update manually:\n  {plan.display_command}"
+                )
+            )
+            return
+
+        if outcome.ok:
+            message = (
+                f"Update complete: bog-agents-cli is now v{plan.latest}.\n"
+                "Restart bog-agents for the new version to take effect."
+            )
+            if plan.daemon_note:
+                message += f"\n\n{plan.daemon_note}"
+            await self._mount_message(AppMessage(message))
+        else:
+            await self._mount_message(ErrorMessage(describe_failure(outcome, plan)))
 
     async def _handle_clear_command(self, _command: str) -> None:
         """Clear the current chat session and start a fresh thread."""
@@ -15380,7 +15498,7 @@ class BogAgentsApp(App):
 
     def action_copy_selection(self) -> None:
         """Copy the current selection to the system clipboard."""
-        copy_selection_to_clipboard(self)
+        copy_selection_to_clipboard_async(self)
 
     def action_paste_clipboard(self) -> None:
         """Paste clipboard text into the chat input."""
@@ -15472,10 +15590,16 @@ class BogAgentsApp(App):
         self.call_after_refresh(self._chat_input.focus_input)
 
     def on_mouse_up(self, _event: MouseUp) -> None:
-        """Copy selection to clipboard on mouse release."""
+        """Copy selection to clipboard on mouse release.
+
+        Dispatches the write to a background worker so the clipboard backend
+        (clip.exe / pbcopy / xclip) never blocks the event loop on release —
+        that freeze was what made selection feel laggy and delayed the
+        "Copied" toast until the next refresh.
+        """
         try:
             if self._mouse_drag_distance >= self._SELECTION_DRAG_THRESHOLD:
-                copy_selection_to_clipboard(self)
+                copy_selection_to_clipboard_async(self)
         finally:
             self._mouse_down_position = None
             self._mouse_drag_distance = 0

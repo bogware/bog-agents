@@ -35,6 +35,7 @@ from bog_agents_cli.app import (
     TextualSessionState,
     _write_iterm_escape,
 )
+from bog_agents_cli.update_manager import InstallMethod, UpdatePlan
 from bog_agents_cli.widgets.chat_input import ChatInput
 from bog_agents_cli.widgets.messages import (
     AppMessage,
@@ -42,6 +43,7 @@ from bog_agents_cli.widgets.messages import (
     QueuedUserMessage,
     UserMessage,
 )
+from bog_agents_cli.widgets.update_confirm import UpdateConfirmScreen
 
 
 class TestInitialPromptOnMount:
@@ -232,7 +234,9 @@ class TestClipboardActions:
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+            with patch(
+                "bog_agents_cli.app.copy_selection_to_clipboard_async"
+            ) as mock_copy:
                 app.on_mouse_up(SimpleNamespace())
 
             mock_copy.assert_not_called()
@@ -245,7 +249,9 @@ class TestClipboardActions:
         async with app.run_test() as pilot:
             await pilot.pause()
 
-            with patch("bog_agents_cli.app.copy_selection_to_clipboard") as mock_copy:
+            with patch(
+                "bog_agents_cli.app.copy_selection_to_clipboard_async"
+            ) as mock_copy:
                 app.on_mouse_up(SimpleNamespace())
 
             mock_copy.assert_called_once_with(app)
@@ -263,6 +269,185 @@ class TestClipboardActions:
                 app.on_click(SimpleNamespace(widget=None))
 
             mock_focus.assert_not_called()
+
+
+def _make_update_plan(
+    *,
+    needs_update: bool,
+    can_auto_update: bool,
+    method: InstallMethod = InstallMethod.UV_TOOL,
+    guidance: str = "",
+    daemon_note: str = "",
+) -> UpdatePlan:
+    """Build an UpdatePlan for the /update handler tests."""
+    argv = ["uv", "tool", "upgrade", "bog-agents-cli"] if can_auto_update else None
+    return UpdatePlan(
+        needs_update=needs_update,
+        method=method,
+        package="bog-agents-cli",
+        current="0.9.8",
+        latest="0.10.0",
+        argv=argv,
+        display_command="uv tool upgrade bog-agents-cli",
+        can_auto_update=can_auto_update,
+        guidance=guidance,
+        daemon_note=daemon_note,
+    )
+
+
+class TestUpdateCommand:
+    """The /update slash command: review -> confirm -> run -> restart."""
+
+    @staticmethod
+    def _contents(mock_mount: AsyncMock) -> list[str]:
+        return [
+            str(getattr(c.args[0], "_content", "")) for c in mock_mount.call_args_list
+        ]
+
+    async def test_no_update_available_reports_latest(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=False, can_auto_update=False)
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    return_value=object(),
+                ),
+                patch(
+                    "bog_agents_cli.update_manager.render_status", return_value="STATUS"
+                ),
+                patch("bog_agents_cli.update_manager.build_plan", return_value=plan),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+                patch.object(app, "push_screen") as mock_push,
+            ):
+                await app._handle_update_command("/update")
+
+            mock_push.assert_not_called()
+            assert any("latest" in c for c in self._contents(mock_mount))
+
+    async def test_update_available_prompts_confirm(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=True, can_auto_update=True)
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    return_value=object(),
+                ),
+                patch(
+                    "bog_agents_cli.update_manager.render_status", return_value="STATUS"
+                ),
+                patch("bog_agents_cli.update_manager.build_plan", return_value=plan),
+                patch.object(app, "_mount_message", new=AsyncMock()),
+                patch.object(app, "push_screen") as mock_push,
+            ):
+                await app._handle_update_command("/update")
+
+            mock_push.assert_called_once()
+            assert isinstance(mock_push.call_args.args[0], UpdateConfirmScreen)
+
+    async def test_editable_shows_guidance_without_prompt(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(
+                needs_update=True,
+                can_auto_update=False,
+                method=InstallMethod.EDITABLE,
+                guidance="git pull && uv sync",
+            )
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    return_value=object(),
+                ),
+                patch(
+                    "bog_agents_cli.update_manager.render_status", return_value="STATUS"
+                ),
+                patch("bog_agents_cli.update_manager.build_plan", return_value=plan),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+                patch.object(app, "push_screen") as mock_push,
+            ):
+                await app._handle_update_command("/update")
+
+            mock_push.assert_not_called()
+            assert any("git pull" in c for c in self._contents(mock_mount))
+
+    async def test_check_failure_is_resilient(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    side_effect=RuntimeError("network down"),
+                ),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+                patch.object(app, "push_screen") as mock_push,
+            ):
+                # Must not raise even when the check blows up.
+                await app._handle_update_command("/update")
+
+            mock_push.assert_not_called()
+            assert any("Couldn't check" in c for c in self._contents(mock_mount))
+
+    async def test_finish_update_success_tells_user_to_restart(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=True, can_auto_update=True)
+            outcome = SimpleNamespace(
+                ok=True, returncode=0, stdout="done", stderr="", error=None
+            )
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.run_upgrade", return_value=outcome
+                ),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+            ):
+                await app._finish_update(plan, confirmed=True)
+
+            contents = self._contents(mock_mount)
+            assert any("Update complete" in c for c in contents)
+            assert any("Restart" in c for c in contents)
+
+    async def test_finish_update_cancelled_changes_nothing(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=True, can_auto_update=True)
+            with (
+                patch("bog_agents_cli.update_manager.run_upgrade") as mock_run,
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+            ):
+                await app._finish_update(plan, confirmed=False)
+
+            mock_run.assert_not_called()
+            assert any("cancelled" in c for c in self._contents(mock_mount))
+
+    async def test_finish_update_failure_reports_error(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=True, can_auto_update=True)
+            outcome = SimpleNamespace(
+                ok=False,
+                returncode=1,
+                stdout="",
+                stderr="permission denied",
+                error=None,
+            )
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.run_upgrade", return_value=outcome
+                ),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+            ):
+                await app._finish_update(plan, confirmed=True)
+
+            assert any("Update failed" in c for c in self._contents(mock_mount))
 
 
 class TestITerm2CursorGuide:

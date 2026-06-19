@@ -37,7 +37,6 @@ def test_copy_selection_to_clipboard_uses_windows_fallback() -> None:
 
     app = MagicMock()
     app.query.return_value = [widget]
-    app.copy_to_clipboard.side_effect = RuntimeError("app clipboard unavailable")
 
     mock_pyperclip = MagicMock()
     mock_pyperclip.copy.side_effect = RuntimeError("pyperclip unavailable")
@@ -78,9 +77,12 @@ class TestCopyNotificationFormat:
     @staticmethod
     def _capture_notify(text: str) -> str:
         _, app = _setup_copy(text)
-        with patch.object(clipboard_module, "_copy_windows_clip"):
-            with patch.object(clipboard_module.sys, "platform", "win32"):
-                clipboard_module.copy_selection_to_clipboard(app)
+        # Isolate the notification format from the clipboard backend so the
+        # test never touches a real clipboard.
+        with patch.object(
+            clipboard_module, "_write_to_clipboard", return_value=(True, None)
+        ):
+            clipboard_module.copy_selection_to_clipboard(app)
         # First positional arg of notify(...) — the message.
         return app.notify.call_args.args[0]
 
@@ -111,9 +113,8 @@ class TestCopyNotificationFormat:
         app = MagicMock()
         app.query.return_value = [widget_a, widget_b]
 
-        with (
-            patch.object(clipboard_module, "_copy_windows_clip"),
-            patch.object(clipboard_module.sys, "platform", "win32"),
+        with patch.object(
+            clipboard_module, "_write_to_clipboard", return_value=(True, None)
         ):
             clipboard_module.copy_selection_to_clipboard(app)
 
@@ -121,3 +122,119 @@ class TestCopyNotificationFormat:
         assert "2 selections" in msg
         assert "first" not in msg
         assert "second" not in msg
+
+
+class TestWriteToClipboardOrdering:
+    """The clipboard backend order is load-bearing for the lag fix.
+
+    pyperclip (native Win32 ``CF_UNICODETEXT``, no subprocess) must be tried
+    before ``clip.exe``. The old order spawned ``clip.exe`` first on every
+    copy, which blocked the event loop and mangled non-ASCII text.
+    """
+
+    def test_prefers_pyperclip_over_clip_exe(self) -> None:
+        mock_pyperclip = MagicMock()
+
+        with (
+            patch.object(clipboard_module.sys, "platform", "win32"),
+            patch.dict(sys.modules, {"pyperclip": mock_pyperclip}),
+            patch.object(clipboard_module, "_copy_windows_clip") as mock_clip,
+        ):
+            success, error = clipboard_module._write_to_clipboard("hello")
+
+        assert success is True
+        assert error is None
+        mock_pyperclip.copy.assert_called_once_with("hello")
+        # clip.exe must NOT run when pyperclip succeeds — that is the whole
+        # point of the reorder (no subprocess spawn on the hot path).
+        mock_clip.assert_not_called()
+
+    def test_falls_back_to_clip_exe_when_pyperclip_fails(self) -> None:
+        mock_pyperclip = MagicMock()
+        mock_pyperclip.copy.side_effect = RuntimeError("pyperclip backend missing")
+
+        with (
+            patch.object(clipboard_module.sys, "platform", "win32"),
+            patch.dict(sys.modules, {"pyperclip": mock_pyperclip}),
+            patch.object(clipboard_module, "_copy_windows_clip") as mock_clip,
+        ):
+            success, _error = clipboard_module._write_to_clipboard("hello")
+
+        assert success is True
+        mock_pyperclip.copy.assert_called_once_with("hello")
+        mock_clip.assert_called_once_with("hello")
+
+    def test_reports_failure_when_all_methods_fail(self) -> None:
+        mock_pyperclip = MagicMock()
+        mock_pyperclip.copy.side_effect = RuntimeError("no backend")
+
+        with (
+            patch.object(clipboard_module.sys, "platform", "win32"),
+            patch.dict(sys.modules, {"pyperclip": mock_pyperclip}),
+            patch.object(
+                clipboard_module,
+                "_copy_windows_clip",
+                side_effect=OSError("clip.exe missing"),
+            ),
+        ):
+            success, error = clipboard_module._write_to_clipboard("hello")
+
+        assert success is False
+        assert isinstance(error, OSError)
+
+
+class TestAsyncCopyDispatch:
+    """`copy_selection_to_clipboard_async` keeps the event loop unblocked.
+
+    The selection is gathered synchronously (UI thread), but the blocking
+    clipboard write + the result toast are pushed onto a thread worker.
+    """
+
+    def test_dispatches_write_to_thread_worker(self) -> None:
+        _, app = _setup_copy("payload")
+
+        with patch.object(
+            clipboard_module, "_write_to_clipboard", return_value=(True, None)
+        ) as mock_write:
+            dispatched = clipboard_module.copy_selection_to_clipboard_async(app)
+
+        assert dispatched is True
+        # The write must NOT have happened on the calling thread — it is
+        # deferred to the worker that run_worker schedules.
+        mock_write.assert_not_called()
+        app.run_worker.assert_called_once()
+        kwargs = app.run_worker.call_args.kwargs
+        assert kwargs.get("thread") is True
+        assert kwargs.get("exit_on_error") is False
+
+        # Running the scheduled work performs the write + notify.
+        work = app.run_worker.call_args.args[0]
+        with patch.object(
+            clipboard_module, "_write_to_clipboard", return_value=(True, None)
+        ) as mock_write_in_worker:
+            work()
+        mock_write_in_worker.assert_called_once_with("payload")
+        app.notify.assert_called_once()
+
+    def test_returns_false_and_skips_worker_without_selection(self) -> None:
+        app = MagicMock()
+        app.query.return_value = []
+
+        dispatched = clipboard_module.copy_selection_to_clipboard_async(app)
+
+        assert dispatched is False
+        app.run_worker.assert_not_called()
+
+    def test_falls_back_to_sync_write_when_worker_dispatch_fails(self) -> None:
+        _, app = _setup_copy("payload")
+        app.run_worker.side_effect = RuntimeError("no event loop")
+
+        with patch.object(
+            clipboard_module, "_write_to_clipboard", return_value=(True, None)
+        ) as mock_write:
+            dispatched = clipboard_module.copy_selection_to_clipboard_async(app)
+
+        assert dispatched is True
+        # When the worker cannot be scheduled we still copy, synchronously.
+        mock_write.assert_called_once_with("payload")
+        app.notify.assert_called_once()

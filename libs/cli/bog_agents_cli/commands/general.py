@@ -593,6 +593,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_version_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/update",
+            "Check for a newer release and upgrade the CLI (asks before downloading)",
+            "upgrade update install latest version self-update",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_update_command",
+    ),
     # ---- Dreamscape (opt-in lifecycle + dreams + laws + imagination) ---
     SlashCommand(
         spec=SlashCommandSpec(
