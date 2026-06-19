@@ -10,7 +10,9 @@ from langchain_core.messages import AIMessage
 
 from bog_agents_cli.orchestrator import (
     OrchestrationResult,
+    Subtask,
     SubtaskMode,
+    SubtaskResult,
     decompose_goal,
     render_result,
     run_orchestration,
@@ -24,6 +26,28 @@ from bog_agents_cli.orchestrator_controller import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_timeout_fallback_result_uses_valid_fields() -> None:
+    """Regression: the parallel-timeout fallback once constructed
+    ``SubtaskResult(output=..., elapsed_seconds=...)`` — fields that don't
+    exist — which raised ``TypeError`` whenever the outer cap was hit. Lock the
+    field contract that the fallback (orchestrator.py) depends on.
+    """
+    st = Subtask(id="1", mode=SubtaskMode.CODE, description="do a thing")
+    # Exactly the kwargs the timeout fallback now constructs.
+    result = SubtaskResult(
+        subtask=st,
+        ok=False,
+        error="subtask timed out (outer cap 120s)",
+        duration_seconds=120.0,
+    )
+    assert result.ok is False
+    assert "timed out" in result.error
+    assert result.duration_seconds == 120.0
+    # The buggy field names must never come back.
+    assert not hasattr(result, "output")
+    assert not hasattr(result, "elapsed_seconds")
 
 
 # ---------------------------------------------------------------------------

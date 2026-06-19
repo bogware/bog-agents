@@ -211,6 +211,57 @@ class TestPdfReader:
 
         assert callable(read_pdf)
 
+    def test_is_pdf_file(self) -> None:
+        from bog_agents.middleware.pdf_reader import is_pdf_file
+
+        assert is_pdf_file("/docs/report.pdf") is True
+        assert is_pdf_file("/docs/REPORT.PDF") is True
+        assert is_pdf_file("/docs/notes.txt") is False
+
+    def test_read_pdf_from_bytes_roundtrip(self) -> None:
+        """read_pdf parses raw bytes (the path used by read_file's backend)."""
+        import io
+
+        import pytest
+
+        pypdf = pytest.importorskip("pypdf")
+
+        writer = pypdf.PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        buf = io.BytesIO()
+        writer.write(buf)
+
+        from bog_agents.middleware.pdf_reader import read_pdf
+
+        result = read_pdf("/tmp/blank.pdf", data=buf.getvalue())
+        assert "/tmp/blank.pdf" in result
+        assert "Page 1" in result
+        assert "Error" not in result
+
+    def test_read_file_routes_pdf_to_read_pdf(self, monkeypatch) -> None:
+        """The read_file tool downloads PDF bytes and hands them to read_pdf."""
+        from types import SimpleNamespace
+
+        from bog_agents.middleware import pdf_reader
+        from bog_agents.middleware.filesystem import FilesystemMiddleware
+
+        mw = FilesystemMiddleware()
+        read_tool = next(t for t in mw.tools if t.name == "read_file")
+
+        fake_backend = SimpleNamespace(download_files=lambda paths: [SimpleNamespace(content=b"%PDF-1.4 bytes", error=None)])
+        monkeypatch.setattr(mw, "_get_backend", lambda runtime: fake_backend)
+        monkeypatch.setattr(
+            pdf_reader,
+            "read_pdf",
+            lambda path, *, data, start_page=0: f"PARSED {len(data)} bytes from {path}",
+        )
+
+        result = read_tool.func(
+            file_path="/doc.pdf",
+            runtime=SimpleNamespace(tool_call_id="t1"),
+        )
+        assert result == "PARSED 14 bytes from /doc.pdf"
+
 
 class TestSandbox:
     """Tests for OS-level sandbox (#2)."""

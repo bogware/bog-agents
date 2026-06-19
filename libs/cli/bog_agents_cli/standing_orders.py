@@ -43,12 +43,6 @@ def _deepcopy_jsonish(value: Any) -> Any:  # noqa: ANN401
     return value
 
 
-@dataclass(frozen=True)
-class _CatalogEntry:
-    order: StandingOrder
-    sort_key: int = 0
-
-
 # ---------------------------------------------------------------------------
 # Curated catalog
 # ---------------------------------------------------------------------------

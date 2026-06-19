@@ -250,10 +250,6 @@ class CausalLedger:
             self._append_to_disk(event)
         return event
 
-    def note(self, summary: str, *, actor: str = "user") -> CausalEvent:
-        """Convenience: record a NOTE event with no parents."""
-        return self.record(EventKind.NOTE, actor=actor, summary=summary)
-
     # ------------------------------------------------------------------
     # Graph queries
     # ------------------------------------------------------------------

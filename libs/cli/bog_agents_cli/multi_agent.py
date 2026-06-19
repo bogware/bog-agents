@@ -75,39 +75,3 @@ def format_thread_list(threads: list[ThreadInfo]) -> str:
         if t.task:
             lines.append(f"           Task: {t.task[:80]}")
     return "\n".join(lines)
-
-
-def format_thread_status(threads: list[ThreadInfo]) -> str:
-    """Format thread status summary.
-
-    Args:
-        threads: All threads.
-
-    Returns:
-        Status summary string.
-    """
-    by_status: dict[str, int] = {}
-    for t in threads:
-        by_status[t.status] = by_status.get(t.status, 0) + 1
-
-    total = len(threads)
-    lines = [f"Thread Status ({total} total):"]
-    for status, count in sorted(by_status.items()):
-        lines.append(f"  {status}: {count}")
-    return "\n".join(lines)
-
-
-def generate_spawn_prompt(task: str, use_worktree: bool = False) -> str:
-    """Generate a prompt for spawning a new agent thread.
-
-    Args:
-        task: Task description.
-        use_worktree: Whether to use git worktree isolation.
-
-    Returns:
-        Prompt text for the agent.
-    """
-    prompt = f"Spawn a new agent thread for the following task:\n\n{task}\n"
-    if use_worktree:
-        prompt += "\nUse git worktree isolation for this thread."
-    return prompt

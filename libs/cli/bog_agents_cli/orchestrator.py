@@ -533,11 +533,11 @@ def _run_subtasks_parallel(
                 results.append(
                     SubtaskResult(
                         subtask=st,
-                        output="",
-                        elapsed_seconds=outer_cap_seconds,
+                        ok=False,
                         error=(
                             f"subtask timed out (outer cap {outer_cap_seconds:.0f}s)"
                         ),
+                        duration_seconds=outer_cap_seconds,
                     )
                 )
             return results

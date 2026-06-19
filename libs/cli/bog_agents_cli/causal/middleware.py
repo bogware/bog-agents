@@ -151,20 +151,6 @@ class CausalMiddleware(AgentMiddleware[CausalState, ContextT, ResponseT]):
         # Rules don't reset head — they annotate the current chain.
         return event
 
-    def record_dream_complete(self, *, agent_id: str, title: str) -> CausalEvent | None:
-        """Record a dream-cycle completion.
-
-        Dreams have no direct parent in the per-turn chain — they
-        happen during dormancy — so we leave parent_ids empty.
-        """
-        if not self._enabled:
-            return None
-        return self._ledger.record(
-            EventKind.DREAM_COMPLETE,
-            actor=f"dream:{agent_id}",
-            summary=title,
-        )
-
     # ------------------------------------------------------------------
     # Middleware hooks
     # ------------------------------------------------------------------

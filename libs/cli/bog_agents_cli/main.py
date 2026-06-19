@@ -1866,28 +1866,25 @@ def cli_main() -> None:
             sys.exit(2)
 
         if prompt_name:
-            try:
-                from bog_agents_cli.prompts import resolve_prompt
-            except ImportError:
-                import tomllib
+            import tomllib
 
-                def resolve_prompt(name: str, variables: dict) -> str:  # type: ignore[no-redef]
-                    cands = [
-                        Path.cwd() / ".bog-agents" / "prompt_library.toml",
-                        Path.home() / ".bog-agents" / "prompt_library.toml",
-                    ]
-                    for p in cands:
-                        if p.is_file():
-                            data = tomllib.loads(p.read_text(encoding="utf-8"))
-                            entry = (data.get("prompts") or {}).get(name)
-                            if not entry:
-                                continue
-                            body = entry.get("body", "")
-                            for k, v in (variables or {}).items():
-                                body = body.replace("{{" + k + "}}", str(v))
-                            return body
-                    msg = f"Prompt '{name}' not found in prompt_library.toml"
-                    raise ValueError(msg)
+            def resolve_prompt(name: str, variables: dict) -> str:
+                cands = [
+                    Path.cwd() / ".bog-agents" / "prompt_library.toml",
+                    Path.home() / ".bog-agents" / "prompt_library.toml",
+                ]
+                for p in cands:
+                    if p.is_file():
+                        data = tomllib.loads(p.read_text(encoding="utf-8"))
+                        entry = (data.get("prompts") or {}).get(name)
+                        if not entry:
+                            continue
+                        body = entry.get("body", "")
+                        for k, v in (variables or {}).items():
+                            body = body.replace("{{" + k + "}}", str(v))
+                        return body
+                msg = f"Prompt '{name}' not found in prompt_library.toml"
+                raise ValueError(msg)
 
             try:
                 prompt_vars = json.loads(args.prompt_vars) if args.prompt_vars else {}

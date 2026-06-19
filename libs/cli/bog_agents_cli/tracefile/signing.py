@@ -39,10 +39,6 @@ class SignatureVerificationError(RuntimeError):
     """
 
 
-class UnsupportedAlgorithmError(SigningError):
-    """Raised when a TraceFile names a signing algorithm we don't support."""
-
-
 @dataclass(frozen=True, slots=True)
 class KeyMaterial:
     """One Ed25519 keypair.
@@ -255,7 +251,6 @@ __all__ = [
     "KeyMaterial",
     "SignatureVerificationError",
     "SigningError",
-    "UnsupportedAlgorithmError",
     "generate_keypair",
     "load_keypair_from_path",
     "material_from_public_b64",

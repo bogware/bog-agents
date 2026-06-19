@@ -297,18 +297,6 @@ class BackgroundAgentManager:
             return True
         return False
 
-    def get_completed(self) -> list[BackgroundTask]:
-        """Get all completed tasks.
-
-        Returns:
-            List of completed tasks.
-        """
-        return [
-            t
-            for t in self._tasks.values()
-            if t.status in {BackgroundStatus.COMPLETED, BackgroundStatus.FAILED}
-        ]
-
     @staticmethod
     def _extract_result_text(result: object) -> str:
         """Extract a user-facing result string from a task result payload."""
