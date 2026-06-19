@@ -88,6 +88,10 @@ bog-agents -p "explain this module" < src/agent.py   # one-shot
 No key handy? Point it at a local [Ollama](https://ollama.com/) model and
 nothing leaves the machine.
 
+Keep current with `/update` inside the TUI — it checks PyPI, shows what will
+download, asks before installing, and upgrades the way you installed (uv tool /
+pipx / pip).
+
 ### Daemon (ambient runner)
 
 ```bash
