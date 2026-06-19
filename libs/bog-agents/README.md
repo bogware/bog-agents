@@ -60,6 +60,10 @@ pip install "bog-agents[ollama]"         # local models
 
 Or all of them: `pip install "bog-agents[all-providers]"`.
 
+Other extras: `pip install "bog-agents[pdf]"` enables the `read_file` tool to
+extract text from `.pdf` files, and `pip install "bog-agents[serve]"` exposes
+the agent over HTTP.
+
 ---
 
 ## 30-second Quick Start
