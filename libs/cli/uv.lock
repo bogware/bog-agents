@@ -363,6 +363,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=1.2.0,<2.0.0" },
     { name = "pyasn1", specifier = ">=0.6.3" },
     { name = "pygments", specifier = ">=2.20.0" },
+    { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=4.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "sse-starlette", marker = "extra == 'serve'", specifier = ">=2.0.0" },
@@ -371,7 +372,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.34.0" },
     { name = "wcmatch", specifier = ">=6.0,<7.0" },
 ]
-provides-extras = ["serve", "bedrock", "openai", "all-providers"]
+provides-extras = ["serve", "pdf", "bedrock", "openai", "all-providers"]
 
 [package.metadata.requires-dev]
 evals = [

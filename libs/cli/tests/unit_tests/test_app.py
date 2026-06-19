@@ -326,6 +326,73 @@ class TestUpdateCommand:
             mock_push.assert_not_called()
             assert any("latest" in c for c in self._contents(mock_mount))
 
+    async def test_no_update_pypi_unreachable_is_honest(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # latest=None means the PyPI probe failed; must not claim "latest".
+            plan = UpdatePlan(
+                needs_update=False,
+                method=InstallMethod.UV_TOOL,
+                package="bog-agents-cli",
+                current="0.9.8",
+                latest=None,
+                argv=None,
+                display_command="uv tool upgrade bog-agents-cli",
+                can_auto_update=False,
+                guidance="",
+                daemon_note="",
+            )
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    return_value=object(),
+                ),
+                patch(
+                    "bog_agents_cli.update_manager.render_status", return_value="STATUS"
+                ),
+                patch("bog_agents_cli.update_manager.build_plan", return_value=plan),
+                patch.object(app, "_mount_message", new=AsyncMock()) as mock_mount,
+                patch.object(app, "push_screen") as mock_push,
+            ):
+                await app._handle_update_command("/update")
+
+            mock_push.assert_not_called()
+            assert any("Couldn't reach PyPI" in c for c in self._contents(mock_mount))
+
+    async def test_confirm_callback_schedules_update_worker(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            plan = _make_update_plan(needs_update=True, can_auto_update=True)
+            captured: dict[str, object] = {}
+
+            def fake_push(screen: object, callback: object = None) -> None:
+                captured["callback"] = callback
+
+            with (
+                patch(
+                    "bog_agents_cli.update_manager.get_suite_status",
+                    return_value=object(),
+                ),
+                patch(
+                    "bog_agents_cli.update_manager.render_status", return_value="STATUS"
+                ),
+                patch("bog_agents_cli.update_manager.build_plan", return_value=plan),
+                patch.object(app, "_mount_message", new=AsyncMock()),
+                patch.object(app, "push_screen", side_effect=fake_push),
+                patch.object(app, "_finish_update") as mock_finish,
+                patch.object(app, "run_worker") as mock_worker,
+            ):
+                await app._handle_update_command("/update")
+                callback = captured.get("callback")
+                assert callback is not None
+                # Simulate the user choosing "yes" in the modal.
+                callback(True)  # type: ignore[operator]
+
+            mock_finish.assert_called_once_with(plan, True)
+            mock_worker.assert_called_once()
+
     async def test_update_available_prompts_confirm(self) -> None:
         app = BogAgentsApp()
         async with app.run_test() as pilot:

@@ -317,8 +317,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     ## Middleware execution order
 
-    Middleware runs in **declaration order** within the stack. The default
-    stack composed by ``create_agent`` is, in this order:
+    Middleware runs in **declaration order** within the stack. The list below
+    is the canonical *order* built-in middleware occupy when active — it is
+    **not** an "always on" default set. Which middleware are actually composed
+    depends on the ``FeatureConfig`` / arguments you pass; several entries below
+    (notably ``LifecycleHooksMiddleware``, ``HttpHooksMiddleware``,
+    ``LangSmithMiddleware``, ``SafeToolsMiddleware``, ``ExpertRulesMiddleware``,
+    ``RulesMiddleware``, ``ContextPackingMiddleware``, ``ThinkingMiddleware``,
+    and ``IntelligentCompactionMiddleware``) are opt-in and only present when
+    you enable them or pass them via ``middleware=``. The canonical order is:
 
     1. Lifecycle / observability — ``LifecycleHooksMiddleware``,
        ``HttpHooksMiddleware``, ``LangSmithMiddleware``,

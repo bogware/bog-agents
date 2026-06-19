@@ -156,6 +156,7 @@ Usage:
 - You have the capability to call multiple tools in a single response. It is always better to speculatively read multiple files as a batch that are potentially useful.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.
 - Image files (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) are returned as multimodal image content blocks (see https://docs.langchain.com/oss/python/langchain/messages#multimodal).
+- PDF files (`.pdf`) are returned as extracted text with page markers (requires the `pdf` extra: `pip install 'bog-agents[pdf]'`). Use `offset` as the 0-indexed start page to read further into a long PDF.
 
 For image tasks:
 - Use `read_file(file_path=...)` for `.png/.jpg/.jpeg/.gif/.webp`
@@ -624,6 +625,16 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     return f"Error reading image: {responses[0].error}"
                 return "Error reading image: unknown error"
 
+            if ext == ".pdf":
+                from bog_agents.middleware.pdf_reader import read_pdf
+
+                responses = resolved_backend.download_files([validated_path])
+                if responses and responses[0].content is not None:
+                    return read_pdf(validated_path, data=responses[0].content, start_page=offset)
+                if responses and responses[0].error:
+                    return f"Error reading PDF: {responses[0].error}"
+                return "Error reading PDF: unknown error"
+
             result = resolved_backend.read(validated_path, offset=offset, limit=limit)
 
             lines = result.splitlines(keepends=True)
@@ -672,6 +683,16 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 if responses and responses[0].error:
                     return f"Error reading image: {responses[0].error}"
                 return "Error reading image: unknown error"
+
+            if ext == ".pdf":
+                from bog_agents.middleware.pdf_reader import read_pdf
+
+                responses = await resolved_backend.adownload_files([validated_path])
+                if responses and responses[0].content is not None:
+                    return read_pdf(validated_path, data=responses[0].content, start_page=offset)
+                if responses and responses[0].error:
+                    return f"Error reading PDF: {responses[0].error}"
+                return "Error reading PDF: unknown error"
 
             result = await resolved_backend.aread(validated_path, offset=offset, limit=limit)
 

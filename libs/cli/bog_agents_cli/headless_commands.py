@@ -55,13 +55,9 @@ def _err(text: str, data: dict[str, Any] | None = None) -> HeadlessResult:
 def _cmd_version(_args: str) -> HeadlessResult:
     """Show the CLI and SDK versions."""
     from bog_agents_cli._version import __version__ as cli_version
+    from bog_agents_cli.update_manager import _installed_version
 
-    try:
-        import bog_agents
-
-        sdk_version = bog_agents.__version__
-    except Exception:
-        sdk_version = "unknown"
+    sdk_version = _installed_version("bog-agents") or "unknown"
     return _ok(
         f"bog-agents-cli {cli_version}\nbog-agents (SDK) {sdk_version}",
         {"cli": cli_version, "sdk": sdk_version},

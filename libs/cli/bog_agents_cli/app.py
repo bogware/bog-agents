@@ -1493,15 +1493,22 @@ class BogAgentsApp(App):
     async def _check_for_updates(self) -> None:
         """Check PyPI for a newer bog-agents-cli version and notify the user."""
         try:
-            from bog_agents_cli.update_check import is_update_available
+            from bog_agents_cli.update_manager import (
+                cli_update_available,
+                detect_install_method,
+                upgrade_command_display,
+            )
 
-            available, latest = await asyncio.to_thread(is_update_available)
+            available, latest = await asyncio.to_thread(cli_update_available)
             if available:
                 from bog_agents_cli._version import __version__ as cli_version
 
+                # Show the command that matches how the user actually installed
+                # (uv tool / pipx / pip / source), not a hardcoded uv command.
+                command = upgrade_command_display(detect_install_method())
                 self.notify(
                     f"Update available: v{latest} (current: v{cli_version}). "
-                    "Run: uv tool upgrade bog-agents-cli",
+                    f"Run: {command}",
                     severity="information",
                     timeout=15,
                 )
@@ -2964,20 +2971,10 @@ class BogAgentsApp(App):
         except Exception:
             logger.warning("Unexpected error looking up CLI version", exc_info=True)
             cli_line = "bog-agents-cli version: unknown"
-        try:
-            from importlib.metadata import (
-                PackageNotFoundError,
-                version as _pkg_version,
-            )
+        from bog_agents_cli.update_manager import _installed_version
 
-            sdk_version = _pkg_version("bog-agents")
-            sdk_line = f"bog-agents (SDK) version: {sdk_version}"
-        except PackageNotFoundError:
-            logger.debug("bog-agents SDK package not found in environment")
-            sdk_line = "bog-agents (SDK) version: unknown"
-        except Exception:
-            logger.warning("Unexpected error looking up SDK version", exc_info=True)
-            sdk_line = "bog-agents (SDK) version: unknown"
+        sdk_version = _installed_version("bog-agents") or "unknown"
+        sdk_line = f"bog-agents (SDK) version: {sdk_version}"
         await self._mount_message(AppMessage(f"{cli_line}\n{sdk_line}"))
 
     async def _handle_update_command(self, command: str) -> None:
@@ -3004,22 +3001,35 @@ class BogAgentsApp(App):
             plan = build_plan(status)
         except Exception:
             logger.debug("update check failed", exc_info=True)
+            try:
+                from bog_agents_cli.update_manager import (
+                    detect_install_method,
+                    upgrade_command_display,
+                )
+
+                command = upgrade_command_display(detect_install_method())
+            except Exception:
+                command = "pip install --upgrade bog-agents-cli"
             await self._mount_message(
                 ErrorMessage(
                     "Couldn't check for updates right now (network or PyPI "
-                    "issue). Try again later, or update manually:\n"
-                    "  uv tool upgrade bog-agents-cli"
+                    f"issue). Try again later, or update manually:\n  {command}"
                 )
             )
             return
 
         if not plan.needs_update:
             extra = f"\n\n{plan.daemon_note}" if plan.daemon_note else ""
-            await self._mount_message(
-                AppMessage(
-                    f"You're on the latest bog-agents-cli (v{plan.current}).{extra}"
+            # plan.latest is None only when the PyPI probe failed — don't claim
+            # "you're on the latest" when we couldn't actually check.
+            if plan.latest is None:
+                summary = (
+                    "Couldn't reach PyPI to check for updates. "
+                    f"You have bog-agents-cli v{plan.current}."
                 )
-            )
+            else:
+                summary = f"You're on the latest bog-agents-cli (v{plan.current})."
+            await self._mount_message(AppMessage(f"{summary}{extra}"))
             return
 
         # A newer version exists but we can't safely auto-upgrade this install

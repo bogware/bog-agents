@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
-import json
 import logging
 import os
 import re
@@ -13,7 +12,6 @@ import sys
 import threading
 from dataclasses import dataclass
 from enum import StrEnum
-from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -292,9 +290,11 @@ Kept short so tracing metadata can never stall CLI flows.
 
 
 def _is_editable_install() -> bool:
-    """Check if bog-agents-cli is installed in editable mode.
+    """Check if bog-agents-cli is installed in editable mode (cached).
 
-    Uses PEP 610 direct_url.json metadata to detect editable installs.
+    Delegates the PEP 610 ``direct_url.json`` detection to
+    `update_manager._is_editable_install` (the single source of truth) and
+    caches the result, since this is consulted on hot UI paths.
 
     Returns:
         True if installed in editable mode, False otherwise.
@@ -303,17 +303,9 @@ def _is_editable_install() -> bool:
     if _editable_cache is not None:
         return _editable_cache
 
-    try:
-        dist = distribution("bog-agents-cli")
-        direct_url = dist.read_text("direct_url.json")
-        if direct_url:
-            data = json.loads(direct_url)
-            _editable_cache = data.get("dir_info", {}).get("editable", False)
-        else:
-            _editable_cache = False
-    except (PackageNotFoundError, FileNotFoundError, json.JSONDecodeError, TypeError):
-        _editable_cache = False
+    from bog_agents_cli.update_manager import _is_editable_install as _detect
 
+    _editable_cache = _detect()
     return _editable_cache
 
 

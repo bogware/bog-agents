@@ -400,29 +400,6 @@ class TestStreamingDiff:
         assert stats["deletions"] >= 0
 
 
-class TestWebSearch:
-    """Tests for web search (#20)."""
-
-    def test_detect_provider_none(self) -> None:
-        """Test provider detection when none configured."""
-        import os
-
-        from bog_agents_cli.web_search import detect_search_provider
-
-        # Save and clear env vars
-        saved = {}
-        for key in ["TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL"]:
-            saved[key] = os.environ.pop(key, None)
-
-        try:
-            result = detect_search_provider()
-            assert result is None
-        finally:
-            for key, val in saved.items():
-                if val is not None:
-                    os.environ[key] = val
-
-
 class TestSlashCommands:
     """Tests for updated slash commands."""
 

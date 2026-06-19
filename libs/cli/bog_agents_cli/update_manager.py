@@ -123,6 +123,16 @@ def detect_install_method() -> InstallMethod:
         if "/pipx/venvs/" in exe:
             return InstallMethod.PIPX
 
+        # `uvx` / uv ephemeral runs execute from the uv *cache*, not a managed
+        # install — there is nothing to upgrade in place. Classifying these as
+        # PIP would offer a no-op upgrade (pip into a throwaway env), so fall
+        # through to UNKNOWN and let the user get the manual command instead.
+        # Cache layout differs by platform: Windows `...\uv\cache\...`,
+        # POSIX `~/.cache/uv/...` (both then contain `archive-v0` etc.).
+        uv_cache_markers = ("/uv/cache/", "/.cache/uv/", "/uv/archive-v")
+        if any(marker in exe for marker in uv_cache_markers):
+            return InstallMethod.UNKNOWN
+
         # Anything else with a real interpreter: a venv or system pip install.
         return InstallMethod.PIP
     except Exception:
@@ -165,7 +175,14 @@ def is_newer(latest: str, current: str) -> bool:
         return Version(latest) > Version(current)
     except Exception:
         try:
-            return _version_tuple(latest) > _version_tuple(current)
+            latest_parts = _version_tuple(latest)
+            current_parts = _version_tuple(current)
+            # Zero-pad to equal width so "1.0" and "1.0.0" compare equal
+            # rather than (1, 0) < (1, 0, 0) wrongly reporting an update.
+            width = max(len(latest_parts), len(current_parts))
+            latest_parts += (0,) * (width - len(latest_parts))
+            current_parts += (0,) * (width - len(current_parts))
+            return latest_parts > current_parts
         except Exception:
             return False
 
@@ -217,6 +234,22 @@ def _fetch_latest_pypi(pypi_name: str, *, force: bool = False) -> str | None:
             logger.debug("update cache write failed for %s", pypi_name, exc_info=True)
 
     return latest
+
+
+def cli_update_available(*, force: bool = False) -> tuple[bool, str | None]:
+    """Return ``(available, latest)`` for the CLI package.
+
+    Lightweight helper for the startup banner: checks only the CLI (not the
+    whole suite) and reads the on-disk cache by default. Never raises — a
+    failed probe degrades to ``(False, None)``.
+    """
+    latest = _fetch_latest_pypi(CLI_PACKAGE, force=force)
+    if latest is None:
+        return False, None
+    current = _installed_version(CLI_PACKAGE, CLI_VERSION)
+    if current and is_newer(latest, current):
+        return True, latest
+    return False, None
 
 
 # ---------------------------------------------------------------------------

@@ -70,6 +70,29 @@ class TestDetectInstallMethod:
         monkeypatch.setattr(um, "_is_editable_install", _boom)
         assert um.detect_install_method() == InstallMethod.UNKNOWN
 
+    def test_uvx_cache_windows_is_unknown(self, monkeypatch) -> None:
+        # uvx ephemeral runs must NOT be offered a (no-op) pip auto-upgrade.
+        monkeypatch.setattr(um, "_is_editable_install", lambda *a, **k: False)
+        monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+        monkeypatch.delenv("PIPX_HOME", raising=False)
+        monkeypatch.setattr(
+            um,
+            "_normalised_executable",
+            lambda: "c:/users/u/appdata/local/uv/cache/archive-v0/h/scripts/python.exe",
+        )
+        assert um.detect_install_method() == InstallMethod.UNKNOWN
+
+    def test_uvx_cache_posix_is_unknown(self, monkeypatch) -> None:
+        monkeypatch.setattr(um, "_is_editable_install", lambda *a, **k: False)
+        monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+        monkeypatch.delenv("PIPX_HOME", raising=False)
+        monkeypatch.setattr(
+            um,
+            "_normalised_executable",
+            lambda: "/home/u/.cache/uv/archive-v0/h/bin/python",
+        )
+        assert um.detect_install_method() == InstallMethod.UNKNOWN
+
 
 class TestIsNewer:
     def test_strictly_newer(self) -> None:
@@ -83,6 +106,42 @@ class TestIsNewer:
 
     def test_malformed_never_triggers_update(self) -> None:
         assert um.is_newer("not-a-version", "0.9.8") is False
+
+    def test_differing_segment_counts_are_equal(self) -> None:
+        # "1.0.0" must not be treated as newer than "1.0" (zero-pad fallback).
+        assert um.is_newer("1.0.0", "1.0") is False
+        assert um.is_newer("1.0", "1.0.0") is False
+
+
+class TestCliUpdateAvailable:
+    """The startup-banner helper folded in from the old update_check module."""
+
+    def test_update_available(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            um, "_fetch_latest_pypi", lambda name, *, force=False: "99.0.0"
+        )
+        monkeypatch.setattr(
+            um, "_installed_version", lambda name, fallback=None: "0.9.8"
+        )
+        available, latest = um.cli_update_available()
+        assert available is True
+        assert latest == "99.0.0"
+
+    def test_up_to_date(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            um, "_fetch_latest_pypi", lambda name, *, force=False: "0.9.8"
+        )
+        monkeypatch.setattr(
+            um, "_installed_version", lambda name, fallback=None: "0.9.8"
+        )
+        available, _latest = um.cli_update_available()
+        assert available is False
+
+    def test_fetch_failure_is_safe(self, monkeypatch) -> None:
+        monkeypatch.setattr(um, "_fetch_latest_pypi", lambda name, *, force=False: None)
+        available, latest = um.cli_update_available()
+        assert available is False
+        assert latest is None
 
 
 class TestBuildUpgradeArgv:

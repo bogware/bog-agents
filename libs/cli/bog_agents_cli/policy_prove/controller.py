@@ -40,7 +40,6 @@ from bog_agents_cli.expert_controller import get_controller as _expert_controlle
 from bog_agents_cli.policy_prove.invariant import (
     Invariant,
     InvariantParseError,
-    load_invariant_from_dict,
     load_invariant_from_yaml,
 )
 from bog_agents_cli.policy_prove.prover import (
@@ -193,18 +192,7 @@ def _help_text() -> str:
     )
 
 
-def prove_dict(
-    data: dict,
-    working_dir: Path | str,
-) -> InvariantProof:
-    """Programmatic entry point for tests + scripts."""
-    invariant = load_invariant_from_dict(data)
-    rules = list(_expert_controller(working_dir).middleware.engine.rules)
-    return prove(invariant, rules)
-
-
 __all__ = [
     "dispatch",
-    "prove_dict",
     "render_proof",
 ]

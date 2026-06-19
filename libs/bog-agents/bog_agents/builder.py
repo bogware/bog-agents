@@ -445,11 +445,17 @@ class AgentBuilder:
         max_threads: int = 10,
         agent_teams: bool = False,
     ) -> AgentBuilder:
-        """Enable multi-agent / parallel agent orchestration.
+        """Enable parallel agent execution (the ``parallel_tasks`` tool).
+
+        The in-process multi-agent orchestrator was removed in V1; this now
+        wires `ParallelAgentsMiddleware`, which lets the agent fan work out to
+        concurrent sub-agents via a ``parallel_tasks`` tool.
 
         Args:
-            max_threads: Maximum number of concurrent agent threads.
-            agent_teams: Enable structured agent teams middleware.
+            max_threads: Deprecated / inert — retained for back-compat with
+                older configs. Concurrency is no longer capped here.
+            agent_teams: Deprecated / inert — the agent-teams middleware was
+                removed; retained only so older YAML configs still load.
         """
         self._config.multi_agent = MultiAgentConfig(
             enabled=True,
@@ -636,20 +642,22 @@ class AgentBuilder:
         if safety.hallucination_detection:
             kwargs["enable_hallucination_detection"] = True
 
-        # Multi-agent
-        ma = self._config.multi_agent
-        if ma.enabled:
-            kwargs["enable_multi_agent"] = True
-            kwargs["max_agent_threads"] = ma.max_threads
-        # Wave V removed agent_teams (it was a STUB). ma.agent_teams
-        # is preserved on the config schema for back-compat reading
-        # of older YAML files but no longer translates to a flag.
-
         # Collections
         if self._config.tools:
             kwargs["tools"] = list(self._config.tools)
-        if self._config.middleware:
-            kwargs["middleware"] = list(self._config.middleware)
+
+        # Middleware (plus multi-agent). The in-process orchestrator was removed
+        # in V1, so an enabled multi-agent config now wires the live
+        # ParallelAgentsMiddleware (the `parallel_tasks` tool) instead of the
+        # old no-op `enable_multi_agent` flag. max_threads / agent_teams remain
+        # on the config schema for back-compat with older YAML but are inert.
+        middleware_list = list(self._config.middleware) if self._config.middleware else []
+        if self._config.multi_agent.enabled:
+            from bog_agents.middleware.parallel_agents import ParallelAgentsMiddleware
+
+            middleware_list.append(ParallelAgentsMiddleware())
+        if middleware_list:
+            kwargs["middleware"] = middleware_list
         if self._config.skills:
             kwargs["skills"] = list(self._config.skills)
         if self._config.subagents:

@@ -59,6 +59,10 @@ serve = [
     "sse-starlette>=2.0.0",
 ]
 
+# PDF reading for the read_file tool (pdf_reader middleware). pypdf is the
+# default backend; pdfplumber / pymupdf are also supported if installed.
+pdf = ["pypdf>=4.0.0"]
+
 # ─── provider extras ────────────────────────────────────────────────
 # `resolve_model` dispatches through langchain's `init_chat_model`, which
 # requires the provider's integration package to be installed. Anthropic
