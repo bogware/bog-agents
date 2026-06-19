@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.9](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.8...bog-agents-cli==0.9.9) (2026-06-19)
+
+
+### Features
+
+* **sdk,cli:** document and release /update, PDF read_file, and review-cycle cleanup ([#151](https://github.com/bogware/bog-agents/issues/151)) ([30d05bb](https://github.com/bogware/bog-agents/commit/30d05bbdfa0b70d21367676a0d104db74527181b))
+
 ## [0.9.8](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.7...bog-agents-cli==0.9.8) (2026-06-18)
 
 
