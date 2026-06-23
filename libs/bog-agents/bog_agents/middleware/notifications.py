@@ -133,20 +133,22 @@ def copy_to_clipboard(text: str) -> bool:
 
     # Fallback to system commands
     system = platform.system()
+    if system == "Linux":
+        argv = ["xclip", "-selection", "clipboard"]
+    elif system == "Darwin":
+        argv = ["pbcopy"]
+    else:
+        return False
     try:
-        if system == "Linux":
-            proc = subprocess.Popen(
-                ["xclip", "-selection", "clipboard"],
-                stdin=subprocess.PIPE,
-            )
-            proc.communicate(text.encode("utf-8"))
-            return proc.returncode == 0
-        if system == "Darwin":
-            proc = subprocess.Popen(
-                ["pbcopy"],
-                stdin=subprocess.PIPE,
-            )
-            proc.communicate(text.encode("utf-8"))
+        with subprocess.Popen(argv, stdin=subprocess.PIPE) as proc:
+            try:
+                proc.communicate(text.encode("utf-8"), timeout=5)
+            except subprocess.TimeoutExpired:
+                # A wedged helper must not block the calling thread forever;
+                # kill the child and reap it so it can't leak.
+                proc.kill()
+                proc.communicate()
+                return False
             return proc.returncode == 0
     except (FileNotFoundError, OSError):
         pass

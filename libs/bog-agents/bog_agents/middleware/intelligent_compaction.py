@@ -22,7 +22,7 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 from typing_extensions import TypedDict
 
 from bog_agents.middleware.context_packing import pack_messages
@@ -219,6 +219,7 @@ class IntelligentCompactionMiddleware(AgentMiddleware[IntelligentCompactionState
 
         keep_count = max(6, len(messages) // 4)
         keep_count = min(keep_count, len(messages))
+        keep_count = self._expand_keep_count_past_orphans(messages, keep_count)
         old_messages = messages[:-keep_count] if keep_count < len(messages) else []
         recent_messages = messages[-keep_count:] if keep_count < len(messages) else messages
 
@@ -250,6 +251,29 @@ class IntelligentCompactionMiddleware(AgentMiddleware[IntelligentCompactionState
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _expand_keep_count_past_orphans(self, messages: list[BaseMessage], keep_count: int) -> int:
+        """Grow the kept-window size so it never starts on an orphaned ``ToolMessage``.
+
+        The kept window is ``messages[-keep_count:]``. If that window begins with one
+        or more ``ToolMessage`` instances, their issuing ``AIMessage`` (which carries the
+        matching ``tool_calls``) lives in the packed/old range, producing a dangling
+        ``tool_result`` the provider rejects. This retreats the boundary leftward —
+        keeping a few extra messages verbatim — until the first kept message is no longer
+        an orphaned ``ToolMessage``.
+
+        Args:
+            messages: Full message list being compressed.
+            keep_count: Proposed number of trailing messages to keep verbatim.
+
+        Returns:
+            A ``keep_count`` (>= the input, never exceeding ``len(messages)``) whose
+            window does not begin on a ``ToolMessage``.
+        """
+        n = len(messages)
+        while keep_count < n and isinstance(messages[n - keep_count], ToolMessage):
+            keep_count += 1
+        return keep_count
 
     def _estimate_tokens(self, messages: list[BaseMessage]) -> int:
         """Estimate token count for a list of messages.

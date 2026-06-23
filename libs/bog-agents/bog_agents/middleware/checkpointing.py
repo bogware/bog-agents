@@ -18,15 +18,16 @@ import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     ContextT,
-    ModelRequest,
-    ModelResponse,
     ResponseT,
 )
 from langchain.tools import ToolRuntime
+from langchain.tools.tool_node import ToolCallRequest
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
@@ -287,37 +288,44 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
 
     def wrap_tool_call(
         self,
-        request: ModelRequest,
-        call_next: Callable[[ModelRequest], ModelResponse],
-    ) -> ModelResponse:
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Any],
+    ) -> ToolMessage | Any:
         """Intercept tool calls to create checkpoints before mutations.
 
+        langgraph's `ToolCallRequest` carries a single `tool_call` dict
+        (with `name`, `args`, `id`) — not a `tool_calls` list — so this
+        inspects that one call and checkpoints before any mutating tool runs.
+
         Args:
-            request: The model request containing tool calls.
-            call_next: The next handler in the chain.
+            request: The incoming tool-call request.
+            handler: The downstream tool-call handler.
 
         Returns:
-            The model response.
+            The handler's result.
         """
-        # Check if any pending tool calls are mutating tools
-        if hasattr(request, "tool_calls"):
-            for tc in request.tool_calls:
-                if tc.get("name") in _MUTATING_TOOLS:
-                    self._create_checkpoint(tc["name"], tc.get("id", "unknown"))
-                    break
+        tool_call = request.tool_call or {}
+        if tool_call.get("name") in _MUTATING_TOOLS:
+            self._create_checkpoint(tool_call["name"], tool_call.get("id", "unknown"))
 
-        return call_next(request)
+        return handler(request)
 
     async def awrap_tool_call(
         self,
-        request: ModelRequest,
-        call_next: Callable[[ModelRequest], Awaitable[ModelResponse]],
-    ) -> ModelResponse:
-        """Async version of wrap_tool_call."""
-        if hasattr(request, "tool_calls"):
-            for tc in request.tool_calls:
-                if tc.get("name") in _MUTATING_TOOLS:
-                    await asyncio.to_thread(self._create_checkpoint, tc["name"], tc.get("id", "unknown"))
-                    break
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Any]],
+    ) -> ToolMessage | Any:
+        """Async version of `wrap_tool_call`.
 
-        return await call_next(request)
+        Args:
+            request: The incoming tool-call request.
+            handler: The downstream async tool-call handler.
+
+        Returns:
+            The handler's result.
+        """
+        tool_call = request.tool_call or {}
+        if tool_call.get("name") in _MUTATING_TOOLS:
+            await asyncio.to_thread(self._create_checkpoint, tool_call["name"], tool_call.get("id", "unknown"))
+
+        return await handler(request)

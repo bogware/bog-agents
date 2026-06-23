@@ -392,7 +392,7 @@ def build_repo_map(
             size = path.stat().st_size
             if size > max_file_size or size == 0:
                 continue
-            content = path.read_text(errors="replace")
+            content = path.read_text(encoding="utf-8", errors="replace")
             rel_path = path.relative_to(root)
             symbols = _extract_symbols(rel_path, content)
             if symbols.classes or symbols.functions:
@@ -464,7 +464,7 @@ def build_repo_map_cached(
                     files_parsed += 1
                     continue
 
-            content = path.read_text(errors="replace")
+            content = path.read_text(encoding="utf-8", errors="replace")
             symbols = _extract_symbols(path.relative_to(root), content, mtime_hash)
             symbols.size = size
             cache.set(symbols)

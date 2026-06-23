@@ -301,10 +301,14 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
         results = backend.download_files(list(self.sources))
         for path, response in zip(self.sources, results, strict=True):
             if response.error is not None:
-                if response.error == "file_not_found":
-                    continue
-                msg = f"Failed to download {path}: {response.error}"
-                raise ValueError(msg)
+                # Memory is optional enrichment loaded in the LangGraph hot path
+                # before the model call. A missing file is expected; any other
+                # backend failure (permission, timeout, transient sandbox/remote
+                # error) is treated as a degraded read so a flaky backend cannot
+                # abort the whole turn — fail open and skip this source.
+                if response.error != "file_not_found":
+                    logger.warning("Failed to download memory source %s: %s — skipping", path, response.error)
+                continue
             if response.content is not None:
                 contents[path] = self._decode_and_bound(path, response.content)
                 logger.debug("Loaded memory from: %s", path)
@@ -335,10 +339,14 @@ class MemoryMiddleware(AgentMiddleware[MemoryState, ContextT, ResponseT]):
         results = await backend.adownload_files(list(self.sources))
         for path, response in zip(self.sources, results, strict=True):
             if response.error is not None:
-                if response.error == "file_not_found":
-                    continue
-                msg = f"Failed to download {path}: {response.error}"
-                raise ValueError(msg)
+                # Memory is optional enrichment loaded in the LangGraph hot path
+                # before the model call. A missing file is expected; any other
+                # backend failure (permission, timeout, transient sandbox/remote
+                # error) is treated as a degraded read so a flaky backend cannot
+                # abort the whole turn — fail open and skip this source.
+                if response.error != "file_not_found":
+                    logger.warning("Failed to download memory source %s: %s — skipping", path, response.error)
+                continue
             if response.content is not None:
                 contents[path] = self._decode_and_bound(path, response.content)
                 logger.debug("Loaded memory from: %s", path)

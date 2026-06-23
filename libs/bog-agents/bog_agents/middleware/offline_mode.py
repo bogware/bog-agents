@@ -131,9 +131,15 @@ def check_connectivity(*, timeout: float = 3.0) -> ConnectivityStatus:
     try:
         import socket
 
-        # Try to resolve a DNS name
-        socket.setdefaulttimeout(timeout)
-        socket.getaddrinfo("dns.google", 443)
+        # Try to resolve a DNS name. getaddrinfo has no per-call timeout, so we
+        # save/restore the process-global default around it rather than leaking
+        # a 3s cap onto every later socket created without an explicit timeout.
+        prev = socket.getdefaulttimeout()
+        try:
+            socket.setdefaulttimeout(timeout)
+            socket.getaddrinfo("dns.google", 443)
+        finally:
+            socket.setdefaulttimeout(prev)
         return ConnectivityStatus.ONLINE
     except (TimeoutError, socket.gaierror, OSError):
         pass
@@ -142,8 +148,8 @@ def check_connectivity(*, timeout: float = 3.0) -> ConnectivityStatus:
     try:
         import socket
 
-        socket.setdefaulttimeout(timeout)
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
         result = sock.connect_ex(("127.0.0.1", 11434))  # Ollama default port
         sock.close()
         if result == 0:

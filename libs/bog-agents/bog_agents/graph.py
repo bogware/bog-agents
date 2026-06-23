@@ -201,6 +201,45 @@ def get_default_model() -> ChatAnthropic:
     return cast(ChatAnthropic, resolve_model("anthropic:claude-sonnet-4-6"))
 
 
+def _dedup_middleware_by_name(middleware_list: list[AgentMiddleware]) -> list[AgentMiddleware]:
+    """Drop duplicate middleware instances that share a `.name`, keeping the first.
+
+    langchain refuses to compile an agent whose middleware list contains two
+    instances with the same `.name`, raising an opaque "Please remove duplicate
+    middleware instances" `AssertionError` that points at the caller's list
+    rather than the framework-injected twin. The per-feature construction guards
+    in `create_agent` are the primary defense (they honor user precedence by not
+    building the twin in the first place); this pass is a keep-first backstop for
+    any combination they miss.
+
+    Args:
+        middleware_list: Ordered list of middleware instances to de-duplicate.
+
+    Returns:
+        A new list with later duplicates (by `.name`) removed, order otherwise
+        preserved. The first occurrence of each name is kept.
+    """
+    seen_names: set[str] = set()
+    deduped: list[AgentMiddleware] = []
+    dropped: list[str] = []
+    for mw in middleware_list:
+        name = getattr(mw, "name", type(mw).__name__)
+        if name in seen_names:
+            dropped.append(name)
+            continue
+        seen_names.add(name)
+        deduped.append(mw)
+    if dropped:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "Removed duplicate middleware instance(s) with name(s) %s; the first occurrence of each was kept. "
+            "This usually means the same feature was supplied both via a convenience kwarg and via middleware=.",
+            sorted(set(dropped)),
+        )
+    return deduped
+
+
 def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> None:
     """Raise ValueError if any middleware's requirements appear later in the stack.
 
@@ -322,7 +361,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     **not** an "always on" default set. Which middleware are actually composed
     depends on the ``FeatureConfig`` / arguments you pass; several entries below
     (notably ``LifecycleHooksMiddleware``, ``HttpHooksMiddleware``,
-    ``LangSmithMiddleware``, ``SafeToolsMiddleware``, ``ExpertRulesMiddleware``,
+    ``LangSmithMiddleware``, ``ExpertRulesMiddleware``,
     ``RulesMiddleware``, ``ContextPackingMiddleware``, ``ThinkingMiddleware``,
     and ``IntelligentCompactionMiddleware``) are opt-in and only present when
     you enable them or pass them via ``middleware=``. The canonical order is:
@@ -331,8 +370,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
        ``HttpHooksMiddleware``, ``LangSmithMiddleware``,
        ``AuditTrailMiddleware``
     2. Pre-prompt safety — ``DLPMiddleware``, ``RBACMiddleware``,
-       ``SafeToolsMiddleware``, ``ApprovalGatesMiddleware``,
-       ``ExpertRulesMiddleware``
+       ``ApprovalGatesMiddleware``, ``ExpertRulesMiddleware`` (selective
+       auto-approval is data-driven via ``SafeToolsConfig`` / ``is_tool_safe``
+       from ``bog_agents.middleware.safe_tools`` — there is no
+       ``SafeToolsMiddleware`` class)
     3. Context preparation — ``RulesMiddleware``, ``MemoryMiddleware``,
        ``SkillsMiddleware``, ``RepoMapMiddleware``,
        ``CodeIntelligenceMiddleware``, ``ContextPackingMiddleware``
@@ -644,11 +685,26 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         # Otherwise - add it!
         all_subagents = [general_purpose_spec, *processed_subagents]
 
+    # P1-4 / S4: don't construct feature-wired middleware that the user has
+    # already supplied via ``middleware=``. Two instances with the same
+    # ``.name`` make langchain raise an opaque "Please remove duplicate
+    # middleware instances" AssertionError that fingers the user's list, not
+    # the injected twin. We resolve ``user_middleware`` up front so the
+    # convenience-kwarg guards below (Skills/Memory/PromptCaching, in addition
+    # to Filesystem/Summarization) can defer to the user's instance.
+    user_middleware = list(middleware) if middleware else []
+    user_supplied_skills = any(isinstance(m, SkillsMiddleware) for m in user_middleware)
+    user_supplied_memory = any(isinstance(m, MemoryMiddleware) for m in user_middleware)
+    user_supplied_prompt_caching = any(isinstance(m, AnthropicPromptCachingMiddleware) for m in user_middleware)
+
     # Build main agent middleware stack
     agents_middleware: list[AgentMiddleware[Any, Any, Any]] = [
         TodoListMiddleware(),
     ]
-    if skills is not None:
+    # Skills is appended before ``user_middleware`` (i.e. the convenience kwarg
+    # wins position), so when the user also passes their own SkillsMiddleware we
+    # skip the kwarg-built twin and honor the user's instance instead.
+    if skills is not None and not user_supplied_skills:
         agents_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
     # Enforce filesystem `deny` permissions as an early tool-call gate so denied
     # reads/writes never reach the backend. Interrupt-mode rules are wired into
@@ -997,7 +1053,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # ran the same middleware twice per request. We check by class
     # identity (covers subclasses too) so a user who has subclassed
     # FilesystemMiddleware for custom behavior takes precedence.
-    user_middleware = list(middleware) if middleware else []
+    # (``user_middleware`` was resolved up front, near the Skills guard.)
     user_supplied_filesystem = any(isinstance(m, FilesystemMiddleware) for m in user_middleware)
     user_supplied_summarization = any(isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware)
 
@@ -1039,9 +1095,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # caching, the injected memory text would fall outside the cached prefix
     # (and per-thread memory variance would bust cache hits). Keeping Memory
     # outer (earlier) and PromptCaching innermost preserves the cached prefix.
-    if memory is not None:
+    # S4: skip the convenience-kwarg twin when the user already passed their
+    # own MemoryMiddleware / AnthropicPromptCachingMiddleware via ``middleware=``
+    # (those instances are already in ``agents_middleware`` at this point).
+    if memory is not None and not user_supplied_memory:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
-    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    if not user_supplied_prompt_caching:
+        agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
@@ -1062,6 +1122,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         required_classes=_required_mw_classes,
         required_names=_required_mw_names,
     )
+
+    # Backstop dedup: drop any duplicate-name middleware the per-feature guards
+    # above didn't catch, so langchain's "Please remove duplicate middleware
+    # instances" assertion can never surprise the caller. Keep-first is safe
+    # here because the framework-injected twins are already suppressed at
+    # construction time, so the user's instance is the one that survives.
+    agents_middleware = _dedup_middleware_by_name(agents_middleware)
 
     # Validate middleware dependency ordering before compiling the graph.
     _validate_middleware_ordering(agents_middleware)

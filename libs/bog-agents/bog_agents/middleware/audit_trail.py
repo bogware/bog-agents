@@ -455,7 +455,20 @@ class AuditTrailMiddleware(AgentMiddleware[AuditTrailState, ContextT, ResponseT]
             metadata={"message_count": len(request.messages)},
         )
 
-        response = call_next(request)
+        try:
+            response = call_next(request)
+        except Exception as exc:
+            # S17: record the failure so a model timeout/5xx/exhaustion does
+            # not vanish from the FINRA-3110 record, leaving a dangling
+            # llm_call. add_entry swallows sink errors internally, so this
+            # introduces no new failure mode before re-raising.
+            self.audit_log.add_entry(
+                action_type="llm_error",
+                description="LLM request failed",
+                metadata={"error": type(exc).__name__},
+            )
+            raise
+
         tool_calls, has_content = _summarize_response(response)
         self.audit_log.add_entry(
             action_type="llm_response",
@@ -484,7 +497,17 @@ class AuditTrailMiddleware(AgentMiddleware[AuditTrailState, ContextT, ResponseT]
             metadata={"message_count": len(request.messages)},
         )
 
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            # S17: mirror of the sync path — record the failure rather than
+            # leaving a dangling llm_call in the compliance record.
+            self.audit_log.add_entry(
+                action_type="llm_error",
+                description="LLM request failed",
+                metadata={"error": type(exc).__name__},
+            )
+            raise
 
         tool_calls, has_content = _summarize_response(response)
         self.audit_log.add_entry(

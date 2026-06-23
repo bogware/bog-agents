@@ -585,13 +585,20 @@ class StoreBackend(BackendProtocol):
         responses: list[FileUploadResponse] = []
 
         for path, content in files:
-            content_str = content.decode("utf-8")
-            # Create file data
-            file_data = create_file_data(content_str)
-            store_value = self._convert_file_data_to_store_value(file_data)
+            # Guard each file independently so one bad payload (e.g. non-UTF-8
+            # bytes) does not poison the whole batch — partial success is part
+            # of the BackendProtocol upload contract.
+            try:
+                content_str = content.decode("utf-8")
+                # Create file data
+                file_data = create_file_data(content_str)
+                store_value = self._convert_file_data_to_store_value(file_data)
 
-            # Store the file
-            store.put(namespace, path, store_value)
+                # Store the file
+                store.put(namespace, path, store_value)
+            except (UnicodeDecodeError, ValueError, KeyError):
+                responses.append(FileUploadResponse(path=path, error="invalid_path"))
+                continue
             responses.append(FileUploadResponse(path=path, error=None))
 
         return responses
@@ -617,10 +624,17 @@ class StoreBackend(BackendProtocol):
                 responses.append(FileDownloadResponse(path=path, content=None, error="file_not_found"))
                 continue
 
-            file_data = self._convert_store_item_to_file_data(item)
-            # Convert file data to bytes
-            content_str = file_data_to_string(file_data)
-            content_bytes = content_str.encode("utf-8")
+            # Guard conversion per-file so one corrupt store item does not abort
+            # the whole batch — partial success is part of the BackendProtocol
+            # download contract, mirroring the ls/grep/glob `except ValueError`.
+            try:
+                file_data = self._convert_store_item_to_file_data(item)
+                # Convert file data to bytes
+                content_str = file_data_to_string(file_data)
+                content_bytes = content_str.encode("utf-8")
+            except (ValueError, KeyError):
+                responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
+                continue
 
             responses.append(FileDownloadResponse(path=path, content=content_bytes, error=None))
 

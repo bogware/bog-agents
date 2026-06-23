@@ -225,6 +225,43 @@ def pack_messages(
     return result
 
 
+def _snap_keep_boundary_left(messages: list[BaseMessage], keep_count: int) -> int:
+    """Grow keep_count leftward so the kept tail does not start mid tool_use/tool_result pair.
+
+    Slicing a conversation at an arbitrary index can orphan a leading ToolMessage
+    (a tool_result whose originating tool_use AIMessage was packed away), which the
+    provider rejects. This walks the boundary left past any leading ToolMessage in the
+    kept tail and the AIMessage that issued the corresponding tool_calls, so the kept
+    slice always begins on a self-contained message.
+
+    Args:
+        messages: Full message list being sliced.
+        keep_count: Desired number of trailing messages to keep.
+
+    Returns:
+        A keep_count >= the requested one that does not split a tool_use/tool_result pair
+        (clamped to len(messages)).
+    """
+    n = len(messages)
+    if keep_count <= 0:
+        return keep_count
+    keep_count = min(keep_count, n)
+    boundary = n - keep_count
+
+    # Move the boundary left while the first kept message is an orphaned tool_result
+    # (a ToolMessage whose originating tool_use AIMessage would otherwise be packed away).
+    while boundary > 0 and isinstance(messages[boundary], ToolMessage):
+        boundary -= 1
+
+    # If the boundary now sits just after an AIMessage that issued tool_calls, pull the
+    # AIMessage into the kept slice too so the tool_use blocks stay paired with results.
+    if boundary > 0 and isinstance(messages[boundary - 1], AIMessage) and getattr(messages[boundary - 1], "tool_calls", None):
+        boundary -= 1
+
+    boundary = max(0, min(boundary, n))
+    return n - boundary
+
+
 class ContextPackingState(TypedDict):
     """State for context packing middleware."""
 
@@ -276,34 +313,8 @@ class ContextPackingMiddleware(AgentMiddleware[ContextPackingState, ContextT, Re
         call_next: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         """Check context usage and pack old messages if needed."""
-        if hasattr(request, "messages"):
-            messages = request.messages
-            estimated = self._estimate_tokens(messages)
-            threshold = int(self._context_window * self._threshold_pct)
-
-            if estimated > threshold and len(messages) > 10:
-                # Pack the older messages, keep recent ones
-                keep_count = min(10, len(messages) // 3)
-                old_messages = messages[:-keep_count]
-                recent_messages = messages[-keep_count:]
-
-                packed = pack_messages(
-                    old_messages,
-                    max_packed_tokens=self._max_packed_tokens,
-                )
-
-                # Replace old messages with packed context
-                packed_msg = SystemMessage(content=f"[Previous conversation packed]\n{packed}")
-                request.messages = [packed_msg, *recent_messages]
-
-                logger.info(
-                    "Packed %d messages into structured context (%d -> ~%d tokens)",
-                    len(old_messages),
-                    estimated,
-                    self._estimate_tokens(request.messages),
-                )
-
-        return call_next(request)
+        packed_request = self._maybe_pack(request)
+        return call_next(packed_request)
 
     async def awrap_model_call(
         self,
@@ -311,22 +322,61 @@ class ContextPackingMiddleware(AgentMiddleware[ContextPackingState, ContextT, Re
         call_next: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Async version of wrap_model_call."""
-        if hasattr(request, "messages"):
+        packed_request = self._maybe_pack(request)
+        return await call_next(packed_request)
+
+    def _maybe_pack(self, request: ModelRequest) -> ModelRequest:
+        """Return a request whose old messages are packed, or the original on no-op/failure.
+
+        Packing never mutates the shared ModelRequest in place: a new request is produced
+        via `request.override(messages=...)`. The keep boundary is snapped left so it never
+        starts on an orphaned tool_result, and the whole pack step is wrapped in an error
+        boundary so any failure passes the request through unchanged.
+
+        Args:
+            request: The incoming model request.
+
+        Returns:
+            A new request with packed context, or the original request if packing is not
+            triggered or raised.
+        """
+        if not hasattr(request, "messages"):
+            return request
+
+        try:
             messages = request.messages
             estimated = self._estimate_tokens(messages)
             threshold = int(self._context_window * self._threshold_pct)
 
-            if estimated > threshold and len(messages) > 10:
-                keep_count = min(10, len(messages) // 3)
-                old_messages = messages[:-keep_count]
-                recent_messages = messages[-keep_count:]
+            if not (estimated > threshold and len(messages) > 10):
+                return request
 
-                packed = pack_messages(
-                    old_messages,
-                    max_packed_tokens=self._max_packed_tokens,
-                )
+            # Pack the older messages, keep recent ones. Snap the boundary left so the
+            # kept tail never starts on an orphaned tool_result.
+            keep_count = min(10, len(messages) // 3)
+            keep_count = _snap_keep_boundary_left(messages, keep_count)
+            if keep_count <= 0 or keep_count >= len(messages):
+                return request
 
-                packed_msg = SystemMessage(content=f"[Previous conversation packed]\n{packed}")
-                request.messages = [packed_msg, *recent_messages]
+            old_messages = messages[:-keep_count]
+            recent_messages = messages[-keep_count:]
 
-        return await call_next(request)
+            packed = pack_messages(
+                old_messages,
+                max_packed_tokens=self._max_packed_tokens,
+            )
+
+            packed_msg = SystemMessage(content=f"[Previous conversation packed]\n{packed}")
+            new_messages = [packed_msg, *recent_messages]
+
+            logger.info(
+                "Packed %d messages into structured context (%d -> ~%d tokens)",
+                len(old_messages),
+                estimated,
+                self._estimate_tokens(new_messages),
+            )
+
+            return request.override(messages=new_messages)
+        except Exception:  # packing is best-effort; never block a turn
+            logger.warning("Context packing failed; passing request through unchanged", exc_info=True)
+            return request

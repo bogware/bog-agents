@@ -361,6 +361,21 @@ class FilesystemBackend(BackendProtocol):
         if not resolved_path.exists() or not resolved_path.is_file():
             return f"Error: File '{file_path}' not found"
 
+        # Guard against reading an unbounded file fully into memory. read() buffers
+        # the whole file before slicing by offset/limit, so a multi-GB log would OOM
+        # the process. Short-circuit on stat size (mirrors the grep fallback's
+        # max_file_size_bytes skip) and suggest a tighter range or grep.
+        try:
+            file_size = resolved_path.stat().st_size
+        except OSError as e:
+            return f"Error reading file '{file_path}': {e}"
+        if file_size > self.max_file_size_bytes:
+            return (
+                f"Error: File '{file_path}' is {file_size} bytes, which exceeds the "
+                f"maximum readable size of {self.max_file_size_bytes} bytes. Use grep "
+                f"to search within it, or read a smaller portion with a tighter offset/limit range."
+            )
+
         try:
             # Open with O_NOFOLLOW where available to avoid symlink traversal
             fd = os.open(resolved_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -768,6 +783,12 @@ class FilesystemBackend(BackendProtocol):
                 if resolved_path.is_dir():
                     responses.append(FileDownloadResponse(path=path, content=None, error="is_directory"))
                     continue
+                # Guard against buffering an unbounded file fully into memory
+                # (mirrors read()'s stat-based short-circuit). Reuse the existing
+                # invalid_path code since FileOperationError has no size-specific literal.
+                if resolved_path.stat().st_size > self.max_file_size_bytes:
+                    responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
+                    continue
                 # Use flags to optionally prevent symlink following if
                 # supported by the OS
                 fd = os.open(resolved_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -782,5 +803,9 @@ class FilesystemBackend(BackendProtocol):
                 responses.append(FileDownloadResponse(path=path, content=None, error="is_directory"))
             except ValueError:
                 responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
-            # Let other errors propagate
+            except OSError:
+                # O_NOFOLLOW on a symlink (ELOOP), FIFO/device (ENXIO), EIO, etc.
+                # raise plain OSError; catch them so one bad file doesn't abort
+                # the whole batch (preserves the partial-success contract).
+                responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
         return responses

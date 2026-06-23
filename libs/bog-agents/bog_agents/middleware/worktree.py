@@ -212,6 +212,11 @@ def create_worktree(
 
     Returns:
         WorktreeInfo with path and branch details.
+
+    Raises:
+        RuntimeError: When git fails to create the worktree (branch
+            collision, dirty tree, git missing, timeout, …) so the caller
+            never operates on a non-existent worktree directory.
     """
     if base_dir is None:
         base_dir = Path(tempfile.mkdtemp(prefix="bog-agents-worktree-"))
@@ -229,7 +234,16 @@ def create_worktree(
         # Branch might already exist, try without -b
         result = _run_git(repo_dir, "worktree", "add", "--", str(worktree_path), branch)
 
-    commit = _run_git(worktree_path, "rev-parse", "HEAD") if worktree_path.exists() else None
+    # S16: ``_run_git`` never raises — it returns ``[exit code N]`` / ``Error:``
+    # strings. If the final attempt failed (or git never created the dir) we
+    # must surface it instead of returning a WorktreeInfo for a worktree that
+    # does not exist; otherwise the sub-agent runs against a wrong/absent dir
+    # and cleanup removes a bogus path with no log or raise.
+    if result.startswith(("[exit code", "Error:")) or not worktree_path.exists():
+        msg = f"failed to create worktree for {branch}: {result}"
+        raise RuntimeError(msg)
+
+    commit = _run_git(worktree_path, "rev-parse", "HEAD")
     return WorktreeInfo(path=worktree_path, branch=branch, commit=commit)
 
 
@@ -851,7 +865,40 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         """Build parallel worktree tools exposed to the agent."""
         mw = self
 
-        def spawn_parallel_tasks(
+        def _parse_and_register_tasks(tasks: str) -> tuple[list[WorktreeTask], str | None]:
+            """Parse the JSON task spec and register WorktreeTask objects.
+
+            Args:
+                tasks: JSON array of ``{"label", "prompt"}`` task objects.
+
+            Returns:
+                A ``(created_tasks, error)`` tuple. ``error`` is a non-None
+                message string when the JSON could not be parsed, in which
+                case ``created_tasks`` is empty.
+            """
+            import json as _json
+
+            try:
+                task_specs = _json.loads(tasks)
+            except _json.JSONDecodeError as exc:
+                return [], f"Invalid JSON: {exc}"
+
+            created_tasks: list[WorktreeTask] = []
+            for spec in task_specs:
+                label = str(spec.get("label", "task"))
+                prompt = str(spec.get("prompt", ""))
+                branch = mw._make_branch_name(label)
+                task = WorktreeTask(label=label, prompt=prompt, branch=branch)
+                mw._tasks[task.task_id] = task
+                created_tasks.append(task)
+            return created_tasks, None
+
+        def _spawn_summary(created_tasks: list[WorktreeTask]) -> str:
+            """Build the user-facing summary line for spawned tasks."""
+            ids = ", ".join(t.task_id for t in created_tasks)
+            return f"Spawned {len(created_tasks)} parallel task(s): {ids}\nUse `worktree_status` to monitor progress."
+
+        async def aspawn_parallel_tasks(
             runtime: ToolRuntime[None, ParallelWorktreeState],
             tasks: Annotated[
                 str,
@@ -862,22 +909,14 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
 
             Each task gets its own isolated branch and directory. Tasks run
             concurrently up to the max_parallel limit.
+
+            This is the async entry point used on the ``ainvoke`` agent path
+            (the default for the CLI and daemon) where a running event loop is
+            guaranteed, so ``asyncio.ensure_future`` is always safe.
             """
-            import json as _json
-
-            try:
-                task_specs = _json.loads(tasks)
-            except _json.JSONDecodeError as exc:
-                return f"Invalid JSON: {exc}"
-
-            created_tasks: list[WorktreeTask] = []
-            for spec in task_specs:
-                label = str(spec.get("label", "task"))
-                prompt = str(spec.get("prompt", ""))
-                branch = mw._make_branch_name(label)
-                task = WorktreeTask(label=label, prompt=prompt, branch=branch)
-                mw._tasks[task.task_id] = task
-                created_tasks.append(task)
+            created_tasks, error = _parse_and_register_tasks(tasks)
+            if error is not None:
+                return error
 
             # Fire and forget — tasks run in the background. Keep a strong
             # reference on ``mw._background_tasks`` so asyncio doesn't GC the
@@ -893,8 +932,50 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 mw._background_tasks.add(bg)
                 bg.add_done_callback(mw._background_tasks.discard)
 
-            ids = ", ".join(t.task_id for t in created_tasks)
-            return f"Spawned {len(created_tasks)} parallel task(s): {ids}\nUse `worktree_status` to monitor progress."
+            return _spawn_summary(created_tasks)
+
+        def spawn_parallel_tasks(
+            runtime: ToolRuntime[None, ParallelWorktreeState],
+            tasks: Annotated[
+                str,
+                'JSON array of task objects with \'label\' and \'prompt\' keys. Example: [{"label": "auth", "prompt": "Refactor auth.py"}]',
+            ],
+        ) -> str:
+            """Spawn multiple agent tasks in parallel git worktrees.
+
+            Sync fallback for the rare ``invoke`` (no event loop) path. When
+            LangChain runs a sync tool in a worker thread under ``ainvoke``
+            there is no running loop, so ``asyncio.ensure_future`` raises
+            ``RuntimeError``; the async ``aspawn_parallel_tasks`` coroutine is
+            preferred there. (Fixes S21.)
+            """
+            created_tasks, error = _parse_and_register_tasks(tasks)
+            if error is not None:
+                return error
+
+            # S21: ``ensure_future`` needs a running loop. On the sync path
+            # (or a worker thread with no loop) it raises RuntimeError. Degrade
+            # gracefully: the tasks are still registered/visible via
+            # ``worktree_status`` and can be driven by the async tool instead.
+            if created_tasks:
+                try:
+                    bg = asyncio.ensure_future(
+                        asyncio.gather(
+                            *(mw._run_task_in_worktree(t) for t in created_tasks),
+                            return_exceptions=True,
+                        )
+                    )
+                    mw._background_tasks.add(bg)
+                    bg.add_done_callback(mw._background_tasks.discard)
+                except RuntimeError as exc:
+                    logger.warning("spawn_parallel_tasks: no running event loop, tasks registered but not started: %s", exc)
+                    ids = ", ".join(t.task_id for t in created_tasks)
+                    return (
+                        f"Registered {len(created_tasks)} parallel task(s): {ids}\n"
+                        "No running event loop to start them; re-run on the async agent path."
+                    )
+
+            return _spawn_summary(created_tasks)
 
         def worktree_status(
             runtime: ToolRuntime[None, ParallelWorktreeState],
@@ -954,6 +1035,7 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 name="spawn_parallel_tasks",
                 description="Spawn multiple agent tasks in parallel git worktrees.",
                 func=spawn_parallel_tasks,
+                coroutine=aspawn_parallel_tasks,
             ),
             StructuredTool.from_function(
                 name="worktree_status",

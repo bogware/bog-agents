@@ -912,3 +912,65 @@ def test_before_agent_batch_skips_missing_keeps_found(tmp_path: Path) -> None:
     assert existing_path in result["memory_contents"]
     assert missing_path not in result["memory_contents"]
     assert backend.download_files_call_count == 1
+
+
+class _ErrorBackend:
+    """Backend stub whose downloads return a configurable error per source.
+
+    Memory is optional enrichment loaded in the LangGraph hot path, so a degraded
+    backend (permission, timeout, transient sandbox/remote failure) must fail open
+    rather than abort the turn.
+    """
+
+    def __init__(self, responses: list) -> None:
+        self._responses = responses
+
+    def download_files(self, paths: list[str]) -> list:
+        return self._responses
+
+    async def adownload_files(self, paths: list[str]) -> list:
+        return self._responses
+
+
+def test_before_agent_fails_open_on_non_file_not_found_error(tmp_path: Path) -> None:
+    """A non-file_not_found backend error degrades the read instead of raising."""
+    good_path = str(tmp_path / "good" / "AGENTS.md")
+    flaky_path = str(tmp_path / "flaky" / "AGENTS.md")
+
+    backend = _ErrorBackend(
+        [
+            SimpleNamespace(content=None, error="permission_denied"),
+            SimpleNamespace(content=b"# Good\nUsable content", error=None),
+        ]
+    )
+
+    middleware = MemoryMiddleware(backend=backend, sources=[flaky_path, good_path])  # type: ignore[arg-type]
+    result = middleware.before_agent({}, None, {})  # type: ignore[arg-type]
+
+    # The whole turn must not crash; the healthy source is still loaded and the
+    # degraded one is simply skipped.
+    assert result is not None
+    assert flaky_path not in result["memory_contents"]
+    assert good_path in result["memory_contents"]
+    assert "Usable content" in result["memory_contents"][good_path]
+
+
+async def test_abefore_agent_fails_open_on_non_file_not_found_error(tmp_path: Path) -> None:
+    """Async variant also degrades the read instead of raising on a backend error."""
+    good_path = str(tmp_path / "good" / "AGENTS.md")
+    flaky_path = str(tmp_path / "flaky" / "AGENTS.md")
+
+    backend = _ErrorBackend(
+        [
+            SimpleNamespace(content=None, error="timeout"),
+            SimpleNamespace(content=b"# Good\nUsable content", error=None),
+        ]
+    )
+
+    middleware = MemoryMiddleware(backend=backend, sources=[flaky_path, good_path])  # type: ignore[arg-type]
+    result = await middleware.abefore_agent({}, None, {})  # type: ignore[arg-type]
+
+    assert result is not None
+    assert flaky_path not in result["memory_contents"]
+    assert good_path in result["memory_contents"]
+    assert "Usable content" in result["memory_contents"][good_path]

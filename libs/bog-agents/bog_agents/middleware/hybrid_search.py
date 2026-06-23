@@ -199,14 +199,22 @@ class EmbeddingCache:
             self._entries = {}
 
     def save(self) -> None:
-        """Persist the cache to disk."""
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": _CACHE_VERSION,
-            "built_at": time.time(),
-            "entries": self._entries,
-        }
-        self._cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        """Persist the cache to disk.
+
+        Failures (read-only checkout, full disk, Windows path-length limits) are
+        swallowed: the cache degrades to in-memory-only rather than discarding all
+        embedding compute by raising into the tool caller.
+        """
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "version": _CACHE_VERSION,
+                "built_at": time.time(),
+                "entries": self._entries,
+            }
+            self._cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            logger.debug("Could not save embedding cache to %s", self._cache_path, exc_info=True)
 
     def is_fresh(self, rel_path: str, mtime_hash: str) -> bool:
         """Return True if the cached entry for rel_path is up to date.

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from langgraph.types import Command
 from bog_agents.backends.composite import CompositeBackend, _route_for_path
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.backends.protocol import (
+    EditResult,
     ExecuteResponse,
     SandboxBackendProtocol,
     WriteResult,
@@ -1375,3 +1377,73 @@ def test_edit_result_path_restored_to_full_routed_path():
 
     assert res.error is None
     assert res.path == "/memories/notes.md"  # not "/notes.md"
+
+
+class _RaisingRuntime:
+    """Runtime stub whose ``state`` access raises, to exercise the state-sync swallow."""
+
+    @property
+    def state(self):
+        raise RuntimeError("state unavailable")
+
+
+class _StateSyncFailBackend:
+    """Default backend stub: write/edit succeed and return a files_update, but the
+    bound runtime raises when the composite tries to merge into state."""
+
+    def __init__(self) -> None:
+        self.runtime = _RaisingRuntime()
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(path=file_path, files_update={file_path: {"content": content}})
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        return WriteResult(path=file_path, files_update={file_path: {"content": content}})
+
+    def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
+        return EditResult(path=file_path, files_update={file_path: {"content": new_string}})
+
+    async def aedit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
+        return EditResult(path=file_path, files_update={file_path: {"content": new_string}})
+
+
+def test_write_state_sync_failure_logs_debug_and_preserves_result(caplog: pytest.LogCaptureFixture):
+    """When state-sync raises, the write result is preserved and a debug line is logged."""
+    comp = CompositeBackend(default=_StateSyncFailBackend(), routes={})
+
+    with caplog.at_level(logging.DEBUG, logger="bog_agents.backends.composite"):
+        res = comp.write("/f.txt", "alpha")
+
+    # Content isn't lost: the underlying write already succeeded.
+    assert res.error is None and res.path == "/f.txt"
+    assert any("state-sync skipped for /f.txt" in r.getMessage() for r in caplog.records)
+
+
+async def test_awrite_state_sync_failure_logs_debug(caplog: pytest.LogCaptureFixture):
+    comp = CompositeBackend(default=_StateSyncFailBackend(), routes={})
+
+    with caplog.at_level(logging.DEBUG, logger="bog_agents.backends.composite"):
+        res = await comp.awrite("/f.txt", "alpha")
+
+    assert res.error is None
+    assert any("state-sync skipped for /f.txt" in r.getMessage() for r in caplog.records)
+
+
+def test_edit_state_sync_failure_logs_debug(caplog: pytest.LogCaptureFixture):
+    comp = CompositeBackend(default=_StateSyncFailBackend(), routes={})
+
+    with caplog.at_level(logging.DEBUG, logger="bog_agents.backends.composite"):
+        res = comp.edit("/f.txt", "a", "b")
+
+    assert res.error is None
+    assert any("state-sync skipped for /f.txt" in r.getMessage() for r in caplog.records)
+
+
+async def test_aedit_state_sync_failure_logs_debug(caplog: pytest.LogCaptureFixture):
+    comp = CompositeBackend(default=_StateSyncFailBackend(), routes={})
+
+    with caplog.at_level(logging.DEBUG, logger="bog_agents.backends.composite"):
+        res = await comp.aedit("/f.txt", "a", "b")
+
+    assert res.error is None
+    assert any("state-sync skipped for /f.txt" in r.getMessage() for r in caplog.records)

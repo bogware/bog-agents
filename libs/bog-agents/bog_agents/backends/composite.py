@@ -18,6 +18,7 @@ Examples:
     ```
 """
 
+import logging
 from collections import defaultdict
 from dataclasses import replace
 from typing import cast
@@ -35,6 +36,8 @@ from bog_agents.backends.protocol import (
     execute_accepts_timeout,
 )
 from bog_agents.backends.state import StateBackend
+
+logger = logging.getLogger(__name__)
 
 
 def _remap_grep_path(m: GrepMatch, route_prefix: str) -> GrepMatch:
@@ -461,8 +464,8 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+            except Exception as exc:  # noqa: BLE001  # Intentional for best-effort state sync
+                logger.debug("composite state-sync skipped for %s: %s", file_path, exc)
         return res
 
     async def awrite(
@@ -484,8 +487,8 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+            except Exception as exc:  # noqa: BLE001  # Intentional for best-effort state sync
+                logger.debug("composite state-sync skipped for %s: %s", file_path, exc)
         return res
 
     def edit(
@@ -518,8 +521,8 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+            except Exception as exc:  # noqa: BLE001  # Intentional for best-effort state sync
+                logger.debug("composite state-sync skipped for %s: %s", file_path, exc)
         return res
 
     async def aedit(
@@ -542,8 +545,8 @@ class CompositeBackend(BackendProtocol):
                     files = state.get("files", {})
                     files.update(res.files_update)
                     state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+            except Exception as exc:  # noqa: BLE001  # Intentional for best-effort state sync
+                logger.debug("composite state-sync skipped for %s: %s", file_path, exc)
         return res
 
     def execute(

@@ -201,6 +201,92 @@ class TestContextPackingMiddleware:
         mw = ContextPackingMiddleware()
         assert mw is not None
 
+    @staticmethod
+    def _make_request(messages: list) -> object:  # type: ignore[type-arg]
+        from langchain_core.messages import SystemMessage
+
+        try:
+            from langchain.agents.middleware.types import ModelRequest
+        except ImportError:  # pragma: no cover - import-path fallback
+            from langchain.agents.middleware import ModelRequest  # type: ignore[no-redef,attr-defined]
+
+        return ModelRequest(
+            model=object(),
+            messages=messages,
+            system_message=SystemMessage(content="base"),
+            tools=[],
+            runtime=None,
+            state={"messages": messages},
+        )
+
+    def test_pack_uses_override_and_does_not_mutate_request(self) -> None:
+        """Packing must produce a new request via override, not mutate request.messages."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from bog_agents.middleware.context_packing import ContextPackingMiddleware
+
+        # 30 large messages so the estimate clears the (tiny) threshold and len > 10.
+        big = "x" * 4000
+        messages = [HumanMessage(content=big) if i % 2 == 0 else AIMessage(content=big) for i in range(30)]
+        request = self._make_request(messages)
+        original_messages = request.messages
+
+        mw = ContextPackingMiddleware(context_window=1000, threshold_pct=0.1)
+        new_request = mw._maybe_pack(request)
+
+        # Original request untouched (no in-place mutation).
+        assert request.messages is original_messages
+        assert len(request.messages) == 30
+        # New request is packed and shorter.
+        assert new_request is not request
+        assert len(new_request.messages) < 30
+
+    def test_pack_does_not_orphan_tool_result(self) -> None:
+        """The kept tail must never begin on an orphaned ToolMessage."""
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        from bog_agents.middleware.context_packing import ContextPackingMiddleware
+
+        big = "y" * 4000
+        messages: list = []
+        for i in range(12):
+            messages.append(HumanMessage(content=big))
+            messages.append(AIMessage(content=big, tool_calls=[{"name": "t", "args": {}, "id": f"id{i}"}]))
+            messages.append(ToolMessage(content=big, tool_call_id=f"id{i}", name="t"))
+
+        request = self._make_request(messages)
+        mw = ContextPackingMiddleware(context_window=1000, threshold_pct=0.1)
+        new_request = mw._maybe_pack(request)
+
+        # First message is the packed system summary; the message right after must not be
+        # a ToolMessage (which would be an orphaned tool_result).
+        assert len(new_request.messages) >= 2
+        assert not isinstance(new_request.messages[1], ToolMessage)
+
+    def test_pack_passes_through_on_failure(self) -> None:
+        """A failure inside packing must return the original request unchanged."""
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from bog_agents.middleware import context_packing
+        from bog_agents.middleware.context_packing import ContextPackingMiddleware
+
+        big = "z" * 4000
+        messages = [HumanMessage(content=big) if i % 2 == 0 else AIMessage(content=big) for i in range(30)]
+        request = self._make_request(messages)
+
+        def _boom(*_args: object, **_kwargs: object) -> str:
+            raise RuntimeError("pack exploded")
+
+        original = context_packing.pack_messages
+        context_packing.pack_messages = _boom  # type: ignore[assignment]
+        try:
+            mw = ContextPackingMiddleware(context_window=1000, threshold_pct=0.1)
+            result = mw._maybe_pack(request)
+        finally:
+            context_packing.pack_messages = original  # type: ignore[assignment]
+
+        assert result is request
+
 
 class TestPdfReader:
     """Tests for PDF reader (#9)."""

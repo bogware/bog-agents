@@ -610,3 +610,84 @@ class TestWindowsPathHandling:
         infos = be.ls_info("/a/b/c/d")
         for info in infos:
             assert "\\" not in info["path"], f"Backslash in deep path: {info['path']}"
+
+
+# --- Hardening: S11 (unbounded read OOM guard) + S12 (generic OSError batch resiliency) ---
+
+
+def test_read_rejects_file_exceeding_max_size(tmp_path: Path):
+    """read() must not buffer a file larger than max_file_size_bytes into memory (S11)."""
+    root = tmp_path
+    big = root / "big.log"
+    # max_file_size_mb=0 makes the limit 0 bytes, so any non-empty file trips the guard
+    # without writing gigabytes to disk.
+    big.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True, max_file_size_mb=0)
+
+    result = be.read("/big.log", limit=100)
+    assert "exceeds the maximum readable size" in result
+    # Actionable guidance toward grep / tighter range.
+    assert "grep" in result.lower()
+
+
+def test_read_allows_file_within_max_size(tmp_path: Path):
+    """read() still works normally for files under the size guard (S11 regression)."""
+    root = tmp_path
+    small = root / "small.txt"
+    small.write_text("hello\nworld\n", encoding="utf-8")
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True, max_file_size_mb=10)
+
+    result = be.read("/small.txt")
+    assert "hello" in result
+    assert "world" in result
+
+
+def test_download_files_rejects_file_exceeding_max_size(tmp_path: Path):
+    """download_files() must short-circuit oversized files instead of buffering them (S11)."""
+    root = tmp_path
+    big = root / "big.bin"
+    big.write_bytes(b"some bytes")
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True, max_file_size_mb=0)
+
+    responses = be.download_files(["/big.bin"])
+    assert len(responses) == 1
+    assert responses[0].content is None
+    assert responses[0].error == "invalid_path"
+
+
+def test_download_files_generic_oserror_does_not_abort_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A plain OSError (e.g. ELOOP/ENXIO/EIO) on one file must not abort the batch (S12)."""
+    import os as _os
+
+    root = tmp_path
+    good1 = root / "good1.txt"
+    good2 = root / "good2.txt"
+    bad = root / "bad.dev"
+    good1.write_text("a", encoding="utf-8")
+    good2.write_text("b", encoding="utf-8")
+    bad.write_text("c", encoding="utf-8")
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True)
+
+    real_open = _os.open
+
+    def fake_open(path: object, *args: object, **kwargs: object) -> int:
+        # Raise a *generic* OSError (not one of the explicitly-caught subclasses)
+        # only for the bad file, mimicking O_NOFOLLOW on a symlink / device node.
+        if str(path).endswith("bad.dev"):
+            raise OSError("simulated ELOOP")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(_os, "open", fake_open)
+
+    responses = be.download_files(["/good1.txt", "/bad.dev", "/good2.txt"])
+
+    assert len(responses) == 3
+    assert responses[0].error is None
+    assert responses[0].content == b"a"
+    # The offending file degrades gracefully rather than raising out of the batch.
+    assert responses[1].error == "invalid_path"
+    assert responses[1].content is None
+    # Subsequent file still processed (partial-success contract preserved).
+    assert responses[2].error is None
+    assert responses[2].content == b"b"

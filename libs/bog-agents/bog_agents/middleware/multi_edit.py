@@ -88,7 +88,11 @@ def create_multi_edit_file_tool(
                 errors.append(f"Edit {i + 1}: Error validating path '{file_path}': {e}")
                 continue
 
-            res: EditResult = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
+            try:
+                res: EditResult = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
+            except Exception as e:
+                errors.append(f"Edit {i + 1} ({validated_path}): {e}")
+                continue
             if res.error:
                 errors.append(f"Edit {i + 1} ({validated_path}): {res.error}")
                 continue
@@ -139,7 +143,11 @@ def create_multi_edit_file_tool(
                 errors.append(f"Edit {i + 1}: Error validating path '{file_path}': {e}")
                 continue
 
-            res: EditResult = await resolved_backend.aedit(validated_path, old_string, new_string, replace_all=replace_all)
+            try:
+                res: EditResult = await resolved_backend.aedit(validated_path, old_string, new_string, replace_all=replace_all)
+            except Exception as e:
+                errors.append(f"Edit {i + 1} ({validated_path}): {e}")
+                continue
             if res.error:
                 errors.append(f"Edit {i + 1} ({validated_path}): {res.error}")
                 continue
