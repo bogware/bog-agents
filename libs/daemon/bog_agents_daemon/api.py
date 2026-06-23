@@ -595,10 +595,7 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-        import asyncio
-
         from bog_agents_daemon.models import JobRun, JobStatus
-        from bog_agents_daemon.runner import run_job
         from bog_agents_daemon.store import save_run
 
         context = body.context if body else {}
@@ -614,22 +611,20 @@ def create_app(
         )
         save_run(run)
 
-        async def _do_run() -> None:
-            with contextlib.suppress(Exception):
-                # Background task — run_job already logs internally.
-                await run_job(
-                    job,
-                    trigger_type=TriggerType.MANUAL,
-                    trigger_context=context,
-                    _existing_run=run,
-                )
-
-        # Hold a strong reference so the loop doesn't garbage-collect
-        # the task mid-flight (RUF006); discarded from the set on done.
-        bg_task = asyncio.create_task(_do_run())
-        webhook_tasks.add(bg_task)
-        bg_task.add_done_callback(webhook_tasks.discard)
-        return _run_to_response(run)
+        # Route through the scheduler so the run honours the _running_jobs
+        # overlap guard and the BOG_DAEMON_MAX_CONCURRENT_JOBS semaphore
+        # instead of spawning an unbounded raw task. dispatch() reserves the
+        # slot synchronously and returns the placeholder immediately; if the
+        # job is already running it returns the placeholder marked SKIPPED.
+        dispatched = scheduler.dispatch(
+            job,
+            trigger_type=TriggerType.MANUAL,
+            trigger_context=context,
+            existing_run=run,
+        )
+        if dispatched.status == JobStatus.SKIPPED:
+            save_run(dispatched)
+        return _run_to_response(dispatched)
 
     # ------------------------------------------------------------------
     # Job runs
@@ -723,6 +718,8 @@ def create_app(
         """
         import fnmatch as _fnmatch
 
+        from bog_agents_daemon.models import JobStatus
+
         _check_auth(request, token_holder["value"])
         try:
             payload = await request.json()
@@ -751,18 +748,16 @@ def create_app(
                 pattern = trigger.git_branch_pattern or "*"
                 if not _fnmatch.fnmatch(branch, pattern):
                     continue
-                from bog_agents_daemon.runner import run_job
-
-                task = asyncio.create_task(
-                    run_job(
-                        job,
-                        trigger_type=TriggerType.GIT_PUSH,
-                        trigger_context={"ref": ref, "branch": branch, **payload},
-                    )
+                # Route through the scheduler so concurrent pushes honour the
+                # overlap guard + concurrency semaphore (a push storm can no
+                # longer fan out unbounded parallel runs of the same job).
+                dispatched = scheduler.dispatch(
+                    job,
+                    trigger_type=TriggerType.GIT_PUSH,
+                    trigger_context={"ref": ref, "branch": branch, **payload},
                 )
-                webhook_tasks.add(task)
-                task.add_done_callback(webhook_tasks.discard)
-                triggered.append(job.job_id)
+                if dispatched.status != JobStatus.SKIPPED:
+                    triggered.append(job.job_id)
                 break
 
         return {"triggered": triggered, "count": len(triggered)}
@@ -859,18 +854,18 @@ def create_app(
                             webhook_path,
                         )
                         break  # wrong secret — don't trigger this job
-                from bog_agents_daemon.runner import run_job
+                from bog_agents_daemon.models import JobStatus
 
-                task = asyncio.create_task(
-                    run_job(
-                        job,
-                        trigger_type=TriggerType.WEBHOOK,
-                        trigger_context={"path": webhook_path, "payload": payload},
-                    )
+                # Route through the scheduler so an unauthenticated-but-valid
+                # HMAC webhook storm cannot fan out unbounded parallel runs:
+                # the overlap guard + concurrency semaphore apply.
+                dispatched = scheduler.dispatch(
+                    job,
+                    trigger_type=TriggerType.WEBHOOK,
+                    trigger_context={"path": webhook_path, "payload": payload},
                 )
-                webhook_tasks.add(task)
-                task.add_done_callback(webhook_tasks.discard)
-                triggered.append(job.job_id)
+                if dispatched.status != JobStatus.SKIPPED:
+                    triggered.append(job.job_id)
                 break
 
         return {"triggered": triggered, "count": len(triggered)}

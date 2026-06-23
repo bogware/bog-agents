@@ -153,7 +153,7 @@ class TestRunJob:
     async def test_failed_run_persisted(self, tmp_daemon_dir: Path) -> None:
         job = AmbientJob(name="fail", prompt="boom")
 
-        async def _explode(_job: AmbientJob, _prompt: str) -> str:
+        async def _explode(_job: AmbientJob, _prompt: str, **_kwargs: object) -> str:
             msg = "agent exploded"
             raise RuntimeError(msg)
 

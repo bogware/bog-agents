@@ -73,7 +73,7 @@ async def run_job(
 
     try:
         prompt = _build_prompt(job)
-        output = await _invoke_agent(job, prompt)
+        output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
         run.output = output
         run.status = JobStatus.COMPLETED
     except Exception as exc:
@@ -360,15 +360,42 @@ def _load_agent_timeout() -> int:
 _AGENT_TIMEOUT_SECONDS = _load_agent_timeout()
 
 
-async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
+def _allow_unattended_shell() -> bool:
+    """Whether unrestricted real-path shell is opted-in for unattended triggers.
+
+    Network/event triggers (WEBHOOK, GIT_PUSH, and any non-MANUAL trigger) run
+    unattended and may be reachable from outside the host (the webhook path is
+    HMAC-secret-only). By default such jobs run with `virtual_mode=True` so the
+    shell/filesystem are confined to the job's `working_dir`. Setting
+    `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1` (or `true`/`yes`) opts the operator
+    into unrestricted real-absolute-path shell for these triggers.
+
+    Returns:
+        True only when the env var is explicitly set to an affirmative value.
+    """
+    return os.environ.get("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "").strip().lower() in ("1", "true", "yes")
+
+
+async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
     Uses a lazy import to avoid circular imports at module load time.  Enforces
     a per-job timeout (default 30 minutes, override with BOG_DAEMON_AGENT_TIMEOUT).
 
+    Safe-by-default unattended posture (V3-11): for non-MANUAL triggers (cron,
+    interval, file-change, git-push, and especially externally-reachable
+    webhooks) the shell/filesystem backend is built with `virtual_mode=True`,
+    confining tool execution to the job's `working_dir` (path guardrails on).
+    A MANUAL trigger is token-authenticated and keeps the unrestricted
+    real-path behaviour. Operators who deliberately want unrestricted shell
+    for unattended triggers must opt in with `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`;
+    when they do, and a network-reachable trigger fires, a WARNING is logged.
+
     Args:
         job: The job providing model and working_dir configuration.
         prompt: The resolved prompt to run.
+        trigger_type: How this run was initiated; controls the shell sandbox
+            posture (MANUAL stays unrestricted, others harden by default).
 
     Returns:
         The last AI message content from the agent.
@@ -385,9 +412,30 @@ async def _invoke_agent(job: AmbientJob, prompt: str) -> str:
     # this the SDK falls back to StateBackend and the agent reports "no files
     # are mounted" even when --working-dir was set.
     root_dir = Path(job.working_dir) if job.working_dir else Path.cwd()
-    # virtual_mode=False so the agent operates on real absolute paths inside
-    # the project tree (mirrors how the CLI wires its LocalShellBackend).
-    backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=False)
+
+    # Decide the shell sandbox posture. MANUAL triggers are token-authenticated
+    # (the operator is at the keyboard) and keep unrestricted real-path shell.
+    # Every other trigger is unattended and (in the webhook case) externally
+    # reachable, so it is hardened with virtual_mode=True unless the operator
+    # has explicitly opted into unrestricted shell.
+    is_manual = trigger_type == TriggerType.MANUAL
+    allow_unattended = _allow_unattended_shell()
+    use_virtual_mode = not (is_manual or allow_unattended)
+    # WEBHOOK is the only trigger reachable purely via an HMAC secret (no daemon
+    # token), so an unrestricted webhook run is the highest-risk posture.
+    if not is_manual and not use_virtual_mode:
+        logger.warning(
+            "Unattended %s job %s (%s) is running with shell guardrails DISABLED "
+            "(virtual_mode=False) because BOG_DAEMON_ALLOW_UNATTENDED_SHELL is set; "
+            "a network-reachable trigger now has unrestricted real-path shell on the host.",
+            trigger_type.value,
+            job.job_id,
+            job.name,
+        )
+
+    # virtual_mode confines the shell/filesystem to root_dir; virtual_mode=False
+    # operates on real absolute paths inside the project tree (mirrors the CLI).
+    backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=use_virtual_mode)
 
     # V3-13: use the FeatureConfig path instead of the deprecated bare
     # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and
