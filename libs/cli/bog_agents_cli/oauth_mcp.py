@@ -274,6 +274,9 @@ async def exchange_code_for_token(
     config: OAuthConfig,
     code: str,
     code_verifier: str = "",
+    *,
+    expected_state: str = "",
+    received_state: str = "",
 ) -> OAuthToken:
     """Exchange an authorization code for an access token.
 
@@ -281,14 +284,38 @@ async def exchange_code_for_token(
         config: OAuth configuration.
         code: Authorization code from the callback.
         code_verifier: PKCE code verifier.
+        expected_state: The `state` value originally issued by
+            `build_authorization_url`. When non-empty, the call enforces a
+            CSRF/auth-code-injection check: `received_state` must equal this
+            value (constant-time comparison) before any token exchange is
+            attempted. Defaults to `""`, which preserves the historical
+            behavior of skipping the check (so existing callers that do not
+            thread state keep working).
+        received_state: The `state` value returned on the OAuth callback.
+            Only consulted when `expected_state` is non-empty.
 
     Returns:
         OAuthToken with the access token.
 
     Raises:
-        ValueError: If token exchange fails.
+        ValueError: If the state check fails or token exchange fails.
     """
     import urllib.request
+
+    # CSRF / authorization-code-injection guard. Only enforced once a caller
+    # threads the originally issued state through; until the callback flow is
+    # wired this stays opt-in, but the rejection path is in place beforehand.
+    if expected_state and (
+        not received_state or not secrets.compare_digest(expected_state, received_state)
+    ):
+        logger.warning(
+            "oauth: rejecting token exchange — state mismatch "
+            "(expected_present=%s, received_present=%s)",
+            bool(expected_state),
+            bool(received_state),
+        )
+        msg = "OAuth state mismatch: possible CSRF or code-injection attempt"
+        raise ValueError(msg)
 
     data = {
         "grant_type": "authorization_code",

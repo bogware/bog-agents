@@ -715,6 +715,61 @@ class TestDreamCompleteCallback:
         assert scheduler.stats.dreams_fired >= 1
         assert scheduler.stats.completion_callbacks_failed >= 1
 
+    async def test_stop_cancels_inflight_completion_task(self, tmp_path: Path) -> None:
+        """P29: stop() must cancel + await slow completion-callback tasks.
+
+        The ``on_dream_complete`` proposer is explicitly slow. Before the
+        fix, ``stop()`` cancelled only the poll loop and left dispatched
+        completion tasks running, so ``asyncio.run`` teardown emitted
+        "Task destroyed but it is pending" and abandoned a partial write.
+        This test dispatches a deliberately slow completion task, calls
+        ``stop()``, and asserts the task is cancelled and drained without
+        leaking or raising.
+        """
+        import asyncio
+
+        from bog_agents_cli.dreamscape.config import (
+            DreamsConfig,
+            LifecycleConfig,
+        )
+        from bog_agents_cli.dreamscape.scheduler import DreamScheduler
+
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def slow_callback(_aid: str, _title: str) -> None:
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        s = DreamScheduler(
+            agent_id="p29-stop-drains",
+            model=self._FakeModel(),
+            dreams_cfg=DreamsConfig(),
+            lifecycle_cfg=LifecycleConfig(enabled=True),
+            poll_seconds=0.05,
+            on_dream_complete=slow_callback,
+        )
+        # Dispatch directly so the test does not depend on dream timing.
+        s._dispatch_completion("a slow dream")
+        assert len(s._completion_tasks) == 1
+        inflight = next(iter(s._completion_tasks))
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        # The poll loop was never started; stop() must still drain the
+        # in-flight completion task without raising.
+        await asyncio.wait_for(s.stop(), timeout=1.0)
+
+        assert cancelled.is_set(), "completion task should have been cancelled"
+        assert inflight.done()
+        assert inflight.cancelled()
+        # Self-removing done-callback fires after the await returns.
+        await asyncio.sleep(0)
+        assert not s._completion_tasks, "completion tasks must be fully drained"
+
     async def test_scheduler_restart_is_iterative_not_recursive(
         self, tmp_path: Path
     ) -> None:

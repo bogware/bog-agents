@@ -400,6 +400,134 @@ class TestParallel:
         # Factory was invoked once per subtask.
         assert calls["n"] == 3
 
+    def test_parallel_timeout_collects_fast_and_does_not_leak_executor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """P20/P21: a timing-out subtask must not block harvesting fast
+        subtasks, and the dedicated executor must be torn down (no thread
+        leak into the shared default pool).
+
+        We block one worker model on an Event so its thread genuinely
+        outlives the (tiny, patched) per-subtask budget. The fast
+        subtask's result must still be collected; the slow one must come
+        back as a timeout marker; and the dedicated executor we created
+        must have been shut down with ``cancel_futures=True``.
+        """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from bog_agents_cli import orchestrator as orch
+
+        plan = [
+            Subtask(id="t1", mode=SubtaskMode.REVIEW, description="fast"),
+            Subtask(id="t2", mode=SubtaskMode.DOC, description="slow"),
+        ]
+
+        fast_done = threading.Event()
+        release = threading.Event()
+
+        class _FastModel:
+            def bind_tools(self, _t: list) -> _FastModel:
+                return self
+
+            def invoke(self, _messages: list) -> AIMessage:
+                fast_done.set()
+                return AIMessage(content="fast-done")
+
+        class _BlockingModel:
+            def bind_tools(self, _t: list) -> _BlockingModel:
+                return self
+
+            def invoke(self, _messages: list) -> AIMessage:
+                # Block until the test releases us in teardown so the
+                # worker thread genuinely outlives the budget.
+                release.wait(timeout=30)
+                return AIMessage(content="slow-done")
+
+        models = iter([_FastModel(), _BlockingModel()])
+
+        def model_factory():
+            return next(models)
+
+        # Tiny budget so the blocked subtask trips the wall-clock cap fast.
+        monkeypatch.setattr(orch, "_subtask_budget_seconds", lambda _n: 0.5)
+
+        # Capture every executor this module creates so we can assert it
+        # was shut down (no abandoned pool).
+        created: list[ThreadPoolExecutor] = []
+        shutdowns: list[dict[str, Any]] = []
+
+        class _TrackingExecutor(ThreadPoolExecutor):
+            def __init__(self, *a: Any, **kw: Any) -> None:
+                super().__init__(*a, **kw)
+                created.append(self)
+
+            def shutdown(
+                self, wait: bool = True, *, cancel_futures: bool = False
+            ) -> None:
+                shutdowns.append({"wait": wait, "cancel_futures": cancel_futures})
+                super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+        monkeypatch.setattr("concurrent.futures.ThreadPoolExecutor", _TrackingExecutor)
+
+        try:
+            results = orch._run_subtasks_parallel(
+                subtasks=plan,
+                goal="g",
+                profiles=orch._make_default_profiles(tmp_path),
+                max_iterations_per_subtask=4,
+                model_factory=model_factory,
+            )
+        finally:
+            release.set()
+
+        # Sanity: the fast worker really did run.
+        assert fast_done.is_set()
+        # Plan order preserved, one result per subtask.
+        assert [r.subtask.id for r in results] == ["t1", "t2"]
+        # Fast subtask collected its real answer.
+        assert results[0].ok is True
+        assert "fast-done" in results[0].answer
+        # Slow subtask came back as a timeout marker, not a crash.
+        assert results[1].ok is False
+        assert "timed out" in results[1].error
+        # The dedicated executor was created and shut down (not leaked).
+        assert len(created) == 1
+        assert created[0]._shutdown is True
+        # On timeout the teardown must cancel not-yet-started futures.
+        assert shutdowns and shutdowns[-1]["cancel_futures"] is True
+
+    def test_parallel_runs_off_loop_without_deadlock(self, tmp_path: Path) -> None:
+        """P20: with no asyncio in the path, a normal off-loop call to the
+        parallel orchestrator completes and collects every fast subtask.
+        """
+        plan = _plan_json(
+            ("t1", "review", "first"),
+            ("t2", "doc", "second"),
+        )
+        planner = _SequenceModel([plan])
+
+        class _EchoModel:
+            def bind_tools(self, _t: list) -> _EchoModel:
+                return self
+
+            def invoke(self, messages: list) -> AIMessage:
+                from langchain_core.messages import HumanMessage
+
+                human = next((m for m in messages if isinstance(m, HumanMessage)), None)
+                return AIMessage(content=str(human.content)[:80] if human else "ok")
+
+        result = run_orchestration(
+            goal="parallel off-loop",
+            model=planner,
+            working_dir=tmp_path,
+            parallel=True,
+            model_factory=_EchoModel,
+        )
+        assert result.ok, result
+        assert [r.subtask.id for r in result.subtasks] == ["t1", "t2"]
+        assert all(r.ok for r in result.subtasks)
+
     def test_controller_parallel_flag(self, tmp_path: Path) -> None:
         from bog_agents_cli.orchestrator_controller import (
             OrchestratorController,

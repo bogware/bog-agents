@@ -14477,25 +14477,29 @@ class BogAgentsApp(App):
             else:
                 await self._mount_message(ErrorMessage(f"Agent error: {e}"))
         finally:
-            # Clean up loading widget and agent state
+            # P27: finalize this turn's stats and auto-commit BEFORE the queue
+            # drain. `_cleanup_agent_task` drains the pending-message queue,
+            # which can spawn the next turn's worker; if auto-commit ran after
+            # that drain it could stage a partially-written tree from turn N+1.
+            # Order is load-bearing: merge stats -> auto-commit this turn ->
+            # cleanup (which drains the queue last).
+            if isinstance(turn_stats, SessionStats):
+                self._session_stats.merge(turn_stats)
+
+            if self._auto_commit and turn_stats is not None:
+                from bog_agents_cli.auto_commit import run_auto_commit
+
+                sha = await run_auto_commit(cwd=Path(self._cwd))
+                if sha:
+                    await self._mount_message(
+                        AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
+                    )
+
+            # Clean up loading widget and agent state (queue drain happens here)
             await self._cleanup_agent_task()
             # Operator routing is per-turn; never let it leak into the next.
             self._operator_turn_model = None
             self._operator_turn_effort = None
-
-        # Accumulate stats across all turns; printed once at session end
-        if isinstance(turn_stats, SessionStats):
-            self._session_stats.merge(turn_stats)
-
-        # Auto-commit after each successful agent turn
-        if self._auto_commit and turn_stats is not None:
-            from bog_agents_cli.auto_commit import run_auto_commit
-
-            sha = await run_auto_commit(cwd=Path(self._cwd))
-            if sha:
-                await self._mount_message(
-                    AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
-                )
 
     async def _process_next_from_queue(self) -> None:
         """Process the next message from the queue if any exist.
@@ -14547,39 +14551,62 @@ class BogAgentsApp(App):
             logger.exception("Failed to drain pending queue after inline task")
 
     async def _cleanup_agent_task(self) -> None:
-        """Clean up after agent task completes or is cancelled."""
+        """Clean up after agent task completes or is cancelled.
+
+        P28: the critical worker-state restoration (`_agent_running=False`,
+        `_agent_worker=None`, cursor re-enable) lives in a `finally` so a
+        cancellation interrupting one of the inner awaits (spinner removal,
+        stop-hook dispatch, queue drain) can never leave the input cursor
+        disabled and the app apparently wedged with no diagnostic.
+        """
+        # Set synchronously up front (no await in between) so the common path
+        # restores immediately; the finally re-asserts these defensively.
         self._agent_running = False
         self._agent_worker = None
 
-        # Remove spinner if present
-        await self._set_spinner(None)
-
-        # Fire project-local stop hooks so users can run side-effects when
-        # an agent turn ends (post-run lint, ding, summary commit, …).
         try:
-            from bog_agents_cli.hooks import dispatch_stop_hook
+            # Remove spinner if present
+            await self._set_spinner(None)
 
-            await dispatch_stop_hook(reason="cleanup")
+            # Fire project-local stop hooks so users can run side-effects when
+            # an agent turn ends (post-run lint, ding, summary commit, …).
+            try:
+                from bog_agents_cli.hooks import dispatch_stop_hook
+
+                await dispatch_stop_hook(reason="cleanup")
+            except Exception:
+                logger.debug("stop hook dispatch failed", exc_info=True)
+
+            # Ensure token display is restored (in case of early cancellation)
+            if self._token_tracker:
+                self._token_tracker.show()
+
+            # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
+            try:
+                from bog_agents_cli.cli_sounds import play_completion_sound
+
+                play_completion_sound()
+            except Exception:  # noqa: S110
+                pass
+
+            # Process next message from queue if any
+            await self._process_next_from_queue()
         except Exception:
-            logger.debug("stop hook dispatch failed", exc_info=True)
-
-        if self._chat_input:
-            self._chat_input.set_cursor_active(active=True)
-
-        # Ensure token display is restored (in case of early cancellation)
-        if self._token_tracker:
-            self._token_tracker.show()
-
-        # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
-        try:
-            from bog_agents_cli.cli_sounds import play_completion_sound
-
-            play_completion_sound()
-        except Exception:  # noqa: S110
-            pass
-
-        # Process next message from queue if any
-        await self._process_next_from_queue()
+            # Log rather than swallow silently — a cleanup failure that isn't a
+            # cancellation is a real bug worth surfacing in logs.
+            logger.exception("agent task cleanup failed")
+            raise
+        finally:
+            # Critical restoration that must run even if an await above is
+            # cancelled or raises. Without this, an interrupted cleanup leaves
+            # the input cursor disabled and the app looks wedged (P28).
+            self._agent_running = False
+            self._agent_worker = None
+            if self._chat_input:
+                try:
+                    self._chat_input.set_cursor_active(active=True)
+                except Exception:
+                    logger.debug("failed to re-enable input cursor", exc_info=True)
 
     @staticmethod
     def _convert_messages_to_data(messages: list[Any]) -> list[MessageData]:

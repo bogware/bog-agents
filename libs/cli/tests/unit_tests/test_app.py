@@ -3093,6 +3093,82 @@ class TestRunAgentTaskMediaTracker:
             assert "authentication/credential error" not in rendered
 
 
+class TestRunAgentTaskAutoCommitOrder:
+    """P27: auto-commit for turn N must run BEFORE the queue drain.
+
+    Otherwise `_cleanup_agent_task`'s queue drain can spawn the next turn's
+    worker and `run_auto_commit` stages a partially-written turn N+1 tree.
+    """
+
+    async def test_auto_commit_runs_before_queue_drain(self) -> None:
+        app = BogAgentsApp(agent=MagicMock())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._ui_adapter is not None
+
+            order: list[str] = []
+            app._auto_commit = True
+
+            from bog_agents_cli.textual_adapter import SessionStats
+
+            async def fake_execute(**_kwargs: object) -> SessionStats:
+                return SessionStats()
+
+            async def fake_auto_commit(**_kwargs: object) -> str:
+                order.append("auto_commit")
+                return ""
+
+            async def fake_drain(*_a: object, **_k: object) -> None:
+                order.append("drain")
+
+            with (
+                patch(
+                    "bog_agents_cli.app.execute_task_textual",
+                    side_effect=fake_execute,
+                ),
+                patch(
+                    "bog_agents_cli.auto_commit.run_auto_commit",
+                    side_effect=fake_auto_commit,
+                ),
+                patch.object(app, "_process_next_from_queue", side_effect=fake_drain),
+            ):
+                await app._run_agent_task("hello")
+
+            # Auto-commit must be recorded before the queue drain.
+            assert order == ["auto_commit", "drain"], order
+
+
+class TestCleanupAgentTaskRestoresCursor:
+    """P28: critical worker-state restoration survives a cancelled inner await."""
+
+    async def test_cursor_reenabled_when_cleanup_step_raises(self) -> None:
+        app = BogAgentsApp(agent=MagicMock())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app._chat_input is not None
+
+            app._agent_running = True
+            app._agent_worker = MagicMock()
+
+            # Simulate a cancellation interrupting an inner cleanup await
+            # (spinner removal) — the old code skipped cursor re-enable.
+            async def boom(*_a: object, **_k: object) -> None:
+                raise asyncio.CancelledError
+
+            with (
+                patch.object(app, "_set_spinner", side_effect=boom),
+                patch.object(app, "_process_next_from_queue", new=AsyncMock()),
+                patch.object(app._chat_input, "set_cursor_active") as mock_cursor,
+            ):
+                with contextlib.suppress(asyncio.CancelledError):
+                    await app._cleanup_agent_task()
+
+            # Critical restoration must have run despite the cancellation.
+            assert app._agent_running is False
+            assert app._agent_worker is None
+            mock_cursor.assert_called_once_with(active=True)
+
+
 class TestAppFocusRestoresChatInput:
     """Test `on_app_focus` restores chat input focus after terminal regains focus."""
 

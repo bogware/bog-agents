@@ -207,15 +207,34 @@ class DreamScheduler:
         )
 
     async def stop(self) -> None:
-        """Cancel the polling task and wait for it to exit cleanly."""
+        """Cancel the polling task and wait for it to exit cleanly.
+
+        Also cancels and awaits any in-flight completion-callback tasks
+        (P29). The ``on_dream_complete`` callback is explicitly slow (the
+        expert proposer) and may still be writing when shutdown is
+        requested. Leaving those tasks running causes ``asyncio.run``
+        teardown to emit "Task destroyed but it is pending" and abandons
+        a partial proposer write. Snapshotting, cancelling, and awaiting
+        them here makes shutdown clean and bounded.
+        """
         task = self._task
-        if task is None:
-            return
-        if not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        self._task = None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            self._task = None
+        # P29: drain in-flight completion-callback tasks. Snapshot first
+        # because each task's done-callback discards itself from the set
+        # (mutating it during iteration would otherwise raise). The await
+        # is bounded — there is at most one completion task per fired
+        # dream and they self-remove on completion.
+        completion_tasks = list(self._completion_tasks)
+        for completion_task in completion_tasks:
+            if not completion_task.done():
+                completion_task.cancel()
+        if completion_tasks:
+            await asyncio.gather(*completion_tasks, return_exceptions=True)
         logger.debug("DreamScheduler stopped (agent=%s)", self._agent_id)
 
     # ------------------------------------------------------------------
