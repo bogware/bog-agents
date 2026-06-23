@@ -25,6 +25,7 @@ prompt mutation, no behaviour change.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -38,6 +39,7 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
+from langchain_core.messages import AIMessage
 
 from bog_agents_cli.dreamscape.config import LawsConfig, is_emergency_disabled
 
@@ -470,9 +472,15 @@ class LawsMiddleware(AgentMiddleware):
 # ---------------------------------------------------------------------------
 
 
-def _response_text(response: Any) -> str:
-    """Best-effort string extraction from a model response."""
-    content = getattr(response, "content", None)
+def _message_text(message: Any) -> str:
+    """Extract the text payload from a single message-like object.
+
+    Handles both the plain-string ``content`` shape and the
+    list-of-content-blocks shape (Anthropic-style) emitted by
+    ``AIMessage``. Returns the empty string for anything without
+    extractable text.
+    """
+    content = getattr(message, "content", None)
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -486,6 +494,34 @@ def _response_text(response: Any) -> str:
                 parts.append(part)
         return "".join(parts)
     return str(content) if content is not None else ""
+
+
+def _response_text(response: Any) -> str:
+    """Best-effort string extraction from a model response.
+
+    The live langchain ``ModelResponse`` is a frozen ``@dataclass`` whose
+    model output lives in ``.result`` (a list of ``BaseMessage`` — usually
+    a single ``AIMessage``). It has **no** ``.content`` attribute, so the
+    earlier implementation that read ``getattr(response, "content", ...)``
+    always returned the empty string on the real model path, silently
+    disabling Hard-Law enforcement and the imagination failure trigger.
+
+    Resolution order:
+
+    1. ``response.result`` — concatenate the text of every message in the
+       list (the canonical live path).
+    2. ``response.content`` — fallback for a bare ``AIMessage`` (or any
+       message-like object) passed directly, which is how a lot of unit
+       tests historically constructed responses.
+    """
+    result = getattr(response, "result", None)
+    if isinstance(result, (list, tuple)):
+        return "".join(_message_text(msg) for msg in result)
+    if result is not None:
+        # A single message object rather than a list.
+        return _message_text(result)
+    # Fallback: a bare AIMessage (or other message) passed as the response.
+    return _message_text(response)
 
 
 # Small English stop-word set used by the paraphrase-tolerance fallback.
@@ -589,9 +625,38 @@ def _violation_phrases(text: str, rules: list[Rule]) -> list[str]:
 
 
 def _replace_response_content(response: Any, new_content: str) -> Any:
-    """Build a new response object with ``content`` replaced."""
-    # ModelResponse is a pydantic model (langchain) — use model_copy if
-    # available; fall back to mutating.
+    """Return a response whose model output is replaced by ``new_content``.
+
+    The live langchain ``ModelResponse`` is a frozen ``@dataclass`` — it
+    cannot be mutated in place and has no ``model_copy`` / ``.content``.
+    The refusal must therefore be written into ``.result`` as a fresh
+    ``AIMessage``. We rebuild via :func:`dataclasses.replace` so the
+    ``structured_response`` field (and any future fields) are preserved.
+
+    Resolution order:
+
+    1. ``dataclasses.replace(response, result=[AIMessage(content=...)])``
+       — the canonical live ``ModelResponse`` path.
+    2. ``model_copy`` — legacy pydantic-style responses.
+    3. In-place ``.content`` assignment — last-ditch fallback for a bare
+       mutable message object used in some tests.
+    """
+    refusal = AIMessage(content=new_content)
+    if dataclasses.is_dataclass(response) and not isinstance(response, type):
+        try:
+            return dataclasses.replace(response, result=[refusal])
+        except Exception:
+            logger.exception(
+                "LawsMiddleware: dataclasses.replace failed; rebuilding ModelResponse"
+            )
+            try:
+                return ModelResponse(
+                    result=[refusal],
+                    structured_response=getattr(response, "structured_response", None),
+                )
+            except Exception:
+                logger.exception("LawsMiddleware: ModelResponse rebuild failed")
+    # Legacy pydantic-style response with a settable ``content``.
     try:
         if hasattr(response, "model_copy"):
             return response.model_copy(update={"content": new_content})

@@ -26,8 +26,10 @@ benefit from seeing the actual content in the message stream.
 from __future__ import annotations
 
 import html
+import ipaddress
 import logging
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +38,11 @@ from dataclasses import dataclass
 from bog_agents_cli.unicode_security import check_url_safety
 
 logger = logging.getLogger(__name__)
+
+# Hard ceiling on redirect hops we are willing to follow. Each hop's host
+# is independently re-validated through the SSRF guard, so this only bounds
+# redirect loops / chains.
+_MAX_REDIRECTS = 5
 
 # Hard ceiling on fetched body size before truncation. ~512 KiB is
 # generous for documentation pages but keeps us from hauling a 10 MB
@@ -50,6 +57,216 @@ _USER_AGENT = "Mozilla/5.0 (compatible; bog-agents-cli/0.8; +https://bog-agents)
 
 class WebFetchError(RuntimeError):
     """Raised when a fetch fails before we have any usable body."""
+
+
+class SsrfError(WebFetchError):
+    """Raised when a URL is rejected by the SSRF guard.
+
+    A subclass of :class:`WebFetchError` so existing ``except WebFetchError``
+    handlers continue to catch it, while callers that care can distinguish an
+    SSRF policy denial from a generic network failure.
+    """
+
+
+# ---------------------------------------------------------------------------
+# SSRF guard (shared by /web, the agent fetch_url tool, and http_request)
+# ---------------------------------------------------------------------------
+
+
+def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return whether an IP address falls in a range we refuse to fetch.
+
+    Blocks loopback, link-local (incl. the 169.254.169.254 cloud metadata
+    endpoint), private, reserved, multicast, and unspecified ranges, plus
+    IPv4-mapped IPv6 addresses whose embedded IPv4 is itself blocked.
+
+    Args:
+        ip: A parsed IPv4 or IPv6 address.
+
+    Returns:
+        `True` when the address must not be fetched, else `False`.
+    """
+    # Unwrap IPv4-mapped / 6to4 IPv6 addresses so ::ffff:169.254.169.254 and
+    # similar can't tunnel past the IPv4 checks.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        return _ip_is_blocked(mapped)
+    sixtofour = getattr(ip, "sixtofour", None)
+    if sixtofour is not None and _ip_is_blocked(sixtofour):
+        return True
+
+    return bool(
+        ip.is_loopback
+        or ip.is_link_local
+        or ip.is_private
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _resolve_host_addresses(
+    host: str,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Resolve *host* to every IP address it maps to.
+
+    Accepts a bare IP literal (returned directly) or a DNS name (resolved
+    via :func:`socket.getaddrinfo`). Stripping any surrounding brackets from
+    IPv6 literals is handled by the caller via ``urlsplit().hostname``.
+
+    Args:
+        host: Hostname or IP literal (no brackets, no port).
+
+    Returns:
+        List of parsed IP addresses the host resolves to (non-empty on
+        success).
+
+    Raises:
+        SsrfError: When the host cannot be resolved.
+    """
+    try:
+        return [ipaddress.ip_address(host)]
+    except ValueError:
+        pass
+
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        msg = f"Could not resolve host {host!r}: {exc}"
+        raise SsrfError(msg) from exc
+
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        sockaddr = info[4]
+        raw_ip = sockaddr[0]
+        try:
+            addresses.append(ipaddress.ip_address(raw_ip))
+        except ValueError:
+            continue
+    if not addresses:
+        msg = f"Could not resolve host {host!r} to any IP address."
+        raise SsrfError(msg)
+    return addresses
+
+
+def assert_fetch_allowed(url: str) -> None:
+    """Validate *url* against the SSRF policy, raising on any violation.
+
+    This is the single shared gate for every outbound fetch in the CLI. It
+    is intentionally *separate* from
+    :func:`bog_agents_cli.unicode_security.check_url_safety` (the unicode /
+    confusable gate) — both should be applied.
+
+    Policy:
+        * Only ``http`` / ``https`` schemes are permitted.
+        * The URL must carry a host.
+        * Every IP the host resolves to must be a public, routable address.
+          Loopback, link-local (incl. ``169.254.169.254``), private,
+          reserved, multicast, and unspecified addresses are rejected. This
+          covers ``localhost`` and ``::1`` because they resolve to loopback.
+
+    Args:
+        url: The URL about to be fetched (an absolute http(s) URL).
+
+    Raises:
+        SsrfError: When the scheme is not http(s), the host is missing, the
+            host cannot be resolved, or any resolved address is blocked.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        msg = f"Only http and https URLs are supported (got {scheme!r})."
+        raise SsrfError(msg)
+
+    host = parsed.hostname
+    if not host:
+        msg = "URL has no host."
+        raise SsrfError(msg)
+
+    for ip in _resolve_host_addresses(host):
+        if _ip_is_blocked(ip):
+            msg = (
+                f"Refusing to fetch {url!r}: host {host!r} resolves to "
+                f"non-public address {ip} (SSRF guard)."
+            )
+            raise SsrfError(msg)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """urllib redirect handler that never auto-follows.
+
+    Returning the redirect response (rather than following it) lets us
+    re-validate the ``Location`` host through the SSRF guard before issuing
+    the next request.
+    """
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:  # noqa: PLR6301  # overrides base method
+        return None
+
+
+def _open_with_guarded_redirects(
+    url: str,
+    *,
+    timeout_seconds: float,
+    max_bytes: int,
+) -> tuple[str, int, str, bytes]:
+    """Fetch *url*, manually following redirects with a per-hop SSRF check.
+
+    Auto-redirects are disabled; each ``3xx`` ``Location`` is resolved
+    against the current URL and re-validated via :func:`assert_fetch_allowed`
+    before the next hop is issued. This defeats a public-host → private-host
+    redirect (e.g. a 302 into the cloud metadata endpoint).
+
+    Args:
+        url: The already-validated initial URL.
+        timeout_seconds: Per-request timeout.
+        max_bytes: Hard cap on the body read.
+
+    Returns:
+        Tuple of ``(final_url, status_code, content_type, raw_body_bytes)``.
+
+    Note:
+        Non-redirect error responses surface as ``urllib.error.HTTPError``
+        propagated from the opener; the caller turns those into a
+        :class:`FetchResult`.
+
+    Raises:
+        SsrfError: When a redirect target violates the SSRF policy or a
+            redirect is missing its ``Location`` header.
+        WebFetchError: When too many redirects are encountered.
+    """
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    current_url = url
+
+    for _hop in range(_MAX_REDIRECTS + 1):
+        request = urllib.request.Request(
+            current_url,
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        with opener.open(request, timeout=timeout_seconds) as response:
+            status = response.status
+            if status in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location")
+                if not location:
+                    msg = f"Redirect ({status}) from {current_url!r} had no Location header."
+                    raise SsrfError(msg)
+                next_url = urllib.parse.urljoin(current_url, location)
+                # Re-validate scheme + host of the new hop BEFORE connecting.
+                assert_fetch_allowed(next_url)
+                current_url = next_url
+                continue
+
+            final_url = response.geturl()
+            content_type = response.headers.get_content_type() or ""
+            raw = response.read(max_bytes + 1)
+            return final_url, status, content_type, raw
+
+    msg = f"Too many redirects (>{_MAX_REDIRECTS}) starting from {url!r}."
+    raise WebFetchError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,21 +319,16 @@ def fetch_url(
         reason = safety.warnings[0] if safety.warnings else "unicode spoofing risk"
         msg = f"Refusing to fetch unsafe URL: {reason}"
         raise WebFetchError(msg)
+    # SSRF guard — separate from the unicode gate above. Validate the
+    # initial URL; each redirect hop below is re-validated independently.
+    assert_fetch_allowed(url)
 
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            final_url = response.geturl()
-            status = response.status
-            content_type = response.headers.get_content_type() or ""
-            raw = response.read(max_bytes + 1)
+        final_url, status, content_type, raw = _open_with_guarded_redirects(
+            url,
+            timeout_seconds=timeout_seconds,
+            max_bytes=max_bytes,
+        )
     except urllib.error.HTTPError as exc:
         # Non-2xx responses are still useful — return them rather than
         # raise so the agent can act on the status code.
@@ -239,7 +451,9 @@ def _clean_text(text: str) -> str:
 
 __all__ = [
     "FetchResult",
+    "SsrfError",
     "WebFetchError",
+    "assert_fetch_allowed",
     "fetch_url",
     "render_prompt_block",
 ]

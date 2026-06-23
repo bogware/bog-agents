@@ -5,10 +5,88 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
+    import requests as _requests_mod
     from tavily import TavilyClient
 
 _UNSET = object()
 _tavily_client: TavilyClient | object | None = _UNSET
+
+# Hard ceiling on redirect hops the requests-based fetchers will follow.
+# Each hop's target host is re-validated through the SSRF guard.
+_MAX_REDIRECTS = 5
+
+
+def _request_with_guarded_redirects(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, str] | None = None,
+    json_body: object | None = None,
+    data: object | None = None,
+    timeout: int,
+) -> _requests_mod.Response:
+    """Issue an HTTP request with an SSRF guard and per-hop redirect checks.
+
+    Redirects are disabled at the ``requests`` layer (``allow_redirects=False``)
+    and followed manually so that every hop's target host is re-validated by
+    :func:`bog_agents_cli.web_fetch.assert_fetch_allowed` before a connection
+    is made. This blocks both a directly-private target and a public→private
+    302 redirect (e.g. into the cloud metadata endpoint).
+
+    Args:
+        method: HTTP method (already upper-cased by the caller).
+        url: Initial target URL.
+        headers: Optional request headers (sent on every hop).
+        params: Optional query parameters (applied to the first hop only).
+        json_body: Optional JSON body.
+        data: Optional raw body.
+        timeout: Per-request timeout in seconds.
+
+    Returns:
+        The final `requests.Response` after following any safe redirects.
+
+    Note:
+        :class:`bog_agents_cli.web_fetch.SsrfError` propagates from the
+        per-hop ``assert_fetch_allowed`` call when a target is blocked.
+
+    Raises:
+        WebFetchError: When the redirect limit is exceeded.
+    """
+    from urllib.parse import urljoin
+
+    import requests
+
+    from bog_agents_cli.web_fetch import WebFetchError, assert_fetch_allowed
+
+    current_url = url
+    current_params = params
+    for _hop in range(_MAX_REDIRECTS + 1):
+        assert_fetch_allowed(current_url)
+        kwargs: dict[str, Any] = {"allow_redirects": False, "timeout": timeout}
+        if headers:
+            kwargs["headers"] = headers
+        if current_params:
+            kwargs["params"] = current_params
+        if json_body is not None:
+            kwargs["json"] = json_body
+        elif data is not None:
+            kwargs["data"] = data
+
+        response = requests.request(  # noqa: S113  # timeout is set in kwargs above
+            method, current_url, **kwargs
+        )
+        if response.is_redirect or response.is_permanent_redirect:
+            location = response.headers.get("Location")
+            if not location:
+                break
+            current_url = urljoin(current_url, location)
+            current_params = None  # query already encoded into Location
+            continue
+        return response
+
+    msg = f"Too many redirects (>{_MAX_REDIRECTS}) starting from {url!r}."
+    raise WebFetchError(msg)
 
 
 def _get_tavily_client() -> TavilyClient | None:
@@ -55,20 +133,20 @@ def http_request(
     """
     import requests
 
+    from bog_agents_cli.web_fetch import WebFetchError
+
     try:
-        kwargs: dict[str, Any] = {}
-
-        if headers:
-            kwargs["headers"] = headers
-        if params:
-            kwargs["params"] = params
-        if data:
-            if isinstance(data, dict):
-                kwargs["json"] = data
-            else:
-                kwargs["data"] = data
-
-        response = requests.request(method.upper(), url, timeout=timeout, **kwargs)
+        json_body = data if isinstance(data, dict) else None
+        raw_body = data if not isinstance(data, dict) else None
+        response = _request_with_guarded_redirects(
+            method.upper(),
+            url,
+            headers=headers,
+            params=params,
+            json_body=json_body,
+            data=raw_body,
+            timeout=timeout,
+        )
 
         try:
             content = response.json()
@@ -83,6 +161,14 @@ def http_request(
             "url": response.url,
         }
 
+    except WebFetchError as e:
+        return {
+            "success": False,
+            "status_code": 0,
+            "headers": {},
+            "content": f"Request blocked: {e!s}",
+            "url": url,
+        }
     except requests.exceptions.Timeout:
         return {
             "success": False,
@@ -215,11 +301,14 @@ def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
             "url": url,
         }
 
+    from bog_agents_cli.web_fetch import WebFetchError
+
     try:
-        response = requests.get(
+        response = _request_with_guarded_redirects(
+            "GET",
             url,
-            timeout=timeout,
             headers={"User-Agent": "Mozilla/5.0 (compatible; Bog Agents/1.0)"},
+            timeout=timeout,
         )
         response.raise_for_status()
 
@@ -232,5 +321,7 @@ def fetch_url(url: str, timeout: int = 30) -> dict[str, Any]:
             "status_code": response.status_code,
             "content_length": len(markdown_content),
         }
+    except WebFetchError as e:
+        return {"error": f"Fetch URL blocked: {e!s}", "url": url}
     except requests.exceptions.RequestException as e:
         return {"error": f"Fetch URL error: {e!s}", "url": url}

@@ -71,6 +71,23 @@ SPEC_VERSION = 1
 incompatible changes; readers refuse files with a version they don't
 recognise."""
 
+SIGN_FORMAT_V1 = 1
+"""Original signed-message format: ``tracefile-v1\\n{root}\\n{session_id}\\n``.
+Binds only the Merkle root + session id — the free-text header fields
+(producer/actor/notes) are NOT covered, so v1 files cannot prove their
+provenance metadata. Kept verbatim so already-emitted v1 files still
+verify byte-identically."""
+
+SIGN_FORMAT_V2 = 2
+"""Header-bound signed-message format. Appends a canonical digest of the
+free-text header fields (producer/actor/notes) so tampering any of them
+breaks the signature. New files emit v2."""
+
+DEFAULT_SIGN_FORMAT = SIGN_FORMAT_V2
+"""Signed-message format used for newly built TraceFiles."""
+
+_SUPPORTED_SIGN_FORMATS = (SIGN_FORMAT_V1, SIGN_FORMAT_V2)
+
 _DEFAULT_PRODUCER = "bog-agents-cli/tracefile-v1"
 _HASH_ALG = "blake2b-256"
 _SIGN_ALG = "ed25519"
@@ -117,6 +134,12 @@ class TraceHeader:
             today; readers refuse unknown values.
         sign_alg: Signature algorithm. ``ed25519`` today.
         notes: Free-form list of provenance breadcrumbs.
+        sign_format: Version of the signed-message format. ``1`` binds
+            only the Merkle root + session id (legacy); ``2`` also binds
+            a canonical digest of the free-text header fields
+            (producer/actor/notes) so they can't be forged on a
+            ``verified`` file. New files emit ``2``; older v1 files keep
+            verifying byte-identically.
     """
 
     version: int = SPEC_VERSION
@@ -127,6 +150,7 @@ class TraceHeader:
     merkle_alg: str = _HASH_ALG
     sign_alg: str = _SIGN_ALG
     notes: tuple[str, ...] = ()
+    sign_format: int = DEFAULT_SIGN_FORMAT
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,7 +204,7 @@ class TraceFile:
     @property
     def signed_message(self) -> bytes:
         """The exact bytes the signature was computed over."""
-        return _signed_message(self.merkle_root, self.header.session_id)
+        return _signed_message(self.merkle_root, self.header)
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,13 +260,62 @@ def canonical_frame_hash(prev_hash: str, frame: TraceFrame) -> str:
     return hashlib.blake2b(text.encode("utf-8"), digest_size=32).hexdigest()
 
 
-def _signed_message(merkle_root: str, session_id: str) -> bytes:
+def _canonical_header_digest(header: TraceHeader) -> str:
+    """Canonical digest of the free-text header fields.
+
+    Binds ``producer``, ``actor``, and ``notes`` (the provenance
+    metadata that the renderer prints under ``verified``) into a single
+    stable hash. Computed identically on sign + verify so any edit to
+    those fields propagates into the signed message and breaks the
+    signature.
+
+    Args:
+        header: The TraceFile header.
+
+    Returns:
+        64-char hex blake2b-256 digest of the canonical header subset.
+    """
+    body = {
+        "producer": header.producer,
+        "actor": header.actor,
+        "notes": list(header.notes),
+    }
+    text = canonical_json(body)
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=32).hexdigest()
+
+
+def _signed_message(merkle_root: str, header: TraceHeader) -> bytes:
     """The exact bytes covered by the Ed25519 signature.
 
     Including the spec version + session id prevents anyone from
     lifting a valid signature off one TraceFile onto another.
+
+    For ``sign_format`` 2 the message additionally binds the
+    ``sign_format`` tag and a canonical digest of the free-text header
+    fields (producer/actor/notes), so forging that metadata invalidates
+    the signature. ``sign_format`` 1 is kept byte-identical to the
+    original format so previously-emitted files still verify.
+
+    Args:
+        merkle_root: Final Merkle root (== last frame hash).
+        header: The TraceFile header (supplies session id, and for v2
+            the free-text fields + sign_format).
+
+    Returns:
+        The signed-message bytes.
     """
-    return f"{_SIGNED_MESSAGE_PREFIX}{merkle_root}\n{session_id}\n".encode()
+    session_id = header.session_id
+    if header.sign_format <= SIGN_FORMAT_V1:
+        # Legacy format — DO NOT change these bytes.
+        return f"{_SIGNED_MESSAGE_PREFIX}{merkle_root}\n{session_id}\n".encode()
+    header_digest = _canonical_header_digest(header)
+    return (
+        f"{_SIGNED_MESSAGE_PREFIX}"
+        f"{merkle_root}\n"
+        f"{session_id}\n"
+        f"sign_format={header.sign_format}\n"
+        f"header={header_digest}\n"
+    ).encode()
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +332,7 @@ def build_tracefile(
     actor: str = "",
     notes: Iterable[str] = (),
     produced_at: float | None = None,
+    sign_format: int = DEFAULT_SIGN_FORMAT,
 ) -> TraceFile:
     """Compute the Merkle chain + sign, returning an in-memory TraceFile.
 
@@ -275,7 +349,14 @@ def build_tracefile(
         notes: Optional provenance breadcrumbs.
         produced_at: Override the wall-clock timestamp (tests use
             this to make headers byte-stable).
+        sign_format: Signed-message format to emit. Defaults to
+            :data:`DEFAULT_SIGN_FORMAT` (v2 — binds the free-text header
+            fields). Pass :data:`SIGN_FORMAT_V1` only to reproduce legacy
+            files in tests.
     """
+    if sign_format not in _SUPPORTED_SIGN_FORMATS:
+        msg = f"Unsupported sign_format {sign_format!r}; expected one of {_SUPPORTED_SIGN_FORMATS}."
+        raise TraceFileError(msg)
     if not key.can_sign:
         msg = "build_tracefile requires a key with a private half."
         raise TraceFileError(msg)
@@ -314,7 +395,6 @@ def build_tracefile(
         msg = "build_tracefile requires at least one frame."
         raise TraceFileError(msg)
     merkle_root = materialised[-1].frame_hash
-    signed = sign(key, _signed_message(merkle_root, session_id))
     header = TraceHeader(
         version=SPEC_VERSION,
         producer=producer,
@@ -324,7 +404,11 @@ def build_tracefile(
         merkle_alg=_HASH_ALG,
         sign_alg=_SIGN_ALG,
         notes=tuple(notes),
+        sign_format=sign_format,
     )
+    # Sign over the header-bound message (v2) so producer/actor/notes
+    # are covered. The header is fully materialised before signing.
+    signed = sign(key, _signed_message(merkle_root, header))
     return TraceFile(
         header=header,
         frames=tuple(materialised),
@@ -381,6 +465,7 @@ def _render(file: TraceFile) -> str:
         "merkle_alg": file.header.merkle_alg,
         "sign_alg": file.header.sign_alg,
         "notes": list(file.header.notes),
+        "sign_format": file.header.sign_format,
     }
     lines.append(canonical_json(header))
     for frame in file.frames:
@@ -465,6 +550,21 @@ def parse_tracefile(text: str) -> TraceFile:
             f"expected {_SIGN_ALG!r}."
         )
         raise TraceFileError(msg)
+    # Legacy v1 files omit ``sign_format`` entirely — default to v1 so
+    # they keep verifying byte-identically. Reject formats we don't
+    # understand (fail closed) rather than silently degrading.
+    try:
+        raw_sign_format = header_dict.get("sign_format", SIGN_FORMAT_V1)
+        sign_format = int(raw_sign_format)
+    except (TypeError, ValueError) as exc:
+        msg = f"Malformed sign_format {header_dict.get('sign_format')!r}: {exc}"
+        raise TraceFileError(msg) from exc
+    if sign_format not in _SUPPORTED_SIGN_FORMATS:
+        msg = (
+            f"Unsupported sign_format {sign_format!r}; "
+            f"this build understands {_SUPPORTED_SIGN_FORMATS}."
+        )
+        raise TraceFileError(msg)
 
     header = TraceHeader(
         version=int(header_dict["version"]),
@@ -475,6 +575,7 @@ def parse_tracefile(text: str) -> TraceFile:
         merkle_alg=str(header_dict["merkle_alg"]),
         sign_alg=str(header_dict["sign_alg"]),
         notes=tuple(header_dict.get("notes") or ()),
+        sign_format=sign_format,
     )
 
     if not frame_lines:
@@ -603,7 +704,7 @@ def verify_tracefile(
         try:
             verify(
                 verifier_material,
-                _signed_message(file.merkle_root, file.header.session_id),
+                _signed_message(file.merkle_root, file.header),
                 file.signature_b64,
             )
         except SignatureVerificationError as exc:
@@ -627,6 +728,9 @@ def verify_tracefile(
 
 
 __all__ = [
+    "DEFAULT_SIGN_FORMAT",
+    "SIGN_FORMAT_V1",
+    "SIGN_FORMAT_V2",
     "SPEC_VERSION",
     "LineKind",
     "TraceFile",

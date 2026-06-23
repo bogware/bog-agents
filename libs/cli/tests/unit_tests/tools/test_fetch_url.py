@@ -1,9 +1,28 @@
 """Tests for tools module."""
 
+import ipaddress
+
+import pytest
 import requests
 import responses
 
+from bog_agents_cli import web_fetch
 from bog_agents_cli.tools import fetch_url
+
+
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch) -> None:
+    """Treat ``example.com`` as a public address (no real DNS in unit tests).
+
+    The SSRF guard added to ``fetch_url`` resolves the host before
+    connecting; stub it so these transport-level tests stay hermetic and
+    socket-free. SSRF blocking itself is covered by the hardening tests.
+    """
+    monkeypatch.setattr(
+        web_fetch,
+        "_resolve_host_addresses",
+        lambda _host: [ipaddress.ip_address("93.184.216.34")],
+    )
 
 
 @responses.activate
