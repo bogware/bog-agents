@@ -21,8 +21,47 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
+from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _latest_human_text(request: ModelRequest[Any]) -> str | None:
+    """Extract the plain text of the most recent human message in a request.
+
+    Walks `request.messages` from the end and returns the first
+    `HumanMessage`'s text content, flattening list-shaped content into a
+    single string. Returns None when no human message is present or it has
+    no extractable text.
+
+    Args:
+        request: The pending model request.
+
+    Returns:
+        The latest human message text, or None when unavailable.
+    """
+    messages = getattr(request, "messages", None) or []
+    for msg in reversed(list(messages)):
+        if not isinstance(msg, HumanMessage):
+            continue
+        content = msg.content
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    value = block.get("text")
+                    if isinstance(value, str):
+                        parts.append(value)
+            text = " ".join(parts)
+        else:
+            text = str(content)
+        text = text.strip()
+        return text or None
+    return None
 
 
 class TaskComplexity(StrEnum):
@@ -395,10 +434,65 @@ class ModelCascadeMiddleware(AgentMiddleware):
         avg_actual = sum(actual_costs) / len(actual_costs)
         return max(0.0, (1.0 - avg_actual / frontier_cost) * 100)
 
+    def _route_request(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
+        """Apply cost-aware routing to a pending model request.
+
+        Extracts the latest human message, classifies its complexity via
+        `route`, and — when a cheaper-but-capable tier is selected — overrides
+        the request model with the resolved tier model. Any uncertainty
+        (no human text, the frontier tier was chosen, or model resolution
+        fails) falls through to the original request unchanged so a turn is
+        never blocked by routing.
+
+        Args:
+            request: The pending model request.
+
+        Returns:
+            The (possibly model-overridden) request to forward downstream.
+        """
+        try:
+            message = _latest_human_text(request)
+            if not message:
+                logger.debug("Model cascade: no human message text; passing through unchanged")
+                return request
+
+            tier = self.route(message)
+
+            # Only downshift: the cascade is ordered cheapest-first, so the
+            # most-capable (last) tier is never an override worth applying.
+            if tier is self.cascade[-1] or tier.model_id == self.cascade[-1].model_id:
+                logger.debug(
+                    "Model cascade: selected most-capable tier %s; passing through unchanged",
+                    tier.name,
+                )
+                return request
+
+            from bog_agents._models import resolve_model
+
+            resolved = resolve_model(tier.model_id)
+            logger.info(
+                "Model cascade: routing to cheaper tier %s (%s)",
+                tier.name,
+                tier.model_id,
+            )
+            return request.override(model=resolved)
+        except Exception:
+            # Routing must never crash a turn — degrade to the original request.
+            logger.debug("Model cascade: routing failed; passing through unchanged", exc_info=True)
+            return request
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        call_next: Any,
+    ) -> ModelResponse[ResponseT]:
+        """Route to the cheapest capable model tier, then call downstream."""
+        return call_next(self._route_request(request))
+
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
     ) -> ModelResponse[ResponseT]:
-        """Pass through — routing decisions are made at the caller level."""
-        return await call_next(request)
+        """Route to the cheapest capable model tier, then call downstream."""
+        return await call_next(self._route_request(request))

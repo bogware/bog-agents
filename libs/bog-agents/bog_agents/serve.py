@@ -18,11 +18,14 @@ Endpoints
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -41,6 +44,7 @@ class ServerConfig:
     request_timeout: float = 300.0
     enable_streaming: bool = True
     enable_websocket: bool = True
+    max_tracked_threads: int = 1000
 
 
 @dataclass
@@ -85,9 +89,16 @@ class AgentServer:
         """
         self.agent = agent
         self.config = config or ServerConfig()
-        self._threads: dict[str, ThreadState] = {}
+        # Ordered (insertion/recency) map so we can LRU-evict when the
+        # tracked-thread ceiling is exceeded, bounding memory on a
+        # long-lived server.
+        self._threads: OrderedDict[str, ThreadState] = OrderedDict()
         self._request_count = 0
         self._start_time = time.time()
+        # Created lazily inside the running event loop so the server can be
+        # constructed outside of one (binding a Semaphore to a loop at
+        # __init__ time can raise / cross loops under test).
+        self._request_semaphore: asyncio.Semaphore | None = None
 
         # Auth: env var -> config -> auto-generate for non-localhost
         if self.config.api_key is None:
@@ -123,10 +134,44 @@ class AgentServer:
             thread_id = str(uuid.uuid4())
         if thread_id not in self._threads:
             self._threads[thread_id] = ThreadState(thread_id=thread_id)
+        else:
+            # Mark as most-recently-used so it survives eviction.
+            self._threads.move_to_end(thread_id)
+        self._evict_stale_threads()
         return self._threads[thread_id]
+
+    def _evict_stale_threads(self) -> None:
+        """Bound the in-memory thread map by evicting least-recently-used entries.
+
+        Keeps at most ``config.max_tracked_threads`` threads so a long-lived
+        server cannot grow ``_threads`` without limit (OOM). The ceiling is
+        clamped to a minimum of 1 so the just-created/just-touched thread (kept
+        most-recent) is never evicted out from under the caller.
+        """
+        ceiling = max(1, self.config.max_tracked_threads)
+        while len(self._threads) > ceiling:
+            # popitem(last=False) removes the oldest (least-recently-used) entry.
+            self._threads.popitem(last=False)
+
+    def _get_request_semaphore(self) -> asyncio.Semaphore:
+        """Return the per-request concurrency semaphore, creating it lazily.
+
+        The semaphore is bound to the currently running event loop on first
+        use so the server can be constructed outside of an event loop.
+
+        Returns:
+            The bounded ``asyncio.Semaphore`` gating concurrent requests.
+        """
+        if self._request_semaphore is None:
+            limit = max(1, self.config.max_concurrent_requests)
+            self._request_semaphore = asyncio.Semaphore(limit)
+        return self._request_semaphore
 
     def _check_api_key(self, provided_key: str | None) -> bool:
         """Validate the API key if one is configured.
+
+        Uses a constant-time comparison so a matching-prefix length cannot be
+        recovered via response timing.
 
         Args:
             provided_key: The key provided in the request.
@@ -136,7 +181,10 @@ class AgentServer:
         """
         if self.config.api_key is None:
             return True
-        return provided_key == self.config.api_key
+        return secrets.compare_digest(
+            (provided_key or "").encode("utf-8"),
+            self.config.api_key.encode("utf-8"),
+        )
 
     async def invoke(
         self,
@@ -162,31 +210,50 @@ class AgentServer:
         config = {"configurable": {"thread_id": thread.thread_id}}
         input_data = {"messages": [{"role": "user", "content": message}]}
 
-        try:
-            result = await self.agent.ainvoke(input_data, config=config)
-            response_messages = result.get("messages", [])
-            assistant_msg = ""
-            for msg in reversed(response_messages):
-                if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
-                    assistant_msg = msg.content
-                    break
-                if isinstance(msg, dict) and msg.get("role") == "assistant":
-                    assistant_msg = msg.get("content", "")
-                    break
+        # Gate concurrency and bound each invocation by request_timeout so a
+        # hung/slow agent cannot block the server indefinitely.
+        async with self._get_request_semaphore():
+            try:
+                result = await asyncio.wait_for(
+                    self.agent.ainvoke(input_data, config=config),
+                    timeout=self.config.request_timeout,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Agent invocation timed out after %ss (thread=%s)",
+                    self.config.request_timeout,
+                    thread.thread_id,
+                )
+                return {
+                    "thread_id": thread.thread_id,
+                    "error": "Gateway timeout: agent did not respond in time",
+                    "status_code": 504,
+                    "metadata": {},
+                }
+            except Exception:
+                logger.exception("Agent invocation failed")
+                return {
+                    "thread_id": thread.thread_id,
+                    "error": "Internal server error",
+                    "metadata": {},
+                }
 
-            thread.messages.append({"role": "assistant", "content": assistant_msg})
-            return {
-                "thread_id": thread.thread_id,
-                "response": assistant_msg,
-                "metadata": {"message_count": len(thread.messages)},
-            }
-        except Exception:
-            logger.exception("Agent invocation failed")
-            return {
-                "thread_id": thread.thread_id,
-                "error": "Internal server error",
-                "metadata": {},
-            }
+        response_messages = result.get("messages", [])
+        assistant_msg = ""
+        for msg in reversed(response_messages):
+            if hasattr(msg, "content") and getattr(msg, "type", None) == "ai":
+                assistant_msg = msg.content
+                break
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                assistant_msg = msg.get("content", "")
+                break
+
+        thread.messages.append({"role": "assistant", "content": assistant_msg})
+        return {
+            "thread_id": thread.thread_id,
+            "response": assistant_msg,
+            "metadata": {"message_count": len(thread.messages)},
+        }
 
     async def stream(
         self,
@@ -210,17 +277,31 @@ class AgentServer:
         config = {"configurable": {"thread_id": thread.thread_id}}
         input_data = {"messages": [{"role": "user", "content": message}]}
 
-        try:
-            async for event in self.agent.astream_events(input_data, config=config, version="v2"):
+        # Gate concurrency and bound the total stream by request_timeout so a
+        # stalled stream cannot occupy a slot / connection indefinitely.
+        async with self._get_request_semaphore():
+            try:
+                stream = self.agent.astream_events(input_data, config=config, version="v2")
+                async for event in _timeboxed_aiter(stream, timeout=self.config.request_timeout):
+                    yield {
+                        "event": event.get("event", ""),
+                        "data": event.get("data", {}),
+                    }
+            except TimeoutError:
+                logger.warning(
+                    "Agent stream timed out after %ss (thread=%s)",
+                    self.config.request_timeout,
+                    thread.thread_id,
+                )
                 yield {
-                    "event": event.get("event", ""),
-                    "data": event.get("data", {}),
+                    "event": "error",
+                    "data": {"error": "Gateway timeout: agent did not respond in time", "status_code": 504},
                 }
-        except Exception as exc:
-            yield {
-                "event": "error",
-                "data": {"error": str(exc)},
-            }
+            except Exception as exc:
+                yield {
+                    "event": "error",
+                    "data": {"error": str(exc)},
+                }
 
     def get_health(self) -> dict[str, Any]:
         """Get server health status.
@@ -490,7 +571,8 @@ class AgentServer:
             if not message:
                 return JSONResponse({"error": "message is required"}, status_code=400)
             result = await server.invoke(message, thread_id=body.get("thread_id"))
-            return JSONResponse(result)
+            status_code = result.get("status_code", 200) if isinstance(result, dict) else 200
+            return JSONResponse(result, status_code=status_code)
 
         async def stream_endpoint(request: Request) -> JSONResponse | EventSourceResponse:
             if not server._check_api_key(_extract_bearer(request)):
@@ -546,7 +628,8 @@ class AgentServer:
             if not message:
                 return JSONResponse({"error": "message is required"}, status_code=400)
             result = await server.invoke(message, thread_id=thread_id)
-            return JSONResponse(result)
+            status_code = result.get("status_code", 200) if isinstance(result, dict) else 200
+            return JSONResponse(result, status_code=status_code)
 
         async def thread_history_endpoint(request: Request) -> JSONResponse:
             if not server._check_api_key(_extract_bearer(request)):
@@ -608,6 +691,31 @@ class AgentServer:
             port=self.config.port,
             log_level="info",
         )
+
+
+async def _timeboxed_aiter(source: Any, *, timeout: float) -> Any:  # noqa: ASYNC109 -- timeout is forwarded to wait_for
+    """Yield from an async iterator, bounding the wait for each item by ``timeout``.
+
+    If no next item is produced within ``timeout`` seconds, ``TimeoutError``
+    is raised so the caller can surface a 504-style response instead of hanging.
+
+    Args:
+        source: The async iterable/iterator to consume.
+        timeout: Maximum seconds to wait for each item.
+
+    Yields:
+        Items from the underlying async iterator.
+
+    Raises:
+        TimeoutError: If an item is not produced within ``timeout``.
+    """
+    iterator = source.__aiter__()
+    while True:
+        try:
+            item = await asyncio.wait_for(iterator.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            return
+        yield item
 
 
 def _get_version() -> str:

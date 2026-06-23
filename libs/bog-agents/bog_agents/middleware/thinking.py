@@ -82,8 +82,16 @@ def _detect_provider(model_name: str) -> str:
         Provider tag: 'anthropic', 'google', 'openai', or 'unknown'.
     """
     name = model_name.lower()
-    if name.startswith("claude"):
+    # Match Anthropic Claude first and by substring so cross-region Bedrock
+    # inference-profile ids classify correctly: `us.anthropic.claude-opus-4-7`,
+    # `eu.anthropic.claude-*`, `apac.anthropic.claude-*`, and the bare
+    # `anthropic.claude-*` / `claude-*` forms all map to 'anthropic'. The
+    # `startswith("claude")` check used previously returned 'unknown' for the
+    # prefixed Bedrock ids, silently disabling native thinking for those users.
+    if "claude" in name:
         return "anthropic"
+    # Gemini and OpenAI stay prefix-anchored: substring matches on short tokens
+    # like `o1`/`o3` are collision-prone (they appear inside unrelated ids).
     if name.startswith(("gemini", "models/gemini")):
         return "google"
     if name.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")):

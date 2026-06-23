@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -22,6 +23,8 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
+from langchain.tools.tool_node import ToolCallRequest
+from langchain_core.messages import ToolMessage
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +379,91 @@ class SmartApprovalsMiddleware(AgentMiddleware):
             escalated_to_human=True,
         )
         self.history.record(decision)
+
+    def _decide(self, request: ToolCallRequest) -> tuple[str, dict[str, Any], ApprovalDecision]:
+        """Run the guardian evaluation for an incoming tool-call request.
+
+        Args:
+            request: The incoming tool-call request.
+
+        Returns:
+            A tuple of (tool_name, tool_args, decision).
+        """
+        tool_call = request.tool_call or {}
+        tool_name = str(tool_call.get("name", ""))
+        raw_args = tool_call.get("args") or {}
+        tool_args: dict[str, Any] = dict(raw_args) if isinstance(raw_args, dict) else {}
+        decision = self.evaluate(tool_name, tool_args)
+        return tool_name, tool_args, decision
+
+    def _make_deny_message(self, request: ToolCallRequest, decision: ApprovalDecision) -> ToolMessage:
+        """Build the approval-blocked `ToolMessage` for a gated call.
+
+        The middleware fails CLOSED: when the guardian denies the call or
+        escalates it to a human, the tool body is never executed and this
+        denial message is returned in its place.
+
+        Args:
+            request: The blocked tool-call request.
+            decision: The guardian decision that blocked the call.
+
+        Returns:
+            A `ToolMessage` with `status="error"` carrying the denial reason.
+        """
+        tool_call = request.tool_call or {}
+        if decision.escalated_to_human:
+            preamble = "Tool call requires human approval and was blocked"
+        else:
+            preamble = "Tool call denied by smart-approvals guardian"
+        content = f"{preamble}: {decision.reason} (tool={decision.tool_name}, risk={decision.risk_level})."
+        # Learn from the block so repeated escalations stay visible in history.
+        self.record_human_decision(decision.tool_name, approved=False, risk_level=decision.risk_level)
+        return ToolMessage(
+            content=content,
+            tool_call_id=str(tool_call.get("id", "")),
+            name=str(tool_call.get("name", "")),
+            status="error",
+        )
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Any],
+    ) -> ToolMessage | Any:
+        """Gate tool execution; deny/escalate fail CLOSED, else pass through.
+
+        Args:
+            request: The incoming tool-call request.
+            handler: The downstream tool-call handler.
+
+        Returns:
+            A denial `ToolMessage` when the guardian blocks the call, otherwise
+            the handler's result.
+        """
+        _, _, decision = self._decide(request)
+        if not decision.approved or decision.escalated_to_human:
+            return self._make_deny_message(request, decision)
+        return handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Any]],
+    ) -> ToolMessage | Any:
+        """Async version of `wrap_tool_call` — deny/escalate fail CLOSED.
+
+        Args:
+            request: The incoming tool-call request.
+            handler: The downstream async tool-call handler.
+
+        Returns:
+            A denial `ToolMessage` when the guardian blocks the call, otherwise
+            the handler's result.
+        """
+        _, _, decision = self._decide(request)
+        if not decision.approved or decision.escalated_to_human:
+            return self._make_deny_message(request, decision)
+        return await handler(request)
 
     async def awrap_model_call(
         self,

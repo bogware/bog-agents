@@ -19,6 +19,8 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
+from langchain_core.messages import AnyMessage, ToolMessage
+from langchain_core.messages.utils import count_tokens_approximately
 
 logger = logging.getLogger(__name__)
 
@@ -467,10 +469,106 @@ class AdaptiveContextMiddleware(AgentMiddleware):
             self.tier_config.tier,
         )
 
+    def _apply_tier(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
+        """Apply the active tier's policy to the outgoing request.
+
+        Builds a new message list in which oversized string-content
+        `ToolMessage`s are truncated to the tier's `tool_output_max_tokens`
+        budget (via `truncate_tool_output`), and logs an advisory warning when
+        the request's approximate token count crosses the tier's
+        `summarize_at_pct` threshold. The canonical request is never mutated in
+        place — when a change is needed a fresh request is produced via
+        `request.override(messages=...)`. When nothing crosses a threshold the
+        original `request` is returned unchanged.
+
+        This method is best-effort: any failure results in the original
+        `request` being returned so a turn is never blocked.
+
+        Args:
+            request: The incoming model request.
+
+        Returns:
+            The (possibly overridden) request to forward to the handler.
+        """
+        try:
+            messages = request.messages
+            if not messages:
+                return request
+
+            max_chars = self.tier_config.tool_output_max_tokens * 4  # ~4 chars per token
+            new_messages: list[AnyMessage] = list(messages)
+            changed = False
+            for i, msg in enumerate(messages):
+                if not isinstance(msg, ToolMessage):
+                    continue
+                content = msg.content
+                if not isinstance(content, str) or len(content) <= max_chars:
+                    # Only plain-string tool outputs are truncated; structured
+                    # (multimodal / block) content is left intact to avoid
+                    # corrupting non-text payloads.
+                    continue
+                truncated = self.truncate_tool_output(content)
+                if truncated != content:
+                    new_messages[i] = msg.model_copy(update={"content": truncated})
+                    changed = True
+
+            # Advisory summarization signal — this middleware does not itself
+            # summarize (that is SummarizationMiddleware's job); it surfaces the
+            # threshold the configured tier advertises so operators can see when
+            # the context is hot.
+            try:
+                approx_tokens = count_tokens_approximately(new_messages)
+                if self.context_window > 0 and approx_tokens / self.context_window >= self.tier_config.summarize_at_pct:
+                    logger.info(
+                        "Adaptive context: usage ~%d/%d tokens (>= %.0f%% summarize threshold for tier %s)",
+                        approx_tokens,
+                        self.context_window,
+                        self.tier_config.summarize_at_pct * 100,
+                        self.tier_config.tier,
+                    )
+            except Exception:  # token estimation is advisory only
+                logger.debug("Adaptive context: token estimate failed", exc_info=True)
+
+            if not changed:
+                return request
+            logger.info(
+                "Adaptive context: truncated oversized tool output(s) to tier %s budget (%d tokens)",
+                self.tier_config.tier,
+                self.tier_config.tool_output_max_tokens,
+            )
+            return request.override(messages=new_messages)
+        except Exception:  # context shaping is best-effort; never block a turn
+            logger.warning("Adaptive context shaping failed; passing request through unchanged", exc_info=True)
+            return request
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        call_next: Any,
+    ) -> ModelResponse[ResponseT]:
+        """Apply the active tier policy, then forward the model call.
+
+        Args:
+            request: The incoming model request.
+            call_next: The downstream handler.
+
+        Returns:
+            The model response from the downstream handler.
+        """
+        return call_next(self._apply_tier(request))
+
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
         call_next: Any,
     ) -> ModelResponse[ResponseT]:
-        """Pass through model calls — context management is advisory."""
-        return await call_next(request)
+        """Apply the active tier policy, then forward the model call (async).
+
+        Args:
+            request: The incoming model request.
+            call_next: The downstream async handler.
+
+        Returns:
+            The model response from the downstream handler.
+        """
+        return await call_next(self._apply_tier(request))
