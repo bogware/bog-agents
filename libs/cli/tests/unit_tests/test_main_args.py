@@ -269,6 +269,88 @@ class TestProfileOverrideArgument:
         assert exc_info.value.code == 1
 
 
+class TestPipelineParsing:
+    """Tests for --pipeline malformed/non-dict YAML resilience (S27).
+
+    A malformed pipeline file must produce a clean ``Error: --pipeline: ...``
+    on stderr and ``sys.exit(2)`` rather than an uncaught traceback.
+    """
+
+    def _write_pipeline(self, tmp_path: object, name: str, content: str) -> None:
+        """Write a pipeline file into the cwd-local resolution candidate dir."""
+        from pathlib import Path
+
+        pdir = Path(str(tmp_path)) / ".bog-agents" / "pipelines"
+        pdir.mkdir(parents=True, exist_ok=True)
+        (pdir / f"{name}.yaml").write_text(content, encoding="utf-8")
+
+    def _run(self, tmp_path: object, name: str) -> int:
+        """Invoke cli_main with --pipeline NAME from tmp_path; return exit code."""
+        from bog_agents_cli.main import cli_main
+
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = True
+        with (
+            patch.object(os, "getcwd", return_value=str(tmp_path)),
+            patch(
+                "pathlib.Path.cwd",
+                return_value=__import__("pathlib").Path(str(tmp_path)),
+            ),
+            patch.object(sys, "argv", ["bog-agents", "--pipeline", name]),
+            patch.object(sys, "stdin", mock_stdin),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            cli_main()
+        code = exc_info.value.code
+        return code if isinstance(code, int) else 1
+
+    def test_malformed_yaml_exits_2(self, tmp_path: object, capsys: object) -> None:
+        """Unparseable YAML emits a clean error and exits 2 (not a traceback)."""
+        self._write_pipeline(tmp_path, "bad", "steps: [unbalanced\n  - oops")
+        assert self._run(tmp_path, "bad") == 2
+        assert "--pipeline" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_non_dict_root_exits_2(self, tmp_path: object, capsys: object) -> None:
+        """A non-mapping YAML root (bare scalar) exits 2 with a clean error."""
+        self._write_pipeline(tmp_path, "scalar", "just a string")
+        assert self._run(tmp_path, "scalar") == 2
+        assert "--pipeline" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_string_step_entries_do_not_crash(self, tmp_path: object) -> None:
+        """Bare-string step entries are normalized rather than raising AttributeError.
+
+        Before the fix, a pipeline whose ``steps`` were plain strings made
+        ``step.get(...)`` raise ``AttributeError: 'str' object has no attribute
+        'get'``. The fix normalizes each non-dict step into ``{"text": str(step)}``.
+        We assert that whatever happens downstream (the TUI never launches in a
+        test env), the failure is never that specific AttributeError.
+        """
+        self._write_pipeline(
+            tmp_path,
+            "strsteps",
+            "steps:\n  - do the first thing\n  - do the second thing\n",
+        )
+        from pathlib import Path
+
+        from bog_agents_cli.main import cli_main
+
+        mock_stdin = MagicMock()
+        mock_stdin.isatty.return_value = True
+        raised: BaseException | None = None
+        with (
+            patch.object(os, "getcwd", return_value=str(tmp_path)),
+            patch("pathlib.Path.cwd", return_value=Path(str(tmp_path))),
+            patch.object(sys, "argv", ["bog-agents", "--pipeline", "strsteps"]),
+            patch.object(sys, "stdin", mock_stdin),
+        ):
+            try:
+                cli_main()
+            except BaseException as exc:  # capturing any failure for assertion
+                raised = exc
+        if isinstance(raised, AttributeError):
+            assert "'str' object has no attribute 'get'" not in str(raised)
+
+
 def _make_args(
     *,
     non_interactive_message: str | None = None,

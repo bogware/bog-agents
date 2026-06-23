@@ -159,6 +159,11 @@ class CausalLedger:
         self._next_id: int = max((e.id for e in self._events), default=0) + 1
         self._lock = threading.Lock()
         self._closed = False
+        # Set when a disk append fails. The in-memory log keeps the
+        # event (id continuity matters more than a rolled-back append),
+        # but the on-disk trace is now incomplete — surface that so the
+        # controller can warn the user the trace is no longer durable.
+        self._disk_errors = 0
 
     # ------------------------------------------------------------------
     # Identity / iteration
@@ -171,6 +176,23 @@ class CausalLedger:
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def degraded(self) -> bool:
+        """True once any disk append has failed.
+
+        When this flips, the in-memory log is still complete and
+        id-continuous, but the on-disk ``.jsonl`` is missing one or more
+        events — readers (compliance collectors, replay tools) will see a
+        truncated trace. The controller should surface a warning so the
+        user knows the trace is no longer durable.
+        """
+        return self._disk_errors > 0
+
+    @property
+    def disk_error_count(self) -> int:
+        """Number of events that failed to flush to disk this session."""
+        return self._disk_errors
 
     def __len__(self) -> int:
         return len(self._events)
@@ -319,8 +341,14 @@ class CausalLedger:
                 fh.write(event.to_json())
                 fh.write("\n")
         except OSError:
+            # The event stays in self._events (id continuity is more
+            # valuable than a rolled-back append), but the on-disk log is
+            # now incomplete. Flag it so the controller can warn the user
+            # the trace is no longer durable — a swallowed OSError must
+            # not look clean to compliance collectors.
+            self._disk_errors += 1
             logger.exception(
-                "causal: failed to append event %d to %s",
+                "causal: failed to append event %d to %s (trace degraded)",
                 event.id,
                 self._path,
             )

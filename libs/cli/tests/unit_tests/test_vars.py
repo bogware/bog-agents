@@ -410,3 +410,124 @@ class TestP0EWindowsPerms:
         message = caplog.text
         assert "icacls" in message.lower()
         assert "readable" in message.lower() or "warning" in message.lower()
+
+
+# ---------------------------------------------------------------------------
+# S28 / S34 hardening regressions
+# ---------------------------------------------------------------------------
+
+
+class TestKeyringProbeDiagnostic:
+    """S28: a failing keyring backend probe must leave a one-time WARNING
+    breadcrumb instead of silently downgrading secrets to plaintext TOML.
+    """
+
+    def test_probe_failure_logs_warning_once(
+        self, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        import logging
+        import sys
+        import types
+
+        from bog_agents_cli import vars_store
+
+        # Reset the one-shot guard so the warning can fire.
+        monkeypatch.setattr(vars_store, "_keyring_probe_warned", False)
+
+        # Inject a fake keyring module whose get_keyring() raises (mirrors a
+        # locked/misconfigured keychain, D-Bus failure, etc.).
+        fake_keyring = types.ModuleType("keyring")
+
+        def _boom() -> object:
+            raise RuntimeError("keychain is locked")
+
+        fake_keyring.get_keyring = _boom  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents_cli.vars_store"):
+            assert vars_store._keyring_available() is False
+            # Second call must NOT emit another WARNING (one-shot guard).
+            assert vars_store._keyring_available() is False
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "probe failed" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "keychain is locked" in warnings[0].getMessage()
+
+    def test_missing_keyring_package_does_not_warn(
+        self, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        import builtins
+        import logging
+
+        from bog_agents_cli import vars_store
+
+        monkeypatch.setattr(vars_store, "_keyring_probe_warned", False)
+
+        real_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "keyring":
+                raise ImportError("no keyring")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents_cli.vars_store"):
+            assert vars_store._keyring_available() is False
+
+        # ImportError is the expected/normal path → debug only, no WARNING.
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+class TestSaveTomlNarrowMode:
+    """S34: _save_toml must hand mode=0o600 to atomic_write_text so the
+    plaintext-secret file is never briefly group/other-readable.
+    """
+
+    def test_save_toml_passes_owner_only_mode(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from bog_agents_cli import io_utils, vars_store
+
+        vars_path = tmp_path / ".bog-agents" / "vars.toml"
+        monkeypatch.setattr(vars_store, "_VARS_PATH", vars_path)
+        monkeypatch.setattr(vars_store, "_DEFAULT_CONFIG_DIR", vars_path.parent)
+
+        captured: dict[str, object] = {}
+
+        real_atomic = io_utils.atomic_write_text
+
+        def _spy(path, content, *, encoding="utf-8", mode=None):
+            captured["mode"] = mode
+            return real_atomic(path, content, encoding=encoding, mode=mode)
+
+        monkeypatch.setattr(io_utils, "atomic_write_text", _spy)
+
+        vars_store._save_toml({"vars": {"X": "secret"}})
+
+        assert captured["mode"] == 0o600
+        assert vars_path.exists()
+
+
+class TestAtomicWriteTextMode:
+    """S34 (io_utils side): mode= is applied to the temp file before the
+    rename, so the destination is owner-only the instant it appears.
+    """
+
+    def test_mode_applied_before_rename_posix(self, tmp_path) -> None:
+        import sys
+
+        if sys.platform == "win32":
+            pytest.skip("POSIX file mode semantics not applicable on Windows")
+
+        from bog_agents_cli.io_utils import atomic_write_text
+
+        target = tmp_path / "secret.toml"
+        atomic_write_text(target, "k='v'", mode=0o600)
+
+        assert target.exists()
+        assert (target.stat().st_mode & 0o777) == 0o600

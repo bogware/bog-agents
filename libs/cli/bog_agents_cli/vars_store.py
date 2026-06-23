@@ -49,6 +49,7 @@ _DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
 _VARS_PATH = _DEFAULT_CONFIG_DIR / _VARS_FILENAME
 
 _warned_fallback = False
+_keyring_probe_warned = False
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +88,24 @@ def _keyring_available() -> bool:
         backend = keyring.get_keyring()
         # keyring.backends.fail.Keyring signals no usable backend
         return "fail" not in type(backend).__module__.lower()
-    except (ImportError, Exception):
+    except ImportError:
+        # The 'keyring' package isn't installed — expected on minimal installs.
+        logger.debug("keyring package not installed; using TOML fallback")
+        return False
+    except Exception as exc:
+        # A locked/misconfigured keychain (D-Bus failure, locked macOS
+        # keychain, etc.) raises here. Leave a one-time breadcrumb so the
+        # silent downgrade to plaintext TOML is at least diagnosable, then
+        # keep the fail-to-fallback behaviour. Mirrors vault.py's
+        # _keyring_warned one-shot guard.
+        global _keyring_probe_warned  # noqa: PLW0603
+        if not _keyring_probe_warned:
+            _keyring_probe_warned = True
+            logger.warning(
+                "keyring backend probe failed (%s); using TOML fallback", exc
+            )
+        else:
+            logger.debug("keyring backend probe failed: %s", exc)
         return False
 
 
@@ -288,7 +306,11 @@ def _save_toml(data: dict[str, Any]) -> None:
     from bog_agents_cli.io_utils import atomic_write_text
 
     _ensure_config_dir()
-    atomic_write_text(_VARS_PATH, tomli_w.dumps(data))
+    # mode=0o600 chmods the temp file *before* the atomic rename so the
+    # plaintext-secret destination never briefly exists at the default
+    # umask (group/other readable). The trailing _secure_owner_only still
+    # runs for the Windows icacls path (mode= is a no-op there). See S34.
+    atomic_write_text(_VARS_PATH, tomli_w.dumps(data), mode=0o600)
     _secure_owner_only(_VARS_PATH, is_dir=False)
 
 

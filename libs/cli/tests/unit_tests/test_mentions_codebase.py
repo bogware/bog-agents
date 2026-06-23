@@ -6,6 +6,7 @@ from pathlib import Path
 
 from bog_agents_cli.mentions import (
     _resolve_codebase,
+    _resolve_file,
     get_mention_type_suggestions,
     parse_mentions,
     resolve_mentions,
@@ -43,3 +44,16 @@ class TestResolveCodebase:
         assert any(t.kind == "codebase" for t in res.tokens)
         # The augmented message prepends a context block for the mention.
         assert "@codebase:banana" in res.augmented
+
+
+class TestResolveFileEncoding:
+    def test_utf8_file_decoded_losslessly(self, tmp_path: Path) -> None:
+        # Non-ASCII utf-8 content must round-trip regardless of the platform
+        # default codec (cp1252/cp932/cp949 on non-en-US Windows would mangle it).
+        text = "smart quote “naive” café — 你好 \U0001f600\n"
+        target = tmp_path / "note.txt"
+        target.write_bytes(text.encode("utf-8"))
+
+        out = _resolve_file("note.txt", tmp_path)
+
+        assert text.strip() in out

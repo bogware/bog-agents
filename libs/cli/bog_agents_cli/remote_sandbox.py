@@ -8,6 +8,12 @@ import subprocess  # noqa: S404 - required for local git discovery
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+_SSH_CONNECT_TIMEOUT_SECONDS = 15
+"""Connect-phase ceiling handed to ssh via `-o ConnectTimeout`."""
+
+_SSH_COMMAND_TIMEOUT_SECONDS = 120.0
+"""Overall wall-clock ceiling for an ssh helper invocation."""
+
 
 @dataclass(frozen=True)
 class LocalGitContext:
@@ -59,10 +65,31 @@ def build_ssh_target(*, host: str, user: str) -> str:
 
 
 def ssh_base_args(
-    *, port: int, identity_file: str, ssh_options: list[str]
+    *,
+    port: int,
+    identity_file: str,
+    ssh_options: list[str],
+    connect_timeout: int = _SSH_CONNECT_TIMEOUT_SECONDS,
 ) -> list[str]:
-    """Build stable SSH CLI arguments."""
-    args: list[str] = []
+    """Build stable SSH CLI arguments.
+
+    A non-interactive posture is enforced via `-o BatchMode=yes` (disables
+    interactive password/passphrase prompts that would otherwise hang the CLI)
+    and a connect-phase ceiling via `-o ConnectTimeout`. User-supplied
+    `ssh_options` are appended last so callers can override these defaults.
+
+    Args:
+        port: SSH port; omitted from args when falsy.
+        identity_file: Optional SSH identity file path.
+        ssh_options: Additional `ssh -o ...` options.
+        connect_timeout: Connect-phase ceiling in seconds passed to ssh.
+
+    Returns:
+        Ordered list of SSH CLI arguments.
+    """
+    args: list[str] = ["-o", "BatchMode=yes"]
+    if connect_timeout:
+        args.extend(["-o", f"ConnectTimeout={connect_timeout}"])
     if port:
         args.extend(["-p", str(port)])
     if identity_file:
@@ -129,8 +156,30 @@ async def run_remote_python(
     python_command: str,
     script_name: str,
     args: list[str],
+    timeout: float = _SSH_COMMAND_TIMEOUT_SECONDS,  # noqa: ASYNC109 — caller-facing wall-clock budget; applied internally via asyncio.wait_for
 ) -> tuple[int, str, str]:
-    """Run a bundled Python helper script on the remote SSH target."""
+    """Run a bundled Python helper script on the remote SSH target.
+
+    The ssh client is spawned with a non-interactive posture and a connect
+    ceiling (see `ssh_base_args`), and the overall exchange is bounded by
+    `timeout`. A wedged/prompting ssh (stale known_hosts, sleeping host) is
+    killed and reported as a failure rather than deadlocking the caller.
+
+    Args:
+        host: SSH host or `user@host` target.
+        user: Optional SSH username when `host` lacks one.
+        port: SSH port.
+        identity_file: Optional SSH identity file path.
+        ssh_options: Additional `ssh -o ...` options.
+        python_command: Remote Python executable.
+        script_name: Bundled helper script to stream over stdin.
+        args: Arguments appended after the helper script.
+        timeout: Overall wall-clock ceiling in seconds for the ssh exchange.
+
+    Returns:
+        Tuple of (return code, stdout, stderr). A timeout yields
+        `(1, "", "SSH command timed out")`.
+    """
     target = build_ssh_target(host=host, user=user)
     if not target:
         return 1, "", "SSH remote host is not configured."
@@ -152,9 +201,15 @@ async def run_remote_python(
         )
     except OSError as exc:
         return 1, "", f"Failed to start ssh client: {exc}"
-    stdout_bytes, stderr_bytes = await process.communicate(
-        asset_text(script_name).encode("utf-8")
-    )
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(asset_text(script_name).encode("utf-8")),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        return 1, "", "SSH command timed out"
     return (
         process.returncode or 0,
         stdout_bytes.decode("utf-8", errors="replace").strip(),

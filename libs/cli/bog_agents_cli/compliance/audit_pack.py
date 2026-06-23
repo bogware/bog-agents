@@ -7,8 +7,10 @@ auditor will run. Each check has a kind:
   :func:`bog_agents_cli.policy_prove.prove` returns HOLDS;
   FAIL on COUNTEREXAMPLE; INCONCLUSIVE otherwise.
 * ``trace_assertion`` — declarative claim about the causal trace
-  log within the audit window (e.g. "at least 1 user_message",
-  "no rule_fire with action=deny").
+  log within the audit window (e.g. "at least 1 user_message", or
+  "no rule_fire with payload action=deny" via the
+  ``no_event_with_payload`` evidence kind — the verdict lives in
+  ``payload.action``, so a plain actor match can't assert on it).
 * ``rule_presence`` — assert that a named rule is loaded (used to
   detect rule-pack drift / accidental disable).
 * ``rule_absence`` — assert that no rule with the given name exists
@@ -95,6 +97,16 @@ class EvidenceKind(StrEnum):
     NO_EVENT_WITH_ACTOR = "no_event_with_actor"
     """Assert no event with ``kind=<kind>`` and ``actor=<actor>`` fires
     within the window. Used for "this rule must never fire" claims.
+    """
+
+    NO_EVENT_WITH_PAYLOAD = "no_event_with_payload"
+    """Assert no event with ``kind=<kind>`` carries the given
+    ``payload_match`` key/values (optionally narrowed by ``actor``).
+
+    This is the only collector that inspects the rule *verdict*:
+    ``rule_fire`` events record the decision under ``payload.action``,
+    so "no deny-control rule fired" is expressible as
+    ``fact_kind: rule_fire`` + ``payload_match: {action: deny}``.
     """
 
     AT_LEAST_ONE_SESSION = "at_least_one_session"

@@ -1916,7 +1916,21 @@ def cli_main() -> None:
                 )
                 sys.stderr.flush()
                 sys.exit(2)
-            data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            try:
+                data = _yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+            except _yaml.YAMLError as exc:
+                sys.stderr.write(
+                    f"Error: --pipeline: invalid YAML in {yaml_path}: {exc}\n"
+                )
+                sys.stderr.flush()
+                sys.exit(2)
+            if not isinstance(data, dict):
+                sys.stderr.write(
+                    f"Error: --pipeline: '{pipeline_name}' must be a YAML mapping "
+                    f"with a top-level 'steps' key.\n",
+                )
+                sys.stderr.flush()
+                sys.exit(2)
             steps = data.get("steps", []) or []
             description = data.get("description", "")
             lines = [
@@ -1930,7 +1944,12 @@ def cli_main() -> None:
                 "",
                 "Steps:",
             ]
-            for i, step in enumerate(steps, 1):
+            for i, raw_step in enumerate(steps, 1):
+                # Normalize bare-string step entries into the mapping shape so
+                # `.get(...)` below never raises on a list of strings.
+                step = (
+                    raw_step if isinstance(raw_step, dict) else {"text": str(raw_step)}
+                )
                 step_id = step.get("id", f"step-{i}")
                 step_type = step.get("type", "message")
                 body = step.get("text") or step.get("name", "")

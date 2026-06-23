@@ -1998,3 +1998,84 @@ class TestVSCodeSpaceWorkaround:
             await pilot.pause()
 
             assert ta.text == "hello "
+
+
+class _FakeRightClick:
+    """Minimal stand-in for a Textual right-click MouseDown event.
+
+    `ChatInput.on_mouse_down` only reads `.button` and calls `prevent_default()`
+    / `stop()`, so a real (heavily-parameterised) `events.MouseDown` is not
+    needed to exercise the right-click paste path.
+    """
+
+    def __init__(self, button: int = 3) -> None:
+        self.button = button
+        self.prevented = False
+        self.stopped = False
+
+    def prevent_default(self) -> None:
+        self.prevented = True
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+class TestRightClickPasteOffThread:
+    """Right-click paste reads the clipboard off the UI thread.
+
+    The clipboard read can shell out to a slow/hung helper; running it inline on
+    the Textual event loop would freeze the whole TUI. The read is dispatched to
+    a background thread worker and the paste applied back on the UI thread.
+    """
+
+    async def test_right_click_reads_off_thread_and_inserts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import bog_agents_cli.clipboard as clipboard_module
+
+        monkeypatch.setattr(
+            clipboard_module, "read_clipboard_text", lambda: "pasted text"
+        )
+
+        app = _ChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat = app.query_one(ChatInput)
+            ta = chat._text_area
+            assert ta is not None
+
+            ta.on_mouse_down(_FakeRightClick())
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert ta.text == "pasted text"
+
+    async def test_right_click_uses_thread_worker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import bog_agents_cli.clipboard as clipboard_module
+
+        monkeypatch.setattr(clipboard_module, "read_clipboard_text", lambda: "x")
+
+        app = _ChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat = app.query_one(ChatInput)
+            ta = chat._text_area
+            assert ta is not None
+            await pilot.pause()
+
+            recorded: dict[str, object] = {}
+            real_run_worker = app.run_worker
+
+            def _spy_run_worker(work: object, **kwargs: object) -> object:
+                recorded.update(kwargs)
+                return real_run_worker(work, **kwargs)  # type: ignore[arg-type]
+
+            monkeypatch.setattr(app, "run_worker", _spy_run_worker)
+
+            ta.on_mouse_down(_FakeRightClick())
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert recorded.get("thread") is True
+            assert recorded.get("exit_on_error") is False

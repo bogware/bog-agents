@@ -796,18 +796,59 @@ class ChatTextArea(TextArea):
             from bog_agents_cli.clipboard import read_clipboard_text
         except ImportError:
             return
-        try:
-            text = read_clipboard_text()
-        except Exception:
-            logger.debug("right-click paste: clipboard read failed", exc_info=True)
-            return
-        if not text:
-            return
         event.prevent_default()
         event.stop()
-        sanitized = _strip_terminal_escapes(text)
-        if not sanitized:
-            return
+
+        # The clipboard read may shell out to a helper (PowerShell Get-Clipboard,
+        # pbpaste, xclip, …). Running it inline on the Textual event loop would
+        # freeze the whole TUI if the helper is slow or hung, so do the read on a
+        # background thread and apply the paste back on the UI thread.
+        def _read_and_paste() -> None:
+            try:
+                text = read_clipboard_text()
+            except Exception:
+                logger.debug("right-click paste: clipboard read failed", exc_info=True)
+                return
+            if not text:
+                return
+            sanitized = _strip_terminal_escapes(text)
+            if not sanitized:
+                return
+            self.app.call_from_thread(self._apply_right_click_paste, sanitized)
+
+        try:
+            self.app.run_worker(
+                _read_and_paste,
+                thread=True,
+                exclusive=False,
+                exit_on_error=False,
+                group="clipboard",
+                name="right-click-paste",
+            )
+        except Exception:
+            # If the worker can't be scheduled, fall back to a synchronous read so
+            # the paste still happens; a paste attempt must never crash the app.
+            logger.debug(
+                "right-click paste worker dispatch failed; reading synchronously",
+                exc_info=True,
+            )
+            try:
+                text = read_clipboard_text()
+            except Exception:
+                logger.debug("right-click paste: clipboard read failed", exc_info=True)
+                return
+            if not text:
+                return
+            sanitized = _strip_terminal_escapes(text)
+            if sanitized:
+                self._apply_right_click_paste(sanitized)
+
+    def _apply_right_click_paste(self, sanitized: str) -> None:
+        """Insert right-click-pasted text on the UI thread.
+
+        Args:
+            sanitized: Clipboard text with terminal escape sequences stripped.
+        """
         if not self._maybe_fold_large_paste(sanitized):
             self.insert(sanitized)
 

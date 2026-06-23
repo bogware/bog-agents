@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bog_agents_cli.io_utils import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,7 +118,7 @@ def _save_fork(config_dir: Path, fork: SessionFork) -> None:
         }
     )
 
-    forks_file.write_text(json.dumps(existing, indent=2))
+    atomic_write_text(forks_file, json.dumps(existing, indent=2), encoding="utf-8")
 
 
 def list_forks(config_dir: Path, thread_id: str) -> list[SessionFork]:

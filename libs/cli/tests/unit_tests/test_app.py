@@ -209,6 +209,10 @@ class TestClipboardActions:
                 ) as mock_paste,
             ):
                 app.action_paste_clipboard()
+                # The clipboard read runs on a background thread worker; wait for
+                # it to finish and apply the paste back on the UI thread.
+                await app.workers.wait_for_complete()
+                await pilot.pause()
 
             mock_paste.assert_called_once_with("hello")
 
@@ -223,6 +227,10 @@ class TestClipboardActions:
                 patch.object(app, "notify") as mock_notify,
             ):
                 app.action_paste_clipboard()
+                # The clipboard read runs on a background thread worker; wait for
+                # it to finish so the empty-clipboard warning is emitted.
+                await app.workers.wait_for_complete()
+                await pilot.pause()
 
             mock_notify.assert_called_once()
 
@@ -1447,6 +1455,75 @@ class TestMessageQueue:
             # message should also have been picked up (mounted as UserMessage)
             user_msgs = app.query(UserMessage)
             assert any(w._content == "hello agent" for w in user_msgs)
+
+
+class TestSetSpinnerHides:
+    """`_set_spinner` must remove the widget for both `None` and `""`.
+
+    Many slash-command sites pass an empty string to clear the spinner. The old
+    `status is None` guard let `""` fall through, leaving a blank spinner widget
+    animating "esc to interrupt" after a pure slash command.
+    """
+
+    async def test_empty_string_removes_loading_widget(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._set_spinner("Thinking")
+            await pilot.pause()
+            assert app._loading_widget is not None
+
+            await app._set_spinner("")
+            await pilot.pause()
+            assert app._loading_widget is None
+
+    async def test_none_still_removes_loading_widget(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            await app._set_spinner("Thinking")
+            await pilot.pause()
+            assert app._loading_widget is not None
+
+            await app._set_spinner(None)
+            await pilot.pause()
+            assert app._loading_widget is None
+
+
+class TestInlineTaskQueueDrain:
+    """Inline tasks (/compact, /butcher) must drain queued input when done.
+
+    Unlike worker-backed turns, these never fire `_cleanup_agent_task`, so the
+    pending-message queue was left undrained until a later normal turn — typed
+    input appeared dropped.
+    """
+
+    async def test_drain_helper_processes_pending_queue(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app, "_process_next_from_queue", new=AsyncMock()
+            ) as mock_drain:
+                await app._drain_queue_after_inline_task()
+
+            mock_drain.assert_awaited_once_with()
+
+    async def test_drain_helper_swallows_errors(self) -> None:
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            with patch.object(
+                app,
+                "_process_next_from_queue",
+                new=AsyncMock(side_effect=RuntimeError("boom")),
+            ):
+                # Must not raise — a drain hiccup should never crash the app.
+                await app._drain_queue_after_inline_task()
 
 
 class TestAskUserLifecycle:

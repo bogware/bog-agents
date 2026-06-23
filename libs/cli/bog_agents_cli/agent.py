@@ -698,7 +698,7 @@ def reset_agent(
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "AGENTS.md"
-    agent_md.write_text(source_content)
+    agent_md.write_text(source_content, encoding="utf-8")
 
     if output_format == "json":
         from bog_agents_cli.output import write_json

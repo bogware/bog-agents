@@ -219,6 +219,51 @@ class TestServerProcess:
         # _SERVER_LOG_MAX_BYTES on the next start().
         assert log_path.exists()
 
+    async def test_start_registers_atexit_stop_and_stop_unregisters(
+        self, tmp_path: Path
+    ) -> None:
+        """A healthy start arms an atexit crash fallback; stop() disarms it.
+
+        Guards S36: without the atexit hook, a SIGTERM/exception escaping
+        before the owning async-context's __aexit__ leaves the langgraph dev
+        child running and holding its port + SQLite checkpointer.
+        """
+        config_dir = tmp_path / "runtime"
+        config_dir.mkdir()
+        (config_dir / "langgraph.json").write_text("{}", encoding="utf-8")
+
+        log_path = tmp_path / "server-2025.log"
+
+        process = MagicMock()
+        process.pid = 1234
+        process.poll.return_value = None
+
+        server = ServerProcess(config_dir=config_dir, owns_config_dir=False)
+
+        with (
+            patch("bog_agents_cli.server._port_in_use", return_value=False),
+            patch("bog_agents_cli.server._find_free_port", return_value=2025),
+            patch(
+                "bog_agents_cli.server._resolve_server_log_path",
+                return_value=log_path,
+            ),
+            patch("bog_agents_cli.server.subprocess.Popen", return_value=process),
+            patch(
+                "bog_agents_cli.server.wait_for_server_healthy",
+                new=AsyncMock(),
+            ),
+            patch("bog_agents_cli.server.atexit") as mock_atexit,
+        ):
+            await server.start()
+            # Fallback armed after a successful Popen so a bypassed teardown
+            # still stops the child.
+            mock_atexit.register.assert_called_once_with(server.stop)
+
+            server.stop()
+            # Normal shutdown disarms the fallback so no stale no-op callback
+            # lingers at interpreter exit.
+            mock_atexit.unregister.assert_called_once_with(server.stop)
+
     async def test_update_env_and_restart(self, tmp_path: Path) -> None:
         """update_env stages overrides that restart() applies."""
         config_dir = tmp_path / "runtime"

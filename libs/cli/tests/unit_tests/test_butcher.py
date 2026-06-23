@@ -489,6 +489,36 @@ class TestVerification:
 
 
 # ---------------------------------------------------------------------------
+# UTF-8 subprocess decoding (S26)
+# ---------------------------------------------------------------------------
+
+
+# Emits a non-ASCII checkmark as raw UTF-8 bytes to stdout, regardless of the
+# child process locale. The parent decode must be UTF-8 (not the active code
+# page) or the glyph either mojibakes or raises UnicodeDecodeError.
+_UNICODE_CHECK = (
+    f'"{sys.executable}" -c '
+    "\"import sys; sys.stdout.buffer.write('\\u2713 done'.encode('utf-8'))\""
+)
+
+
+class TestSubprocessUtf8Decoding:
+    """S26: butcher subprocess output is decoded as UTF-8, not the OS code page."""
+
+    async def test_acceptance_check_decodes_utf8_output(self, tmp_path: Path) -> None:
+        ok, out = await run_acceptance_check(_UNICODE_CHECK, tmp_path)
+        assert ok is True
+        # The UTF-8 checkmark must survive decoding intact.
+        assert "✓ done" in out
+
+    def test_run_command_decodes_utf8_output(self, tmp_path: Path) -> None:
+        tools = {t.name: t for t in build_worker_tools(tmp_path)}
+        out = tools["run_command"].invoke({"command": _UNICODE_CHECK})
+        assert "exit code: 0" in out
+        assert "✓ done" in out
+
+
+# ---------------------------------------------------------------------------
 # Full job runner
 # ---------------------------------------------------------------------------
 

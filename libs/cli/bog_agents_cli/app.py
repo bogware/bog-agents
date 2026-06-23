@@ -1736,10 +1736,12 @@ class BogAgentsApp(App):
 
         Args:
             status: The status text to display (e.g., "Thinking", "Summarizing"),
-                or `None` to hide the spinner.
+                or `None`/empty string to hide the spinner.
         """
-        if status is None:
-            # Hide
+        if not status:
+            # Hide (None or empty string). Many slash-command sites pass "" to
+            # clear the spinner; the previous `status is None` guard let "" fall
+            # through and leave a blank spinner animating "esc to interrupt".
             if self._loading_widget:
                 await self._loading_widget.remove()
                 self._loading_widget = None
@@ -10790,6 +10792,7 @@ class BogAgentsApp(App):
             await self._mount_message(ErrorMessage(f"/butcher failed: {exc}"))
         finally:
             self._agent_running = False
+            await self._drain_queue_after_inline_task()
 
     async def _handle_jtbd_command(self, command: str) -> None:
         """``/jtbd`` — Jobs To Be Done interview → spec → outcome-driven run."""
@@ -13952,6 +13955,7 @@ class BogAgentsApp(App):
                 await self._set_spinner(None)
             except Exception:  # best-effort spinner cleanup
                 logger.exception("Failed to dismiss spinner after compaction")
+            await self._drain_queue_after_inline_task()
 
     async def _offload_messages_for_compact(
         self,
@@ -14526,6 +14530,21 @@ class BogAgentsApp(App):
         busy = self._agent_running or self._shell_running
         if not busy and self._pending_messages:
             await self._process_next_from_queue()
+
+    async def _drain_queue_after_inline_task(self) -> None:
+        """Drain queued user messages after an inline (non-worker) agent task.
+
+        Inline tasks such as `/compact` and `/butcher` set `_agent_running` while
+        they run but, unlike `_cleanup_agent_task`/`_cleanup_shell_task`, never
+        spawn a worker whose completion fires the queue drain. Without this call
+        any message typed during the task sits queued in the UI and only runs
+        after a later normal turn completes (perceived dropped input). Failures
+        here must never escape — a drain hiccup should not crash the app.
+        """
+        try:
+            await self._process_next_from_queue()
+        except Exception:
+            logger.exception("Failed to drain pending queue after inline task")
 
     async def _cleanup_agent_task(self) -> None:
         """Clean up after agent task completes or is cancelled."""
@@ -15511,10 +15530,47 @@ class BogAgentsApp(App):
         copy_selection_to_clipboard_async(self)
 
     def action_paste_clipboard(self) -> None:
-        """Paste clipboard text into the chat input."""
+        """Paste clipboard text into the chat input.
+
+        The clipboard read can shell out to a helper (PowerShell Get-Clipboard,
+        pbpaste, xclip, …). Running it inline on the Textual event loop would
+        freeze the whole TUI if the helper is slow or hung, so the read runs on a
+        background thread and the paste is applied back on the UI thread.
+        """
         if not self._chat_input:
             return
-        pasted = read_clipboard_text()
+
+        def _read_and_paste() -> None:
+            pasted = read_clipboard_text()
+            self.call_from_thread(self._apply_pasted_clipboard, pasted)
+
+        try:
+            self.run_worker(
+                _read_and_paste,
+                thread=True,
+                exclusive=False,
+                exit_on_error=False,
+                group="clipboard",
+                name="paste-clipboard",
+            )
+        except Exception:
+            # If the worker can't be scheduled, fall back to a synchronous read so
+            # the paste still happens; a paste attempt must never crash the app.
+            logger.debug(
+                "paste worker dispatch failed; reading synchronously",
+                exc_info=True,
+            )
+            self._apply_pasted_clipboard(read_clipboard_text())
+
+    def _apply_pasted_clipboard(self, pasted: str | None) -> None:
+        """Apply clipboard text to the chat input on the UI thread.
+
+        Args:
+            pasted: Text read from the system clipboard, or `None`/empty when the
+                clipboard was empty or unavailable.
+        """
+        if not self._chat_input:
+            return
         if not pasted:
             self.notify(
                 "Clipboard is empty or unavailable",
@@ -16315,7 +16371,9 @@ class BogAgentsApp(App):
         if action in ("paste", "") or (not tail):
             from bog_agents_cli.clipboard import read_clipboard_text
 
-            clip = read_clipboard_text()
+            # Read off the event loop — the clipboard helper may shell out and a
+            # slow/hung helper would otherwise freeze the TUI.
+            clip = await asyncio.to_thread(read_clipboard_text)
             if clip and detect_image_in_input(clip):
                 # Clipboard contains a path reference to an image
                 img_path = detect_image_in_input(clip)

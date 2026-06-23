@@ -165,6 +165,46 @@ class TestLedger:
         with pytest.raises(RuntimeError, match="closed"):
             ledger.record(EventKind.NOTE, actor="u", summary="x")
 
+    def test_disk_append_error_flags_degraded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ledger = open_session(tmp_path)
+        assert ledger.degraded is False
+        assert ledger.disk_error_count == 0
+
+        # Force the next on-disk append to fail with an OSError. The
+        # in-memory event must still be recorded (id continuity) but the
+        # ledger must now report itself degraded so the controller can
+        # warn the user the trace is no longer durable.
+        def _boom(self: Path, *args: object, **kwargs: object) -> object:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "open", _boom)
+        event = ledger.record(EventKind.NOTE, actor="u", summary="dropped")
+
+        assert event.id == 1  # still appended in-memory
+        assert len(ledger) == 1
+        assert ledger.degraded is True
+        assert ledger.disk_error_count == 1
+
+    def test_disk_append_error_preserves_id_continuity(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ledger = open_session(tmp_path)
+        ledger.record(EventKind.USER_MESSAGE, actor="u", summary="ok")
+
+        def _boom(self: Path, *args: object, **kwargs: object) -> object:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "open", _boom)
+        # Two failed appends increment the error counter and the id
+        # counter keeps advancing — ids are never reused.
+        e2 = ledger.record(EventKind.NOTE, actor="u", summary="lost-a")
+        e3 = ledger.record(EventKind.NOTE, actor="u", summary="lost-b")
+        assert (e2.id, e3.id) == (2, 3)
+        assert ledger.disk_error_count == 2
+        assert ledger.degraded is True
+
 
 # ---------------------------------------------------------------------------
 # Middleware

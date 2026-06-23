@@ -158,6 +158,32 @@ class TestTeach:
         assert "test-skill" in skill
         assert "read_file" in skill
 
+    def test_save_taught_skill_non_ascii(self) -> None:
+        """Saving a skill with non-ASCII content uses utf-8 (no locale crash)."""
+        from bog_agents_cli.teach import TeachSession, save_taught_skill
+
+        # Smart quotes / accents that crash under cp1252/cp932 default encoding.
+        session = TeachSession(name="cafe-skill", description="Résumé “quoted” café ☕")
+        session.record_tool_call("read_file", {"path": "/naïve"}, "café ☕")
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_path = save_taught_skill(Path(tmp), session)
+            assert skill_path.exists()
+            # Must be readable as utf-8 with the non-ASCII content intact.
+            content = skill_path.read_text(encoding="utf-8")
+            assert "café" in content
+
+    def test_save_session_data_non_ascii(self) -> None:
+        """Saving raw session data with non-ASCII content uses utf-8."""
+        from bog_agents_cli.teach import TeachSession, save_session_data
+
+        session = TeachSession(name="cafe-skill", description="café ☕")
+        session.record_message("naïve “message”")
+        with tempfile.TemporaryDirectory() as tmp:
+            session_path = save_session_data(Path(tmp), session)
+            assert session_path.exists()
+            data = json.loads(session_path.read_text(encoding="utf-8"))
+            assert data["description"] == "café ☕"
+
 
 class TestReplay:
     """Tests for session replay (#50)."""

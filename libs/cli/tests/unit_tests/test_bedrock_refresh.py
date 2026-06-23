@@ -252,3 +252,62 @@ class TestAsyncRefreshFlow:
         ):
             with pytest.raises(Exception, match="ExpiredTokenException"):
                 await mw.awrap_model_call(request=MagicMock(), call_next=call_next)
+
+
+class TestConcurrentRefresh:
+    """The refresh critical section is serialized (S35 hardening).
+
+    Concurrent expired-creds model calls (parallel sub-agents, each
+    running under ``asyncio.to_thread``) must not all clear the budget
+    check before anyone increments — that would spawn multiple ``aws
+    sso login`` subprocesses racing the SSO cache and exceed the cap.
+    """
+
+    def test_concurrent_refresh_serialized_and_capped(self) -> None:
+        import threading
+
+        max_refreshes = 2
+        mw = BedrockRefreshMiddleware(
+            interactive=True, max_refreshes_per_session=max_refreshes
+        )
+
+        in_flight = 0
+        max_in_flight = 0
+        spawn_count = 0
+        counter_lock = threading.Lock()
+        start = threading.Barrier(4)
+
+        def fake_login(profile: str, *, timeout_s: float = 120.0) -> bool:
+            nonlocal in_flight, max_in_flight, spawn_count
+            with counter_lock:
+                spawn_count += 1
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            # Hold the simulated subprocess open briefly so an
+            # unsynchronized implementation would overlap here.
+            import time
+
+            time.sleep(0.02)
+            with counter_lock:
+                in_flight -= 1
+            return True
+
+        def worker() -> None:
+            start.wait(timeout=5)
+            mw._refresh_credentials()
+
+        with patch(
+            "bog_agents_cli.bedrock_refresh._attempt_sso_login",
+            side_effect=fake_login,
+        ):
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+        # Never more than one subprocess in flight at a time.
+        assert max_in_flight == 1
+        # The cap is respected even under contention: at most
+        # ``max_refreshes`` subprocesses are ever spawned.
+        assert spawn_count == max_refreshes

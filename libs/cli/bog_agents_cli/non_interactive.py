@@ -1272,6 +1272,7 @@ async def run_non_interactive(
         console.print(header)
 
     import asyncio
+    import contextlib
 
     from bog_agents_cli.server_manager import server_session
 
@@ -1549,3 +1550,15 @@ async def run_non_interactive(
         return 1
     else:
         return 0
+    finally:
+        # S37: the MCP preload task is created before this try block and is
+        # only awaited on the happy path (after the server session is
+        # entered). Every early return — the 45 s server-start timeout and
+        # all the except handlers above — would otherwise leave the task
+        # detached, where it can spawn MCP stdio subprocesses that outlive
+        # the call. Cancel-and-drain it here so no coroutine leaks on any
+        # exit path.
+        if mcp_task is not None and not mcp_task.done():
+            mcp_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await mcp_task

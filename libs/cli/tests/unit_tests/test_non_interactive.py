@@ -909,6 +909,86 @@ class TestNonInteractivePrompt:
         assert kwargs["interactive"] is False
 
 
+class TestMcpPreloadTaskCleanup:
+    """S37: the MCP preload task must never leak on an early-return path."""
+
+    async def test_preload_task_cancelled_on_server_start_failure(self) -> None:
+        """A server-start failure (early return 1) must cancel the preload task.
+
+        The MCP preload task is created before the outer try block and is only
+        awaited on the happy path. When the server fails to start we return 1
+        without awaiting it, so the function-level `finally` must cancel and
+        drain it rather than leaving a detached coroutine (which can spawn MCP
+        stdio subprocesses that outlive the call).
+        """
+        import asyncio
+
+        cancelled = asyncio.Event()
+        started = asyncio.Event()
+
+        async def _blocking_preload(**_kwargs: object) -> object:
+            started.set()
+            try:
+                # Block forever — the only way out is cancellation.
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return []
+
+        async def _failing_start(**_kwargs: object) -> object:
+            # Ensure the preload task has actually begun running before the
+            # server-start failure trips the early return, so we exercise the
+            # not-done() cleanup branch.
+            await started.wait()
+            raise ValueError("server boom")
+
+        with (
+            patch(
+                "bog_agents_cli.non_interactive.create_model",
+                return_value=ModelResult(
+                    model=MagicMock(),
+                    model_name="test-model",
+                    provider="test",
+                ),
+            ),
+            patch(
+                "bog_agents_cli.non_interactive.generate_thread_id",
+                return_value="test-thread",
+            ),
+            patch(
+                "bog_agents_cli.non_interactive.settings",
+            ) as mock_settings,
+            patch(
+                "bog_agents_cli.non_interactive.build_langsmith_thread_url",
+                return_value=None,
+            ),
+            patch(
+                "bog_agents_cli.main._preload_session_mcp_server_info",
+                new=_blocking_preload,
+            ),
+            patch(
+                "bog_agents_cli.server_manager.start_server_and_get_agent",
+                new=_failing_start,
+            ),
+        ):
+            mock_settings.shell_allow_list = None
+            mock_settings.has_tavily = False
+            mock_settings.model_name = None
+
+            # quiet=False so the preload task is actually created
+            # (`if not no_mcp and not quiet`).
+            exit_code = await run_non_interactive(message="test", quiet=False)
+
+        assert exit_code == 1
+        # The preload coroutine must have been cancelled (and drained), not
+        # left detached.
+        assert cancelled.is_set()
+        # No stray tasks should be left pending for this run.
+        pending = [t for t in asyncio.all_tasks() if not t.done()]
+        assert all(t is asyncio.current_task() for t in pending)
+
+
 async def _async_iter(items: list[object]) -> AsyncIterator[object]:
     """Create an async iterator from a list for testing."""
     for item in items:

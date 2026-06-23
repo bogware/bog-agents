@@ -64,6 +64,7 @@ from bog_agents_cli.compliance.evidence import (
     collect_at_least_one_session,
     collect_event_count,
     collect_no_event_with_actor,
+    collect_no_event_with_payload,
     load_trace_slice,
     window_for_lookback,
 )
@@ -344,6 +345,93 @@ class TestEvidenceCollectors:
             {"fact_kind": "rule_fire"},
         )
         assert finding.inconclusive is True
+
+    def test_no_event_with_payload_fail_on_deny(self, slice_with_events: TraceSlice):
+        # The fixture records a rule_fire with payload action=deny — a
+        # pack asserting "no deny-control fired" must FAIL (catch it).
+        finding = collect_no_event_with_payload(
+            slice_with_events,
+            {"fact_kind": "rule_fire", "payload_match": {"action": "deny"}},
+        )
+        assert finding.passes is False
+        assert len(finding.samples) >= 1
+
+    def test_no_event_with_payload_pass_on_mismatch(
+        self, slice_with_events: TraceSlice
+    ):
+        # No rule_fire with action=require_approval → assertion holds.
+        finding = collect_no_event_with_payload(
+            slice_with_events,
+            {
+                "fact_kind": "rule_fire",
+                "payload_match": {"action": "require_approval"},
+            },
+        )
+        assert finding.passes is True
+
+    def test_no_event_with_payload_actor_narrowing(self, slice_with_events: TraceSlice):
+        # Same payload but a different actor → no match → passes.
+        finding = collect_no_event_with_payload(
+            slice_with_events,
+            {
+                "fact_kind": "rule_fire",
+                "actor": "some_other_rule",
+                "payload_match": {"action": "deny"},
+            },
+        )
+        assert finding.passes is True
+
+    def test_no_event_with_payload_requires_match(self, slice_with_events: TraceSlice):
+        finding = collect_no_event_with_payload(
+            slice_with_events,
+            {"fact_kind": "rule_fire"},
+        )
+        assert finding.inconclusive is True
+        assert "payload_match" in finding.reason
+
+    def test_no_event_with_payload_missing_kind(self, slice_with_events: TraceSlice):
+        finding = collect_no_event_with_payload(
+            slice_with_events,
+            {"payload_match": {"action": "deny"}},
+        )
+        assert finding.inconclusive is True
+        assert "fact_kind" in finding.reason
+
+    def test_no_event_with_payload_in_dispatch_table(self):
+        assert "no_event_with_payload" in COLLECTORS
+
+    def test_no_event_with_payload_end_to_end_via_pack(self, tmp_path: Path):
+        # A trace_assertion pack using the new evidence kind must parse
+        # and the runner must dispatch it to a FAIL on a recorded deny.
+        ledger = open_session(tmp_path)
+        ledger.record(
+            EventKind.RULE_FIRE,
+            actor="block_force_push",
+            summary="deny push",
+            payload={"action": "deny", "detail": "force push"},
+        )
+        ledger.close()
+        d = {
+            "version": 1,
+            "name": "payload-pack",
+            "checks": [
+                {
+                    "id": "NP-1",
+                    "title": "no deny-control fired",
+                    "kind": "trace_assertion",
+                    "evidence": {
+                        "kind": "no_event_with_payload",
+                        "fact_kind": "rule_fire",
+                        "payload_match": {"action": "deny"},
+                    },
+                }
+            ],
+        }
+        pack = load_pack_from_dict(d)
+        assert pack.checks[0].evidence is not None
+        assert pack.checks[0].evidence.kind == EvidenceKind.NO_EVENT_WITH_PAYLOAD
+        report = run_audit(pack, working_dir=tmp_path, rules=[])
+        assert report.results[0].verdict == Verdict.FAIL
 
     def test_at_least_one_session_pass(self, slice_with_events: TraceSlice):
         assert collect_at_least_one_session(slice_with_events, {}).passes is True

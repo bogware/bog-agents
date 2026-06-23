@@ -234,7 +234,7 @@ class PersistentJobsManager(BackgroundAgentManager):
                     working_dir=data.get("working_dir"),
                 )
                 self._tasks[task_id] = task
-            except (json.JSONDecodeError, KeyError, ValueError):
+            except (json.JSONDecodeError, KeyError, ValueError, OSError):
                 logger.debug("Skipping unreadable job file: %s", path)
 
     # ------------------------------------------------------------------

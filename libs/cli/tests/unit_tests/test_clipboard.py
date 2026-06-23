@@ -9,6 +9,55 @@ from unittest.mock import MagicMock, patch
 from bog_agents_cli import clipboard as clipboard_module
 
 
+class TestClipboardReadTimeout:
+    """Clipboard READ helpers must bound their subprocess with a timeout.
+
+    A slow/hung clipboard helper would otherwise block the (synchronous) read
+    indefinitely; the read is invoked from the TUI, so an unbounded subprocess
+    can freeze the whole event loop. ``subprocess.TimeoutExpired`` is a subclass
+    of ``SubprocessError``, which ``read_clipboard_text`` already catches.
+    """
+
+    def test_read_windows_clipboard_passes_timeout(self) -> None:
+        with patch.object(clipboard_module.subprocess, "run") as mock_run:
+            mock_run.return_value = SimpleNamespace(stdout="clip")
+            clipboard_module._read_windows_clipboard()
+
+        assert mock_run.call_args.kwargs.get("timeout") == 5
+
+    def test_read_command_output_passes_timeout(self) -> None:
+        with patch.object(clipboard_module.subprocess, "run") as mock_run:
+            mock_run.return_value = SimpleNamespace(stdout="clip")
+            clipboard_module._read_command_output(["pbpaste"])
+
+        assert mock_run.call_args.kwargs.get("timeout") == 5
+
+    def test_copy_windows_clip_passes_timeout(self) -> None:
+        with patch.object(clipboard_module.subprocess, "run") as mock_run:
+            clipboard_module._copy_windows_clip("text")
+
+        assert mock_run.call_args.kwargs.get("timeout") == 5
+
+    def test_read_returns_none_on_timeout(self) -> None:
+        mock_pyperclip = MagicMock()
+        mock_pyperclip.paste.side_effect = RuntimeError("clipboard unavailable")
+
+        with (
+            patch.object(clipboard_module.sys, "platform", "win32"),
+            patch.dict(sys.modules, {"pyperclip": mock_pyperclip}),
+            patch.object(
+                clipboard_module,
+                "_read_windows_clipboard",
+                side_effect=clipboard_module.subprocess.TimeoutExpired(
+                    cmd="powershell.exe", timeout=5
+                ),
+            ),
+        ):
+            result = clipboard_module.read_clipboard_text()
+
+        assert result is None
+
+
 def test_read_clipboard_text_falls_back_to_windows_clipboard() -> None:
     """Windows clipboard fallback should be used when pyperclip fails."""
     mock_pyperclip = MagicMock()
