@@ -127,12 +127,10 @@ async def run_job(
             else:
                 overflow_count += 1
     if overflow_count:
-        run.dispatch_errors.append(
-            {
-                "target": "(overflow)",
-                "error": f"{overflow_count} additional dispatch failure(s) truncated",
-            }
-        )
+        run.dispatch_errors.append({
+            "target": "(overflow)",
+            "error": f"{overflow_count} additional dispatch failure(s) truncated",
+        })
 
     # If the agent run succeeded but dispatches failed, mark the run as
     # COMPLETED but keep ``error`` populated so HTTP clients and the
@@ -199,11 +197,13 @@ def _find_skill_file(skill_name: str) -> Path | None:
     return None
 
 
-def _parse_skill_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+def _parse_skill_frontmatter(content: str, *, skill_path: Path | None = None) -> tuple[dict[str, Any], str]:
     """Extract YAML frontmatter from a SKILL.md.
 
     Args:
         content: Raw SKILL.md text.
+        skill_path: Optional path to the SKILL.md, used only to make the
+            warning logged on malformed frontmatter actionable.
 
     Returns:
         Tuple of (frontmatter dict, body string). Returns ({}, content)
@@ -218,9 +218,14 @@ def _parse_skill_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         return {}, content
     try:
         frontmatter = yaml.safe_load(match.group(1)) or {}
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
+        # Malformed frontmatter silently dropped any `chain:` declaration,
+        # so chained skills vanished with no diagnostic. Log so operators
+        # can find the broken SKILL.md.
+        logger.warning("Skill frontmatter is not valid YAML (%s): %s", skill_path or "<unknown>", exc)
         frontmatter = {}
     if not isinstance(frontmatter, dict):
+        logger.warning("Skill frontmatter is not a mapping (%s); ignoring", skill_path or "<unknown>")
         frontmatter = {}
     return frontmatter, match.group(2)
 
@@ -267,7 +272,7 @@ def _resolve_skill_prompt(
         raise ValueError(msg)
 
     raw = path.read_text(encoding="utf-8")
-    frontmatter, body = _parse_skill_frontmatter(raw)
+    frontmatter, body = _parse_skill_frontmatter(raw, skill_path=path)
 
     # Resolve chained skills first so their content is available for
     # context. The `chain:` value can be a list of names or a single name.
@@ -548,18 +553,16 @@ async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
         logger.warning("Webhook output for job %s has no webhook_url configured", run.job_id)
         return
 
-    payload = json.dumps(
-        {
-            "run_id": run.run_id,
-            "job_id": run.job_id,
-            "job_name": run.job_name,
-            "status": run.status.value,
-            "output": run.output,
-            "error": run.error,
-            "started_at": run.started_at,
-            "finished_at": run.finished_at,
-        }
-    ).encode()
+    payload = json.dumps({
+        "run_id": run.run_id,
+        "job_id": run.job_id,
+        "job_name": run.job_name,
+        "status": run.status.value,
+        "output": run.output,
+        "error": run.error,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }).encode()
 
     headers: dict[str, str] = {"Content-Type": "application/json", **output.webhook_headers}
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")

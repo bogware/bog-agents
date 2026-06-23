@@ -35,11 +35,74 @@ def _generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _secure_token_file(path: Path) -> None:
+    """Restrict the token file to the current user (best-effort, cross-platform).
+
+    On POSIX this is `chmod 0600`. On Windows `chmod` only flips the
+    read-only bit, so we additionally run `icacls /inheritance:r /grant
+    <user>:F` to strip inherited ACEs and grant only the current user.
+    icacls failures are non-fatal — modern user-profile directories are
+    already ACL-protected.
+
+    Args:
+        path: The token file to lock down. Must already exist.
+    """
+    import contextlib
+
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    if sys.platform == "win32":
+        import subprocess
+
+        username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+        if username:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run(
+                    ["icacls", str(path), "/inheritance:r", "/grant", f"{username}:F"],
+                    capture_output=True,
+                    timeout=5,
+                    check=False,
+                )
+
+
+def _write_token_atomic(token: str) -> None:
+    """Write the daemon token atomically with owner-only permissions.
+
+    Writes to a temp file in the token directory, locks it down BEFORE the
+    rename, then atomically `replace()`s it into place. This avoids the
+    window where a plain `write_text` then `chmod` leaves the file briefly
+    at default (world-readable on multi-user POSIX) permissions, and avoids
+    a crash mid-write persisting a truncated/empty token.
+
+    Args:
+        token: The token value to persist.
+    """
+    import tempfile
+
+    _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(_TOKEN_FILE.parent), suffix=".tmp")
+    tmp = Path(tmp_path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(token)
+        _secure_token_file(tmp)
+        tmp.replace(_TOKEN_FILE)
+        _secure_token_file(_TOKEN_FILE)
+    except BaseException:
+        import contextlib
+
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+
+
 def _ensure_token() -> str:
     """Read or create the daemon auth token.
 
-    If the token file does not exist, generates a new token, writes it with
-    mode 0o600, and returns it. If it already exists, returns the existing value.
+    If the token file does not exist (or holds an empty/blank value from a
+    prior crashed write), generates a new token, writes it atomically with
+    owner-only permissions, and returns it. Otherwise returns the existing
+    value.
 
     On Windows, `chmod(0o600)` only flips the read-only bit — it does NOT
     restrict access by user. Modern Windows user-profile directories
@@ -54,26 +117,15 @@ def _ensure_token() -> str:
     """
     _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     if _TOKEN_FILE.exists():
-        return _TOKEN_FILE.read_text(encoding="utf-8").strip()
+        existing = _TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing
+        # An empty/blank token file is a corrupt remnant of a crashed or
+        # concurrent write. Regenerate rather than persisting a token that
+        # would reject every request (auth DoS).
+        logger.warning("Daemon token file %s was empty/blank; regenerating", _TOKEN_FILE)
     token = _generate_token()
-    _TOKEN_FILE.write_text(token, encoding="utf-8")
-    _TOKEN_FILE.chmod(0o600)
-    # Windows-specific belt-and-suspenders: try icacls to grant only the
-    # current user read/write, blocking inherited ACEs. Best-effort —
-    # icacls failures don't fail token creation.
-    if sys.platform == "win32":
-        import contextlib
-        import subprocess
-
-        username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
-        if username:
-            with contextlib.suppress(OSError, subprocess.SubprocessError):
-                subprocess.run(
-                    ["icacls", str(_TOKEN_FILE), "/inheritance:r", "/grant", f"{username}:F"],
-                    capture_output=True,
-                    timeout=5,
-                    check=False,
-                )
+    _write_token_atomic(token)
     return token
 
 

@@ -16,6 +16,16 @@ from bog_agents_daemon.models import AmbientJob, TriggerConfig, TriggerType
 
 logger = logging.getLogger(__name__)
 
+# Directories never worth walking for a file-change trigger. Pruning these in
+# place keeps a tick from descending into multi-gigabyte vendored/VCS trees.
+_FILE_TRIGGER_PRUNE_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".mypy_cache"})
+
+# Hard cap on the number of files stat()'d per tick. A FILE_CHANGE trigger
+# runs on every scheduler tick (default ~30s); without a bound a large
+# watch_dir makes a single tick exceed the interval and starve cron/interval
+# jobs. When the cap is hit we log and bail rather than blocking the loop.
+_FILE_TRIGGER_MAX_FILES = 50_000
+
 
 def _is_cron_due(cron_expr: str, last_run_at: float) -> bool:
     """Check whether a 5-field cron expression would have fired since last_run_at.
@@ -327,9 +337,15 @@ class DaemonScheduler:
 def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | None:
     """Check whether any watched file has been modified since the last run.
 
-    Iterates over all files under `trigger.watch_dir` (recursively) and
-    matches filenames against each pattern in `trigger.watch_patterns` using
+    Iterates over files under `trigger.watch_dir` (recursively) and matches
+    filenames against each pattern in `trigger.watch_patterns` using
     `fnmatch`. Returns the first path whose mtime is newer than `last_run_at`.
+
+    Heavy/irrelevant directories (`.git`, `node_modules`, `.venv`, build
+    caches — see `_FILE_TRIGGER_PRUNE_DIRS`) are pruned in place, and the
+    number of files examined per tick is capped at `_FILE_TRIGGER_MAX_FILES`
+    so a large watch_dir can't make a single tick overrun the scheduler
+    interval and starve cron/interval jobs.
 
     If `last_run_at` is 0 (job has never run), every matched file is considered
     changed so the trigger fires immediately on the first tick.
@@ -352,8 +368,20 @@ def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | No
         if not root.is_dir():
             return None
 
-        for dirpath, _dirnames, filenames in os.walk(root):
+        examined = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune in place so os.walk never descends into these subtrees.
+            dirnames[:] = [d for d in dirnames if d not in _FILE_TRIGGER_PRUNE_DIRS]
             for filename in filenames:
+                examined += 1
+                if examined > _FILE_TRIGGER_MAX_FILES:
+                    logger.warning(
+                        "File-change trigger: watch_dir %s exceeds %d files; "
+                        "stopping scan early this tick. Narrow watch_patterns or watch a smaller dir.",
+                        watch_dir,
+                        _FILE_TRIGGER_MAX_FILES,
+                    )
+                    return None
                 if not any(fnmatch.fnmatch(filename, pat) for pat in patterns):
                     continue
                 full_path = Path(dirpath) / filename

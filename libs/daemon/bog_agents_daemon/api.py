@@ -727,11 +727,18 @@ def create_app(
         try:
             payload = await request.json()
         except Exception:
+            logger.warning("git-push payload was not valid JSON; treating as empty")
             payload = {}
 
         ref = payload.get("ref", "")
         # Normalise "refs/heads/main" → "main"
         branch = ref.split("/")[-1] if ref else ""
+        # A missing/empty ref used to leave branch="" which fnmatch("", "*")
+        # matches — firing every wildcard GIT_PUSH job on a malformed payload.
+        # Reject the push instead of silently triggering on noise.
+        if not branch:
+            logger.warning("git-push payload had no usable 'ref'; ignoring (no jobs triggered)")
+            return {"triggered": [], "count": 0}
 
         jobs = load_jobs()
         triggered: list[str] = []

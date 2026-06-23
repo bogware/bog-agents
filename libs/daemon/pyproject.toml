@@ -123,9 +123,16 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 150
 target-version = "py311"
+# PLW1514 (unspecified-encoding) is a ruff *preview* rule. Enable preview so
+# the rule is active, but pair it with `explicit-preview-rules` so ONLY the
+# preview rules we list by code (PLW1514) turn on — the rest of the preview
+# ruleset stays off. This keeps CLAUDE.md's mandated encoding check enforced
+# on the always-on daemon without dragging in unrelated preview lint.
+preview = true
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "C4", "SIM", "PTH", "RUF"]
+explicit-preview-rules = true
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "C4", "SIM", "PTH", "RUF", "PLW1514"]
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
