@@ -1,7 +1,7 @@
 """StateBackend: Store files in LangGraph agent state (ephemeral)."""
 
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bog_agents.backends.protocol import (
     BackendProtocol,
@@ -143,14 +143,31 @@ class StateBackend(BackendProtocol):
         old_string: str,
         new_string: str,
         replace_all: bool = False,
+        *,
+        base_content: dict[str, Any] | None = None,
     ) -> EditResult:
         """Edit a file by replacing string occurrences.
 
-        Returns EditResult with files_update and occurrences.
+        Args:
+            file_path: Absolute file path to edit.
+            old_string: Exact string to find.
+            new_string: Replacement string.
+            replace_all: If True, replace all occurrences.
+            base_content: Optional FileData dict to edit against instead of
+                re-reading from state. Batch callers (multi_edit_file) pass the
+                result of a prior edit so chained edits to the same file compose
+                — state is only mutated at the end of the batch via the returned
+                Command, so re-reading here would discard intermediate edits.
+
+        Returns:
+            EditResult with files_update and occurrences.
         """
-        with self._lock:
-            files = self.runtime.state.get("files", {})
-            file_data = files.get(file_path)
+        if base_content is not None:
+            file_data = base_content
+        else:
+            with self._lock:
+                files = self.runtime.state.get("files", {})
+                file_data = files.get(file_path)
 
         if file_data is None:
             return EditResult(error=f"Error: File '{file_path}' not found")

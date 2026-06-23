@@ -535,73 +535,105 @@ def merge_with_conflict_report(
     if auto_resolve:
         strategy = "prefer_source"
 
+    # P26: capture the caller's current branch BEFORE we check out the target,
+    # so we can restore it on every non-success/early-return path and avoid
+    # silently leaving the shared working tree parked on target_branch.
+    original_branch = _run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    if original_branch.startswith(("[exit code", "Error:")) or original_branch == "HEAD":
+        # Detached HEAD or git failure — nothing safe to restore to.
+        original_branch = ""
+
+    def _restore_branch() -> None:
+        """Best-effort restore of the caller's branch (P26)."""
+        if not original_branch or original_branch == target_branch:
+            return
+        restore = _run_git(repo_dir, "checkout", "--", original_branch)
+        if restore.startswith(("[exit code", "Error:")):
+            logger.warning(
+                "Could not restore branch %s after merge attempt (%s -> %s): %s",
+                original_branch,
+                source_branch,
+                target_branch,
+                restore,
+            )
+
     # Check out target branch first
     checkout_result = _run_git(repo_dir, "checkout", target_branch)
     if checkout_result.startswith("[exit code"):
+        # Checkout failed: HEAD is unchanged, nothing to restore.
         return {
             "success": False,
             "conflicts": [],
             "message": f"Cannot checkout {target_branch}: {checkout_result}",
         }
 
-    # Pre-flight conflict detection
-    conflicts = detect_merge_conflicts(repo_dir, source_branch, target_branch)
+    merged_into_target = False
+    try:
+        # Pre-flight conflict detection
+        conflicts = detect_merge_conflicts(repo_dir, source_branch, target_branch)
 
-    if conflicts:
-        # Check for trivial (whitespace-only) conflicts and auto-resolve them
-        if _is_trivial_conflict(repo_dir, source_branch, target_branch):
-            logger.debug(
-                "Trivial whitespace-only conflicts detected for %s -> %s; resolving with -X theirs",
-                source_branch,
-                target_branch,
-            )
-            merge_args = ["merge", "--no-edit", "-X", "theirs", source_branch]
-            merge_result = _run_git(repo_dir, *merge_args)
-            success = not merge_result.startswith("[exit code")
-            return {
-                "success": success,
-                "conflicts": [] if success else conflicts,
-                "message": merge_result,
-            }
+        if conflicts:
+            # Check for trivial (whitespace-only) conflicts and auto-resolve them
+            if _is_trivial_conflict(repo_dir, source_branch, target_branch):
+                logger.debug(
+                    "Trivial whitespace-only conflicts detected for %s -> %s; resolving with -X theirs",
+                    source_branch,
+                    target_branch,
+                )
+                merge_args = ["merge", "--no-edit", "-X", "theirs", source_branch]
+                merge_result = _run_git(repo_dir, *merge_args)
+                success = not merge_result.startswith("[exit code")
+                merged_into_target = success
+                return {
+                    "success": success,
+                    "conflicts": [] if success else conflicts,
+                    "message": merge_result,
+                }
 
-        if strategy == "sequential":
-            return {
-                "success": False,
-                "retry_sequential": True,
-                "conflicts": conflicts,
-                "message": (
-                    f"Sequential strategy: {len(conflicts)} conflict(s) detected in "
-                    f"{source_branch} -> {target_branch}. "
-                    "Skipping merge; retry tasks sequentially to resolve ordering."
-                ),
-            }
+            if strategy == "sequential":
+                return {
+                    "success": False,
+                    "retry_sequential": True,
+                    "conflicts": conflicts,
+                    "message": (
+                        f"Sequential strategy: {len(conflicts)} conflict(s) detected in "
+                        f"{source_branch} -> {target_branch}. "
+                        "Skipping merge; retry tasks sequentially to resolve ordering."
+                    ),
+                }
 
-        if strategy == "manual":
-            return {
-                "success": False,
-                "conflicts": conflicts,
-                "message": (
-                    f"Merge would produce {len(conflicts)} conflict(s):\n"
-                    + "\n".join(f"  - {c}" for c in conflicts)
-                    + "\n\nResolve conflicts manually or re-run with a different strategy."
-                ),
-            }
+            if strategy == "manual":
+                return {
+                    "success": False,
+                    "conflicts": conflicts,
+                    "message": (
+                        f"Merge would produce {len(conflicts)} conflict(s):\n"
+                        + "\n".join(f"  - {c}" for c in conflicts)
+                        + "\n\nResolve conflicts manually or re-run with a different strategy."
+                    ),
+                }
 
-    merge_args = ["merge", "--no-edit"]
-    if strategy == "prefer_source":
-        merge_args += ["-X", "theirs"]
-    elif strategy == "prefer_target":
-        merge_args += ["-X", "ours"]
-    merge_args.append(source_branch)
+        merge_args = ["merge", "--no-edit"]
+        if strategy == "prefer_source":
+            merge_args += ["-X", "theirs"]
+        elif strategy == "prefer_target":
+            merge_args += ["-X", "ours"]
+        merge_args.append(source_branch)
 
-    merge_result = _run_git(repo_dir, *merge_args)
-    success = not merge_result.startswith("[exit code")
+        merge_result = _run_git(repo_dir, *merge_args)
+        success = not merge_result.startswith("[exit code")
+        merged_into_target = success
 
-    return {
-        "success": success,
-        "conflicts": conflicts if not success else [],
-        "message": merge_result,
-    }
+        return {
+            "success": success,
+            "conflicts": conflicts if not success else [],
+            "message": merge_result,
+        }
+    finally:
+        # A successful merge legitimately leaves HEAD on target_branch (that is
+        # the intent). On every other path restore the caller's branch.
+        if not merged_into_target:
+            _restore_branch()
 
 
 def smart_merge_parallel_tasks(
@@ -657,6 +689,9 @@ class WorktreeTask:
         label: Human-readable description.
         prompt: Task instructions for the agent.
         branch: Git branch name for this task's worktree.
+        repo_root: Repository root this task operates against. Captured at
+            registration time so concurrent tasks created with different roots
+            never race on a shared instance attribute (P19).
         worktree: WorktreeInfo for this task.
         status: 'pending' | 'running' | 'completed' | 'failed'.
         result: Output text when completed.
@@ -669,6 +704,7 @@ class WorktreeTask:
     label: str = ""
     prompt: str = ""
     branch: str = ""
+    repo_root: Path | None = None
     worktree: WorktreeInfo | None = None
     status: str = "pending"
     result: str = ""
@@ -699,7 +735,7 @@ def format_worktree_status(tasks: list[WorktreeTask]) -> str:
 
     lines = [f"Parallel Worktree Tasks ({len(tasks)}):"]
     for task in tasks:
-        icon = {"pending": "○", "running": "◎", "completed": "✓", "failed": "✗"}.get(task.status, "?")
+        icon = {"pending": "○", "running": "◎", "completed": "✓", "failed": "✗", "cancelled": "⊘"}.get(task.status, "?")
         dur = task.duration_secs
         dur_str = f" ({dur:.0f}s)" if dur is not None else ""
         label = task.label or task.prompt[:50]
@@ -764,6 +800,11 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         self._branch_prefix = branch_prefix
         self._auto_cleanup = auto_cleanup
         self._tasks: dict[str, WorktreeTask] = {}
+        # P18: per-task asyncio handles so cancel_task can make a best-effort
+        # handle.cancel(). Note this only stops post-thread bookkeeping — the
+        # agent_factory runs in asyncio.to_thread which is not truly
+        # interruptible, so an in-flight model call still runs to completion.
+        self._task_handles: dict[str, asyncio.Task[Any]] = {}
         self._semaphore: asyncio.Semaphore | None = None
         # Strong references to in-flight background tasks. asyncio's docs
         # explicitly warn that without a stable reference the task may be
@@ -807,7 +848,10 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         Args:
             label: Human-readable label for the task.
             prompt: The prompt to run in the worktree.
-            repo_root: Optional override for the working directory.
+            repo_root: Optional repository root for this task. Defaults to the
+                middleware's working directory. Stored on the task (not the
+                shared instance) so concurrent tasks with different roots never
+                race (P19).
 
         Returns:
             The created WorktreeTask.
@@ -817,9 +861,8 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
             label=label,
             prompt=prompt,
             branch=self._make_branch_name(label),
+            repo_root=repo_root or self._working_dir,
         )
-        if repo_root is not None:
-            self._working_dir = repo_root
         self._tasks[task.task_id] = task
         return task
 
@@ -829,13 +872,23 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
         Args:
             task: The task to execute.
         """
+        # P19: operate against the task's own repo_root (captured at
+        # registration) rather than the shared self._working_dir, which a
+        # concurrent _create_task could have repointed.
+        repo_root = task.repo_root or self._working_dir
+        # P18: record this coroutine's task handle so cancel_task can attempt a
+        # best-effort cancellation. current_task() is non-None whenever this is
+        # driven on a running loop (every production spawn path).
+        handle = asyncio.current_task()
+        if handle is not None:
+            self._task_handles[task.task_id] = handle
         async with self._get_semaphore():
             task.status = "running"
             task.started_at = time.monotonic()
 
             try:
                 # Create the worktree
-                wt = await asyncio.to_thread(create_worktree, self._working_dir, task.branch)
+                wt = await asyncio.to_thread(create_worktree, repo_root, task.branch)
                 task.worktree = wt
 
                 if self._agent_factory is not None:
@@ -843,7 +896,12 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                     result = await asyncio.to_thread(self._agent_factory, task.prompt, wt.path)
                     task.result = str(result)
 
-                task.status = "completed"
+                # P18: only mark completed if the task wasn't moved to a
+                # terminal state (e.g. cancelled -> 'failed') while the
+                # to_thread worker was running. Without this guard, a
+                # cancelled task is resurrected to 'completed' here.
+                if task.status not in {"failed", "cancelled"}:
+                    task.status = "completed"
             except Exception as exc:
                 task.status = "failed"
                 task.error = str(exc)
@@ -853,9 +911,12 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
 
                 if self._auto_cleanup and task.worktree is not None:
                     try:
-                        await asyncio.to_thread(remove_worktree, self._working_dir, task.worktree.path)
+                        await asyncio.to_thread(remove_worktree, repo_root, task.worktree.path)
                     except Exception as exc:
                         logger.debug("Failed to clean up worktree: %s", exc)
+
+                # P18: drop the handle once the coroutine is winding down.
+                self._task_handles.pop(task.task_id, None)
 
     # ------------------------------------------------------------------
     # Tools
@@ -888,7 +949,9 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
                 label = str(spec.get("label", "task"))
                 prompt = str(spec.get("prompt", ""))
                 branch = mw._make_branch_name(label)
-                task = WorktreeTask(label=label, prompt=prompt, branch=branch)
+                # P19: bind the repo root onto the task so _run_task_in_worktree
+                # reads it from the task, not the shared instance attribute.
+                task = WorktreeTask(label=label, prompt=prompt, branch=branch, repo_root=mw._working_dir)
                 mw._tasks[task.task_id] = task
                 created_tasks.append(task)
             return created_tasks, None
@@ -1023,11 +1086,22 @@ class ParallelWorktreeMiddleware(AgentMiddleware[ParallelWorktreeState, ContextT
             task = mw._tasks.get(task_id)
             if task is None:
                 return f"Task '{task_id}' not found."
-            if task.status == "completed":
-                return f"Task '{task_id}' already completed."
-            task.status = "failed"
+            if task.status in {"completed", "failed", "cancelled"}:
+                return f"Task '{task_id}' already {task.status}."
+            # P18: mark cancelled BEFORE attempting handle.cancel() so the
+            # running coroutine's terminal-status guard
+            # (see _run_task_in_worktree) refuses to resurrect it to
+            # 'completed' if it finishes the to_thread worker first.
+            task.status = "cancelled"
             task.error = "Cancelled by user"
             task.finished_at = time.monotonic()
+            # Best-effort: cancel the awaiting coroutine. This only interrupts
+            # bookkeeping between awaits — the agent_factory in asyncio.to_thread
+            # is not truly interruptible, so an in-flight model call still runs
+            # to completion.
+            handle = mw._task_handles.pop(task_id, None)
+            if handle is not None and not handle.done():
+                handle.cancel()
             return f"Task '{task_id}' cancelled."
 
         return [

@@ -15,9 +15,12 @@ from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
 
 import bog_agents.graph as bog_graph
 from bog_agents.backends import StateBackend
+from bog_agents.feature_config import FeatureConfig
 from bog_agents.graph import _dedup_middleware_by_name
 from bog_agents.middleware.memory import MemoryMiddleware
+from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
 from bog_agents.middleware.skills import SkillsMiddleware
+from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 from tests.unit_tests.chat_model import GenericFakeChatModel
 
 
@@ -128,3 +131,67 @@ class TestCreateAgentDedup:
 
         names = [m.name for m in middleware]
         assert len(names) == len(set(names)), f"duplicate middleware names: {names}"
+
+
+# ---------------------------------------------------------------------------
+# ResultSynthesis auto-provision asymmetry (V3-24)
+# ---------------------------------------------------------------------------
+
+
+class TestResultSynthesisParallelWorktree:
+    """`enable_result_synthesis` + an explicit ParallelWorktreeMiddleware (V3-24).
+
+    Before the fix the result-synthesis block searched only the feature-wired
+    stack (user middleware not yet appended), auto-provisioned a second
+    ParallelWorktreeMiddleware, and the keep-first dedup pass then silently
+    discarded the user's configured instance. These tests assert the build
+    succeeds, contains exactly one ParallelWorktreeMiddleware, and that it is
+    the user's instance — and that ResultSynthesis is wired to that same
+    instance and still sees it earlier in the stack (`requires=` satisfied).
+    """
+
+    def test_flag_plus_explicit_parallel_worktree_builds(self, monkeypatch) -> None:
+        """The build succeeds with no duplicate ParallelWorktreeMiddleware crash."""
+        user_parallel = ParallelWorktreeMiddleware(working_dir=None)
+        middleware = _capture_middleware(
+            monkeypatch,
+            config=FeatureConfig(enable_result_synthesis=True),
+            middleware=[user_parallel],
+        )
+
+        parallel_mw = [m for m in middleware if isinstance(m, ParallelWorktreeMiddleware)]
+        assert len(parallel_mw) == 1, "auto-provisioned a duplicate ParallelWorktreeMiddleware"
+        assert parallel_mw[0] is user_parallel, "user's ParallelWorktreeMiddleware was discarded"
+
+        names = [m.name for m in middleware]
+        assert len(names) == len(set(names)), f"duplicate middleware names: {names}"
+
+    def test_result_synthesis_wired_to_user_instance_and_ordered(self, monkeypatch) -> None:
+        """ResultSynthesis references the user's instance and sees it earlier."""
+        user_parallel = ParallelWorktreeMiddleware(working_dir=None)
+        middleware = _capture_middleware(
+            monkeypatch,
+            config=FeatureConfig(enable_result_synthesis=True),
+            middleware=[user_parallel],
+        )
+
+        synthesis = next(m for m in middleware if isinstance(m, ResultSynthesisMiddleware))
+        # Wired to the user's instance, not an auto-provisioned twin.
+        assert synthesis._parallel_middleware is user_parallel
+
+        # `requires=` ordering: ParallelWorktreeMiddleware must appear earlier.
+        parallel_idx = next(i for i, m in enumerate(middleware) if isinstance(m, ParallelWorktreeMiddleware))
+        synthesis_idx = next(i for i, m in enumerate(middleware) if isinstance(m, ResultSynthesisMiddleware))
+        assert parallel_idx < synthesis_idx
+
+    def test_flag_alone_auto_provisions_one(self, monkeypatch) -> None:
+        """Without a user instance the flag still auto-provisions exactly one."""
+        middleware = _capture_middleware(
+            monkeypatch,
+            config=FeatureConfig(enable_result_synthesis=True),
+        )
+
+        parallel_mw = [m for m in middleware if isinstance(m, ParallelWorktreeMiddleware)]
+        assert len(parallel_mw) == 1
+        synthesis = next(m for m in middleware if isinstance(m, ResultSynthesisMiddleware))
+        assert synthesis._parallel_middleware is parallel_mw[0]

@@ -164,20 +164,45 @@ class TestDLPMiddleware:
         mw = DLPMiddleware(mode="warn")
         assert mw._mode == "warn"
 
-    def test_process_messages_redact_mutates_string_content(self) -> None:
-        from types import SimpleNamespace
+    def test_process_messages_redact_returns_redacted_copy_string_content(self) -> None:
+        # P14: redact mode returns a redacted COPY (request.override) and leaves
+        # the canonical message untouched rather than mutating it in place.
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         from bog_agents.middleware.dlp import DLPMiddleware
 
-        mw = DLPMiddleware(mode="redact")
-        msg = SimpleNamespace(content="My SSN is 123-45-6789 and email john@example.com")
-        request = SimpleNamespace(messages=[msg])
-        mw._process_messages(request)  # type: ignore[arg-type]
+        try:
+            from langchain.agents.middleware.types import ModelRequest
+        except ImportError:  # pragma: no cover - import-path fallback
+            from langchain.agents.middleware import ModelRequest  # type: ignore[attr-defined,no-redef]
 
-        assert "123-45-6789" not in msg.content
-        assert "john@example.com" not in msg.content
-        assert "[SSN-REDACTED]" in msg.content
-        assert "[EMAIL-REDACTED]" in msg.content
+        class _FakeModel:
+            _llm_type = "fake"
+
+            def _get_ls_params(self, **_kwargs: object) -> dict[str, str]:
+                return {"ls_provider": "fake", "ls_model_name": "fake-model"}
+
+        mw = DLPMiddleware(mode="redact")
+        secret = "My SSN is 123-45-6789 and email john@example.com"
+        msg = HumanMessage(content=secret)
+        request = ModelRequest(
+            model=_FakeModel(),
+            messages=[msg],
+            system_message=SystemMessage(content="sys"),
+            tools=[],
+            runtime=None,
+            state={"messages": [msg]},
+        )
+
+        out = mw._process_messages(request)  # type: ignore[arg-type]
+
+        redacted = out.messages[0].content
+        assert "123-45-6789" not in redacted
+        assert "john@example.com" not in redacted
+        assert "[SSN-REDACTED]" in redacted
+        assert "[EMAIL-REDACTED]" in redacted
+        # Canonical message left untouched (no in-place corruption).
+        assert msg.content == secret
         assert mw.log.total_redactions >= 2
 
     def test_process_messages_warn_does_not_mutate(self) -> None:
@@ -195,24 +220,48 @@ class TestDLPMiddleware:
         assert mw.log.total_detections >= 1
         assert mw.log.total_redactions == 0
 
-    def test_process_messages_redact_multimodal_text_blocks(self) -> None:
-        from types import SimpleNamespace
+    def test_process_messages_redact_returns_redacted_copy_multimodal(self) -> None:
+        # P14: multimodal text parts are redacted on a copy; the canonical
+        # message's content list is not mutated in place.
+        from langchain_core.messages import HumanMessage, SystemMessage
 
         from bog_agents.middleware.dlp import DLPMiddleware
+
+        try:
+            from langchain.agents.middleware.types import ModelRequest
+        except ImportError:  # pragma: no cover - import-path fallback
+            from langchain.agents.middleware import ModelRequest  # type: ignore[attr-defined,no-redef]
+
+        class _FakeModel:
+            _llm_type = "fake"
+
+            def _get_ls_params(self, **_kwargs: object) -> dict[str, str]:
+                return {"ls_provider": "fake", "ls_model_name": "fake-model"}
 
         mw = DLPMiddleware(mode="redact")
         content = [
             {"type": "text", "text": "Card: 4111-1111-1111-1111"},
             {"type": "image_url", "image_url": "data:image/png;base64,..."},
         ]
-        msg = SimpleNamespace(content=content)
-        request = SimpleNamespace(messages=[msg])
-        mw._process_messages(request)  # type: ignore[arg-type]
+        msg = HumanMessage(content=content)
+        request = ModelRequest(
+            model=_FakeModel(),
+            messages=[msg],
+            system_message=SystemMessage(content="sys"),
+            tools=[],
+            runtime=None,
+            state={"messages": [msg]},
+        )
 
-        assert "4111-1111-1111-1111" not in content[0]["text"]
-        assert "[CC-REDACTED]" in content[0]["text"]
-        # Non-text block untouched.
-        assert content[1] == {"type": "image_url", "image_url": "data:image/png;base64,..."}
+        out = mw._process_messages(request)  # type: ignore[arg-type]
+
+        # Outgoing copy has the card number redacted; image block preserved.
+        out_repr = str(out.messages[0].content)
+        assert "4111-1111-1111-1111" not in out_repr
+        assert "[CC-REDACTED]" in out_repr
+        assert "image_url" in out_repr
+        # Canonical message content is untouched.
+        assert "4111-1111-1111-1111" in str(msg.content)
 
 
 class TestVersionControlMiddleware:

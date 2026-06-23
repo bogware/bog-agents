@@ -1040,10 +1040,25 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
         from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 
+        # ResultSynthesisMiddleware requires a ParallelWorktreeMiddleware that
+        # appears earlier in the stack (enforced by `requires=`). Search BOTH
+        # the feature-wired stack built so far AND the not-yet-appended
+        # ``user_middleware`` (V3-24): if we only searched ``agents_middleware``,
+        # a user passing their own ParallelWorktreeMiddleware via ``middleware=``
+        # would get a second auto-provisioned instance, and the keep-first dedup
+        # pass would then silently discard the user's configured instance in
+        # favor of our default. Prefer the user's instance and reposition it
+        # before ResultSynthesis so ordering holds without auto-provisioning a
+        # twin. The later copy left in ``user_middleware`` is dropped by the
+        # keep-first ``_dedup_middleware_by_name`` backstop.
         parallel_mw = next((m for m in agents_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
         if parallel_mw is None:
-            # ResultSynthesisMiddleware requires ParallelWorktreeMiddleware.
-            # Auto-create one rather than crashing at validation time.
+            parallel_mw = next((m for m in user_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
+            if parallel_mw is not None:
+                agents_middleware.append(parallel_mw)
+        if parallel_mw is None:
+            # Neither the feature stack nor the user supplied one; auto-create
+            # one rather than crashing at validation time.
             parallel_mw = ParallelWorktreeMiddleware(working_dir=_wd)
             agents_middleware.append(parallel_mw)
         agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))

@@ -132,6 +132,72 @@ class FilesystemBackend(BackendProtocol):
         self.virtual_mode = virtual_mode
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
 
+    def _atomic_write(self, resolved_path: Path, content: str | bytes, *, mode: int = 0o644) -> None:
+        """Write `content` to `resolved_path` crash-safely via a sibling temp file.
+
+        Writes to a uniquely-named sibling temp file opened with
+        `O_NOFOLLOW|O_CREAT|O_EXCL` (so the write can never traverse a symlink and
+        never clobber a pre-existing temp), fsyncs the data to disk, then
+        `os.replace`s the temp file onto the destination. Because `os.replace` is
+        atomic on a single filesystem, an interrupt / `ENOSPC` after the old
+        `O_TRUNC` truncate can no longer corrupt or empty the original: either the
+        replace completes (new content) or it doesn't (original untouched).
+
+        The destination is checked for being a symlink before the replace so the
+        O_NOFOLLOW protection of the previous in-place writers is preserved: we
+        never silently overwrite a symlink target.
+
+        Args:
+            resolved_path: Absolute destination path (already security-resolved).
+            content: Text (`str`) or binary (`bytes`) payload to write.
+            mode: File mode for the newly created temp file. Defaults to `0o644`.
+
+        Raises:
+            OSError: If the destination is a symlink (preserving O_NOFOLLOW
+                semantics), or on any underlying open/write/replace failure.
+            UnicodeEncodeError: If `content` is `str` and cannot be UTF-8 encoded.
+        """
+        # Preserve the O_NOFOLLOW symlink protection of the in-place writers:
+        # refuse to replace a symlink (which os.replace would otherwise clobber).
+        # os.path.islink inspects the link itself, not its target.
+        if hasattr(os, "O_NOFOLLOW") and os.path.islink(resolved_path):
+            msg = f"Refusing to write through symlink: {resolved_path}"
+            raise OSError(msg)
+
+        # Sibling temp file: same directory guarantees same filesystem so
+        # os.replace is a true atomic rename (not a cross-device copy).
+        tmp_path = resolved_path.with_name(f".{resolved_path.name}.{os.getpid()}.tmp")
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+
+        is_bytes = isinstance(content, bytes)
+        try:
+            fd = os.open(tmp_path, flags, mode)
+            try:
+                with os.fdopen(fd, "wb" if is_bytes else "w", encoding=None if is_bytes else "utf-8") as f:
+                    f.write(content)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except BaseException:
+                # fdopen took ownership of fd; the with-block closed it. Best-effort
+                # cleanup of the partial temp so it doesn't linger or block a retry.
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+            os.replace(tmp_path, resolved_path)
+        except BaseException:
+            # Replace (or a pre-replace failure) left the temp behind; remove it.
+            # The original destination is guaranteed untouched at this point.
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
     def _resolve_path(self, key: str) -> Path:
         r"""Resolve a file path with security checks.
 
@@ -473,13 +539,11 @@ class FilesystemBackend(BackendProtocol):
 
             new_content, occurrences = result
 
-            # Write securely
-            flags = os.O_WRONLY | os.O_TRUNC
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(resolved_path, flags)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            # Write crash-safely: a sibling temp file + fsync + atomic os.replace so
+            # an interrupt/ENOSPC mid-write can no longer truncate-then-lose the
+            # original (the old O_WRONLY|O_TRUNC path destroyed it). O_NOFOLLOW
+            # symlink protection is preserved inside the helper.
+            self._atomic_write(resolved_path, new_content)
 
             return EditResult(path=file_path, files_update=None, occurrences=int(occurrences))
         except (OSError, UnicodeDecodeError, UnicodeEncodeError) as e:
@@ -745,12 +809,10 @@ class FilesystemBackend(BackendProtocol):
                 # Create parent directories if needed
                 resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
-                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-                if hasattr(os, "O_NOFOLLOW"):
-                    flags |= os.O_NOFOLLOW
-                fd = os.open(resolved_path, flags, 0o644)
-                with os.fdopen(fd, "wb") as f:
-                    f.write(content)
+                # Crash-safe write: sibling temp file + fsync + atomic os.replace so a
+                # mid-write interrupt/ENOSPC can't truncate-then-lose an existing file
+                # being overwritten. O_NOFOLLOW symlink protection is preserved.
+                self._atomic_write(resolved_path, content)
 
                 responses.append(FileUploadResponse(path=path, error=None))
             except FileNotFoundError:

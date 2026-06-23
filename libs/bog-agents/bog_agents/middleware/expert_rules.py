@@ -51,6 +51,7 @@ from bog_agents.middleware.expert_engine import (
     Pattern,
     Rule,
     RuleLoadError,
+    WorkingMemory,
     load_rules_from_dir,
 )
 
@@ -118,6 +119,12 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             store the middleware still blocks the tool call but the
             approval lives only in the engine's return value.
         extra_rules: Rules to load programmatically (additive over disk).
+        max_working_facts: Soft cap on the number of *derived* facts
+            (everything except the per-call ``tool_call`` structural fact)
+            held in the shared engine memory. Crossing it logs a one-time
+            warning; running far past it FIFO-evicts the oldest derived
+            facts so a long-lived daemon session can't leak memory or
+            compound matcher latency. ``0`` disables the cap.
     """
 
     state_schema = ExpertRulesState
@@ -135,14 +142,23 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         on_approval_required: Callable[[dict[str, Any]], None] | None = None,
         approval_store: ApprovalStore | None = None,
         extra_rules: list[Rule] | None = None,
+        max_working_facts: int = 5000,
     ) -> None:
         self._working_dir = working_dir or Path.cwd()
         self._rules_subdir = rules_subdir
         self._reload_interval = reload_interval
         self._enabled = enabled
         self._extra_rules: list[Rule] = list(extra_rules or [])
+        # Bound the shared engine memory. Rule ``assert_fact`` actions add
+        # derived facts that are never retracted (only the per-call
+        # ``tool_call`` structural fact is), so over a long daemon session
+        # they leak memory and compound matcher latency. The soft cap warns
+        # once on crossing and FIFO-evicts the oldest derived facts far past
+        # it, leaving ``tool_call`` (and other structural) facts untouched so
+        # cross-call rule semantics keep working.
         self._engine = ExpertEngine(
             self._extra_rules,
+            memory=WorkingMemory(max_working_facts=max_working_facts),
             max_iterations=max_iterations,
             notify=notify,
             audit=audit,

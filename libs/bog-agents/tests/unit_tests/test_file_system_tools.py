@@ -350,13 +350,13 @@ def test_grep_finds_written_file() -> None:
     assert "/project/main.py" in grep_message.content, "Grep should reference the file containing 'import'"
 
 
-# Our reducers do not handle parallel edits in StateBackend.
-# These will also not work correctly for other backends due to race conditions.
-# Even sandbox/file system backend could get into some edge cases (e.g., if the edits are overlapping)
-# Generally best to instruct the LLM to avoid parallel edits of the same file likely.
-@pytest.mark.xfail(reason="We should add after_model middleware to fail parallel edits of the same file.")
+# Parallel edits to the SAME file race each other in StateBackend (and via overlapping
+# edits in sandbox/file system backends): each edit reads the same base version and the
+# last-writer-wins reducer silently clobbers the others. The FilesystemMiddleware's
+# after_model guard now rejects all-but-one conflicting write-class call and asks the
+# model to sequence them across turns.
 def test_parallel_edit_file_calls() -> None:
-    """Verify that parallel edit_file calls correctly update file state."""
+    """Verify conflicting parallel edit_file calls on one file are rejected, not clobbered."""
     # Fake model will write a file, then issue multiple edit_file calls in parallel
     fake_model = GenericFakeChatModel(
         messages=iter(
@@ -400,7 +400,7 @@ def test_parallel_edit_file_calls() -> None:
                         },
                     ],
                 ),
-                AIMessage(content="I have edited the file in parallel."),
+                AIMessage(content="I have edited the file."),
             ]
         )
     )
@@ -410,11 +410,167 @@ def test_parallel_edit_file_calls() -> None:
         checkpointer=InMemorySaver(),
     )
 
-    _ = agent.invoke(
+    result = agent.invoke(
         {"messages": [HumanMessage(content="Edit file in parallel")]},
         config={"configurable": {"thread_id": "test_thread_parallel_edits"}},
     )
-    assert False, "Finish implementing correct behavior to add a ToolMessage with error if parallel edits to the same file are attempted."  # noqa: PT015, B011
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    tool_by_id = {m.tool_call_id: m for m in tool_messages}
+
+    # The second conflicting edit must have been rejected with an error ToolMessage.
+    assert "call_edit_2" in tool_by_id, "Expected an error ToolMessage for the rejected parallel edit"
+    rejected = tool_by_id["call_edit_2"]
+    assert rejected.status == "error"
+    assert "same file" in rejected.content
+    assert "/multi.txt" in rejected.content
+
+    # The first edit must still have executed (no lost write for the kept call).
+    assert "call_edit_1" in tool_by_id, "Expected the first edit to still run"
+    assert tool_by_id["call_edit_1"].status != "error"
+
+    # The rejected edit must NOT be present as a live tool call on the rewritten AIMessage.
+    edit_ai_messages = [
+        m for m in result["messages"] if isinstance(m, AIMessage) and any(tc["id"] in {"call_edit_1", "call_edit_2"} for tc in m.tool_calls)
+    ]
+    assert len(edit_ai_messages) == 1
+    kept_ids = {tc["id"] for tc in edit_ai_messages[0].tool_calls}
+    assert kept_ids == {"call_edit_1"}, "The conflicting edit should be stripped from the AIMessage"
+
+    # The surviving edit must have actually applied to the file contents.
+    multi_content = result["files"]["/multi.txt"]["content"]
+    if isinstance(multi_content, list):
+        multi_content = "\n".join(multi_content)
+    assert multi_content == "line 1\nline two\nline three"
+
+
+def test_parallel_edit_file_calls_to_different_files_succeed() -> None:
+    """Verify non-conflicting parallel edits to DIFFERENT files are not rejected."""
+    fake_model = GenericFakeChatModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_file",
+                            "args": {"file_path": "/a.txt", "content": "alpha"},
+                            "id": "call_write_a",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "write_file",
+                            "args": {"file_path": "/b.txt", "content": "beta"},
+                            "id": "call_write_b",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "edit_file",
+                            "args": {"file_path": "/a.txt", "old_string": "alpha", "new_string": "ALPHA"},
+                            "id": "call_edit_a",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "edit_file",
+                            "args": {"file_path": "/b.txt", "old_string": "beta", "new_string": "BETA"},
+                            "id": "call_edit_b",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(content="Edited both files."),
+            ]
+        )
+    )
+
+    agent = create_agent(
+        model=fake_model,
+        checkpointer=InMemorySaver(),
+    )
+
+    result = agent.invoke(
+        {"messages": [HumanMessage(content="Edit two different files in parallel")]},
+        config={"configurable": {"thread_id": "test_thread_parallel_diff_files"}},
+    )
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    # No edit should be rejected - distinct files do not race.
+    assert all(m.status != "error" for m in tool_messages), "Parallel edits to different files must not be rejected"
+
+    # Both edits must have applied.
+    def _content(path: str) -> str:
+        raw = result["files"][path]["content"]
+        return "\n".join(raw) if isinstance(raw, list) else raw
+
+    assert _content("/a.txt") == "ALPHA"
+    assert _content("/b.txt") == "BETA"
+
+
+def test_detect_parallel_write_conflicts_same_file() -> None:
+    """Two write-class calls on one (normalized) path keep the first, reject the rest."""
+    from bog_agents.middleware.filesystem import _detect_parallel_write_conflicts
+
+    msg = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "edit_file", "args": {"file_path": "/x.txt", "old_string": "a", "new_string": "b"}, "id": "e1", "type": "tool_call"},
+            # Same file, different spelling - normalization must still collide.
+            {"name": "write_file", "args": {"file_path": "x.txt", "content": "z"}, "id": "w1", "type": "tool_call"},
+        ],
+    )
+    kept, conflicts = _detect_parallel_write_conflicts(msg)
+    assert [tc["id"] for tc in kept] == ["e1"]
+    assert len(conflicts) == 1
+    assert conflicts[0].tool_call_id == "w1"
+    assert conflicts[0].status == "error"
+
+
+def test_detect_parallel_write_conflicts_distinct_and_reads() -> None:
+    """Distinct files and non-write tools never conflict."""
+    from bog_agents.middleware.filesystem import _detect_parallel_write_conflicts
+
+    msg = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "read_file", "args": {"file_path": "/x.txt"}, "id": "r1", "type": "tool_call"},
+            {"name": "edit_file", "args": {"file_path": "/x.txt", "old_string": "a", "new_string": "b"}, "id": "e1", "type": "tool_call"},
+            {"name": "edit_file", "args": {"file_path": "/y.txt", "old_string": "a", "new_string": "b"}, "id": "e2", "type": "tool_call"},
+        ],
+    )
+    kept, conflicts = _detect_parallel_write_conflicts(msg)
+    assert {tc["id"] for tc in kept} == {"r1", "e1", "e2"}
+    assert conflicts == []
+
+
+def test_detect_parallel_write_conflicts_multi_edit_overlap() -> None:
+    """multi_edit_file overlapping a prior edit's target on any sub-path conflicts."""
+    from bog_agents.middleware.filesystem import _detect_parallel_write_conflicts
+
+    msg = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "edit_file", "args": {"file_path": "/shared.txt", "old_string": "a", "new_string": "b"}, "id": "e1", "type": "tool_call"},
+            {
+                "name": "multi_edit_file",
+                "args": {
+                    "edits": [
+                        {"file_path": "/other.txt", "old_string": "a", "new_string": "b"},
+                        {"file_path": "/shared.txt", "old_string": "c", "new_string": "d"},
+                    ]
+                },
+                "id": "m1",
+                "type": "tool_call",
+            },
+        ],
+    )
+    kept, conflicts = _detect_parallel_write_conflicts(msg)
+    assert [tc["id"] for tc in kept] == ["e1"]
+    assert [c.tool_call_id for c in conflicts] == ["m1"]
 
 
 def test_path_traversal_returns_error_message() -> None:

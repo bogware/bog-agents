@@ -138,6 +138,116 @@ class TestWorkingMemory:
 
 
 # ---------------------------------------------------------------------------
+# WorkingMemory soft cap (P17) — bound unbounded assert_fact-derived growth
+# ---------------------------------------------------------------------------
+
+
+class TestWorkingMemorySoftCap:
+    """The shared engine memory must not leak derived facts forever.
+
+    Rule ``assert_fact`` actions accumulate in shared memory for the engine's
+    lifetime (only the per-call ``tool_call`` fact is retracted). The soft cap
+    warns once on crossing and FIFO-evicts the oldest *derived* facts far past
+    it, never the structural ``tool_call`` facts.
+    """
+
+    def test_crossing_cap_logs_one_time_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        wm = WorkingMemory(max_working_facts=3)
+        with caplog.at_level("WARNING", logger="bog_agents.middleware.expert_engine.working_memory"):
+            for _ in range(5):
+                wm.assert_fact(Fact(fact_type="alert", data={}))
+        warnings = [r for r in caplog.records if "soft cap" in r.getMessage()]
+        # Crossing the bound logs exactly once, not once per assertion above it.
+        assert len(warnings) == 1
+        assert "max_working_facts=3" in warnings[0].getMessage()
+
+    def test_warning_does_not_repeat_until_dropping_below(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        wm = WorkingMemory(max_working_facts=2)
+        ids: list[int] = []
+        with caplog.at_level("WARNING", logger="bog_agents.middleware.expert_engine.working_memory"):
+            for _ in range(4):
+                ids.append(wm.assert_fact(Fact(fact_type="alert", data={})).id)
+            assert sum("soft cap" in r.getMessage() for r in caplog.records) == 1
+            # Drop back under the cap, then cross again → a second warning.
+            wm.retract(ids[0])
+            wm.retract(ids[1])
+            wm.retract(ids[2])  # now 1 derived fact, under cap → latch re-arms
+            wm.assert_fact(Fact(fact_type="alert", data={}))
+            wm.assert_fact(Fact(fact_type="alert", data={}))  # back over cap
+        assert sum("soft cap" in r.getMessage() for r in caplog.records) == 2
+
+    def test_structural_facts_never_counted_or_evicted(self) -> None:
+        # tool_call is protected: any number of them must never trip the cap.
+        wm = WorkingMemory(max_working_facts=2)
+        for i in range(50):
+            wm.assert_fact(Fact(fact_type="tool_call", data={"n": i}))
+        assert wm.stats().get("tool_call") == 50
+        assert wm._derived_fact_count() == 0
+
+    def test_fifo_evicts_oldest_derived_far_past_cap(self) -> None:
+        # Eviction kicks in past 2x the cap; oldest (lowest-id) derived facts go.
+        wm = WorkingMemory(max_working_facts=2)
+        ids = [wm.assert_fact(Fact(fact_type="alert", data={"n": i})).id for i in range(10)]
+        # cap=2, eviction ceiling=4: derived count stays bounded by the
+        # ceiling rather than growing with every assertion (no leak).
+        assert wm._derived_fact_count() <= 4
+        survivors = {f.id for f in wm.by_type("alert")}
+        # Oldest ids are evicted FIFO; the most-recent fact always survives.
+        assert ids[0] not in survivors
+        assert ids[-1] in survivors
+
+    def test_eviction_preserves_structural_facts(self) -> None:
+        wm = WorkingMemory(max_working_facts=2)
+        tool_ids = [wm.assert_fact(Fact(fact_type="tool_call", data={"n": i})).id for i in range(3)]
+        # Flood derived facts well past the eviction ceiling.
+        for i in range(20):
+            wm.assert_fact(Fact(fact_type="alert", data={"n": i}))
+        # All structural tool_call facts are retained despite eviction.
+        for tid in tool_ids:
+            assert tid in wm
+        assert wm.stats().get("tool_call") == 3
+        # Derived facts trimmed back under the eviction ceiling (no leak).
+        assert wm._derived_fact_count() <= 4
+
+    def test_custom_protected_fact_types(self) -> None:
+        wm = WorkingMemory(max_working_facts=1, protected_fact_types=("session",))
+        wm.assert_fact(Fact(fact_type="session", data={}))
+        wm.assert_fact(Fact(fact_type="session", data={}))
+        # session is protected here → not counted toward the cap.
+        assert wm._derived_fact_count() == 0
+
+    def test_cap_zero_disables_bound(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        wm = WorkingMemory(max_working_facts=0)
+        with caplog.at_level("WARNING", logger="bog_agents.middleware.expert_engine.working_memory"):
+            for _ in range(100):
+                wm.assert_fact(Fact(fact_type="alert", data={}))
+        assert not any("soft cap" in r.getMessage() for r in caplog.records)
+        assert wm._derived_fact_count() == 100
+
+    def test_clear_resets_warning_latch(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        wm = WorkingMemory(max_working_facts=2)
+        with caplog.at_level("WARNING", logger="bog_agents.middleware.expert_engine.working_memory"):
+            for _ in range(4):
+                wm.assert_fact(Fact(fact_type="alert", data={}))
+            wm.clear()
+            for _ in range(4):
+                wm.assert_fact(Fact(fact_type="alert", data={}))
+        assert sum("soft cap" in r.getMessage() for r in caplog.records) == 2
+
+
+# ---------------------------------------------------------------------------
 # PatternMatcher
 # ---------------------------------------------------------------------------
 

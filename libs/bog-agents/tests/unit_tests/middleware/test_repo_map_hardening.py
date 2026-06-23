@@ -71,3 +71,68 @@ def test_build_repo_map_handles_invalid_utf8_bytes(tmp_path: Path) -> None:
 
     # The valid file is still indexed even though a sibling has bad bytes.
     assert "Widget" in result
+
+
+# ---------------------------------------------------------------------------
+# P31: dotted-dir exclusion was too broad — legitimate source under non-noise
+# dotted dirs (.github scripts, etc.) was silently dropped. The exclusion is
+# now narrowed to a curated noise allowlist; .git is still skipped.
+# ---------------------------------------------------------------------------
+
+
+def _write_source(path: Path, class_name: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"class {class_name}:\n    pass\n", encoding="utf-8")
+
+
+def test_source_under_non_noise_dotted_dir_is_indexed(tmp_path: Path) -> None:
+    """A source file under ``.github`` (a non-noise dotted dir) is now indexed (P31)."""
+    _write_source(tmp_path / ".github" / "scripts" / "release.py", "ReleaseTool")
+
+    result = build_repo_map(tmp_path)
+
+    assert "ReleaseTool" in result
+
+
+def test_source_under_non_noise_dotted_dir_is_indexed_cached(tmp_path: Path) -> None:
+    """Cached build also indexes source under a non-noise dotted dir (P31)."""
+    _write_source(tmp_path / ".github" / "scripts" / "release.py", "ReleaseTool")
+
+    result = build_repo_map_cached(tmp_path)
+
+    assert "ReleaseTool" in result
+
+
+def test_git_dir_is_still_skipped(tmp_path: Path) -> None:
+    """``.git`` contents must never be indexed even with the narrowed filter."""
+    # A file that *looks* like indexable Python living inside the object store.
+    _write_source(tmp_path / ".git" / "hooks" / "evil.py", "GitInternal")
+    # A real source file so the map is non-empty.
+    _write_source(tmp_path / "app.py", "RealCode")
+
+    result = build_repo_map(tmp_path)
+
+    assert "RealCode" in result
+    assert "GitInternal" not in result
+
+
+def test_git_dir_is_still_skipped_cached(tmp_path: Path) -> None:
+    """Cached build also excludes ``.git`` contents (P31)."""
+    _write_source(tmp_path / ".git" / "hooks" / "evil.py", "GitInternal")
+    _write_source(tmp_path / "app.py", "RealCode")
+
+    result = build_repo_map_cached(tmp_path)
+
+    assert "RealCode" in result
+    assert "GitInternal" not in result
+
+
+def test_known_noise_dotted_dir_still_skipped(tmp_path: Path) -> None:
+    """A curated-noise dotted dir (e.g. ``.venv``) remains excluded."""
+    _write_source(tmp_path / ".venv" / "lib" / "pkg.py", "VendoredPkg")
+    _write_source(tmp_path / "main.py", "AppMain")
+
+    result = build_repo_map(tmp_path)
+
+    assert "AppMain" in result
+    assert "VendoredPkg" not in result

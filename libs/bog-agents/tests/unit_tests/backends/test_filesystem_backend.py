@@ -691,3 +691,164 @@ def test_download_files_generic_oserror_does_not_abort_batch(tmp_path: Path, mon
     # Subsequent file still processed (partial-success contract preserved).
     assert responses[2].error is None
     assert responses[2].content == b"b"
+
+
+def test_edit_preserves_original_on_mid_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """P12: a crash during edit()'s write must leave the original file intact.
+
+    The legacy in-place writer opened the target O_TRUNC and then wrote, so an
+    interrupt/ENOSPC after the truncate emptied the file. The temp-file +
+    os.replace path must keep the original content if the write blows up.
+    """
+    import os as _os
+
+    root = tmp_path
+    target = root / "data.txt"
+    original = "ORIGINAL CONTENT THAT MUST SURVIVE\nline2\n"
+    write_file(target, original)
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+
+    real_replace = _os.replace
+
+    def boom_replace(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        raise OSError("simulated ENOSPC during replace")
+
+    monkeypatch.setattr(_os, "replace", boom_replace)
+
+    result = be.edit(str(target), "ORIGINAL", "MUTATED", replace_all=False)
+
+    # The edit reports the failure...
+    assert isinstance(result, EditResult)
+    assert result.error is not None
+    # ...and crucially the original file is byte-for-byte intact (not truncated/emptied).
+    assert target.read_text(encoding="utf-8") == original
+
+    # No stray temp file left behind.
+    monkeypatch.setattr(_os, "replace", real_replace)
+    leftovers = [p.name for p in root.iterdir() if p.name != "data.txt"]
+    assert leftovers == [], f"temp file leaked: {leftovers}"
+
+
+def test_edit_mid_write_failure_during_write_preserves_original(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """P12: a failure while writing the temp file (before replace) must not touch the original."""
+    import os as _os
+
+    root = tmp_path
+    target = root / "data.txt"
+    original = "KEEP ME\n"
+    write_file(target, original)
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+
+    real_write = _os.write
+    real_fsync = _os.fsync
+
+    # Force the data-write phase to fail (fsync is the easiest deterministic hook
+    # that runs after the bytes are buffered but before replace).
+    def boom_fsync(fd: int) -> None:
+        raise OSError("simulated I/O error during fsync")
+
+    monkeypatch.setattr(_os, "fsync", boom_fsync)
+
+    result = be.edit(str(target), "KEEP", "DROP", replace_all=False)
+
+    assert isinstance(result, EditResult)
+    assert result.error is not None
+    assert target.read_text(encoding="utf-8") == original
+
+    monkeypatch.setattr(_os, "fsync", real_fsync)
+    leftovers = [p.name for p in root.iterdir() if p.name != "data.txt"]
+    assert leftovers == [], f"temp file leaked: {leftovers}"
+    # sanity: real os.write/os.fsync untouched
+    assert _os.write is real_write
+
+
+def test_edit_succeeds_and_replaces_content(tmp_path: Path) -> None:
+    """P12: the happy path still produces the edited content (no regression)."""
+    root = tmp_path
+    target = root / "data.txt"
+    write_file(target, "alpha beta gamma\n")
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+    result = be.edit(str(target), "beta", "DELTA", replace_all=False)
+
+    assert isinstance(result, EditResult)
+    assert result.error is None
+    assert result.occurrences == 1
+    assert target.read_text(encoding="utf-8") == "alpha DELTA gamma\n"
+    # No temp residue.
+    assert [p.name for p in root.iterdir()] == ["data.txt"]
+
+
+def test_upload_files_preserves_original_on_replace_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """P12: upload_files overwriting an existing file must not lose it on a mid-write crash."""
+    import os as _os
+
+    root = tmp_path
+    target = root / "blob.bin"
+    original = b"\x00\x01ORIGINAL-BYTES\x02"
+    target.write_bytes(original)
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+
+    real_replace = _os.replace
+
+    def boom_replace(src: object, dst: object, *args: object, **kwargs: object) -> None:
+        raise OSError("simulated crash during replace")
+
+    monkeypatch.setattr(_os, "replace", boom_replace)
+
+    responses = be.upload_files([(str(target), b"NEW-CONTENT")])
+
+    assert len(responses) == 1
+    assert responses[0].error is not None
+    # Original bytes survive the failed overwrite.
+    assert target.read_bytes() == original
+
+    monkeypatch.setattr(_os, "replace", real_replace)
+    leftovers = [p.name for p in root.iterdir() if p.name != "blob.bin"]
+    assert leftovers == [], f"temp file leaked: {leftovers}"
+
+
+def test_upload_files_atomic_overwrite_succeeds(tmp_path: Path) -> None:
+    """P12: upload_files happy path overwrites an existing file with the new bytes."""
+    root = tmp_path
+    target = root / "blob.bin"
+    target.write_bytes(b"old")
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+    responses = be.upload_files([(str(target), b"brand-new")])
+
+    assert responses[0].error is None
+    assert target.read_bytes() == b"brand-new"
+    assert [p.name for p in root.iterdir()] == ["blob.bin"]
+
+
+def test_atomic_write_refuses_symlink_destination(tmp_path: Path) -> None:
+    """P12: O_NOFOLLOW protection preserved — _atomic_write must not overwrite a symlink target.
+
+    Skipped on platforms without O_NOFOLLOW (Windows), where the guard is a no-op
+    by design.
+    """
+    import os as _os
+
+    if not hasattr(_os, "O_NOFOLLOW"):
+        pytest.skip("O_NOFOLLOW unavailable on this platform")
+
+    root = tmp_path
+    secret = root / "secret.txt"
+    secret.write_text("do-not-touch", encoding="utf-8")
+    link = root / "link.txt"
+    try:
+        link.symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported in this environment")
+
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=False)
+
+    with pytest.raises(OSError, match="symlink"):
+        be._atomic_write(link, "evil")
+
+    # The symlink target is untouched.
+    assert secret.read_text(encoding="utf-8") == "do-not-touch"

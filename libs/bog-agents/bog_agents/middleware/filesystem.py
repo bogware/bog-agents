@@ -17,9 +17,10 @@ from langchain.agents.middleware.types import (
 )
 from langchain.tools import ToolRuntime
 from langchain.tools.tool_node import ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.messages.content import ContentBlock, create_image_block
 from langchain_core.tools import BaseTool, StructuredTool
+from langgraph.runtime import Runtime
 from langgraph.types import Command
 from typing_extensions import TypedDict
 
@@ -71,6 +72,113 @@ READ_FILE_TRUNCATION_MSG = (
 # Using 4 chars per token as a conservative approximation (actual ratio varies by content)
 # This errs on the high side to avoid premature eviction of content that might fit
 NUM_CHARS_PER_TOKEN = 4
+
+# Tool names that mutate file contents. Two of these targeting the same resolved
+# file_path within a single AIMessage race each other: each reads the same base
+# version and the last-writer-wins reducer silently clobbers the others. The
+# after_model guard below rejects all-but-one such call and asks the model to
+# sequence them across turns instead.
+_WRITE_CLASS_TOOL_NAMES = frozenset({"write_file", "edit_file", "multi_edit_file"})
+
+# Message returned to the model for a conflicting write-class tool call that was
+# rejected because another write-class call in the same turn already targets the
+# same file.
+_PARALLEL_WRITE_CONFLICT_MSG = (
+    "Error: Multiple file-mutating tool calls in this turn target the same file "
+    "'{file_path}'. Parallel edits/writes to one file race each other and the last "
+    "writer silently overwrites the others, so this call was not executed. Re-issue "
+    "this change in a follow-up turn, after the first edit to '{file_path}' has been "
+    "applied, so the edits are sequenced correctly."
+)
+
+
+def _write_target_paths(tool_call: dict[str, Any]) -> set[str]:
+    """Resolve the file paths a write-class tool call would mutate.
+
+    Args:
+        tool_call: A tool-call dict from `AIMessage.tool_calls` (has `name`, `args`).
+
+    Returns:
+        The set of resolved (normalized) file paths the call targets. Paths that
+        fail validation fall back to their raw string so the guard never crashes
+        on a malformed path; an empty set is returned when no path is present.
+    """
+    args = tool_call.get("args") or {}
+    raw_paths: list[str] = []
+
+    if tool_call.get("name") == "multi_edit_file":
+        edits = args.get("edits")
+        if isinstance(edits, list):
+            for edit in edits:
+                if isinstance(edit, dict):
+                    path = edit.get("file_path")
+                    if isinstance(path, str) and path:
+                        raw_paths.append(path)
+    else:
+        path = args.get("file_path")
+        if isinstance(path, str) and path:
+            raw_paths.append(path)
+
+    resolved: set[str] = set()
+    for raw in raw_paths:
+        try:
+            resolved.add(validate_path(raw))
+        except ValueError:
+            # Keep the raw spelling so a bad path still participates in conflict
+            # detection (and is left to the tool itself to reject).
+            resolved.add(raw)
+    return resolved
+
+
+def _detect_parallel_write_conflicts(message: AIMessage) -> tuple[list[dict[str, Any]], list[ToolMessage]]:
+    """Find write-class tool calls in one AIMessage that race on the same file.
+
+    Within a single AIMessage, multiple `write_file`/`edit_file`/`multi_edit_file`
+    calls targeting the same resolved file path each read the same base version and
+    the last-writer-wins reducer silently clobbers the others. This keeps the first
+    such call per file and rejects every later conflicting one.
+
+    Reads, globs, greps, executes, and writes to *distinct* files are never affected.
+
+    Args:
+        message: The AIMessage to inspect.
+
+    Returns:
+        A tuple `(kept_tool_calls, conflict_tool_messages)`:
+        - `kept_tool_calls`: the tool calls to keep on the AIMessage (non-write
+          calls, plus the first write-class call per file).
+        - `conflict_tool_messages`: one error ToolMessage per rejected call.
+
+        When there is no conflict, `conflict_tool_messages` is empty and
+        `kept_tool_calls` is the original list (by value).
+    """
+    seen_paths: set[str] = set()
+    kept: list[dict[str, Any]] = []
+    conflicts: list[ToolMessage] = []
+
+    for tool_call in message.tool_calls:
+        if tool_call.get("name") not in _WRITE_CLASS_TOOL_NAMES:
+            kept.append(tool_call)
+            continue
+
+        targets = _write_target_paths(tool_call)
+        # Only reject when this call overlaps a path already claimed this turn.
+        conflicting = targets & seen_paths
+        if conflicting:
+            conflict_path = sorted(conflicting)[0]
+            conflicts.append(
+                ToolMessage(
+                    content=_PARALLEL_WRITE_CONFLICT_MSG.format(file_path=conflict_path),
+                    tool_call_id=tool_call["id"],
+                    name=tool_call.get("name"),
+                    status="error",
+                )
+            )
+        else:
+            seen_paths |= targets
+            kept.append(tool_call)
+
+    return kept, conflicts
 
 
 __all__ = [
@@ -1176,6 +1284,80 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
             request = request.override(system_message=new_system_message)
 
         return await handler(request)
+
+    def _guard_parallel_writes(self, state: AgentState[Any]) -> dict[str, Any] | None:
+        """Reject conflicting parallel file mutations in the latest model response.
+
+        When the model emits multiple write-class tool calls
+        (`write_file`/`edit_file`/`multi_edit_file`) targeting the same file in a
+        single AIMessage, only the first is allowed to run; each later conflicting
+        call is removed from the AIMessage and answered with an error ToolMessage
+        telling the model to sequence the edits across turns. This prevents the
+        last-writer-wins state reducer from silently clobbering edits.
+
+        Non-conflicting parallel calls (distinct files, or non-write tools such as
+        `read_file`/`grep`) are left untouched.
+
+        Args:
+            state: The current agent state (must contain `messages`).
+
+        Returns:
+            A state update `{"messages": [...]}` (the rewritten AIMessage by id plus
+            the new error ToolMessages) when a conflict is found, otherwise None.
+        """
+        messages = state.get("messages")
+        if not messages:
+            return None
+
+        last_ai_msg: AIMessage | None = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage):
+                last_ai_msg = msg
+                break
+
+        if last_ai_msg is None or not last_ai_msg.tool_calls:
+            return None
+
+        kept, conflicts = _detect_parallel_write_conflicts(last_ai_msg)
+        if not conflicts:
+            return None
+
+        # Rewrite the AIMessage with the conflicting tool calls removed. Preserving
+        # the original id makes the add_messages reducer overwrite it in place.
+        rewritten_ai = AIMessage(
+            content=last_ai_msg.content,
+            id=last_ai_msg.id,
+            name=last_ai_msg.name,
+            tool_calls=kept,
+            additional_kwargs=dict(last_ai_msg.additional_kwargs),
+            response_metadata=dict(last_ai_msg.response_metadata),
+        )
+
+        return {"messages": [rewritten_ai, *conflicts]}
+
+    def after_model(self, state: AgentState[Any], runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        """Reject conflicting parallel file mutations after each model call.
+
+        Args:
+            state: The current agent state.
+            runtime: The langgraph runtime (unused).
+
+        Returns:
+            A state update when conflicting parallel writes were rejected, else None.
+        """
+        return self._guard_parallel_writes(state)
+
+    async def aafter_model(self, state: AgentState[Any], runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        """(async) Reject conflicting parallel file mutations after each model call.
+
+        Args:
+            state: The current agent state.
+            runtime: The langgraph runtime (unused).
+
+        Returns:
+            A state update when conflicting parallel writes were rejected, else None.
+        """
+        return self._guard_parallel_writes(state)
 
     def _process_large_message(
         self,

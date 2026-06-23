@@ -340,6 +340,8 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         old_string: str,
         new_string: str,
         replace_all: bool = False,
+        *,
+        base_content: dict[str, Any] | None = None,
     ) -> EditResult:
         """Perform exact string replacements in an existing file.
 
@@ -351,6 +353,13 @@ class BackendProtocol(abc.ABC):  # noqa: B024
                        Must be different from old_string.
             replace_all: If True, replace all occurrences. If False (default),
                         old_string must be unique in the file or the edit fails.
+            base_content: Optional FileData dict to use as the working copy
+                instead of re-reading the file from the backend's store. Used by
+                batch callers (e.g. multi_edit_file) to thread an earlier edit's
+                result forward so chained edits to the same file compose, even on
+                state-backed stores that are not mutated mid-batch. Backends that
+                already reflect prior edits in their store (e.g. on-disk
+                filesystem backends) may ignore this argument.
 
         Returns:
             EditResult
@@ -363,9 +372,22 @@ class BackendProtocol(abc.ABC):  # noqa: B024
         old_string: str,
         new_string: str,
         replace_all: bool = False,
+        *,
+        base_content: dict[str, Any] | None = None,
     ) -> EditResult:
         """Async version of edit."""
-        return await anyio.to_thread.run_sync(self.edit, file_path, old_string, new_string, replace_all)  # ty: ignore[unresolved-attribute]
+        import functools
+
+        # Only forward ``base_content`` when a caller actually supplied one.
+        # Concrete backends that override ``edit`` without the (optional) kwarg
+        # — e.g. the on-disk FilesystemBackend — would otherwise raise
+        # ``TypeError`` on the default ``aedit`` path. Batch callers that need
+        # chained-edit content still pass it (and tolerate a TypeError fallback).
+        if base_content is None:
+            fn = functools.partial(self.edit, file_path, old_string, new_string, replace_all)
+        else:
+            fn = functools.partial(self.edit, file_path, old_string, new_string, replace_all, base_content=base_content)
+        return await anyio.to_thread.run_sync(fn)  # ty: ignore[unresolved-attribute]
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload multiple files to the sandbox.
