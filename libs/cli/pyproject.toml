@@ -95,7 +95,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Model providers
-anthropic = ["langchain-anthropic>=1.0.0,<2.0.0"]
+anthropic = ["langchain-anthropic>=1.4.8,<2.0.0"]
 baseten = ["langchain-baseten>=0.1.9,<1.0.0"]
 bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
 cohere = ["langchain-cohere>=0.5.0,<1.0.0"]
