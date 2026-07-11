@@ -1,13 +1,27 @@
+import base64
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 
-from bog_agents.backends.filesystem import FilesystemBackend
-from bog_agents.backends.protocol import EditResult, WriteResult
-from bog_agents.middleware.filesystem import FilesystemMiddleware
+from bog_agents.backends import filesystem as filesystem_module
+from bog_agents.backends.filesystem import DEFAULT_GLOB_TIMEOUT, FilesystemBackend
+from bog_agents.backends.protocol import (
+    DEFAULT_GREP_TIMEOUT,
+    DeleteResult,
+    EditResult,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+    supports_delete,
+)
+from bog_agents.backends.utils import compile_grep_include_glob
+from bog_agents.middleware.filesystem import GLOB_TIMEOUT, FilesystemMiddleware
 
 
 def write_file(p: Path, content: str):
@@ -852,3 +866,373 @@ def test_atomic_write_refuses_symlink_destination(tmp_path: Path) -> None:
 
     # The symlink target is untouched.
     assert secret.read_text(encoding="utf-8") == "do-not-touch"
+
+
+# --- Python grep fallback: include-glob semantics (nested + Windows separators) ---
+
+
+@pytest.fixture
+def python_fallback_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FilesystemBackend:
+    """Backend whose grep always takes the Python fallback path, over a nested tree."""
+    write_file(tmp_path / "src" / "app" / "main.py", "needle in nested python file\n")
+    write_file(tmp_path / "top.py", "needle at the top level\n")
+    write_file(tmp_path / "src" / "app" / "notes.txt", "needle in a text file\n")
+
+    monkeypatch.setattr(FilesystemBackend, "_ripgrep_search", lambda *_args, **_kwargs: None)
+    return FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+
+def test_python_search_include_glob_matches_nested_file(python_fallback_backend: FilesystemBackend) -> None:
+    """`*.py` must match a file at any depth, not just the search root.
+
+    Regression: `_python_search` matched the include glob against the whole
+    root-relative path, so `*.py` (no separator) never matched `src/app/main.py`.
+    Ripgrep includes it, so grep results silently differed depending on whether
+    `rg` happened to be installed.
+    """
+    matches = python_fallback_backend.grep_raw("needle", path="/", glob="*.py")
+
+    paths = {m["path"] for m in matches}
+    assert "/src/app/main.py" in paths
+    assert "/top.py" in paths
+    # The include glob still excludes non-matching files.
+    assert "/src/app/notes.txt" not in paths
+
+
+def test_python_search_include_glob_with_directory_component(python_fallback_backend: FilesystemBackend) -> None:
+    """A glob with a `/` matches against the path relative to the search root."""
+    matches = python_fallback_backend.grep_raw("needle", path="/", glob="src/**/*.py")
+
+    paths = {m["path"] for m in matches}
+    assert paths == {"/src/app/main.py"}
+
+
+def test_grep_include_glob_matcher_normalizes_windows_separators() -> None:
+    r"""The include-glob matcher must accept the backslash paths Windows produces.
+
+    Regression: `_python_search` fed `str(fp.relative_to(root))` straight to
+    `wcglob.globmatch`. On Windows that is `src\app\main.py`, which never matches
+    a POSIX-style glob on a POSIX host — so the same backend gave different grep
+    results per platform. `compile_grep_include_glob` normalizes separators, and
+    the backend now goes through it.
+    """
+    windows_rel_path = "src" + chr(92) + "app" + chr(92) + "main.py"
+
+    assert compile_grep_include_glob("src/**/*.py")(windows_rel_path)
+    assert compile_grep_include_glob("*.py")(windows_rel_path)
+
+
+def test_python_search_returns_untruncated_on_clean_walk(python_fallback_backend: FilesystemBackend) -> None:
+    """A search that completes within its budget reports `truncated=False`."""
+    result = python_fallback_backend.grep("needle", path="/")
+
+    assert isinstance(result, GrepResult)
+    assert result.error is None
+    assert result.truncated is False
+    assert result.matches
+
+
+def test_python_search_is_bounded_by_wall_clock_budget(python_fallback_backend: FilesystemBackend, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_python_search` must abandon a slow walk instead of running unbounded."""
+    real_monotonic = time.monotonic
+    # First call sets the deadline; every later call is far past it.
+    calls = {"n": 0}
+
+    def creeping_monotonic() -> float:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_monotonic()
+        return real_monotonic() + DEFAULT_GREP_TIMEOUT + 1
+
+    monkeypatch.setattr(filesystem_module.time, "monotonic", creeping_monotonic)
+
+    result = python_fallback_backend.grep("needle", path="/")
+
+    assert result.truncated is True
+    # Partial results stay usable rather than being discarded.
+    assert result.error is None
+
+
+def test_ripgrep_search_uses_default_grep_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ripgrep subprocess must use the shared `DEFAULT_GREP_TIMEOUT`, not a hardcoded 30s."""
+    write_file(tmp_path / "a.txt", "hello\n")
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(args=cmd, returncode=1, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    be.grep("hello", path="/")
+
+    assert seen["timeout"] == DEFAULT_GREP_TIMEOUT
+
+
+# --- Structured (Result-returning) API ---
+
+
+def test_ls_returns_ls_result(tmp_path: Path) -> None:
+    """`ls` returns an `LsResult`; a missing directory yields empty entries, not an error."""
+    write_file(tmp_path / "a.txt", "a")
+    (tmp_path / "dir").mkdir()
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.ls("/")
+    assert isinstance(result, LsResult)
+    assert result.error is None
+    assert {e["path"] for e in result.entries or []} == {"/a.txt", "/dir/"}
+
+    missing = be.ls("/nope")
+    assert missing.error is None
+    assert missing.entries == []
+
+
+def test_read_file_returns_sliced_file_data(tmp_path: Path) -> None:
+    """`read_file` returns raw sliced `FileData`, not the line-numbered rendering."""
+    write_file(tmp_path / "f.txt", "one\ntwo\nthree\nfour\n")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.read_file("/f.txt", offset=1, limit=2)
+    assert isinstance(result, ReadResult)
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["content"] == "two\nthree\n"
+    assert result.file_data["encoding"] == "utf-8"
+
+    # The rendered legacy view still numbers from the requested offset.
+    rendered = be.read("/f.txt", offset=1, limit=2)
+    assert "     2\ttwo" in rendered
+    assert "     3\tthree" in rendered
+
+
+def test_read_file_missing_and_offset_errors(tmp_path: Path) -> None:
+    """`read_file` reports failures through `error` rather than raising."""
+    write_file(tmp_path / "f.txt", "one\n")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    assert "not found" in (be.read_file("/missing.txt").error or "")
+    assert "exceeds file length" in (be.read_file("/f.txt", offset=50).error or "")
+
+
+def test_read_file_empty_file(tmp_path: Path) -> None:
+    """An empty file yields empty content, which the legacy view renders as the reminder."""
+    write_file(tmp_path / "empty.txt", "")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.read_file("/empty.txt")
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["content"] == ""
+    assert "empty contents" in be.read("/empty.txt")
+
+
+def test_grep_and_glob_return_results(tmp_path: Path) -> None:
+    """`grep` / `glob` return `GrepResult` / `GlobResult` with a `truncated` flag."""
+    write_file(tmp_path / "src" / "main.py", "import os\n")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    grep_result = be.grep("import", path="/")
+    assert isinstance(grep_result, GrepResult)
+    assert grep_result.truncated is False
+    assert any(m["path"] == "/src/main.py" for m in grep_result.matches or [])
+
+    glob_result = be.glob("*.py", path="/")
+    assert isinstance(glob_result, GlobResult)
+    assert glob_result.truncated is False
+    assert [m["path"] for m in glob_result.matches or []] == ["/src/main.py"]
+
+    # `path=None` falls back to the backend root.
+    assert be.glob("*.py").matches == glob_result.matches
+
+    # A missing search root is an empty result, not an error.
+    assert be.glob("*.py", path="/nope").matches == []
+
+
+def test_glob_is_bounded_by_wall_clock_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`glob` must abandon a slow walk and report partial results as truncated."""
+    write_file(tmp_path / "a.py", "a")
+    write_file(tmp_path / "b.py", "b")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    real_monotonic = time.monotonic
+    calls = {"n": 0}
+
+    def creeping_monotonic() -> float:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_monotonic()
+        return real_monotonic() + DEFAULT_GLOB_TIMEOUT + 1
+
+    monkeypatch.setattr(filesystem_module.time, "monotonic", creeping_monotonic)
+
+    result = be.glob("*.py", path="/")
+    assert result.truncated is True
+
+
+def test_glob_backend_budget_below_middleware_deadline() -> None:
+    """The backend's own budget must expire before the middleware abandons the call.
+
+    Otherwise the middleware's timeout fires first and the partial results the
+    backend was about to return are thrown away.
+    """
+    assert DEFAULT_GLOB_TIMEOUT < GLOB_TIMEOUT
+
+
+# --- Binary read path ---
+
+
+def test_read_file_binary_returns_base64(tmp_path: Path) -> None:
+    """Non-text files are returned whole as base64 rather than UTF-8 decoded."""
+    raw = bytes(range(256))
+    (tmp_path / "img.png").write_bytes(raw)
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.read_file("/img.png")
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["encoding"] == "base64"
+    assert base64.standard_b64decode(result.file_data["content"]) == raw
+
+
+def test_read_file_rejects_oversized_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A binary file above `MAX_BINARY_BYTES` is refused instead of being buffered."""
+    (tmp_path / "img.png").write_bytes(b"\x00" * 64)
+    monkeypatch.setattr(filesystem_module, "MAX_BINARY_BYTES", 8)
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.read_file("/img.png")
+    assert result.file_data is None
+    assert "exceeds the maximum readable size" in (result.error or "")
+
+
+def test_read_file_treats_mkv_as_binary(tmp_path: Path) -> None:
+    """`.mkv` is classified as video by `_get_backend_read_file_type`, so it must not text-decode."""
+    (tmp_path / "clip.mkv").write_bytes(b"\x1f\x43\xb6\x75\xff\xfe")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.read_file("/clip.mkv")
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["encoding"] == "base64"
+
+
+def test_legacy_read_refuses_binary(tmp_path: Path) -> None:
+    """The rendered `read` must not dump base64 into the caller's context."""
+    (tmp_path / "img.png").write_bytes(b"\x89PNG\r\n")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    assert "is binary" in be.read("/img.png")
+
+
+# --- delete ---
+
+
+def test_supports_delete() -> None:
+    """`supports_delete` detects the override so callers can guard on it."""
+    assert supports_delete(FilesystemBackend(root_dir=".", virtual_mode=True))
+
+
+def test_delete_file(tmp_path: Path) -> None:
+    """Deleting a file unlinks it and reports it in `deleted_paths`."""
+    write_file(tmp_path / "f.txt", "bye")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.delete("/f.txt")
+    assert isinstance(result, DeleteResult)
+    assert result.error is None
+    assert result.path == "/f.txt"
+    assert result.files_update is None
+    assert result.deleted_paths == ["/f.txt"]
+    assert not (tmp_path / "f.txt").exists()
+
+
+def test_delete_directory_is_recursive(tmp_path: Path) -> None:
+    """Deleting a directory removes it and everything under it."""
+    write_file(tmp_path / "pkg" / "a.py", "a")
+    write_file(tmp_path / "pkg" / "sub" / "b.py", "b")
+    write_file(tmp_path / "keep.txt", "keep")
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.delete("/pkg")
+    assert result.error is None
+    assert result.path == "/pkg"
+    assert result.deleted_paths == ["/pkg/a.py", "/pkg/sub/b.py"]
+    assert not (tmp_path / "pkg").exists()
+    assert (tmp_path / "keep.txt").exists()
+
+
+def test_delete_missing_path_errors(tmp_path: Path) -> None:
+    """Deleting a nonexistent path is an error, not a silent no-op."""
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+
+    result = be.delete("/nope.txt")
+    assert result.path is None
+    assert "not found" in (result.error or "")
+
+
+def test_delete_cannot_escape_root(tmp_path: Path) -> None:
+    """A traversal path is refused by `_resolve_path` and reported as an error."""
+    outside = tmp_path / "outside.txt"
+    outside.write_text("do-not-touch", encoding="utf-8")
+    root = tmp_path / "root"
+    root.mkdir()
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True)
+
+    result = be.delete("/../outside.txt")
+    assert result.path is None
+    assert "traversal" in (result.error or "")
+    assert outside.read_text(encoding="utf-8") == "do-not-touch"
+
+
+def test_delete_symlink_does_not_follow_into_target(tmp_path: Path) -> None:
+    """Deleting a symlink removes the link, never the directory it points at."""
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep", encoding="utf-8")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported in this environment")
+
+    be = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    result = be.delete("/link")
+
+    assert result.error is None
+    assert not link.exists()
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_write_overwrites_existing_file(tmp_path: Path) -> None:
+    """`write` overwrites an existing file rather than erroring.
+
+    This is the upstream deepagents contract and must agree with every other backend --
+    a `CompositeBackend` mixing a `FilesystemBackend` default with a `StateBackend` would
+    otherwise accept or reject the same `write` call based only on the routed prefix.
+    """
+    backend = FilesystemBackend(root_dir=str(tmp_path))
+    (tmp_path / "notes.txt").write_text("original", encoding="utf-8")
+
+    result = backend.write("/notes.txt", "replaced")
+
+    assert result.error is None
+    assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "replaced"
+
+
+def test_write_overwrite_does_not_follow_symlink(tmp_path: Path) -> None:
+    """Overwriting must not write *through* a symlink (O_NOFOLLOW survives the guard removal)."""
+    backend = FilesystemBackend(root_dir=str(tmp_path))
+    target = tmp_path / "target.txt"
+    target.write_text("secret", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation not permitted on this host")
+
+    result = backend.write("/link.txt", "attacker")
+
+    assert result.error is not None
+    assert target.read_text(encoding="utf-8") == "secret"

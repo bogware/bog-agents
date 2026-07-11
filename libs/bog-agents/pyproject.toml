@@ -66,6 +66,12 @@ serve = [
 # default backend; pdfplumber / pymupdf are also supported if installed.
 pdf = ["pypdf>=4.0.0"]
 
+# ContextHubBackend — a persistent, versioned agent filesystem backed by a
+# LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
+# the backend needs `Client.pull_agent` / `push_agent`, so pin the floor here.
+# CVE-2026-45134 — langsmith fix landed in 0.8.0.
+hub = ["langsmith>=0.8.0"]
+
 # ─── provider extras ────────────────────────────────────────────────
 # `resolve_model` dispatches through langchain's `init_chat_model`, which
 # requires the provider's integration package to be installed. Anthropic

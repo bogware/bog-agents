@@ -7,7 +7,15 @@ from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
 
 from bog_agents.backends.filesystem import FilesystemBackend
-from bog_agents.backends.protocol import EditResult, WriteResult
+from bog_agents.backends.protocol import (
+    DeleteResult,
+    EditResult,
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+    WriteResult,
+)
 from bog_agents.middleware.filesystem import FilesystemMiddleware
 
 
@@ -519,3 +527,46 @@ async def test_filesystem_aglob_recursive(tmp_path: Path):
     assert any("helper.py" in p for p in py_files)
     assert any("test_main.py" in p for p in py_files)
     assert not any("readme.txt" in p for p in py_files)
+
+
+async def test_filesystem_structured_async_api(tmp_path: Path):
+    """The async structured twins return the same `*Result` shapes as their sync counterparts."""
+    root = tmp_path
+    write_file(root / "src" / "main.py", "import os\n")
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True)
+
+    ls_result = await be.als("/")
+    assert isinstance(ls_result, LsResult)
+    assert {e["path"] for e in ls_result.entries or []} == {"/src/"}
+
+    read_result = await be.aread_file("/src/main.py")
+    assert isinstance(read_result, ReadResult)
+    assert read_result.file_data is not None
+    assert read_result.file_data["content"] == "import os\n"
+
+    grep_result = await be.agrep("import", path="/")
+    assert isinstance(grep_result, GrepResult)
+    assert grep_result.truncated is False
+    assert any(m["path"] == "/src/main.py" for m in grep_result.matches or [])
+
+    glob_result = await be.aglob("*.py", path="/")
+    assert isinstance(glob_result, GlobResult)
+    assert [m["path"] for m in glob_result.matches or []] == ["/src/main.py"]
+
+
+async def test_filesystem_adelete(tmp_path: Path):
+    """`adelete` removes a directory tree and reports the paths it removed."""
+    root = tmp_path
+    write_file(root / "pkg" / "a.py", "a")
+    write_file(root / "pkg" / "sub" / "b.py", "b")
+    be = FilesystemBackend(root_dir=str(root), virtual_mode=True)
+
+    result = await be.adelete("/pkg")
+
+    assert isinstance(result, DeleteResult)
+    assert result.error is None
+    assert result.deleted_paths == ["/pkg/a.py", "/pkg/sub/b.py"]
+    assert not (root / "pkg").exists()
+
+    missing = await be.adelete("/pkg")
+    assert "not found" in (missing.error or "")

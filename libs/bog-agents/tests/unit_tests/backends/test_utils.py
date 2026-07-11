@@ -171,3 +171,35 @@ class TestGlobSearchFiles:
         assert "/foo/a.md" in result
         assert "/foo/c.md" in result
         assert "/foo/b.txt" not in result
+
+
+class TestCreateFileData:
+    """Tests for `create_file_data`'s format default and encoding guard."""
+
+    def test_defaults_to_v2(self) -> None:
+        from bog_agents.backends.utils import create_file_data
+
+        file_data = create_file_data("a\nb")
+        assert file_data["content"] == "a\nb"
+        assert file_data["encoding"] == "utf-8"
+
+    def test_v2_records_base64_encoding(self) -> None:
+        from bog_agents.backends.utils import create_file_data
+
+        file_data = create_file_data("AAECAw==", encoding="base64")
+        assert file_data["content"] == "AAECAw=="
+        assert file_data["encoding"] == "base64"
+
+    def test_v1_rejects_non_utf8_encoding(self) -> None:
+        """v1 has no `encoding` field, so it must not silently drop a binary encoding."""
+        from bog_agents.backends.utils import create_file_data
+
+        with pytest.raises(ValueError, match="cannot represent encoding"):
+            create_file_data("AAECAw==", encoding="base64", file_format="v1")
+
+    def test_v1_still_available_for_utf8(self) -> None:
+        from bog_agents.backends.utils import create_file_data
+
+        file_data = create_file_data("a\nb", file_format="v1")
+        assert file_data["content"] == ["a", "b"]
+        assert "encoding" not in file_data

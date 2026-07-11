@@ -802,10 +802,20 @@ class TestFilesystemMiddleware:
 
         file_data = create_file_data(content)
 
-        assert len(file_data["content"]) == 2
-        assert file_data["content"][0] == short_line
-        assert file_data["content"][1] == long_line
-        assert len(file_data["content"][1]) == 3500
+        # v2 is the default format: content is a plain str, with an encoding.
+        assert file_data["content"] == content
+        assert file_data["encoding"] == "utf-8"
+        assert file_data["content"].split("\n")[1] == long_line
+
+    def test_create_file_data_v1_still_splits_lines(self):
+        """The opt-in v1 format still stores content as a list of lines."""
+        long_line = "a" * 3500
+        content = f"short line\n{long_line}"
+
+        file_data = create_file_data(content, file_format="v1")
+
+        assert file_data["content"] == ["short line", long_line]
+        assert "encoding" not in file_data
 
     def test_update_file_data_preserves_long_lines(self):
         """Test that update_file_data stores long lines as-is without splitting."""
@@ -817,10 +827,9 @@ class TestFilesystemMiddleware:
 
         updated_file_data = update_file_data(initial_file_data, new_content)
 
-        assert len(updated_file_data["content"]) == 2
-        assert updated_file_data["content"][0] == short_line
-        assert updated_file_data["content"][1] == long_line
-        assert len(updated_file_data["content"][1]) == 5000
+        assert updated_file_data["content"] == new_content
+        assert updated_file_data["encoding"] == "utf-8"
+        assert len(updated_file_data["content"].split("\n")[1]) == 5000
 
         assert updated_file_data["created_at"] == initial_file_data["created_at"]
 
@@ -1113,8 +1122,7 @@ class TestFilesystemMiddleware:
 
         assert isinstance(result, Command)
         # Check that the file contains actual text, not stringified dict
-        file_content = result.update["files"]["/large_tool_results/test_single"]["content"]
-        file_text = "\n".join(file_content)
+        file_text = result.update["files"]["/large_tool_results/test_single"]["content"]
         # Should start with the actual text, not with "[{" which would indicate stringified dict
         assert file_text.startswith("Hello world!")
         assert not file_text.startswith("[{")
@@ -1133,8 +1141,7 @@ class TestFilesystemMiddleware:
         result = middleware._intercept_large_tool_result(tool_message, runtime)
 
         assert isinstance(result, Command)
-        file_content = result.update["files"]["/large_tool_results/test_multi"]["content"]
-        file_text = "\n".join(file_content)
+        file_text = result.update["files"]["/large_tool_results/test_multi"]["content"]
         assert file_text.startswith("First block")
         assert "Second block" in file_text
         assert not file_text.startswith("[{")
@@ -1154,8 +1161,7 @@ class TestFilesystemMiddleware:
         result = middleware._intercept_large_tool_result(tool_message, runtime)
 
         assert isinstance(result, Command)
-        file_content = result.update["files"]["/large_tool_results/test_mixed"]["content"]
-        file_text = "\n".join(file_content)
+        file_text = result.update["files"]["/large_tool_results/test_mixed"]["content"]
         assert file_text.startswith("Some text")
 
         returned_content = result.update["messages"][0].content

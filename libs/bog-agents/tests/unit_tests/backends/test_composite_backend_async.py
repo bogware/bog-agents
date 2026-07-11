@@ -9,7 +9,12 @@ from langgraph.store.memory import InMemoryStore
 from bog_agents.backends.composite import CompositeBackend
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.backends.protocol import (
+    BackendProtocol,
+    DeleteResult,
     ExecuteResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
     SandboxBackendProtocol,
     WriteResult,
 )
@@ -915,10 +920,10 @@ async def test_composite_agrep_error_in_routed_backend_async() -> None:
     """Test async grep error handling when routed backend returns error string."""
     rt = make_runtime("t_agrep_err1")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorBackend(StoreBackend):
-        async def agrep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Invalid regex pattern error"
+        async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Invalid regex pattern error")
 
     error_backend = ErrorBackend(rt)
     state_backend = StateBackend(rt)
@@ -934,10 +939,10 @@ async def test_composite_agrep_error_in_routed_backend_at_root_async() -> None:
     """Test async grep error handling when routed backend errors during root search."""
     rt = make_runtime("t_agrep_err2")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorBackend(StoreBackend):
-        async def agrep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Backend error occurred"
+        async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Backend error occurred")
 
     error_backend = ErrorBackend(rt)
     state_backend = StateBackend(rt)
@@ -953,10 +958,10 @@ async def test_composite_agrep_error_in_default_backend_at_root_async() -> None:
     """Test async grep error handling when default backend errors during root search."""
     rt = make_runtime("t_agrep_err3")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorDefaultBackend(StateBackend):
-        async def agrep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Default backend error"
+        async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Default backend error")
 
     error_default = ErrorDefaultBackend(rt)
     store_backend = StoreBackend(rt)
@@ -1058,3 +1063,190 @@ async def test_aedit_result_path_restored_to_full_routed_path():
 
     assert res.error is None
     assert res.path == "/memories/notes.md"  # not "/notes.md"
+
+
+# --- Route isolation: a scoped aglob must not leak entries from another route ---
+
+
+async def test_composite_aglob_scoped_to_default_path_does_not_leak_routed_results_async() -> None:
+    """aglob(pattern, "/src") must not return files from the /memories/ route."""
+    rt = make_runtime("t_aglob_leak")
+
+    state = StateBackend(rt)
+    store = StoreBackend(rt)
+    comp = CompositeBackend(default=state, routes={"/memories/": store})
+
+    await comp.awrite("/src/main.md", "source doc")
+    await comp.awrite("/memories/secret.md", "private memory")
+
+    result = await comp.aglob("**/*.md", path="/src")
+
+    assert isinstance(result, GlobResult)
+    assert result.error is None
+    paths = [fi["path"] for fi in (result.matches or [])]
+
+    assert "/src/main.md" in paths
+    assert not any(p.startswith("/memories/") for p in paths), f"aglob scoped to /src leaked routed results: {paths}"
+
+
+async def test_composite_aglob_info_scoped_to_default_path_does_not_leak_routed_results_async() -> None:
+    """Same leak, through the legacy `aglob_info` surface."""
+    rt = make_runtime("t_aglob_leak_legacy")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    await comp.awrite("/src/main.md", "source doc")
+    await comp.awrite("/memories/secret.md", "private memory")
+
+    paths = [fi["path"] for fi in await comp.aglob_info("**/*.md", path="/src")]
+
+    assert "/src/main.md" in paths
+    assert not any(p.startswith("/memories/") for p in paths), f"aglob_info scoped to /src leaked routed results: {paths}"
+
+
+async def test_composite_aglob_root_still_merges_across_routes_async() -> None:
+    rt = make_runtime("t_aglob_root_merge")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    await comp.awrite("/src/main.md", "source doc")
+    await comp.awrite("/memories/note.md", "memory note")
+
+    for path in ("/", None):
+        result = await comp.aglob("**/*.md", path=path)
+        paths = [fi["path"] for fi in (result.matches or [])]
+        assert "/src/main.md" in paths
+        assert "/memories/note.md" in paths
+
+
+# --- Result-returning twins: error propagation + truncated OR-ing ---
+
+
+class _ATruncatingBackend(StateBackend):
+    """Backend whose async searches always report a truncated (but valid) result."""
+
+    async def agrep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+        return GrepResult(matches=[{"path": "/partial.txt", "line": 1, "text": pattern}], truncated=True)
+
+    async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
+        return GlobResult(matches=[{"path": "/partial.txt"}], truncated=True)
+
+
+async def test_composite_agrep_truncated_is_ored_across_routes_async() -> None:
+    rt = make_runtime("t_atrunc_grep")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/partial/": _ATruncatingBackend(rt)})
+
+    await comp.awrite("/whole.txt", "findme")
+
+    result = await comp.agrep("findme", path="/")
+
+    assert result.error is None
+    assert result.truncated is True
+    assert "/partial/partial.txt" in [m["path"] for m in (result.matches or [])]
+
+
+async def test_composite_aglob_truncated_is_ored_across_routes_async() -> None:
+    rt = make_runtime("t_atrunc_glob")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/partial/": _ATruncatingBackend(rt)})
+
+    await comp.awrite("/whole.txt", "content")
+
+    result = await comp.aglob("**/*.txt", path="/")
+
+    assert result.error is None
+    assert result.truncated is True
+    assert "/partial/partial.txt" in [fi["path"] for fi in (result.matches or [])]
+
+
+async def test_composite_aglob_error_in_routed_backend_at_root_async() -> None:
+    rt = make_runtime("t_aglob_err")
+
+    class ErrorBackend(StoreBackend):
+        async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
+            return GlobResult(error="Glob backend exploded")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/errors/": ErrorBackend(rt)})
+    await comp.awrite("/ok.txt", "fine")
+
+    result = await comp.aglob("**/*.txt", path="/")
+
+    assert result.error == "Glob backend exploded"
+    assert result.matches is None
+
+
+async def test_composite_als_error_in_routed_backend_propagates_async() -> None:
+    rt = make_runtime("t_als_err")
+
+    class ErrorBackend(StoreBackend):
+        async def als(self, path: str) -> LsResult:
+            return LsResult(error="Ls backend exploded")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/errors/": ErrorBackend(rt)})
+
+    result = await comp.als("/errors/")
+
+    assert result.error == "Ls backend exploded"
+    assert result.entries is None
+
+
+async def test_composite_aread_file_routes_to_backend_async() -> None:
+    rt = make_runtime("t_aread_file")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    await comp.awrite("/memories/note.md", "routed content")
+
+    result = await comp.aread_file("/memories/note.md")
+
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["content"] == "routed content"
+
+
+# --- adelete ---
+
+
+async def test_composite_adelete_routes_to_default_backend_async() -> None:
+    rt = make_runtime("t_adel1")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    await comp.awrite("/temp.txt", "ephemeral")
+
+    result = await comp.adelete("/temp.txt")
+
+    assert isinstance(result, DeleteResult)
+    assert result.error is None
+    assert result.path == "/temp.txt"
+    assert result.deleted_paths == ["/temp.txt"]
+    assert result.files_update == {"/temp.txt": None}
+
+
+async def test_composite_adelete_remaps_routed_paths_to_virtual_paths_async() -> None:
+    rt = make_runtime("t_adel2")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    await comp.awrite("/memories/note.md", "persistent")
+
+    result = await comp.adelete("/memories/note.md")
+
+    assert result.error is None
+    assert result.path == "/memories/note.md"
+    assert result.deleted_paths == ["/memories/note.md"]
+
+
+class _ANoDeleteBackend(BackendProtocol):
+    """Backend that inherits the protocol's `NotImplementedError` default for `delete`."""
+
+    def ls(self, path: str) -> LsResult:
+        return LsResult(entries=[])
+
+
+async def test_composite_adelete_unsupported_routed_backend_returns_error_async() -> None:
+    rt = make_runtime("t_adel3")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/readonly/": _ANoDeleteBackend()})
+
+    result = await comp.adelete("/readonly/file.txt")
+
+    assert result.error is not None
+    assert "/readonly/file.txt" in result.error
+    assert result.path is None

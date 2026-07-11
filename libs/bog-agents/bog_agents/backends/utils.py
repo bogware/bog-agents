@@ -375,27 +375,35 @@ def create_file_data(
     created_at: str | None = None,
     *,
     encoding: str = "utf-8",
-    file_format: FileFormat = "v1",
+    file_format: FileFormat = "v2",
 ) -> dict[str, Any]:
-    """Create a `FileData` object with timestamps.
+    r"""Create a `FileData` object with timestamps.
 
     Args:
         content: File content as a string (plain text, or base64-encoded binary
             when `encoding="base64"`).
         created_at: Optional creation timestamp (ISO format).
         encoding: Content encoding — `"utf-8"` for text, `"base64"` for binary.
-            Only recorded in the v2 format; v1 has no `encoding` field.
-        file_format: Storage format to emit. Defaults to `"v1"` (`content` as
-            `list[str]`) because bog's state/store backends and their persisted
-            checkpoints still read that shape; the backend wave flips this to
-            `"v2"` once every reader goes through `file_data_to_string`.
+            Only representable in the v2 format.
+        file_format: Storage format to emit. Defaults to `"v2"` (`content` as a
+            plain `str` plus an `encoding` field). `"v1"` emits the legacy shape
+            (`content` as `list[str]`, no `encoding`) for callers that must keep
+            writing checkpoints readable by pre-0.10 consumers.
 
     Returns:
         `FileData` dict with content and timestamps.
+
+    Raises:
+        ValueError: If `file_format="v1"` is combined with a non-`"utf-8"`
+            encoding. v1 has no `encoding` field, so the encoding would be
+            silently dropped and the content later decoded as text.
     """
     now = datetime.now(UTC).isoformat()
 
     if file_format == "v1":
+        if encoding != "utf-8":
+            msg = f"file_format='v1' cannot represent encoding={encoding!r} (v1 has no `encoding` field). Use file_format='v2' for non-utf-8 content."
+            raise ValueError(msg)
         lines = content.split("\n") if isinstance(content, str) else content
         return {
             "content": lines,

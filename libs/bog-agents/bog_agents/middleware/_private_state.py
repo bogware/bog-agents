@@ -14,12 +14,14 @@ lock holder.
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from typing import Annotated, NotRequired, Required, get_args, get_origin, get_type_hints
 
 from langchain.agents.middleware.types import PrivateStateAttr
 
 __all__ = ["private_state_field_names"]
+
+logger = logging.getLogger(__name__)
 
 # Wrappers we look *through* when hunting for the marker. Recursing through
 # arbitrary generics instead would mis-flag containers whose element type is
@@ -67,7 +69,17 @@ def private_state_field_names(*schemas: type) -> frozenset[str]:
     """
     names: set[str] = set()
     for schema in schemas:
-        with contextlib.suppress(Exception):
+        # An unresolvable schema must not take down agent construction, but it must also not
+        # pass silently: the caller uses this set to *withhold* keys from a sub-agent, so an
+        # empty result leaks private state rather than failing closed.
+        try:
             hints = get_type_hints(schema, include_extras=True)
-            names.update(name for name, annotation in hints.items() if _has_marker(annotation, PrivateStateAttr))
+        except (NameError, AttributeError, TypeError):
+            logger.warning(
+                "Could not resolve annotations for state schema %r; its private keys will not be filtered.",
+                getattr(schema, "__name__", schema),
+                exc_info=True,
+            )
+            continue
+        names.update(name for name, annotation in hints.items() if _has_marker(annotation, PrivateStateAttr))
     return frozenset(names)

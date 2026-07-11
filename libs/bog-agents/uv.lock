@@ -278,6 +278,9 @@ all-providers = [
 bedrock = [
     { name = "langchain-aws" },
 ]
+hub = [
+    { name = "langsmith" },
+]
 openai = [
     { name = "langchain-openai" },
 ]
@@ -339,6 +342,7 @@ requires-dist = [
     { name = "langchain-openai", marker = "extra == 'all-providers'", specifier = ">=1.1.14,<2.0.0" },
     { name = "langchain-openai", marker = "extra == 'openai'", specifier = ">=1.1.14,<2.0.0" },
     { name = "langgraph", specifier = ">=1.2.0,<2.0.0" },
+    { name = "langsmith", marker = "extra == 'hub'", specifier = ">=0.8.0" },
     { name = "pyasn1", specifier = ">=0.6.3" },
     { name = "pygments", specifier = ">=2.20.0" },
     { name = "pypdf", marker = "extra == 'pdf'", specifier = ">=4.0.0" },
@@ -350,7 +354,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.34.0" },
     { name = "wcmatch", specifier = ">=10.1,<11.0" },
 ]
-provides-extras = ["serve", "pdf", "bedrock", "openai", "all-providers"]
+provides-extras = ["serve", "pdf", "hub", "bedrock", "openai", "all-providers"]
 
 [package.metadata.requires-dev]
 evals = [

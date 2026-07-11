@@ -71,12 +71,24 @@ def test_state_backend_errors():
     err = be.edit("/missing.txt", "a", "b")
     assert isinstance(err, EditResult) and err.error and "not found" in err.error
 
-    # write duplicate
+
+def test_state_backend_write_overwrites_existing_file():
+    """Writing to an existing path overwrites it (upstream semantics) instead of erroring."""
+    rt = make_runtime()
+    be = StateBackend(rt)
+
     res = be.write("/dup.txt", "x")
-    assert isinstance(res, WriteResult) and res.files_update is not None
+    assert isinstance(res, WriteResult) and res.error is None and res.files_update is not None
     rt.state["files"].update(res.files_update)
-    dup_err = be.write("/dup.txt", "y")
-    assert isinstance(dup_err, WriteResult) and dup_err.error and "already exists" in dup_err.error
+    created_at = rt.state["files"]["/dup.txt"]["created_at"]
+
+    res2 = be.write("/dup.txt", "y")
+    assert isinstance(res2, WriteResult) and res2.error is None and res2.files_update is not None
+    rt.state["files"].update(res2.files_update)
+
+    assert "y" in be.read("/dup.txt")
+    # The overwrite preserves the original creation timestamp.
+    assert rt.state["files"]["/dup.txt"]["created_at"] == created_at
 
 
 def test_state_backend_ls_nested_directories():
@@ -156,7 +168,7 @@ def test_state_backend_intercept_large_tool_result():
 
     assert isinstance(result, Command)
     assert "/large_tool_results/test_123" in result.update["files"]
-    assert result.update["files"]["/large_tool_results/test_123"]["content"] == [large_content]
+    assert result.update["files"]["/large_tool_results/test_123"]["content"] == large_content
     assert "Tool result too large" in result.update["messages"][0].content
 
 
@@ -323,3 +335,120 @@ def test_state_backend_grep_with_path_variations(path: str, expected_count: int,
     assert len(matches) == expected_count
     match_paths = {m["path"] for m in matches}
     assert match_paths == set(expected_paths)
+
+
+# --- FileData v2 migration -------------------------------------------------
+
+
+def test_state_backend_v2_round_trip():
+    """Files written by the default (v2) backend store `content` as a str + encoding."""
+    rt = make_runtime()
+    be = StateBackend(rt)
+
+    res = be.write("/v2.txt", "line one\nline two")
+    rt.state["files"].update(res.files_update)
+
+    stored = rt.state["files"]["/v2.txt"]
+    assert stored["content"] == "line one\nline two"
+    assert stored["encoding"] == "utf-8"
+    assert "created_at" in stored and "modified_at" in stored
+
+    result = be.read_file("/v2.txt")
+    assert result.error is None
+    assert result.file_data["content"] == "line one\nline two"
+
+    assert "line two" in be.read("/v2.txt")
+    assert be.ls("/").entries[0]["size"] == len("line one\nline two")
+
+
+def test_state_backend_v1_file_format_opt_in():
+    """`file_format="v1"` still writes the legacy list-of-lines shape."""
+    rt = make_runtime()
+    be = StateBackend(rt, file_format="v1")
+
+    res = be.write("/legacy.txt", "a\nb")
+    rt.state["files"].update(res.files_update)
+
+    stored = rt.state["files"]["/legacy.txt"]
+    assert stored["content"] == ["a", "b"]
+    assert "encoding" not in stored
+    assert "b" in be.read("/legacy.txt")
+
+
+def test_state_backend_reads_legacy_v1_content_with_deprecation_warning():
+    """Pre-existing v1 state (list content) is tolerated, not rejected."""
+    rt = make_runtime(
+        files={
+            "/old.txt": {
+                "content": ["hello", "world"],
+                "created_at": "2020-01-01",
+                "modified_at": "2020-01-01",
+            }
+        }
+    )
+    be = StateBackend(rt)
+
+    with pytest.deprecated_call():
+        assert "world" in be.read("/old.txt")
+
+    # ls sizes the joined lines, not the character-interleaved join of a str.
+    entries = be.ls("/").entries
+    assert entries[0]["size"] == len("hello\nworld")
+
+    # grep still finds content in legacy files.
+    assert any(m["path"] == "/old.txt" for m in be.grep("world").matches)
+
+    # An edit of a v1 file stays v1 (update_file_data preserves the input format).
+    res = be.edit("/old.txt", "world", "there")
+    assert res.files_update["/old.txt"]["content"] == ["hello", "there"]
+
+
+def test_state_backend_delete_file_and_recursive_directory():
+    rt = make_runtime()
+    be = StateBackend(rt)
+
+    for path in ("/keep.txt", "/dir/a.txt", "/dir/sub/b.txt", "/directory.txt"):
+        rt.state["files"].update(be.write(path, "x").files_update)
+
+    # Missing path.
+    missing = be.delete("/nope.txt")
+    assert missing.error and "not found" in missing.error
+
+    # Single file.
+    single = be.delete("/keep.txt")
+    assert single.error is None
+    assert single.deleted_paths == ["/keep.txt"]
+    assert single.files_update == {"/keep.txt": None}
+    rt.state["files"] = {k: v for k, v in rt.state["files"].items() if single.files_update.get(k, v) is not None}
+
+    # Directory: removes the nested children, and nothing that merely shares a
+    # string prefix ("/directory.txt" must survive).
+    res = be.delete("/dir")
+    assert res.error is None
+    assert res.deleted_paths == ["/dir/a.txt", "/dir/sub/b.txt"]
+    assert res.files_update == {"/dir/a.txt": None, "/dir/sub/b.txt": None}
+    assert "/directory.txt" not in res.deleted_paths
+
+
+def test_state_backend_upload_download_round_trip_binary():
+    rt = make_runtime()
+    be = StateBackend(rt)
+
+    payload = b"\xff\xfe\x00\x01"
+    responses = be.upload_files([("/text.txt", b"hi"), ("/blob.bin", payload)])
+    assert [r.error for r in responses] == [None, None]
+
+    assert rt.state["files"]["/blob.bin"]["encoding"] == "base64"
+    assert rt.state["files"]["/text.txt"]["encoding"] == "utf-8"
+
+    downloaded = be.download_files(["/text.txt", "/blob.bin", "/missing"])
+    assert downloaded[0].content == b"hi"
+    assert downloaded[1].content == payload
+    assert downloaded[2].error == "file_not_found"
+
+
+def test_state_backend_without_runtime_outside_graph_raises():
+    """`StateBackend()` constructs (no TypeError) but needs a graph to read state."""
+    be = StateBackend()
+    with pytest.raises(RuntimeError, match="LangGraph graph execution"):
+        be.ls("/")

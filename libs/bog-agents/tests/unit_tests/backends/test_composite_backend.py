@@ -10,10 +10,16 @@ from langgraph.types import Command
 from bog_agents.backends.composite import CompositeBackend, _route_for_path
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.backends.protocol import (
+    BackendProtocol,
+    DeleteResult,
     EditResult,
     ExecuteResponse,
+    GlobResult,
+    GrepResult,
+    LsResult,
     SandboxBackendProtocol,
     WriteResult,
+    supports_delete,
 )
 from bog_agents.backends.state import StateBackend
 from bog_agents.backends.store import StoreBackend
@@ -408,7 +414,7 @@ def test_composite_backend_intercept_large_tool_result():
 
     assert isinstance(result, Command)
     assert "/large_tool_results/test_789" in result.update["files"]
-    assert result.update["files"]["/large_tool_results/test_789"]["content"] == [large_content]
+    assert result.update["files"]["/large_tool_results/test_789"]["content"] == large_content
     assert "Tool result too large" in result.update["messages"][0].content
 
 
@@ -431,7 +437,7 @@ def test_composite_backend_intercept_large_tool_result_routed_to_store():
 
     stored_item = rt.store.get(("filesystem",), "/test_routed_123")
     assert stored_item is not None
-    assert stored_item.value["content"] == [large_content]
+    assert stored_item.value["content"] == large_content
 
 
 def test_composite_backend_artifacts_root_is_used_for_large_tool_results():
@@ -456,7 +462,7 @@ def test_composite_backend_artifacts_root_is_used_for_large_tool_results():
 
     stored_item = rt.store.get(("filesystem",), "/test_artifact_123")
     assert stored_item is not None
-    assert stored_item.value["content"] == [large_content]
+    assert stored_item.value["content"] == large_content
 
 
 # Mock sandbox backend for testing execute functionality
@@ -1025,10 +1031,10 @@ def test_composite_grep_error_in_routed_backend() -> None:
     """Test grep error handling when routed backend returns error string."""
     rt = make_runtime("t_grep_err1")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorBackend(StoreBackend):
-        def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Invalid regex pattern error"
+        def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Invalid regex pattern error")
 
     error_backend = ErrorBackend(rt)
     state_backend = StateBackend(rt)
@@ -1044,10 +1050,10 @@ def test_composite_grep_error_in_routed_backend_at_root() -> None:
     """Test grep error handling when routed backend errors during root search."""
     rt = make_runtime("t_grep_err2")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorBackend(StoreBackend):
-        def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Backend error occurred"
+        def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Backend error occurred")
 
     error_backend = ErrorBackend(rt)
     state_backend = StateBackend(rt)
@@ -1063,10 +1069,10 @@ def test_composite_grep_error_in_default_backend_at_root() -> None:
     """Test grep error handling when default backend errors during root search."""
     rt = make_runtime("t_grep_err3")
 
-    # Create a mock backend that returns error strings for grep
+    # Create a mock backend that reports an error for grep
     class ErrorDefaultBackend(StateBackend):
-        def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None):
-            return "Default backend error"
+        def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+            return GrepResult(error="Default backend error")
 
     error_default = ErrorDefaultBackend(rt)
     store_backend = StoreBackend(rt)
@@ -1447,3 +1453,278 @@ async def test_aedit_state_sync_failure_logs_debug(caplog: pytest.LogCaptureFixt
 
     assert res.error is None
     assert any("state-sync skipped for /f.txt" in r.getMessage() for r in caplog.records)
+
+
+# --- Route isolation: a scoped glob must not leak entries from another route ---
+
+
+def test_composite_glob_scoped_to_default_path_does_not_leak_routed_results() -> None:
+    """glob(pattern, "/src") must not return files from the /memories/ route.
+
+    A composite backend is a boundary between routes: a search the caller scoped
+    to one subtree must never surface entries from a different one.
+    """
+    rt = make_runtime("t_glob_leak")
+
+    state = StateBackend(rt)
+    store = StoreBackend(rt)
+    comp = CompositeBackend(default=state, routes={"/memories/": store})
+
+    # Default backend, under /src
+    comp.write("/src/main.md", "source doc")
+    # Routed backend - must stay invisible to a /src-scoped glob
+    comp.write("/memories/secret.md", "private memory")
+
+    result = comp.glob("**/*.md", path="/src")
+
+    assert isinstance(result, GlobResult)
+    assert result.error is None
+    paths = [fi["path"] for fi in (result.matches or [])]
+
+    assert "/src/main.md" in paths
+    assert not any(p.startswith("/memories/") for p in paths), f"glob scoped to /src leaked routed results: {paths}"
+
+
+def test_composite_glob_info_scoped_to_default_path_does_not_leak_routed_results() -> None:
+    """Same leak, through the legacy `glob_info` surface the filesystem middleware calls."""
+    rt = make_runtime("t_glob_leak_legacy")
+
+    state = StateBackend(rt)
+    store = StoreBackend(rt)
+    comp = CompositeBackend(default=state, routes={"/memories/": store})
+
+    comp.write("/src/main.md", "source doc")
+    comp.write("/memories/secret.md", "private memory")
+
+    paths = [fi["path"] for fi in comp.glob_info("**/*.md", path="/src")]
+
+    assert "/src/main.md" in paths
+    assert not any(p.startswith("/memories/") for p in paths), f"glob_info scoped to /src leaked routed results: {paths}"
+
+
+def test_composite_glob_root_still_merges_across_routes() -> None:
+    """The leak fix must not narrow the whole-tree search."""
+    rt = make_runtime("t_glob_root_merge")
+
+    state = StateBackend(rt)
+    store = StoreBackend(rt)
+    comp = CompositeBackend(default=state, routes={"/memories/": store})
+
+    comp.write("/src/main.md", "source doc")
+    comp.write("/memories/note.md", "memory note")
+
+    for path in ("/", None):
+        result = comp.glob("**/*.md", path=path)
+        paths = [fi["path"] for fi in (result.matches or [])]
+        assert "/src/main.md" in paths
+        assert "/memories/note.md" in paths
+
+
+# --- Result-returning twins: error propagation + truncated OR-ing ---
+
+
+class _TruncatingBackend(StateBackend):
+    """Backend whose searches always report a truncated (but valid) result."""
+
+    def grep(self, pattern: str, path: str | None = None, glob: str | None = None) -> GrepResult:
+        return GrepResult(matches=[{"path": "/partial.txt", "line": 1, "text": pattern}], truncated=True)
+
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        return GlobResult(matches=[{"path": "/partial.txt"}], truncated=True)
+
+
+def test_composite_grep_truncated_is_ored_across_routes() -> None:
+    rt = make_runtime("t_trunc_grep")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/partial/": _TruncatingBackend(rt)})
+
+    comp.write("/whole.txt", "findme")
+
+    result = comp.grep("findme", path="/")
+
+    assert result.error is None
+    assert result.truncated is True
+    assert "/partial/partial.txt" in [m["path"] for m in (result.matches or [])]
+
+
+def test_composite_glob_truncated_is_ored_across_routes() -> None:
+    rt = make_runtime("t_trunc_glob")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/partial/": _TruncatingBackend(rt)})
+
+    comp.write("/whole.txt", "content")
+
+    result = comp.glob("**/*.txt", path="/")
+
+    assert result.error is None
+    assert result.truncated is True
+    assert "/partial/partial.txt" in [fi["path"] for fi in (result.matches or [])]
+
+
+def test_composite_glob_truncated_preserved_for_single_route() -> None:
+    rt = make_runtime("t_trunc_glob_route")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/partial/": _TruncatingBackend(rt)})
+
+    result = comp.glob("**/*.txt", path="/partial/")
+
+    assert result.truncated is True
+    assert [fi["path"] for fi in (result.matches or [])] == ["/partial/partial.txt"]
+
+
+def test_composite_glob_error_in_routed_backend_at_root() -> None:
+    """A routed backend's glob error must surface, not be swallowed as a partial success."""
+    rt = make_runtime("t_glob_err")
+
+    class ErrorBackend(StoreBackend):
+        def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+            return GlobResult(error="Glob backend exploded")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/errors/": ErrorBackend(rt)})
+    comp.write("/ok.txt", "fine")
+
+    result = comp.glob("**/*.txt", path="/")
+
+    assert result.error == "Glob backend exploded"
+    assert result.matches is None
+
+
+def test_composite_glob_error_in_default_backend_at_root() -> None:
+    rt = make_runtime("t_glob_err2")
+
+    class ErrorDefaultBackend(StateBackend):
+        def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+            return GlobResult(error="Default glob exploded")
+
+    comp = CompositeBackend(default=ErrorDefaultBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    result = comp.glob("**/*.txt", path="/")
+
+    assert result.error == "Default glob exploded"
+
+
+def test_composite_ls_error_in_routed_backend_propagates() -> None:
+    rt = make_runtime("t_ls_err")
+
+    class ErrorBackend(StoreBackend):
+        def ls(self, path: str) -> LsResult:
+            return LsResult(error="Ls backend exploded")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/errors/": ErrorBackend(rt)})
+
+    result = comp.ls("/errors/")
+
+    assert result.error == "Ls backend exploded"
+    assert result.entries is None
+
+
+def test_composite_read_file_routes_to_backend() -> None:
+    rt = make_runtime("t_read_file")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    comp.write("/memories/note.md", "routed content")
+
+    result = comp.read_file("/memories/note.md")
+
+    assert result.error is None
+    assert result.file_data is not None
+    assert result.file_data["content"] == "routed content"
+
+
+# --- delete / adelete ---
+
+
+def test_composite_delete_routes_to_default_backend() -> None:
+    rt = make_runtime("t_del1")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    comp.write("/temp.txt", "ephemeral")
+
+    result = comp.delete("/temp.txt")
+
+    assert isinstance(result, DeleteResult)
+    assert result.error is None
+    assert result.path == "/temp.txt"
+    assert result.deleted_paths == ["/temp.txt"]
+    assert result.files_update == {"/temp.txt": None}
+
+
+def test_composite_delete_remaps_routed_paths_to_virtual_paths() -> None:
+    """A routed delete reports the virtual path, not the backend's stripped key."""
+    rt = make_runtime("t_del2")
+    store = StoreBackend(rt)
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": store})
+
+    comp.write("/memories/note.md", "persistent")
+
+    result = comp.delete("/memories/note.md")
+
+    assert result.error is None
+    assert result.path == "/memories/note.md"
+    assert result.deleted_paths == ["/memories/note.md"]
+
+    # And it is really gone from the routed backend.
+    assert comp.read_file("/memories/note.md").error is not None
+
+
+def test_composite_delete_recursive_remaps_every_nested_path() -> None:
+    rt = make_runtime("t_del3")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    comp.write("/memories/docs/a.md", "a")
+    comp.write("/memories/docs/nested/b.md", "b")
+    comp.write("/memories/keep.md", "keep")
+
+    result = comp.delete("/memories/docs")
+
+    assert result.error is None
+    assert sorted(result.deleted_paths) == ["/memories/docs/a.md", "/memories/docs/nested/b.md"]
+    assert comp.read_file("/memories/keep.md").error is None
+
+
+class _NoDeleteBackend(BackendProtocol):
+    """Backend that inherits the protocol's `NotImplementedError` default for `delete`."""
+
+    def ls(self, path: str) -> LsResult:
+        return LsResult(entries=[])
+
+
+def test_composite_delete_unsupported_routed_backend_returns_error() -> None:
+    """A route pointing at a backend without `delete` reports an error, not NotImplementedError."""
+    rt = make_runtime("t_del4")
+
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/readonly/": _NoDeleteBackend()})
+
+    assert supports_delete(_NoDeleteBackend()) is False
+
+    result = comp.delete("/readonly/file.txt")
+
+    assert isinstance(result, DeleteResult)
+    assert result.error is not None
+    assert "/readonly/file.txt" in result.error
+    assert result.path is None
+
+
+def test_composite_delete_unsupported_default_backend_returns_error() -> None:
+    rt = make_runtime("t_del5")
+
+    comp = CompositeBackend(default=_NoDeleteBackend(), routes={"/memories/": StoreBackend(rt)})
+
+    result = comp.delete("/file.txt")
+
+    assert result.error is not None
+    assert "/file.txt" in result.error
+
+
+def test_composite_delete_missing_file_propagates_backend_error() -> None:
+    rt = make_runtime("t_del6")
+    comp = CompositeBackend(default=StateBackend(rt), routes={"/memories/": StoreBackend(rt)})
+
+    result = comp.delete("/nope.txt")
+
+    assert result.error is not None
+    assert result.path is None
+
+
+def test_composite_supports_delete() -> None:
+    rt = make_runtime("t_del7")
+    comp = CompositeBackend(default=StateBackend(rt), routes={})
+
+    assert supports_delete(comp) is True

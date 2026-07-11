@@ -290,7 +290,7 @@ async def test_store_backend_intercept_large_tool_result_async():
 
     stored_content = rt.store.get(("filesystem",), "/large_tool_results/test_456")
     assert stored_content is not None
-    assert stored_content.value["content"] == [large_content]
+    assert stored_content.value["content"] == large_content
 
 
 async def test_store_backend_aintercept_large_tool_result_async():
@@ -327,4 +327,33 @@ async def test_store_backend_aintercept_large_tool_result_async():
     # Verify content was stored via async path
     stored_content = await rt.store.aget(("filesystem",), "/large_tool_results/test_async_789")
     assert stored_content is not None
-    assert stored_content.value["content"] == [large_content]
+    assert stored_content.value["content"] == large_content
+
+
+async def test_store_backend_adelete_recursive() -> None:
+    """`adelete` removes the exact key plus every key nested under it."""
+    rt = make_runtime()
+    be = StoreBackend(rt, namespace=lambda _ctx: ("filesystem",))
+
+    for path in ("/dir/a.txt", "/dir/sub/b.txt", "/directory.txt"):
+        assert (await be.awrite(path, "x")).error is None
+
+    missing = await be.adelete("/nope.txt")
+    assert missing.error and "not found" in missing.error
+
+    res = await be.adelete("/dir")
+    assert res.error is None
+    assert res.deleted_paths == ["/dir/a.txt", "/dir/sub/b.txt"]
+    assert await rt.store.aget(("filesystem",), "/dir/a.txt") is None
+    assert await rt.store.aget(("filesystem",), "/directory.txt") is not None
+
+
+async def test_store_backend_awrite_overwrites_existing_file() -> None:
+    """awrite to an existing path overwrites it instead of erroring."""
+    rt = make_runtime()
+    be = StoreBackend(rt, namespace=lambda _ctx: ("filesystem",))
+
+    assert (await be.awrite("/dup.txt", "x")).error is None
+    second = await be.awrite("/dup.txt", "y")
+    assert second.error is None
+    assert "y" in await be.aread("/dup.txt")
