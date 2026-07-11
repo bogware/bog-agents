@@ -5,17 +5,19 @@ helpers used by backends and the composite router. Structured helpers
 enable composition without fragile string parsing.
 """
 
+import functools
 import os
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
-from typing import Any, Literal, overload
+from pathlib import PurePosixPath
+from typing import Any, Final, Literal, overload
 
 import wcmatch.glob as wcglob
 
-from bog_agents.backends.protocol import FileInfo as _FileInfo, GrepMatch as _GrepMatch
+from bog_agents._api.deprecation import warn_deprecated
+from bog_agents.backends.protocol import FileData, FileFormat, FileInfo as _FileInfo, GrepMatch as _GrepMatch, ReadResult
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -25,9 +27,428 @@ LINE_NUMBER_WIDTH = 6
 TOOL_RESULT_TOKEN_LIMIT = 20000  # Same threshold as eviction
 TRUNCATION_GUIDANCE = "... [results truncated, try being more specific with your parameters]"
 
+MAX_BINARY_BYTES: Final = 500 * 1024
+"""Maximum size of a binary file a backend will base64-encode into a read result."""
+
+MAX_VIDEO_INPUT_BYTES: Final = 1024 * 1024 * 1024
+"""Maximum raw video payload size accepted by `read_file` frame extraction."""
+
 # Re-export protocol types for backwards compatibility
 FileInfo = _FileInfo
 GrepMatch = _GrepMatch
+
+FileType = Literal["text", "image", "audio", "video", "file"]
+"""Classification of a file by extension."""
+
+_EXTENSION_TO_FILE_TYPE: dict[str, FileType] = {
+    # Images (https://ai.google.dev/gemini-api/docs/image-understanding)
+    ".png": "image",
+    ".jpeg": "image",
+    ".jpg": "image",
+    ".webp": "image",
+    ".gif": "image",
+    ".heic": "image",
+    ".heif": "image",
+    # Video (https://ai.google.dev/gemini-api/docs/video-understanding)
+    ".mp4": "video",
+    ".mpeg": "video",
+    ".mov": "video",
+    ".avi": "video",
+    ".flv": "video",
+    ".mpg": "video",
+    ".webm": "video",
+    ".wmv": "video",
+    ".3gpp": "video",
+    # Audio (https://ai.google.dev/gemini-api/docs/audio)
+    ".wav": "audio",
+    ".mp3": "audio",
+    ".aiff": "audio",
+    ".aac": "audio",
+    ".ogg": "audio",
+    ".flac": "audio",
+    # Files
+    ".pdf": "file",
+    ".ppt": "file",
+    ".pptx": "file",
+}
+"""Extension-to-type mapping for non-text files.
+
+Optional features may layer on additional classifications at the use site. For
+example, `read_file` treats `.mkv` as video only when the optional video
+dependencies are installed.
+
+Derived from Google's multimodal API supported formats:
+
+- Images: https://ai.google.dev/gemini-api/docs/image-understanding
+- Video: https://ai.google.dev/gemini-api/docs/video-understanding
+- Audio: https://ai.google.dev/gemini-api/docs/audio
+"""
+
+_VIDEO_EXTRA_EXTENSIONS: frozenset[str] = frozenset({".mkv"})
+"""Video container extensions handled outside the Google-derived multimodal map.
+
+These are intentionally absent from `_EXTENSION_TO_FILE_TYPE`, so a `read_file`
+without the optional `[video]` extra returns them as a generic file block rather
+than a native video block. Backends must still read them as binary — never
+text-decode them — and `read_file` layers frame extraction on top only when the
+`[video]` dependencies are installed.
+"""
+
+
+def _get_file_type(path: str) -> FileType:
+    """Classify a file by its extension.
+
+    Args:
+        path: File path to classify.
+
+    Returns:
+        One of `"text"`, `"image"`, `"audio"`, `"video"`, or `"file"`. Defaults
+            to `"text"` for unrecognized extensions.
+    """
+    return _EXTENSION_TO_FILE_TYPE.get(PurePosixPath(to_posix_path(path)).suffix.lower(), "text")
+
+
+def _get_backend_read_file_type(path: str) -> FileType:
+    """Classify a file for backend reads, forcing known video containers to binary.
+
+    Backends decide binary-vs-text on `_get_file_type(...) != "text"`. Extensions
+    in `_VIDEO_EXTRA_EXTENSIONS` are absent from `_EXTENSION_TO_FILE_TYPE`, so
+    `_get_file_type` alone would treat them as text and corrupt the bytes (a raw
+    UTF-8 decode of a video, or line-slicing a base64 blob). Classify them as
+    `"video"` here so the binary read path runs on every backend.
+
+    Args:
+        path: File path to classify.
+
+    Returns:
+        `"video"` for `_VIDEO_EXTRA_EXTENSIONS`; otherwise the shared
+            `_get_file_type` classification.
+    """
+    if PurePosixPath(to_posix_path(path)).suffix.lower() in _VIDEO_EXTRA_EXTENSIONS:
+        return "video"
+    return _get_file_type(path)
+
+
+# ---------------------------------------------------------------------------
+# Glob compilation
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=256)
+def compile_grep_include_glob(pattern: str) -> Callable[[str], bool]:
+    """Compile a grep include-glob into a matcher with ripgrep-like semantics.
+
+    Provides one shared include-glob behavior for every backend so the same
+    `grep(..., glob=...)` call closely mirrors ripgrep for common include
+    patterns, whether or not ripgrep is installed:
+
+    - Patterns without a `/` match the basename at any depth. Example: `*.py`
+        matches `src/app/main.py`.
+    - Patterns containing a `/` match the path relative to the grep search root,
+        with `**` support. Example: `src/**/*.py` matches `src/app/main.py`.
+    - A leading `/` anchors the pattern to the search root; it narrows the match
+        rather than widening it. Example: `/*.py` matches `top.py` but not
+        `src/app/main.py`.
+
+    Exclusion/negation patterns (a leading `!`) are not supported: the `!` is
+    treated literally rather than inverting the match, so results for such
+    patterns can diverge from `rg --glob '!...'`.
+
+    Args:
+        pattern: Glob include pattern.
+
+    Returns:
+        Predicate accepting a search-root-relative POSIX path; returns True when
+            the path is included by `pattern`.
+    """
+    flags = wcglob.BRACE | wcglob.GLOBSTAR
+    # A leading `/` anchors to the search root: strip it so it matches against
+    # the (slash-less) relative path, but decide anchoring from the original
+    # pattern so `/*.py` stays root-anchored instead of collapsing to a
+    # basename-at-any-depth match.
+    anchored = "/" in pattern
+    compiled = wcglob.compile(pattern.lstrip("/"), flags=flags)
+
+    if anchored:
+
+        def matcher(rel_path: str) -> bool:
+            return bool(compiled.match(to_posix_path(rel_path)))
+    else:
+
+        def matcher(rel_path: str) -> bool:
+            return bool(compiled.match(PurePosixPath(to_posix_path(rel_path)).name))
+
+    return matcher
+
+
+@functools.lru_cache(maxsize=256)
+def compile_recursive_glob(pattern: str) -> Callable[[str], bool]:
+    r"""Compile a `glob` pattern into a per-entry matcher for a recursive walk.
+
+    `Path.rglob(pattern)` is equivalent to `Path.glob("**/" + pattern)`, so the
+    pattern matches at any depth (e.g. `*.py` matches `src/app/main.py`). Prefix
+    the pattern with `**/` and compile it with globstar support so a matcher can
+    be applied to each visited entry while walking the tree, letting the caller
+    enforce a deadline on every entry instead of only on matched paths.
+
+    Depth (`GLOBSTAR`) and dotfile matching (`DOTMATCH`) mirror `Path.rglob`:
+    `DOTMATCH` is required because `wcmatch` excludes dotfiles by default whereas
+    stdlib `rglob` includes them. Brace expansion (`BRACE`) is an intentional
+    *divergence* from `rglob` — `{a,b}.py` expands here but `Path.rglob` treats
+    the braces literally — chosen so `glob` matches the include-glob semantics of
+    `compile_grep_include_glob`.
+
+    The matcher normalizes backslashes before matching, so a Windows-native
+    relative path (`src\\app\\main.py`) still matches `**/*.py`.
+
+    Args:
+        pattern: Glob pattern (a leading `/` is stripped).
+
+    Returns:
+        Predicate accepting a search-root-relative path; returns True when the
+            path matches `pattern` under recursive-glob semantics.
+    """
+    flags = wcglob.BRACE | wcglob.GLOBSTAR | wcglob.DOTMATCH
+    compiled = wcglob.compile("**/" + pattern.lstrip("/"), flags=flags)
+
+    def matcher(rel_path: str) -> bool:
+        return bool(compiled.match(to_posix_path(rel_path)))
+
+    return matcher
+
+
+def to_posix_path(path: str) -> str:
+    r"""Normalize backslash separators to forward slashes for `PurePosixPath` use.
+
+    Backends running on Windows return OS-native paths using backslashes.
+    `PurePosixPath` treats backslashes as literal filename characters, so
+    `PurePosixPath(r"C:\a\b").name` yields the full string instead of `"b"`.
+    Normalize before constructing a `PurePosixPath`.
+
+    This is best-effort: a POSIX directory literally named with a backslash will
+    also be rewritten. That trade-off is accepted because such filenames are
+    vanishingly rare in practice and the alternative (gating on `os.sep`) fails
+    when a Windows-style path is handed to a non-Windows process.
+
+    Args:
+        path: Path string that may use backslash separators.
+
+    Returns:
+        The same path with every backslash replaced by `/`. Inputs that already
+            use forward slashes are returned unchanged.
+    """
+    return path.replace("\\", "/")
+
+
+# Characters that mark a glob path component as a wildcard segment for the
+# purposes of `_glob_anchor`. Keep in sync with the wcmatch flags used by the
+# filesystem middleware (`BRACE | GLOBSTAR`).
+_GLOB_WILDCARD_CHARS = frozenset("*?[{")
+
+
+def _glob_anchor(pattern: str) -> str:
+    """Return the longest leading directory of `pattern` with no wildcards.
+
+    For `/secrets/**` returns `/secrets`; for `/a/*/b` returns `/a`; for a
+    pattern with a wildcard at or near the root (`/**/secrets`, `/*/foo`) falls
+    back to `/`. The root fallback causes overlap checks to match any subtree —
+    conservative over-gating, since we cannot statically pin down where the rule
+    could resolve. Callers wanting precise gating should anchor the rule's
+    leading components.
+
+    Args:
+        pattern: A glob pattern.
+
+    Returns:
+        The longest wildcard-free leading directory, or `/` if none.
+    """
+    parts = PurePosixPath(to_posix_path(pattern)).parts
+    safe: list[str] = []
+    for part in parts:
+        if any(c in _GLOB_WILDCARD_CHARS for c in part):
+            break
+        safe.append(part)
+    if not safe:
+        return "/"
+    return str(PurePosixPath(*safe))
+
+
+def _paths_overlap(call_path: str, rule_anchor: str) -> bool:
+    """Return True if the subtree at `call_path` intersects the subtree at `rule_anchor`.
+
+    Two subtrees overlap when one is a (component-wise) prefix of the other, or
+    they're equal. Comparison runs on `PurePosixPath` components, so `/secret`
+    does not overlap `/secrets`. The root `/` overlaps everything.
+
+    Args:
+        call_path: Normalized path of the call's search root.
+        rule_anchor: Anchor (wildcard-free prefix) of a rule's pattern.
+
+    Returns:
+        True if the two subtrees intersect.
+    """
+    a = PurePosixPath(call_path)
+    b = PurePosixPath(rule_anchor)
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
+# ---------------------------------------------------------------------------
+# FileData v1 and v2 conversion
+# ---------------------------------------------------------------------------
+
+
+def _normalize_content(file_data: FileData | dict[str, Any]) -> str:
+    r"""Normalize `file_data` content to a plain string.
+
+    Single backwards-compatibility conversion point for the legacy (v1)
+    `list[str]` file format. v2 stores `content` as a plain `str`; persisted
+    checkpoints and pickled state in the wild still carry a list of lines.
+
+    Args:
+        file_data: `FileData` dict with a `content` key.
+
+    Returns:
+        Content as a single string.
+    """
+    content = file_data.get("content", "")
+    if isinstance(content, list):
+        warn_deprecated(
+            since="0.10.0",
+            removal="1.0.0",
+            message=(
+                "`FileData` with `list[str]` content (the v1 format) is deprecated and will be removed in bog-agents==1.0.0. "
+                "Store `content` as a plain `str` with an `encoding` field instead."
+            ),
+            package="bog-agents",
+            stacklevel=3,
+        )
+        return "\n".join(content)
+    return content
+
+
+def _to_legacy_file_data(file_data: FileData | dict[str, Any]) -> dict[str, Any]:
+    r"""Convert a `FileData` dict to the legacy (v1) storage format.
+
+    The v1 format stores content as `list[str]` (lines split on `\n`) and omits
+    the `encoding` field. Use this when `file_format="v1"` on a backend, to
+    preserve compatibility with consumers that expect `list[str]` content.
+
+    Args:
+        file_data: `FileData` with `content: str` (and, usually, `encoding`).
+
+    Returns:
+        Dict with `content` as `list[str]`, plus whichever of `created_at` /
+            `modified_at` were present. No `encoding` key.
+    """
+    content = file_data.get("content", "")
+    if isinstance(content, list):
+        # Already v1 — pass the lines through rather than splitting a joined copy.
+        lines = list(content)
+    else:
+        lines = content.split("\n")
+
+    result: dict[str, Any] = {"content": lines}
+    if "created_at" in file_data:
+        result["created_at"] = file_data["created_at"]
+    if "modified_at" in file_data:
+        result["modified_at"] = file_data["modified_at"]
+    return result
+
+
+def file_data_to_string(file_data: FileData | dict[str, Any]) -> str:
+    """Convert `FileData` to plain string content.
+
+    Accepts both the v2 (`content: str`) and legacy v1 (`content: list[str]`)
+    shapes.
+
+    Args:
+        file_data: `FileData` dict with a `content` key.
+
+    Returns:
+        Content as a single string.
+    """
+    return _normalize_content(file_data)
+
+
+def create_file_data(
+    content: str,
+    created_at: str | None = None,
+    *,
+    encoding: str = "utf-8",
+    file_format: FileFormat = "v1",
+) -> dict[str, Any]:
+    """Create a `FileData` object with timestamps.
+
+    Args:
+        content: File content as a string (plain text, or base64-encoded binary
+            when `encoding="base64"`).
+        created_at: Optional creation timestamp (ISO format).
+        encoding: Content encoding — `"utf-8"` for text, `"base64"` for binary.
+            Only recorded in the v2 format; v1 has no `encoding` field.
+        file_format: Storage format to emit. Defaults to `"v1"` (`content` as
+            `list[str]`) because bog's state/store backends and their persisted
+            checkpoints still read that shape; the backend wave flips this to
+            `"v2"` once every reader goes through `file_data_to_string`.
+
+    Returns:
+        `FileData` dict with content and timestamps.
+    """
+    now = datetime.now(UTC).isoformat()
+
+    if file_format == "v1":
+        lines = content.split("\n") if isinstance(content, str) else content
+        return {
+            "content": lines,
+            "created_at": created_at or now,
+            "modified_at": now,
+        }
+
+    return {
+        "content": content,
+        "encoding": encoding,
+        "created_at": created_at or now,
+        "modified_at": now,
+    }
+
+
+def update_file_data(file_data: FileData | dict[str, Any], content: str) -> dict[str, Any]:
+    """Update `FileData` with new content, preserving creation timestamp and format.
+
+    The storage format of `file_data` is preserved: a v1 dict (list content, no
+    `encoding`) updates to v1, a v2 dict updates to v2. This keeps a backend's
+    on-disk / in-state representation stable across edits regardless of which
+    format it was originally written in.
+
+    Args:
+        file_data: Existing `FileData` dict.
+        content: New content as a string.
+
+    Returns:
+        Updated `FileData` dict in the same format as the input.
+    """
+    now = datetime.now(UTC).isoformat()
+    created_at = file_data.get("created_at") or now
+    is_legacy = isinstance(file_data.get("content"), list)
+
+    if is_legacy:
+        lines = content.split("\n") if isinstance(content, str) else content
+        return {
+            "content": lines,
+            "created_at": created_at,
+            "modified_at": now,
+        }
+
+    return {
+        "content": content,
+        "encoding": file_data.get("encoding", "utf-8"),
+        "created_at": created_at,
+        "modified_at": now,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
 
 
 def sanitize_tool_call_id(tool_call_id: str) -> str:
@@ -98,60 +519,51 @@ def check_empty_content(content: str) -> str | None:
     return None
 
 
-def file_data_to_string(file_data: dict[str, Any]) -> str:
-    """Convert FileData to plain string content.
+def slice_read_response(
+    file_data: FileData | dict[str, Any],
+    offset: int,
+    limit: int,
+) -> str | ReadResult:
+    """Slice file data to the requested line range without formatting.
+
+    Returns raw text for the requested window. Line-number formatting is applied
+    downstream (by `format_read_response` or the middleware layer).
 
     Args:
-        file_data: FileData dict with 'content' key
+        file_data: `FileData` dict.
+        offset: Line offset (0-indexed).
+        limit: Maximum number of lines.
 
     Returns:
-        Content as string with lines joined by newlines
+        Raw sliced content string on success, or a `ReadResult` with `error` set
+            when the offset exceeds the file length.
     """
-    return "\n".join(file_data["content"])
+    content = file_data_to_string(file_data)
 
+    if not content or content.strip() == "":
+        return content
 
-def create_file_data(content: str, created_at: str | None = None) -> dict[str, Any]:
-    """Create a FileData object with timestamps.
+    # `splitlines(keepends=True)` retains each line's terminator, including the
+    # absence of one on the final line. Joining with `""` therefore round-trips
+    # the trailing-newline state of the file faithfully — required so `edit()`
+    # can report EOF-newline mismatches accurately. It also splits on CR / CRLF,
+    # so line indexing matches the LF-normalized form without first rewriting the
+    # whole (potentially huge) string.
+    lines = content.splitlines(keepends=True)
+    start_idx = offset
+    end_idx = min(start_idx + limit, len(lines))
 
-    Args:
-        content: File content as string
-        created_at: Optional creation timestamp (ISO format)
+    if start_idx >= len(lines):
+        return ReadResult(error=f"Line offset {offset} exceeds file length ({len(lines)} lines)")
 
-    Returns:
-        FileData dict with content and timestamps
-    """
-    lines = content.split("\n") if isinstance(content, str) else content
-    now = datetime.now(UTC).isoformat()
-
-    return {
-        "content": lines,
-        "created_at": created_at or now,
-        "modified_at": now,
-    }
-
-
-def update_file_data(file_data: dict[str, Any], content: str) -> dict[str, Any]:
-    """Update FileData with new content, preserving creation timestamp.
-
-    Args:
-        file_data: Existing FileData dict
-        content: New content as string
-
-    Returns:
-        Updated FileData dict
-    """
-    lines = content.split("\n") if isinstance(content, str) else content
-    now = datetime.now(UTC).isoformat()
-
-    return {
-        "content": lines,
-        "created_at": file_data["created_at"],
-        "modified_at": now,
-    }
+    # Normalize line endings to LF, but only across the requested window.
+    # State/Store backends may carry CRLF or CR content as written; downstream
+    # tooling (edit match, grep, format) assumes LF.
+    return "".join(lines[start_idx:end_idx]).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def format_read_response(
-    file_data: dict[str, Any],
+    file_data: FileData | dict[str, Any],
     offset: int,
     limit: int,
 ) -> str:
@@ -234,6 +646,11 @@ def truncate_if_too_long(result: list[str] | str) -> list[str] | str:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Path handling
+# ---------------------------------------------------------------------------
+
+
 def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -> str:
     r"""Validate and normalize file path for security.
 
@@ -272,7 +689,7 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
     """
     # Check for traversal as a path component (not substring) to avoid
     # false-positive rejection of legitimate filenames like "foo..bar.txt"
-    parts = PurePosixPath(path.replace("\\", "/")).parts
+    parts = PurePosixPath(to_posix_path(path)).parts
     if ".." in parts or path.startswith("~"):
         msg = f"Path traversal not allowed: {path}"
         raise ValueError(msg)
@@ -281,7 +698,7 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
         # On Windows, accept native absolute paths (C:\Users\..., D:/data/...)
         # and normalize them while preserving the drive letter.
         normalized = os.path.normpath(path)
-        normalized = normalized.replace("\\", "/")
+        normalized = to_posix_path(normalized)
         # Defense-in-depth: verify normpath didn't produce traversal
         if ".." in normalized.split("/"):
             msg = f"Path traversal detected after normalization: {path} -> {normalized}"
@@ -301,7 +718,7 @@ def validate_path(path: str, *, allowed_prefixes: Sequence[str] | None = None) -
         raise ValueError(msg)
 
     normalized = os.path.normpath(path)
-    normalized = normalized.replace("\\", "/")
+    normalized = to_posix_path(normalized)
 
     if not normalized.startswith("/"):
         normalized = f"/{normalized}"
@@ -383,17 +800,41 @@ def _filter_files_by_path(files: dict[str, Any], normalized_path: str) -> dict[s
     return {fp: fd for fp, fd in files.items() if fp.startswith(dir_prefix)}
 
 
+def _relative_to_root(file_path: str, normalized_path: str) -> str:
+    """Return `file_path` relative to a normalized grep/glob search root.
+
+    Args:
+        file_path: Absolute file path (e.g. `/src/app/main.py`).
+        normalized_path: Normalized search root from `_normalize_path`.
+
+    Returns:
+        POSIX path relative to the search root (e.g. `src/app/main.py`). When
+            `file_path` equals the search root (an exact-file search), returns
+            just the basename.
+    """
+    if normalized_path == "/":
+        return file_path[1:]
+    if file_path == normalized_path:
+        return file_path.rsplit("/", maxsplit=1)[-1]
+    return file_path[len(normalized_path) + 1 :]
+
+
+# ---------------------------------------------------------------------------
+# In-memory glob / grep
+# ---------------------------------------------------------------------------
+
+
 def _glob_search_files(
     files: dict[str, Any],
     pattern: str,
-    path: str = "/",
+    path: str | None = "/",
 ) -> str:
     r"""Search files dict for paths matching glob pattern.
 
     Args:
         files: Dictionary of file paths to FileData.
         pattern: Glob pattern (e.g., "*.py", "**/*.ts").
-        path: Base path to search from.
+        path: Base path to search from. `None` defaults to root.
 
     Returns:
         Newline-separated file paths, sorted by modification time (most recent first).
@@ -422,20 +863,12 @@ def _glob_search_files(
 
     matches = []
     for file_path, file_data in filtered.items():
-        # Compute relative path for glob matching
-        # If normalized_path is "/dir", we want "/dir/file.txt" -> "file.txt"
-        # If normalized_path is "/dir/file.txt" (exact file), we want "file.txt"
-        if normalized_path == "/":
-            relative = file_path[1:]  # Remove leading slash
-        elif file_path == normalized_path:
-            # Exact file match - use just the filename
-            relative = file_path.split("/")[-1]
-        else:
-            # Directory prefix - strip the directory path
-            relative = file_path[len(normalized_path) + 1 :]  # +1 for the slash
+        relative = _relative_to_root(file_path, normalized_path)
 
         if wcglob.globmatch(relative, effective_pattern, flags=wcglob.BRACE | wcglob.GLOBSTAR):
-            matches.append((file_path, file_data["modified_at"]))
+            # `modified_at` is optional on FileData; backends that never stamp it
+            # (and hand-built fixtures) must not blow up the sort.
+            matches.append((file_path, file_data.get("modified_at") or ""))
 
     matches.sort(key=lambda x: x[1], reverse=True)
 
@@ -481,7 +914,7 @@ def _grep_search_files(
     glob: str | None = None,
     output_mode: Literal["files_with_matches", "content", "count"] = "files_with_matches",
 ) -> str:
-    """Search file contents for regex pattern.
+    r"""Search file contents for regex pattern.
 
     Args:
         files: Dictionary of file paths to FileData.
@@ -495,7 +928,7 @@ def _grep_search_files(
 
     Example:
         ```python
-        files = {"/file.py": FileData(content=["import os", "print('hi')"], ...)}
+        files = {"/file.py": FileData(content="import os\\nprint('hi')", ...)}
         _grep_search_files(files, "import", "/")
         # Returns: "/file.py" (with output_mode="files_with_matches")
         ```
@@ -513,11 +946,14 @@ def _grep_search_files(
     filtered = _filter_files_by_path(files, normalized_path)
 
     if glob:
-        filtered = {fp: fd for fp, fd in filtered.items() if wcglob.globmatch(Path(fp).name, glob, flags=wcglob.BRACE)}
+        matcher = compile_grep_include_glob(glob)
+        filtered = {fp: fd for fp, fd in filtered.items() if matcher(_relative_to_root(fp, normalized_path))}
 
     results: dict[str, list[tuple[int, str]]] = {}
     for file_path, file_data in filtered.items():
-        for line_num, line in enumerate(file_data["content"], 1):
+        # Split explicitly: v2 stores `content` as a `str`, so iterating the raw
+        # value would walk one character at a time.
+        for line_num, line in enumerate(_normalize_content(file_data).split("\n"), 1):
             if regex.search(line):
                 if file_path not in results:
                     results[file_path] = []
@@ -544,6 +980,15 @@ def grep_matches_from_files(
     Returns a list of GrepMatch on success, or a string for invalid inputs.
     We deliberately do not raise here to keep backends non-throwing in tool
     contexts and preserve user-facing error messages.
+
+    Args:
+        files: Dictionary of file paths to FileData.
+        pattern: Literal substring to search for.
+        path: Base path to search from. `None` defaults to root.
+        glob: Optional include-glob filtering which files are searched.
+
+    Returns:
+        List of `GrepMatch` dicts, or an error string.
     """
     try:
         normalized_path = _normalize_path(path)
@@ -553,11 +998,14 @@ def grep_matches_from_files(
     filtered = _filter_files_by_path(files, normalized_path)
 
     if glob:
-        filtered = {fp: fd for fp, fd in filtered.items() if wcglob.globmatch(Path(fp).name, glob, flags=wcglob.BRACE)}
+        matcher = compile_grep_include_glob(glob)
+        filtered = {fp: fd for fp, fd in filtered.items() if matcher(_relative_to_root(fp, normalized_path))}
 
     matches: list[GrepMatch] = []
     for file_path, file_data in filtered.items():
-        for line_num, line in enumerate(file_data["content"], 1):
+        # Split explicitly: v2 stores `content` as a `str`, so iterating the raw
+        # value would walk one character at a time.
+        for line_num, line in enumerate(_normalize_content(file_data).split("\n"), 1):
             if pattern in line:  # Simple substring search for literal matching
                 matches.append({"path": file_path, "line": int(line_num), "text": line})
     return matches
@@ -579,3 +1027,58 @@ def format_grep_matches(
     if not matches:
         return "No matches found"
     return _format_grep_results(build_grep_results_dict(matches), output_mode)
+
+
+# ---------------------------------------------------------------------------
+# Regex-vs-literal hinting
+# ---------------------------------------------------------------------------
+
+
+_REGEX_SIGNAL_RE = re.compile(
+    r"\|"  # alternation
+    r"|\.\*"  # `.*` wildcard
+    r"|\.\+"  # `.+` wildcard
+    r"|\\[.wWdDsSbB(){}\[\]|+*?^$]"  # escaped regex metacharacters / classes
+)
+"""Strong signals that a pattern was written as a regex rather than literal text.
+
+Deliberately conservative: bare `.`, `(`, `)`, `[`, `]`, `?`, `^`, `$` are
+omitted because they appear routinely in literal code searches (e.g.
+`self.tools`, `def __init__(self):`, `arr[0]`), which would cause false hints.
+"""
+
+
+def _looks_like_regex(pattern: str) -> bool:
+    """Heuristically detect regex syntax in a pattern meant for literal grep.
+
+    Args:
+        pattern: The pattern to inspect.
+
+    Returns:
+        True when the pattern carries a strong regex signal.
+    """
+    return bool(_REGEX_SIGNAL_RE.search(pattern))
+
+
+def regex_literal_hint(pattern: str) -> str | None:
+    """Return a hint when a pattern looks like an (unsupported) regex.
+
+    `grep` matches literal text, so regex metacharacters are searched verbatim
+    and silently miss. Callers gate this on a no-match result; the function
+    itself only inspects the pattern.
+
+    Args:
+        pattern: The literal grep pattern to inspect for regex signals.
+
+    Returns:
+        A one-line hint steering the caller toward literal search, or `None`
+            when the pattern has no regex signals.
+    """
+    if not _looks_like_regex(pattern):
+        return None
+    return (
+        "Note: grep matches literal text, not regex, so characters like "
+        "`|`, `.*`, and `\\.` are searched verbatim. Search for the literal "
+        "text you need instead; for `|` alternation, run a separate search "
+        "per alternative."
+    )
