@@ -7,10 +7,11 @@ and child agents.
 
 import warnings
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Annotated, Any, NotRequired, TypedDict
 
 import pytest
-from langchain.agents import create_agent
+from langchain.agents import create_agent, create_agent as lc_create_agent
+from langchain.agents.middleware.types import AgentMiddleware, AgentState, PrivateStateAttr
 from langchain.agents.structured_output import ToolStrategy
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, HumanMessage
@@ -18,12 +19,21 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 from pydantic import BaseModel, Field
 
 from bog_agents.backends.filesystem import FilesystemBackend
+from bog_agents.backends.state import StateBackend
 from bog_agents.graph import create_agent
 from bog_agents.middleware.skills import SkillsMiddleware
-from bog_agents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
+from bog_agents.middleware.subagents import (
+    SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY,
+    CompiledSubAgent,
+    SubAgent,
+    SubAgentMiddleware,
+    create_sub_agent,
+    subagent_private_state_keys,
+)
 from tests.unit_tests.chat_model import GenericFakeChatModel
 
 
@@ -1623,6 +1633,331 @@ class TestSubAgents:
         tool_messages = [msg for msg in result["messages"] if msg.type == "tool"]
         assert len(tool_messages) == 1
         assert tool_messages[0].content == "Override response."
+
+
+class _Findings(BaseModel):
+    """Structured findings returned by an analyzer subagent."""
+
+    summary: str = Field(description="What the analyzer concluded")
+    confidence: float = Field(description="Confidence between 0 and 1")
+
+
+def _analyzer_model() -> GenericFakeChatModel:
+    """A fake subagent model that answers by calling the `_Findings` structured-output tool."""
+    return GenericFakeChatModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "_Findings",
+                            "args": {"summary": "The build is green", "confidence": 0.9},
+                            "id": "call_findings",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+            ]
+        )
+    )
+
+
+def _parent_model_calling(subagent_type: str) -> GenericFakeChatModel:
+    """A fake parent model that delegates once to `subagent_type`, then finishes."""
+    return GenericFakeChatModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "task",
+                            "args": {"description": "Analyze the repo", "subagent_type": subagent_type},
+                            "id": "call_task",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="Done."),
+            ]
+        )
+    )
+
+
+class TestSubAgentResponseFormat:
+    """A raw `SubAgent` spec's `response_format` must actually reach the compiled subagent.
+
+    Before `create_sub_agent` existed, both construction sites called `create_agent`
+    without forwarding `response_format`, so the field was accepted by the `SubAgent`
+    TypedDict and then silently dropped. These tests fail loudly against that bug: a
+    subagent compiled without `response_format` has no `_Findings` structured-output
+    tool, so the fake model's tool call resolves to nothing and the structured payload
+    never reaches the parent's ToolMessage.
+    """
+
+    def test_spec_response_format_round_trips_to_parent_tool_message(self) -> None:
+        """End-to-end: spec `response_format` -> compiled subagent -> parent ToolMessage."""
+        parent_agent = create_agent(
+            model=_parent_model_calling("analyzer"),
+            checkpointer=InMemorySaver(),
+            subagents=[
+                SubAgent(
+                    name="analyzer",
+                    description="Analyzes a repo and reports structured findings.",
+                    system_prompt="Analyze and report.",
+                    model=_analyzer_model(),
+                    tools=[],
+                    response_format=ToolStrategy(schema=_Findings),
+                )
+            ],
+        )
+
+        result = parent_agent.invoke(
+            {"messages": [HumanMessage(content="How is the build?")]},
+            config={"configurable": {"thread_id": "test_subagent_response_format"}},
+        )
+
+        tool_messages = [msg for msg in result["messages"] if msg.type == "tool"]
+        assert len(tool_messages) == 1
+        content = tool_messages[0].content
+        # The subagent's structured response is what surfaces to the parent. If
+        # `response_format` were dropped, the subagent would never produce one.
+        assert "The build is green" in content, f"structured response did not round-trip; got: {content!r}"
+        assert "0.9" in content, f"structured response did not round-trip; got: {content!r}"
+
+    def test_create_sub_agent_compiles_response_format(self) -> None:
+        """`create_sub_agent` alone produces a `structured_response` from the spec's format."""
+        subagent = create_sub_agent(
+            SubAgent(
+                name="analyzer",
+                description="Analyzer.",
+                system_prompt="Analyze.",
+                model=_analyzer_model(),
+                tools=[],
+                response_format=ToolStrategy(schema=_Findings),
+            )
+        )
+
+        result = subagent.invoke({"messages": [HumanMessage(content="Analyze")]})
+
+        assert isinstance(result["structured_response"], _Findings)
+        assert result["structured_response"].summary == "The build is green"
+
+    def test_create_sub_agent_response_format_override_wins(self) -> None:
+        """An explicit `response_format` argument overrides the spec's own."""
+
+        class _Other(BaseModel):
+            summary: str
+
+        subagent = create_sub_agent(
+            SubAgent(
+                name="analyzer",
+                description="Analyzer.",
+                system_prompt="Analyze.",
+                model=_analyzer_model(),
+                tools=[],
+                response_format=ToolStrategy(schema=_Other),
+            ),
+            response_format=ToolStrategy(schema=_Findings),
+        )
+
+        result = subagent.invoke({"messages": [HumanMessage(content="Analyze")]})
+
+        assert isinstance(result["structured_response"], _Findings)
+
+    def test_response_format_from_task_tool_config_key(self) -> None:
+        """A caller can request a per-call response format via the wire config key."""
+        middleware = SubAgentMiddleware(
+            backend=StateBackend,
+            subagents=[
+                SubAgent(
+                    name="analyzer",
+                    description="Analyzer.",
+                    system_prompt="Analyze.",
+                    model=_analyzer_model(),
+                    tools=[],
+                )
+            ],
+        )
+        parent_agent = lc_create_agent(
+            model=_parent_model_calling("analyzer"),
+            middleware=[middleware],
+        )
+
+        result = parent_agent.invoke(
+            {"messages": [HumanMessage(content="How is the build?")]},
+            config={"configurable": {SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY: ToolStrategy(schema=_Findings)}},
+        )
+
+        tool_messages = [msg for msg in result["messages"] if msg.type == "tool"]
+        assert len(tool_messages) == 1
+        assert "The build is green" in tool_messages[0].content
+
+
+class _PrivateBookkeepingState(AgentState):
+    """Parent state schema carrying a `PrivateStateAttr` bookkeeping field."""
+
+    secret_bookkeeping: NotRequired[Annotated[str, PrivateStateAttr]]
+
+
+class _SecretSeedingMiddleware(AgentMiddleware):
+    """Seeds a private bookkeeping key into the parent's state, like the real middleware do."""
+
+    state_schema = _PrivateBookkeepingState
+
+    def before_agent(self, state: Any, runtime: Runtime[Any]) -> dict[str, Any] | None:
+        """Write the private key once, at the start of the parent's run."""
+        return {"secret_bookkeeping": "parent-only"}
+
+
+class TestSubAgentPrivateStateIsolation:
+    """`PrivateStateAttr` fields must not cross the subagent boundary in either direction."""
+
+    def test_private_keys_are_not_forwarded_to_the_subagent(self) -> None:
+        """parent -> child: the subagent's input state must not carry the parent's private keys."""
+        seen_states: list[dict[str, Any]] = []
+
+        def _recording_subagent(state: dict[str, Any]) -> dict[str, Any]:
+            seen_states.append(dict(state))
+            return {"messages": [AIMessage(content="child done")]}
+
+        middleware = SubAgentMiddleware(
+            backend=StateBackend,
+            subagents=[
+                CompiledSubAgent(
+                    name="worker",
+                    description="Worker.",
+                    runnable=RunnableLambda(_recording_subagent),
+                )
+            ],
+            private_state_keys=subagent_private_state_keys(_PrivateBookkeepingState),
+        )
+        parent_agent = lc_create_agent(
+            model=_parent_model_calling("worker"),
+            middleware=[_SecretSeedingMiddleware(), middleware],
+        )
+
+        parent_agent.invoke({"messages": [HumanMessage(content="Go")]})
+
+        assert len(seen_states) == 1, "subagent should have been invoked exactly once"
+        assert "secret_bookkeeping" not in seen_states[0], (
+            f"parent's private bookkeeping leaked into the subagent's input state: {sorted(seen_states[0])}"
+        )
+
+    def test_private_keys_are_not_returned_to_the_parent(self) -> None:
+        """child -> parent: a private key written by the subagent must not land in parent state."""
+        parent_states: list[dict[str, Any]] = []
+
+        @tool
+        def inspect_parent_state(runtime: ToolRuntime) -> str:
+            """Record the parent agent's state after the subagent has returned."""
+            parent_states.append(dict(runtime.state))
+            return "inspected"
+
+        def _leaky_subagent(state: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "messages": [AIMessage(content="child done")],
+                "secret_bookkeeping": "child-only",
+            }
+
+        parent_model = GenericFakeChatModel(
+            messages=iter(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "task",
+                                "args": {"description": "Work", "subagent_type": "worker"},
+                                "id": "call_task",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "inspect_parent_state",
+                                "args": {},
+                                "id": "call_inspect",
+                                "type": "tool_call",
+                            }
+                        ],
+                    ),
+                    AIMessage(content="Done."),
+                ]
+            )
+        )
+
+        middleware = SubAgentMiddleware(
+            backend=StateBackend,
+            subagents=[
+                CompiledSubAgent(
+                    name="worker",
+                    description="Worker.",
+                    runnable=RunnableLambda(_leaky_subagent),
+                )
+            ],
+            private_state_keys=subagent_private_state_keys(_PrivateBookkeepingState),
+        )
+        parent_agent = lc_create_agent(
+            model=parent_model,
+            tools=[inspect_parent_state],
+            middleware=[_SecretSeedingMiddleware(), middleware],
+        )
+
+        parent_agent.invoke({"messages": [HumanMessage(content="Go")]})
+
+        assert len(parent_states) == 1, "the parent's inspection tool should have run after the task tool"
+        assert parent_states[0].get("secret_bookkeeping") != "child-only", "the subagent's private bookkeeping overwrote the parent's private state"
+
+    def test_private_state_keys_setter_rebuilds_the_task_tool(self) -> None:
+        """Assigning `private_state_keys` must rebuild the tool, not just store the value.
+
+        The `task` tool closes over the filter, so a setter that only assigned the
+        attribute would leave the old (empty) filter live inside the closure.
+        """
+        seen_states: list[dict[str, Any]] = []
+
+        def _recording_subagent(state: dict[str, Any]) -> dict[str, Any]:
+            seen_states.append(dict(state))
+            return {"messages": [AIMessage(content="child done")]}
+
+        middleware = SubAgentMiddleware(
+            backend=StateBackend,
+            subagents=[
+                CompiledSubAgent(
+                    name="worker",
+                    description="Worker.",
+                    runnable=RunnableLambda(_recording_subagent),
+                )
+            ],
+        )
+        assert middleware.private_state_keys == frozenset()
+        tool_before = middleware.tools[0]
+
+        middleware.private_state_keys = subagent_private_state_keys(_PrivateBookkeepingState)
+
+        assert middleware.private_state_keys == frozenset({"secret_bookkeeping"})
+        assert middleware.tools[0] is not tool_before, "the task tool must be rebuilt so the new filter takes effect"
+
+        parent_agent = lc_create_agent(
+            model=_parent_model_calling("worker"),
+            middleware=[_SecretSeedingMiddleware(), middleware],
+        )
+        parent_agent.invoke({"messages": [HumanMessage(content="Go")]})
+
+        assert len(seen_states) == 1
+        assert "secret_bookkeeping" not in seen_states[0], "the rebuilt task tool is still using the stale (empty) filter"
+
+    def test_subagent_private_state_keys_drops_base_agent_state_keys(self) -> None:
+        """`jump_to` is private on langchain's own `AgentState` and must not be treated as ours."""
+        keys = subagent_private_state_keys(_PrivateBookkeepingState)
+
+        assert "secret_bookkeeping" in keys
+        assert "jump_to" not in keys, "langchain's own control-flow key must not be filtered as middleware bookkeeping"
 
 
 class TestSubAgentMiddlewareValidation:

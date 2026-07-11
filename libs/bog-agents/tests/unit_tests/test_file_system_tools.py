@@ -740,3 +740,69 @@ def test_ls_with_invalid_path_returns_error_message() -> None:
 
     error_message = tool_messages[0].content
     assert error_message == "Error: Path traversal not allowed: ../../../etc"
+
+
+def test_deny_rule_filters_pathless_grep_results_end_to_end() -> None:
+    """A `deny` permission rule must filter denied paths out of a pathless grep.
+
+    Regression for the wiring gap where `create_agent(permissions=...)` built the
+    filesystem tools without threading `_permissions` into `FilesystemMiddleware`, so the
+    result filters never ran. A pathless `grep` (no `path` argument, so the argument-side
+    deny check has nothing to match) would return matches -- including file contents --
+    from a denied subtree. See PARITY.md wave 1B.
+    """
+    from bog_agents.middleware.permissions import FilesystemPermission
+
+    fake_model = GenericFakeChatModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_file",
+                            "args": {"file_path": "/secrets/prod.env", "content": "API_KEY=sk-live-deadbeef"},
+                            "id": "call_write_secret",
+                            "type": "tool_call",
+                        },
+                        {
+                            "name": "write_file",
+                            "args": {"file_path": "/work/app.py", "content": "# API_KEY is read from env"},
+                            "id": "call_write_work",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "grep",
+                            "args": {"pattern": "API_KEY", "output_mode": "content"},
+                            "id": "call_grep_pathless",
+                            "type": "tool_call",
+                        },
+                    ],
+                ),
+                AIMessage(content="done"),
+            ]
+        )
+    )
+
+    agent = create_agent(
+        model=fake_model,
+        checkpointer=InMemorySaver(),
+        permissions=[FilesystemPermission(operations=["read"], paths=["/secrets/**"], mode="deny")],
+    )
+
+    result = agent.invoke(
+        {"messages": [HumanMessage(content="write and search")]},
+        config={"configurable": {"thread_id": "test_thread_deny_grep"}},
+    )
+
+    grep_message = result["messages"][-2]
+    assert isinstance(grep_message, ToolMessage)
+    assert "/secrets/prod.env" not in grep_message.content, "grep must not leak a denied path"
+    assert "sk-live-deadbeef" not in grep_message.content, "grep must not leak denied file contents"
+    # The non-denied hit must still come through -- the filter must not over-block.
+    assert "/work/app.py" in grep_message.content, "grep must still return allowed matches"

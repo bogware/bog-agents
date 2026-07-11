@@ -8,6 +8,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
+    InvalidToolCall,
     SystemMessage,
     ToolCall,
     ToolMessage,
@@ -20,6 +21,7 @@ from bog_agents.backends import CompositeBackend, StateBackend, StoreBackend
 from bog_agents.backends.protocol import (
     ExecuteResponse,
     FileDownloadResponse,
+    GlobResult,
     SandboxBackendProtocol,
 )
 from bog_agents.backends.utils import (
@@ -103,7 +105,7 @@ class TestFilesystemMiddleware:
         middleware = FilesystemMiddleware()
         assert callable(middleware.backend)
         assert middleware._custom_system_prompt is None
-        assert len(middleware.tools) == 9  # All tools including execute, multi_edit_file, read_many_files
+        assert len(middleware.tools) == 10  # All tools including delete, execute, multi_edit_file, read_many_files
 
     def test_init_with_composite_backend(self):
         def backend_factory(rt):
@@ -112,13 +114,13 @@ class TestFilesystemMiddleware:
         middleware = FilesystemMiddleware(backend=backend_factory)
         assert callable(middleware.backend)
         assert middleware._custom_system_prompt is None
-        assert len(middleware.tools) == 9  # All tools including execute, multi_edit_file, read_many_files
+        assert len(middleware.tools) == 10  # All tools including delete, execute, multi_edit_file, read_many_files
 
     def test_init_custom_system_prompt_default(self):
         middleware = FilesystemMiddleware(system_prompt="Custom system prompt")
         assert callable(middleware.backend)
         assert middleware._custom_system_prompt == "Custom system prompt"
-        assert len(middleware.tools) == 9  # All tools including execute, multi_edit_file, read_many_files
+        assert len(middleware.tools) == 10  # All tools including delete, execute, multi_edit_file, read_many_files
 
     def test_init_custom_system_prompt_with_composite(self):
         def backend_factory(rt):
@@ -127,7 +129,7 @@ class TestFilesystemMiddleware:
         middleware = FilesystemMiddleware(backend=backend_factory, system_prompt="Custom system prompt")
         assert callable(middleware.backend)
         assert middleware._custom_system_prompt == "Custom system prompt"
-        assert len(middleware.tools) == 9  # All tools including execute, multi_edit_file, read_many_files
+        assert len(middleware.tools) == 10  # All tools including delete, execute, multi_edit_file, read_many_files
 
     def test_init_custom_tool_descriptions_default(self):
         middleware = FilesystemMiddleware(custom_tool_descriptions={"ls": "Custom ls tool description"})
@@ -425,14 +427,14 @@ class TestFilesystemMiddleware:
             ToolRuntime(state=state, context=None, tool_call_id="", store=None, stream_writer=lambda _: None, config={})
         )
 
-        def slow_glob_info(*_args: object, **_kwargs: object) -> list[dict[str, str]]:
+        def slow_glob(*_args: object, **_kwargs: object) -> GlobResult:
             time.sleep(2)
-            return []
+            return GlobResult(matches=[])
 
         with (
             patch.object(filesystem_middleware, "GLOB_TIMEOUT", 0.5),
             patch.object(middleware, "_get_backend", return_value=backend),
-            patch.object(backend, "glob_info", side_effect=slow_glob_info),
+            patch.object(backend, "glob", side_effect=slow_glob),
         ):
             result = glob_search_tool.invoke(
                 {
@@ -1611,15 +1613,9 @@ class TestPatchToolCallsMiddleware:
         ]
         middleware = PatchToolCallsMiddleware()
         state_update = middleware.before_agent({"messages": input_messages}, None)
-        assert state_update is not None
-        assert isinstance(state_update["messages"], Overwrite)
-        patched_messages = state_update["messages"].value
-        assert len(patched_messages) == 2
-        assert patched_messages[0].type == "system"
-        assert patched_messages[0].content == "You are a helpful assistant."
-        assert patched_messages[1].type == "human"
-        assert patched_messages[1].content == "Hello, how are you?"
-        assert patched_messages[1].id == "2"
+        # Nothing is dangling, so the history must be left alone. Returning an
+        # Overwrite here would rewrite the full message list on every single turn.
+        assert state_update is None
 
     def test_missing_tool_call(self) -> None:
         input_messages = [
@@ -1667,23 +1663,68 @@ class TestPatchToolCallsMiddleware:
         ]
         middleware = PatchToolCallsMiddleware()
         state_update = middleware.before_agent({"messages": input_messages}, None)
+        # Every tool call is answered — no state update at all. The previous
+        # assertion (`is not None`) locked in a bug where the entire history was
+        # Overwrite-rewritten on every turn even with nothing to patch.
+        assert state_update is None
+
+    def test_invalid_tool_call_is_patched(self) -> None:
+        """A malformed tool call still emits a dangling `tool_use` block — patch it."""
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[],
+            invalid_tool_calls=[
+                InvalidToolCall(id="bad-1", name="get_events_for_days", args='{"date_str": "2025-01-', error="Unterminated JSON"),
+            ],
+            id="3",
+        )
+        input_messages = [
+            HumanMessage(content="What's on my calendar?", id="1"),
+            ai_message,
+        ]
+        middleware = PatchToolCallsMiddleware()
+        state_update = middleware.before_agent({"messages": input_messages}, None)
         assert state_update is not None
-        assert isinstance(state_update["messages"], Overwrite)
         patched_messages = state_update["messages"].value
-        assert len(patched_messages) == 5
-        assert patched_messages[0].type == "system"
-        assert patched_messages[0].content == "You are a helpful assistant."
-        assert patched_messages[1].type == "human"
-        assert patched_messages[1].content == "Hello, how are you?"
-        assert patched_messages[2].type == "ai"
-        assert len(patched_messages[2].tool_calls) == 1
-        assert patched_messages[2].tool_calls[0]["id"] == "123"
-        assert patched_messages[2].tool_calls[0]["name"] == "get_events_for_days"
-        assert patched_messages[2].tool_calls[0]["args"] == {"date_str": "2025-01-01"}
-        assert patched_messages[3].type == "tool"
-        assert patched_messages[3].tool_call_id == "123"
-        assert patched_messages[4].type == "human"
-        assert patched_messages[4].content == "What is the weather in Tokyo?"
+        assert len(patched_messages) == 3
+        assert patched_messages[2].type == "tool"
+        assert patched_messages[2].tool_call_id == "bad-1"
+        assert patched_messages[2].name == "get_events_for_days"
+        assert "malformed or truncated" in patched_messages[2].content
+
+    def test_valid_and_invalid_tool_calls_get_distinct_messages(self) -> None:
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[ToolCall(id="ok-1", name="get_events_for_days", args={"date_str": "2025-01-01"})],
+            invalid_tool_calls=[InvalidToolCall(id="bad-1", name="get_weather", args="{oops", error="Invalid JSON")],
+            id="2",
+        )
+        input_messages = [HumanMessage(content="hi", id="1"), ai_message]
+        middleware = PatchToolCallsMiddleware()
+        state_update = middleware.before_agent({"messages": input_messages}, None)
+        assert state_update is not None
+        patched_messages = state_update["messages"].value
+        assert len(patched_messages) == 4
+        assert patched_messages[2].tool_call_id == "ok-1"
+        assert "cancelled" in patched_messages[2].content
+        assert patched_messages[3].tool_call_id == "bad-1"
+        assert "malformed or truncated" in patched_messages[3].content
+
+    def test_invalid_tool_call_with_null_id_is_skipped(self) -> None:
+        """A tool call with no id cannot be answered — a ToolMessage would be invalid."""
+        ai_message = AIMessage(
+            content="",
+            tool_calls=[],
+            invalid_tool_calls=[InvalidToolCall(id=None, name="get_weather", args="{oops", error="Invalid JSON")],
+            id="2",
+        )
+        input_messages = [HumanMessage(content="hi", id="1"), ai_message]
+        middleware = PatchToolCallsMiddleware()
+        assert middleware.before_agent({"messages": input_messages}, None) is None
+
+    def test_empty_messages(self) -> None:
+        middleware = PatchToolCallsMiddleware()
+        assert middleware.before_agent({"messages": []}, None) is None
 
     def test_two_missing_tool_calls(self) -> None:
         input_messages = [

@@ -3,12 +3,17 @@
 This module contains async versions of skills middleware tests.
 """
 
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage
 
 from bog_agents.backends.filesystem import FilesystemBackend
+from bog_agents.backends.protocol import FileDownloadResponse
+from bog_agents.middleware import skills as skills_module
 from bog_agents.middleware.skills import SkillsMiddleware, _alist_skills
 from tests.unit_tests.chat_model import GenericFakeChatModel
 
@@ -404,3 +409,141 @@ async def test_agent_with_skills_middleware_empty_sources_async(tmp_path: Path) 
 
     assert "Skills System" in content
     assert "No skills available" in content
+
+
+# ---------------------------------------------------------------------------
+# P1-8 (async): symlinked skill directories must be refused on the async path
+#
+# The containment guard originally lived only in `_list_skills`. `_alist_skills`
+# -- the path `ainvoke` actually takes -- had no check at all, so running the
+# agent asynchronously bypassed the guard entirely. Both paths now share
+# `_filter_skill_dirs`.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _AsyncStubBackend:
+    """Minimal async backend recording which SKILL.md paths were requested.
+
+    `adownload_files` returns one `file_not_found` response per requested path so
+    the production `zip(..., strict=True)` invariant holds. The assertion is only
+    about which paths reached the download step -- a symlinked directory must be
+    filtered out before then.
+    """
+
+    items_response: list
+    downloaded_paths: list = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        self.downloaded_paths = []
+
+    async def als_info(self, path: str) -> list:
+        return self.items_response
+
+    async def adownload_files(self, paths: list) -> list:
+        self.downloaded_paths.extend(paths)
+        return [FileDownloadResponse(path=p, content=None, error="file_not_found") for p in paths]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows symlink creation requires admin / dev-mode",
+)
+async def test_symlinked_skill_dir_is_skipped_async(tmp_path: Path) -> None:
+    """A symlinked skill dir is refused via the ASYNC listing path.
+
+    Regression guard: this asserts the fix for the async symlink bypass. Against
+    the pre-fix code `_alist_skills` had no containment check and the hostile
+    link's SKILL.md was happily downloaded.
+    """
+    real = tmp_path / "real-skill"
+    real.mkdir()
+    (real / "SKILL.md").write_text("---\nname: real\n---\n", encoding="utf-8")
+    outside = tmp_path.parent / "hostile-async"
+    outside.mkdir(exist_ok=True)
+    link = tmp_path / "hostile-skill"
+    link.symlink_to(outside)
+
+    backend = _AsyncStubBackend(
+        items_response=[
+            {"path": str(real), "is_dir": True},
+            {"path": str(link), "is_dir": True},
+        ]
+    )
+
+    await _alist_skills(backend, str(tmp_path))  # type: ignore[arg-type]
+
+    downloaded = backend.downloaded_paths
+    assert any("real-skill" in p for p in downloaded)
+    assert not any("hostile-skill" in p for p in downloaded), downloaded
+
+
+async def test_symlinked_skill_dir_is_skipped_async_islink_patched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Platform-independent twin of the symlink test.
+
+    Real symlink creation needs privileges Windows CI/dev boxes lack, so the
+    test above skips there -- which would leave the async containment guard
+    completely unexercised on Windows. Patching `os.path.islink` drives the exact
+    same branch of `_filter_skill_dirs` on every platform.
+    """
+    real = tmp_path / "real-skill"
+    hostile = tmp_path / "hostile-skill"
+
+    monkeypatch.setattr(
+        skills_module.os.path,
+        "islink",
+        lambda p: str(p) == str(hostile),
+    )
+
+    backend = _AsyncStubBackend(
+        items_response=[
+            {"path": str(real), "is_dir": True},
+            {"path": str(hostile), "is_dir": True},
+        ]
+    )
+
+    await _alist_skills(backend, str(tmp_path))  # type: ignore[arg-type]
+
+    downloaded = backend.downloaded_paths
+    assert any("real-skill" in p for p in downloaded)
+    assert not any("hostile-skill" in p for p in downloaded), downloaded
+
+
+async def test_symlinked_skill_dir_refused_through_abefore_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: the guard holds through `abefore_agent`, not just the helper."""
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+
+    good = skills_dir / "good-skill"
+    good.mkdir()
+    (good / "SKILL.md").write_text(
+        make_skill_content("good-skill", "A legitimate skill."),
+        encoding="utf-8",
+    )
+    hostile = skills_dir / "hostile-skill"
+    hostile.mkdir()
+    (hostile / "SKILL.md").write_text(
+        make_skill_content("hostile-skill", "Loaded through a symlink."),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        skills_module.os.path,
+        "islink",
+        lambda p: Path(p).name == "hostile-skill",
+    )
+
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=False)
+    middleware = SkillsMiddleware(backend=backend, sources=[str(skills_dir)])
+
+    result = await middleware.abefore_agent({"messages": []}, None, {})  # type: ignore[arg-type]
+
+    assert result is not None
+    names = {s["name"] for s in result["skills_metadata"]}
+    assert names == {"good-skill"}, f"symlinked skill leaked through the async path: {names}"

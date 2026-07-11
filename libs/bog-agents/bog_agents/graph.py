@@ -559,7 +559,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # Build general-purpose subagent with default middleware stack
     gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [
         TodoListMiddleware(),
-        FilesystemMiddleware(backend=backend),
+        # `_permissions` lets the filesystem tools filter deny'd paths out of ls/glob/grep
+        # *results* -- the FilesystemPermissionsMiddleware below only guards the tool's path
+        # argument, which a pathless grep/ls/glob would otherwise bypass entirely.
+        FilesystemMiddleware(backend=backend, _permissions=permissions),
     ]
     if permissions:
         gp_middleware.append(FilesystemPermissionsMiddleware(permissions=permissions))
@@ -626,7 +629,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             # Build middleware: base stack + skills (if specified) + user's middleware
             subagent_middleware: list[AgentMiddleware[Any, Any, Any]] = [
                 TodoListMiddleware(),
-                FilesystemMiddleware(backend=backend),
+                FilesystemMiddleware(backend=backend, _permissions=subagent_permissions),
             ]
             if subagent_permissions:
                 subagent_middleware.append(FilesystemPermissionsMiddleware(permissions=subagent_permissions))
@@ -1074,7 +1077,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     defaults_to_append: list[Any] = []
     if not user_supplied_filesystem:
-        defaults_to_append.append(FilesystemMiddleware(backend=backend))
+        defaults_to_append.append(FilesystemMiddleware(backend=backend, _permissions=permissions))
     defaults_to_append.append(SubAgentMiddleware(backend=backend, subagents=all_subagents))
     if not user_supplied_summarization:
         defaults_to_append.append(create_summarization_middleware(model, backend))

@@ -13,16 +13,23 @@ as a self-contained unit. It provides three things:
    [`HumanInTheLoopMiddleware`][langchain.agents.middleware.HumanInTheLoopMiddleware],
    using per-tool `when` predicates that fire only when a call's path could
    intersect an interrupt-mode rule.
+4. **Result filters** (`apply_permissions_to_ls_result` and friends) — the
+   argument-side check above is not sufficient for the bulk tools. `ls`, `glob`
+   and `grep` can be called with no path argument at all, in which case there is
+   no path to match a rule against, yet their results happily surface denied
+   files (and, for `grep`, denied file *contents*). The filters below remove
+   `deny`-mode entries from a bulk result before it reaches the model.
 
-`validate_path` is reused from `bog_agents.backends.utils`. The glob-anchor and
-overlap helpers (`to_posix_path`, `_glob_anchor`, `_paths_overlap`) are not
-present there, so they are ported verbatim here.
+`validate_path`, `to_posix_path`, `_glob_anchor` and `_paths_overlap` all come
+from `bog_agents.backends.utils`, which is the single source of truth for path
+helpers. They are re-bound at module level here so existing importers of
+`bog_agents.middleware.permissions.to_posix_path` (etc.) keep working.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from typing import Any, Literal, cast
 
@@ -32,7 +39,14 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
-from bog_agents.backends.utils import validate_path
+from bog_agents.backends.protocol import FileInfo, GlobResult, GrepMatch, GrepResult, LsResult
+from bog_agents.backends.utils import (
+    _GLOB_WILDCARD_CHARS,
+    _glob_anchor,
+    _paths_overlap,
+    to_posix_path,
+    validate_path,
+)
 
 FilesystemOperation = Literal["read", "write"]
 
@@ -45,87 +59,8 @@ _DEFAULT_FS_TOOL_OPS: dict[str, FilesystemOperation] = {
     "grep": "read",
     "write_file": "write",
     "edit_file": "write",
+    "delete": "write",
 }
-
-
-# ---------------------------------------------------------------------------
-# Path helpers (ported from deepagents.backends.utils — not present in bog's
-# backends/utils.py). `validate_path` is imported from bog instead.
-# ---------------------------------------------------------------------------
-
-# Characters that mark a glob path component as a wildcard segment for the
-# purposes of `_glob_anchor`. Keep in sync with the wcmatch flags used by the
-# filesystem middleware (`BRACE | GLOBSTAR`).
-_GLOB_WILDCARD_CHARS = frozenset("*?[{")
-
-
-def to_posix_path(path: str) -> str:
-    r"""Normalize backslash separators to forward slashes for `PurePosixPath` use.
-
-    Backends running on Windows return OS-native paths using backslashes.
-    `PurePosixPath` treats backslashes as literal filename characters, so
-    `PurePosixPath(r"C:\a\b").name` yields the full string instead of `"b"`.
-    Normalize before constructing a `PurePosixPath`.
-
-    This is best-effort: a POSIX directory literally named with a backslash will
-    also be rewritten. That trade-off is accepted because such filenames are
-    vanishingly rare in practice and the alternative (gating on `os.sep`) fails
-    when a Windows-style path is handed to a non-Windows process.
-
-    Args:
-        path: Path string that may use backslash separators.
-
-    Returns:
-        The same path with every backslash replaced by `/`. Inputs that already
-        use forward slashes are returned unchanged.
-    """
-    return path.replace("\\", "/")
-
-
-def _glob_anchor(pattern: str) -> str:
-    """Return the longest leading directory of `pattern` with no wildcards.
-
-    For `/secrets/**` returns `/secrets`; for `/a/*/b` returns `/a`; for a
-    pattern with a wildcard at or near the root (`/**/secrets`, `/*/foo`) falls
-    back to `/`. The root fallback causes overlap checks to match any subtree —
-    conservative over-gating, since we cannot statically pin down where the rule
-    could resolve. Callers wanting precise gating should anchor the rule's
-    leading components.
-
-    Args:
-        pattern: A glob pattern.
-
-    Returns:
-        The longest wildcard-free leading directory, or `/` if none.
-    """
-    parts = PurePosixPath(to_posix_path(pattern)).parts
-    safe: list[str] = []
-    for part in parts:
-        if any(c in _GLOB_WILDCARD_CHARS for c in part):
-            break
-        safe.append(part)
-    if not safe:
-        return "/"
-    return str(PurePosixPath(*safe))
-
-
-def _paths_overlap(call_path: str, rule_anchor: str) -> bool:
-    """Return True if the subtree at `call_path` intersects the subtree at `rule_anchor`.
-
-    Two subtrees overlap when one is a (component-wise) prefix of the other, or
-    they're equal. Comparison runs on `PurePosixPath` components, so `/secret`
-    does not overlap `/secrets`. The root `/` overlaps everything.
-
-    Args:
-        call_path: Normalized path of the call's search root.
-        rule_anchor: Anchor (wildcard-free prefix) of a rule's pattern.
-
-    Returns:
-        True if the two subtrees intersect.
-    """
-    a = PurePosixPath(call_path)
-    b = PurePosixPath(rule_anchor)
-    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
 
 
 # ---------------------------------------------------------------------------
@@ -226,9 +161,240 @@ _FS_TOOL_PATH_ARGS: dict[str, tuple[FilesystemOperation, str, ToolScope, str | N
     "read_file": ("read", "file_path", "exact", None),
     "write_file": ("write", "file_path", "exact", None),
     "edit_file": ("write", "file_path", "exact", None),
+    # `delete` names a single path, but the operation is *recursive*: it removes
+    # the path plus everything under it. The plain exact-match check is therefore
+    # not enough — see `_find_delete_deny_patterns`, which the enforcement
+    # middleware uses instead for this tool.
+    "delete": ("write", "file_path", "exact", None),
     "glob": ("read", "path", "bulk", "pattern"),
     "grep": ("read", "path", "bulk", None),
 }
+
+
+# ---------------------------------------------------------------------------
+# Recursive-delete overlap
+# ---------------------------------------------------------------------------
+
+
+def _wildcard_delete_overlap(pattern: str, anchor: str, target: str) -> bool:
+    """Check whether a wildcard deny pattern overlaps a recursive delete target.
+
+    Args:
+        pattern: The original glob pattern (e.g. `/work/*.log`).
+        anchor: The longest wildcard-free prefix of `pattern`.
+        target: The absolute path being recursively deleted.
+
+    Returns:
+        True if the pattern's matches intersect the delete subtree.
+    """
+    # Root anchor ("/**/x"): the pattern can match anywhere, so block.
+    if anchor == "/":
+        return True
+    # Target directly matches the glob: block.
+    if wcglob.globmatch(target, pattern, flags=_FS_WCMATCH_FLAGS):
+        return True
+    # Anchor is inside the delete subtree: a recursive delete would remove
+    # matching descendants — block.
+    if PurePosixPath(anchor).is_relative_to(PurePosixPath(target)):
+        return True
+    # Target is below the anchor: safe to allow ONLY when the pattern suffix is a
+    # single, non-`**` component (fixed depth) AND no ancestor of the target
+    # matches the glob. `/work/*.log` can never match anything under
+    # `/work/notes.txt`. But `/work/*` matches `/work/app`, so deleting
+    # `/work/app/child` mutates a denied path's contents and must be blocked.
+    # Patterns with directory wildcards (`/work/*/secrets`) could match
+    # descendants of the target, so fail closed for those.
+    if not PurePosixPath(target).is_relative_to(PurePosixPath(anchor)):
+        return False
+    anchor_parts = PurePosixPath(anchor).parts
+    pattern_parts = PurePosixPath(to_posix_path(pattern)).parts
+    suffix = pattern_parts[len(anchor_parts) :]
+    if len(suffix) != 1 or "**" in suffix[0]:
+        return True
+    # Check whether any ancestor of the target (between anchor and target)
+    # matches the glob. If so, the target lives inside a denied directory.
+    target_parts = PurePosixPath(target).parts
+    return any(
+        wcglob.globmatch(str(PurePosixPath(*target_parts[:depth])), pattern, flags=_FS_WCMATCH_FLAGS)
+        for depth in range(len(anchor_parts), len(target_parts))
+    )
+
+
+def _find_delete_deny_patterns(rules: list[FilesystemPermission], target: str) -> list[str]:
+    """Return the deny-write patterns that block recursively deleting `target`.
+
+    A recursive delete removes `target` and everything below it, so a deny-write
+    pattern blocks the operation whenever it could match `target` *or anything in
+    its subtree*. This is what stops `delete("/")` from quietly blowing away a
+    denied subtree: a `deny` rule on `/secrets/**` anchors at `/secrets`, which is
+    inside the `/` delete subtree, so the delete is refused outright rather than
+    partially executed.
+
+    Sibling file globs that cannot match anything inside the deleted subtree (e.g.
+    deny `/work/*.log` when deleting `/work/notes.txt`) do not block. Literal
+    (wildcard-free) deny patterns use the plain subtree-overlap check, so a deny on
+    `/work` blocks deleting `/work/sub` as well as deleting `/`.
+
+    Args:
+        rules: Filesystem permission rules.
+        target: Absolute, validated path being deleted.
+
+    Returns:
+        The matching deny-write patterns, or an empty list if the delete is allowed.
+    """
+    denying: list[str] = []
+    seen: set[str] = set()
+    for rule in rules:
+        if rule.mode != "deny" or "write" not in rule.operations:
+            continue
+        for pattern in rule.paths:
+            if pattern in seen:
+                continue
+            anchor = _glob_anchor(pattern)
+            if any(c in _GLOB_WILDCARD_CHARS for c in pattern):
+                overlaps = _wildcard_delete_overlap(pattern, anchor, target)
+            else:
+                # Literal pattern: subtree overlap in either direction.
+                overlaps = _paths_overlap(target, anchor)
+            if overlaps:
+                seen.add(pattern)
+                denying.append(pattern)
+    return denying
+
+
+# ---------------------------------------------------------------------------
+# Result filtering for bulk tools (ls / glob / grep)
+# ---------------------------------------------------------------------------
+#
+# SECURITY: the argument-side deny check in `FilesystemPermissionsMiddleware`
+# only sees a tool call's *path argument*. `ls`, `glob` and `grep` do not require
+# one — `grep(pattern="API_KEY")` with no `path` has nothing for a rule to match
+# against, so a `deny` rule on `/secrets/**` never fires and the tool returns
+# matches (including the matching lines' text) straight out of `/secrets`. The
+# same hole leaks the existence and names of denied paths through `ls` and `glob`.
+# The functions below close it by filtering denied entries out of the *result*.
+#
+# Interrupt-mode entries deliberately pass through unfiltered: `interrupt` means
+# "ask the human when they actually access this", not "hide it". The HITL gate
+# fires before the tool runs (see `_build_interrupt_on_from_permissions`), so by
+# the time a result exists the human has already approved the call — dropping the
+# entries here would silently empty the very listing they approved.
+
+
+def filter_paths_by_permission(
+    rules: list[FilesystemPermission],
+    paths: list[str],
+    *,
+    operation: FilesystemOperation = "read",
+) -> list[str]:
+    """Drop paths whose effective mode is `deny`.
+
+    Args:
+        rules: Ordered list of permission rules.
+        paths: Paths produced by a bulk tool.
+        operation: Operation the bulk tool performs. Defaults to `"read"`.
+
+    Returns:
+        The paths whose effective mode is `allow` or `interrupt`, in input order.
+    """
+    if not rules:
+        return list(paths)
+    return [p for p in paths if _check_fs_permission(rules, operation, p) != "deny"]
+
+
+def filter_file_infos_by_permission(
+    rules: list[FilesystemPermission],
+    infos: list[FileInfo],
+    *,
+    operation: FilesystemOperation = "read",
+) -> list[FileInfo]:
+    """Drop `FileInfo` entries whose effective mode is `deny`.
+
+    Args:
+        rules: Ordered list of permission rules.
+        infos: Entries produced by `ls` or `glob`.
+        operation: Operation the bulk tool performs. Defaults to `"read"`.
+
+    Returns:
+        The entries whose effective mode is `allow` or `interrupt`, in input order.
+    """
+    if not rules:
+        return list(infos)
+    return [fi for fi in infos if _check_fs_permission(rules, operation, fi.get("path", "")) != "deny"]
+
+
+def filter_grep_matches_by_permission(
+    rules: list[FilesystemPermission],
+    matches: list[GrepMatch],
+    *,
+    operation: FilesystemOperation = "read",
+) -> list[GrepMatch]:
+    """Drop `GrepMatch` entries whose effective mode is `deny`.
+
+    Each match carries the matching line's text, so an unfiltered match against a
+    denied file leaks that file's contents, not merely its name.
+
+    Args:
+        rules: Ordered list of permission rules.
+        matches: Matches produced by `grep`.
+        operation: Operation the bulk tool performs. Defaults to `"read"`.
+
+    Returns:
+        The matches whose effective mode is `allow` or `interrupt`, in input order.
+    """
+    if not rules:
+        return list(matches)
+    return [m for m in matches if _check_fs_permission(rules, operation, m.get("path", "")) != "deny"]
+
+
+def apply_permissions_to_ls_result(rules: list[FilesystemPermission], result: LsResult) -> LsResult:
+    """Return `result` with `deny`-mode entries removed.
+
+    Args:
+        rules: Ordered list of permission rules.
+        result: The backend's `ls` result.
+
+    Returns:
+        A new `LsResult` with denied entries filtered out. Results carrying an
+        `error` (or no entries) are returned untouched.
+    """
+    if not rules or result.error is not None or result.entries is None:
+        return result
+    return replace(result, entries=filter_file_infos_by_permission(rules, result.entries))
+
+
+def apply_permissions_to_glob_result(rules: list[FilesystemPermission], result: GlobResult) -> GlobResult:
+    """Return `result` with `deny`-mode matches removed.
+
+    Args:
+        rules: Ordered list of permission rules.
+        result: The backend's `glob` result.
+
+    Returns:
+        A new `GlobResult` with denied matches filtered out; `truncated` is
+        preserved. Results carrying an `error` (or no matches) are returned
+        untouched.
+    """
+    if not rules or result.error is not None or result.matches is None:
+        return result
+    return replace(result, matches=filter_file_infos_by_permission(rules, result.matches))
+
+
+def apply_permissions_to_grep_result(rules: list[FilesystemPermission], result: GrepResult) -> GrepResult:
+    """Return `result` with `deny`-mode matches removed.
+
+    Args:
+        rules: Ordered list of permission rules.
+        result: The backend's `grep` result.
+
+    Returns:
+        A new `GrepResult` with denied matches filtered out; `truncated` is
+        preserved. Results carrying an `error` (or no matches) are returned
+        untouched.
+    """
+    if not rules or result.error is not None or result.matches is None:
+        return result
+    return replace(result, matches=filter_grep_matches_by_permission(rules, result.matches))
 
 
 def _make_fs_when_predicate(
@@ -462,6 +628,12 @@ class FilesystemPermissionsMiddleware(AgentMiddleware):
         and returns the normalized path only when `_check_fs_permission` resolves
         to `"deny"`.
 
+        `delete` is special-cased: it is recursive, so it is resolved through
+        `_find_delete_deny_patterns` rather than an exact-path match. Otherwise
+        `delete("/")` would sail past a `deny` rule on `/secrets/**` (the rule's
+        pattern does not match the literal path `/`) and destroy the denied
+        subtree.
+
         Args:
             request: The incoming tool-call request.
 
@@ -493,6 +665,9 @@ class FilesystemPermissionsMiddleware(AgentMiddleware):
                 return None
             if normalized == "/.":
                 normalized = "/"
+
+        if tool_name == "delete":
+            return normalized if _find_delete_deny_patterns(self.permissions, normalized) else None
 
         if _check_fs_permission(self.permissions, operation, normalized) == "deny":
             return normalized
@@ -582,4 +757,15 @@ __all__ = [
     "FilesystemPermissionsMiddleware",
     "_build_interrupt_on_from_permissions",
     "_check_fs_permission",
+    "_find_delete_deny_patterns",
+    "_glob_anchor",
+    "_paths_overlap",
+    "_wildcard_delete_overlap",
+    "apply_permissions_to_glob_result",
+    "apply_permissions_to_grep_result",
+    "apply_permissions_to_ls_result",
+    "filter_file_infos_by_permission",
+    "filter_grep_matches_by_permission",
+    "filter_paths_by_permission",
+    "to_posix_path",
 ]
