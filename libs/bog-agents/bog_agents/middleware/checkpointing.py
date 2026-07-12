@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +37,17 @@ logger = logging.getLogger(__name__)
 
 # Tools that modify files and should trigger checkpointing
 _MUTATING_TOOLS = frozenset({"write_file", "edit_file", "multi_edit_file", "execute"})
+
+# Committer identity for shadow checkpoint commits, passed per-invocation so
+# checkpointing does not depend on (or mutate) the user's global git config.
+_CHECKPOINT_IDENTITY_ARGS = (
+    "-c",
+    "user.name=bog-agents",
+    "-c",
+    "user.email=bog-agents@localhost",
+    "-c",
+    "commit.gpgsign=false",
+)
 
 
 __all__ = [
@@ -92,9 +105,15 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         self._shadow_dir = shadow_dir
         self._checkpoints: list[Checkpoint] = []
         self._initialized = False
+        # Checkpointing stages files (`git add -A`) to build stash snapshots. It
+        # MUST NOT touch the user's real git index — a user running the agent in
+        # their own repo would otherwise find their whole working tree staged.
+        # All checkpoint git commands operate against an isolated, throwaway index
+        # via GIT_INDEX_FILE, so the user's index is never modified.
+        self._index_file = str(Path(tempfile.mkdtemp(prefix="bog-agents-ckpt-")) / "index")
 
     def _run_git(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        """Run a git command in the working directory.
+        """Run a git command against an isolated index in the working directory.
 
         Args:
             *args: Git command arguments.
@@ -110,6 +129,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
             text=True,
             timeout=30,
             check=False,
+            env={**os.environ, "GIT_INDEX_FILE": self._index_file},
         )
 
     def _ensure_initialized(self) -> None:
@@ -140,28 +160,34 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
                 self._initialized = True
                 return
 
-        # Create initial checkpoint
-        add_result = self._run_git("add", "-A")
-        if add_result.returncode != 0:
-            logger.warning(
-                "Checkpointing baseline `git add -A` failed: exit %d. stderr: %s",
-                add_result.returncode,
-                (add_result.stderr or "").strip()[:200],
+        # `git stash create` (used to record checkpoints) requires an existing
+        # HEAD. On a repo with an UNBORN head (freshly `git init`ed, no commits)
+        # it fails with "you do not have the initial commit yet", which silently
+        # disabled checkpointing on modern git. Create a single initial commit in
+        # that case ONLY. A repo that already has history (the common case — a
+        # user running the agent in their real project) is left completely
+        # untouched: we never `git add`/`git commit` into an existing history,
+        # we just anchor the baseline at the user's current HEAD.
+        if self._run_git("rev-parse", "--verify", "--quiet", "HEAD").returncode != 0:
+            self._run_git("add", "-A")
+            commit_result = self._run_git(
+                *_CHECKPOINT_IDENTITY_ARGS, "commit", "--allow-empty", "-q", "-m", "bog-agents-checkpoint-baseline"
             )
-        result = self._run_git("stash", "create", "bog-agents-checkpoint-init")
-        if result.returncode == 0 and result.stdout.strip():
+            if commit_result.returncode != 0:
+                logger.warning(
+                    "Checkpointing initial commit failed: exit %d. stderr: %s",
+                    commit_result.returncode,
+                    (commit_result.stderr or "").strip()[:200],
+                )
+
+        head = self._run_git("rev-parse", "HEAD")
+        if head.returncode == 0 and head.stdout.strip():
             self._checkpoints.append(
                 Checkpoint(
-                    commit_hash=result.stdout.strip(),
+                    commit_hash=head.stdout.strip(),
                     message="Initial checkpoint before agent modifications",
                     tool_call_id="init",
                 )
-            )
-        elif result.returncode != 0:
-            logger.warning(
-                "Checkpointing initial `git stash create` failed: exit %d. stderr: %s",
-                result.returncode,
-                (result.stderr or "").strip()[:200],
             )
         self._initialized = True
 
@@ -183,12 +209,20 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         # Stage all current changes
         self._run_git("add", "-A")
 
-        # Create a checkpoint commit on a detached ref
+        # Create a checkpoint commit on a detached ref. `git stash create` only
+        # emits a hash when there are uncommitted changes; when the tree is clean
+        # the state before this tool is just HEAD, so fall back to recording HEAD
+        # (a checkpoint before every mutating tool must always exist so rewind can
+        # restore to it).
         msg = f"bog-agents-checkpoint: before {tool_name} ({tool_call_id})"
         result = self._run_git("stash", "create", msg)
 
-        if result.returncode == 0 and result.stdout.strip():
-            checkpoint_hash = result.stdout.strip()
+        checkpoint_hash = result.stdout.strip() if result.returncode == 0 else ""
+        if not checkpoint_hash:
+            head = self._run_git("rev-parse", "HEAD")
+            checkpoint_hash = head.stdout.strip() if head.returncode == 0 else ""
+
+        if checkpoint_hash:
             self._checkpoints.append(
                 Checkpoint(
                     commit_hash=checkpoint_hash,
