@@ -79,6 +79,34 @@ IMAGE_MEDIA_TYPES = {
     ".webp": "image/webp",
 }
 
+# Video container extensions the read_file tool samples into frames when the
+# optional `[video]` extra is installed. Mirrors upstream deepagents' combined
+# `_EXTENSION_TO_FILE_TYPE` video set plus `_VIDEO_EXTRA_EXTENSIONS` (`.mkv`).
+VIDEO_EXTENSIONS = frozenset(
+    {
+        ".mp4",
+        ".mpeg",
+        ".mpg",
+        ".mov",
+        ".avi",
+        ".flv",
+        ".webm",
+        ".wmv",
+        ".3gpp",
+        ".mkv",
+    }
+)
+
+# Seconds between sampled frames when extracting stills from a video. The
+# sampling rate is fixed by the middleware; agents control the window they
+# inspect through read_file's existing offset/limit arguments (interpreted as
+# seconds for video reads). Mirrors upstream deepagents' `_VIDEO_SAMPLING_RATE`.
+_VIDEO_SAMPLING_RATE = 0.5
+
+# Maximum raw video payload size accepted by read_file frame extraction.
+# Mirrors upstream deepagents' `MAX_VIDEO_INPUT_BYTES`.
+MAX_VIDEO_INPUT_BYTES = 1024 * 1024 * 1024
+
 
 # Template for truncation message in read_file
 # {file_path} will be filled in at runtime
@@ -116,6 +144,94 @@ _PARALLEL_WRITE_CONFLICT_MSG = (
     "this change in a follow-up turn, after the first edit to '{file_path}' has been "
     "applied, so the edits are sequenced correctly."
 )
+
+
+def _video_window_header(path: str, offset_seconds: float, duration_seconds: float, rate: float) -> str:
+    """Render the model-facing text header introducing a sampled frame window.
+
+    Args:
+        path: Path of the video being read (for display).
+        offset_seconds: Seconds into the source at which sampling starts.
+        duration_seconds: Seconds of source sampled.
+        rate: Sampling rate in frames per second.
+
+    Returns:
+        A human-readable one-line description of the sampled window.
+    """
+    end = offset_seconds + duration_seconds
+    if offset_seconds <= 0.0:
+        return f"Reading first {int(duration_seconds)}s of {path} at {rate} fps."
+    return f"Reading [{offset_seconds:.3f}s, {end:.3f}s) of {path} at {rate} fps."
+
+
+def _handle_video_read(
+    validated_path: str,
+    content: bytes,
+    tool_call_id: str | None,
+    offset: int,
+    limit: int,
+) -> ToolMessage | str:
+    """Slice a video byte payload into a sampled frame window for the model.
+
+    `offset` is reinterpreted as seconds into the source to skip and `limit` as
+    seconds of source to sample, mirroring upstream deepagents' read_file video
+    window. The agent's supplied `limit` is authoritative (no per-call upper
+    clamp); a non-positive value is rejected as a tool error. Output volume is
+    bounded by the layered caps on the extractor (`MAX_VIDEO_DECODE_SECONDS`,
+    `MAX_VIDEO_SAMPLED_FRAMES`, `MAX_VIDEO_EMITTED_BYTES`, `MAX_VIDEO_FRAME_PIXELS`,
+    `MAX_VIDEO_FRAME_SIDE`).
+
+    The sampled frames are returned as image content blocks preceded by a text
+    window header on a single success `ToolMessage`, matching the read_file image
+    branch's shape. Errors are returned as plain error strings so the turn still
+    completes and the agent can recover (e.g. by retrying with a smaller window).
+
+    Args:
+        validated_path: The validated path of the video being read.
+        content: Raw bytes of the video payload (from the backend download).
+        tool_call_id: The tool call id to stamp on the result message.
+        offset: Seconds into the source to skip before sampling.
+        limit: Seconds of source to sample.
+
+    Returns:
+        A success `ToolMessage` carrying the header and sampled frame blocks, or
+        an error string when the window is invalid or extraction fails.
+    """
+    # Lazy import keeps `av` / Pillow optional and the lazy-import graph clean.
+    from bog_agents.middleware.video_reader import VideoExtractionError, extract_video_frames
+
+    if limit <= 0:
+        return f"Error reading video {validated_path}: limit must be > 0, got {limit!r}"
+
+    rate = _VIDEO_SAMPLING_RATE
+    offset_seconds = max(0.0, float(offset))
+    duration_seconds = float(limit)
+    header = _video_window_header(validated_path, offset_seconds, duration_seconds, rate)
+
+    if len(content) > MAX_VIDEO_INPUT_BYTES:
+        return f"Error reading video {validated_path}: video payload exceeds maximum input size of {MAX_VIDEO_INPUT_BYTES} bytes\n{header}"
+
+    try:
+        blocks = extract_video_frames(
+            content,
+            offset_seconds=offset_seconds,
+            duration_seconds=duration_seconds,
+            sampling_rate=rate,
+        )
+    except VideoExtractionError as exc:
+        return f"Error reading video {validated_path}: {exc}\n{header}"
+
+    frame_count = sum(1 for block in blocks if isinstance(block, dict) and block.get("type") == "image")
+    content_blocks: list[ContentBlock] = [cast("ContentBlock", {"type": "text", "text": header}), *blocks]
+    return ToolMessage(
+        content_blocks=content_blocks,
+        name="read_file",
+        tool_call_id=tool_call_id,
+        additional_kwargs={
+            "read_file_path": validated_path,
+            "read_file_frame_count": frame_count,
+        },
+    )
 
 
 def _write_target_paths(tool_call: dict[str, Any]) -> set[str]:
@@ -1034,6 +1150,21 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                     return f"Error reading PDF: {responses[0].error}"
                 return "Error reading PDF: unknown error"
 
+            if ext in VIDEO_EXTENSIONS:
+                from bog_agents.middleware.video_reader import MISSING_VIDEO_HINT, video_dependencies_available
+
+                # Without the optional `[video]` extra we cannot sample frames.
+                # Return the install hint rather than corrupting the bytes by
+                # reading a binary container as text.
+                if not video_dependencies_available():
+                    return MISSING_VIDEO_HINT
+                responses = resolved_backend.download_files([validated_path])
+                if responses and responses[0].content is not None:
+                    return _handle_video_read(validated_path, responses[0].content, runtime.tool_call_id, offset, limit)
+                if responses and responses[0].error:
+                    return f"Error reading video: {responses[0].error}"
+                return "Error reading video: unknown error"
+
             result = resolved_backend.read(validated_path, offset=offset, limit=limit)
 
             lines = result.splitlines(keepends=True)
@@ -1094,6 +1225,21 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 if responses and responses[0].error:
                     return f"Error reading PDF: {responses[0].error}"
                 return "Error reading PDF: unknown error"
+
+            if ext in VIDEO_EXTENSIONS:
+                from bog_agents.middleware.video_reader import MISSING_VIDEO_HINT, video_dependencies_available
+
+                # Without the optional `[video]` extra we cannot sample frames.
+                # Return the install hint rather than corrupting the bytes by
+                # reading a binary container as text.
+                if not video_dependencies_available():
+                    return MISSING_VIDEO_HINT
+                responses = await resolved_backend.adownload_files([validated_path])
+                if responses and responses[0].content is not None:
+                    return _handle_video_read(validated_path, responses[0].content, runtime.tool_call_id, offset, limit)
+                if responses and responses[0].error:
+                    return f"Error reading video: {responses[0].error}"
+                return "Error reading video: unknown error"
 
             result = await resolved_backend.aread(validated_path, offset=offset, limit=limit)
 

@@ -66,6 +66,11 @@ serve = [
 # default backend; pdfplumber / pymupdf are also supported if installed.
 pdf = ["pypdf>=4.0.0"]
 
+# Video-frame reading for the read_file tool (video_reader middleware). PyAV
+# decodes frames; Pillow encodes the sampled JPEGs. Both are imported lazily so
+# a default install stays lean.
+video = ["av>=17.0.0,<18.0.0", "pillow>=10.0.0,<13.0.0"]
+
 # ContextHubBackend — a persistent, versioned agent filesystem backed by a
 # LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
 # the backend needs `Client.pull_agent` / `push_agent`, so pin the floor here.

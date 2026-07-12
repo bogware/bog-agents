@@ -15,6 +15,5 @@ def test_orphan_base_prompt_md_stays_deleted() -> None:
     pkg_dir = Path(bog_agents.__file__).parent
     orphan = pkg_dir / "base_prompt.md"
     assert not orphan.exists(), (
-        "bog_agents/base_prompt.md was re-added. The live base prompt is the "
-        "BASE_AGENT_PROMPT constant in graph.py; a markdown copy is a drift trap."
+        "bog_agents/base_prompt.md was re-added. The live base prompt is the BASE_AGENT_PROMPT constant in graph.py; a markdown copy is a drift trap."
     )

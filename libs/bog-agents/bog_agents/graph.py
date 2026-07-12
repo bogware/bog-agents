@@ -3,6 +3,7 @@
 import dataclasses
 import os
 from collections.abc import Callable, Sequence
+from importlib import import_module
 from pathlib import Path
 from typing import Annotated, Any, Required, TypedDict, cast
 
@@ -28,7 +29,7 @@ from bog_agents._excluded_middleware import (
     _verify_excluded_middleware_coverage,
 )
 from bog_agents._messages_reducer import _messages_delta_reducer
-from bog_agents._models import resolve_model
+from bog_agents._models import is_bedrock_model, resolve_model
 from bog_agents._tools import _apply_tool_description_overrides
 from bog_agents._version import __version__
 from bog_agents.backends import StateBackend
@@ -211,6 +212,58 @@ def _apply_custom_middleware(
     else:
         result.extend(to_append)
     return result
+
+
+def _create_bedrock_prompt_caching_middleware() -> AgentMiddleware[Any, Any, Any] | None:
+    """Create Bedrock prompt-caching middleware when `langchain-aws` is installed.
+
+    `langchain-aws` is an optional dependency, so its prompt-caching submodule
+    is imported lazily. When the package (or that submodule) is absent the
+    function degrades gracefully by returning `None`, leaving a Bedrock model to
+    pay full input-token price rather than crashing the agent build. Import
+    errors that name an unrelated transitive dependency are re-raised so a
+    genuinely broken `langchain-aws` install is not silently masked.
+
+    Returns:
+        A `BedrockPromptCachingMiddleware` instance configured to ignore
+        unsupported models, or `None` when `langchain-aws` is unavailable.
+    """
+    module_name = "langchain_aws.middleware.prompt_caching"
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        if exc.name not in {"langchain_aws", "langchain_aws.middleware", module_name}:
+            raise
+        return None
+    middleware_cls = module.BedrockPromptCachingMiddleware
+    return cast("AgentMiddleware[Any, Any, Any]", middleware_cls(unsupported_model_behavior="ignore"))
+
+
+def _append_prompt_caching_middleware(
+    middleware: list[AgentMiddleware[Any, Any, Any]],
+    resolved_model: str | BaseChatModel,
+) -> None:
+    """Append the provider-appropriate prompt-caching tail for `resolved_model`.
+
+    Always appends `AnthropicPromptCachingMiddleware` (a no-op for non-Anthropic
+    models via `unsupported_model_behavior="ignore"`, so the non-Bedrock stack is
+    byte-identical to before). When `resolved_model` targets AWS Bedrock and
+    `langchain-aws` is installed, `BedrockPromptCachingMiddleware` is appended
+    directly after it so Bedrock turns pay the cached input-token price. The two
+    never both fire: the Anthropic middleware ignores Bedrock (`ChatBedrock`)
+    models, and the Bedrock entry is only added when the model is Bedrock. The
+    Bedrock entry is the innermost tail so, like the Anthropic one, it sees the
+    final message list after summarization/memory transforms.
+
+    Args:
+        middleware: The stack to append onto; mutated in place.
+        resolved_model: The already-resolved model this stack will serve.
+    """
+    middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    if is_bedrock_model(resolved_model):
+        bedrock_middleware = _create_bedrock_prompt_caching_middleware()
+        if bedrock_middleware is not None:
+            middleware.append(bedrock_middleware)
 
 
 def _merge_fs_interrupt_on(
@@ -772,7 +825,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             subagent_middleware.extend(_subagent_profile.materialize_extra_middleware())
             if _subagent_profile.excluded_tools:
                 subagent_middleware.append(_ToolExclusionMiddleware(excluded=_subagent_profile.excluded_tools))
-            subagent_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+            _append_prompt_caching_middleware(subagent_middleware, subagent_model)
             subagent_middleware = _apply_excluded_middleware(
                 subagent_middleware,
                 _subagent_profile,
@@ -867,7 +920,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         gp_middleware.extend(_profile.materialize_extra_middleware())
         if _profile.excluded_tools:
             gp_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-        gp_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+        _append_prompt_caching_middleware(gp_middleware, model)
         # Names of the GP slots (pre-exclusion) so we only inherit main-agent
         # middleware that overrides a default GP slot — not middleware specific
         # to the main agent.
@@ -1374,7 +1427,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if memory is not None and not user_supplied_memory:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
     if not user_supplied_prompt_caching:
-        agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+        _append_prompt_caching_middleware(agents_middleware, model)
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))

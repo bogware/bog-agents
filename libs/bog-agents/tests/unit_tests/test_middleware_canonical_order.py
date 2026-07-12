@@ -72,7 +72,14 @@ class TestCanonicalMiddlewareOrder:
 
         # PromptCaching is the closest middleware to the model — must
         # be the last (innermost) so it sees the final message list
-        # after Summarization compresses it.
+        # after Summarization compresses it. The tail contract is
+        # ``[AnthropicPromptCachingMiddleware]`` OR, for a Bedrock model
+        # with ``langchain-aws`` installed,
+        # ``[AnthropicPromptCachingMiddleware, BedrockPromptCachingMiddleware]``.
+        # This suite builds a NON-Bedrock model (claude-sonnet-4), so the
+        # Bedrock entry must never be appended and Anthropic caching stays
+        # strictly last — pinning that the non-Bedrock stack is unchanged.
+        assert "BedrockPromptCachingMiddleware" not in names, names
         assert names[-1] == "AnthropicPromptCachingMiddleware", names
 
     def test_summarization_runs_before_prompt_caching(self, monkeypatch: pytest.MonkeyPatch) -> None:

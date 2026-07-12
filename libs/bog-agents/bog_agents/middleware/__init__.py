@@ -124,6 +124,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "LangSmithMiddleware": ("langsmith_integration", "LangSmithMiddleware"),
     "LifecycleHooksMiddleware": ("lifecycle_hooks", "LifecycleHooksMiddleware"),
     "MEMORY_SYSTEM_PROMPT": ("memory", "MEMORY_SYSTEM_PROMPT"),
+    "MISSING_VIDEO_HINT": ("video_reader", "MISSING_VIDEO_HINT"),
     "MemoryMiddleware": ("memory", "MemoryMiddleware"),
     "MessagingIntegrationMiddleware": ("messaging_integration", "MessagingIntegrationMiddleware"),
     "ModelCascadeMiddleware": ("model_cascade", "ModelCascadeMiddleware"),
@@ -187,6 +188,8 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "make_job_id": ("background_jobs", "make_job_id"),
     "parse_tool_calls_from_text": ("tool_call_parser", "parse_tool_calls_from_text"),
     "save_job": ("background_jobs", "save_job"),
+    "extract_video_frames": ("video_reader", "extract_video_frames"),
+    "video_dependencies_available": ("video_reader", "video_dependencies_available"),
 }
 
 
