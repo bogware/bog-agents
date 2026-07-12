@@ -263,7 +263,7 @@ def save_pipeline(pipeline: Pipeline, *, name: str | None = None) -> Path:
         for step in pipeline.steps
     ]
 
-    with dest.open("w") as fh:
+    with dest.open("w", encoding="utf-8") as fh:
         yaml.dump(data, fh, sort_keys=False, allow_unicode=True)
 
     logger.info("Saved pipeline '%s' to %s", pipeline.name, dest)

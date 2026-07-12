@@ -36,7 +36,7 @@ import re
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -46,6 +46,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain.tools import ToolRuntime
+from langchain_core.messages import AnyMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
@@ -273,18 +274,28 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
         ]
 
     def _process_messages(self, request: ModelRequest[ContextT]) -> ModelRequest[ContextT]:
-        """Scan and optionally redact messages.
+        """Scan and (in ``redact`` mode) build a redacted view of the messages.
 
-        In ``redact`` mode the message content is rewritten in place so that
-        sensitive data never reaches the underlying model.
+        Redaction is applied to a **per-call copy** of the messages and surfaced
+        via ``request.override(messages=...)`` — the canonical LangGraph state
+        message objects are never mutated. This keeps the full history intact for
+        later turns, checkpointing, and summarization (mirroring the StreetSweeper
+        view-transformation invariant) while still ensuring sensitive data never
+        reaches the underlying model on the outgoing call.
 
         Args:
             request: Model request.
 
         Returns:
-            Possibly modified request (mutated in place).
+            The original request in ``warn`` mode (or when nothing was redacted),
+            or a new request overridden with a redacted copy of the messages in
+            ``redact`` mode.
         """
         redact = self._mode == "redact"
+        # Lazily built only when a redaction actually occurs, so non-matching
+        # calls return the original request untouched.
+        redacted_messages: list[AnyMessage] | None = None
+
         for i, msg in enumerate(request.messages):
             content = getattr(msg, "content", "")
             if isinstance(content, str):
@@ -312,10 +323,15 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
                         self._mode,
                     )
                 if redact:
-                    msg.content = _redact_text(content, self._patterns)
+                    if redacted_messages is None:
+                        redacted_messages = list(request.messages)
+                    # Copy the message (do not touch the shared state object).
+                    redacted_messages[i] = msg.model_copy(update={"content": _redact_text(content, self._patterns)})
             elif isinstance(content, list):
-                # Multimodal content: redact text parts in place.
-                for part in content:
+                # Multimodal content: redact text parts on a deep copy of the
+                # content list so the shared part dicts are never mutated.
+                redacted_content: list[Any] | None = None
+                for part_index, part in enumerate(content):
                     if isinstance(part, dict) and part.get("type") == "text":
                         text = part.get("text", "")
                         if not isinstance(text, str):
@@ -335,7 +351,19 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
                                     )
                                 )
                         if redact:
-                            part["text"] = _redact_text(text, self._patterns)
+                            if redacted_content is None:
+                                # Shallow-copy the list; copy individual dicts on write.
+                                redacted_content = list(content)
+                            redacted_part = dict(part)
+                            redacted_part["text"] = _redact_text(text, self._patterns)
+                            redacted_content[part_index] = redacted_part
+                if redact and redacted_content is not None:
+                    if redacted_messages is None:
+                        redacted_messages = list(request.messages)
+                    redacted_messages[i] = msg.model_copy(update={"content": redacted_content})
+
+        if redacted_messages is not None:
+            return request.override(messages=redacted_messages)
         return request
 
     def wrap_model_call(
@@ -352,8 +380,7 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        self._process_messages(request)
-        return call_next(request)
+        return call_next(self._process_messages(request))
 
     async def awrap_model_call(
         self,
@@ -369,8 +396,7 @@ class DLPMiddleware(AgentMiddleware[DLPState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        self._process_messages(request)
-        return await call_next(request)
+        return await call_next(self._process_messages(request))
 
 
 __all__ = ["DLPLog", "DLPMiddleware", "DLPPattern"]

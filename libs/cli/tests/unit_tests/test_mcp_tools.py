@@ -12,6 +12,7 @@ from bog_agents_cli.mcp_tools import (
     MCPSessionManager,
     MCPToolInfo,
     _filter_project_stdio_servers,
+    _interpolate_headers,
     classify_discovered_configs,
     discover_mcp_configs,
     extract_stdio_server_commands,
@@ -976,6 +977,114 @@ class TestGetMCPTools:
         # Clean up
         await manager.cleanup()
 
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_stdio_server_gets_no_auth(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        valid_config_data: dict,
+        mock_mcp_client: tuple,
+    ) -> None:
+        """A stdio server connection is never given an ``auth`` provider."""
+        path = write_config(valid_config_data)
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        _, manager, _ = await get_mcp_tools(path)
+
+        connections = mock_client_class.call_args.kwargs["connections"]
+        assert "auth" not in connections["filesystem"]
+
+        await manager.cleanup()
+
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_remote_server_with_stored_token_gets_auth(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        mock_mcp_client: tuple,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A remote server with a stored token gets the OAuth provider attached."""
+        import httpx
+
+        from bog_agents_cli import mcp_oauth
+
+        monkeypatch.setattr(
+            mcp_oauth, "default_oauth_dir", lambda: tmp_path, raising=False
+        )
+        monkeypatch.setattr(
+            "bog_agents_cli.mcp_token_storage.default_oauth_dir", lambda: tmp_path
+        )
+        sentinel = httpx.BasicAuth("u", "p")
+        monkeypatch.setattr(
+            mcp_oauth, "build_oauth_provider", lambda name, url, **_kw: sentinel
+        )
+        (tmp_path / "api.json").write_text("{}", encoding="utf-8")
+
+        path = write_config(
+            {"mcpServers": {"api": {"type": "http", "url": "https://x/mcp"}}}
+        )
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        _, manager, _ = await get_mcp_tools(path)
+
+        connections = mock_client_class.call_args.kwargs["connections"]
+        assert connections["api"]["auth"] is sentinel
+
+        await manager.cleanup()
+
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_oauth_optin_without_token_is_skipped_with_hint(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        mock_mcp_client: tuple,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An OAuth opt-in server with no token is skipped with an actionable hint."""
+        from bog_agents_cli import mcp_oauth
+
+        monkeypatch.setattr(
+            mcp_oauth, "default_oauth_dir", lambda: tmp_path, raising=False
+        )
+        monkeypatch.setattr(
+            "bog_agents_cli.mcp_token_storage.default_oauth_dir", lambda: tmp_path
+        )
+
+        path = write_config(
+            {
+                "mcpServers": {
+                    "api": {"type": "http", "url": "https://x/mcp", "auth": "oauth"}
+                }
+            }
+        )
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        tools, manager, server_infos = await get_mcp_tools(path)
+
+        # The server was not connected (no tool load attempted for it) and its
+        # info carries the actionable /mcp login hint.
+        mock_load_tools.assert_not_called()
+        assert tools == []
+        assert len(server_infos) == 1
+        assert "/mcp login api" in server_infos[0].error
+
+        await manager.cleanup()
+
 
 class TestDiscoverMcpConfigs:
     """Test auto-discovery of MCP config files."""
@@ -1547,6 +1656,96 @@ class TestFilterProjectStdioServers:
         config = {"mcpServers": {"a": {"command": "x", "args": []}}}
         result = _filter_project_stdio_servers(config)
         assert result["mcpServers"] == {}
+
+
+class TestInterpolateHeaders:
+    """Tests for ``${VAR}`` interpolation in remote-MCP header values."""
+
+    def test_env_var_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR}`` is resolved from the process environment."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_fromenv")
+
+        result = _interpolate_headers({"Authorization": "Bearer ${GITHUB_TOKEN}"}, "gh")
+        assert result == {"Authorization": "Bearer ghp_fromenv"}
+
+    def test_vault_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The secret vault is consulted first and wins over the environment."""
+        monkeypatch.setattr(
+            "bog_agents_cli.vars_store.get_var",
+            lambda name: "vault-secret" if name == "GITHUB_TOKEN" else None,
+        )
+        monkeypatch.setenv("GITHUB_TOKEN", "env-secret")
+
+        result = _interpolate_headers({"Authorization": "Bearer ${GITHUB_TOKEN}"}, "gh")
+        assert result == {"Authorization": "Bearer vault-secret"}
+
+    def test_vault_only_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A value present only in the vault resolves even with no env var."""
+        monkeypatch.setattr(
+            "bog_agents_cli.vars_store.get_var",
+            lambda name: "vaulted" if name == "API_KEY" else None,
+        )
+        monkeypatch.delenv("API_KEY", raising=False)
+
+        result = _interpolate_headers({"X-API-Key": "${API_KEY}"}, "svc")
+        assert result == {"X-API-Key": "vaulted"}
+
+    def test_unset_raises_naming_server_and_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unset variable raises a RuntimeError naming the server and var."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.delenv("MISSING_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            _interpolate_headers(
+                {"Authorization": "Bearer ${MISSING_TOKEN}"}, "my-server"
+            )
+        message = str(excinfo.value)
+        assert "my-server" in message
+        assert "MISSING_TOKEN" in message
+
+    def test_header_without_placeholder_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A header value with no ``${}`` placeholder passes through untouched."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        headers = {"Authorization": "Bearer raw-token", "X-Custom": "value"}
+        result = _interpolate_headers(headers, "svc")
+        assert result == headers
+
+    def test_default_used_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR:-default}`` falls back to the default when the var is unset."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.delenv("MISSING", raising=False)
+
+        result = _interpolate_headers({"X-Env": "${MISSING:-production}"}, "svc")
+        assert result == {"X-Env": "production"}
+
+    def test_default_overridden_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR:-default}`` prefers a resolved value over the default."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("MODE", "staging")
+
+        result = _interpolate_headers({"X-Env": "${MODE:-production}"}, "svc")
+        assert result == {"X-Env": "staging"}
+
+    def test_multiple_and_mixed_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Multiple placeholders resolve; non-string values pass through."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("USER_NAME", "alice")
+        monkeypatch.setenv("PASSWORD", "s3cret")
+
+        result = _interpolate_headers(
+            {
+                "Authorization": "Basic ${USER_NAME}:${PASSWORD}",
+                "X-Numeric": 42,
+            },
+            "svc",
+        )
+        assert result["Authorization"] == "Basic alice:s3cret"
+        assert result["X-Numeric"] == 42
 
 
 # ---------------------------------------------------------------------------

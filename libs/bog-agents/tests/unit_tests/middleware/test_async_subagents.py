@@ -5,11 +5,12 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
 from langchain.tools import ToolRuntime
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
-from bog_agents.middleware.async_subagents import AsyncSubAgentMiddleware
+from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 
 
 def _make_runtime(tool_call_id: str = "call_async") -> ToolRuntime:
@@ -191,3 +192,17 @@ async def test_async_subagent_async_tool_path(monkeypatch) -> None:
     )
     assert isinstance(result, Command)
     assert "async_tasks" in result.update
+
+
+def test_empty_async_subagents_rejected() -> None:
+    """An empty spec list would build a middleware whose tools can never be used."""
+    with pytest.raises(ValueError, match="At least one async subagent"):
+        AsyncSubAgentMiddleware(async_subagents=[])
+
+
+def test_duplicate_async_subagent_names_rejected() -> None:
+    """Duplicate names would silently drop a declared subagent from the name->spec map."""
+    spec: AsyncSubAgent = {"name": "builder", "description": "Builds.", "graph_id": "build", "url": "http://x"}
+    other: AsyncSubAgent = {"name": "builder", "description": "Also builds.", "graph_id": "build2", "url": "http://y"}
+    with pytest.raises(ValueError, match="Duplicate async subagent names: builder"):
+        AsyncSubAgentMiddleware(async_subagents=[spec, other])

@@ -256,8 +256,12 @@ def wrap_command_with_sandbox(
 
     if support.seatbelt_available:
         profile = _build_seatbelt_profile(sandbox)
-        # Write profile to temp file
-        profile_file = tempfile.NamedTemporaryFile(mode="w", suffix=".sb", delete=False, prefix="bog_agents_sandbox_")
+        # Write profile to a temp file. `delete=False` is required because
+        # sandbox-exec reads the `-f` profile lazily at exec time, so the file
+        # must outlive this function. NOTE: the call site that wires this API
+        # into an executor is responsible for unlinking `profile_file.name`
+        # after sandbox-exec exits (do NOT unlink here — see [S43]).
+        profile_file = tempfile.NamedTemporaryFile(mode="w", suffix=".sb", delete=False, prefix="bog_agents_sandbox_", encoding="utf-8")
         profile_file.write(profile)
         profile_file.close()
         return ["sandbox-exec", "-f", profile_file.name, "sh", "-c", command]

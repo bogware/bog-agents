@@ -12,6 +12,11 @@ call inside the assistant message text using their training-time format:
   but with newlines and slightly different argument keys).
 - **Generic fenced JSON**: code blocks tagged ``json``/``tool_call`` containing
   ``{"name": ..., "arguments": ...}``.
+- **Nemotron / Llama XML function calls**: ``<function=NAME><parameter name=k>v</parameter>...</function>``
+  and the alternate ``<function><name>NAME</name>...</function>`` shape, with
+  string-valued ``<parameter>`` (or inline ``<key>:value``) arguments.
+- **Bare JSON**: an entire message body that is one tool-call-shaped object,
+  e.g. ``{"tool": "search", "args": {...}}`` or ``{"name": "f", "arguments": {...}}``.
 
 The translation layer between Ollama and langchain-ollama silently drops these,
 so langchain receives an `AIMessage` with empty `tool_calls`. The agent then
@@ -123,6 +128,23 @@ _GEMMA_KV_RE = re.compile(
 # find any tool call hiding in the post-think section.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
+# Nemotron 3 Ultra / Llama-family XML function calls. Two observed shapes:
+#
+#   <function=grep><parameter name=pattern>MAGIC</parameter></function>
+#   <function><name>get_service_name</name><parameter name=id>0</parameter></function>
+#
+# Nothing else in this module parses these — the model emits a tool call as
+# plain assistant text and the agent would otherwise treat it as a final
+# answer. Argument values are captured as strings (downstream tool schemas
+# coerce them). The alternate shape also tolerates an inline `<key>:value`
+# argument body and a trailing `</tool_call>` sentinel.
+_FUNCTION_BLOCK_RE = re.compile(r"<function=(?P<name>[^>\s]+)\s*>(?P<body>.*?)</function>", re.DOTALL)
+_FUNCTION_PARAM_RE = re.compile(r"<parameter\s+name=(?P<key>[^>\s]+)\s*>(?P<val>.*?)</parameter>", re.DOTALL)
+_ALT_FUNCTION_BLOCK_RE = re.compile(r"<function>\s*(?P<body>.*?)</function>\s*(?:</tool_call>)?", re.DOTALL | re.IGNORECASE)
+_ALT_NAME_RE = re.compile(r"<name\s*>(.*?)</name>|<name=([^<>\s]+)</name>", re.DOTALL | re.IGNORECASE)
+_ALT_PARAMETER_RE = re.compile(r"<parameter(?:\s+name=([^>\s]+))?\s*>(.*?)</parameter>", re.DOTALL | re.IGNORECASE)
+_ALT_INLINE_ARG_RE = re.compile(r"^\s*<?([A-Za-z_][\w-]*)>?\s*:\s*(.*?)\s*$", re.DOTALL)
+
 
 def _balanced_json_objects(text: str) -> list[str]:
     """Extract top-level JSON objects/arrays from `text` by brace counting.
@@ -225,6 +247,10 @@ def _coerce_call(obj: Any) -> _ParsedCall | None:
         if "parameters" in obj
         else obj.get("input")
         if "input" in obj
+        else {"command": obj["command"]}
+        if isinstance(obj.get("command"), str)
+        else {"command": obj["cmd"]}
+        if isinstance(obj.get("cmd"), str)
         else {}
     )
 
@@ -276,7 +302,7 @@ def _parse_body(body: str) -> list[_ParsedCall]:
 def parse_tool_calls_from_text(
     text: str,
     *,
-    formats: tuple[str, ...] = ("mistral", "hermes", "fenced", "gemma"),
+    formats: tuple[str, ...] = ("mistral", "hermes", "fenced", "gemma", "function"),
     strip_thinking: bool = True,
 ) -> tuple[list[_ParsedCall], str]:
     """Extract tool calls from raw assistant text.
@@ -314,6 +340,9 @@ def parse_tool_calls_from_text(
             calls.extend(calls_part)
         elif fmt == "gemma":
             calls_part, residual = _strip_gemma(residual)
+            calls.extend(calls_part)
+        elif fmt == "function":
+            calls_part, residual = _strip_function(residual)
             calls.extend(calls_part)
     # Last-resort: if no markers matched but the whole message body is a
     # single JSON object that looks tool-call-shaped (has a `name` key + a
@@ -407,7 +436,7 @@ def _strip_bare_object(text: str) -> tuple[_ParsedCall, str] | None:
         return None
     # Must look tool-call-shaped: a name + a plausible args key.
     has_name = isinstance(decoded.get("name") or decoded.get("tool"), str)
-    has_args = any(k in decoded for k in ("arguments", "args", "parameters", "input"))
+    has_args = any(k in decoded for k in ("arguments", "args", "parameters", "input", "command", "cmd"))
     if not (has_name and has_args):
         # Wrapped form: {"type": "function", "function": {...}}
         if decoded.get("type") == "function" and isinstance(decoded.get("function"), dict):
@@ -515,6 +544,91 @@ def _strip_mistral(text: str) -> tuple[list[_ParsedCall], str]:
     return calls, "".join(parts)
 
 
+def _strip_function(text: str) -> tuple[list[_ParsedCall], str]:
+    """Special-case the `<function=NAME>...</function>` XML tool-call format.
+
+    Nemotron-family (and some Llama) models emit tool calls as XML-ish text:
+    `<function=grep><parameter name=pattern>x</parameter></function>`. Arguments
+    are captured from `<parameter name=...>` children as trimmed strings. When no
+    `<function=NAME>` block matches, falls through to the alternate
+    `<function><name>NAME</name>...` shape via `_strip_alt_function`.
+
+    Returns:
+        A `(calls, residual)` pair. `calls` is empty (and `residual` is `text`
+        unchanged, modulo the alternate fallback) when nothing matched.
+    """
+    calls: list[_ParsedCall] = []
+    parts: list[str] = []
+    last_end = 0
+    matched = False
+    for m in _FUNCTION_BLOCK_RE.finditer(text):
+        name = m.group("name").strip("\"'")
+        if not name:
+            continue
+        args: dict[str, Any] = {p.group("key").strip("\"'"): p.group("val").strip() for p in _FUNCTION_PARAM_RE.finditer(m.group("body"))}
+        calls.append({"name": name, "args": args})
+        parts.append(text[last_end : m.start()])
+        last_end = m.end()
+        matched = True
+    if not matched:
+        return _strip_alt_function(text)
+    parts.append(text[last_end:])
+    return calls, "".join(parts).replace("</tool_call>", "")
+
+
+def _alt_function_name(body: str) -> str:
+    """Extract the tool name from an alternate `<function>` body."""
+    match = _ALT_NAME_RE.search(body)
+    if match is None:
+        return ""
+    return (match.group(1) or match.group(2) or "").strip().strip("\"'")
+
+
+def _alt_function_args(body: str) -> dict[str, Any]:
+    """Extract arguments from an alternate `<function>` body.
+
+    Prefers `<parameter name=k>v</parameter>` children; when a `<parameter>`
+    has no `name=` attribute, falls back to parsing an inline `<key>:value`
+    body so malformed emissions still yield a usable argument.
+    """
+    args: dict[str, Any] = {}
+    for match in _ALT_PARAMETER_RE.finditer(body):
+        name = (match.group(1) or "").strip().strip("\"'")
+        raw = match.group(2).strip()
+        if name:
+            args[name] = raw
+            continue
+        inline = _ALT_INLINE_ARG_RE.match(raw)
+        if inline is not None:
+            args[inline.group(1)] = inline.group(2).strip()
+    return args
+
+
+def _strip_alt_function(text: str) -> tuple[list[_ParsedCall], str]:
+    """Special-case the alternate `<function><name>NAME</name>...` shape.
+
+    Some Nemotron emissions wrap the name in a `<name>` (or `<name=...>`) child
+    instead of the `<function=NAME>` attribute form. A trailing `</tool_call>`
+    sentinel, if present, is consumed and stripped from the residual.
+    """
+    calls: list[_ParsedCall] = []
+    parts: list[str] = []
+    last_end = 0
+    matched = False
+    for block in _ALT_FUNCTION_BLOCK_RE.finditer(text):
+        name = _alt_function_name(block.group("body"))
+        if not name:
+            continue
+        calls.append({"name": name, "args": _alt_function_args(block.group("body"))})
+        parts.append(text[last_end : block.start()])
+        last_end = block.end()
+        matched = True
+    if not matched:
+        return [], text
+    parts.append(text[last_end:])
+    return calls, "".join(parts).replace("</tool_call>", "")
+
+
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
@@ -558,7 +672,7 @@ class ToolCallParserMiddleware(AgentMiddleware[ToolCallParserState, ContextT, Re
     def __init__(
         self,
         *,
-        formats: tuple[str, ...] = ("mistral", "hermes", "fenced", "gemma"),
+        formats: tuple[str, ...] = ("mistral", "hermes", "fenced", "gemma", "function"),
         log_recoveries: bool = True,
         strip_thinking: bool = True,
         empty_args_feedback: bool = False,

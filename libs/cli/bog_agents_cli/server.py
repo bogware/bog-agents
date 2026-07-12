@@ -7,6 +7,7 @@ required `langgraph.json` configuration file.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import json
 import logging
@@ -528,6 +529,16 @@ class ServerProcess:
             self._log_file = None
             raise
 
+        # Crash/teardown fallback: if the interpreter exits (SIGTERM, an
+        # exception escaping before the owning async-context's __aexit__, or
+        # a plain ``sys.exit``) without ``stop()`` being called, the
+        # langgraph dev child would keep running and hold its port + SQLite
+        # checkpointer. ``stop()`` is idempotent, so registering it here is
+        # safe; ``stop()`` unregisters it on the normal path to avoid a
+        # second no-op call at exit. Mirrors the terminal-restore atexit
+        # pattern in main.py/app.py. (Does not cover SIGKILL.)
+        atexit.register(self.stop)
+
         try:
             await wait_for_server_healthy(
                 self.url,
@@ -586,6 +597,11 @@ class ServerProcess:
 
     def stop(self) -> None:
         """Stop the server process and clean up all resources."""
+        # Drop the crash-fallback hook registered in ``start()`` so a normal
+        # shutdown doesn't leave a stale (no-op) callback to run at exit.
+        # ``unregister`` is a no-op if the hook was never registered.
+        atexit.unregister(self.stop)
+
         self._stop_process()
 
         if self._temp_dir is not None:

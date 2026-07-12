@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from bog_agents.middleware.auto_quality import AutoQualityMiddleware
@@ -206,3 +207,48 @@ def test_audit_trail_records_tool_calls_and_content() -> None:
     meta = entries[-1].metadata
     assert meta["tool_calls"] == ["read_file"]
     assert meta["has_content"] is True
+
+
+def test_audit_trail_records_llm_error_on_sync_failure() -> None:
+    # S17: a model timeout/5xx/exhaustion must not vanish from the compliance
+    # record. The llm_call should be followed by an llm_error entry (not a
+    # dangling unresolved llm_call), and the original exception must propagate.
+    from bog_agents.middleware.audit_trail import AuditTrailMiddleware
+
+    mw = AuditTrailMiddleware()
+
+    class _Boom(RuntimeError):
+        pass
+
+    def handler(_request: ModelRequest):
+        raise _Boom("model exhausted")
+
+    with pytest.raises(_Boom):
+        mw.wrap_model_call(_make_request(), handler)
+
+    action_types = [e.action_type for e in mw.audit_log.entries]
+    assert action_types[-2:] == ["llm_call", "llm_error"]
+    assert not [e for e in mw.audit_log.entries if e.action_type == "llm_response"]
+    err = mw.audit_log.entries[-1]
+    assert err.metadata["error"] == "_Boom"
+
+
+async def test_audit_trail_records_llm_error_on_async_failure() -> None:
+    # S17: mirror of the sync path for awrap_model_call.
+    from bog_agents.middleware.audit_trail import AuditTrailMiddleware
+
+    mw = AuditTrailMiddleware()
+
+    class _Boom(RuntimeError):
+        pass
+
+    async def handler(_request: ModelRequest):
+        raise _Boom("model timeout")
+
+    with pytest.raises(_Boom):
+        await mw.awrap_model_call(_make_request(), handler)
+
+    action_types = [e.action_type for e in mw.audit_log.entries]
+    assert action_types[-2:] == ["llm_call", "llm_error"]
+    assert not [e for e in mw.audit_log.entries if e.action_type == "llm_response"]
+    assert mw.audit_log.entries[-1].metadata["error"] == "_Boom"

@@ -49,6 +49,7 @@ from bog_agents_cli.textual_adapter import (
     SessionStats,
     TextualUIAdapter,
     _get_git_branch,
+    _invalidate_git_branch_cache,
     execute_task_textual,
     format_token_count,
 )
@@ -797,6 +798,15 @@ class BogAgentsApp(App):
             show=False,
             priority=True,
         ),
+        # priority=True is REQUIRED: TextArea binds ctrl+x to "cut", so without
+        # priority the input widget would swallow the key before the app sees it.
+        Binding(
+            "ctrl+x",
+            "open_editor",
+            "Edit in $EDITOR",
+            show=False,
+            priority=True,
+        ),
         # Approval menu keys (handled at App level for reliability)
         Binding("up", "approval_up", "Up", show=False),
         Binding("k", "approval_up", "Up", show=False),
@@ -987,6 +997,28 @@ class BogAgentsApp(App):
         from bog_agents_cli.input import MediaTracker
 
         self._image_tracker = MediaTracker()
+
+        # Register themes and activate the saved (or default `bog`) theme HERE,
+        # in __init__, not on_mount: app.tcss references app-specific variables
+        # ($boundary, $highlight, $highlight-soft) that only the registered
+        # `bog` theme supplies, and the stylesheet is parsed before on_mount
+        # runs — so the theme must be active first or CSS resolution fails.
+        # Best-effort: a bad user theme must never block startup.
+        try:
+            from bog_agents_cli.config import load_selected_theme
+            from bog_agents_cli.theme import (
+                DEFAULT_THEME_NAME,
+                register_all_themes,
+                resolve_theme_name,
+            )
+
+            register_all_themes(self)
+            saved = load_selected_theme()
+            self.theme = (resolve_theme_name(saved) if saved else None) or (
+                DEFAULT_THEME_NAME
+            )
+        except Exception:
+            logger.debug("Theme registration failed; using Textual default")
 
     def _remote_agent(self) -> RemoteAgent | None:
         """Return the agent narrowed to `RemoteAgent`, or `None`.
@@ -1736,10 +1768,12 @@ class BogAgentsApp(App):
 
         Args:
             status: The status text to display (e.g., "Thinking", "Summarizing"),
-                or `None` to hide the spinner.
+                or `None`/empty string to hide the spinner.
         """
-        if status is None:
-            # Hide
+        if not status:
+            # Hide (None or empty string). Many slash-command sites pass "" to
+            # clear the spinner; the previous `status is None` guard let "" fall
+            # through and leave a blank spinner animating "esc to interrupt".
             if self._loading_widget:
                 await self._loading_widget.remove()
                 self._loading_widget = None
@@ -3237,6 +3271,9 @@ class BogAgentsApp(App):
           /mcp add <name> <cmd> ...  — add a custom stdio server
           /mcp remove <name>         — remove a server from user config
           /mcp info <id>             — show catalog entry details
+          /mcp login <server>        — sign in to an OAuth server
+          /mcp logout <server>       — remove stored OAuth tokens
+          /mcp status                — show OAuth login status
           /mcp trust                 — manage project stdio server trust
           /mcp help                  — show this help
 
@@ -3590,6 +3627,12 @@ class BogAgentsApp(App):
                     timeout=3,
                 )
 
+        # ---- login / logout / status (OAuth) ----
+        elif subcommand in {"login", "logout", "status"}:
+            from bog_agents_cli.mcp_auth_controller import handle_mcp_auth_command
+
+            await handle_mcp_auth_command(self, subcommand, rest)
+
         # ---- trust ----
         elif subcommand == "trust":
             from bog_agents_cli.mcp_tools import discover_mcp_configs
@@ -3635,6 +3678,9 @@ class BogAgentsApp(App):
                     "  [cyan]/mcp install <id>[/cyan]         — install from registry\n"
                     "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
                     "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
+                    "  [cyan]/mcp login <server>[/cyan]       — sign in to an OAuth server\n"
+                    "  [cyan]/mcp logout <server>[/cyan]      — remove stored OAuth tokens\n"
+                    "  [cyan]/mcp status[/cyan]               — show OAuth login status\n"
                     "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
                     "[dim]Featured: github · jira · linear · slack · postgres · aws · "
                     "azure-devops · terraform · datadog · kubernetes · sentry · notion[/dim]"
@@ -7787,34 +7833,73 @@ class BogAgentsApp(App):
             logger.exception("plan-mode model restore failed")
 
     async def _handle_effort_command(self, command: str) -> None:
-        """Handle `/effort` runtime reasoning presets."""
+        """Handle `/effort` — set native, per-model reasoning effort."""
         await self._mount_message(UserMessage(command))
 
-        descriptions = {
-            "low": "Quick responses with minimal reasoning overhead.",
-            "medium": "Balanced reasoning and speed.",
-            "high": "Thorough analysis for most coding tasks.",
-            "max": "Maximum reasoning depth for complex work.",
-        }
+        from bog_agents_cli.reasoning_effort import (
+            EFFORT_DESCRIPTIONS,
+            effort_levels_for_model,
+            render_effort_status,
+        )
+
+        model_spec = self._model_override or self._base_model_spec
         raw_arg = command.strip()[len("/effort") :].strip().lower()
-        if not raw_arg or raw_arg in {"show", "status"}:
-            lines = [f"Current effort: {self._effort_level}", ""]
-            lines.extend(f"  {level} - {desc}" for level, desc in descriptions.items())
-            lines.append("")
-            lines.append("Usage: /effort low|medium|high|max")
-            await self._mount_message(AppMessage("\n".join(lines)))
+        if not raw_arg:
+            # Bare `/effort` opens the interactive picker; `/effort <level>`
+            # still applies directly, and `/effort show|status` prints text.
+            self._show_effort_selector(model_spec)
+            return
+        if raw_arg in {"show", "status"}:
+            await self._mount_message(
+                AppMessage(render_effort_status(model_spec, self._effort_level))
+            )
             return
 
-        if raw_arg not in descriptions:
-            await self._mount_message(AppMessage("Usage: /effort low|medium|high|max"))
+        valid_levels = effort_levels_for_model(model_spec)
+        if raw_arg not in valid_levels:
+            await self._mount_message(
+                AppMessage(f"Usage: /effort {'|'.join(valid_levels)}")
+            )
             return
 
         self._effort_level = raw_arg
+        blurb = EFFORT_DESCRIPTIONS.get(raw_arg, "")
         await self._mount_message(
             AppMessage(
-                f"Effort set to {raw_arg}. {descriptions[raw_arg]} "
-                "The new preset will apply on the next agent turn."
+                f"Effort set to {raw_arg}. {blurb} "
+                "The new reasoning effort applies on the next agent turn."
             )
+        )
+
+    def _show_effort_selector(self, model_spec: str | None) -> None:
+        """Open the reasoning-effort picker modal for the active model.
+
+        Thin opener: the modal lists only the levels valid for `model_spec`;
+        applying a choice sets `self._effort_level` and confirms on-screen.
+
+        Args:
+            model_spec: `provider:model` spec for the active model.
+        """
+        from bog_agents_cli.reasoning_effort import EFFORT_DESCRIPTIONS
+        from bog_agents_cli.widgets.effort_selector import EffortSelectorScreen
+
+        def handle_result(level: str | None) -> None:
+            if level is not None and level != self._effort_level:
+                self._effort_level = level
+                blurb = EFFORT_DESCRIPTIONS.get(level, "")
+                self.call_later(
+                    self._mount_message,
+                    AppMessage(
+                        f"Effort set to {level}. {blurb} "
+                        "The new reasoning effort applies on the next agent turn."
+                    ),
+                )
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(
+            EffortSelectorScreen(model_spec=model_spec, current=self._effort_level),
+            handle_result,
         )
 
     async def _handle_diff_command(self, command: str) -> None:
@@ -7940,6 +8025,7 @@ class BogAgentsApp(App):
                     AppMessage(output or f"Could not create branch {branch_name}.")
                 )
                 return
+            _invalidate_git_branch_cache()
             if self._status_bar:
                 self._status_bar.branch = _get_git_branch() or ""
             message = output.strip() or f"Switched to a new branch `{branch_name}`."
@@ -7960,6 +8046,7 @@ class BogAgentsApp(App):
                     AppMessage(output or f"Could not switch to branch {branch_name}.")
                 )
                 return
+            _invalidate_git_branch_cache()
             if self._status_bar:
                 self._status_bar.branch = _get_git_branch() or ""
             message = output.strip() or f"Switched to branch `{branch_name}`."
@@ -9415,6 +9502,16 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
+        # `/skills trust ...` manages the symlinked-skill-dir trust store; it is
+        # handled by a standalone controller so the logic stays TUI-free. A
+        # non-None result means the subcommand was recognized and handled.
+        from bog_agents_cli.skill_trust_controller import handle_skills_command
+
+        trust_result = handle_skills_command(command)
+        if trust_result is not None:
+            await self._mount_message(AppMessage(trust_result))
+            return
+
         from bog_agents_cli.extensibility import get_extension_skill_dirs
         from bog_agents_cli.skills.load import list_skills
 
@@ -10790,6 +10887,7 @@ class BogAgentsApp(App):
             await self._mount_message(ErrorMessage(f"/butcher failed: {exc}"))
         finally:
             self._agent_running = False
+            await self._drain_queue_after_inline_task()
 
     async def _handle_jtbd_command(self, command: str) -> None:
         """``/jtbd`` — Jobs To Be Done interview → spec → outcome-driven run."""
@@ -11451,6 +11549,218 @@ class BogAgentsApp(App):
         args = command.strip()[len("/expert") :].strip()
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
+
+    async def _sync_goal_state(self, record: Any) -> None:  # noqa: ANN401 — goal_controller.GoalRecord
+        """Seed the goal objective/rubric into the live agent's checkpointed state.
+
+        Best-effort: mirrors the user's goal (via ``goal_controller.state_seed``)
+        into the ``_goal_*`` channels so the SDK's ``GoalToolsMiddleware`` tools
+        (``get_goal``/``get_rubric``) and its per-turn prompt injection see it. A
+        state-update failure (or an agentless session) never affects the display.
+
+        Args:
+            record: The ``GoalRecord`` to mirror into agent state.
+        """
+        from bog_agents_cli.goal_controller import state_seed
+
+        agent = self._agent
+        thread_id = self._lc_thread_id
+        if agent is None or not hasattr(agent, "aupdate_state") or not thread_id:
+            return
+        try:
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            await agent.aupdate_state(config, state_seed(record))
+        except Exception:
+            logger.debug("Failed to seed goal state into agent thread", exc_info=True)
+
+    async def _safe_goal_state_values(self) -> dict[str, Any] | None:
+        """Read live agent goal state (status/note), or ``None`` when unavailable."""
+        if self._agent is None or not self._lc_thread_id:
+            return None
+        try:
+            return await self._get_thread_state_values(self._lc_thread_id)
+        except Exception:
+            logger.debug("Failed to read goal state values", exc_info=True)
+            return None
+
+    async def _handle_goal_command(self, command: str) -> None:
+        """Handle ``/goal`` — set or show the durable objective.
+
+        Thin façade over ``goal_controller``; the goal persists in
+        ``.bog-agents/goal.json`` and is mirrored into agent state so the
+        agent's goal tools stay in sync.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli import goal_controller
+
+        args = command.strip()[len("/goal") :].strip()
+        sub = args.lower()
+        if sub in ("clear", "reset"):
+            goal_controller.clear_goal(self._cwd)
+            await self._sync_goal_state(goal_controller.GoalRecord())
+            await self._mount_message(AppMessage("Goal cleared."))
+            return
+        if sub == "review":
+            record = goal_controller.merge_agent_state(
+                goal_controller.load_goal(self._cwd),
+                await self._safe_goal_state_values(),
+            )
+            self._show_goal_review(record)
+            return
+        if args and sub not in ("show", "status"):
+            record = goal_controller.set_objective(self._cwd, args)
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage(goal_controller.render_goal(record)))
+            return
+        record = goal_controller.merge_agent_state(
+            goal_controller.load_goal(self._cwd), await self._safe_goal_state_values()
+        )
+        await self._mount_message(AppMessage(goal_controller.render_goal(record)))
+
+    def _show_goal_review(self, record: Any) -> None:  # noqa: ANN401 — GoalRecord
+        """Open the read-only goal review modal.
+
+        Thin opener over `widgets.goal_review.GoalReviewScreen`; the caller has
+        already loaded and merged the record.
+
+        Args:
+            record: The `goal_controller.GoalRecord` to display.
+        """
+        from bog_agents_cli.widgets.goal_review import GoalReviewScreen
+
+        def handle_result(_result: None) -> None:
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(GoalReviewScreen(record), handle_result)
+
+    async def _handle_rubric_command(self, command: str) -> None:
+        """Handle ``/rubric`` — draft/manage the goal's acceptance criteria.
+
+        Drafting is a one-shot LLM call (``goal_rubric.draft_criteria``) with a
+        regenerate-on-feedback gate; the proposed criteria are parked on
+        ``self._goal_rubric_pending`` until ``/rubric accept``.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli import goal_controller
+        from bog_agents_cli.goal_rubric import (
+            RubricPending,
+            build_invoke,
+            draft_criteria,
+        )
+
+        args = command.strip()[len("/rubric") :].strip()
+        head, _, rest = args.partition(" ")
+        head_lower = head.lower()
+        rest = rest.strip()
+
+        if head_lower in ("", "show", "list"):
+            record = goal_controller.load_goal(self._cwd)
+            await self._mount_message(AppMessage(goal_controller.render_rubric(record)))
+            return
+        if head_lower == "clear":
+            record = goal_controller.set_rubric(self._cwd, [])
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage("Acceptance criteria cleared."))
+            return
+        if head_lower == "set":
+            criteria = goal_controller.parse_rubric_lines(rest)
+            if not criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Usage: /rubric set <criteria> (newline- or semicolon-separated)"
+                    )
+                )
+                return
+            record = goal_controller.set_rubric(self._cwd, criteria)
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage(goal_controller.render_rubric(record)))
+            return
+        if head_lower == "accept":
+            pending = getattr(self, "_goal_rubric_pending", None)
+            if not isinstance(pending, RubricPending) or not pending.criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "No drafted criteria to accept — run /rubric draft first."
+                    )
+                )
+                return
+            record = goal_controller.set_rubric(self._cwd, pending.criteria)
+            self._goal_rubric_pending = None
+            await self._sync_goal_state(record)
+            await self._mount_message(
+                AppMessage("Accepted.\n\n" + goal_controller.render_rubric(record))
+            )
+            return
+        if head_lower in ("draft", "regenerate", "redraft"):
+            record = goal_controller.load_goal(self._cwd)
+            if not record.is_set:
+                await self._mount_message(
+                    ErrorMessage("Set a goal first: /goal <objective>.")
+                )
+                return
+            feedback: str | None = None
+            previous: list[str] | None = None
+            if head_lower in ("regenerate", "redraft"):
+                if not rest:
+                    await self._mount_message(
+                        ErrorMessage("Usage: /rubric regenerate <feedback>")
+                    )
+                    return
+                pending = getattr(self, "_goal_rubric_pending", None)
+                previous = (
+                    pending.criteria
+                    if isinstance(pending, RubricPending)
+                    else record.rubric
+                )
+                feedback = rest
+            invoke = build_invoke(self)
+            if invoke is None:
+                await self._mount_message(
+                    ErrorMessage("No active model — run /model first.")
+                )
+                return
+            await self._set_spinner("Drafting acceptance criteria")
+            try:
+                criteria = await draft_criteria(
+                    record.objective,
+                    invoke=invoke,
+                    feedback=feedback,
+                    previous_criteria=previous,
+                )
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/rubric draft failed: {exc}"))
+                return
+            await self._set_spinner("")
+            if not criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Could not draft criteria — try /rubric regenerate <feedback> "
+                        "or set them manually with /rubric set."
+                    )
+                )
+                return
+            self._goal_rubric_pending = RubricPending(
+                objective=record.objective, criteria=criteria
+            )
+            rendered = "\n".join(f"  {i}. {c}" for i, c in enumerate(criteria, start=1))
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Proposed acceptance criteria[/bold]\n"
+                    f"{rendered}\n\n"
+                    "[bold]/rubric accept[/bold] to use these, or "
+                    "[bold]/rubric regenerate <feedback>[/bold] to redraft."
+                )
+            )
+            return
+        await self._mount_message(
+            ErrorMessage(
+                f"Unknown /rubric subcommand: '{head}'.\n"
+                "Usage: /rubric [show|draft|accept|regenerate <feedback>|"
+                "set <criteria>|clear]"
+            )
+        )
 
     async def _handle_browser_command(self, command: str) -> None:
         """Handle ``/browser …`` — Computer Use session control.
@@ -13952,6 +14262,7 @@ class BogAgentsApp(App):
                 await self._set_spinner(None)
             except Exception:  # best-effort spinner cleanup
                 logger.exception("Failed to dismiss spinner after compaction")
+            await self._drain_queue_after_inline_task()
 
     async def _offload_messages_for_compact(
         self,
@@ -14473,25 +14784,29 @@ class BogAgentsApp(App):
             else:
                 await self._mount_message(ErrorMessage(f"Agent error: {e}"))
         finally:
-            # Clean up loading widget and agent state
+            # P27: finalize this turn's stats and auto-commit BEFORE the queue
+            # drain. `_cleanup_agent_task` drains the pending-message queue,
+            # which can spawn the next turn's worker; if auto-commit ran after
+            # that drain it could stage a partially-written tree from turn N+1.
+            # Order is load-bearing: merge stats -> auto-commit this turn ->
+            # cleanup (which drains the queue last).
+            if isinstance(turn_stats, SessionStats):
+                self._session_stats.merge(turn_stats)
+
+            if self._auto_commit and turn_stats is not None:
+                from bog_agents_cli.auto_commit import run_auto_commit
+
+                sha = await run_auto_commit(cwd=Path(self._cwd))
+                if sha:
+                    await self._mount_message(
+                        AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
+                    )
+
+            # Clean up loading widget and agent state (queue drain happens here)
             await self._cleanup_agent_task()
             # Operator routing is per-turn; never let it leak into the next.
             self._operator_turn_model = None
             self._operator_turn_effort = None
-
-        # Accumulate stats across all turns; printed once at session end
-        if isinstance(turn_stats, SessionStats):
-            self._session_stats.merge(turn_stats)
-
-        # Auto-commit after each successful agent turn
-        if self._auto_commit and turn_stats is not None:
-            from bog_agents_cli.auto_commit import run_auto_commit
-
-            sha = await run_auto_commit(cwd=Path(self._cwd))
-            if sha:
-                await self._mount_message(
-                    AppMessage(f"[dim]Auto-committed: {sha} (bog-agent)[/dim]")
-                )
 
     async def _process_next_from_queue(self) -> None:
         """Process the next message from the queue if any exist.
@@ -14527,40 +14842,78 @@ class BogAgentsApp(App):
         if not busy and self._pending_messages:
             await self._process_next_from_queue()
 
+    async def _drain_queue_after_inline_task(self) -> None:
+        """Drain queued user messages after an inline (non-worker) agent task.
+
+        Inline tasks such as `/compact` and `/butcher` set `_agent_running` while
+        they run but, unlike `_cleanup_agent_task`/`_cleanup_shell_task`, never
+        spawn a worker whose completion fires the queue drain. Without this call
+        any message typed during the task sits queued in the UI and only runs
+        after a later normal turn completes (perceived dropped input). Failures
+        here must never escape — a drain hiccup should not crash the app.
+        """
+        try:
+            await self._process_next_from_queue()
+        except Exception:
+            logger.exception("Failed to drain pending queue after inline task")
+
     async def _cleanup_agent_task(self) -> None:
-        """Clean up after agent task completes or is cancelled."""
+        """Clean up after agent task completes or is cancelled.
+
+        P28: the critical worker-state restoration (`_agent_running=False`,
+        `_agent_worker=None`, cursor re-enable) lives in a `finally` so a
+        cancellation interrupting one of the inner awaits (spinner removal,
+        stop-hook dispatch, queue drain) can never leave the input cursor
+        disabled and the app apparently wedged with no diagnostic.
+        """
+        # Set synchronously up front (no await in between) so the common path
+        # restores immediately; the finally re-asserts these defensively.
         self._agent_running = False
         self._agent_worker = None
 
-        # Remove spinner if present
-        await self._set_spinner(None)
-
-        # Fire project-local stop hooks so users can run side-effects when
-        # an agent turn ends (post-run lint, ding, summary commit, …).
         try:
-            from bog_agents_cli.hooks import dispatch_stop_hook
+            # Remove spinner if present
+            await self._set_spinner(None)
 
-            await dispatch_stop_hook(reason="cleanup")
+            # Fire project-local stop hooks so users can run side-effects when
+            # an agent turn ends (post-run lint, ding, summary commit, …).
+            try:
+                from bog_agents_cli.hooks import dispatch_stop_hook
+
+                await dispatch_stop_hook(reason="cleanup")
+            except Exception:
+                logger.debug("stop hook dispatch failed", exc_info=True)
+
+            # Ensure token display is restored (in case of early cancellation)
+            if self._token_tracker:
+                self._token_tracker.show()
+
+            # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
+            try:
+                from bog_agents_cli.cli_sounds import play_completion_sound
+
+                play_completion_sound()
+            except Exception:  # noqa: S110
+                pass
+
+            # Process next message from queue if any
+            await self._process_next_from_queue()
         except Exception:
-            logger.debug("stop hook dispatch failed", exc_info=True)
-
-        if self._chat_input:
-            self._chat_input.set_cursor_active(active=True)
-
-        # Ensure token display is restored (in case of early cancellation)
-        if self._token_tracker:
-            self._token_tracker.show()
-
-        # Play completion sound (non-blocking; honours BOG_AGENTS_SOUNDS env var)
-        try:
-            from bog_agents_cli.cli_sounds import play_completion_sound
-
-            play_completion_sound()
-        except Exception:  # noqa: S110
-            pass
-
-        # Process next message from queue if any
-        await self._process_next_from_queue()
+            # Log rather than swallow silently — a cleanup failure that isn't a
+            # cancellation is a real bug worth surfacing in logs.
+            logger.exception("agent task cleanup failed")
+            raise
+        finally:
+            # Critical restoration that must run even if an await above is
+            # cancelled or raises. Without this, an interrupted cleanup leaves
+            # the input cursor disabled and the app looks wedged (P28).
+            self._agent_running = False
+            self._agent_worker = None
+            if self._chat_input:
+                try:
+                    self._chat_input.set_cursor_active(active=True)
+                except Exception:
+                    logger.debug("failed to re-enable input cursor", exc_info=True)
 
     @staticmethod
     def _convert_messages_to_data(messages: list[Any]) -> list[MessageData]:
@@ -15437,6 +15790,42 @@ class BogAgentsApp(App):
                     tool_msg.toggle_output()
                     return
 
+    async def action_open_editor(self) -> None:
+        """Pop the current input buffer into an external editor ($VISUAL/$EDITOR).
+
+        Suspends the TUI so the editor gets the terminal, then writes the edited
+        result back into the chat input. Any failure falls through to a notify()
+        and re-focuses the input rather than crashing the app.
+        """
+        from bog_agents_cli.editor import open_in_editor
+
+        chat_input = self._chat_input
+        if chat_input is None:
+            return
+        current_text = chat_input.value
+
+        edited: str | None = None
+        try:
+            with self.suspend():
+                edited = open_in_editor(current_text)
+        except Exception:
+            logger.warning("External editor failed", exc_info=True)
+            self.notify(
+                "External editor failed. Check $VISUAL/$EDITOR.",
+                severity="error",
+                timeout=5,
+            )
+            chat_input.focus_input()
+            return
+
+        if edited is not None:
+            chat_input.value = edited
+            text_area = chat_input.input_widget
+            if text_area is not None:
+                lines = edited.split("\n")
+                text_area.move_cursor((len(lines) - 1, len(lines[-1])))
+        chat_input.focus_input()
+
     # Approval menu action handlers (delegated from App-level bindings)
     # NOTE: These only activate when approval widget is pending
     # AND input is not focused
@@ -15511,10 +15900,47 @@ class BogAgentsApp(App):
         copy_selection_to_clipboard_async(self)
 
     def action_paste_clipboard(self) -> None:
-        """Paste clipboard text into the chat input."""
+        """Paste clipboard text into the chat input.
+
+        The clipboard read can shell out to a helper (PowerShell Get-Clipboard,
+        pbpaste, xclip, …). Running it inline on the Textual event loop would
+        freeze the whole TUI if the helper is slow or hung, so the read runs on a
+        background thread and the paste is applied back on the UI thread.
+        """
         if not self._chat_input:
             return
-        pasted = read_clipboard_text()
+
+        def _read_and_paste() -> None:
+            pasted = read_clipboard_text()
+            self.call_from_thread(self._apply_pasted_clipboard, pasted)
+
+        try:
+            self.run_worker(
+                _read_and_paste,
+                thread=True,
+                exclusive=False,
+                exit_on_error=False,
+                group="clipboard",
+                name="paste-clipboard",
+            )
+        except Exception:
+            # If the worker can't be scheduled, fall back to a synchronous read so
+            # the paste still happens; a paste attempt must never crash the app.
+            logger.debug(
+                "paste worker dispatch failed; reading synchronously",
+                exc_info=True,
+            )
+            self._apply_pasted_clipboard(read_clipboard_text())
+
+    def _apply_pasted_clipboard(self, pasted: str | None) -> None:
+        """Apply clipboard text to the chat input on the UI thread.
+
+        Args:
+            pasted: Text read from the system clipboard, or `None`/empty when the
+                clipboard was empty or unavailable.
+        """
+        if not self._chat_input:
+            return
         if not pasted:
             self.notify(
                 "Clipboard is empty or unavailable",
@@ -15958,6 +16384,56 @@ class BogAgentsApp(App):
         )
         self.push_screen(screen, handle_result)
 
+    async def _handle_theme_command(self, command: str) -> None:
+        """Change the color theme (thin glue; logic in `theme`).
+
+        `/theme` opens the picker, `/theme <name>` switches + persists, and
+        `/theme list` lists the available themes.
+        """
+        from bog_agents_cli.theme import handle_theme_command
+
+        arg = command.strip()[len("/theme") :].strip()
+        if not arg:
+            await self._show_theme_selector()
+            return
+        await self._mount_message(UserMessage(command))
+        result = handle_theme_command(arg, current=self.theme)
+        if result.apply is not None:
+            self._apply_and_persist_theme(result.apply)
+        await self._mount_message(
+            ErrorMessage(result.message)
+            if result.is_error
+            else AppMessage(result.message)
+        )
+
+    def _apply_and_persist_theme(self, name: str) -> None:
+        """Set the active theme and save it as the persisted preference.
+
+        Args:
+            name: The theme name to apply (already resolved to a real theme).
+        """
+        from bog_agents_cli.config import save_selected_theme
+
+        try:
+            self.theme = name
+        except Exception:
+            logger.warning("Could not apply theme %r", name, exc_info=True)
+            return
+        if not save_selected_theme(name):
+            logger.warning("Applied theme %r but could not persist it", name)
+
+    async def _show_theme_selector(self) -> None:
+        """Open the theme picker modal; apply + persist the chosen theme."""
+        from bog_agents_cli.widgets.theme_selector import ThemeSelectorScreen
+
+        def handle_result(name: str | None) -> None:
+            if name is not None:
+                self._apply_and_persist_theme(name)
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(ThemeSelectorScreen(current=self.theme), handle_result)
+
     async def _show_settings_screen(self) -> None:
         """Show interactive settings screen as a modal."""
         from bog_agents_cli.widgets.settings_screen import SettingsScreen
@@ -16315,7 +16791,9 @@ class BogAgentsApp(App):
         if action in ("paste", "") or (not tail):
             from bog_agents_cli.clipboard import read_clipboard_text
 
-            clip = read_clipboard_text()
+            # Read off the event loop — the clipboard helper may shell out and a
+            # slow/hung helper would otherwise freeze the TUI.
+            clip = await asyncio.to_thread(read_clipboard_text)
             if clip and detect_image_in_input(clip):
                 # Clipboard contains a path reference to an image
                 img_path = detect_image_in_input(clip)

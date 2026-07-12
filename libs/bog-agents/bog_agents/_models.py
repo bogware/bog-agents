@@ -4,12 +4,39 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
+
+
+_PROVIDER_ALIASES: dict[str, str] = {
+    "azure_openai": "azure",
+    "mistralai": "mistral",
+}
+"""Known provider aliases between LangChain specs and LangSmith params.
+
+LangChain `provider:model` specs and the `ls_provider` reported by
+`_get_ls_params` use different provider names for some integrations.
+Canonicalize only known aliases before comparing providers.
+"""
+
+_BEDROCK_PROVIDERS: frozenset[str] = frozenset({"amazon_bedrock", "anthropic_bedrock", "aws", "bedrock", "bedrock_converse"})
+"""Normalized provider names that identify AWS Bedrock chat models."""
+
+_BEDROCK_MODEL_CLASSES: frozenset[str] = frozenset({"ChatAnthropicBedrock", "ChatBedrock", "ChatBedrockConverse", "ChatBedrockNovaSonic"})
+"""`langchain-aws` chat model class names that identify AWS Bedrock models."""
+
+_BEDROCK_REGIONAL_PREFIXES: tuple[str, ...] = ("apac.", "amer.", "au.", "eu.", "global.", "jp.", "sa.", "us.", "us-gov.")
+"""Regional inference profile prefixes stripped from Bedrock model identifiers.
+
+Distinct from `_BEDROCK_PROFILE_PREFIXES` (used by the bare-id auto-resolver):
+this wider set is used only to peel a regional prefix off a Bedrock model id
+before checking for a cache-capable Nova identifier.
+"""
 
 
 # Long-output, long-thinking model turns can legitimately run for an hour
@@ -205,8 +232,6 @@ def _model_init_kwargs(model: str, timeout_secs: float | None) -> dict[str, Any]
         Dict of kwargs to splat into `init_chat_model`.
     """
     kwargs: dict[str, Any] = {}
-    if model.startswith("openai:"):
-        kwargs["use_responses_api"] = True
     if timeout_secs is None:
         return kwargs
     if model.startswith(("bedrock:", "bedrock_converse:")):
@@ -216,6 +241,29 @@ def _model_init_kwargs(model: str, timeout_secs: float | None) -> dict[str, Any]
         # accept a flat `timeout=` kwarg that flows down to their HTTP client.
         kwargs["timeout"] = timeout_secs
     return kwargs
+
+
+def _apply_openai_responses_default(model: str, kwargs: dict[str, Any]) -> None:
+    """Default OpenAI specs to the Responses API unless a profile decided.
+
+    Historically `_model_init_kwargs` hardcoded `use_responses_api=True` for
+    every `openai:` spec, which landed in the caller-kwargs layer that wins
+    over `apply_provider_profile` — making a `ProviderProfile` override (e.g.
+    `ProviderProfile(init_kwargs={"use_responses_api": False})`) permanently
+    dead. The default now sits **beneath** the profile: it is only applied when
+    neither a registered profile nor the caller has already set the key, so a
+    profile can turn the Responses API off (or on). Behavior for OpenAI users
+    is unchanged when no profile is registered — the SDK still defaults them to
+    the Responses API.
+
+    Mutates `kwargs` in place.
+
+    Args:
+        model: Model spec like `provider:identifier`.
+        kwargs: Merged `init_chat_model` kwargs (post profile application).
+    """
+    if model.startswith("openai:") and "use_responses_api" not in kwargs:
+        kwargs["use_responses_api"] = True
 
 
 def resolve_model(model: str | BaseChatModel) -> BaseChatModel:
@@ -248,6 +296,7 @@ def resolve_model(model: str | BaseChatModel) -> BaseChatModel:
     from bog_agents.profiles.provider.provider_profiles import apply_provider_profile
 
     kwargs = apply_provider_profile(model, kwargs)
+    _apply_openai_responses_default(model, kwargs)
     try:
         return init_chat_model(model, **kwargs)
     except TypeError as exc:
@@ -299,7 +348,30 @@ def get_model_provider(model: BaseChatModel) -> str | None:
     """
     try:
         params = model._get_ls_params()
-    except Exception:  # noqa: BLE001 - best-effort; never fail model resolution over this
+    except (AttributeError, TypeError, NotImplementedError) as exc:
+        # A missing or raising `_get_ls_params` causes profile resolution to
+        # silently miss for this model. Log at INFO (not DEBUG) so custom
+        # integrations can debug "my profile isn't applying" without turning on
+        # DEBUG. Narrowed from a bare `except`: only the shapes a partial or
+        # unimplemented `_get_ls_params` actually raises are swallowed; any
+        # other error surfaces instead of being silently mapped to `None`.
+        logger.info(
+            "Could not extract provider from %s.%s via _get_ls_params: %s",
+            type(model).__module__,
+            type(model).__name__,
+            exc,
+        )
+        return None
+    if not isinstance(params, Mapping):
+        # A custom integration may return `None` (or another non-mapping)
+        # instead of raising. Treat that as "provider unavailable" rather than
+        # letting the subsequent `.get` raise `AttributeError`.
+        logger.info(
+            "Could not extract provider from %s.%s: _get_ls_params returned %s, not a mapping",
+            type(model).__module__,
+            type(model).__name__,
+            type(params).__name__,
+        )
         return None
     provider = params.get("ls_provider")
     if isinstance(provider, str) and provider:
@@ -307,13 +379,83 @@ def get_model_provider(model: BaseChatModel) -> str | None:
     return None
 
 
+def is_bedrock_model(model: str | BaseChatModel) -> bool:
+    """Check whether a model targets AWS Bedrock.
+
+    For string specs, the provider half (before the first colon) is normalized
+    and checked against the known Bedrock provider names, and bare Nova
+    identifiers (which may omit a provider prefix) are recognised directly. For
+    instances, the provider reported by `get_model_provider` is checked first,
+    then the concrete `langchain-aws` chat model class name as a fallback.
+
+    Args:
+        model: Model spec in `provider:model` format, or a chat model instance.
+
+    Returns:
+        `True` if the model targets AWS Bedrock, otherwise `False`.
+    """
+    if isinstance(model, str):
+        if _is_bedrock_nova_model_id(model):
+            return True
+        provider, separator, _ = model.partition(":")
+        return bool(separator) and _normalize_provider(provider) in _BEDROCK_PROVIDERS
+
+    provider = get_model_provider(model)
+    if provider is not None and _normalize_provider(provider) in _BEDROCK_PROVIDERS:
+        return True
+    return type(model).__name__ in _BEDROCK_MODEL_CLASSES
+
+
+def _is_bedrock_nova_model_id(model: str) -> bool:
+    """Check for a cache-capable Bedrock Nova model identifier.
+
+    Peels a single regional inference-profile prefix (e.g. `us.`) off the id,
+    then tests for the `amazon.nova-` family.
+
+    Args:
+        model: Model spec or bare model identifier.
+
+    Returns:
+        `True` when the identifier names a Bedrock Nova model.
+    """
+    identifier = model
+    for prefix in _BEDROCK_REGIONAL_PREFIXES:
+        if identifier.startswith(prefix):
+            identifier = identifier.removeprefix(prefix)
+            break
+    return identifier.startswith("amazon.nova-")
+
+
+def _normalize_provider(provider: str) -> str:
+    """Canonicalize a provider name so equal providers compare equal.
+
+    Specs use the `provider:model` spelling (lowercase, underscore-separated,
+    e.g. `azure_openai`), while the `ls_provider` reported by `_get_ls_params`
+    may differ in case, use hyphens (`openai-codex`), or use an entirely
+    different name (`mistralai` vs `mistral`). Folding both sides through this
+    function before comparison keeps those spellings from reading as a mismatch.
+
+    Args:
+        provider: Raw provider name from either a spec or `ls_provider`.
+
+    Returns:
+        The canonical provider name.
+    """
+    normalized = provider.lower().replace("-", "_")
+    return _PROVIDER_ALIASES.get(normalized, normalized)
+
+
 def model_matches_spec(model: BaseChatModel, spec: str) -> bool:
     """Check whether a model instance already matches a string model spec.
 
-    Matching is performed in two ways: first by exact string equality between
-    `spec` and the model identifier, then by comparing only the model-name
-    portion of a `provider:model` spec against the identifier. For example,
-    `"openai:gpt-5"` matches a model with identifier `"gpt-5"`.
+    Bare specs (no colon) match by model identifier alone. Provider-prefixed
+    specs must match on **both** the model identifier and the provider: a spec
+    like `"openai:gpt-5"` no longer matches an Anthropic model that merely
+    happens to expose a `"gpt-5"` identifier. When the current model's provider
+    cannot be inspected (`_get_ls_params` unavailable), the check falls back to
+    identifier-only matching for backwards compatibility with custom models.
+    Provider comparison is normalized (see `_normalize_provider`), so case,
+    hyphen/underscore spelling, and known aliases do not read as a mismatch.
 
     Assumes the `provider:model` convention (single colon separator).
 
@@ -330,8 +472,25 @@ def model_matches_spec(model: BaseChatModel, spec: str) -> bool:
     if spec == current:
         return True
 
-    _, separator, model_name = spec.partition(":")
-    return bool(separator) and model_name == current
+    provider, separator, model_name = spec.partition(":")
+    if not separator or model_name != current:
+        return False
+
+    current_provider = get_model_provider(model)
+    if current_provider is None:
+        # Provider could not be inspected, so the spec's provider cannot be
+        # confirmed. Fall back to the identifier-only match. Logged at DEBUG so
+        # a consumer skipping a model swap on the strength of this match (e.g.
+        # the runtime model override) is traceable when it surprises.
+        logger.debug(
+            "Matched spec %r on identifier alone; provider for %s.%s is uninspectable, so the spec's %r provider was not verified",
+            spec,
+            type(model).__module__,
+            type(model).__name__,
+            provider,
+        )
+        return True
+    return _normalize_provider(provider) == _normalize_provider(current_provider)
 
 
 def _string_value(config: dict[str, Any], key: str) -> str | None:

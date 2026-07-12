@@ -100,6 +100,69 @@ class TestFencedJSON:
         assert calls[0]["name"] == "search"
 
 
+class TestFunctionXMLFormat:
+    """Nemotron / Llama `<function=NAME>...</function>` XML tool calls."""
+
+    def test_function_attribute_form(self) -> None:
+        text = "Run this.\n<function=grep><parameter name=pattern>MAGIC</parameter><parameter name=path>/workspace/tmp</parameter></function>"
+        calls, residual = parse_tool_calls_from_text(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "grep"
+        assert calls[0]["args"] == {"pattern": "MAGIC", "path": "/workspace/tmp"}
+        assert residual == "Run this."
+
+    def test_multiple_function_blocks(self) -> None:
+        text = (
+            "<function=ls><parameter name=path>/</parameter></function> then "
+            "<function=read_file><parameter name=file_path>/a.txt</parameter></function>"
+        )
+        calls, residual = parse_tool_calls_from_text(text)
+        assert [c["name"] for c in calls] == ["ls", "read_file"]
+        assert "then" in residual
+
+    def test_alternate_name_child_form(self) -> None:
+        # <function><name=NAME</name>...<parameter>...</parameter></function> plus a
+        # trailing </tool_call> sentinel, with an inline `<key>:value` argument body.
+        text = "<function>\n<name=get_service_name</name>\n<parameter>\n<service_id>:0\n</parameter>\n</function>\n</tool_call>"
+        calls, residual = parse_tool_calls_from_text(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "get_service_name"
+        assert calls[0]["args"] == {"service_id": "0"}
+        assert "</tool_call>" not in residual
+
+    def test_alternate_named_parameter_form(self) -> None:
+        text = "<function><name>write_file</name><parameter name=file_path>/x.txt</parameter><parameter name=content>hi</parameter></function>"
+        calls, _ = parse_tool_calls_from_text(text)
+        assert calls[0]["name"] == "write_file"
+        assert calls[0]["args"] == {"file_path": "/x.txt", "content": "hi"}
+
+    def test_format_filter_excludes_function(self) -> None:
+        text = "<function=grep><parameter name=pattern>x</parameter></function>"
+        calls, _ = parse_tool_calls_from_text(text, formats=("mistral", "hermes"))
+        assert calls == []
+
+
+class TestBareJSON:
+    """Whole-message bare JSON objects that are tool-call-shaped."""
+
+    def test_tool_args_shape(self) -> None:
+        calls, residual = parse_tool_calls_from_text('{"tool": "search", "args": {"q": "x"}}')
+        assert calls[0]["name"] == "search"
+        assert calls[0]["args"] == {"q": "x"}
+        assert residual == ""
+
+    def test_name_arguments_shape(self) -> None:
+        calls, _ = parse_tool_calls_from_text('{"name": "ls", "arguments": {"path": "/"}}')
+        assert calls[0]["name"] == "ls"
+        assert calls[0]["args"] == {"path": "/"}
+
+    def test_shell_style_command_key(self) -> None:
+        # Nemotron sometimes emits a bare shell call with `cmd`/`command`.
+        calls, _ = parse_tool_calls_from_text('{"tool": "run", "cmd": "pytest -q"}')
+        assert calls[0]["name"] == "run"
+        assert calls[0]["args"] == {"command": "pytest -q"}
+
+
 # ---------------------------------------------------------------------------
 # Pass-through behaviour
 # ---------------------------------------------------------------------------

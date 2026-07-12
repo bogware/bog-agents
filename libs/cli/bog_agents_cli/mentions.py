@@ -112,7 +112,7 @@ def _resolve_file(value: str, cwd: Path) -> str:
                 size = path.stat().st_size
                 if size > _MAX_FILE_BYTES:
                     return f"[File too large to inject: {size:,} bytes. Max {_MAX_FILE_BYTES:,}.]"
-                content = path.read_text(errors="replace")
+                content = path.read_text(encoding="utf-8", errors="replace")
                 lang = _lang_hint(path)
                 return f"```{lang}\n# {path.name}\n{content}\n```"
             except OSError as exc:

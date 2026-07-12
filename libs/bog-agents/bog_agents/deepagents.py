@@ -26,16 +26,22 @@ deepagents.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from bog_agents._version import __version__
-from bog_agents.graph import DeepAgentState, create_agent
+from bog_agents.graph import DeepAgentState, SystemPromptConfig, create_agent
 from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
-from bog_agents.middleware.filesystem import FilesystemMiddleware
+from bog_agents.middleware.filesystem import FilesystemMiddleware, FsToolName
 from bog_agents.middleware.memory import MemoryMiddleware
 from bog_agents.middleware.permissions import FilesystemPermission
 from bog_agents.middleware.rubric import RubricMiddleware
-from bog_agents.middleware.subagents import CompiledSubAgent, SubAgent, SubAgentMiddleware
+from bog_agents.middleware.subagents import (
+    SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY,
+    CompiledSubAgent,
+    SubAgent,
+    SubAgentMiddleware,
+    create_sub_agent,
+)
 from bog_agents.profiles.harness.harness_profiles import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
@@ -61,12 +67,14 @@ if TYPE_CHECKING:
     from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 
 __all__ = [
+    "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY",
     "AsyncSubAgent",
     "AsyncSubAgentMiddleware",
     "CompiledSubAgent",
     "DeepAgentState",
     "FilesystemMiddleware",
     "FilesystemPermission",
+    "FsToolName",
     "GeneralPurposeSubagentProfile",
     "HarnessProfile",
     "HarnessProfileConfig",
@@ -75,8 +83,10 @@ __all__ = [
     "RubricMiddleware",
     "SubAgent",
     "SubAgentMiddleware",
+    "SystemPromptConfig",
     "__version__",
     "create_deep_agent",
+    "create_sub_agent",
     "register_harness_profile",
     "register_provider_profile",
 ]
@@ -86,15 +96,15 @@ def create_deep_agent(
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,
-    system_prompt: str | SystemMessage | None = None,
+    system_prompt: str | SystemMessage | SystemPromptConfig | None = None,
     middleware: Sequence[AgentMiddleware] = (),
-    subagents: list[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
+    subagents: Sequence[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[str] | None = None,
     memory: list[str] | None = None,
     permissions: list[FilesystemPermission] | None = None,
     backend: BackendProtocol | BackendFactory | None = None,
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None,
-    response_format: ResponseFormat | None = None,
+    response_format: ResponseFormat | type[Any] | dict[str, Any] | None = None,
     state_schema: type[Any] | None = None,
     context_schema: type[Any] | None = None,
     checkpointer: Checkpointer | None = None,
@@ -102,6 +112,7 @@ def create_deep_agent(
     debug: bool = False,
     name: str | None = None,
     cache: BaseCache | None = None,
+    max_turns: int = 9_999,
 ) -> CompiledStateGraph:
     """Create a deep agent (deepagents-compatible entry point).
 
@@ -136,6 +147,8 @@ def create_deep_agent(
         debug: Enable debug mode.
         name: Agent name.
         cache: Node cache.
+        max_turns: Maximum model turns before the run stops. Defaults to
+            `9_999` to mirror the deepagents recursion budget.
 
     Returns:
         A compiled deep agent graph.
@@ -145,13 +158,13 @@ def create_deep_agent(
         tools,
         system_prompt=system_prompt,
         middleware=middleware,
-        subagents=subagents,
+        subagents=list(subagents) if subagents is not None else None,
         skills=skills,
         memory=memory,
         permissions=permissions,
         backend=backend,
         interrupt_on=interrupt_on,
-        response_format=response_format,
+        response_format=cast("ResponseFormat | None", response_format),
         state_schema=state_schema if state_schema is not None else DeepAgentState,
         context_schema=context_schema,
         checkpointer=checkpointer,
@@ -159,4 +172,5 @@ def create_deep_agent(
         debug=debug,
         name=name,
         cache=cache,
+        max_turns=max_turns,
     )

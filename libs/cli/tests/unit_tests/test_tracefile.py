@@ -608,6 +608,212 @@ class TestHeader:
         assert tf.header.notes == ()
 
 
+# ---------------------------------------------------------------------------
+# 7. Header binding (P24) — producer/actor/notes are signed (sign_format v2)
+# ---------------------------------------------------------------------------
+
+
+def _retext(tf, *, replace: tuple[str, str] | None = None) -> str:
+    """Render a TraceFile to text, optionally applying a string swap.
+
+    The swap mimics an attacker editing the on-disk header in place.
+    """
+    text = trace_to_text(tf)
+    if replace is not None:
+        old, new = replace
+        assert old in text, f"expected {old!r} in serialized TraceFile"
+        text = text.replace(old, new)
+    return text
+
+
+class TestHeaderBinding:
+    """P24: the free-text header fields must be cryptographically bound.
+
+    Forging producer/actor/notes on a v2 file must break verification;
+    legacy v1 files (no header binding) must keep verifying so old
+    artefacts don't suddenly fail.
+    """
+
+    def test_new_files_default_to_sign_format_v2(self):
+        from bog_agents_cli.tracefile.spec import SIGN_FORMAT_V2
+
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="sess-v2",
+            producer="prod/1.0",
+            actor="claude-haiku",
+            notes=("origin=ci",),
+        )
+        assert tf.header.sign_format == SIGN_FORMAT_V2
+        assert verify_tracefile(tf).ok is True
+
+    def test_tampered_producer_fails_v2(self):
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="s",
+            producer="trusted/1.0",
+            actor="claude",
+            notes=("origin=ci",),
+        )
+        forged = _retext(
+            tf, replace=('"producer":"trusted/1.0"', '"producer":"evilcorp/9.9"')
+        )
+        loaded = parse_tracefile(forged)
+        assert loaded.header.producer == "evilcorp/9.9"
+        result = verify_tracefile(loaded)
+        assert result.ok is False
+        assert result.signature_ok is False
+        # Chain is untouched — only the signature should fail.
+        assert result.chain_ok is True
+
+    def test_tampered_actor_fails_v2(self):
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="s",
+            actor="claude-haiku-4-5",
+        )
+        forged = _retext(
+            tf, replace=('"actor":"claude-haiku-4-5"', '"actor":"gpt-impersonator"')
+        )
+        loaded = parse_tracefile(forged)
+        assert loaded.header.actor == "gpt-impersonator"
+        result = verify_tracefile(loaded)
+        assert result.ok is False
+        assert result.signature_ok is False
+
+    def test_tampered_notes_fails_v2(self):
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="s",
+            notes=("origin=internal-audit",),
+        )
+        forged = _retext(
+            tf, replace=("origin=internal-audit", "origin=blessed-by-security")
+        )
+        loaded = parse_tracefile(forged)
+        assert "origin=blessed-by-security" in loaded.header.notes
+        result = verify_tracefile(loaded)
+        assert result.ok is False
+        assert result.signature_ok is False
+
+    def test_legacy_v1_file_still_verifies(self):
+        """A genuine v1 artefact (no sign_format key) must still verify."""
+        from bog_agents_cli.tracefile.spec import SIGN_FORMAT_V1
+
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="legacy",
+            producer="legacy-producer/0.1",
+            actor="legacy-actor",
+            notes=("legacy-note",),
+            sign_format=SIGN_FORMAT_V1,
+        )
+        assert tf.header.sign_format == SIGN_FORMAT_V1
+        # Emulate an on-disk v1 file: strip the sign_format key entirely,
+        # exactly as files emitted before this change look.
+        text = trace_to_text(tf)
+        stripped = text.replace(',"sign_format":1', "")
+        assert "sign_format" not in stripped.splitlines()[0]
+        loaded = parse_tracefile(stripped)
+        assert loaded.header.sign_format == SIGN_FORMAT_V1
+        result = verify_tracefile(loaded)
+        assert result.ok is True
+        assert result.signature_ok is True
+
+    def test_legacy_v1_does_not_bind_header(self):
+        """v1 keeps its old semantics — header tamper does NOT break v1.
+
+        This documents the backward-compat trade-off: v1 files never
+        protected the header, and we keep that path byte-identical. The
+        protection is opt-in via v2 (the new default for fresh files).
+        """
+        from bog_agents_cli.tracefile.spec import SIGN_FORMAT_V1
+
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="legacy",
+            producer="old/1.0",
+            sign_format=SIGN_FORMAT_V1,
+        )
+        text = trace_to_text(tf).replace(',"sign_format":1', "")
+        forged = text.replace('"producer":"old/1.0"', '"producer":"forged/2.0"')
+        loaded = parse_tracefile(forged)
+        # v1 path: signature still verifies because the header was never
+        # part of the signed message in v1.
+        assert verify_tracefile(loaded).ok is True
+
+    def test_downgrade_attack_fails(self):
+        """Stripping sign_format to forge a v2 file must fail closed.
+
+        An attacker who edits producer/actor/notes on a v2 file and
+        downgrades sign_format to 1 (to dodge header binding) still
+        fails: the signature was computed over the v2 message, but
+        re-verifying as v1 produces a different message.
+        """
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="s",
+            producer="trusted/1.0",
+        )
+        text = trace_to_text(tf)
+        # Downgrade the format tag AND forge the producer.
+        downgraded = text.replace('"sign_format":2', '"sign_format":1')
+        downgraded = downgraded.replace(
+            '"producer":"trusted/1.0"', '"producer":"forged/9.9"'
+        )
+        loaded = parse_tracefile(downgraded)
+        from bog_agents_cli.tracefile.spec import SIGN_FORMAT_V1
+
+        assert loaded.header.sign_format == SIGN_FORMAT_V1
+        result = verify_tracefile(loaded)
+        assert result.ok is False
+        assert result.signature_ok is False
+
+    def test_parse_refuses_unknown_sign_format(self):
+        key = generate_keypair()
+        tf = build_tracefile(_sample_frames(), key=key, session_id="s")
+        text = trace_to_text(tf).replace('"sign_format":2', '"sign_format":99')
+        with pytest.raises(TraceFileError):
+            parse_tracefile(text)
+
+    def test_build_refuses_unknown_sign_format(self):
+        key = generate_keypair()
+        with pytest.raises(TraceFileError):
+            build_tracefile(_sample_frames(), key=key, session_id="s", sign_format=7)
+
+    def test_v2_roundtrip_through_disk(self, tmp_path: Path):
+        key = generate_keypair()
+        tf = build_tracefile(
+            _sample_frames(),
+            key=key,
+            session_id="disk",
+            producer="p",
+            actor="a",
+            notes=("n1", "n2"),
+        )
+        path = tmp_path / "v2.trace"
+        write_tracefile(tf, path)
+        loaded = read_tracefile(path)
+        assert loaded.header.sign_format == 2
+        assert loaded.header.producer == "p"
+        assert loaded.header.notes == ("n1", "n2")
+        assert verify_tracefile(loaded).ok is True
+
+
 # Silence "imported but unused" without removing — these are part of
 # the public surface tests assert against and the import keeps the
 # module discoverable in IDEs.

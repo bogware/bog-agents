@@ -8,10 +8,12 @@ from bog_agents_cli.unicode_security import (
     UrlSafetyResult,
     check_url_safety,
     detect_dangerous_unicode,
+    escape_for_display,
     format_warning_detail,
     iter_string_values,
     looks_like_url_key,
     render_with_unicode_markers,
+    sanitize_control_chars,
     strip_dangerous_unicode,
     summarize_issues,
 )
@@ -244,3 +246,133 @@ def test_looks_like_url_key_case_insensitive() -> None:
     """Key matching should be case-insensitive."""
     assert looks_like_url_key("URL") is True
     assert looks_like_url_key("Base_URL") is True
+
+
+# --- sanitize_control_chars ---
+
+
+def test_sanitize_control_chars_neutralizes_csi_color() -> None:
+    """A CSI SGR colour sequence should be removed, leaving the text."""
+    result = sanitize_control_chars("\x1b[31mred\x1b[0m text")
+    assert result == "red text"
+    assert "\x1b" not in result
+
+
+def test_sanitize_control_chars_removes_osc_clipboard() -> None:
+    """An OSC 52 clipboard-write (BEL-terminated) should be removed entirely."""
+    result = sanitize_control_chars("before\x1b]52;c;ZXZpbA==\x07after")
+    assert result == "beforeafter"
+    assert "52" not in result
+    assert "\x1b" not in result
+
+
+def test_sanitize_control_chars_removes_osc_st_terminated() -> None:
+    """An OSC sequence terminated by ST (ESC backslash) should be removed."""
+    result = sanitize_control_chars("a\x1b]0;window title\x1b\\b")
+    assert result == "ab"
+
+
+def test_sanitize_control_chars_removes_dcs() -> None:
+    """A DCS sequence (ESC P ... ST) should be removed entirely."""
+    result = sanitize_control_chars("x\x1bP1;2|payload\x1b\\y")
+    assert result == "xy"
+    assert "payload" not in result
+
+
+def test_sanitize_control_chars_removes_apc_and_pm() -> None:
+    """APC and PM sequences should be removed."""
+    assert sanitize_control_chars("a\x1b_apc\x1b\\b") == "ab"
+    assert sanitize_control_chars("a\x1b^pm\x1b\\b") == "ab"
+
+
+def test_sanitize_control_chars_removes_raw_c1_csi() -> None:
+    """A raw 8-bit C1 CSI (0x9B) sequence should be removed."""
+    result = sanitize_control_chars("hi\x9b31mthere")
+    assert result == "hithere"
+    assert "\x9b" not in result
+
+
+def test_sanitize_control_chars_removes_lone_c1_byte() -> None:
+    """A bare C1 control byte with no sequence should be stripped."""
+    result = sanitize_control_chars("a\x9bb\x85c")
+    assert "\x9b" not in result
+    assert "\x85" not in result
+
+
+def test_sanitize_control_chars_removes_nul_and_c0() -> None:
+    """NUL and other C0 control bytes (and a lone trailing ESC) are removed."""
+    result = sanitize_control_chars("a\x00b\x07c\x0bd\x1b")
+    assert result == "abcd"
+
+
+def test_sanitize_control_chars_preserves_tabs_and_newlines() -> None:
+    """Legitimate tabs, newlines, and carriage returns must survive."""
+    text = "line1\tcol\nline2\r\nline3"
+    assert sanitize_control_chars(text) == text
+
+
+def test_sanitize_control_chars_preserves_plain_unicode() -> None:
+    """Ordinary (non-control) text, including Unicode, is untouched."""
+    text = "hello 世界 café ☃ 123"
+    assert sanitize_control_chars(text) == text
+
+
+def test_sanitize_control_chars_is_idempotent() -> None:
+    """Applying the sanitizer twice equals applying it once."""
+    text = "\x1b[31mred\x1b]52;c;x\x07\x9b1m\x00tab\there\nline"
+    once = sanitize_control_chars(text)
+    assert sanitize_control_chars(once) == once
+    assert "\x1b" not in once
+    assert "\x9b" not in once
+
+
+def test_sanitize_control_chars_empty_string() -> None:
+    """Empty input yields empty output."""
+    assert sanitize_control_chars("") == ""
+
+
+# --- escape_for_display ---
+
+
+def test_escape_for_display_escapes_rich_markup() -> None:
+    """Rich markup tags should be escaped so they render literally."""
+    result = escape_for_display("[bold red]hi[/]")
+    assert "\\[" in result  # opening bracket escaped by rich.markup.escape
+
+
+def test_escape_for_display_strips_escapes_and_bidi() -> None:
+    """Composition removes terminal escapes and bidi/zero-width controls."""
+    # ESC[31m (CSI colour) + RIGHT-TO-LEFT OVERRIDE + ZERO WIDTH SPACE.
+    result = escape_for_display("\x1b[31ma\u202eb\u200bc")
+    assert "\x1b" not in result
+    assert "\u202e" not in result
+    assert "\u200b" not in result
+    assert "a" in result and "b" in result and "c" in result
+
+
+def test_escape_for_display_neutralizes_esc_adjacent_close_tag() -> None:
+    """An ESC byte glued to a markup tag must not re-expose a live tag.
+
+    Regression: escaping markup *before* stripping escapes let the lone-ESC
+    sweep consume the backslash the escaper inserted, re-exposing a bare
+    closing tag that raises `MarkupError` at render time and crashes the
+    approval/MCP dialogs. Escaping must run last.
+    """
+    from rich.markup import render
+
+    for payload in ("\x1b[/dim]", "\x1b[/bold]x", "before\x1b[/]after"):
+        result = escape_for_display(payload)
+        assert "\x1b" not in result
+        # Must render without raising MarkupError (no live tag survived).
+        render(result)
+
+
+def test_escape_for_display_preserves_plain_text() -> None:
+    """Ordinary text without markup or controls is preserved."""
+    assert escape_for_display("plain text 123") == "plain text 123"
+
+
+def test_escape_for_display_is_idempotent_on_clean_output() -> None:
+    """Re-running on already-escaped clean text (no markup) is stable."""
+    once = escape_for_display("no markup here\tkept\nlines")
+    assert once == "no markup here\tkept\nlines"

@@ -217,6 +217,89 @@ class TestGetGitBranch:
 
         assert mock_run.call_count == 1
 
+    def test_reuses_cache_within_ttl_window(self) -> None:
+        """A second lookup inside the TTL window must not re-run `git`."""
+        result = MagicMock(returncode=0, stdout="feature-branch\n")
+        ttl = textual_adapter._GIT_BRANCH_CACHE_TTL_SECONDS
+        # Two calls a fraction of a second apart -> still one git invocation.
+        clock = iter([100.0, 100.0 + ttl / 2])
+
+        with (
+            patch(
+                "bog_agents_cli.textual_adapter.Path.cwd",
+                return_value=Path("/tmp/repo"),
+            ),
+            patch(
+                "bog_agents_cli.textual_adapter.time.monotonic",
+                side_effect=lambda: next(clock),
+            ),
+            patch("subprocess.run", return_value=result) as mock_run,
+        ):
+            assert textual_adapter._get_git_branch() == "feature-branch"
+            assert textual_adapter._get_git_branch() == "feature-branch"
+
+        assert mock_run.call_count == 1
+
+    def test_refreshes_branch_after_ttl_expires(self) -> None:
+        """After the TTL window a switched branch is picked up on next lookup."""
+        results = [
+            MagicMock(returncode=0, stdout="old-branch\n"),
+            MagicMock(returncode=0, stdout="new-branch\n"),
+        ]
+        ttl = textual_adapter._GIT_BRANCH_CACHE_TTL_SECONDS
+        # Second call is beyond the TTL -> git re-runs and observes the switch.
+        clock = iter([100.0, 100.0 + ttl + 1.0])
+
+        with (
+            patch(
+                "bog_agents_cli.textual_adapter.Path.cwd",
+                return_value=Path("/tmp/repo"),
+            ),
+            patch(
+                "bog_agents_cli.textual_adapter.time.monotonic",
+                side_effect=lambda: next(clock),
+            ),
+            patch("subprocess.run", side_effect=results) as mock_run,
+        ):
+            assert textual_adapter._get_git_branch() == "old-branch"
+            assert textual_adapter._get_git_branch() == "new-branch"
+
+        assert mock_run.call_count == 2
+
+    def test_invalidate_forces_refresh_within_ttl(self) -> None:
+        """`_invalidate_git_branch_cache` drops the entry for instant re-read."""
+        results = [
+            MagicMock(returncode=0, stdout="old-branch\n"),
+            MagicMock(returncode=0, stdout="new-branch\n"),
+        ]
+        # Both lookups well within the TTL -> only invalidation forces a re-run.
+        clock = iter([100.0, 100.1])
+
+        with (
+            patch(
+                "bog_agents_cli.textual_adapter.Path.cwd",
+                return_value=Path("/tmp/repo"),
+            ),
+            patch(
+                "bog_agents_cli.textual_adapter.time.monotonic",
+                side_effect=lambda: next(clock),
+            ),
+            patch("subprocess.run", side_effect=results) as mock_run,
+        ):
+            assert textual_adapter._get_git_branch() == "old-branch"
+            textual_adapter._invalidate_git_branch_cache()
+            assert textual_adapter._get_git_branch() == "new-branch"
+
+        assert mock_run.call_count == 2
+
+    def test_invalidate_missing_entry_is_noop(self) -> None:
+        """Invalidating with no cached entry must not raise."""
+        with patch(
+            "bog_agents_cli.textual_adapter.Path.cwd",
+            return_value=Path("/tmp/repo"),
+        ):
+            textual_adapter._invalidate_git_branch_cache()
+
 
 class TestGetGitBranchOSError:
     """Tests for _get_git_branch when Path.cwd() raises OSError."""

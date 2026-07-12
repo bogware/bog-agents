@@ -231,6 +231,17 @@ def show_help() -> None:
     console.print("  --drive-stop-on-failure    Abort at the first failed assertion")
     console.print()
 
+    # --- Keyboard Shortcuts ---
+    console.print(
+        "[bold]Keyboard (inside interactive session):[/bold]",
+        style=COLORS["primary"],
+    )
+    console.print("  Shift+Tab                  Cycle permission mode")
+    console.print("  Ctrl+T                     Toggle auto-approve")
+    console.print("  Ctrl+E                     Toggle last tool output")
+    console.print("  Ctrl+X                     Edit the prompt in $VISUAL/$EDITOR")
+    console.print()
+
     # --- Slash Commands ---
     console.print(
         "[bold]Slash Commands (inside interactive session):[/bold]",

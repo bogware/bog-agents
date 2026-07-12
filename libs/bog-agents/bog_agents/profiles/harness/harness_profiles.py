@@ -1292,6 +1292,7 @@ def _harness_profile_for_model(model: BaseChatModel, spec: str | None) -> Harnes
     # `get_model_provider`; degrade to the null-object default when missing.
     try:
         from bog_agents._models import (
+            _normalize_provider,
             get_model_identifier,
             get_model_provider,
         )
@@ -1299,7 +1300,15 @@ def _harness_profile_for_model(model: BaseChatModel, spec: str | None) -> Harnes
         return HarnessProfile()
 
     identifier = get_model_identifier(model)
-    provider = get_model_provider(model)
+    raw_provider = get_model_provider(model)
+    # Normalize the provider half before building lookup keys. The
+    # `ls_provider` reported by `get_model_provider` may differ in case or
+    # hyphen/underscore spelling from the lowercase `provider:model` keys
+    # profiles register under (e.g. a pre-built NVIDIA model reports
+    # `"NVIDIA"`, but the built-in profile is keyed `nvidia:...`). Folding it
+    # through `_normalize_provider` lets `anthropic:claude-opus-4-7` and
+    # `nvidia:...` profiles resolve for pre-built model instances too.
+    provider = _normalize_provider(raw_provider) if raw_provider else raw_provider
     # Try the canonical `provider:model` key first so user registrations under
     # that shape match. `_get_harness_profile` internally falls back from the
     # exact key to the provider prefix, which also subsumes the pure

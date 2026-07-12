@@ -135,7 +135,7 @@ def test_store_backend_intercept_large_tool_result():
 
     stored_content = rt.store.get(("filesystem",), "/large_tool_results/test_456")
     assert stored_content is not None
-    assert stored_content.value["content"] == [large_content]
+    assert stored_content.value["content"] == large_content
 
 
 @dataclass
@@ -429,3 +429,136 @@ def test_store_backend_rejects_wildcard_namespace() -> None:
 
     with pytest.raises(ValueError, match="disallowed characters"):
         be.write("/test.txt", "content")
+
+
+# --- FileData v2 migration -------------------------------------------------
+
+
+def test_store_backend_v2_round_trip() -> None:
+    """Files written by the default (v2) backend store `content` as a str + encoding."""
+    store = InMemoryStore()
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",))
+
+    be.write("/v2.txt", "line one\nline two")
+
+    value = store.get(("filesystem",), "/v2.txt").value
+    assert value["content"] == "line one\nline two"
+    assert value["encoding"] == "utf-8"
+
+    result = be.read_file("/v2.txt")
+    assert result.error is None
+    assert result.file_data["content"] == "line one\nline two"
+    assert be.ls("/").entries[0]["size"] == len("line one\nline two")
+
+
+def test_store_backend_v1_file_format_opt_in() -> None:
+    """`file_format="v1"` still writes the legacy list-of-lines shape."""
+    store = InMemoryStore()
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",), file_format="v1")
+
+    be.write("/legacy.txt", "a\nb")
+
+    value = store.get(("filesystem",), "/legacy.txt").value
+    assert value["content"] == ["a", "b"]
+    assert "encoding" not in value
+
+
+def test_store_backend_accepts_legacy_v1_items() -> None:
+    """A pre-existing v1 store item is read, not rejected as corrupt.
+
+    The old `_convert_store_item_to_file_data` required `content` to be a list
+    AND both timestamps to be present; either miss raised and the item was
+    dropped from ls/grep/glob. Both shapes must now convert.
+    """
+    store = InMemoryStore()
+    store.put(("filesystem",), "/old.txt", {"content": ["hello", "world"], "created_at": "2020-01-01", "modified_at": "2020-01-01"})
+    # v2 item with no timestamps at all.
+    store.put(("filesystem",), "/bare.txt", {"content": "bare"})
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",))
+
+    with pytest.deprecated_call():
+        assert "world" in be.read("/old.txt")
+    assert "bare" in be.read("/bare.txt")
+
+    listed = {e["path"]: e["size"] for e in be.ls("/").entries}
+    assert listed == {"/old.txt": len("hello\nworld"), "/bare.txt": len("bare")}
+
+
+def test_store_backend_write_overwrites_existing_file() -> None:
+    """Writing to an existing path overwrites it (upstream semantics) instead of erroring."""
+    store = InMemoryStore()
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",))
+
+    first = be.write("/dup.txt", "x")
+    assert first.error is None
+    created_at = store.get(("filesystem",), "/dup.txt").value["created_at"]
+
+    second = be.write("/dup.txt", "y")
+    assert second.error is None and second.path == "/dup.txt"
+
+    value = store.get(("filesystem",), "/dup.txt").value
+    assert value["content"] == "y"
+    # The overwrite preserves the original creation timestamp.
+    assert value["created_at"] == created_at
+
+
+def test_store_backend_delete_file_and_recursive_directory() -> None:
+    store = InMemoryStore()
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",))
+
+    for path in ("/keep.txt", "/dir/a.txt", "/dir/sub/b.txt", "/directory.txt"):
+        be.write(path, "x")
+
+    missing = be.delete("/nope.txt")
+    assert missing.error and "not found" in missing.error
+
+    single = be.delete("/keep.txt")
+    assert single.error is None
+    assert single.deleted_paths == ["/keep.txt"]
+    assert store.get(("filesystem",), "/keep.txt") is None
+
+    recursive = be.delete("/dir")
+    assert recursive.error is None
+    assert recursive.deleted_paths == ["/dir/a.txt", "/dir/sub/b.txt"]
+    assert store.get(("filesystem",), "/dir/a.txt") is None
+    assert store.get(("filesystem",), "/dir/sub/b.txt") is None
+    # A path that merely shares a string prefix must survive.
+    assert store.get(("filesystem",), "/directory.txt") is not None
+
+
+def test_store_backend_with_store_kwarg_and_no_runtime() -> None:
+    """`StoreBackend(store=...)` works standalone — no runtime, no graph context."""
+    store = InMemoryStore()
+    be = StoreBackend(store=store, namespace=lambda _ctx: ("filesystem",))
+
+    assert be.write("/standalone.txt", "content").error is None
+    assert "content" in be.read("/standalone.txt")
+
+
+def test_store_backend_no_store_anywhere_raises() -> None:
+    be = StoreBackend(namespace=lambda _ctx: ("filesystem",))
+    with pytest.raises(ValueError, match="Store is required"):
+        be.write("/x.txt", "y")
+
+
+def test_store_backend_namespace_factory_both_generations() -> None:
+    """Both the BackendContext-style and the Runtime-style factory keep working."""
+    store = InMemoryStore()
+    rt = ToolRuntime(
+        state={"messages": [], "thread_id": "thread-abc"},
+        context=UserContext(user_id="alice"),
+        tool_call_id="t1",
+        store=store,
+        stream_writer=lambda _: None,
+        config={},
+    )
+
+    # First generation: reaches the runtime through `ctx.runtime`, state through `ctx.state`.
+    legacy = StoreBackend(rt, namespace=lambda ctx: ("legacy", ctx.runtime.context.user_id, ctx.state["thread_id"]))
+    assert legacy.write("/a.txt", "old-style").error is None
+    assert [i.key for i in store.search(("legacy", "alice", "thread-abc"))] == ["/a.txt"]
+
+    # Second generation (upstream): the argument *is* the runtime.
+    modern = StoreBackend(rt, namespace=lambda runtime: ("modern", runtime.context.user_id))
+    assert modern.write("/b.txt", "new-style").error is None
+    assert [i.key for i in store.search(("modern", "alice"))] == ["/b.txt"]

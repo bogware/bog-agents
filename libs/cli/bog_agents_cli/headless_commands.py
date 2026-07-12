@@ -26,7 +26,10 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from bog_agents_cli.config_manifest import ConfigOption
 
 
 @dataclass(frozen=True)
@@ -77,21 +80,111 @@ def _cmd_model(_args: str) -> HeadlessResult:
     return _ok(text, {"model": current})
 
 
-def _cmd_config(_args: str) -> HeadlessResult:
-    """Show key resolved configuration values and the config file path."""
-    from bog_agents_cli.config import settings
+_REDACTED_DISPLAY = "********"
+"""Placeholder shown for a *set* redacted option, never its raw value."""
 
-    cfg_path = Path.home() / ".bog-agents" / "config.toml"
+
+def _display_value(option: ConfigOption, value: object) -> str:
+    """Render a resolved option value for display, redacting where flagged.
+
+    Args:
+        option: The `ConfigOption` the value was resolved for.
+        value: The resolved value (may be `None` when unset with no default).
+
+    Returns:
+        The value as a display string: `(unset)` when `None`, the redaction
+        placeholder for a set redacted option, or `str(value)` otherwise. A
+        redacted option's raw value is never returned.
+    """
+    if value is None:
+        return "(unset)"
+    if option.redacted:
+        return _REDACTED_DISPLAY
+    return str(value)
+
+
+def _option_row(option: ConfigOption, toml_data: dict[str, Any]) -> dict[str, Any]:
+    """Resolve one option into a JSON-safe row (raw secrets never included)."""
+    from bog_agents_cli.config_manifest import resolve_scalar
+
+    value, source = resolve_scalar(option, toml_data=toml_data)
+    return {
+        "key": option.key,
+        "group": option.group,
+        "type": option.type,
+        "source": source,
+        "redacted": option.redacted,
+        "set": value is not None,
+        "value": _display_value(option, value),
+    }
+
+
+def _cmd_config(args: str) -> HeadlessResult:
+    """Introspect resolved configuration via the config manifest.
+
+    Usage:
+        config [show]      List every option with its resolved value and source.
+        config get <key>   Show the resolved value and source for one option.
+
+    This is read-only introspection — it never mutates config. Redacted options
+    (credentials) report only whether they are set, never the raw value.
+    """
+    from bog_agents_cli.config_manifest import (
+        get_config_options,
+        get_option,
+        load_config_toml,
+    )
+    from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+    verb, _, rest = args.strip().partition(" ")
+    verb = verb.strip().lower()
+    toml_data = load_config_toml()
+
+    if verb == "get":
+        key = rest.strip()
+        if not key:
+            return _err(
+                "Usage: config get <key>",
+                {"error": "usage", "config_path": str(DEFAULT_CONFIG_PATH)},
+            )
+        option = get_option(key)
+        if option is None:
+            return _err(
+                f"Unknown config key: {key}",
+                {"error": "unknown_key", "key": key},
+            )
+        row = _option_row(option, toml_data)
+        text = (
+            f"{row['key']} = {row['value']}  ({row['type']}, source: {row['source']})"
+        )
+        return _ok(text, {"config_path": str(DEFAULT_CONFIG_PATH), "option": row})
+
+    if verb not in ("", "show", "list"):
+        return _err(
+            f"Unknown config subcommand: {verb}. Try 'config show' or "
+            "'config get <key>'.",
+            {"error": "usage"},
+        )
+
+    rows = [_option_row(opt, toml_data) for opt in get_config_options()]
     data: dict[str, Any] = {
-        "config_path": str(cfg_path),
-        "config_exists": cfg_path.exists(),
-        "model": getattr(settings, "model_name", None),
+        "config_path": str(DEFAULT_CONFIG_PATH),
+        "config_exists": DEFAULT_CONFIG_PATH.exists(),
+        "options": rows,
     }
     lines = [
-        f"Config file: {cfg_path}",
-        f"Exists:      {cfg_path.exists()}",
-        f"Model:       {data['model']}",
+        f"Config file: {DEFAULT_CONFIG_PATH} "
+        f"({'exists' if DEFAULT_CONFIG_PATH.exists() else 'not created'})",
+        "",
     ]
+    current_group = ""
+    for row in rows:
+        if row["group"] != current_group:
+            current_group = row["group"]
+            lines.append(f"[{current_group}]")
+        lines.append(
+            f"  {row['key']:<34} {row['value']:<24} ({row['type']}, {row['source']})"
+        )
     return _ok("\n".join(lines), data)
 
 
@@ -147,6 +240,36 @@ def _cmd_changelog(_args: str) -> HeadlessResult:
         return _err("CHANGELOG.md not found.", {"found": False})
     text = path.read_text(encoding="utf-8")
     return _ok(text, {"found": True, "path": str(path)})
+
+
+def _cmd_goal(_args: str) -> HeadlessResult:
+    """Show the current project goal: objective, status, and rubric.
+
+    Reads the file-backed goal (``.bog-agents/goal.json`` under the cwd) so the
+    objective/rubric set via the interactive ``/goal`` and ``/rubric`` commands
+    are visible headlessly. Agent-recorded status/note live in checkpointed
+    session state and are not available without a live thread.
+    """
+    from bog_agents_cli import goal_controller
+
+    record = goal_controller.load_goal(Path.cwd())
+    data: dict[str, Any] = {
+        "objective": record.objective or None,
+        "status": record.status if record.is_set else None,
+        "rubric": list(record.rubric),
+        "note": record.note or None,
+    }
+    if not record.is_set:
+        return _ok("No goal set. Set one with /goal <objective> in the TUI.", data)
+    lines = [f"Goal: {record.objective}", f"Status: {record.status}"]
+    if record.rubric:
+        lines.append("Acceptance criteria:")
+        lines.extend(f"  {i}. {c}" for i, c in enumerate(record.rubric, start=1))
+    else:
+        lines.append("Acceptance criteria: (none)")
+    if record.note:
+        lines.append(f"Latest note: {record.note}")
+    return _ok("\n".join(lines), data)
 
 
 def _command_rows() -> list[dict[str, Any]]:
@@ -216,8 +339,12 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "version": ("Show CLI and SDK versions", _cmd_version),
     "update": ("Check whether a newer CLI release is available", _cmd_update),
     "model": ("Show the configured model", _cmd_model),
-    "config": ("Show resolved configuration", _cmd_config),
+    "config": (
+        "Introspect resolved configuration (config show | config get <key>)",
+        _cmd_config,
+    ),
     "changelog": ("Show the CLI changelog", _cmd_changelog),
+    "goal": ("Show the current project goal, status, and rubric", _cmd_goal),
 }
 
 

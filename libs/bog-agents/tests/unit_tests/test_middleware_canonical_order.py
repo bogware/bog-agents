@@ -72,7 +72,14 @@ class TestCanonicalMiddlewareOrder:
 
         # PromptCaching is the closest middleware to the model — must
         # be the last (innermost) so it sees the final message list
-        # after Summarization compresses it.
+        # after Summarization compresses it. The tail contract is
+        # ``[AnthropicPromptCachingMiddleware]`` OR, for a Bedrock model
+        # with ``langchain-aws`` installed,
+        # ``[AnthropicPromptCachingMiddleware, BedrockPromptCachingMiddleware]``.
+        # This suite builds a NON-Bedrock model (claude-sonnet-4), so the
+        # Bedrock entry must never be appended and Anthropic caching stays
+        # strictly last — pinning that the non-Bedrock stack is unchanged.
+        assert "BedrockPromptCachingMiddleware" not in names, names
         assert names[-1] == "AnthropicPromptCachingMiddleware", names
 
     def test_summarization_runs_before_prompt_caching(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,6 +159,51 @@ class TestCanonicalMiddlewareOrder:
         assert "_UserMW" in names
         assert names.index("_UserMW") > names.index("FilesystemMiddleware")
         assert names.index("_UserMW") > names.index("SubAgentMiddleware")
+
+    def test_user_middleware_replaces_builtin_at_original_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A user middleware colliding with a built-in `.name` replaces it in place.
+
+        Upstream REPLACE semantics: rather than keep-first dedup dropping the
+        user's instance, a `.name` collision swaps the user's middleware into
+        the built-in's ORIGINAL slot. A stack built with only the default
+        middleware plus a same-named override must therefore keep exactly one
+        instance of that name, positioned where the built-in sat (before the
+        prompt-caching tail), not appended at the very end.
+        """
+        from langchain.agents.middleware.types import AgentMiddleware
+
+        class _FakeSubAgent(AgentMiddleware):
+            name = "SubAgentMiddleware"
+
+        names = _capture_middleware_list(monkeypatch, middleware=[_FakeSubAgent()])
+        assert names.count("_FakeSubAgent") == 1, names
+        # The built-in `SubAgentMiddleware` slot was taken over (its class name
+        # no longer appears), and the replacement sits before PromptCaching.
+        assert "SubAgentMiddleware" not in names, names
+        assert names.index("_FakeSubAgent") < names.index("AnthropicPromptCachingMiddleware"), names
+
+    def test_subagent_middleware_omitted_when_general_purpose_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The GP-disabled stack legitimately omits SubAgentMiddleware.
+
+        When the active harness profile disables the general-purpose subagent
+        and no synchronous `subagents=` are supplied, there is nothing to back
+        the `task` tool, so `SubAgentMiddleware` (normally part of the default
+        tail) is not installed at all.
+        """
+        from bog_agents import graph as graph_module
+        from bog_agents.profiles.harness.harness_profiles import (
+            GeneralPurposeSubagentProfile,
+            HarnessProfile,
+        )
+
+        gp_disabled = HarnessProfile(general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False))
+        monkeypatch.setattr(graph_module, "_harness_profile_for_model", lambda *a, **k: gp_disabled)
+
+        names = _capture_middleware_list(monkeypatch)
+        assert "SubAgentMiddleware" not in names, names
+        # The rest of the core tail is unaffected.
+        assert "FilesystemMiddleware" in names, names
+        assert "_BogAgentsSummarizationMiddleware" in names, names
 
     def test_memory_middleware_appears_after_user_middleware(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Memory middleware reads/writes persistent storage and should run

@@ -49,6 +49,64 @@ class EditOperation(TypedDict):
     replace_all: bool
 
 
+def _prior_file_data(all_files_updates: dict[str, Any], path: str) -> dict[str, Any] | None:
+    """Return the working FileData for a path if an earlier edit already touched it.
+
+    Chained edits to the same file must see earlier edits. State-backed stores
+    are not mutated until the batch's Command is returned, so the only place an
+    in-flight edit's result lives is the accumulated ``all_files_updates`` map.
+
+    Args:
+        all_files_updates: Accumulated ``{path: file_data}`` updates so far.
+        path: The validated file path about to be edited.
+
+    Returns:
+        The prior FileData dict if present and dict-shaped, otherwise None
+        (signalling the backend should read its own canonical copy).
+    """
+    prior = all_files_updates.get(path)
+    return prior if isinstance(prior, dict) else None
+
+
+def _backend_edit_sync(
+    backend: BackendProtocol,
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool,
+    base_content: dict[str, Any] | None,
+) -> EditResult:
+    """Call ``backend.edit`` threading ``base_content`` when the backend accepts it.
+
+    Older/custom backends may not accept the ``base_content`` keyword. They are
+    typically on-disk backends whose store already reflects prior edits, so we
+    fall back to a plain call rather than failing the batch.
+    """
+    if base_content is None:
+        return backend.edit(path, old_string, new_string, replace_all=replace_all)
+    try:
+        return backend.edit(path, old_string, new_string, replace_all=replace_all, base_content=base_content)
+    except TypeError:
+        return backend.edit(path, old_string, new_string, replace_all=replace_all)
+
+
+async def _backend_edit_async(
+    backend: BackendProtocol,
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool,
+    base_content: dict[str, Any] | None,
+) -> EditResult:
+    """Async twin of `_backend_edit_sync`."""
+    if base_content is None:
+        return await backend.aedit(path, old_string, new_string, replace_all=replace_all)
+    try:
+        return await backend.aedit(path, old_string, new_string, replace_all=replace_all, base_content=base_content)
+    except TypeError:
+        return await backend.aedit(path, old_string, new_string, replace_all=replace_all)
+
+
 def create_multi_edit_file_tool(
     backend: BACKEND_TYPES,
     get_backend: Any,
@@ -88,7 +146,15 @@ def create_multi_edit_file_tool(
                 errors.append(f"Edit {i + 1}: Error validating path '{file_path}': {e}")
                 continue
 
-            res: EditResult = resolved_backend.edit(validated_path, old_string, new_string, replace_all=replace_all)
+            # Thread the result of any earlier edit to this same file forward so
+            # chained edits compose (state-backed stores are not mutated until the
+            # batch returns, so re-reading would discard intermediate edits).
+            base_content = _prior_file_data(all_files_updates, validated_path)
+            try:
+                res: EditResult = _backend_edit_sync(resolved_backend, validated_path, old_string, new_string, replace_all, base_content)
+            except Exception as e:
+                errors.append(f"Edit {i + 1} ({validated_path}): {e}")
+                continue
             if res.error:
                 errors.append(f"Edit {i + 1} ({validated_path}): {res.error}")
                 continue
@@ -108,6 +174,7 @@ def create_multi_edit_file_tool(
                         ToolMessage(
                             content=summary,
                             tool_call_id=runtime.tool_call_id,
+                            status="error" if errors else "success",
                         )
                     ],
                 }
@@ -139,7 +206,15 @@ def create_multi_edit_file_tool(
                 errors.append(f"Edit {i + 1}: Error validating path '{file_path}': {e}")
                 continue
 
-            res: EditResult = await resolved_backend.aedit(validated_path, old_string, new_string, replace_all=replace_all)
+            # Thread the result of any earlier edit to this same file forward so
+            # chained edits compose (state-backed stores are not mutated until the
+            # batch returns, so re-reading would discard intermediate edits).
+            base_content = _prior_file_data(all_files_updates, validated_path)
+            try:
+                res: EditResult = await _backend_edit_async(resolved_backend, validated_path, old_string, new_string, replace_all, base_content)
+            except Exception as e:
+                errors.append(f"Edit {i + 1} ({validated_path}): {e}")
+                continue
             if res.error:
                 errors.append(f"Edit {i + 1} ({validated_path}): {res.error}")
                 continue
@@ -159,6 +234,7 @@ def create_multi_edit_file_tool(
                         ToolMessage(
                             content=summary,
                             tool_call_id=runtime.tool_call_id,
+                            status="error" if errors else "success",
                         )
                     ],
                 }

@@ -992,6 +992,19 @@ class TestBuildMcpContext:
         assert f"tool_{_TOOL_NAME_DISPLAY_LIMIT}" not in result
         assert "and 5 more" in result
 
+    def test_control_chars_neutralized(self) -> None:
+        # Untrusted MCP metadata carrying an ANSI colour code and an OSC 52
+        # clipboard-write terminated by BEL must be neutralized in the output.
+        ansi = "\x1b[31m"
+        osc52 = "\x1b]52;c;ZXZpbA==\x07"
+        server = _make_server(f"{ansi}srv{osc52}", "stdio", [f"{ansi}evil_tool{osc52}"])
+        result = _build_mcp_context([server])
+        assert "\x1b" not in result
+        assert "\x07" not in result
+        # Visible names survive.
+        assert "srv" in result
+        assert "evil_tool" in result
+
 
 class TestMcpContextInMiddleware:
     """Tests for MCP context integration in LocalContextMiddleware."""

@@ -173,6 +173,62 @@ _SKIP_DIRS = frozenset(
     }
 )
 
+# Dotted directories that are *always* noise (VCS metadata, tool caches,
+# editor/IDE state, build/dependency caches). These are skipped even though
+# they start with ".". Legitimate dotted source dirs (e.g. ``.github`` CI
+# scripts, ``.config``) are NOT in this set and so are now indexed (P31).
+#
+# IMPORTANT: ``.git`` must stay here — indexing the object store is both
+# meaningless and catastrophically large.
+_SKIP_DOTTED_DIRS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".bzr",
+        ".bog-agents",
+        ".idea",
+        ".vscode",
+        ".vs",
+        ".gradle",
+        ".tox",
+        ".nox",
+        ".cache",
+        ".eggs",
+        ".terraform",
+        ".serverless",
+        ".parcel-cache",
+        ".turbo",
+        ".svelte-kit",
+        ".dart_tool",
+        ".angular",
+        ".yarn",
+        ".pnpm-store",
+        ".cargo",
+        ".gem",
+    }
+)
+
+
+def _is_skipped_part(part: str) -> bool:
+    """Return True if a single path component should exclude the file.
+
+    A component is skipped when it is a known noise directory (``_SKIP_DIRS``)
+    or a known-noise *dotted* directory (``_SKIP_DOTTED_DIRS``). Previously any
+    component starting with ``.`` was blanket-dropped, which silently excluded
+    legitimate in-repo source under dotted directories such as ``.github``
+    scripts (P31). Dotted directories are now only skipped when they appear on
+    the curated noise list; ``.git`` and friends remain excluded.
+
+    Args:
+        part: A single path component (directory or file name).
+
+    Returns:
+        True if the component marks the path as one to skip.
+    """
+    return part in _SKIP_DIRS or part in _SKIP_DOTTED_DIRS
+
+
 _MAX_FILE_SIZE = 500_000  # 500KB
 _MAX_FILES = 5000
 _CACHE_VERSION = 2
@@ -374,6 +430,7 @@ def build_repo_map(
 
     exts = extensions or _DEFAULT_EXTENSIONS
     files_parsed = 0
+    skipped = 0
     all_symbols: list[FileSymbols] = []
 
     for path in sorted(root.rglob("*")):
@@ -381,7 +438,8 @@ def build_repo_map(
             break
 
         parts = path.relative_to(root).parts
-        if any(p.startswith(".") or p in _SKIP_DIRS for p in parts):
+        if any(_is_skipped_part(p) for p in parts):
+            skipped += 1
             continue
         if not path.is_file():
             continue
@@ -392,7 +450,7 @@ def build_repo_map(
             size = path.stat().st_size
             if size > max_file_size or size == 0:
                 continue
-            content = path.read_text(errors="replace")
+            content = path.read_text(encoding="utf-8", errors="replace")
             rel_path = path.relative_to(root)
             symbols = _extract_symbols(rel_path, content)
             if symbols.classes or symbols.functions:
@@ -401,6 +459,7 @@ def build_repo_map(
         except OSError:
             continue
 
+    logger.debug("RepoMap: %d files indexed, %d paths skipped (noise dirs)", files_parsed, skipped)
     return _format_map(all_symbols, files_parsed)
 
 
@@ -435,13 +494,15 @@ def build_repo_map_cached(
     current_paths: set[str] = set()
     files_parsed = 0
     cache_hits = 0
+    skipped = 0
 
     for path in sorted(root.rglob("*")):
         if files_parsed >= max_files:
             break
 
         parts = path.relative_to(root).parts
-        if any(p.startswith(".") or p in _SKIP_DIRS for p in parts):
+        if any(_is_skipped_part(p) for p in parts):
+            skipped += 1
             continue
         if not path.is_file():
             continue
@@ -464,7 +525,7 @@ def build_repo_map_cached(
                     files_parsed += 1
                     continue
 
-            content = path.read_text(errors="replace")
+            content = path.read_text(encoding="utf-8", errors="replace")
             symbols = _extract_symbols(path.relative_to(root), content, mtime_hash)
             symbols.size = size
             cache.set(symbols)
@@ -478,10 +539,11 @@ def build_repo_map_cached(
     cache.save()
 
     logger.debug(
-        "RepoMap: %d files indexed (%d cache hits, %d re-parsed)",
+        "RepoMap: %d files indexed (%d cache hits, %d re-parsed), %d paths skipped (noise dirs)",
         files_parsed,
         cache_hits,
         files_parsed - cache_hits,
+        skipped,
     )
 
     all_symbols = [sym for sym in cache.all_symbols() if sym.classes or sym.functions]

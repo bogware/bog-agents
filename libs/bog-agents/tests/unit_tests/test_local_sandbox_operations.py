@@ -26,7 +26,15 @@ from pathlib import Path
 
 import pytest
 
-from bog_agents.backends.protocol import EditResult, ExecuteResponse, FileInfo, GrepMatch, WriteResult
+from bog_agents.backends.protocol import (
+    EditResult,
+    ExecuteResponse,
+    FileDownloadResponse,
+    FileInfo,
+    FileUploadResponse,
+    GrepMatch,
+    WriteResult,
+)
 from bog_agents.backends.sandbox import BaseSandbox
 
 # Skip all tests in this module unless RUN_SANDBOX_TESTS=true
@@ -122,10 +130,11 @@ class LocalSubprocessSandbox(BaseSandbox):
 
     def ls_info(self, path: str) -> list[FileInfo]:
         """List files while preserving virtual-path expectations in tests."""
-        results = super().ls_info(self._to_real_path(path))
-        for entry in results:
+        result = super().ls(self._to_real_path(path))
+        entries = result.entries or []
+        for entry in entries:
             entry["path"] = self._to_virtual_path(entry["path"])
-        return results
+        return entries
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """Read file content from the mapped real path."""
@@ -164,29 +173,57 @@ class LocalSubprocessSandbox(BaseSandbox):
     def grep_raw(self, pattern: str, path: str | None = None, glob: str | None = None) -> list[GrepMatch] | str:
         """Run grep against mapped real paths and return virtual paths."""
         mapped_path = self._to_real_path(path) if path is not None else None
-        result = super().grep_raw(pattern, path=mapped_path, glob=glob)
-        if isinstance(result, str):
-            return self._to_virtual_path(result)
-        for match in result:
+        result = super().grep(pattern, path=mapped_path, glob=glob)
+        if result.error is not None:
+            return self._to_virtual_path(result.error)
+        matches = result.matches or []
+        for match in matches:
             match["path"] = self._to_virtual_path(match["path"])
-        return result
+        return matches
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         """Run glob against mapped real paths."""
-        return super().glob_info(pattern, path=self._to_real_path(path))
+        return super().glob(pattern, path=self._to_real_path(path)).matches or []
 
     @property
     def id(self) -> str:
         """Unique identifier for the sandbox backend."""
         return self._id
 
-    def upload_files(self, files: list[tuple[str, bytes]]) -> list:
-        """Upload files (not needed for local filesystem sandbox)."""
-        return []
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """Write files straight to the mapped real path.
 
-    def download_files(self, paths: list[str]) -> list:
-        """Download files (not needed for local filesystem sandbox)."""
-        return []
+        `BaseSandbox.write` routes content through this method, so it has to work
+        for the write tests below to exercise anything.
+        """
+        responses: list[FileUploadResponse] = []
+        for path, content in files:
+            real = Path(self._to_real_path(path))
+            try:
+                real.parent.mkdir(parents=True, exist_ok=True)
+                real.write_bytes(content)
+            except OSError:
+                responses.append(FileUploadResponse(path=path, error="permission_denied"))
+            else:
+                responses.append(FileUploadResponse(path=path, error=None))
+        return responses
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Read files straight from the mapped real path."""
+        responses: list[FileDownloadResponse] = []
+        for path in paths:
+            real = Path(self._to_real_path(path))
+            try:
+                content = real.read_bytes()
+            except FileNotFoundError:
+                responses.append(FileDownloadResponse(path=path, content=None, error="file_not_found"))
+            except IsADirectoryError:
+                responses.append(FileDownloadResponse(path=path, content=None, error="is_directory"))
+            except OSError:
+                responses.append(FileDownloadResponse(path=path, content=None, error="permission_denied"))
+            else:
+                responses.append(FileDownloadResponse(path=path, content=content, error=None))
+        return responses
 
 
 class TestLocalSandboxOperations:
@@ -230,20 +267,17 @@ class TestLocalSandboxOperations:
         exec_result = sandbox.execute(f"cat {test_path}")
         assert exec_result.output.strip() == content
 
-    def test_write_existing_file_fails(self, sandbox: LocalSubprocessSandbox) -> None:
-        """Test that writing to an existing file returns an error."""
+    def test_write_existing_file_overwrites(self, sandbox: LocalSubprocessSandbox) -> None:
+        """Writing to an existing path overwrites it (it used to error)."""
         test_path = "/tmp/test_sandbox_ops/existing.txt"
-        # Create file first
         sandbox.write(test_path, "First content")
 
-        # Try to write again
         result = sandbox.write(test_path, "Second content")
 
-        assert result.error is not None
-        assert "already exists" in result.error.lower()
-        # Verify original content unchanged
+        assert result.error is None
+        assert result.path == test_path
         exec_result = sandbox.execute(f"cat {test_path}")
-        assert exec_result.output.strip() == "First content"
+        assert exec_result.output.strip() == "Second content"
 
     def test_write_special_characters(self, sandbox: LocalSubprocessSandbox) -> None:
         """Test writing content with special characters and escape sequences."""

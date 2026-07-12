@@ -1,7 +1,29 @@
 """On-premise / air-gapped deployment middleware.
 
-Feature #23: Local model management and data flow policies to ensure
-no data leaves the network in air-gapped environments.
+Feature #23: Local model management and data flow policies for air-gapped
+environments.
+
+## Egress enforcement (best-effort)
+
+In addition to injecting policy instructions into the system prompt, this
+middleware installs a `wrap_tool_call` / `awrap_tool_call` egress gate that
+intercepts a *known* set of egress vectors before they execute:
+
+- Tools whose name contains `web_fetch`, `fetch_url`, or `http_request`.
+- Shell / execute tools whose command string looks networked
+  (`curl`, `wget`, `nc`/`netcat`, `ssh`, `scp`, `telnet`, or a bare
+  `http(s)://` URL).
+
+For each intercepted call it extracts the target host and consults
+`AirGapStore.check_allowed`, **denying** the call (returning an error
+`ToolMessage`) whenever the policy does not allow it. The gate fails CLOSED:
+when the target host cannot be determined for a recognised egress tool, the
+call is denied rather than passed through.
+
+This is **best-effort defense-in-depth over KNOWN egress vectors, not a hard
+guarantee**. Egress vectors not on the lists above (custom tools, indirect
+network access, DNS side channels, etc.) are not covered, so the gate must be
+paired with a real network sandbox for adversarial isolation.
 
 ## Tools
 
@@ -23,10 +45,13 @@ middleware = AirGappedMiddleware()
 from __future__ import annotations
 
 import logging
+import re
+import shlex
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -36,6 +61,8 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain.tools import ToolRuntime
+from langchain.tools.tool_node import ToolCallRequest
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
@@ -231,6 +258,105 @@ You have access to tools for managing on-premise / air-gapped deployments.
 - Audit logs track all external access attempts for compliance"""
 
 
+# Tool-name substrings that identify a direct egress (network-fetch) tool.
+_EGRESS_TOOL_NAME_MARKERS: tuple[str, ...] = ("web_fetch", "fetch_url", "http_request")
+
+# Tool-name substrings that identify a shell / command-execution tool whose
+# argument string must be inspected for networked commands.
+_SHELL_TOOL_NAME_MARKERS: tuple[str, ...] = ("shell", "execute", "bash", "run_command", "command")
+
+# Networked command names that, when present in a shell command, indicate egress.
+_NETWORK_COMMANDS: frozenset[str] = frozenset({"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "telnet"})
+
+# Common tool-call argument keys that may carry a URL or host.
+_URL_ARG_KEYS: tuple[str, ...] = ("url", "uri", "endpoint", "address", "host", "target", "link")
+
+# Common tool-call argument keys that may carry a shell command string.
+_COMMAND_ARG_KEYS: tuple[str, ...] = ("command", "cmd", "script", "input", "code")
+
+_URL_RE = re.compile(r"\bhttps?://[^\s'\"<>|]+", re.IGNORECASE)
+
+
+def _host_from_url(value: str) -> str | None:
+    """Extract the host from a URL-like string.
+
+    Args:
+        value: A candidate URL (with or without a scheme).
+
+    Returns:
+        The lower-cased hostname, or None if no host could be parsed.
+    """
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if "://" not in candidate:
+        candidate = f"//{candidate}"
+    try:
+        host = urlsplit(candidate).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
+
+
+def _looks_networked_command(command: str) -> bool:
+    """Return whether a shell command string appears to perform network egress.
+
+    Args:
+        command: The raw command string.
+
+    Returns:
+        True if the command invokes a known network tool or embeds a URL.
+    """
+    if _URL_RE.search(command):
+        return True
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        # Strip any leading path (e.g. /usr/bin/curl -> curl).
+        base = token.rsplit("/", 1)[-1].lower()
+        if base in _NETWORK_COMMANDS:
+            return True
+    return False
+
+
+def _host_from_command(command: str) -> str | None:
+    """Best-effort extraction of the target host from a networked command.
+
+    Args:
+        command: The raw command string.
+
+    Returns:
+        The target host if one can be determined, else None.
+    """
+    url_match = _URL_RE.search(command)
+    if url_match:
+        host = _host_from_url(url_match.group(0))
+        if host:
+            return host
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        tokens = command.split()
+    # For ssh/scp/sftp/telnet/nc, the host is typically the first non-flag,
+    # non-command token; e.g. `ssh user@example.com`, `nc example.com 443`.
+    seen_command = False
+    for token in tokens:
+        base = token.rsplit("/", 1)[-1].lower()
+        if not seen_command:
+            if base in _NETWORK_COMMANDS:
+                seen_command = True
+            continue
+        if token.startswith("-"):
+            continue
+        candidate = token.split("@", 1)[-1]  # drop user@ prefix
+        host = _host_from_url(candidate)
+        if host:
+            return host
+    return None
+
+
 class AirGappedState(TypedDict):
     """State for air-gapped middleware."""
 
@@ -377,6 +503,153 @@ class AirGappedMiddleware(AgentMiddleware[AirGappedState, ContextT, ResponseT]):
             Model response.
         """
         return await call_next(self.modify_request(request))
+
+    def _evaluate_egress(self, request: ToolCallRequest) -> tuple[bool, str, str]:
+        """Decide whether a tool call is a recognised egress and, if so, allowed.
+
+        This inspects only KNOWN egress vectors (see the module docstring). For
+        recognised vectors the gate fails CLOSED: if the target host cannot be
+        determined, the call is denied.
+
+        Args:
+            request: The incoming tool-call request.
+
+        Returns:
+            A tuple `(is_egress, allowed, reason)`. When `is_egress` is False the
+            other fields are unset and the caller must pass the call through.
+        """
+        tool_call = request.tool_call or {}
+        name = str(tool_call.get("name", "")).lower()
+        args = tool_call.get("args") or {}
+        if not isinstance(args, dict):
+            args = {}
+
+        # Direct network-fetch tools (web_fetch / fetch_url / http_request).
+        if any(marker in name for marker in _EGRESS_TOOL_NAME_MARKERS):
+            host = self._host_from_args(args)
+            if host is None:
+                return True, False, "Air-gap egress blocked: could not determine target host for network tool (fail-closed)."
+            allowed, reason = self.store.check_allowed(domain=host, data=self._data_blob(args))
+            return True, allowed, f"Air-gap egress to '{host}': {reason}"
+
+        # Shell / execute tools carrying a networked command string.
+        if any(marker in name for marker in _SHELL_TOOL_NAME_MARKERS):
+            command = self._command_from_args(args)
+            if command and _looks_networked_command(command):
+                host = _host_from_command(command)
+                if host is None:
+                    return True, False, "Air-gap egress blocked: networked command with no resolvable host (fail-closed)."
+                allowed, reason = self.store.check_allowed(domain=host, data=command)
+                return True, allowed, f"Air-gap egress to '{host}': {reason}"
+
+        return False, True, ""
+
+    @staticmethod
+    def _host_from_args(args: dict[str, Any]) -> str | None:
+        """Extract a target host from common URL-bearing argument keys.
+
+        Args:
+            args: The tool-call argument mapping.
+
+        Returns:
+            The target host, or None if none could be determined.
+        """
+        for key in _URL_ARG_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                host = _host_from_url(value)
+                if host:
+                    return host
+        return None
+
+    @staticmethod
+    def _command_from_args(args: dict[str, Any]) -> str:
+        """Extract a shell command string from common command-bearing keys.
+
+        Args:
+            args: The tool-call argument mapping.
+
+        Returns:
+            The command string, or an empty string if none was found.
+        """
+        for key in _COMMAND_ARG_KEYS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
+
+    @staticmethod
+    def _data_blob(args: dict[str, Any]) -> str:
+        """Concatenate string argument values for blocked-pattern scanning.
+
+        Args:
+            args: The tool-call argument mapping.
+
+        Returns:
+            A single string joining all string-valued arguments.
+        """
+        return " ".join(str(v) for v in args.values() if isinstance(v, str))
+
+    def _make_deny_message(self, request: ToolCallRequest, reason: str) -> ToolMessage:
+        """Build the egress-denied `ToolMessage` for a blocked call.
+
+        Args:
+            request: The denied tool-call request.
+            reason: Human-readable denial reason.
+
+        Returns:
+            A `ToolMessage` with `status="error"` carrying the denial reason.
+        """
+        tool_call = request.tool_call or {}
+        return ToolMessage(
+            content=reason,
+            tool_call_id=str(tool_call.get("id", "")),
+            name=str(tool_call.get("name", "")),
+            status="error",
+        )
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Any],
+    ) -> ToolMessage | Any:
+        """Deny disallowed egress tool calls; otherwise pass through.
+
+        Best-effort: only KNOWN egress vectors are intercepted (see the module
+        docstring). Recognised egress fails CLOSED when not policy-allowed.
+
+        Args:
+            request: The incoming tool-call request.
+            handler: The downstream tool-call handler.
+
+        Returns:
+            An egress-denied `ToolMessage` for blocked calls, else the handler's
+            result.
+        """
+        is_egress, allowed, reason = self._evaluate_egress(request)
+        if is_egress and not allowed:
+            return self._make_deny_message(request, reason)
+        return handler(request)
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Any]],
+    ) -> ToolMessage | Any:
+        """Async version of `wrap_tool_call`.
+
+        Args:
+            request: The incoming tool-call request.
+            handler: The downstream async tool-call handler.
+
+        Returns:
+            An egress-denied `ToolMessage` for blocked calls, else the handler's
+            result.
+        """
+        is_egress, allowed, reason = self._evaluate_egress(request)
+        if is_egress and not allowed:
+            return self._make_deny_message(request, reason)
+        return await handler(request)
 
 
 __all__ = ["AirGapStore", "AirGappedMiddleware", "DataPolicy", "LocalModel"]

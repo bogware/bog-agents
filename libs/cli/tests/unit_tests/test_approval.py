@@ -334,3 +334,93 @@ class TestOptionOrdering:
             await pilot.pause()
 
         assert decision_received == {"type": expected_type}
+
+
+class TestApprovalMarkupInjection:
+    """SEC-1: attacker-influenceable text must not inject Rich markup or crash HITL.
+
+    Tool name / description / title are attacker-influenceable (raw file paths,
+    server-supplied MCP name/description). Unescaped they can restyle/hide the
+    approved text or — via an unbalanced `[/dim]` / `[/]` — raise MarkupError,
+    which would crash the approval dialog and deny approve/reject entirely.
+    """
+
+    async def test_description_markup_escaped_and_dialog_mounts(self) -> None:
+        """A malicious description mounts cleanly with markup rendered literally."""
+        from textual.app import App, ComposeResult
+        from textual.widgets import Static
+
+        malicious = "[bold red]danger[/bold red] [/dim] a\u202eb"
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield ApprovalMenu(
+                    {
+                        "name": "write",
+                        "args": {"path": "f.py", "content": ""},
+                        "description": malicious,
+                    }
+                )
+
+        async with _App().run_test() as pilot:
+            # No MarkupError on mount means the bare [/dim] did not crash HITL.
+            await pilot.pause()
+            menu = pilot.app.query_one(ApprovalMenu)
+            desc = menu.query_one(".approval-description", Static)
+            plain = desc.render().plain
+            # Markup tags survive as literal text (not interpreted as styling).
+            assert "[bold red]" in plain
+            assert "[/bold red]" in plain
+            assert "[/dim]" in plain
+            assert "danger" in plain
+            # The bidi override is stripped from displayed text.
+            assert "\u202e" not in plain
+
+    async def test_multi_tool_malicious_name_does_not_crash(self) -> None:
+        """A batch header with markup-laden tool names mounts without MarkupError."""
+        from textual.app import App, ComposeResult
+        from textual.widgets import Static
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield ApprovalMenu(
+                    [
+                        {
+                            "name": "[bold red]evil[/bold red]",
+                            "args": {"path": "a.py", "content": ""},
+                        },
+                        {"name": "[/dim]", "args": {"path": "b.py", "content": ""}},
+                    ]
+                )
+
+        async with _App().run_test() as pilot:
+            await pilot.pause()
+            menu = pilot.app.query_one(ApprovalMenu)
+            # Mount succeeded (no MarkupError). Confirm the literal tag text of
+            # both malicious names survives in the rendered headers.
+            rendered_plain = " ".join(w.render().plain for w in menu.query(Static))
+            assert "[bold red]evil[/bold red]" in rendered_plain
+            assert "1. " in rendered_plain
+            assert "2. " in rendered_plain
+
+    async def test_malicious_tool_name_in_title_is_escaped(self) -> None:
+        """The single-tool title escapes an attacker-controlled tool name."""
+        from textual.app import App, ComposeResult
+        from textual.widgets import Static
+
+        malicious_name = "write[/dim] a\u202eb"
+
+        class _App(App[None]):
+            def compose(self) -> ComposeResult:
+                yield ApprovalMenu(
+                    {"name": malicious_name, "args": {"path": "f.py", "content": ""}}
+                )
+
+        async with _App().run_test() as pilot:
+            await pilot.pause()
+            menu = pilot.app.query_one(ApprovalMenu)
+            title = menu.query_one(".approval-title", Static)
+            plain = title.render().plain
+            assert "[/dim]" in plain
+            assert "Requires Approval" in plain
+            assert "\u202e" not in plain

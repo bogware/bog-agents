@@ -18,23 +18,51 @@ Examples:
     ```
 """
 
+import logging
 from collections import defaultdict
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from bog_agents.backends.protocol import (
     BackendProtocol,
+    DeleteResult,
     EditResult,
     ExecuteResponse,
     FileDownloadResponse,
     FileInfo,
     FileUploadResponse,
+    GlobResult,
     GrepMatch,
+    GrepResult,
+    LsResult,
+    ReadResult,
     SandboxBackendProtocol,
     WriteResult,
     execute_accepts_timeout,
+    supports_delete,
 )
 from bog_agents.backends.state import StateBackend
+
+logger = logging.getLogger(__name__)
+
+_DELETE_UNSUPPORTED_ERROR = "Error: deletion is not supported for '{file_path}'."
+
+
+def _prefix_for(route_prefix: str) -> str:
+    """Return the route prefix in the form used to rebuild virtual paths.
+
+    Routes may be registered with or without a trailing slash (`_route_for_path`
+    accepts both), and the backend-local paths handed back to us always start
+    with `/`. Stripping the trailing slash — rather than dropping the last
+    character — keeps `"/abcd"` from being rebuilt as `"/abc"`.
+
+    Args:
+        route_prefix: The route prefix as registered (e.g. `/memories/` or `/abcd`).
+
+    Returns:
+        The prefix with any trailing slash removed.
+    """
+    return route_prefix.rstrip("/")
 
 
 def _remap_grep_path(m: GrepMatch, route_prefix: str) -> GrepMatch:
@@ -43,7 +71,7 @@ def _remap_grep_path(m: GrepMatch, route_prefix: str) -> GrepMatch:
         "GrepMatch",
         {
             **m,
-            "path": f"{route_prefix[:-1]}{m['path']}",
+            "path": f"{_prefix_for(route_prefix)}{m['path']}",
         },
     )
 
@@ -76,7 +104,7 @@ def _remap_file_info_path(fi: FileInfo, route_prefix: str) -> FileInfo:
         "FileInfo",
         {
             **fi,
-            "path": f"{route_prefix[:-1]}{fi['path']}",
+            "path": f"{_prefix_for(route_prefix)}{fi['path']}",
         },
     )
 
@@ -118,6 +146,12 @@ class CompositeBackend(BackendProtocol):
 
     Matches paths against route prefixes (longest first) and delegates to the
     corresponding backend. Unmatched paths use the default backend.
+
+    Search operations (`grep`, `glob`) only fan out across every backend when the
+    caller asked for the whole tree (`path` of `"/"` or `None`). A `path` that
+    resolves to a single route searches that route; a `path` that resolves to the
+    default backend searches only the default backend. A scoped search must never
+    surface entries from a route the caller did not ask for.
 
     Attributes:
         default: Backend for paths that don't match any route.
@@ -170,7 +204,66 @@ class CompositeBackend(BackendProtocol):
         )
         return backend, stripped_key
 
-    def ls_info(self, path: str) -> list[FileInfo]:
+    def _sync_state(self, file_path: str, files_update: dict[str, Any] | None) -> None:
+        """Best-effort mirror of a backend's `files_update` into the default backend's state.
+
+        Keeps `ls`/`grep` listings coherent within a single tool call, before
+        LangGraph applies the returned update. A `None` value is the state
+        reducer's deletion marker, so it pops the key rather than storing `None`.
+
+        Args:
+            file_path: The virtual path the operation targeted, for logging.
+            files_update: The backend's state update, or `None` for external storage.
+        """
+        if not files_update:
+            return
+        try:
+            runtime = getattr(self.default, "runtime", None)
+            if runtime is None:
+                return
+            state = runtime.state
+            files = state.get("files", {})
+            for key, value in files_update.items():
+                if value is None:
+                    files.pop(key, None)
+                else:
+                    files[key] = value
+            state["files"] = files
+        except Exception as exc:  # noqa: BLE001  # Intentional for best-effort state sync
+            logger.debug("composite state-sync skipped for %s: %s", file_path, exc)
+
+    # -- coercion helpers ----------------------------------------------------
+    #
+    # Third-party backends predating the structured API may still return the
+    # legacy shapes from `ls`/`grep`/`glob`. Normalize at the boundary so the
+    # merge logic below only ever handles one shape.
+
+    @staticmethod
+    def _coerce_ls_result(raw: LsResult | list[FileInfo]) -> LsResult:
+        """Normalize a legacy `list[FileInfo]` return to `LsResult`."""
+        if isinstance(raw, LsResult):
+            return raw
+        return LsResult(entries=raw)
+
+    @staticmethod
+    def _coerce_grep_result(raw: GrepResult | list[GrepMatch] | str) -> GrepResult:
+        """Normalize a legacy `list[GrepMatch] | str` return to `GrepResult`."""
+        if isinstance(raw, GrepResult):
+            return raw
+        if isinstance(raw, str):
+            return GrepResult(error=raw)
+        return GrepResult(matches=raw)
+
+    @staticmethod
+    def _coerce_glob_result(raw: GlobResult | list[FileInfo]) -> GlobResult:
+        """Normalize a legacy `list[FileInfo]` return to `GlobResult`."""
+        if isinstance(raw, GlobResult):
+            return raw
+        return GlobResult(matches=raw)
+
+    # -- structured API ------------------------------------------------------
+
+    def ls(self, path: str) -> LsResult:
         """List directory contents (non-recursive).
 
         If path matches a route, lists only that backend. If path is "/", aggregates
@@ -180,13 +273,13 @@ class CompositeBackend(BackendProtocol):
             path: Absolute directory path starting with "/".
 
         Returns:
-            List of FileInfo dicts. Directories have trailing "/" and is_dir=True.
-            Route prefixes are restored in returned paths.
+            `LsResult` whose entries have route prefixes restored. Directories have
+            a trailing "/" and `is_dir=True`.
 
         Examples:
             ```python
-            infos = composite.ls_info("/")
-            infos = composite.ls_info("/memories/")
+            result = composite.ls("/")
+            result = composite.ls("/memories/")
             ```
         """
         backend, backend_path, route_prefix = _route_for_path(
@@ -195,18 +288,22 @@ class CompositeBackend(BackendProtocol):
             path=path,
         )
         if route_prefix is not None:
-            infos = backend.ls_info(backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+            routed = self._coerce_ls_result(backend.ls(backend_path))
+            if routed.error is not None:
+                return routed
+            return LsResult(entries=[_remap_file_info_path(fi, route_prefix) for fi in (routed.entries or [])])
 
         # At root, aggregate default and all routed backends
         if path == "/":
-            results: list[FileInfo] = []
-            results.extend(self.default.ls_info(path))
-            for route_prefix, _backend in self.sorted_routes:
+            default_result = self._coerce_ls_result(self.default.ls(path))
+            if default_result.error is not None:
+                return default_result
+            results: list[FileInfo] = list(default_result.entries or [])
+            for prefix, _backend in self.sorted_routes:
                 # Add the route itself as a directory (e.g., /memories/)
                 results.append(
                     FileInfo(
-                        path=route_prefix,
+                        path=prefix,
                         is_dir=True,
                         size=0,
                         modified_at="",
@@ -214,42 +311,75 @@ class CompositeBackend(BackendProtocol):
                 )
 
             results.sort(key=lambda x: x.get("path", ""))
-            return results
+            return LsResult(entries=results)
 
         # Path doesn't match a route: query only default backend
-        return self.default.ls_info(path)
+        return self._coerce_ls_result(self.default.ls(path))
 
-    async def als_info(self, path: str) -> list[FileInfo]:
-        """Async version of ls_info."""
+    async def als(self, path: str) -> LsResult:
+        """Async version of `ls`."""
         backend, backend_path, route_prefix = _route_for_path(
             default=self.default,
             sorted_routes=self.sorted_routes,
             path=path,
         )
         if route_prefix is not None:
-            infos = await backend.als_info(backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+            routed = self._coerce_ls_result(await backend.als(backend_path))
+            if routed.error is not None:
+                return routed
+            return LsResult(entries=[_remap_file_info_path(fi, route_prefix) for fi in (routed.entries or [])])
 
         # At root, aggregate default and all routed backends
         if path == "/":
-            results: list[FileInfo] = []
-            results.extend(await self.default.als_info(path))
-            for route_prefix, _backend in self.sorted_routes:
+            default_result = self._coerce_ls_result(await self.default.als(path))
+            if default_result.error is not None:
+                return default_result
+            results: list[FileInfo] = list(default_result.entries or [])
+            for prefix, _backend in self.sorted_routes:
                 # Add the route itself as a directory (e.g., /memories/)
                 results.append(
-                    {
-                        "path": route_prefix,
-                        "is_dir": True,
-                        "size": 0,
-                        "modified_at": "",
-                    }
+                    FileInfo(
+                        path=prefix,
+                        is_dir=True,
+                        size=0,
+                        modified_at="",
+                    )
                 )
 
             results.sort(key=lambda x: x.get("path", ""))
-            return results
+            return LsResult(entries=results)
 
         # Path doesn't match a route: query only default backend
-        return await self.default.als_info(path)
+        return self._coerce_ls_result(await self.default.als(path))
+
+    def read_file(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+    ) -> ReadResult:
+        """Read raw file data, routing to the appropriate backend.
+
+        Args:
+            file_path: Absolute file path.
+            offset: Line offset to start reading from (0-indexed).
+            limit: Maximum number of lines to read.
+
+        Returns:
+            `ReadResult` carrying the sliced `FileData`, or an error message.
+        """
+        backend, stripped_key = self._get_backend_and_key(file_path)
+        return backend.read_file(stripped_key, offset, limit)
+
+    async def aread_file(
+        self,
+        file_path: str,
+        offset: int = 0,
+        limit: int = 2000,
+    ) -> ReadResult:
+        """Async version of `read_file`."""
+        backend, stripped_key = self._get_backend_and_key(file_path)
+        return await backend.aread_file(stripped_key, offset, limit)
 
     def read(
         self,
@@ -257,7 +387,7 @@ class CompositeBackend(BackendProtocol):
         offset: int = 0,
         limit: int = 2000,
     ) -> str:
-        """Read file content, routing to appropriate backend.
+        """Read file content with line numbers, routing to appropriate backend.
 
         Args:
             file_path: Absolute file path.
@@ -280,16 +410,21 @@ class CompositeBackend(BackendProtocol):
         backend, stripped_key = self._get_backend_and_key(file_path)
         return await backend.aread(stripped_key, offset=offset, limit=limit)
 
-    def grep_raw(
+    def grep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
+    ) -> GrepResult:
         """Search files for literal text pattern.
 
-        Routes to backends based on path: specific route searches one backend,
-        "/" or None searches all backends, otherwise searches default backend.
+        Routes to backends based on path: a routed path searches that one backend,
+        "/" or None searches every backend, and any other path searches only the
+        default backend.
+
+        The first backend to report an error short-circuits the merge — a partial
+        result is never passed off as a complete one. `truncated` is OR-ed across
+        every backend that contributed.
 
         Args:
             pattern: Literal text to search for (NOT regex).
@@ -298,14 +433,13 @@ class CompositeBackend(BackendProtocol):
                 Filters by filename, not content.
 
         Returns:
-            List of GrepMatch dicts with path (route prefix restored), line
-            (1-indexed), and text. Returns error string on failure.
+            `GrepResult` whose match paths have route prefixes restored.
 
         Examples:
             ```python
-            matches = composite.grep_raw("TODO", path="/memories/")
-            matches = composite.grep_raw("error", path="/")
-            matches = composite.grep_raw("import", path="/", glob="*.py")
+            result = composite.grep("TODO", path="/memories/")
+            result = composite.grep("error", path="/")
+            result = composite.grep("import", path="/", glob="*.py")
             ```
         """
         if path is not None:
@@ -315,41 +449,43 @@ class CompositeBackend(BackendProtocol):
                 path=path,
             )
             if route_prefix is not None:
-                raw = backend.grep_raw(pattern, backend_path, glob)
-                if isinstance(raw, str):
-                    return raw
-                return [_remap_grep_path(m, route_prefix) for m in raw]
+                routed = self._coerce_grep_result(backend.grep(pattern, backend_path, glob))
+                if routed.error is not None:
+                    return routed
+                return GrepResult(
+                    matches=[_remap_grep_path(m, route_prefix) for m in (routed.matches or [])],
+                    truncated=routed.truncated,
+                )
 
         # If path is None or "/", search default and all routed backends and merge
-        # Otherwise, search only the default backend
         if path is None or path == "/":
-            all_matches: list[GrepMatch] = []
-            raw_default = self.default.grep_raw(pattern, path, glob)
-            if isinstance(raw_default, str):
-                # This happens if error occurs
-                return raw_default
-            all_matches.extend(raw_default)
+            default_result = self._coerce_grep_result(self.default.grep(pattern, path, glob))
+            if default_result.error is not None:
+                return default_result
+            all_matches: list[GrepMatch] = list(default_result.matches or [])
+            truncated = default_result.truncated
 
             for route_prefix, backend in self.routes.items():
-                raw = backend.grep_raw(pattern, "/", glob)
-                if isinstance(raw, str):
-                    # This happens if error occurs
-                    return raw
-                all_matches.extend(_remap_grep_path(m, route_prefix) for m in raw)
+                routed = self._coerce_grep_result(backend.grep(pattern, "/", glob))
+                if routed.error is not None:
+                    return routed
+                all_matches.extend(_remap_grep_path(m, route_prefix) for m in (routed.matches or []))
+                truncated = truncated or routed.truncated
 
-            return all_matches
+            return GrepResult(matches=all_matches, truncated=truncated)
+
         # Path specified but doesn't match a route - search only default
-        return self.default.grep_raw(pattern, path, glob)
+        return self._coerce_grep_result(self.default.grep(pattern, path, glob))
 
-    async def agrep_raw(
+    async def agrep(
         self,
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
-    ) -> list[GrepMatch] | str:
-        """Async version of grep_raw.
+    ) -> GrepResult:
+        """Async version of grep.
 
-        See grep_raw() for detailed documentation on routing behavior and parameters.
+        See `grep()` for detailed documentation on routing behavior and parameters.
         """
         if path is not None:
             backend, backend_path, route_prefix = _route_for_path(
@@ -358,111 +494,150 @@ class CompositeBackend(BackendProtocol):
                 path=path,
             )
             if route_prefix is not None:
-                raw = await backend.agrep_raw(pattern, backend_path, glob)
-                if isinstance(raw, str):
-                    return raw
-                return [_remap_grep_path(m, route_prefix) for m in raw]
+                routed = self._coerce_grep_result(await backend.agrep(pattern, backend_path, glob))
+                if routed.error is not None:
+                    return routed
+                return GrepResult(
+                    matches=[_remap_grep_path(m, route_prefix) for m in (routed.matches or [])],
+                    truncated=routed.truncated,
+                )
 
         # If path is None or "/", search default and all routed backends and merge
-        # Otherwise, search only the default backend
         if path is None or path == "/":
-            all_matches: list[GrepMatch] = []
-            raw_default = await self.default.agrep_raw(pattern, path, glob)
-            if isinstance(raw_default, str):
-                # This happens if error occurs
-                return raw_default
-            all_matches.extend(raw_default)
+            default_result = self._coerce_grep_result(await self.default.agrep(pattern, path, glob))
+            if default_result.error is not None:
+                return default_result
+            all_matches: list[GrepMatch] = list(default_result.matches or [])
+            truncated = default_result.truncated
 
             for route_prefix, backend in self.routes.items():
-                raw = await backend.agrep_raw(pattern, "/", glob)
-                if isinstance(raw, str):
-                    # This happens if error occurs
-                    return raw
-                all_matches.extend(_remap_grep_path(m, route_prefix) for m in raw)
+                routed = self._coerce_grep_result(await backend.agrep(pattern, "/", glob))
+                if routed.error is not None:
+                    return routed
+                all_matches.extend(_remap_grep_path(m, route_prefix) for m in (routed.matches or []))
+                truncated = truncated or routed.truncated
 
-            return all_matches
+            return GrepResult(matches=all_matches, truncated=truncated)
+
         # Path specified but doesn't match a route - search only default
-        return await self.default.agrep_raw(pattern, path, glob)
+        return self._coerce_grep_result(await self.default.agrep(pattern, path, glob))
 
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Find files matching a glob pattern, routing by path prefix."""
-        results: list[FileInfo] = []
+    def glob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Find files matching a glob pattern, routing by path prefix.
 
-        backend, backend_path, route_prefix = _route_for_path(
-            default=self.default,
-            sorted_routes=self.sorted_routes,
-            path=path,
-        )
-        if route_prefix is not None:
-            infos = backend.glob_info(pattern, backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+        Routes to backends based on path: a routed path searches that one backend,
+        "/" or None searches every backend, and any other path searches only the
+        default backend — a glob scoped to `/src` must not surface entries from a
+        `/memories/` route.
 
-        # Path doesn't match any specific route - search default backend AND all routed backends
-        results.extend(self.default.glob_info(pattern, path))
+        The first backend to report an error short-circuits the merge. `truncated`
+        is OR-ed across every backend that contributed.
 
-        for route_prefix, backend in self.routes.items():
-            route_pattern = _strip_route_from_pattern(pattern, route_prefix)
-            infos = backend.glob_info(route_pattern, "/")
-            results.extend(_remap_file_info_path(fi, route_prefix) for fi in infos)
+        Args:
+            pattern: Glob pattern with wildcards (e.g., "**/*.md").
+            path: Base directory to search from. None searches all backends.
 
-        # Deterministic ordering
-        results.sort(key=lambda x: x.get("path", ""))
-        return results
+        Returns:
+            `GlobResult` whose match paths have route prefixes restored.
+        """
+        if path is not None:
+            backend, backend_path, route_prefix = _route_for_path(
+                default=self.default,
+                sorted_routes=self.sorted_routes,
+                path=path,
+            )
+            if route_prefix is not None:
+                routed = self._coerce_glob_result(backend.glob(pattern, backend_path))
+                if routed.error is not None:
+                    return routed
+                return GlobResult(
+                    matches=[_remap_file_info_path(fi, route_prefix) for fi in (routed.matches or [])],
+                    truncated=routed.truncated,
+                )
 
-    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Async version of glob_info."""
-        results: list[FileInfo] = []
+        # Whole-tree search: fan out to the default backend AND every route.
+        if path is None or path == "/":
+            default_result = self._coerce_glob_result(self.default.glob(pattern, path))
+            if default_result.error is not None:
+                return default_result
+            results: list[FileInfo] = list(default_result.matches or [])
+            truncated = default_result.truncated
 
-        backend, backend_path, route_prefix = _route_for_path(
-            default=self.default,
-            sorted_routes=self.sorted_routes,
-            path=path,
-        )
-        if route_prefix is not None:
-            infos = await backend.aglob_info(pattern, backend_path)
-            return [_remap_file_info_path(fi, route_prefix) for fi in infos]
+            for route_prefix, backend in self.routes.items():
+                routed = self._coerce_glob_result(backend.glob(_strip_route_from_pattern(pattern, route_prefix), "/"))
+                if routed.error is not None:
+                    return routed
+                results.extend(_remap_file_info_path(fi, route_prefix) for fi in (routed.matches or []))
+                truncated = truncated or routed.truncated
 
-        # Path doesn't match any specific route - search default backend AND all routed backends
-        results.extend(await self.default.aglob_info(pattern, path))
+            results.sort(key=lambda x: x.get("path", ""))
+            return GlobResult(matches=results, truncated=truncated)
 
-        for route_prefix, backend in self.routes.items():
-            route_pattern = _strip_route_from_pattern(pattern, route_prefix)
-            infos = await backend.aglob_info(route_pattern, "/")
-            results.extend(_remap_file_info_path(fi, route_prefix) for fi in infos)
+        # Scoped to a path the default backend owns: routed backends are out of scope.
+        return self._coerce_glob_result(self.default.glob(pattern, path))
 
-        # Deterministic ordering
-        results.sort(key=lambda x: x.get("path", ""))
-        return results
+    async def aglob(self, pattern: str, path: str | None = None) -> GlobResult:
+        """Async version of glob.
+
+        See `glob()` for detailed documentation on routing behavior and parameters.
+        """
+        if path is not None:
+            backend, backend_path, route_prefix = _route_for_path(
+                default=self.default,
+                sorted_routes=self.sorted_routes,
+                path=path,
+            )
+            if route_prefix is not None:
+                routed = self._coerce_glob_result(await backend.aglob(pattern, backend_path))
+                if routed.error is not None:
+                    return routed
+                return GlobResult(
+                    matches=[_remap_file_info_path(fi, route_prefix) for fi in (routed.matches or [])],
+                    truncated=routed.truncated,
+                )
+
+        # Whole-tree search: fan out to the default backend AND every route.
+        if path is None or path == "/":
+            default_result = self._coerce_glob_result(await self.default.aglob(pattern, path))
+            if default_result.error is not None:
+                return default_result
+            results: list[FileInfo] = list(default_result.matches or [])
+            truncated = default_result.truncated
+
+            for route_prefix, backend in self.routes.items():
+                routed = self._coerce_glob_result(await backend.aglob(_strip_route_from_pattern(pattern, route_prefix), "/"))
+                if routed.error is not None:
+                    return routed
+                results.extend(_remap_file_info_path(fi, route_prefix) for fi in (routed.matches or []))
+                truncated = truncated or routed.truncated
+
+            results.sort(key=lambda x: x.get("path", ""))
+            return GlobResult(matches=results, truncated=truncated)
+
+        # Scoped to a path the default backend owns: routed backends are out of scope.
+        return self._coerce_glob_result(await self.default.aglob(pattern, path))
+
+    # -- write / edit / delete -----------------------------------------------
 
     def write(
         self,
         file_path: str,
         content: str,
     ) -> WriteResult:
-        """Create a new file, routing to appropriate backend.
+        """Write a file, routing to appropriate backend.
 
         Args:
             file_path: Absolute file path.
             content: File content as a string.
 
         Returns:
-            Success message or Command object, or error if file already exists.
+            `WriteResult` with the full virtual path restored.
         """
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = backend.write(stripped_key, content)
         if res.path is not None:
             res = replace(res, path=file_path)
-        # If this is a state-backed update and default has state, merge so listings reflect changes
-        if res.files_update:
-            try:
-                runtime = getattr(self.default, "runtime", None)
-                if runtime is not None:
-                    state = runtime.state
-                    files = state.get("files", {})
-                    files.update(res.files_update)
-                    state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+        self._sync_state(file_path, res.files_update)
         return res
 
     async def awrite(
@@ -475,17 +650,7 @@ class CompositeBackend(BackendProtocol):
         res = await backend.awrite(stripped_key, content)
         if res.path is not None:
             res = replace(res, path=file_path)
-        # If this is a state-backed update and default has state, merge so listings reflect changes
-        if res.files_update:
-            try:
-                runtime = getattr(self.default, "runtime", None)
-                if runtime is not None:
-                    state = runtime.state
-                    files = state.get("files", {})
-                    files.update(res.files_update)
-                    state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+        self._sync_state(file_path, res.files_update)
         return res
 
     def edit(
@@ -504,22 +669,13 @@ class CompositeBackend(BackendProtocol):
             replace_all: If True, replace all occurrences.
 
         Returns:
-            Success message or Command object, or error message on failure.
+            `EditResult` with the full virtual path restored.
         """
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = backend.edit(stripped_key, old_string, new_string, replace_all=replace_all)
         if res.path is not None:
             res = replace(res, path=file_path)
-        if res.files_update:
-            try:
-                runtime = getattr(self.default, "runtime", None)
-                if runtime is not None:
-                    state = runtime.state
-                    files = state.get("files", {})
-                    files.update(res.files_update)
-                    state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+        self._sync_state(file_path, res.files_update)
         return res
 
     async def aedit(
@@ -534,17 +690,91 @@ class CompositeBackend(BackendProtocol):
         res = await backend.aedit(stripped_key, old_string, new_string, replace_all=replace_all)
         if res.path is not None:
             res = replace(res, path=file_path)
-        if res.files_update:
-            try:
-                runtime = getattr(self.default, "runtime", None)
-                if runtime is not None:
-                    state = runtime.state
-                    files = state.get("files", {})
-                    files.update(res.files_update)
-                    state["files"] = files
-            except Exception:  # noqa: BLE001  # Intentional for best-effort state sync
-                pass
+        self._sync_state(file_path, res.files_update)
         return res
+
+    def _remap_delete_result(self, res: DeleteResult, file_path: str, route_prefix: str | None) -> DeleteResult:
+        """Translate a routed backend's local paths back into virtual paths.
+
+        The routed backend saw a stripped key (`/note.md`), so every path it
+        reports — `path`, `deleted_paths`, and the `files_update` keys the state
+        reducer will consume — has to be lifted back under the route prefix
+        before it reaches the caller.
+
+        Args:
+            res: The routed backend's result, with backend-local paths.
+            file_path: The original virtual path the caller asked to delete.
+            route_prefix: The matched route prefix, or `None` for the default backend.
+
+        Returns:
+            A `DeleteResult` whose paths are all virtual.
+        """
+        if res.error is not None:
+            return res
+
+        if route_prefix is None:
+            return replace(res, path=file_path if res.path is not None else None)
+
+        prefix = _prefix_for(route_prefix)
+        files_update: dict[str, Any] | None = None
+        if res.files_update is not None:
+            files_update = {f"{prefix}{key}": value for key, value in res.files_update.items()}
+        return replace(
+            res,
+            path=file_path if res.path is not None else None,
+            files_update=files_update,
+            deleted_paths=[f"{prefix}{p}" for p in res.deleted_paths],
+        )
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """Delete a path, routing to the appropriate backend.
+
+        `CompositeBackend` always advertises delete support (it overrides this
+        method), so the delete tool is never filtered out for it. A route may
+        still point at a backend that does not implement `delete`; rather than
+        letting `NotImplementedError` escape to the caller, that case is reported
+        as a `DeleteResult` error.
+
+        Args:
+            file_path: Absolute path to delete (recursively, for a directory).
+
+        Returns:
+            `DeleteResult` with virtual paths restored, or an error — including
+                when the routed backend does not support deletion.
+        """
+        backend, stripped_key, route_prefix = _route_for_path(
+            default=self.default,
+            sorted_routes=self.sorted_routes,
+            path=file_path,
+        )
+        if not supports_delete(backend):
+            return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        try:
+            res = backend.delete(stripped_key)
+        except NotImplementedError:
+            return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        res = self._remap_delete_result(res, file_path, route_prefix)
+        self._sync_state(file_path, res.files_update)
+        return res
+
+    async def adelete(self, file_path: str) -> DeleteResult:
+        """Async version of delete."""
+        backend, stripped_key, route_prefix = _route_for_path(
+            default=self.default,
+            sorted_routes=self.sorted_routes,
+            path=file_path,
+        )
+        if not supports_delete(backend):
+            return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        try:
+            res = await backend.adelete(stripped_key)
+        except NotImplementedError:
+            return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        res = self._remap_delete_result(res, file_path, route_prefix)
+        self._sync_state(file_path, res.files_update)
+        return res
+
+    # -- execution -----------------------------------------------------------
 
     def execute(
         self,
@@ -607,6 +837,8 @@ class CompositeBackend(BackendProtocol):
             "To enable execution, provide a default backend that implements SandboxBackendProtocol."
         )
         raise NotImplementedError(msg)
+
+    # -- bulk transfer -------------------------------------------------------
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         """Upload multiple files, batching by backend for efficiency.

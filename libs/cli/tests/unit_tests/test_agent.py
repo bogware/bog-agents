@@ -24,6 +24,7 @@ from bog_agents_cli.agent import (
     create_cli_agent,
     get_system_prompt,
     list_agents,
+    reset_agent,
 )
 from bog_agents_cli.config import Settings, get_glyphs
 from bog_agents_cli.project_utils import ProjectContext
@@ -1632,3 +1633,30 @@ class TestMiddlewareStackConformance:
             assert isinstance(mw, AgentMiddleware), (
                 f"{type(mw).__name__} does not inherit from AgentMiddleware"
             )
+
+
+class TestResetAgentEncoding:
+    """Tests for `reset_agent` AGENTS.md encoding (S7 hardening)."""
+
+    def test_reset_writes_non_ascii_source_with_utf8(self, tmp_path: Path) -> None:
+        """Copying a source agent whose AGENTS.md has non-ASCII chars must not crash.
+
+        Regression for S7: `agent_md.write_text(...)` omitted `encoding='utf-8'`,
+        so on a non-en-US Windows codepage a smart quote / em dash would raise
+        `UnicodeEncodeError` after the target dir had already been removed.
+        """
+        agents_dir = tmp_path / "agents"
+        source_dir = agents_dir / "src"
+        source_dir.mkdir(parents=True)
+        # Characters outside cp1252-safe ASCII: em dash, smart quotes, emoji.
+        non_ascii = "Instructions — use “smart quotes” and an emoji 🚀\n"
+        (source_dir / "AGENTS.md").write_text(non_ascii, encoding="utf-8")
+
+        mock_settings = Mock()
+        mock_settings.user_agents_dir = agents_dir
+
+        with patch("bog_agents_cli.agent.settings", mock_settings):
+            reset_agent("dest", source_agent="src", output_format="json")
+
+        written = (agents_dir / "dest" / "AGENTS.md").read_text(encoding="utf-8")
+        assert written == non_ascii

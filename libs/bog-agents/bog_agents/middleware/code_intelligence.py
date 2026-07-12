@@ -38,6 +38,46 @@ from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
+# Directories that hold vendored dependencies, build artifacts, or VCS metadata.
+# Pruned from codebase scans so counts reflect project source, not site-packages.
+# Mirrors repo_map._SKIP_DIRS to keep scan semantics consistent across middleware.
+_SKIP_DIRS = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "venv",
+        ".venv",
+        ".git",
+        "dist",
+        "build",
+        "target",
+        ".next",
+        ".nuxt",
+        "coverage",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        "vendor",
+        "site-packages",
+    }
+)
+
+# Hard cap on files visited per scan so a single tool call never hangs the agent
+# on a repo with vendored deps that slipped past the skip-dir filter.
+_MAX_FILES = 5000
+
+
+def _is_skipped(path: Path) -> bool:
+    """Return True if any path component is a skip directory.
+
+    Args:
+        path: Filesystem path to test.
+
+    Returns:
+        True when the path lives under a vendored/build/VCS directory.
+    """
+    return any(part in _SKIP_DIRS for part in path.parts)
+
 
 def _run_cmd(working_dir: Path, *args: str, timeout: int = 60) -> str:
     """Run a shell command and return output."""
@@ -137,12 +177,16 @@ class CodeIntelligenceMiddleware(AgentMiddleware[CodeIntelligenceState, ContextT
             long_functions = 0
 
             for scan_path in scan_paths:
+                if total_files >= _MAX_FILES:
+                    break
                 root = middleware._working_dir / scan_path
                 if not root.exists():
                     continue
                 for py_file in root.rglob("*.py"):
-                    if any(p in py_file.parts for p in ("__pycache__", ".git", "node_modules", ".venv")):
+                    if _is_skipped(py_file):
                         continue
+                    if total_files >= _MAX_FILES:
+                        break
                     total_files += 1
                     try:
                         content = py_file.read_text(encoding="utf-8", errors="replace")
@@ -293,10 +337,27 @@ class CodeIntelligenceMiddleware(AgentMiddleware[CodeIntelligenceState, ContextT
             elif "Cargo.toml" in file_names:
                 project_type = "Rust"
 
-            # Count files by type
-            py_count = len(list(middleware._working_dir.rglob("*.py")))
-            ts_count = len(list(middleware._working_dir.rglob("*.ts")))
-            js_count = len(list(middleware._working_dir.rglob("*.js")))
+            # Count files by type, pruning vendored/build dirs and capping total
+            # work so a repo with site-packages can't hang the tool call.
+            py_count = 0
+            ts_count = 0
+            js_count = 0
+            scanned = 0
+            for path in middleware._working_dir.rglob("*"):
+                if scanned >= _MAX_FILES:
+                    break
+                if _is_skipped(path) or not path.is_file():
+                    continue
+                suffix = path.suffix.lower()
+                if suffix == ".py":
+                    py_count += 1
+                elif suffix == ".ts":
+                    ts_count += 1
+                elif suffix == ".js":
+                    js_count += 1
+                else:
+                    continue
+                scanned += 1
 
             guide = [
                 "# Onboarding Guide\n",

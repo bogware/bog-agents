@@ -437,7 +437,13 @@ def test_validate_metadata_valid_dict_passthrough() -> None:
     assert result == {"author": "acme"}
 
 
-def test_parse_skill_metadata_allowed_tools_yaml_list_ignored() -> None:
+def test_parse_skill_metadata_allowed_tools_yaml_list_parsed() -> None:
+    """A YAML-list `allowed-tools` is honored.
+
+    Previously this shape was silently dropped and asserted to yield `[]`,
+    which meant every Claude-Code-style skill using the (very common) YAML list
+    form advertised no allowed tools at all.
+    """
     content = """---
 name: test-skill
 description: A test skill
@@ -452,10 +458,11 @@ Content
 
     result = _parse_skill_metadata(content, "/skills/test-skill/SKILL.md", "test-skill")
     assert result is not None
-    assert result["allowed_tools"] == []
+    assert result["allowed_tools"] == ["Bash", "Read", "Write"]
 
 
-def test_parse_skill_metadata_allowed_tools_yaml_list_non_strings_ignored() -> None:
+def test_parse_skill_metadata_allowed_tools_yaml_list_non_strings_skipped() -> None:
+    """Non-string and blank entries are skipped, but valid strings survive."""
     content = """---
 name: test-skill
 description: A test skill
@@ -473,7 +480,39 @@ Content
 
     result = _parse_skill_metadata(content, "/skills/test-skill/SKILL.md", "test-skill")
     assert result is not None
-    assert result["allowed_tools"] == []
+    assert result["allowed_tools"] == ["Read", "Write"]
+
+
+def test_parse_skill_metadata_allowed_tools_comma_without_space() -> None:
+    """`Bash,Read,Write` splits into three tools, not one fused token."""
+    content = """---
+name: test-skill
+description: A test skill
+allowed-tools: Bash,Read,Write
+---
+
+Content
+"""
+
+    result = _parse_skill_metadata(content, "/skills/test-skill/SKILL.md", "test-skill")
+    assert result is not None
+    assert result["allowed_tools"] == ["Bash", "Read", "Write"]
+
+
+def test_parse_skill_metadata_allowed_tools_mixed_separators() -> None:
+    """Mixed comma/space separators collapse cleanly."""
+    content = """---
+name: test-skill
+description: A test skill
+allowed-tools: Bash, Read,Write  Grep
+---
+
+Content
+"""
+
+    result = _parse_skill_metadata(content, "/skills/test-skill/SKILL.md", "test-skill")
+    assert result is not None
+    assert result["allowed_tools"] == ["Bash", "Read", "Write", "Grep"]
 
 
 def test_parse_skill_metadata_license_boolean_coerced() -> None:

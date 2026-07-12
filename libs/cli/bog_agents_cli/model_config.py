@@ -1799,6 +1799,51 @@ def is_warning_suppressed(key: str, config_path: Path | None = None) -> bool:
     return key in suppress_list
 
 
+def tools_auto_install(config_path: Path | None = None) -> bool:
+    """Return whether managed-tool auto-install is enabled in the config file.
+
+    Reads the `[tools].auto_install` boolean from `config.toml`. Defaults to
+    `True` (auto-install on) when the file is missing, unreadable, the key is
+    absent, or the value is not a boolean — so a fresh install gets a working
+    `rg` without any configuration, while an explicit `auto_install = false`
+    fully opts out.
+
+    Args:
+        config_path: Path to config file.
+
+            Defaults to `~/.bog-agents/config.toml`.
+
+    Returns:
+        `True` when managed-tool auto-install is permitted, `False` only when
+            `[tools].auto_install` is explicitly set to `false`.
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        if not config_path.exists():
+            return True
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.debug(
+            "Could not read config file %s for auto_install check",
+            config_path,
+            exc_info=True,
+        )
+        return True
+
+    value = data.get("tools", {}).get("auto_install", True)
+    if not isinstance(value, bool):
+        logger.debug(
+            "[tools].auto_install in %s should be a bool, got %s",
+            config_path,
+            type(value).__name__,
+        )
+        return True
+    return value
+
+
 def suppress_warning(key: str, config_path: Path | None = None) -> bool:
     """Add a warning key to the suppression list in the config file.
 

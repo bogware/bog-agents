@@ -40,6 +40,7 @@ import os
 import shutil
 import subprocess  # noqa: S404 — only used for `aws sso login`, never user input
 import sys
+import threading
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import AgentMiddleware
@@ -61,6 +62,15 @@ logger = logging.getLogger(__name__)
 _SESSION_REFRESH_COUNT: int = 0
 _USER_PROMPTED_THIS_SESSION: bool = False
 _DEFAULT_MAX_REFRESHES_PER_SESSION: int = 3
+
+# Serializes the whole check-then-act refresh critical section. Without
+# it, concurrent expired-creds model calls (parallel sub-agents, each
+# running under ``asyncio.to_thread``) can all pass the budget check
+# before anyone increments the counter — spawning multiple ``aws sso
+# login`` subprocesses that race on the same SSO cache and blowing past
+# the cap. Holding the lock across the subprocess spawn also guarantees
+# at most one ``aws sso login`` is in flight at a time.
+_REFRESH_LOCK = threading.Lock()
 
 
 def _reset_session_state_for_tests() -> None:
@@ -286,43 +296,53 @@ class BedrockRefreshMiddleware(AgentMiddleware[Any, Any, Any]):
         """
         global _SESSION_REFRESH_COUNT, _USER_PROMPTED_THIS_SESSION  # noqa: PLW0603
 
-        if _SESSION_REFRESH_COUNT >= self._max_refreshes:  # noqa: SIM300 — natural ordering for budget check
-            logger.warning(
-                "bedrock_refresh: session budget exhausted "
-                "(%d/%d) — not attempting refresh",
-                _SESSION_REFRESH_COUNT,
-                self._max_refreshes,
-            )
-            return False
+        # Serialize the entire check-then-act region. The lock covers
+        # both the sync path and the ``asyncio.to_thread`` path, so
+        # concurrent expired-creds calls can't all clear the budget
+        # check before any of them increments, and at most one ``aws
+        # sso login`` runs at a time (no SSO-cache race).
+        with _REFRESH_LOCK:
+            if _SESSION_REFRESH_COUNT >= self._max_refreshes:  # noqa: SIM300 — natural ordering for budget check
+                logger.warning(
+                    "bedrock_refresh: session budget exhausted "
+                    "(%d/%d) — not attempting refresh",
+                    _SESSION_REFRESH_COUNT,
+                    self._max_refreshes,
+                )
+                return False
 
-        profile = _resolved_profile()
+            profile = _resolved_profile()
 
-        if not self._interactive:
-            # Headless: print the fix and re-raise. No subprocess.
-            _print_refresh_banner_to_stderr(profile)
-            return False
+            if not self._interactive:
+                # Headless: print the fix and re-raise. No subprocess.
+                _print_refresh_banner_to_stderr(profile)
+                return False
 
-        # First refresh of the session: show the banner so the user
-        # sees what's about to happen before a browser tab pops up.
-        if not _USER_PROMPTED_THIS_SESSION:
-            _print_refresh_banner_to_stderr(profile)
-            _USER_PROMPTED_THIS_SESSION = True
+            # First refresh of the session: show the banner so the user
+            # sees what's about to happen before a browser tab pops up.
+            if not _USER_PROMPTED_THIS_SESSION:
+                _print_refresh_banner_to_stderr(profile)
+                _USER_PROMPTED_THIS_SESSION = True
 
-        ok = _attempt_sso_login(profile)
-        _SESSION_REFRESH_COUNT += 1
-        if ok:
-            logger.info(
-                "bedrock_refresh: refresh #%d succeeded for profile=%s",
-                _SESSION_REFRESH_COUNT,
-                profile,
-            )
-        else:
-            logger.warning(
-                "bedrock_refresh: refresh #%d FAILED for profile=%s",
-                _SESSION_REFRESH_COUNT,
-                profile,
-            )
-        return ok
+            # Reserve the budget slot before launching so a concurrent
+            # caller that acquires the lock next sees the consumed slot.
+            _SESSION_REFRESH_COUNT += 1
+            attempt_num = _SESSION_REFRESH_COUNT
+
+            ok = _attempt_sso_login(profile)
+            if ok:
+                logger.info(
+                    "bedrock_refresh: refresh #%d succeeded for profile=%s",
+                    attempt_num,
+                    profile,
+                )
+            else:
+                logger.warning(
+                    "bedrock_refresh: refresh #%d FAILED for profile=%s",
+                    attempt_num,
+                    profile,
+                )
+            return ok
 
 
 __all__ = [

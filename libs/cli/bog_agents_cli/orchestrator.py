@@ -374,8 +374,9 @@ def run_orchestration(
         profiles: Override the default mode → profile map (mostly
             for tests).
         max_iterations_per_subtask: Per-subtask loop cap.
-        parallel: When True, run subtasks concurrently via
-            ``asyncio.to_thread`` + ``asyncio.gather``. Requires
+        parallel: When True, run subtasks concurrently on a dedicated,
+            bounded ``ThreadPoolExecutor`` owned by the call (never the
+            shared default executor or the caller's event loop). Requires
             ``model_factory`` — each subtask gets its own fresh model
             instance because LangChain ``BaseChatModel`` instances
             often hold per-request state that doesn't survive
@@ -476,6 +477,24 @@ def _run_one_subtask(
     return st_result
 
 
+def _subtask_budget_seconds(max_iterations_per_subtask: int) -> float:
+    """Per-subtask wall-clock budget for parallel orchestration.
+
+    L3: scale the budget with the iteration budget. Each iteration is one
+    LLM call + tool round; ~60s is a generous upper bound. We pad by 30%
+    so genuinely slow models don't hit the wall, then floor at 120s and
+    cap at one hour absolute so a single hung subtask can't freeze the
+    whole TUI. Factored out so it is a single, patchable knob.
+
+    Args:
+        max_iterations_per_subtask: The per-subtask model→tool loop cap.
+
+    Returns:
+        The wall-clock budget in seconds.
+    """
+    return min(3600.0, max(120.0, max_iterations_per_subtask * 60.0 * 1.3))
+
+
 def _run_subtasks_parallel(
     *,
     subtasks: list[Subtask],
@@ -487,27 +506,43 @@ def _run_subtasks_parallel(
     """Run all subtasks concurrently via threads, preserving plan order.
 
     Each subtask gets its own fresh chat model (via ``model_factory()``)
-    because LangChain models often hold per-request state. We use
-    ``asyncio.to_thread`` so subtasks that block on LLM calls don't
-    starve each other. Results are returned in plan order regardless
-    of completion order — this matches the sequential output the user
-    expects to read.
+    because LangChain models often hold per-request state. Subtasks run
+    on a *dedicated*, bounded :class:`~concurrent.futures.ThreadPoolExecutor`
+    owned by this call — never the shared default executor and never the
+    caller's event loop. Two properties fall out of that choice:
+
+    * **No deadlock (P20).** The previous implementation reached into the
+      caller's running loop via ``run_coroutine_threadsafe(...).result()``,
+      which hard-deadlocks if ever invoked from the event-loop thread.
+      This implementation uses no asyncio at all, so it is safe to call
+      from a worker thread *or* the loop thread (it just blocks the
+      caller, same as the sequential path).
+    * **No thread/executor leak (P21).** On the per-subtask wall-clock
+      budget being exceeded we ``shutdown(cancel_futures=True)`` our own
+      executor, which cancels every not-yet-started subtask future and
+      drops the executor's reference so its threads are reclaimable —
+      abandoned work never saturates the shared default executor.
+
+    Results are returned in plan order regardless of completion order —
+    this matches the sequential output the user expects to read.
     """
-    import asyncio
+    from concurrent.futures import Future, ThreadPoolExecutor
 
-    # L3: scale the outer cap with the per-subtask iteration budget.
-    # Each iteration is one LLM call + tool round; ~60s is a generous
-    # upper bound. We further pad by 30% so genuinely slow models
-    # don't hit the wall, then cap at one hour absolute so a single
-    # hung subtask can't freeze the whole TUI.
-    outer_cap_seconds = min(
-        3600.0,
-        max(120.0, max_iterations_per_subtask * 60.0 * 1.3),
+    budget_seconds = _subtask_budget_seconds(max_iterations_per_subtask)
+
+    # Bound the pool so a fat plan can't spawn an unbounded number of
+    # threads (each holds a live model client). 8 is the planner's hard
+    # subtask cap, so this never throttles a valid plan.
+    max_workers = max(1, min(len(subtasks), 8))
+
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="orchestrator-subtask",
     )
-
-    async def _gather() -> list[SubtaskResult]:
-        tasks = [
-            asyncio.to_thread(
+    timed_out = False
+    try:
+        futures: list[Future[SubtaskResult]] = [
+            executor.submit(
                 _run_one_subtask,
                 st,
                 goal=goal,
@@ -517,44 +552,44 @@ def _run_subtasks_parallel(
             )
             for st in subtasks
         ]
-        try:
-            return await asyncio.wait_for(
-                asyncio.gather(*tasks), timeout=outer_cap_seconds
-            )
-        except TimeoutError:
-            # Fill any unfinished slots with a timeout-marker so the
-            # caller still gets a list aligned to ``subtasks``.
-            results: list[SubtaskResult] = []
-            for st, task in zip(subtasks, tasks, strict=False):
-                if isinstance(task, asyncio.Task) and task.done():
-                    with contextlib.suppress(Exception):
-                        results.append(task.result())
-                        continue
+
+        # Per-subtask wall-clock budget. We measure remaining time
+        # against a single shared deadline so a slow early subtask
+        # doesn't grant a later one extra runway, while still letting
+        # fast subtasks that already completed be harvested.
+        deadline = time.monotonic() + budget_seconds
+        results: list[SubtaskResult] = []
+        for st, fut in zip(subtasks, futures, strict=True):
+            remaining = deadline - time.monotonic()
+            try:
+                results.append(fut.result(timeout=max(0.0, remaining)))
+            except TimeoutError:
+                timed_out = True
                 results.append(
                     SubtaskResult(
                         subtask=st,
                         ok=False,
-                        error=(
-                            f"subtask timed out (outer cap {outer_cap_seconds:.0f}s)"
-                        ),
-                        duration_seconds=outer_cap_seconds,
+                        error=f"subtask timed out (budget {budget_seconds:.0f}s)",
+                        duration_seconds=budget_seconds,
                     )
                 )
-            return results
-
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Called from inside an already-running loop (e.g. the TUI
-            # handler). Use run_coroutine_threadsafe through a fresh
-            # loop — this is a rare path; the orchestrator controller
-            # currently runs via ``asyncio.to_thread(...)`` so it's
-            # called from a worker thread without a running loop here.
-            fut = asyncio.run_coroutine_threadsafe(_gather(), loop)
-            return fut.result()
-    except RuntimeError:
-        pass
-    return asyncio.run(_gather())
+            except Exception as exc:  # never let one subtask abort the batch
+                results.append(
+                    SubtaskResult(
+                        subtask=st,
+                        ok=False,
+                        error=f"subtask raised: {exc}",
+                    )
+                )
+        return results
+    finally:
+        # cancel_futures=True drops not-yet-started subtasks so the pool
+        # tears down promptly instead of blocking on abandoned work.
+        # When nothing timed out we already harvested every future, so a
+        # plain shutdown (wait for the handful of in-flight threads to
+        # unwind) is cheaper and avoids a needless cancel sweep.
+        with contextlib.suppress(Exception):
+            executor.shutdown(wait=not timed_out, cancel_futures=timed_out)
 
 
 # ---------------------------------------------------------------------------

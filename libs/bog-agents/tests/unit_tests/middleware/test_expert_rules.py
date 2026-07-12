@@ -420,3 +420,54 @@ class TestApprovalStoreIntegration:
         assert store.gates["existing"].required_approvers == 2
         assert store.gates["existing"].description == "manual"
         assert len(store.submissions) == 1
+
+
+# ---------------------------------------------------------------------------
+# Working-memory soft cap wiring (P17)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkingMemoryCapWiring:
+    """The middleware bounds derived-fact growth without breaking semantics.
+
+    The per-call ``tool_call`` fact must still be retracted each turn, and
+    cross-call ``assert_fact``-derived facts must accumulate (so rate-limit /
+    cumulative-cost rulebooks keep working) — but only up to the configured
+    ``max_working_facts`` cap, past which the oldest derived facts are evicted.
+    """
+
+    def test_tool_call_fact_retracted_each_turn(self, tmp_path: Path) -> None:
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
+        for _ in range(5):
+            mw.wrap_tool_call(_make_request("shell", {"command": "ls"}), lambda _r: "ok")
+        # The structural tool_call fact is asserted then retracted in the
+        # finally of _run_for_request, so memory holds none between calls.
+        assert mw.engine.memory.stats().get("tool_call", 0) == 0
+
+    def test_derived_facts_accumulate_then_bound(self, tmp_path: Path) -> None:
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        _write_rule_file(
+            rules_dir,
+            "accumulate.yaml",
+            """
+            - name: record_call
+              when:
+                - tool_call:
+                    name: shell
+              then:
+                - assert_fact:
+                    fact_type: call_seen
+                    data:
+                      marker: 1
+            """,
+        )
+        # cap=3, eviction ceiling=6: drive enough calls to exceed it.
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0, max_working_facts=3)
+        for _ in range(20):
+            mw.wrap_tool_call(_make_request("shell", {"command": "ls"}), lambda _r: "ok")
+        # Cross-call derived facts accumulated (semantics intact) but the
+        # shared memory stayed bounded rather than leaking 20 facts.
+        derived = mw.engine.memory.stats().get("call_seen", 0)
+        assert 0 < derived <= 6
+        # And tool_call is still never resident between calls.
+        assert mw.engine.memory.stats().get("tool_call", 0) == 0

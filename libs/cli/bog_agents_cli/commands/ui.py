@@ -36,4 +36,15 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_always_ask_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/theme",
+            "Change the color theme: /theme opens the picker, /theme <name> switches, /theme list",
+            "color palette appearance dark light scheme skin",
+            "ui",
+            available=True,
+            subcommands=(("list", "List available themes"),),
+        ),
+        handler_method="_handle_theme_command",
+    ),
 )

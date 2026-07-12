@@ -31,6 +31,7 @@ _DEEPAGENTS_PUBLIC_API = frozenset(
         "DeepAgentState",
         "FilesystemMiddleware",
         "FilesystemPermission",
+        "FsToolName",
         "GeneralPurposeSubagentProfile",
         "HarnessProfile",
         "HarnessProfileConfig",
@@ -39,12 +40,16 @@ _DEEPAGENTS_PUBLIC_API = frozenset(
         "RubricMiddleware",
         "SubAgent",
         "SubAgentMiddleware",
+        "SystemPromptConfig",
         "__version__",
         "create_deep_agent",
         "register_harness_profile",
         "register_provider_profile",
     }
 )
+
+# New interop symbols we additionally re-export beyond upstream's __all__.
+_INTEROP_EXTRAS = frozenset({"create_sub_agent", "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY"})
 
 
 class _DummyCompiledGraph:
@@ -82,6 +87,49 @@ def test_top_level_package_reexports_deepagents_names() -> None:
     """The deepagents-style names resolve from the top-level `bog_agents` package."""
     for name in _DEEPAGENTS_PUBLIC_API - {"__version__"}:
         assert getattr(bog_agents, name) is not None
+
+
+def test_interop_extras_importable_from_both_entry_points() -> None:
+    """The extra interop symbols resolve from the compat module and top-level package."""
+    import bog_agents.deepagents as compat
+
+    for name in _INTEROP_EXTRAS:
+        assert name in compat.__all__
+        assert getattr(compat, name) is not None
+        assert getattr(bog_agents, name) is not None
+
+
+def test_system_prompt_config_mapping_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deepagents `SystemPromptConfig` mapping form is accepted (was a `TypeError`)."""
+    captured = _capture_create_agent(monkeypatch)
+    from bog_agents.deepagents import create_deep_agent
+
+    create_deep_agent(
+        model=GenericFakeChatModel(messages=iter([])),
+        system_prompt={"base": None, "suffix": "be terse"},
+    )
+    assert "be terse" in captured["kwargs"]["system_prompt"]
+
+
+def test_system_prompt_plain_string_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A plain-string `system_prompt` keeps working through the compat wrapper."""
+    captured = _capture_create_agent(monkeypatch)
+    from bog_agents.deepagents import create_deep_agent
+
+    create_deep_agent(model=GenericFakeChatModel(messages=iter([])), system_prompt="hi")
+    assert "hi" in captured["kwargs"]["system_prompt"]
+
+
+def test_create_deep_agent_forwards_max_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`create_deep_agent` exposes keyword-only `max_turns` (default mirrors deepagents)."""
+    captured = _capture_create_agent(monkeypatch)
+    from bog_agents.deepagents import create_deep_agent
+
+    create_deep_agent(model=GenericFakeChatModel(messages=iter([])), max_turns=7)
+    # `max_turns` shapes the compiled graph's recursion_limit, not a passthrough
+    # kwarg; assert the call succeeded and default omission also works.
+    assert captured["kwargs"] is not None
+    create_deep_agent(model=GenericFakeChatModel(messages=iter([])))
 
 
 def test_create_deep_agent_defaults_state_schema_to_deep_agent_state(monkeypatch: pytest.MonkeyPatch) -> None:

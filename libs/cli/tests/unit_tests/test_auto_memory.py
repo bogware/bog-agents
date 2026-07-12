@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from bog_agents_cli.auto_memory import (
     _SECTION,
     append_memory,
@@ -56,6 +58,56 @@ class TestAppendMemory:
         p = tmp_path / "AGENTS.md"
         append_memory(p, "line one\n   line two", "note")
         assert "(note) line one line two" in p.read_text(encoding="utf-8")
+
+
+class TestAtomicWrite:
+    """append_memory must write durable memory files atomically (S33).
+
+    A crash/disk-full mid-write must not corrupt or truncate the existing
+    user-editable memory file, and must not leave a stray ``.tmp`` sibling.
+    """
+
+    def test_no_stray_tmp_file_left_behind(self, tmp_path: Path) -> None:
+        p = tmp_path / "AGENTS.md"
+        append_memory(p, "first fact", "note")
+        append_memory(p, "second fact", "gotcha")
+        siblings = {child.name for child in tmp_path.iterdir()}
+        assert siblings == {"AGENTS.md"}  # no AGENTS.md.tmp
+
+    def test_uses_atomic_write_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Path] = []
+        real = __import__(
+            "bog_agents_cli.io_utils", fromlist=["atomic_write_text"]
+        ).atomic_write_text
+
+        def _spy(path: Path, content: str, **kwargs: object) -> None:
+            calls.append(path)
+            real(path, content, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("bog_agents_cli.auto_memory.atomic_write_text", _spy)
+        p = tmp_path / "AGENTS.md"
+        append_memory(p, "new section fact", "note")  # create-section path
+        append_memory(p, "existing section fact", "gotcha")  # append-in-section path
+        assert calls == [p, p]
+
+    def test_failing_write_preserves_original_and_no_tmp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        p = tmp_path / "AGENTS.md"
+        append_memory(p, "durable fact", "note")
+        original = p.read_text(encoding="utf-8")
+
+        def _boom(self: Path, target: Path) -> None:
+            raise OSError("disk full")
+
+        # Simulate a failure during the rename step of the atomic write.
+        monkeypatch.setattr(Path, "replace", _boom)
+        with pytest.raises(OSError):
+            append_memory(p, "second fact", "gotcha")
+        assert p.read_text(encoding="utf-8") == original  # untouched
+        assert not (tmp_path / "AGENTS.md.tmp").exists()  # cleaned up
 
 
 class TestRememberTool:

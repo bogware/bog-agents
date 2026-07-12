@@ -12,9 +12,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from bog_agents_daemon.models import AmbientJob, TriggerConfig, TriggerType
+from bog_agents_daemon.models import AmbientJob, JobRun, JobStatus, TriggerConfig, TriggerType
 
 logger = logging.getLogger(__name__)
+
+# Directories never worth walking for a file-change trigger. Pruning these in
+# place keeps a tick from descending into multi-gigabyte vendored/VCS trees.
+_FILE_TRIGGER_PRUNE_DIRS = frozenset({".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", ".mypy_cache"})
+
+# Hard cap on the number of files stat()'d per tick. A FILE_CHANGE trigger
+# runs on every scheduler tick (default ~30s); without a bound a large
+# watch_dir makes a single tick exceed the interval and starve cron/interval
+# jobs. When the cap is hit we log and bail rather than blocking the loop.
+_FILE_TRIGGER_MAX_FILES = 50_000
 
 
 def _is_cron_due(cron_expr: str, last_run_at: float) -> bool:
@@ -224,12 +234,91 @@ class DaemonScheduler:
             self._bg_tasks.add(task)
             task.add_done_callback(self._bg_tasks.discard)
 
+    def dispatch(
+        self,
+        job: AmbientJob,
+        *,
+        trigger_type: TriggerType,
+        trigger_context: dict[str, Any] | None = None,
+        existing_run: JobRun | None = None,
+    ) -> JobRun:
+        """Reserve and launch a single job run under the scheduler's guards.
+
+        This is the public entry point event-driven triggers (manual API run,
+        git-push, webhook) must use instead of calling `run_job` directly. It
+        funnels the run through the same `_running_jobs` overlap guard and
+        `_semaphore` concurrency bound the polled scheduler uses, so an
+        external push/webhook storm cannot fan out unbounded parallel runs of
+        the same job against one workspace/history.
+
+        Overlap policy is **skip-if-running**: if the job is already in
+        `_running_jobs`, no new task is launched. A warning is logged and the
+        caller's placeholder run (or a freshly minted one) is returned with
+        `status=SKIPPED` so HTTP clients still observe a coherent run record.
+
+        The reservation is performed synchronously (before the awaitable task
+        is scheduled) so two near-simultaneous dispatches of the same job
+        cannot both pass the running-check and double-fire.
+
+        Args:
+            job: The job to run.
+            trigger_type: How this execution was initiated.
+            trigger_context: Optional metadata from the trigger.
+            existing_run: An already-persisted placeholder JobRun to reuse so
+                HTTP clients see a stable run_id immediately. When omitted, a
+                minimal placeholder is created in-memory for the return value
+                only (the runner allocates and persists the real record).
+
+        Returns:
+            The JobRun the caller should return to its client: either the
+            launched placeholder (status unchanged) or, when skipped, a run
+            marked `status=SKIPPED`.
+        """
+        # Skip-if-running: a job already executing must not be double-fired by
+        # an event trigger. Reserve the slot synchronously so a second dispatch
+        # arriving in the same tick is rejected too.
+        if job.job_id in self._running_jobs:
+            logger.warning(
+                "Job %s (%s) is already running; skipping overlapping %s trigger",
+                job.job_id,
+                job.name,
+                trigger_type.value,
+            )
+            skipped = existing_run or JobRun(
+                job_id=job.job_id,
+                job_name=job.name,
+                trigger_type=trigger_type,
+                trigger_context=trigger_context or {},
+            )
+            skipped.status = JobStatus.SKIPPED
+            return skipped
+
+        self._running_jobs.add(job.job_id)
+        run = existing_run or JobRun(
+            job_id=job.job_id,
+            job_name=job.name,
+            trigger_type=trigger_type,
+            trigger_context=trigger_context or {},
+        )
+        task = asyncio.create_task(
+            self._run_job_safely(
+                job,
+                trigger_type=trigger_type,
+                trigger_context=trigger_context,
+                existing_run=existing_run,
+            )
+        )
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return run
+
     async def _run_job_safely(
         self,
         job: AmbientJob,
         *,
         trigger_type: TriggerType = TriggerType.CRON,
         trigger_context: dict[str, Any] | None = None,
+        existing_run: JobRun | None = None,
     ) -> None:
         """Execute a job under the concurrency semaphore, preventing parallel runs.
 
@@ -237,15 +326,24 @@ class DaemonScheduler:
             job: The job to run.
             trigger_type: How this execution was initiated.
             trigger_context: Optional metadata from the trigger.
+            existing_run: When set, a placeholder JobRun the API already
+                persisted is forwarded to the runner so it reuses that record
+                instead of allocating a fresh one.
         """
         try:
             async with self._semaphore:
-                # _running_jobs membership was already added by _tick before
-                # task creation; we re-assert here to handle the API path
-                # (where this method is invoked directly without _tick).
+                # _running_jobs membership was already added by _tick/dispatch
+                # before task creation; we re-assert here to handle any path
+                # that invokes this method directly without that reservation.
                 self._running_jobs.add(job.job_id)
                 try:
-                    await self._runner(job, trigger_type=trigger_type, trigger_context=trigger_context)
+                    runner_kwargs: dict[str, Any] = {
+                        "trigger_type": trigger_type,
+                        "trigger_context": trigger_context,
+                    }
+                    if existing_run is not None:
+                        runner_kwargs["_existing_run"] = existing_run
+                    await self._runner(job, **runner_kwargs)
                 except Exception:
                     logger.exception("Job %s (%s) raised an unhandled exception", job.job_id, job.name)
         finally:
@@ -327,9 +425,15 @@ class DaemonScheduler:
 def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | None:
     """Check whether any watched file has been modified since the last run.
 
-    Iterates over all files under `trigger.watch_dir` (recursively) and
-    matches filenames against each pattern in `trigger.watch_patterns` using
+    Iterates over files under `trigger.watch_dir` (recursively) and matches
+    filenames against each pattern in `trigger.watch_patterns` using
     `fnmatch`. Returns the first path whose mtime is newer than `last_run_at`.
+
+    Heavy/irrelevant directories (`.git`, `node_modules`, `.venv`, build
+    caches — see `_FILE_TRIGGER_PRUNE_DIRS`) are pruned in place, and the
+    number of files examined per tick is capped at `_FILE_TRIGGER_MAX_FILES`
+    so a large watch_dir can't make a single tick overrun the scheduler
+    interval and starve cron/interval jobs.
 
     If `last_run_at` is 0 (job has never run), every matched file is considered
     changed so the trigger fires immediately on the first tick.
@@ -352,8 +456,20 @@ def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | No
         if not root.is_dir():
             return None
 
-        for dirpath, _dirnames, filenames in os.walk(root):
+        examined = 0
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune in place so os.walk never descends into these subtrees.
+            dirnames[:] = [d for d in dirnames if d not in _FILE_TRIGGER_PRUNE_DIRS]
             for filename in filenames:
+                examined += 1
+                if examined > _FILE_TRIGGER_MAX_FILES:
+                    logger.warning(
+                        "File-change trigger: watch_dir %s exceeds %d files; "
+                        "stopping scan early this tick. Narrow watch_patterns or watch a smaller dir.",
+                        watch_dir,
+                        _FILE_TRIGGER_MAX_FILES,
+                    )
+                    return None
                 if not any(fnmatch.fnmatch(filename, pat) for pat in patterns):
                     continue
                 full_path = Path(dirpath) / filename

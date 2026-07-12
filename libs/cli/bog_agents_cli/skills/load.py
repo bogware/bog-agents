@@ -24,8 +24,15 @@ from bog_agents.middleware.skills import (
 )
 
 from bog_agents_cli._version import __version__ as _cli_version
+from bog_agents_cli.skill_trust import install_symlink_trust_hook
 
 logger = logging.getLogger(__name__)
+
+# Teach the SDK skill loader to honor the user's skill-trust store so an
+# explicitly-trusted symlinked skill directory is loaded instead of refused.
+# Idempotent and fail-closed: with no trust file, every symlink is still
+# refused (the default P1-8 posture).
+install_symlink_trust_hook()
 
 
 class ExtendedSkillMetadata(SkillMetadata):

@@ -61,10 +61,18 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/effort",
-            "Set effort level (low/medium/high/max)",
-            "quality speed",
+            "Set native reasoning effort (per-model levels)",
+            "quality speed reasoning thinking none low medium high xhigh max",
             "config",
             available=True,
+            subcommands=(
+                ("none", "Reasoning off (where supported)"),
+                ("low", "Minimal reasoning overhead"),
+                ("medium", "Balanced reasoning and speed"),
+                ("high", "Thorough analysis (default)"),
+                ("xhigh", "Extended reasoning (where supported)"),
+                ("max", "Maximum reasoning depth (where supported)"),
+            ),
         ),
         handler_method="_handle_effort_command",
     ),
@@ -123,6 +131,9 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("info", "Show catalog entry details (usage: /mcp info <id>)"),
                 ("add", "Add a custom stdio server (usage: /mcp add <name> <cmd> ...)"),
                 ("remove", "Remove a configured server (usage: /mcp remove <name>)"),
+                ("login", "Sign in to an OAuth server (usage: /mcp login <server>)"),
+                ("logout", "Remove stored OAuth tokens (usage: /mcp logout <server>)"),
+                ("status", "Show OAuth login status for configured servers"),
                 ("trust", "Manage project stdio server trust"),
                 ("view", "Open the live viewer (configured servers + tools)"),
                 ("help", "Show /mcp usage"),
@@ -234,8 +245,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/skills",
-            "Show loaded skills and their search paths",
-            "abilities memory",
+            "Show loaded skills; `/skills trust` manages trusted symlinked skill dirs",
+            "abilities memory trust symlink",
             "config",
             available=True,
         ),

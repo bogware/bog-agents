@@ -75,12 +75,21 @@ async def test_state_backend_async_errors():
     err = await be.aedit("/missing.txt", "a", "b")
     assert isinstance(err, EditResult) and err.error and "not found" in err.error
 
-    # awrite duplicate
+
+async def test_state_backend_awrite_overwrites_existing_file():
+    """awrite to an existing path overwrites it (upstream semantics) instead of erroring."""
+    rt = make_runtime()
+    be = StateBackend(rt)
+
     res = await be.awrite("/dup.txt", "x")
-    assert isinstance(res, WriteResult) and res.files_update is not None
+    assert isinstance(res, WriteResult) and res.error is None and res.files_update is not None
     rt.state["files"].update(res.files_update)
-    dup_err = await be.awrite("/dup.txt", "y")
-    assert isinstance(dup_err, WriteResult) and dup_err.error and "already exists" in dup_err.error
+
+    res2 = await be.awrite("/dup.txt", "y")
+    assert isinstance(res2, WriteResult) and res2.error is None and res2.files_update is not None
+    rt.state["files"].update(res2.files_update)
+
+    assert "y" in await be.aread("/dup.txt")
 
 
 async def test_state_backend_als_nested_directories():
@@ -269,7 +278,7 @@ async def test_state_backend_intercept_large_tool_result_async():
 
     assert isinstance(result, Command)
     assert "/large_tool_results/test_123" in result.update["files"]
-    assert result.update["files"]["/large_tool_results/test_123"]["content"] == [large_content]
+    assert result.update["files"]["/large_tool_results/test_123"]["content"] == large_content
     assert "Tool result too large" in result.update["messages"][0].content
 
 
@@ -399,3 +408,21 @@ async def test_state_backend_agrep_with_path_variations(path: str, expected_coun
     assert len(matches) == expected_count
     match_paths = {m["path"] for m in matches}
     assert match_paths == set(expected_paths)
+
+
+async def test_state_backend_adelete_recursive():
+    """`adelete` removes the exact key plus every key nested under it."""
+    rt = make_runtime()
+    be = StateBackend(rt)
+
+    for path in ("/dir/a.txt", "/dir/sub/b.txt", "/directory.txt"):
+        res = await be.awrite(path, "x")
+        rt.state["files"].update(res.files_update)
+
+    missing = await be.adelete("/nope.txt")
+    assert missing.error and "not found" in missing.error
+
+    res = await be.adelete("/dir")
+    assert res.error is None
+    assert res.deleted_paths == ["/dir/a.txt", "/dir/sub/b.txt"]
+    assert res.files_update == {"/dir/a.txt": None, "/dir/sub/b.txt": None}

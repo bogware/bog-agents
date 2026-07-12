@@ -1,6 +1,6 @@
 """Security regression tests for Wave 1 injection / SSRF fixes (REVIEW.md v2).
 
-* P1-2  — BaseSandbox.grep_raw must shlex-quote the glob argument.
+* P1-2  — BaseSandbox.grep must never let a glob reach the shell unquoted.
 * P1-16 — desktop notifications must not interpolate text into shell/AppleScript.
 * P1-6 / P1-74 — browser_agent must re-validate redirect targets (no SSRF via 3xx).
 """
@@ -40,12 +40,14 @@ def _make_recording_sandbox() -> Any:
     return _S()
 
 
-def test_grep_raw_quotes_glob() -> None:
-    sb = _make_recording_sandbox()
-    malicious = "x'; touch /tmp/pwned #"
-    sb.grep_raw(pattern="needle", path=".", glob=malicious)
-    cmd = type(sb).last_cmd
+def test_grep_quotes_glob() -> None:
+    """A slash-free glob goes to GNU grep, so it must be a single shlex-quoted token."""
     import shlex
+
+    sb = _make_recording_sandbox()
+    malicious = "x'; touch pwned #"
+    sb.grep(pattern="needle", path=".", glob=malicious)
+    cmd = type(sb).last_cmd
 
     # The glob must appear as exactly one shlex-quoted token. That is the whole
     # security property: the payload cannot break out of the quoting. (The old
@@ -54,6 +56,26 @@ def test_grep_raw_quotes_glob() -> None:
     assert f"--include={shlex.quote(malicious)}" in cmd
     # And the dangerous old form is gone.
     assert "--include='x'; touch" not in cmd
+
+
+def test_grep_path_glob_is_base64_encoded() -> None:
+    """A glob containing `/` takes the in-sandbox Python route.
+
+    GNU `--include` only matches basenames, so `src/**/*.py` is routed to a
+    Python script instead. That route must carry the glob as base64 — never as
+    shell text — or the quoting property above would be silently lost for every
+    path-shaped glob.
+    """
+    import base64
+
+    sb = _make_recording_sandbox()
+    malicious = "x'; touch /tmp/pwned #"
+    sb.grep(pattern="needle", path=".", glob=malicious)
+    cmd = type(sb).last_cmd
+
+    assert malicious not in cmd
+    assert base64.b64encode(malicious.encode()).decode() in cmd
+    assert "; touch /tmp/pwned" not in cmd
 
 
 # ---------------------------------------------------------------------------

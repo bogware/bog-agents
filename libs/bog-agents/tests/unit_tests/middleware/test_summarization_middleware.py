@@ -1,6 +1,7 @@
 """Unit tests for `SummarizationMiddleware` with backend offloading."""
 
 import asyncio
+import re
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -383,7 +384,9 @@ class TestOffloadingBasic:
         assert path == "/conversation_history/test-thread-123.md"
 
         assert "## Summarized at" in content
-        assert "Human:" in content or "AI:" in content
+        # History is rendered with `get_buffer_string(format="xml")` so that
+        # offloaded media reference blocks survive the render.
+        assert '<message type="human">' in content or '<message type="ai">' in content
 
     def test_offload_appends_to_existing_content(self) -> None:
         """Test that second summarization appends to existing file."""
@@ -1123,8 +1126,8 @@ class TestCustomHistoryPathPrefix:
 class TestMarkdownFormatting:
     """Tests for markdown message formatting using `get_buffer_string`."""
 
-    def test_markdown_format_includes_message_content(self) -> None:
-        """Test that markdown format includes message content."""
+    def test_xml_format_includes_message_content(self) -> None:
+        """Test that the offloaded history is XML-formatted and includes message content."""
         backend = MockBackend()
         mock_model = make_mock_model()
 
@@ -1144,11 +1147,11 @@ class TestMarkdownFormatting:
         assert result.command is not None
         assert result.command.update is not None
 
-        # Verify the offloaded content is markdown formatted
+        # Verify the offloaded content is XML formatted
         _, content = backend.write_calls[0]
 
-        # Should contain human-readable message prefixes
-        assert "Human:" in content or "AI:" in content
+        # Should contain the XML message envelopes
+        assert '<message type="human">' in content or '<message type="ai">' in content
         # Should contain the actual message content
         assert "User message" in content
 
@@ -2189,8 +2192,8 @@ def test_chained_summarization_cutoff_index() -> None:
         return [HumanMessage(content=f"S{i}", id=f"s{i}") if i % 2 == 0 else AIMessage(content=f"S{i}", id=f"s{i}") for i in range(n)]
 
     def offloaded_labels(write_call_content: str) -> list[str]:
-        """Extract S-labels from backend write content (e.g. "Human: S0" -> "S0")."""
-        return [word for word in write_call_content.split() if word.startswith("S") and word[1:].isdigit()]
+        """Extract S-labels from XML-rendered backend write content."""
+        return re.findall(r"\bS\d+\b", write_call_content)
 
     # --- Round 1: first summarization, no previous event ---
     state = cast("AgentState[Any]", {"messages": make_state_messages(8)})

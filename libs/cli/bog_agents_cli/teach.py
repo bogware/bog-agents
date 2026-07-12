@@ -200,7 +200,7 @@ def save_taught_skill(
     skill_path = skills_dir / f"{safe_name}.md"
 
     content = generate_skill_from_session(session)
-    skill_path.write_text(content)
+    skill_path.write_text(content, encoding="utf-8")
 
     logger.info("Saved taught skill to %s", skill_path)
     return skill_path
@@ -242,6 +242,6 @@ def save_session_data(
 
     safe_name = session.name.replace(" ", "-").lower()
     session_path = sessions_dir / f"{safe_name}.json"
-    session_path.write_text(json.dumps(data, indent=2))
+    session_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     return session_path

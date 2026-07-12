@@ -698,7 +698,7 @@ def reset_agent(
 
     agent_dir.mkdir(parents=True, exist_ok=True)
     agent_md = agent_dir / "AGENTS.md"
-    agent_md.write_text(source_content)
+    agent_md.write_text(source_content, encoding="utf-8")
 
     if output_format == "json":
         from bog_agents_cli.output import write_json
@@ -1231,6 +1231,12 @@ def create_cli_agent(
     project_skills_dir = None
     project_agent_skills_dir = None
     if enable_skills:
+        # Honor the skill-trust store when SkillsMiddleware lists directories:
+        # an explicitly-trusted symlinked skill dir is loaded, everything else
+        # is still refused (fail-closed default). Idempotent.
+        from bog_agents_cli.skill_trust import install_symlink_trust_hook
+
+        install_symlink_trust_hook()
         skills_dir = settings.ensure_user_skills_dir(assistant_id)
         user_agent_skills_dir = settings.get_user_agent_skills_dir()
         project_skills_dir = (
@@ -1697,6 +1703,17 @@ def create_cli_agent(
     from bog_agents.middleware.notifications import NotificationsMiddleware
 
     agent_middleware.append(NotificationsMiddleware())
+
+    # Goal tools — a durable objective + acceptance-criteria rubric that survive
+    # across turns and are re-injected into the system prompt every model call.
+    # Carries no configuration and is safe to include unconditionally: with no
+    # goal set, get_goal/get_rubric report empty and the injected prompt is just
+    # the static guidance. The CLI's /goal and /rubric commands seed the goal
+    # channels (see goal_controller.state_seed); the agent's update_goal tool
+    # records progress back into the same checkpointed state.
+    from bog_agents.middleware import GoalToolsMiddleware
+
+    agent_middleware.append(GoalToolsMiddleware())
 
     # Bedrock resilience — only attached when a Bedrock model is in use, to
     # keep the middleware list lean for everyone else. NOTE: by this point

@@ -92,40 +92,52 @@ class TestDecodeBody:
         assert "hello" in out
 
 
+def _stub_open(
+    *,
+    body: bytes,
+    status: int = 200,
+    content_type: str = "text/html; charset=utf-8",
+    final_url: str = "https://example.com/page",
+):
+    """Build a stub `opener.open` return value (a context-manager response)."""
+    resp = MagicMock()
+    resp.geturl.return_value = final_url
+    resp.status = status
+    resp.headers.get_content_type.return_value = content_type.split(";", 1)[0].strip()
+    resp.headers.get.return_value = None  # no Location header
+    resp.headers.__contains__ = lambda _self, _k: False
+    resp.read.return_value = body
+    ctx = MagicMock()
+    ctx.__enter__ = MagicMock(return_value=resp)
+    ctx.__exit__ = MagicMock(return_value=False)
+    return ctx
+
+
+def _patch_open(monkeypatch, ctx) -> None:
+    """Stub the urllib opener so no real network call is made.
+
+    Also stubs the SSRF resolution so tests stay hermetic (no real DNS).
+    """
+    import urllib.request
+
+    import bog_agents_cli.web_fetch as wf
+
+    monkeypatch.setattr(
+        urllib.request.OpenerDirector,
+        "open",
+        lambda _self, _req, timeout=None: ctx,
+    )
+    # Treat the test host as a public address — exercise the fetch path, not
+    # real DNS. SSRF-blocking behaviour is covered by the dedicated tests.
+    monkeypatch.setattr(wf, "assert_fetch_allowed", lambda _url: None)
+
+
 class TestFetchHappyPath:
     """fetch_url's interaction with urllib stubbed end-to-end."""
 
-    def _stub_response(
-        self,
-        *,
-        body: bytes,
-        status: int = 200,
-        content_type: str = "text/html; charset=utf-8",
-        final_url: str = "https://example.com/page",
-    ):
-        resp = MagicMock()
-        resp.geturl.return_value = final_url
-        resp.status = status
-        resp.headers.get_content_type.return_value = content_type.split(";", 1)[
-            0
-        ].strip()
-        # We need 'in' membership on content_type for charset detection.
-        resp.headers.__contains__ = lambda _self, _k: False
-        resp.read.return_value = body
-        ctx = MagicMock()
-        ctx.__enter__ = MagicMock(return_value=resp)
-        ctx.__exit__ = MagicMock(return_value=False)
-        return ctx
-
     def test_basic_html_fetch(self, monkeypatch):
-        import bog_agents_cli.web_fetch as wf
-
         body = b"<html><body><p>hello world</p></body></html>"
-        monkeypatch.setattr(
-            wf.urllib.request,
-            "urlopen",
-            lambda _req, timeout=None: self._stub_response(body=body),
-        )
+        _patch_open(monkeypatch, _stub_open(body=body))
         result = fetch_url("https://example.com/page")
         assert result.status_code == 200
         assert "hello world" in result.body
@@ -133,30 +145,19 @@ class TestFetchHappyPath:
         assert result.final_url == "https://example.com/page"
 
     def test_truncation_flagged(self, monkeypatch):
-        import bog_agents_cli.web_fetch as wf
-
         # Make a body larger than the per-call cap.
         body = b"a" * 20
-        monkeypatch.setattr(
-            wf.urllib.request,
-            "urlopen",
-            lambda _req, timeout=None: self._stub_response(body=body),
-        )
+        _patch_open(monkeypatch, _stub_open(body=body))
         result = fetch_url("https://example.com/page", max_bytes=10)
         assert result.truncated is True
         # Body holds the truncated, cleaned text — 10 'a's stripped of tags.
         assert "a" in result.body
 
     def test_non_html_kept_verbatim(self, monkeypatch):
-        import bog_agents_cli.web_fetch as wf
-
         body = b"raw plain content"
-        monkeypatch.setattr(
-            wf.urllib.request,
-            "urlopen",
-            lambda _req, timeout=None: self._stub_response(
-                body=body, content_type="text/plain; charset=utf-8"
-            ),
+        _patch_open(
+            monkeypatch,
+            _stub_open(body=body, content_type="text/plain; charset=utf-8"),
         )
         result = fetch_url("https://example.com/page")
         assert "raw plain content" in result.body
@@ -194,6 +195,7 @@ class TestRenderPromptBlock:
 class TestErrorPaths:
     def test_http_error_surfaces_as_result_not_exception(self, monkeypatch):
         import urllib.error
+        import urllib.request
 
         import bog_agents_cli.web_fetch as wf
 
@@ -204,7 +206,8 @@ class TestErrorPaths:
             err.headers = None  # exercise the None-headers branch
             raise err
 
-        monkeypatch.setattr(wf.urllib.request, "urlopen", raise_404)
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", raise_404)
+        monkeypatch.setattr(wf, "assert_fetch_allowed", lambda _url: None)
         result = fetch_url("https://example.com/x")
         # 4xx still yields a usable FetchResult, not an exception.
         assert result.status_code == 404
@@ -212,6 +215,7 @@ class TestErrorPaths:
 
     def test_network_error_raises(self, monkeypatch):
         import urllib.error
+        import urllib.request
 
         import bog_agents_cli.web_fetch as wf
 
@@ -219,6 +223,7 @@ class TestErrorPaths:
             msg = "nodename nor servname provided"
             raise urllib.error.URLError(msg)
 
-        monkeypatch.setattr(wf.urllib.request, "urlopen", raise_dns)
+        monkeypatch.setattr(urllib.request.OpenerDirector, "open", raise_dns)
+        monkeypatch.setattr(wf, "assert_fetch_allowed", lambda _url: None)
         with pytest.raises(WebFetchError, match="Network error"):
             fetch_url("https://example.com/x")

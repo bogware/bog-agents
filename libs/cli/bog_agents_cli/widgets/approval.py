@@ -25,6 +25,7 @@ from bog_agents_cli.config import (
 from bog_agents_cli.unicode_security import (
     check_url_safety,
     detect_dangerous_unicode,
+    escape_for_display,
     format_warning_detail,
     iter_string_values,
     looks_like_url_key,
@@ -209,7 +210,10 @@ class ApprovalMenu(Container):
         # Title - show count if multiple tools
         count = len(self._action_requests)
         if count == 1:
-            title = f">>> {self._tool_names[0]} Requires Approval <<<"
+            # tool name is attacker-influenceable (e.g. server-supplied MCP
+            # name) — escape before embedding in Rich markup.
+            safe_tool_name = escape_for_display(str(self._tool_names[0]))
+            title = f">>> {safe_tool_name} Requires Approval <<<"
         else:
             title = f">>> {count} Tool Calls Require Approval <<<"
         yield Static(title, classes="approval-title")
@@ -287,16 +291,20 @@ class ApprovalMenu(Container):
             tool_name = action_request.get("name", "unknown")
             tool_args = action_request.get("args", {})
 
-            # Add tool header if multiple tools
+            # Add tool header if multiple tools. tool_name is
+            # attacker-influenceable — escape before Rich markup interpolation.
             if len(self._action_requests) > 1:
-                header = Static(f"[bold]{i + 1}. {tool_name}[/bold]")
+                safe_header_name = escape_for_display(str(tool_name))
+                header = Static(f"[bold]{i + 1}. {safe_header_name}[/bold]")
                 await self._tool_info_container.mount(header)
 
-            # Show description if present
+            # Show description if present. Descriptions can carry raw
+            # server-supplied / file-path text — escape before Rich markup.
             description = action_request.get("description")
             if description:
+                safe_description = escape_for_display(str(description))
                 desc_widget = Static(
-                    f"[dim]{description}[/dim]",
+                    f"[dim]{safe_description}[/dim]",
                     classes="approval-description",
                 )
                 await self._tool_info_container.mount(desc_widget)

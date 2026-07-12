@@ -36,6 +36,14 @@ from bog_agents_cli.dreamscape.config import (
     is_emergency_disabled,
 )
 from bog_agents_cli.dreamscape.dream_engine import sample_dream_excerpts
+
+# Single source of truth for model-output text extraction. The live
+# langchain ``ModelResponse`` keeps its output in ``.result`` (not
+# ``.content``); the shared helper in ``laws.py`` handles both that and
+# the bare-``AIMessage`` fallback used in tests. Imported here so the
+# imagination failure-trigger reads real model output rather than the
+# always-empty ``.content`` it read before.
+from bog_agents_cli.dreamscape.laws import _response_text
 from bog_agents_cli.dreamscape.lifecycle import (
     LifecycleState,
     load_snapshot,
@@ -481,23 +489,6 @@ def _strip_dream_prefix(excerpt: str) -> str:
     if lower.startswith(_DREAM_TITLE_PREFIX):
         return stripped[len(_DREAM_TITLE_PREFIX) :].lstrip()
     return excerpt
-
-
-def _response_text(response: Any) -> str:
-    content = getattr(response, "content", None)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for part in content:
-            if isinstance(part, dict) and part.get("type") == "text":
-                value = part.get("text")
-                if isinstance(value, str):
-                    parts.append(value)
-            elif isinstance(part, str):
-                parts.append(part)
-        return "".join(parts)
-    return str(content) if content is not None else ""
 
 
 # ---------------------------------------------------------------------------

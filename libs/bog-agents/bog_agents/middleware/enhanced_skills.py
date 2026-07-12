@@ -263,7 +263,8 @@ You have access to skills loaded from both local and remote sources.
 **How to Use Skills:**
 
 1. Check if the user's task matches an available skill
-2. Read the skill's full instructions using the path shown
+2. Read the skill's full instructions with `read_file` on the path shown.
+    Pass `limit=1000` since the default of 100 lines is too small for most skill files.
 3. Follow the skill's workflow
 4. For remote skills, the content is cached locally for fast access
 

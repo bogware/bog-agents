@@ -661,3 +661,29 @@ class TestOfflineMode:
         summary = mw.get_status_summary()
         assert "Connectivity" in summary
         assert "Enforce offline: True" in summary
+
+    def test_check_connectivity_restores_global_socket_timeout(self):
+        """check_connectivity must not leak a process-global socket default timeout (S2)."""
+        import socket
+        from unittest.mock import patch
+
+        from bog_agents.middleware.offline_mode import ConnectivityStatus, check_connectivity
+
+        sentinel = 17.5
+        prev = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(sentinel)
+        try:
+            # Force both branches to run: DNS resolution fails, then the local
+            # probe reports no Ollama, exercising the full code path.
+            with (
+                patch("socket.getaddrinfo", side_effect=socket.gaierror("offline")),
+                patch("socket.socket") as fake_socket,
+            ):
+                fake_socket.return_value.connect_ex.return_value = 1
+                status = check_connectivity(timeout=3.0)
+
+            assert status == ConnectivityStatus.OFFLINE
+            # The global default must be exactly what we set, not the 3.0 probe timeout.
+            assert socket.getdefaulttimeout() == sentinel
+        finally:
+            socket.setdefaulttimeout(prev)

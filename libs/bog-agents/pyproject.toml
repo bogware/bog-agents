@@ -28,15 +28,18 @@ classifiers = [
 dependencies = [
     "anyio>=4.0.0,<5.0.0",
     # CVE-2026-40087 (langchain-core 1.2.x): fix landed in 1.2.28
-    "langchain-core>=1.2.28,<2.0.0",
-    "langchain>=1.2.11,<2.0.0",
+    "langchain-core>=1.4.9,<2.0.0",
+    "langchain>=1.3.12,<2.0.0",
     # graph.py and ~15 middleware modules import langgraph directly (BaseCache,
     # channels, CompiledStateGraph, …); declare it explicitly instead of
     # relying on it arriving transitively via langchain. (REVIEW.md v2 P1-72.)
     "langgraph>=1.2.0,<2.0.0",
-    "langchain-anthropic>=1.3.4,<2.0.0",
+    "langchain-anthropic>=1.4.8,<2.0.0",
     "langchain-google-genai>=4.2.0,<5.0.0",
-    "wcmatch>=6.0,<7.0",
+    # Must stay >=10.1 to remain co-installable with `deepagents` (which floors
+    # wcmatch at 10.1). A <7.0 cap made the two packages unresolvable together,
+    # which defeats the drop-in-replacement contract. See PARITY.md.
+    "wcmatch>=10.1,<11.0",
     "pyyaml>=6.0.0,<7.0.0",
 
     # ─── transitive-CVE floors ──────────────────────────────────────
@@ -62,6 +65,17 @@ serve = [
 # PDF reading for the read_file tool (pdf_reader middleware). pypdf is the
 # default backend; pdfplumber / pymupdf are also supported if installed.
 pdf = ["pypdf>=4.0.0"]
+
+# Video-frame reading for the read_file tool (video_reader middleware). PyAV
+# decodes frames; Pillow encodes the sampled JPEGs. Both are imported lazily so
+# a default install stays lean.
+video = ["av>=17.0.0,<18.0.0", "pillow>=10.0.0,<13.0.0"]
+
+# ContextHubBackend — a persistent, versioned agent filesystem backed by a
+# LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
+# the backend needs `Client.pull_agent` / `push_agent`, so pin the floor here.
+# CVE-2026-45134 — langsmith fix landed in 0.8.0.
+hub = ["langsmith>=0.8.0"]
 
 # ─── provider extras ────────────────────────────────────────────────
 # `resolve_model` dispatches through langchain's `init_chat_model`, which

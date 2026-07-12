@@ -3,8 +3,9 @@
 import dataclasses
 import os
 from collections.abc import Callable, Sequence
+from importlib import import_module
 from pathlib import Path
-from typing import Annotated, Any, Required, cast
+from typing import Annotated, Any, Required, TypedDict, cast
 
 from langchain.agents import AgentState, create_agent as _langchain_create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig, TodoListMiddleware
@@ -21,13 +22,14 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.store.base import BaseStore
 from langgraph.types import Checkpointer
 
+from bog_agents._api.deprecation import warn_deprecated
 from bog_agents._excluded_middleware import (
     _apply_excluded_middleware,
     _validate_excluded_middleware_config,
     _verify_excluded_middleware_coverage,
 )
 from bog_agents._messages_reducer import _messages_delta_reducer
-from bog_agents._models import resolve_model
+from bog_agents._models import is_bedrock_model, resolve_model
 from bog_agents._tools import _apply_tool_description_overrides
 from bog_agents._version import __version__
 from bog_agents.backends import StateBackend
@@ -55,7 +57,11 @@ from bog_agents.middleware.summarization import (
     _BogAgentsSummarizationMiddleware,
     create_summarization_middleware,
 )
-from bog_agents.profiles.harness.harness_profiles import _apply_profile_prompt, _harness_profile_for_model
+from bog_agents.profiles.harness.harness_profiles import (
+    GeneralPurposeSubagentProfile,
+    _apply_profile_prompt,
+    _harness_profile_for_model,
+)
 
 
 class DeepAgentState(AgentState):
@@ -80,6 +86,184 @@ class DeepAgentState(AgentState):
     """
 
     messages: Required[Annotated[list[AnyMessage], DeltaChannel(_messages_delta_reducer, snapshot_frequency=50)]]  # ty: ignore[invalid-argument-type]
+
+
+class SystemPromptConfig(TypedDict, total=False):
+    """Structured `system_prompt` for `create_agent`.
+
+    All keys are optional. Each accepts a `str` or a `SystemMessage` (to
+    carry explicit `cache_control` markers), and `base` additionally accepts
+    `None` to drop the base prompt entirely.
+    """
+
+    prefix: str | SystemMessage | None
+    """Text placed before the base prompt."""
+
+    base: str | SystemMessage | None
+    """Replacement for the built-in base prompt.
+
+    Omit the key to keep the built-in base (or the active
+    `HarnessProfile.base_system_prompt`). Set it to `None` to drop the base
+    entirely, leaving only `prefix`, `suffix`, and middleware-contributed
+    content.
+    """
+
+    suffix: str | SystemMessage | None
+    """Text placed after the base prompt (before any profile suffix)."""
+
+
+_PROMPT_SEPARATOR = "\n\n"
+
+
+def _assemble_prompt_parts(parts: list[str | SystemMessage]) -> str | SystemMessage:
+    r"""Join prompt parts into a single `str` or `SystemMessage`.
+
+    All-`str` parts join with blank lines. If any part is a `SystemMessage`,
+    the result is a `SystemMessage` whose `content_blocks` concatenate each
+    part's blocks with `\n\n` separators, preserving `cache_control` markers.
+
+    Args:
+        parts: Ordered prompt fragments to concatenate.
+
+    Returns:
+        The joined prompt as a plain `str` (when every part is a `str`) or a
+        `SystemMessage` (when any part carries content blocks).
+    """
+    if not parts:
+        return ""
+    if all(isinstance(part, str) for part in parts):
+        return _PROMPT_SEPARATOR.join(cast("list[str]", parts))
+    blocks: list[Any] = []
+    for i, part in enumerate(parts):
+        if i:
+            blocks.append({"type": "text", "text": _PROMPT_SEPARATOR})
+        if isinstance(part, SystemMessage):
+            blocks.extend(part.content_blocks)
+        else:
+            blocks.append({"type": "text", "text": part})
+    return SystemMessage(content_blocks=blocks)
+
+
+def _normalize_system_prompt(
+    system_prompt: str | SystemMessage | SystemPromptConfig | None,
+) -> SystemPromptConfig:
+    """Coerce the `system_prompt` argument into a `SystemPromptConfig`.
+
+    `None` becomes an empty config; a bare `str`/`SystemMessage` becomes a
+    `prefix` (matching the historical behavior of placing caller text before
+    the base); a config dict is returned unchanged.
+
+    Args:
+        system_prompt: The caller-supplied `system_prompt` value.
+
+    Returns:
+        A `SystemPromptConfig` mapping with the caller's intent normalized.
+    """
+    if system_prompt is None:
+        return {}
+    if isinstance(system_prompt, (str, SystemMessage)):
+        return {"prefix": system_prompt}
+    return system_prompt
+
+
+def _apply_custom_middleware(
+    base: list[AgentMiddleware],
+    custom: Sequence[AgentMiddleware],
+    *,
+    core_names: set[str] | None = None,
+) -> list[AgentMiddleware]:
+    """Merge custom middleware into `base` by `.name`, replacing collisions in place.
+
+    A custom middleware whose `.name` matches a middleware still present in
+    `base` REPLACES that built-in at its original position (rather than being
+    dropped by keep-first dedup). Brand-new custom middleware lands after the
+    last `core_names` member — so it precedes the profile/prompt-caching/memory
+    tail — or at the end when `core_names` is unset.
+
+    Args:
+        base: The assembled base stack (not mutated).
+        custom: Caller-supplied middleware to merge in.
+        core_names: Names of the core stack, used to position brand-new custom
+            middleware ahead of the tail. When `None`, new middleware is
+            appended at the end.
+
+    Returns:
+        A new list with collisions replaced in place and novel entries spliced
+        in after the core stack.
+    """
+    if not custom:
+        return list(base)
+    current_names = {m.name for m in base}
+    replacements: dict[str, AgentMiddleware] = {}
+    to_append: list[AgentMiddleware] = []
+    for m in custom:
+        if m.name in current_names:
+            replacements[m.name] = m
+        else:
+            to_append.append(m)
+    result = list(base)
+    for i, m in enumerate(result):
+        if m.name in replacements:
+            result[i] = replacements[m.name]
+    if to_append and core_names is not None:
+        # Land new middleware after the last core entry, ahead of the tail.
+        pos = max((i for i, m in enumerate(result) if m.name in core_names), default=len(result) - 1) + 1
+        result[pos:pos] = to_append
+    else:
+        result.extend(to_append)
+    return result
+
+
+def _create_bedrock_prompt_caching_middleware() -> AgentMiddleware[Any, Any, Any] | None:
+    """Create Bedrock prompt-caching middleware when `langchain-aws` is installed.
+
+    `langchain-aws` is an optional dependency, so its prompt-caching submodule
+    is imported lazily. When the package (or that submodule) is absent the
+    function degrades gracefully by returning `None`, leaving a Bedrock model to
+    pay full input-token price rather than crashing the agent build. Import
+    errors that name an unrelated transitive dependency are re-raised so a
+    genuinely broken `langchain-aws` install is not silently masked.
+
+    Returns:
+        A `BedrockPromptCachingMiddleware` instance configured to ignore
+        unsupported models, or `None` when `langchain-aws` is unavailable.
+    """
+    module_name = "langchain_aws.middleware.prompt_caching"
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        if exc.name not in {"langchain_aws", "langchain_aws.middleware", module_name}:
+            raise
+        return None
+    middleware_cls = module.BedrockPromptCachingMiddleware
+    return cast("AgentMiddleware[Any, Any, Any]", middleware_cls(unsupported_model_behavior="ignore"))
+
+
+def _append_prompt_caching_middleware(
+    middleware: list[AgentMiddleware[Any, Any, Any]],
+    resolved_model: str | BaseChatModel,
+) -> None:
+    """Append the provider-appropriate prompt-caching tail for `resolved_model`.
+
+    Always appends `AnthropicPromptCachingMiddleware` (a no-op for non-Anthropic
+    models via `unsupported_model_behavior="ignore"`, so the non-Bedrock stack is
+    byte-identical to before). When `resolved_model` targets AWS Bedrock and
+    `langchain-aws` is installed, `BedrockPromptCachingMiddleware` is appended
+    directly after it so Bedrock turns pay the cached input-token price. The two
+    never both fire: the Anthropic middleware ignores Bedrock (`ChatBedrock`)
+    models, and the Bedrock entry is only added when the model is Bedrock. The
+    Bedrock entry is the innermost tail so, like the Anthropic one, it sees the
+    final message list after summarization/memory transforms.
+
+    Args:
+        middleware: The stack to append onto; mutated in place.
+        resolved_model: The already-resolved model this stack will serve.
+    """
+    middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    if is_bedrock_model(resolved_model):
+        bedrock_middleware = _create_bedrock_prompt_caching_middleware()
+        if bedrock_middleware is not None:
+            middleware.append(bedrock_middleware)
 
 
 def _merge_fs_interrupt_on(
@@ -201,6 +385,45 @@ def get_default_model() -> ChatAnthropic:
     return cast(ChatAnthropic, resolve_model("anthropic:claude-sonnet-4-6"))
 
 
+def _dedup_middleware_by_name(middleware_list: list[AgentMiddleware]) -> list[AgentMiddleware]:
+    """Drop duplicate middleware instances that share a `.name`, keeping the first.
+
+    langchain refuses to compile an agent whose middleware list contains two
+    instances with the same `.name`, raising an opaque "Please remove duplicate
+    middleware instances" `AssertionError` that points at the caller's list
+    rather than the framework-injected twin. The per-feature construction guards
+    in `create_agent` are the primary defense (they honor user precedence by not
+    building the twin in the first place); this pass is a keep-first backstop for
+    any combination they miss.
+
+    Args:
+        middleware_list: Ordered list of middleware instances to de-duplicate.
+
+    Returns:
+        A new list with later duplicates (by `.name`) removed, order otherwise
+        preserved. The first occurrence of each name is kept.
+    """
+    seen_names: set[str] = set()
+    deduped: list[AgentMiddleware] = []
+    dropped: list[str] = []
+    for mw in middleware_list:
+        name = getattr(mw, "name", type(mw).__name__)
+        if name in seen_names:
+            dropped.append(name)
+            continue
+        seen_names.add(name)
+        deduped.append(mw)
+    if dropped:
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "Removed duplicate middleware instance(s) with name(s) %s; the first occurrence of each was kept. "
+            "This usually means the same feature was supplied both via a convenience kwarg and via middleware=.",
+            sorted(set(dropped)),
+        )
+    return deduped
+
+
 def _validate_middleware_ordering(middleware_list: list[AgentMiddleware]) -> None:
     """Raise ValueError if any middleware's requirements appear later in the stack.
 
@@ -289,7 +512,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     model: str | BaseChatModel | None = None,
     tools: Sequence[BaseTool | Callable | dict[str, Any]] | None = None,
     *,
-    system_prompt: str | SystemMessage | None = None,
+    system_prompt: str | SystemMessage | SystemPromptConfig | None = None,
     middleware: Sequence[AgentMiddleware] = (),
     subagents: list[SubAgent | CompiledSubAgent | AsyncSubAgent] | None = None,
     skills: list[str] | None = None,
@@ -322,7 +545,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     **not** an "always on" default set. Which middleware are actually composed
     depends on the ``FeatureConfig`` / arguments you pass; several entries below
     (notably ``LifecycleHooksMiddleware``, ``HttpHooksMiddleware``,
-    ``LangSmithMiddleware``, ``SafeToolsMiddleware``, ``ExpertRulesMiddleware``,
+    ``LangSmithMiddleware``, ``ExpertRulesMiddleware``,
     ``RulesMiddleware``, ``ContextPackingMiddleware``, ``ThinkingMiddleware``,
     and ``IntelligentCompactionMiddleware``) are opt-in and only present when
     you enable them or pass them via ``middleware=``. The canonical order is:
@@ -331,8 +554,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
        ``HttpHooksMiddleware``, ``LangSmithMiddleware``,
        ``AuditTrailMiddleware``
     2. Pre-prompt safety — ``DLPMiddleware``, ``RBACMiddleware``,
-       ``SafeToolsMiddleware``, ``ApprovalGatesMiddleware``,
-       ``ExpertRulesMiddleware``
+       ``ApprovalGatesMiddleware``, ``ExpertRulesMiddleware`` (selective
+       auto-approval is data-driven via ``SafeToolsConfig`` / ``is_tool_safe``
+       from ``bog_agents.middleware.safe_tools`` — there is no
+       ``SafeToolsMiddleware`` class)
     3. Context preparation — ``RulesMiddleware``, ``MemoryMiddleware``,
        ``SkillsMiddleware``, ``RepoMapMiddleware``,
        ``CodeIntelligenceMiddleware``, ``ContextPackingMiddleware``
@@ -472,6 +697,21 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     _model_spec: str | None = model if isinstance(model, str) else None
 
     if model is None:
+        # Relying on the default model is a deprecated path (parity with
+        # deepagents 0.5.3): callers should construct their model explicitly.
+        warn_deprecated(
+            since="0.7.0",
+            removal="1.0.0",
+            message=(
+                "Passing `model=None` to `create_agent` is deprecated and will "
+                "be removed in bog-agents==1.0.0. The `model` parameter type "
+                "will change from `BaseChatModel | str | None` to "
+                "`BaseChatModel | str`. Specify a model explicitly "
+                "(e.g., `ChatAnthropic(model_name=...)` or "
+                "`create_agent(model='anthropic:claude-sonnet-4-6')`)."
+            ),
+            package="bog-agents",
+        )
         _api_key_vars = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY")
         if not any(os.environ.get(k) for k in _api_key_vars):
             import warnings
@@ -515,42 +755,6 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # gets a real factory rather than a typo'd grouping expression.
     backend = backend if backend is not None else StateBackend
 
-    # Build general-purpose subagent with default middleware stack
-    gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [
-        TodoListMiddleware(),
-        FilesystemMiddleware(backend=backend),
-    ]
-    if permissions:
-        gp_middleware.append(FilesystemPermissionsMiddleware(permissions=permissions))
-    gp_middleware.extend(
-        [
-            create_summarization_middleware(model, backend),
-            PatchToolCallsMiddleware(),
-        ]
-    )
-    if skills is not None:
-        gp_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
-    gp_middleware.extend(_profile.materialize_extra_middleware())
-    if _profile.excluded_tools:
-        gp_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-    gp_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
-    gp_middleware = _apply_excluded_middleware(
-        gp_middleware,
-        _profile,
-        matched_classes=_excl_matched_classes,
-        matched_names=_excl_matched_names,
-    )
-
-    general_purpose_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
-        **GENERAL_PURPOSE_SUBAGENT,
-        "model": model,
-        "tools": _tools or [],
-        "middleware": gp_middleware,
-    }
-    gp_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
-    if gp_interrupt_on is not None:
-        general_purpose_spec["interrupt_on"] = gp_interrupt_on
-
     # Process user-provided subagents to fill in defaults for model, tools, and middleware
     processed_subagents: list[SubAgent | CompiledSubAgent] = []
     async_subagents: list[AsyncSubAgent] = []
@@ -574,9 +778,21 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             # CompiledSubAgent - use as-is
             processed_subagents.append(spec)
         else:
-            # SubAgent - fill in defaults and prepend base middleware
-            subagent_model = spec.get("model", model)
-            subagent_model = resolve_model(subagent_model)
+            # SubAgent - fill in defaults and prepend base middleware.
+            # Capture the raw model spec string BEFORE `resolve_model` so this
+            # subagent resolves its OWN harness profile (a subagent on a
+            # different model no longer silently inherits the parent's profile).
+            raw_subagent_model = spec.get("model", model)
+            subagent_model = resolve_model(raw_subagent_model)
+            _subagent_spec = raw_subagent_model if isinstance(raw_subagent_model, str) else None
+            _subagent_profile = _harness_profile_for_model(subagent_model, _subagent_spec)
+            _validate_excluded_middleware_config(
+                _subagent_profile,
+                required_classes=_required_mw_classes,
+                required_names=_required_mw_names,
+            )
+            _sub_matched_classes: set[type[AgentMiddleware[Any, Any, Any]]] = set()
+            _sub_matched_names: set[str] = set()
 
             # Resolve permissions: a subagent's own rules replace the parent's
             # entirely; otherwise it inherits the top-level rules.
@@ -585,7 +801,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             # Build middleware: base stack + skills (if specified) + user's middleware
             subagent_middleware: list[AgentMiddleware[Any, Any, Any]] = [
                 TodoListMiddleware(),
-                FilesystemMiddleware(backend=backend),
+                FilesystemMiddleware(
+                    backend=backend,
+                    custom_tool_descriptions=_subagent_profile.tool_description_overrides,
+                    _permissions=subagent_permissions,
+                ),
             ]
             if subagent_permissions:
                 subagent_middleware.append(FilesystemPermissionsMiddleware(permissions=subagent_permissions))
@@ -598,16 +818,37 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             subagent_skills = spec.get("skills")
             if subagent_skills:
                 subagent_middleware.append(SkillsMiddleware(backend=backend, sources=subagent_skills))
-            subagent_middleware.extend(spec.get("middleware", []))
-            subagent_middleware.extend(_profile.materialize_extra_middleware())
-            if _profile.excluded_tools:
-                subagent_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
-            subagent_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+            # Core names captured before the profile/prompt-caching tail so spec
+            # middleware colliding with a built-in REPLACES it in place, and
+            # novel spec middleware splices in ahead of the tail.
+            _subagent_core_names = {m.name for m in subagent_middleware}
+            subagent_middleware.extend(_subagent_profile.materialize_extra_middleware())
+            if _subagent_profile.excluded_tools:
+                subagent_middleware.append(_ToolExclusionMiddleware(excluded=_subagent_profile.excluded_tools))
+            _append_prompt_caching_middleware(subagent_middleware, subagent_model)
             subagent_middleware = _apply_excluded_middleware(
                 subagent_middleware,
-                _profile,
-                matched_classes=_excl_matched_classes,
-                matched_names=_excl_matched_names,
+                _subagent_profile,
+                matched_classes=_sub_matched_classes,
+                matched_names=_sub_matched_names,
+            )
+            subagent_middleware = _apply_custom_middleware(
+                subagent_middleware,
+                spec.get("middleware", []),
+                core_names=_subagent_core_names,
+            )
+            subagent_middleware = _apply_excluded_middleware(
+                subagent_middleware,
+                _subagent_profile,
+                matched_classes=_sub_matched_classes,
+                matched_names=_sub_matched_names,
+            )
+            _verify_excluded_middleware_coverage(
+                _subagent_profile,
+                _sub_matched_classes,
+                _sub_matched_names,
+                required_classes=_required_mw_classes,
+                required_names=_required_mw_names,
             )
 
             subagent_interrupt_on = _merge_fs_interrupt_on(
@@ -622,33 +863,135 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             # they hallucinate the output.
             user_prompt = spec.get("system_prompt", "") or ""
             # A subagent inherits the main tools unless it declares its own;
-            # apply harness tool-description overrides to whichever set applies.
+            # apply this subagent's harness tool-description overrides to
+            # whichever set applies.
             raw_subagent_tools = spec.get("tools") if "tools" in spec else tools
-            subagent_tools = _apply_tool_description_overrides(raw_subagent_tools, _profile.tool_description_overrides)
+            subagent_tools = _apply_tool_description_overrides(raw_subagent_tools, _subagent_profile.tool_description_overrides)
+            # Compose the anti-fabrication preamble with the authored prompt,
+            # then layer this subagent's profile overlay (base replacement
+            # and/or suffix) on top so a model-specific profile applies here too.
+            _subagent_base_prompt = f"{DEFAULT_SUBAGENT_PROMPT}\n\n{user_prompt}".strip()
             processed_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
                 **spec,
                 "model": subagent_model,
                 "tools": subagent_tools or [],
                 "middleware": subagent_middleware,
-                "system_prompt": f"{DEFAULT_SUBAGENT_PROMPT}\n\n{user_prompt}".strip(),
+                "system_prompt": _apply_profile_prompt(_subagent_profile, _subagent_base_prompt),
             }
             if subagent_interrupt_on is not None:
                 processed_spec["interrupt_on"] = subagent_interrupt_on
             processed_subagents.append(processed_spec)
 
-    if any(spec["name"] == GENERAL_PURPOSE_SUBAGENT["name"] for spec in processed_subagents):
-        # If an agent with general purpose name already exists in subagents, then don't add it
-        # This is how you overwrite/configure general purpose subagent
-        all_subagents: list[SubAgent | CompiledSubAgent] = processed_subagents
-    else:
-        # Otherwise - add it!
+    # Auto-add the default general-purpose subagent unless the caller already
+    # supplied their own (an explicit `general-purpose` spec is how you
+    # override/configure it) or the active harness profile disables it via
+    # `GeneralPurposeSubagentProfile(enabled=False)`. When the GP subagent is
+    # suppressed and no other synchronous subagents remain, the
+    # `SubAgentMiddleware` install below is skipped entirely — dropping the
+    # `task` tool.
+    gp_profile = _profile.general_purpose_subagent or GeneralPurposeSubagentProfile()
+    _user_has_gp = any(spec["name"] == GENERAL_PURPOSE_SUBAGENT["name"] for spec in processed_subagents)
+    all_subagents: list[SubAgent | CompiledSubAgent]
+    if gp_profile.enabled is not False and not _user_has_gp:
+        gp_middleware: list[AgentMiddleware[Any, Any, Any]] = [
+            TodoListMiddleware(),
+            # `_permissions` lets the filesystem tools filter deny'd paths out of ls/glob/grep
+            # *results* -- the FilesystemPermissionsMiddleware below only guards the tool's path
+            # argument, which a pathless grep/ls/glob would otherwise bypass entirely.
+            FilesystemMiddleware(
+                backend=backend,
+                custom_tool_descriptions=_profile.tool_description_overrides,
+                _permissions=permissions,
+            ),
+        ]
+        if permissions:
+            gp_middleware.append(FilesystemPermissionsMiddleware(permissions=permissions))
+        gp_middleware.extend(
+            [
+                create_summarization_middleware(model, backend),
+                PatchToolCallsMiddleware(),
+            ]
+        )
+        if skills is not None:
+            gp_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
+        # Core names captured before the tail so main-agent middleware that
+        # overrides a GP slot replaces it in place (see `_gp_inheritable`).
+        _gp_core_names = {m.name for m in gp_middleware}
+        gp_middleware.extend(_profile.materialize_extra_middleware())
+        if _profile.excluded_tools:
+            gp_middleware.append(_ToolExclusionMiddleware(excluded=_profile.excluded_tools))
+        _append_prompt_caching_middleware(gp_middleware, model)
+        # Names of the GP slots (pre-exclusion) so we only inherit main-agent
+        # middleware that overrides a default GP slot — not middleware specific
+        # to the main agent.
+        _gp_original_names = {m.name for m in gp_middleware}
+        gp_middleware = _apply_excluded_middleware(
+            gp_middleware,
+            _profile,
+            matched_classes=_excl_matched_classes,
+            matched_names=_excl_matched_names,
+        )
+        _gp_inheritable = [m for m in (middleware or []) if m.name in _gp_original_names]
+        gp_middleware = _apply_custom_middleware(gp_middleware, _gp_inheritable, core_names=_gp_core_names)
+        gp_middleware = _apply_excluded_middleware(
+            gp_middleware,
+            _profile,
+            matched_classes=_excl_matched_classes,
+            matched_names=_excl_matched_names,
+        )
+
+        general_purpose_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
+            **GENERAL_PURPOSE_SUBAGENT,
+            "model": model,
+            "tools": _tools or [],
+            "middleware": gp_middleware,
+        }
+        if gp_profile.description is not None:
+            general_purpose_spec["description"] = gp_profile.description
+        if gp_profile.system_prompt is not None:
+            # A GP-specific override beats `profile.base_system_prompt`; only the
+            # profile suffix still layers on top.
+            gp_prompt = gp_profile.system_prompt
+            if _profile.system_prompt_suffix is not None:
+                gp_prompt = gp_prompt + "\n\n" + _profile.system_prompt_suffix
+            general_purpose_spec["system_prompt"] = gp_prompt
+        else:
+            general_purpose_spec["system_prompt"] = _apply_profile_prompt(_profile, GENERAL_PURPOSE_SUBAGENT["system_prompt"])
+        gp_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
+        if gp_interrupt_on is not None:
+            general_purpose_spec["interrupt_on"] = gp_interrupt_on
         all_subagents = [general_purpose_spec, *processed_subagents]
+    else:
+        # GP stack not assembled: seed the coverage sets with this profile's
+        # exclusions so an entry that would only have matched the (now-omitted)
+        # GP stack doesn't spuriously trip the "matched nothing" audit below.
+        for entry in _profile.excluded_middleware:
+            if isinstance(entry, type):
+                _excl_matched_classes.add(entry)
+            else:
+                _excl_matched_names.add(entry)
+        all_subagents = list(processed_subagents)
+
+    # P1-4 / S4: don't construct feature-wired middleware that the user has
+    # already supplied via ``middleware=``. Two instances with the same
+    # ``.name`` make langchain raise an opaque "Please remove duplicate
+    # middleware instances" AssertionError that fingers the user's list, not
+    # the injected twin. We resolve ``user_middleware`` up front so the
+    # convenience-kwarg guards below (Skills/Memory/PromptCaching, in addition
+    # to Filesystem/Summarization) can defer to the user's instance.
+    user_middleware = list(middleware) if middleware else []
+    user_supplied_skills = any(isinstance(m, SkillsMiddleware) for m in user_middleware)
+    user_supplied_memory = any(isinstance(m, MemoryMiddleware) for m in user_middleware)
+    user_supplied_prompt_caching = any(isinstance(m, AnthropicPromptCachingMiddleware) for m in user_middleware)
 
     # Build main agent middleware stack
     agents_middleware: list[AgentMiddleware[Any, Any, Any]] = [
         TodoListMiddleware(),
     ]
-    if skills is not None:
+    # Skills is appended before ``user_middleware`` (i.e. the convenience kwarg
+    # wins position), so when the user also passes their own SkillsMiddleware we
+    # skip the kwarg-built twin and honor the user's instance instead.
+    if skills is not None and not user_supplied_skills:
         agents_middleware.append(SkillsMiddleware(backend=backend, sources=skills))
     # Enforce filesystem `deny` permissions as an early tool-call gate so denied
     # reads/writes never reach the backend. Interrupt-mode rules are wired into
@@ -984,10 +1327,25 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.result_synthesis import ResultSynthesisMiddleware
         from bog_agents.middleware.worktree import ParallelWorktreeMiddleware
 
+        # ResultSynthesisMiddleware requires a ParallelWorktreeMiddleware that
+        # appears earlier in the stack (enforced by `requires=`). Search BOTH
+        # the feature-wired stack built so far AND the not-yet-appended
+        # ``user_middleware`` (V3-24): if we only searched ``agents_middleware``,
+        # a user passing their own ParallelWorktreeMiddleware via ``middleware=``
+        # would get a second auto-provisioned instance, and the keep-first dedup
+        # pass would then silently discard the user's configured instance in
+        # favor of our default. Prefer the user's instance and reposition it
+        # before ResultSynthesis so ordering holds without auto-provisioning a
+        # twin. The later copy left in ``user_middleware`` is dropped by the
+        # keep-first ``_dedup_middleware_by_name`` backstop.
         parallel_mw = next((m for m in agents_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
         if parallel_mw is None:
-            # ResultSynthesisMiddleware requires ParallelWorktreeMiddleware.
-            # Auto-create one rather than crashing at validation time.
+            parallel_mw = next((m for m in user_middleware if isinstance(m, ParallelWorktreeMiddleware)), None)
+            if parallel_mw is not None:
+                agents_middleware.append(parallel_mw)
+        if parallel_mw is None:
+            # Neither the feature stack nor the user supplied one; auto-create
+            # one rather than crashing at validation time.
             parallel_mw = ParallelWorktreeMiddleware(working_dir=_wd)
             agents_middleware.append(parallel_mw)
         agents_middleware.append(ResultSynthesisMiddleware(parallel_middleware=parallel_mw))
@@ -997,14 +1355,35 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # ran the same middleware twice per request. We check by class
     # identity (covers subclasses too) so a user who has subclassed
     # FilesystemMiddleware for custom behavior takes precedence.
-    user_middleware = list(middleware) if middleware else []
+    # (``user_middleware`` was resolved up front, near the Skills guard.)
     user_supplied_filesystem = any(isinstance(m, FilesystemMiddleware) for m in user_middleware)
     user_supplied_summarization = any(isinstance(m, _BogAgentsSummarizationMiddleware) for m in user_middleware)
 
     defaults_to_append: list[Any] = []
     if not user_supplied_filesystem:
-        defaults_to_append.append(FilesystemMiddleware(backend=backend))
-    defaults_to_append.append(SubAgentMiddleware(backend=backend, subagents=all_subagents))
+        defaults_to_append.append(
+            FilesystemMiddleware(
+                backend=backend,
+                custom_tool_descriptions=_profile.tool_description_overrides,
+                _permissions=permissions,
+            )
+        )
+    # Only install SubAgentMiddleware (the `task` tool backend) when there is at
+    # least one synchronous subagent to dispatch to. With the general-purpose
+    # subagent disabled via `GeneralPurposeSubagentProfile(enabled=False)` and no
+    # user-supplied synchronous subagents, `all_subagents` is empty and the
+    # `task` tool is dropped. Async subagents are independent.
+    if all_subagents:
+        defaults_to_append.append(
+            SubAgentMiddleware(
+                backend=backend,
+                subagents=all_subagents,
+                # Overrides the task tool description. Value should include the
+                # `{available_agents}` placeholder; `None` (default) uses the
+                # built-in template.
+                task_description=_profile.tool_description_overrides.get("task"),
+            )
+        )
     if not user_supplied_summarization:
         defaults_to_append.append(create_summarization_middleware(model, backend))
     defaults_to_append.append(PatchToolCallsMiddleware())
@@ -1013,8 +1392,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if async_subagents:
         agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
 
-    if user_middleware:
-        agents_middleware.extend(user_middleware)
+    # User-supplied middleware: a `.name` collision with a built-in REPLACES it
+    # in place (parity with upstream); novel middleware splices in after the
+    # core stack, ahead of the profile/prompt-caching/memory tail.
+    _main_core_names = {m.name for m in agents_middleware}
+    agents_middleware = _apply_custom_middleware(agents_middleware, user_middleware, core_names=_main_core_names)
     # Harness-profile `extra_middleware` (no-op unless a profile is registered
     # for this model). Placed after user middleware and before prompt caching so
     # caller middleware retains precedence.
@@ -1039,9 +1421,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # caching, the injected memory text would fall outside the cached prefix
     # (and per-thread memory variance would bust cache hits). Keeping Memory
     # outer (earlier) and PromptCaching innermost preserves the cached prefix.
-    if memory is not None:
+    # S4: skip the convenience-kwarg twin when the user already passed their
+    # own MemoryMiddleware / AnthropicPromptCachingMiddleware via ``middleware=``
+    # (those instances are already in ``agents_middleware`` at this point).
+    if memory is not None and not user_supplied_memory:
         agents_middleware.append(MemoryMiddleware(backend=backend, sources=memory))
-    agents_middleware.append(AnthropicPromptCachingMiddleware(unsupported_model_behavior="ignore"))
+    if not user_supplied_prompt_caching:
+        _append_prompt_caching_middleware(agents_middleware, model)
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
@@ -1063,28 +1449,50 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         required_names=_required_mw_names,
     )
 
+    # Backstop dedup: drop any duplicate-name middleware the per-feature guards
+    # above didn't catch, so langchain's "Please remove duplicate middleware
+    # instances" assertion can never surprise the caller. Keep-first is safe
+    # here because the framework-injected twins are already suppressed at
+    # construction time, so the user's instance is the one that survives.
+    agents_middleware = _dedup_middleware_by_name(agents_middleware)
+
     # Validate middleware dependency ordering before compiling the graph.
     _validate_middleware_ordering(agents_middleware)
 
-    # Combine system_prompt with BASE_AGENT_PROMPT, plus an optional
-    # provenance-loop addendum (D-5) that tells the model to use the
-    # citation / hallucination-detection / fact-check tools by default
-    # when those middleware are active. We only inject the addendum
-    # when the loop is active — otherwise the model would be told to
-    # call tools that aren't bound.
-    # Apply harness-profile prompt overlay (base_system_prompt replacement
-    # and/or system_prompt_suffix). No-op when no profile is registered.
-    base_prompt = _apply_profile_prompt(_profile, BASE_AGENT_PROMPT)
+    # Assemble the main-agent prompt from ordered parts:
+    #   prefix -> base -> suffix -> profile suffix -> provenance addendum
+    #
+    # `prefix`/`suffix` come from a `SystemPromptConfig` (a bare `str` /
+    # `SystemMessage` normalizes to `prefix`, preserving the historical
+    # "caller text before the base" behavior). The config's `base` key
+    # overrides the profile base when present; `base: None` (present but
+    # `None`) drops the base entirely, while an OMITTED key keeps the
+    # profile's `base_system_prompt` (or `BASE_AGENT_PROMPT`).
+    #
+    # The provenance-loop addendum (D-5) is appended as ITS OWN part rather
+    # than folded into the base, so `base: None` never silently un-prompts
+    # the bound citation / hallucination-detection / fact-check tools. It is
+    # only injected when that loop is active — otherwise the model would be
+    # told to call tools that aren't bound.
+    cfg = _normalize_system_prompt(system_prompt)
+    prompt_parts: list[str | SystemMessage] = []
+    prefix = cfg.get("prefix")
+    if prefix is not None:
+        prompt_parts.append(prefix)
+    profile_base = _profile.base_system_prompt if _profile.base_system_prompt is not None else BASE_AGENT_PROMPT
+    # Two-arg `.get` so a present-but-`None` `base` key drops the base, while
+    # an omitted key falls back to the profile/default base.
+    base = cfg.get("base", profile_base)
+    if base is not None:
+        prompt_parts.append(base)
+    suffix = cfg.get("suffix")
+    if suffix is not None:
+        prompt_parts.append(suffix)
+    if _profile.system_prompt_suffix is not None:
+        prompt_parts.append(_profile.system_prompt_suffix)
     if provenance_active:
-        base_prompt = base_prompt + "\n\n" + _PROVENANCE_LOOP_PROMPT
-
-    if system_prompt is None:
-        final_system_prompt: str | SystemMessage = base_prompt
-    elif isinstance(system_prompt, SystemMessage):
-        final_system_prompt = SystemMessage(content_blocks=[*system_prompt.content_blocks, {"type": "text", "text": f"\n\n{base_prompt}"}])
-    else:
-        # String: simple concatenation
-        final_system_prompt = system_prompt + "\n\n" + base_prompt
+        prompt_parts.append(_PROVENANCE_LOOP_PROMPT)
+    final_system_prompt: str | SystemMessage = _assemble_prompt_parts(prompt_parts)
 
     # Only forward `state_schema` when the caller opted in, so the default
     # behavior (LangChain's built-in AgentState) is preserved unchanged.
@@ -1107,10 +1515,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         **_create_kwargs,
     ).with_config(
         {
-            "recursion_limit": max(10, min(max_turns, 1000)),
+            # Honor `max_turns` without the old hard clamp at 1000 (parity with
+            # upstream, which caps at 9,999); the floor of 10 keeps a usable
+            # minimum. Bog's native default (`max_turns=200`) is unchanged.
+            "recursion_limit": max(10, max_turns),
             "metadata": {
                 "ls_integration": "bog-agents",
-                "versions": {"bog-agents": __version__},
+                # Langsmith metadata key is `lc_versions` (parity with upstream);
+                # the prior `versions` key was a bog-local divergence.
+                "lc_versions": {"bog-agents": __version__},
                 "lc_agent_name": name,
             },
         }

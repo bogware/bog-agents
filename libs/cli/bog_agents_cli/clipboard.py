@@ -45,6 +45,7 @@ def _copy_windows_clip(text: str) -> None:
         input=text,
         text=True,
         check=True,
+        timeout=5,
         creationflags=_subprocess_creationflags(),
     )
 
@@ -61,6 +62,7 @@ def _read_windows_clipboard() -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=5,
         creationflags=_subprocess_creationflags(),
     )
     return result.stdout
@@ -73,6 +75,7 @@ def _read_command_output(command: list[str]) -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=5,
         creationflags=_subprocess_creationflags(),
     )
     return result.stdout

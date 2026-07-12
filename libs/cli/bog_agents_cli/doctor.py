@@ -86,6 +86,123 @@ def _read_default_ollama_model() -> str | None:
     return None
 
 
+_CLI_ENTRYPOINTS = ("bog-agents", "bog-agents-cli")
+"""Console-script names installed by `bog-agents-cli` (see pyproject scripts)."""
+
+
+def _entrypoints_on_path(name: str) -> list[str]:
+    """Return every resolved path where console script `name` resolves on PATH.
+
+    A uv/pip/pipx upgrade can leave a stale copy of the entrypoint earlier on
+    PATH than the freshly upgraded one — so `name` runs the old build while the
+    installed package is new. Enumerating *all* matches (not just
+    `shutil.which`'s first hit) lets doctor flag that shadowing.
+
+    Args:
+        name: Console-script base name (without a platform extension).
+
+    Returns:
+        Distinct resolved executable paths in PATH order.
+    """
+    seen: list[str] = []
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    # On Windows the same logical entrypoint exists as name.exe / name.cmd /
+    # name (shim); PATHEXT drives which is executable. Probe each candidate.
+    exts = [""]
+    if platform.system() == "Windows":
+        exts = [*os.environ.get("PATHEXT", ".EXE;.CMD;.BAT").split(os.pathsep), ""]
+    for directory in path_dirs:
+        if not directory:
+            continue
+        for ext in exts:
+            candidate = Path(directory) / f"{name}{ext}"
+            try:
+                if candidate.is_file():
+                    resolved = str(candidate.resolve())
+                    if resolved not in seen:
+                        seen.append(resolved)
+            except OSError:
+                continue
+    return seen
+
+
+def _shadowed_entrypoint_check() -> tuple[str, str] | None:
+    """Detect a CLI entrypoint shadowed by a second install on PATH.
+
+    Returns a `(status, detail)` row when at least one of the CLI's console
+    scripts resolves to more than one distinct location on PATH (the classic
+    "old copy earlier on PATH after an upgrade" trap), or `None` when nothing
+    is shadowed and there is nothing worth reporting.
+
+    Returns:
+        A `(status, detail)` tuple, or `None` when no shadowing is detected.
+    """
+    for name in _CLI_ENTRYPOINTS:
+        matches = _entrypoints_on_path(name)
+        if len(matches) > 1:
+            active, *shadowed = matches
+            try:
+                from bog_agents_cli.update_manager import detect_install_method
+
+                method = detect_install_method().value
+            except Exception:  # diagnostic must not crash
+                method = "unknown"
+            return (
+                "WARN",
+                f"`{name}` resolves to {len(matches)} installs on PATH — active "
+                f"{active} shadows {', '.join(shadowed)} (install method: "
+                f"{method}). Remove the stale copy or reorder PATH.",
+            )
+    return None
+
+
+def _mcp_oauth_signed_in_count() -> tuple[int, int]:
+    """Count remote MCP servers and how many have a live OAuth token.
+
+    Walks the discovered MCP configs for remote (`http`/`sse`) servers and
+    asks `mcp_login_controller.status` whether each has a stored, unexpired
+    token. Purely informational — never raises to the caller.
+
+    Returns:
+        A `(signed_in, total_remote)` tuple. `(0, 0)` when discovery fails or
+        there are no remote servers.
+    """
+    try:
+        from bog_agents_cli.mcp_login_controller import status as oauth_status
+        from bog_agents_cli.mcp_tools import (
+            _resolve_server_type,
+            discover_mcp_configs,
+            load_mcp_config_lenient,
+        )
+    except Exception:
+        return 0, 0
+
+    remote_names: set[str] = set()
+    try:
+        for config_path in discover_mcp_configs():
+            config = load_mcp_config_lenient(config_path)
+            if not config:
+                continue
+            for server_name, server_config in config.get("mcpServers", {}).items():
+                if not isinstance(server_config, dict):
+                    continue
+                if _resolve_server_type(server_config) in {"http", "sse"}:
+                    remote_names.add(server_name)
+    except Exception:
+        return 0, 0
+
+    signed_in = 0
+    for server_name in remote_names:
+        try:
+            info = oauth_status(server_name)
+        except Exception:
+            logger.debug("OAuth status probe failed for %s", server_name, exc_info=True)
+            continue
+        if info.get("has_token") and not info.get("expired"):
+            signed_in += 1
+    return signed_in, len(remote_names)
+
+
 def _bedrock_credential_status() -> tuple[str, str]:
     """Probe AWS credentials for the Bedrock provider and report their state.
 
@@ -253,7 +370,6 @@ def run_doctor() -> str:
     for tool, purpose in [
         ("git", "Version control"),
         ("ollama", "Local model runtime"),
-        ("rg", "Fast text search (ripgrep)"),
         ("ruff", "Python linter"),
         ("uv", "Package manager"),
         ("node", "Node.js runtime"),
@@ -263,6 +379,33 @@ def run_doctor() -> str:
             checks.append((f"Tool: {tool}", "OK", f"Found at {path}"))
         else:
             checks.append((f"Tool: {tool}", "WARN", f"Not found ({purpose})"))
+
+    # ripgrep gets a dedicated row so users can see whether the fast search
+    # path is served by the checksum-verified managed copy under
+    # ~/.bog-agents/bin, a system install on PATH, or is missing entirely.
+    try:
+        from bog_agents_cli.managed_tools import describe_ripgrep
+
+        rg_status, rg_detail = describe_ripgrep()
+    except Exception:  # diagnostic command must not crash
+        rg_status, rg_detail = "absent", "ripgrep status could not be determined"
+    checks.append(
+        (
+            "Tool: rg",
+            {"managed": "OK", "system": "OK"}.get(rg_status, "WARN"),
+            rg_detail,
+        )
+    )
+
+    # Shadowed-entrypoint check: after a uv/pip/pipx upgrade a stale copy of
+    # the `bog-agents` console script can sit earlier on PATH than the new
+    # one, so the CLI silently runs the old build. Flag that here.
+    try:
+        shadow_row = _shadowed_entrypoint_check()
+    except Exception:  # diagnostic command must not crash
+        shadow_row = None
+    if shadow_row is not None:
+        checks.append(("CLI entrypoint", shadow_row[0], shadow_row[1]))
 
     ollama_version = _get_ollama_version()
     if ollama_version:
@@ -411,6 +554,24 @@ def run_doctor() -> str:
                 )
         except Exception as e:  # diagnostic command must not crash
             checks.append(("MCP trust", "WARN", f"Could not evaluate trust: {e}"))
+
+    # 9c. MCP OAuth — informational count of how many remote (http/sse) servers
+    # currently hold a live signed-in token. Helps a user confirm `/mcp login`
+    # actually persisted a token before a session starts.
+    try:
+        signed_in, total_remote = _mcp_oauth_signed_in_count()
+    except Exception:  # diagnostic command must not crash
+        signed_in, total_remote = 0, 0
+    if total_remote:
+        server_word = "server" if total_remote == 1 else "servers"
+        checks.append(
+            (
+                "MCP OAuth",
+                "INFO",
+                f"{signed_in}/{total_remote} remote {server_word} signed in "
+                "(/mcp login <name> to authenticate)",
+            )
+        )
 
     # Format output
     lines = ["## Bog Agents Health Check\n"]

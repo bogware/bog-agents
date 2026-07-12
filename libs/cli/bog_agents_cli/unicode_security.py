@@ -7,6 +7,7 @@ approval paths without affecting startup performance.
 from __future__ import annotations
 
 import ipaddress
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -171,6 +172,84 @@ def strip_dangerous_unicode(text: str) -> str:
         Sanitized text with dangerous characters removed.
     """
     return "".join(ch for ch in text if ch not in _DANGEROUS_CHARACTERS)
+
+
+# ---------------------------------------------------------------------------
+# Control-character / terminal-escape sanitization
+# ---------------------------------------------------------------------------
+
+# Terminal escape sequences that must be neutralized in displayed untrusted
+# text. Covers both the 7-bit ESC-introduced forms and their 8-bit C1
+# single-byte equivalents:
+#   - CSI  : ESC '[' ... final       (or 0x9B ...)
+#   - OSC  : ESC ']' ... BEL/ST       (or 0x9D ...)   e.g. clipboard write (52)
+#   - DCS  : ESC 'P' ... ST           (or 0x90 ...)
+#   - SOS  : ESC 'X' ... ST           (or 0x98 ...)
+#   - PM   : ESC '^' ... ST           (or 0x9E ...)
+#   - APC  : ESC '_' ... ST           (or 0x9F ...)
+# The trailing `\x1b.?` arm mops up any other two-byte escape and a lone
+# trailing ESC. ST is either `ESC \\` (0x1B 0x5C) or the C1 byte 0x9C.
+_ESCAPE_SEQUENCE_RE = re.compile(
+    r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"  # CSI (parameters, intermediates, final)
+    r"|(?:\x1b\]|\x9d).*?(?:\x07|\x1b\\|\x9c)"  # OSC ... BEL or ST
+    r"|(?:\x1b[P^_X]|[\x90\x9e\x9f\x98]).*?(?:\x1b\\|\x9c)"  # DCS/PM/APC/SOS ... ST
+    r"|\x1b.?",  # any remaining ESC sequence, incl. a lone trailing ESC
+    re.DOTALL,
+)
+
+# C0 controls except TAB (\t), LINE FEED (\n) and CARRIAGE RETURN (\r), DEL,
+# and the entire C1 range (0x80-0x9F). Any 8-bit escape introducers left over
+# after `_ESCAPE_SEQUENCE_RE` (e.g. an unterminated OSC) are swept here too.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def sanitize_control_chars(text: str) -> str:
+    r"""Neutralize terminal escape sequences and control bytes in display text.
+
+    Untrusted strings (tool output, MCP server errors, file contents) can carry
+    ANSI/CSI colour codes, OSC clipboard writes, DCS/APC/PM/SOS payloads, or raw
+    C0/C1 control bytes that hijack the terminal, spoof output, or exfiltrate
+    data. This strips all of those while leaving ordinary text — including
+    legitimate tabs, newlines, and carriage returns — untouched.
+
+    The function is idempotent: after one pass no escape introducers or
+    non-whitespace control bytes remain, so a second pass is a no-op. It is
+    dependency-free and regex-driven to stay cheap on hot display paths. It does
+    NOT remove bidi/zero-width Unicode — compose with `strip_dangerous_unicode`
+    (or call `escape_for_display`) when that is also required.
+
+    Args:
+        text: Untrusted text to sanitize.
+
+    Returns:
+        Text with every terminal escape sequence and control byte removed,
+        preserving `\t`, `\n`, and `\r`.
+    """
+    without_escapes = _ESCAPE_SEQUENCE_RE.sub("", text)
+    return _CONTROL_CHARS_RE.sub("", without_escapes)
+
+
+def escape_for_display(text: str) -> str:
+    """Make untrusted text safe to render through a Rich `Static` widget.
+
+    Applies, in order: `sanitize_control_chars` (terminal escapes / control
+    bytes), `strip_dangerous_unicode` (bidi / zero-width confusables), then Rich
+    markup escaping (so `[bold]`-style tags render as literal text). Markup
+    escaping MUST run last: escaping first would insert a backslash before a
+    tag's `[`, and the subsequent lone-ESC sweep in `sanitize_control_chars`
+    would consume that backslash for an ESC-adjacent tag (an ESC byte glued to
+    a closing tag), re-exposing a live closing tag that raises `MarkupError`
+    and crashes the dialog. Callers that only need one primitive call it directly.
+
+    Args:
+        text: Untrusted text destined for a Rich-rendered surface.
+
+    Returns:
+        Text safe to embed in Rich markup output.
+    """
+    from rich.markup import escape as escape_markup
+
+    return escape_markup(strip_dangerous_unicode(sanitize_control_chars(text)))
 
 
 def render_with_unicode_markers(text: str) -> str:

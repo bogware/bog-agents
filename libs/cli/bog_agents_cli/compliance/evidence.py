@@ -4,7 +4,9 @@ These helpers walk the causal-trace log under ``<cwd>/.bog-agents/causal/``
 and answer the questions audit-pack ``trace_assertion`` checks pose:
 
 * "Did the agent record at least N events of kind K in the window?"
-* "Did *no* rule with action=deny fire on actor=X in the window?"
+* "Did *no* rule_fire with payload action=deny fire (optionally on
+  actor=X) in the window?" (``no_event_with_payload`` — the verdict
+  lives in ``payload.action``, so plain actor matching can't see it.)
 * "Is there at least one session at all?"
 
 The collectors are pure — they read from disk and return concrete
@@ -205,6 +207,75 @@ def collect_no_event_with_actor(
     )
 
 
+def collect_no_event_with_payload(
+    slice_: TraceSlice, params: dict[str, Any]
+) -> EvidenceFinding:
+    """``trace_assertion`` with ``kind: no_event_with_payload``.
+
+    Asserts that *no* event of the given kind carries the supplied
+    payload key/value pairs. This is the collector that can actually
+    inspect the rule *verdict* — ``rule_fire`` events record the
+    action (``deny`` / ``require_approval`` / ``modify``) under
+    ``payload.action``, so a pack can assert e.g. "no deny-control
+    rule fired" with ``fact_kind: rule_fire`` and
+    ``payload_match: {action: deny}``.
+
+    Params:
+        fact_kind: required EventKind value.
+        actor: optional string. When set, narrows the match to events
+            whose ``actor`` equals this value (e.g. a specific rule
+            name). When omitted, every actor is considered.
+        payload_match: required non-empty mapping. An event matches
+            only when, for every key, the event's ``payload`` contains
+            that key with an equal value.
+    """
+    fact_kind = _required_event_kind(params, "fact_kind")
+    if fact_kind is None:
+        return EvidenceFinding(
+            passes=False,
+            observed="",
+            inconclusive=True,
+            reason="evidence.fact_kind is required for no_event_with_payload",
+        )
+    payload_match = params.get("payload_match")
+    if not isinstance(payload_match, dict) or not payload_match:
+        return EvidenceFinding(
+            passes=False,
+            observed="",
+            inconclusive=True,
+            reason="evidence.payload_match is required and must be a non-empty mapping",
+        )
+    actor_raw = params.get("actor")
+    actor_clean: str | None = None
+    if actor_raw is not None:
+        if not isinstance(actor_raw, str) or not actor_raw.strip():
+            return EvidenceFinding(
+                passes=False,
+                observed="",
+                inconclusive=True,
+                reason="evidence.actor, when set, must be a non-empty string",
+            )
+        actor_clean = actor_raw.strip()
+    matches = [
+        e
+        for e in slice_.events
+        if e.kind == fact_kind
+        and (actor_clean is None or e.actor == actor_clean)
+        and _payload_matches(e.payload, payload_match)
+    ]
+    actor_text = f"actor={actor_clean!r}, " if actor_clean is not None else ""
+    observed = (
+        f"{len(matches)} event(s) of kind {fact_kind.value!r} "
+        f"with {actor_text}payload matching {payload_match!r} "
+        "in the audit window (expected: 0)"
+    )
+    return EvidenceFinding(
+        passes=len(matches) == 0,
+        observed=observed,
+        samples=tuple(matches[:3]),
+    )
+
+
 def collect_at_least_one_session(
     slice_: TraceSlice, params: dict[str, Any]
 ) -> EvidenceFinding:
@@ -261,6 +332,20 @@ def _parse_bounds(
     return min_bound, max_bound, ""
 
 
+def _payload_matches(payload: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Return True when *payload* contains every key/value in *expected*.
+
+    A subset match: extra keys on the event payload are ignored. The
+    comparison is exact equality per key, so ``{"action": "deny"}``
+    matches a payload of ``{"action": "deny", "detail": "..."}`` but
+    not ``{"action": "require_approval"}``.
+    """
+    for key, value in expected.items():
+        if key not in payload or payload[key] != value:
+            return False
+    return True
+
+
 def _format_bounds(min_bound: int | None, max_bound: int | None) -> str:
     if min_bound is None and max_bound is None:
         return "any"
@@ -275,6 +360,7 @@ def _format_bounds(min_bound: int | None, max_bound: int | None) -> str:
 COLLECTORS = {
     "event_count": collect_event_count,
     "no_event_with_actor": collect_no_event_with_actor,
+    "no_event_with_payload": collect_no_event_with_payload,
     "at_least_one_session": collect_at_least_one_session,
 }
 
@@ -287,6 +373,7 @@ __all__ = [
     "collect_at_least_one_session",
     "collect_event_count",
     "collect_no_event_with_actor",
+    "collect_no_event_with_payload",
     "load_trace_slice",
     "window_for_lookback",
 ]

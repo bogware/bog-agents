@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from bog_agents.middleware._utils import append_to_system_message
+from bog_agents.middleware.subagents import _subagent_tracing_context
 
 logger = logging.getLogger(__name__)
 
@@ -296,8 +297,28 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
         system_prompt: str | None = ASYNC_TASK_SYSTEM_PROMPT,
         task_description: str | None = None,
     ) -> None:
-        """Initialize async-subagent middleware."""
+        """Initialize async-subagent middleware.
+
+        Args:
+            async_subagents: Remote subagent specs. Must be non-empty and uniquely named.
+            system_prompt: Instructions appended to the main agent's system prompt.
+            task_description: Custom description for the `start_async_task` tool.
+
+        Raises:
+            ValueError: If `async_subagents` is empty or contains duplicate names.
+        """
         super().__init__()
+        if not async_subagents:
+            msg = "At least one async subagent must be specified"
+            raise ValueError(msg)
+        names = [spec["name"] for spec in async_subagents]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            # Silently de-duplicating would drop a subagent the caller declared,
+            # and the `task_id -> agent_name` lookup would resolve to the wrong spec.
+            msg = f"Duplicate async subagent names: {', '.join(duplicates)}"
+            raise ValueError(msg)
+
         self._async_subagents = {spec["name"]: spec for spec in async_subagents}
         self._clients = _ClientCache(self._async_subagents)
 
@@ -330,9 +351,12 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
 
             spec = self._async_subagents[subagent_type]
             try:
-                client = self._clients.get_sync(subagent_type)
-                thread = client.threads.create()
-                run = _create_run_sync(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
+                # Same LangSmith tagging as the in-process `task` tool: runs created
+                # while launching a remote subagent are tagged `ls_agent_type=subagent`.
+                with _subagent_tracing_context():
+                    client = self._clients.get_sync(subagent_type)
+                    thread = client.threads.create()
+                    run = _create_run_sync(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
             except Exception as exc:
                 logger.warning("Failed to launch async subagent '%s': %s", subagent_type, exc)
                 return f"Failed to launch async subagent '{subagent_type}': {exc}"
@@ -363,9 +387,12 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
 
             spec = self._async_subagents[subagent_type]
             try:
-                client = self._clients.get_async(subagent_type)
-                thread = await client.threads.create()
-                run = await _acreate_run(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
+                # Same LangSmith tagging as the in-process `task` tool: runs created
+                # while launching a remote subagent are tagged `ls_agent_type=subagent`.
+                with _subagent_tracing_context():
+                    client = self._clients.get_async(subagent_type)
+                    thread = await client.threads.create()
+                    run = await _acreate_run(client, thread_id=thread["thread_id"], graph_id=spec["graph_id"], description=description)
             except Exception as exc:
                 logger.warning("Failed to launch async subagent '%s': %s", subagent_type, exc)
                 return f"Failed to launch async subagent '{subagent_type}': {exc}"

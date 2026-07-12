@@ -227,6 +227,76 @@ class TestRuntimeWorkflowControls:
         assert captured[0].model.temperature == 0.7  # ty: ignore[unresolved-attribute]
 
 
+class TestNativeReasoningEffort:
+    """Effort is translated onto each provider's real reasoning knob."""
+
+    def test_anthropic_reasoning_model_gets_native_params_not_max_tokens(self) -> None:
+        # The runtime spec resolves the model without a swap (identifier match),
+        # so the effort translation runs against `anthropic:claude-opus-4-8`.
+        request = _make_request(
+            _make_model("claude-opus-4-8"),
+            context=CLIContext(model="anthropic:claude-opus-4-8", effort_level="low"),
+        )
+        captured: list[ModelRequest] = []
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        settings = captured[0].model_settings
+        assert settings["output_config"] == {"effort": "low"}
+        assert settings["thinking"] == {"type": "adaptive", "display": "summarized"}
+        # The central regression: never cap a reasoning model's output.
+        assert "max_tokens" not in settings
+        assert "temperature" not in settings
+
+    def test_openai_reasoning_model_gets_reasoning_effort(self) -> None:
+        request = _make_request(
+            _make_model("gpt-5.6"),
+            context=CLIContext(model="openai:gpt-5.6", effort_level="high"),
+        )
+        captured: list[ModelRequest] = []
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        settings = captured[0].model_settings
+        assert settings["reasoning"] == {"effort": "high", "summary": "auto"}
+        assert "max_tokens" not in settings
+
+    def test_reasoning_model_unsupported_level_leaves_default(self) -> None:
+        # `max` is not accepted by Opus 4.5 — emit nothing rather than cap.
+        request = _make_request(
+            _make_model("claude-opus-4-5"),
+            context=CLIContext(model="anthropic:claude-opus-4-5", effort_level="max"),
+            model_settings={"top_p": 0.9},
+        )
+        captured: list[ModelRequest] = []
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        settings = captured[0].model_settings
+        assert "max_tokens" not in settings
+        assert "output_config" not in settings
+        assert settings["top_p"] == 0.9
+
+    def test_non_reasoning_model_still_gets_preset_fallback(self) -> None:
+        # A mock whose provider cannot be inspected classifies as non-reasoning,
+        # so the legacy max_tokens/temperature preset still applies.
+        request = _make_request(
+            _make_model("gpt-4o"),
+            context=CLIContext(model="openai:gpt-4o", effort_level="low"),
+        )
+        captured: list[ModelRequest] = []
+        _mw.wrap_model_call(
+            request, lambda r: (captured.append(r), _make_response())[1]
+        )
+
+        settings = captured[0].model_settings
+        assert settings["max_tokens"] == 1024
+        assert settings["temperature"] == 0.3
+
+
 class TestModelSwap:
     """Cases where the middleware should swap the model."""
 

@@ -21,6 +21,8 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
+from bog_agents_cli.io_utils import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 _SECTION = "## Agent-Recorded Memories"
@@ -70,14 +72,14 @@ def append_memory(path: Path, fact: str, category: str) -> bool:
             new_text = existing.rstrip() + "\n" + entry + "\n"
         else:
             new_text = existing[:nxt].rstrip() + "\n" + entry + "\n" + existing[nxt:]
-        path.write_text(new_text, encoding="utf-8")
+        atomic_write_text(path, new_text, encoding="utf-8")
         return True
 
     block = f"\n{_SECTION}\n{_PROVENANCE}\n\n{entry}\n"
     new_text = (
         (existing.rstrip() + "\n" + block) if existing.strip() else block.lstrip("\n")
     )
-    path.write_text(new_text, encoding="utf-8")
+    atomic_write_text(path, new_text, encoding="utf-8")
     return True
 
 
