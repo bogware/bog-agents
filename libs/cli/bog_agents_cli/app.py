@@ -3249,6 +3249,9 @@ class BogAgentsApp(App):
           /mcp add <name> <cmd> ...  — add a custom stdio server
           /mcp remove <name>         — remove a server from user config
           /mcp info <id>             — show catalog entry details
+          /mcp login <server>        — sign in to an OAuth server
+          /mcp logout <server>       — remove stored OAuth tokens
+          /mcp status                — show OAuth login status
           /mcp trust                 — manage project stdio server trust
           /mcp help                  — show this help
 
@@ -3602,6 +3605,12 @@ class BogAgentsApp(App):
                     timeout=3,
                 )
 
+        # ---- login / logout / status (OAuth) ----
+        elif subcommand in {"login", "logout", "status"}:
+            from bog_agents_cli.mcp_auth_controller import handle_mcp_auth_command
+
+            await handle_mcp_auth_command(self, subcommand, rest)
+
         # ---- trust ----
         elif subcommand == "trust":
             from bog_agents_cli.mcp_tools import discover_mcp_configs
@@ -3647,6 +3656,9 @@ class BogAgentsApp(App):
                     "  [cyan]/mcp install <id>[/cyan]         — install from registry\n"
                     "  [cyan]/mcp add <name> <cmd> ...[/cyan] — add custom stdio server\n"
                     "  [cyan]/mcp remove <name>[/cyan]        — remove from user config\n"
+                    "  [cyan]/mcp login <server>[/cyan]       — sign in to an OAuth server\n"
+                    "  [cyan]/mcp logout <server>[/cyan]      — remove stored OAuth tokens\n"
+                    "  [cyan]/mcp status[/cyan]               — show OAuth login status\n"
                     "  [cyan]/mcp trust[/cyan]                — trust project stdio servers\n\n"
                     "[dim]Featured: github · jira · linear · slack · postgres · aws · "
                     "azure-devops · terraform · datadog · kubernetes · sentry · notion[/dim]"

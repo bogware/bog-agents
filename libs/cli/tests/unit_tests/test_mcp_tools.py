@@ -977,6 +977,114 @@ class TestGetMCPTools:
         # Clean up
         await manager.cleanup()
 
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_stdio_server_gets_no_auth(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        valid_config_data: dict,
+        mock_mcp_client: tuple,
+    ) -> None:
+        """A stdio server connection is never given an ``auth`` provider."""
+        path = write_config(valid_config_data)
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        _, manager, _ = await get_mcp_tools(path)
+
+        connections = mock_client_class.call_args.kwargs["connections"]
+        assert "auth" not in connections["filesystem"]
+
+        await manager.cleanup()
+
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_remote_server_with_stored_token_gets_auth(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        mock_mcp_client: tuple,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A remote server with a stored token gets the OAuth provider attached."""
+        import httpx
+
+        from bog_agents_cli import mcp_oauth
+
+        monkeypatch.setattr(
+            mcp_oauth, "default_oauth_dir", lambda: tmp_path, raising=False
+        )
+        monkeypatch.setattr(
+            "bog_agents_cli.mcp_token_storage.default_oauth_dir", lambda: tmp_path
+        )
+        sentinel = httpx.BasicAuth("u", "p")
+        monkeypatch.setattr(
+            mcp_oauth, "build_oauth_provider", lambda name, url, **_kw: sentinel
+        )
+        (tmp_path / "api.json").write_text("{}", encoding="utf-8")
+
+        path = write_config(
+            {"mcpServers": {"api": {"type": "http", "url": "https://x/mcp"}}}
+        )
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        _, manager, _ = await get_mcp_tools(path)
+
+        connections = mock_client_class.call_args.kwargs["connections"]
+        assert connections["api"]["auth"] is sentinel
+
+        await manager.cleanup()
+
+    @patch("langchain_mcp_adapters.tools.load_mcp_tools")
+    @patch("langchain_mcp_adapters.client.MultiServerMCPClient")
+    async def test_oauth_optin_without_token_is_skipped_with_hint(
+        self,
+        mock_client_class: MagicMock,
+        mock_load_tools: AsyncMock,
+        write_config: Callable[..., str],
+        mock_mcp_client: tuple,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An OAuth opt-in server with no token is skipped with an actionable hint."""
+        from bog_agents_cli import mcp_oauth
+
+        monkeypatch.setattr(
+            mcp_oauth, "default_oauth_dir", lambda: tmp_path, raising=False
+        )
+        monkeypatch.setattr(
+            "bog_agents_cli.mcp_token_storage.default_oauth_dir", lambda: tmp_path
+        )
+
+        path = write_config(
+            {
+                "mcpServers": {
+                    "api": {"type": "http", "url": "https://x/mcp", "auth": "oauth"}
+                }
+            }
+        )
+        mock_client, _ = mock_mcp_client
+        mock_client_class.return_value = mock_client
+        mock_load_tools.return_value = []
+
+        tools, manager, server_infos = await get_mcp_tools(path)
+
+        # The server was not connected (no tool load attempted for it) and its
+        # info carries the actionable /mcp login hint.
+        mock_load_tools.assert_not_called()
+        assert tools == []
+        assert len(server_infos) == 1
+        assert "/mcp login api" in server_infos[0].error
+
+        await manager.cleanup()
+
 
 class TestDiscoverMcpConfigs:
     """Test auto-discovery of MCP config files."""

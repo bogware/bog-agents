@@ -116,26 +116,6 @@ class TestRemote:
         assert "No remote tasks" in result
 
 
-class TestOAuthMCP:
-    """Tests for OAuth MCP (#31)."""
-
-    def test_generate_pkce_pair(self) -> None:
-        """Test PKCE pair generation."""
-        from bog_agents_cli.oauth_mcp import generate_pkce_pair
-
-        verifier, challenge = generate_pkce_pair()
-        assert len(verifier) > 0
-        assert len(challenge) > 0
-        assert verifier != challenge
-
-    def test_load_configs_missing(self, tmp_path: Path) -> None:
-        """Test loading missing OAuth configs."""
-        from bog_agents_cli.oauth_mcp import load_oauth_configs
-
-        configs = load_oauth_configs(tmp_path)
-        assert configs == {}
-
-
 class TestTeach:
     """Tests for teaching sessions (#45)."""
 

@@ -546,6 +546,14 @@ async def _load_tools_from_config(
                 conn["headers"] = _interpolate_headers(
                     server_config["headers"], server_name
                 )
+            # Attach a spec-compliant OAuth provider when the server opted into
+            # OAuth or already has stored tokens (None for stdio, static-header,
+            # or no-auth servers — those connections are unchanged).
+            from bog_agents_cli.mcp_auth import _resolve_mcp_auth
+
+            auth = _resolve_mcp_auth(server_name, server_config)
+            if auth is not None:
+                conn["auth"] = auth  # ty: ignore[invalid-assignment]
             connections[server_name] = conn
         else:
             # stdio server connection (default)
@@ -607,6 +615,19 @@ async def _load_tools_from_config(
             # ``/init`` symptom we just chased.
             connection = connections[server_name]
             transport = _resolve_server_type(server_config)
+            # An OAuth-opt-in server with no stored token cannot connect
+            # non-interactively — attaching a provider would drive a browser
+            # (blocking) or time out opaquely. Skip it with an actionable hint
+            # so the user knows to run ``/mcp login <server>`` first.
+            from bog_agents_cli.mcp_auth import auth_login_hint, needs_oauth_login
+
+            if needs_oauth_login(server_name, server_config):
+                err = auth_login_hint(server_name)
+                logger.info("MCP server %r skipped: %s", server_name, err)
+                server_infos.append(
+                    MCPServerInfo(name=server_name, transport=transport, error=err)
+                )
+                continue
             try:
                 tools = await asyncio.wait_for(
                     load_mcp_tools(
@@ -642,8 +663,15 @@ async def _load_tools_from_config(
                 continue
             except Exception as per_server_exc:
                 # Same isolation strategy: a single broken server should
-                # never brick the rest of the rulebook.
-                err = f"startup failed: {per_server_exc}"
+                # never brick the rest of the rulebook. A 401 challenge means
+                # the server wants OAuth — surface an actionable login hint
+                # instead of the opaque underlying error.
+                from bog_agents_cli.mcp_auth import auth_login_hint, is_auth_challenge
+
+                if is_auth_challenge(per_server_exc):
+                    err = auth_login_hint(server_name)
+                else:
+                    err = f"startup failed: {per_server_exc}"
                 logger.warning(
                     "MCP server %r failed to start: %s",
                     server_name,
