@@ -13,15 +13,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# Ceiling on app.py's line count. Set 2026-07-12 from a measured 17,111 lines,
-# rounded up to the next 100 (17,200) plus a 100-line buffer for in-flight work.
+# Ceiling on app.py's line count. Bumped 2026-07-12 to 17,400 when the /goal and
+# /rubric command surface landed: their thin dispatch handlers (plus the
+# _sync_goal_state / _safe_goal_state_values glue that needs live self._agent
+# access) must live on BogAgentsApp, while the real logic delegates out to
+# goal_controller.py and goal_rubric.py. Measured 17,350 after that change.
 # This is a deliberate ratchet, NOT a target: it only ever moves DOWN for free.
 # If you are a legitimate grower and this test fails, do NOT silence it by
 # stuffing more into app.py — add new handlers to commands/*.py plus a testable
 # controller module (see CLAUDE.md and expert_controller.py for the pattern).
 # Only bump this constant when the growth genuinely belongs on BogAgentsApp, and
 # bump it deliberately in the same change that adds the lines.
-APP_PY_LINE_CEILING = 17_300
+APP_PY_LINE_CEILING = 17_400
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 

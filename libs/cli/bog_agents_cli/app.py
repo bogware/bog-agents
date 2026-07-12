@@ -798,6 +798,15 @@ class BogAgentsApp(App):
             show=False,
             priority=True,
         ),
+        # priority=True is REQUIRED: TextArea binds ctrl+x to "cut", so without
+        # priority the input widget would swallow the key before the app sees it.
+        Binding(
+            "ctrl+x",
+            "open_editor",
+            "Edit in $EDITOR",
+            show=False,
+            priority=True,
+        ),
         # Approval menu keys (handled at App level for reliability)
         Binding("up", "approval_up", "Up", show=False),
         Binding("k", "approval_up", "Up", show=False),
@@ -7790,33 +7799,36 @@ class BogAgentsApp(App):
             logger.exception("plan-mode model restore failed")
 
     async def _handle_effort_command(self, command: str) -> None:
-        """Handle `/effort` runtime reasoning presets."""
+        """Handle `/effort` — set native, per-model reasoning effort."""
         await self._mount_message(UserMessage(command))
 
-        descriptions = {
-            "low": "Quick responses with minimal reasoning overhead.",
-            "medium": "Balanced reasoning and speed.",
-            "high": "Thorough analysis for most coding tasks.",
-            "max": "Maximum reasoning depth for complex work.",
-        }
+        from bog_agents_cli.reasoning_effort import (
+            EFFORT_DESCRIPTIONS,
+            effort_levels_for_model,
+            render_effort_status,
+        )
+
+        model_spec = self._model_override or self._base_model_spec
         raw_arg = command.strip()[len("/effort") :].strip().lower()
         if not raw_arg or raw_arg in {"show", "status"}:
-            lines = [f"Current effort: {self._effort_level}", ""]
-            lines.extend(f"  {level} - {desc}" for level, desc in descriptions.items())
-            lines.append("")
-            lines.append("Usage: /effort low|medium|high|max")
-            await self._mount_message(AppMessage("\n".join(lines)))
+            await self._mount_message(
+                AppMessage(render_effort_status(model_spec, self._effort_level))
+            )
             return
 
-        if raw_arg not in descriptions:
-            await self._mount_message(AppMessage("Usage: /effort low|medium|high|max"))
+        valid_levels = effort_levels_for_model(model_spec)
+        if raw_arg not in valid_levels:
+            await self._mount_message(
+                AppMessage(f"Usage: /effort {'|'.join(valid_levels)}")
+            )
             return
 
         self._effort_level = raw_arg
+        blurb = EFFORT_DESCRIPTIONS.get(raw_arg, "")
         await self._mount_message(
             AppMessage(
-                f"Effort set to {raw_arg}. {descriptions[raw_arg]} "
-                "The new preset will apply on the next agent turn."
+                f"Effort set to {raw_arg}. {blurb} "
+                "The new reasoning effort applies on the next agent turn."
             )
         )
 
@@ -11457,6 +11469,194 @@ class BogAgentsApp(App):
         args = command.strip()[len("/expert") :].strip()
         output = await asyncio.to_thread(controller.handle_expert, args)
         await self._mount_message(AppMessage(output))
+
+    async def _sync_goal_state(self, record: Any) -> None:  # noqa: ANN401 — goal_controller.GoalRecord
+        """Seed the goal objective/rubric into the live agent's checkpointed state.
+
+        Best-effort: mirrors the user's goal (via ``goal_controller.state_seed``)
+        into the ``_goal_*`` channels so the SDK's ``GoalToolsMiddleware`` tools
+        (``get_goal``/``get_rubric``) and its per-turn prompt injection see it. A
+        state-update failure (or an agentless session) never affects the display.
+
+        Args:
+            record: The ``GoalRecord`` to mirror into agent state.
+        """
+        from bog_agents_cli.goal_controller import state_seed
+
+        agent = self._agent
+        thread_id = self._lc_thread_id
+        if agent is None or not hasattr(agent, "aupdate_state") or not thread_id:
+            return
+        try:
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            await agent.aupdate_state(config, state_seed(record))
+        except Exception:
+            logger.debug("Failed to seed goal state into agent thread", exc_info=True)
+
+    async def _safe_goal_state_values(self) -> dict[str, Any] | None:
+        """Read live agent goal state (status/note), or ``None`` when unavailable."""
+        if self._agent is None or not self._lc_thread_id:
+            return None
+        try:
+            return await self._get_thread_state_values(self._lc_thread_id)
+        except Exception:
+            logger.debug("Failed to read goal state values", exc_info=True)
+            return None
+
+    async def _handle_goal_command(self, command: str) -> None:
+        """Handle ``/goal`` — set or show the durable objective.
+
+        Thin façade over ``goal_controller``; the goal persists in
+        ``.bog-agents/goal.json`` and is mirrored into agent state so the
+        agent's goal tools stay in sync.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli import goal_controller
+
+        args = command.strip()[len("/goal") :].strip()
+        sub = args.lower()
+        if sub in ("clear", "reset"):
+            goal_controller.clear_goal(self._cwd)
+            await self._sync_goal_state(goal_controller.GoalRecord())
+            await self._mount_message(AppMessage("Goal cleared."))
+            return
+        if args and sub not in ("show", "status"):
+            record = goal_controller.set_objective(self._cwd, args)
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage(goal_controller.render_goal(record)))
+            return
+        record = goal_controller.merge_agent_state(
+            goal_controller.load_goal(self._cwd), await self._safe_goal_state_values()
+        )
+        await self._mount_message(AppMessage(goal_controller.render_goal(record)))
+
+    async def _handle_rubric_command(self, command: str) -> None:
+        """Handle ``/rubric`` — draft/manage the goal's acceptance criteria.
+
+        Drafting is a one-shot LLM call (``goal_rubric.draft_criteria``) with a
+        regenerate-on-feedback gate; the proposed criteria are parked on
+        ``self._goal_rubric_pending`` until ``/rubric accept``.
+        """
+        await self._mount_message(UserMessage(command))
+        from bog_agents_cli import goal_controller
+        from bog_agents_cli.goal_rubric import (
+            RubricPending,
+            build_invoke,
+            draft_criteria,
+        )
+
+        args = command.strip()[len("/rubric") :].strip()
+        head, _, rest = args.partition(" ")
+        head_lower = head.lower()
+        rest = rest.strip()
+
+        if head_lower in ("", "show", "list"):
+            record = goal_controller.load_goal(self._cwd)
+            await self._mount_message(AppMessage(goal_controller.render_rubric(record)))
+            return
+        if head_lower == "clear":
+            record = goal_controller.set_rubric(self._cwd, [])
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage("Acceptance criteria cleared."))
+            return
+        if head_lower == "set":
+            criteria = goal_controller.parse_rubric_lines(rest)
+            if not criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Usage: /rubric set <criteria> (newline- or semicolon-separated)"
+                    )
+                )
+                return
+            record = goal_controller.set_rubric(self._cwd, criteria)
+            await self._sync_goal_state(record)
+            await self._mount_message(AppMessage(goal_controller.render_rubric(record)))
+            return
+        if head_lower == "accept":
+            pending = getattr(self, "_goal_rubric_pending", None)
+            if not isinstance(pending, RubricPending) or not pending.criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "No drafted criteria to accept — run /rubric draft first."
+                    )
+                )
+                return
+            record = goal_controller.set_rubric(self._cwd, pending.criteria)
+            self._goal_rubric_pending = None
+            await self._sync_goal_state(record)
+            await self._mount_message(
+                AppMessage("Accepted.\n\n" + goal_controller.render_rubric(record))
+            )
+            return
+        if head_lower in ("draft", "regenerate", "redraft"):
+            record = goal_controller.load_goal(self._cwd)
+            if not record.is_set:
+                await self._mount_message(
+                    ErrorMessage("Set a goal first: /goal <objective>.")
+                )
+                return
+            feedback: str | None = None
+            previous: list[str] | None = None
+            if head_lower in ("regenerate", "redraft"):
+                if not rest:
+                    await self._mount_message(
+                        ErrorMessage("Usage: /rubric regenerate <feedback>")
+                    )
+                    return
+                pending = getattr(self, "_goal_rubric_pending", None)
+                previous = (
+                    pending.criteria
+                    if isinstance(pending, RubricPending)
+                    else record.rubric
+                )
+                feedback = rest
+            invoke = build_invoke(self)
+            if invoke is None:
+                await self._mount_message(
+                    ErrorMessage("No active model — run /model first.")
+                )
+                return
+            await self._set_spinner("Drafting acceptance criteria")
+            try:
+                criteria = await draft_criteria(
+                    record.objective,
+                    invoke=invoke,
+                    feedback=feedback,
+                    previous_criteria=previous,
+                )
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/rubric draft failed: {exc}"))
+                return
+            await self._set_spinner("")
+            if not criteria:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Could not draft criteria — try /rubric regenerate <feedback> "
+                        "or set them manually with /rubric set."
+                    )
+                )
+                return
+            self._goal_rubric_pending = RubricPending(
+                objective=record.objective, criteria=criteria
+            )
+            rendered = "\n".join(f"  {i}. {c}" for i, c in enumerate(criteria, start=1))
+            await self._mount_message(
+                AppMessage(
+                    "[bold]Proposed acceptance criteria[/bold]\n"
+                    f"{rendered}\n\n"
+                    "[bold]/rubric accept[/bold] to use these, or "
+                    "[bold]/rubric regenerate <feedback>[/bold] to redraft."
+                )
+            )
+            return
+        await self._mount_message(
+            ErrorMessage(
+                f"Unknown /rubric subcommand: '{head}'.\n"
+                "Usage: /rubric [show|draft|accept|regenerate <feedback>|"
+                "set <criteria>|clear]"
+            )
+        )
 
     async def _handle_browser_command(self, command: str) -> None:
         """Handle ``/browser …`` — Computer Use session control.
@@ -15485,6 +15685,42 @@ class BogAgentsApp(App):
                 if tool_msg.has_output:
                     tool_msg.toggle_output()
                     return
+
+    async def action_open_editor(self) -> None:
+        """Pop the current input buffer into an external editor ($VISUAL/$EDITOR).
+
+        Suspends the TUI so the editor gets the terminal, then writes the edited
+        result back into the chat input. Any failure falls through to a notify()
+        and re-focuses the input rather than crashing the app.
+        """
+        from bog_agents_cli.editor import open_in_editor
+
+        chat_input = self._chat_input
+        if chat_input is None:
+            return
+        current_text = chat_input.value
+
+        edited: str | None = None
+        try:
+            with self.suspend():
+                edited = open_in_editor(current_text)
+        except Exception:
+            logger.warning("External editor failed", exc_info=True)
+            self.notify(
+                "External editor failed. Check $VISUAL/$EDITOR.",
+                severity="error",
+                timeout=5,
+            )
+            chat_input.focus_input()
+            return
+
+        if edited is not None:
+            chat_input.value = edited
+            text_area = chat_input.input_widget
+            if text_area is not None:
+                lines = edited.split("\n")
+                text_area.move_cursor((len(lines) - 1, len(lines[-1])))
+        chat_input.focus_input()
 
     # Approval menu action handlers (delegated from App-level bindings)
     # NOTE: These only activate when approval widget is pending

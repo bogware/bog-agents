@@ -61,10 +61,18 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/effort",
-            "Set effort level (low/medium/high/max)",
-            "quality speed",
+            "Set native reasoning effort (per-model levels)",
+            "quality speed reasoning thinking none low medium high xhigh max",
             "config",
             available=True,
+            subcommands=(
+                ("none", "Reasoning off (where supported)"),
+                ("low", "Minimal reasoning overhead"),
+                ("medium", "Balanced reasoning and speed"),
+                ("high", "Thorough analysis (default)"),
+                ("xhigh", "Extended reasoning (where supported)"),
+                ("max", "Maximum reasoning depth (where supported)"),
+            ),
         ),
         handler_method="_handle_effort_command",
     ),

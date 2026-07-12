@@ -1698,6 +1698,17 @@ def create_cli_agent(
 
     agent_middleware.append(NotificationsMiddleware())
 
+    # Goal tools — a durable objective + acceptance-criteria rubric that survive
+    # across turns and are re-injected into the system prompt every model call.
+    # Carries no configuration and is safe to include unconditionally: with no
+    # goal set, get_goal/get_rubric report empty and the injected prompt is just
+    # the static guidance. The CLI's /goal and /rubric commands seed the goal
+    # channels (see goal_controller.state_seed); the agent's update_goal tool
+    # records progress back into the same checkpointed state.
+    from bog_agents.middleware import GoalToolsMiddleware
+
+    agent_middleware.append(GoalToolsMiddleware())
+
     # Bedrock resilience — only attached when a Bedrock model is in use, to
     # keep the middleware list lean for everyone else. NOTE: by this point
     # `model` has already been resolved from a `provider:model` string to a

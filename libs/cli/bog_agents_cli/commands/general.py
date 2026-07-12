@@ -680,4 +680,38 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_help_dream_command",
     ),
+    # ---- Goal & rubric (durable objective + acceptance criteria) -------
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/goal",
+            "Set a durable objective the agent keeps in view every turn (get_goal/update_goal tools)",
+            "goal objective target mission durable persistent rubric acceptance criteria",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show the current goal, status, and rubric"),
+                ("<objective>", "Set the goal objective"),
+                ("clear", "Clear the goal and its rubric"),
+            ),
+        ),
+        handler_method="_handle_goal_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/rubric",
+            "Draft and manage the goal's acceptance criteria (definition of done)",
+            "rubric criteria acceptance definition done grade draft regenerate goal",
+            "general",
+            available=True,
+            subcommands=(
+                ("", "Show the current acceptance criteria"),
+                ("draft", "Draft criteria from the current goal (LLM)"),
+                ("accept", "Accept the drafted criteria as the goal rubric"),
+                ("regenerate <feedback>", "Redraft the criteria using your feedback"),
+                ("set <criteria>", "Set criteria manually (newline/semicolon list)"),
+                ("clear", "Clear the acceptance criteria"),
+            ),
+        ),
+        handler_method="_handle_rubric_command",
+    ),
 )

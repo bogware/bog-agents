@@ -10,7 +10,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from bog_agents._models import model_matches_spec, resolve_model  # noqa: PLC2701
+from bog_agents._models import (  # noqa: PLC2701
+    get_model_identifier,
+    get_model_provider,
+    model_matches_spec,
+    resolve_model,
+)
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     ModelRequest,
@@ -18,6 +23,11 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.messages import ContentBlock, SystemMessage
 from typing_extensions import TypedDict
+
+from bog_agents_cli.reasoning_effort import (
+    model_params_for_effort,
+    supported_efforts_for_model,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -41,7 +51,12 @@ class CLIContext(TypedDict, total=False):
     into `model_settings`."""
 
     effort_level: str | None
-    """Runtime reasoning preset (`low`, `medium`, `high`, or `max`)."""
+    """Runtime reasoning effort.
+
+    Translated per active model: a reasoning model receives its provider's
+    native knob (e.g. Anthropic `output_config.effort`), while a non-reasoning
+    model falls back to the `{max_tokens, temperature}` presets. Never caps a
+    reasoning model's output. See `reasoning_effort.py`."""
 
     plan_mode: bool
     """Whether read-only plan mode should be enforced for this turn."""
@@ -93,7 +108,12 @@ _EFFORT_LEVEL_SETTINGS: dict[str, dict[str, Any]] = {
     "high": {"max_tokens": 8192, "temperature": 0.7},
     "max": {"max_tokens": 16384, "temperature": 1.0},
 }
-"""Best-effort runtime model settings for effort presets."""
+"""Legacy `{max_tokens, temperature}` presets for effort levels.
+
+Applied **only** as a fallback for models with no native reasoning knob (see
+`reasoning_effort.supported_efforts_for_model`). A reasoning model must never
+receive these — capping `max_tokens` at 1024 on `low` would truncate its
+reasoning. Reasoning models get native params via `model_params_for_effort`."""
 
 _OLLAMA_SETTING_ALIASES: dict[str, str] = {
     "max_tokens": "num_predict",
@@ -183,6 +203,57 @@ def _apply_ollama_runtime_model_updates(
     return cloned_model, remaining_settings
 
 
+def _spec_from_resolved_model(model: object) -> str | None:
+    """Derive a `provider:model` spec from a resolved chat model instance.
+
+    Returns:
+        The `provider:model` spec, or `None` when either half cannot be
+        inspected (e.g. a custom model whose `_get_ls_params` is unavailable).
+    """
+    identifier = get_model_identifier(model)  # ty: ignore[invalid-argument-type]
+    if not identifier:
+        return None
+    provider = get_model_provider(model)  # ty: ignore[invalid-argument-type]
+    if not provider:
+        return None
+    return f"{provider}:{identifier}"
+
+
+def _effort_settings_for(
+    override_spec: str | None,
+    resolved_model: object,
+    effort_level: str,
+) -> dict[str, Any]:
+    """Translate an effort level into model settings for the active model.
+
+    Prefers the runtime override spec (already a `provider:model` string) and
+    otherwise derives the spec from the resolved model instance. Reasoning
+    models get their provider's native reasoning params; only models with no
+    native reasoning knob fall back to the `{max_tokens, temperature}` presets.
+
+    Args:
+        override_spec: `provider:model` spec from `CLIContext.model`, if any.
+        resolved_model: The chat model instance on the request.
+        effort_level: The requested effort label.
+
+    Returns:
+        Model settings to merge for this effort, or an empty dict when the
+        model supports the reasoning knob but not this specific level (leave it
+        at the model default rather than cap it).
+    """
+    spec = override_spec or _spec_from_resolved_model(resolved_model)
+    native = model_params_for_effort(spec, effort_level)
+    if native is not None:
+        return native
+    # `native is None` means either a non-reasoning model or a reasoning model
+    # that does not accept this specific level. Only apply the truncating
+    # legacy preset for a genuinely non-reasoning model — never cap a reasoning
+    # model's output.
+    if supported_efforts_for_model(spec):
+        return {}
+    return _EFFORT_LEVEL_SETTINGS.get(effort_level, {})
+
+
 def _apply_overrides(request: ModelRequest) -> ModelRequest:
     """Apply model/param overrides from `CLIContext` on the runtime.
 
@@ -212,8 +283,8 @@ def _apply_overrides(request: ModelRequest) -> ModelRequest:
     model_params = ctx.get("model_params", {})
     effort_level = ctx.get("effort_level")
     effort_settings = (
-        _EFFORT_LEVEL_SETTINGS.get(effort_level, {})
-        if isinstance(effort_level, str)
+        _effort_settings_for(model, request.model, effort_level)
+        if isinstance(effort_level, str) and effort_level
         else {}
     )
     base_model_settings = request.model_settings or {}

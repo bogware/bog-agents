@@ -149,6 +149,36 @@ def _cmd_changelog(_args: str) -> HeadlessResult:
     return _ok(text, {"found": True, "path": str(path)})
 
 
+def _cmd_goal(_args: str) -> HeadlessResult:
+    """Show the current project goal: objective, status, and rubric.
+
+    Reads the file-backed goal (``.bog-agents/goal.json`` under the cwd) so the
+    objective/rubric set via the interactive ``/goal`` and ``/rubric`` commands
+    are visible headlessly. Agent-recorded status/note live in checkpointed
+    session state and are not available without a live thread.
+    """
+    from bog_agents_cli import goal_controller
+
+    record = goal_controller.load_goal(Path.cwd())
+    data: dict[str, Any] = {
+        "objective": record.objective or None,
+        "status": record.status if record.is_set else None,
+        "rubric": list(record.rubric),
+        "note": record.note or None,
+    }
+    if not record.is_set:
+        return _ok("No goal set. Set one with /goal <objective> in the TUI.", data)
+    lines = [f"Goal: {record.objective}", f"Status: {record.status}"]
+    if record.rubric:
+        lines.append("Acceptance criteria:")
+        lines.extend(f"  {i}. {c}" for i, c in enumerate(record.rubric, start=1))
+    else:
+        lines.append("Acceptance criteria: (none)")
+    if record.note:
+        lines.append(f"Latest note: {record.note}")
+    return _ok("\n".join(lines), data)
+
+
 def _command_rows() -> list[dict[str, Any]]:
     """Build the list of all slash commands with a headless-capable flag."""
     from bog_agents_cli.command_registry import SLASH_COMMAND_SPECS
@@ -218,6 +248,7 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "model": ("Show the configured model", _cmd_model),
     "config": ("Show resolved configuration", _cmd_config),
     "changelog": ("Show the CLI changelog", _cmd_changelog),
+    "goal": ("Show the current project goal, status, and rubric", _cmd_goal),
 }
 
 
