@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.9...bog-agents==0.9.10) (2026-07-12)
+
+
+### Features
+
+* **sdk:** add GoalToolsMiddleware for persistent agent-visible goals ([70ffb43](https://github.com/bogware/bog-agents/commit/70ffb43cc879287fb9dd83c4f00a0929f53c2310))
+* **sdk:** add pluggable symlink-trust checker hook to SkillsMiddleware ([6000c2f](https://github.com/bogware/bog-agents/commit/6000c2f1c0dc7fd12a47461c930528788e7293f0))
+* **sdk:** complete deepagents backend rewrite (FileData v2, delete, overwrite) ([836cdea](https://github.com/bogware/bog-agents/commit/836cdea6a0a240fd738e949ee902c48a6364e0ae))
+* **sdk:** deepagents 0.6.12 backend type foundation + dep floors ([3e0ef8b](https://github.com/bogware/bog-agents/commit/3e0ef8b2c3e6d112eef164cfd2e1468b2a27824f))
+* **sdk:** deepagents drop-in core API (SystemPromptConfig, exports, profiles) ([674906a](https://github.com/bogware/bog-agents/commit/674906a72ce6272a3fe0bb375bb22215eff4f968))
+* **sdk:** middleware interop surface + fix two permission-bypass vulns ([7687282](https://github.com/bogware/bog-agents/commit/768728284b2e54bfcc5fc549490395efca21d112))
+* **sdk:** ship built-in model profiles + bedrock caching + video read ([38e7930](https://github.com/bogware/bog-agents/commit/38e793024c67a2fdd1f374698035090fc6e8585e))
+
+
+### Bug Fixes
+
+* **sdk:** activate no-op safety/feature middleware + harden serve ([bfc03f2](https://github.com/bogware/bog-agents/commit/bfc03f2946396e12670815d4d706f284bb3b8358))
+* **sdk:** checkpointing works on fresh repos and never touches the user's git index ([d5a9df0](https://github.com/bogware/bog-agents/commit/d5a9df0194cdb6e42faba192da77b9907284c850))
+* **sdk:** data-integrity + concurrency hardening (lost edits, atomic writes, DLP, worktree) ([2b28420](https://github.com/bogware/bog-agents/commit/2b2842084f8658ccb4a0fe105a2d9fd15ed35c33))
+* **sdk:** don't follow a symlinked leaf on filesystem write/delete ([055bd81](https://github.com/bogware/bog-agents/commit/055bd818ef7e97e3bcad1f627837d76d1d33f826))
+* **sdk:** resiliency/reliability/observability hardening across middleware and backends ([0999527](https://github.com/bogware/bog-agents/commit/0999527322336a872d878c7c562f958b7f039318))
+
 ## [0.9.9](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.8...bog-agents==0.9.9) (2026-06-19)
 
 
