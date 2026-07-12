@@ -144,7 +144,108 @@ COLORS = {
     "mode_shell": "#a07358",  # peat ember — shell-mode prefix
     "mode_command": "#7aa888",  # matte moss — command-mode prefix
 }
-"""App color scheme — matte swamp palette. Muted, low-saturation."""
+"""App color scheme — matte swamp palette. Muted, low-saturation.
+
+These ANSI-free hex values back Rich-side markup and the default `bog`
+Textual theme (see `bog_agents_cli.theme`). The interactive theme the CLI
+renders with is stored separately under `[ui].theme` in the user's
+`config.toml`; see `load_selected_theme` / `save_selected_theme`.
+"""
+
+
+def load_selected_theme(config_path: Path | None = None) -> str | None:
+    """Return the persisted UI theme name, or `None` when unset.
+
+    Reads `[ui].theme` from the user's `config.toml`. A missing file,
+    missing key, or unreadable/invalid config returns `None` (the caller
+    falls back to the default `bog` theme) rather than raising.
+
+    Args:
+        config_path: Path to the config file. Defaults to
+            `~/.bog-agents/config.toml`.
+
+    Returns:
+        The saved theme name, or `None` if none is stored or readable.
+    """
+    import tomllib
+
+    from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        with config_path.open("rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.warning("Could not read theme preference from %s", config_path)
+        return None
+
+    ui_section = data.get("ui")
+    if not isinstance(ui_section, dict):
+        return None
+    theme = ui_section.get("theme")
+    return theme if isinstance(theme, str) and theme.strip() else None
+
+
+def save_selected_theme(name: str, config_path: Path | None = None) -> bool:
+    """Persist the UI theme name to `[ui].theme` in the config file.
+
+    Read-modify-write via a temp file + atomic replace so an interrupted
+    write cannot corrupt the config. Other config keys are preserved (though
+    comments are not).
+
+    Args:
+        name: Theme name to persist (e.g. `'bog'`).
+        config_path: Path to the config file. Defaults to
+            `~/.bog-agents/config.toml`.
+
+    Returns:
+        `True` on success, `False` on any I/O or serialization failure.
+    """
+    import contextlib
+    import tempfile
+    import tomllib
+
+    import tomli_w
+
+    from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+        else:
+            data = {}
+
+        ui_section = data.get("ui")
+        if not isinstance(ui_section, dict):
+            ui_section = {}
+            data["ui"] = ui_section
+        ui_section["theme"] = name
+
+        fd, tmp_path = tempfile.mkstemp(dir=config_path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                tomli_w.dump(data, f)
+            Path(tmp_path).replace(config_path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                Path(tmp_path).unlink()
+            raise
+    except (OSError, tomllib.TOMLDecodeError, TypeError):
+        logger.exception("Could not save theme preference")
+        return False
+    else:
+        return True
+
 
 MODE_PREFIXES: dict[str, str] = {
     "shell": "!",

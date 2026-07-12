@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding, BindingType
 from textual.containers import Vertical, VerticalScroll
+from textual.content import Content
 from textual.events import (
     Click,  # noqa: TC002 - needed at runtime for Textual event dispatch
 )
@@ -47,6 +48,26 @@ def _safe_markup(text: str) -> str:
     return escape_markup(strip_dangerous_unicode(sanitize_control_chars(text)))
 
 
+def _safe_literal(text: str) -> str:
+    """Sanitize server-controlled MCP text for literal `Content` rendering.
+
+    Applies `sanitize_control_chars` (strip terminal escape sequences / control
+    bytes) then `strip_dangerous_unicode` (drop bidi and zero-width
+    confusables), but — unlike `_safe_markup` — does NOT Rich-escape the result.
+    `Content.assemble` treats its text parts as literal and never runs them
+    through the markup parser, so escaping is both unnecessary and would surface
+    visible backslashes. The escaping still guards the `_safe_markup` path
+    (belt-and-suspenders); this variant feeds the preferred `Content` path.
+
+    Args:
+        text: Untrusted, server-controlled string.
+
+    Returns:
+        Text safe to hand to `Content.assemble` as a literal part.
+    """
+    return strip_dangerous_unicode(sanitize_control_chars(text))
+
+
 class MCPToolItem(Static):
     """A selectable tool item in the MCP viewer."""
 
@@ -66,91 +87,109 @@ class MCPToolItem(Static):
             index: Flat index of this tool in the list.
             classes: CSS classes.
         """
-        # Tool name/description are fully server-controlled and untrusted:
-        # escape Rich markup, strip terminal escapes/control bytes, and remove
-        # bidi/zero-width confusables BEFORE any interpolation into markup. The
-        # sanitized forms are stored and reused by every render path below.
-        safe_name = _safe_markup(name)
-        safe_description = _safe_markup(description) if description else ""
-        label = f"  {safe_name}"
-        if safe_description:
-            label += f" [dim]{safe_description}[/dim]"
-        super().__init__(label, classes=classes)
-        self.tool_name = safe_name
-        self.tool_description = safe_description
+        # Tool name/description are fully server-controlled and untrusted.
+        # Preferred render path: `Content.assemble`, which treats text parts as
+        # LITERAL and never runs them through the markup parser — so an injected
+        # `[bold]`/`[/dim]` can never activate. We still keep `_safe_markup`
+        # (Rich-escaped) copies in `tool_name`/`tool_description` as
+        # belt-and-suspenders for any markup-string consumer. Both paths first
+        # strip terminal escapes/control bytes and bidi/zero-width confusables.
+        literal_name = _safe_literal(name)
+        literal_description = _safe_literal(description) if description else ""
+        # NB: attribute names must avoid `self._name`, which Textual's DOMNode
+        # owns for the widget `name` — `super().__init__` would clobber it.
+        super().__init__(
+            self._format_collapsed(literal_name, literal_description), classes=classes
+        )
+        self.tool_name = _safe_markup(name)
+        self.tool_description = _safe_markup(description) if description else ""
+        self._literal_name = literal_name
+        self._literal_description = literal_description
         self.index = index
         self._expanded = False
 
-    def _format_collapsed(self, name: str, description: str) -> str:
-        """Build the collapsed (single-line) label.
+    def _format_collapsed(self, name: str, description: str) -> Content:
+        """Build the collapsed (single-line) content.
 
-        Truncates the description with `(...)` if it would overflow
-        the widget width.
-
-        Expects `name`/`description` to already be markup-safe (see
-        `_safe_markup`, applied in `__init__`); the values wrapped here are the
-        stored `self.tool_name`/`self.tool_description`. Truncating escaped text
-        is safe because escaped brackets are backslash-prefixed, so a slice can
-        never re-expose an active tag.
+        Truncates the description with `(...)` if it would overflow the widget
+        width. The pieces are handed to `Content.assemble` as literal text with
+        an explicit `dim` style span, so server-controlled brackets render
+        verbatim rather than as markup. Truncating literal text is safe — there
+        is no markup token that a slice could split mid-tag.
 
         Args:
-            name: Sanitized tool name.
-            description: Sanitized tool description.
+            name: Sanitized (literal) tool name.
+            description: Sanitized (literal) tool description.
 
         Returns:
-            Rich-markup label.
+            Renderable `Content` for the collapsed row.
         """
         if not description:
-            return f"  {name}"
+            return Content.assemble(f"  {name}")
         prefix_len = 2 + len(name) + 1
-        avail = self.size.width - prefix_len - 1 if self.size.width else 0
+        try:
+            width = self.size.width
+        except (RuntimeError, AttributeError):
+            # `self.size` is unavailable before the widget is mounted (e.g. when
+            # building the initial content in `__init__`); render untruncated.
+            width = 0
+        avail = width - prefix_len - 1 if width else 0
         ellipsis = " (...)"
         if avail > 0 and len(description) > avail:
             cut = max(0, avail - len(ellipsis))
             desc_text = description[:cut] + ellipsis
         else:
             desc_text = description
-        return f"  {name} [dim]{desc_text}[/dim]"
+        return Content.assemble(f"  {name} ", (desc_text, "dim"))
 
     @staticmethod
-    def _format_expanded(name: str, description: str) -> str:
-        """Build the expanded (multi-line) label.
+    def _format_expanded(name: str, description: str) -> Content:
+        """Build the expanded (multi-line) content.
 
-        Expects markup-safe `name`/`description` (see `_safe_markup`, applied in
-        `__init__`).
+        Expects sanitized (literal) `name`/`description`; assembled as literal
+        `Content` so untrusted text is never markup-parsed.
 
         Args:
-            name: Sanitized tool name.
-            description: Sanitized tool description.
+            name: Sanitized (literal) tool name.
+            description: Sanitized (literal) tool description.
 
         Returns:
-            Rich-markup label with full description on next line.
+            Renderable `Content` with the full description on the next line.
         """
-        lines = f"  [bold]{name}[/bold]"
         if description:
-            lines += f"\n    [dim]{description}[/dim]"
-        return lines
+            return Content.assemble(
+                "  ", (name, "bold"), "\n    ", (description, "dim")
+            )
+        return Content.assemble("  ", (name, "bold"))
 
     def toggle_expand(self) -> None:
         """Toggle between collapsed and expanded view."""
         self._expanded = not self._expanded
         if self._expanded:
-            label = self._format_expanded(self.tool_name, self.tool_description)
+            content = self._format_expanded(
+                self._literal_name, self._literal_description
+            )
             self.styles.height = "auto"
         else:
-            label = self._format_collapsed(self.tool_name, self.tool_description)
+            content = self._format_collapsed(
+                self._literal_name, self._literal_description
+            )
             self.styles.height = 1
-        self.update(label)
+        self.update(content)
 
     def on_mount(self) -> None:
         """Re-render with correct truncation once width is known."""
         if not self._expanded:
-            self.update(self._format_collapsed(self.tool_name, self.tool_description))
+            self.update(
+                self._format_collapsed(self._literal_name, self._literal_description)
+            )
 
     def on_resize(self) -> None:
         """Re-truncate when widget width changes."""
         if not self._expanded:
-            self.update(self._format_collapsed(self.tool_name, self.tool_description))
+            self.update(
+                self._format_collapsed(self._literal_name, self._literal_description)
+            )
 
     def on_click(self, event: Click) -> None:
         """Handle click — select and toggle expand via parent screen.

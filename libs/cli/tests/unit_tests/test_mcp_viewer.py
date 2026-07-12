@@ -12,8 +12,18 @@ from bog_agents_cli.widgets.mcp_viewer import (
 
 
 def _widget_text(widget: Widget) -> str:
-    """Extract plain text content from a Static widget."""
+    """Extract plain text content from a Static widget.
+
+    Handles both render paths: a Rich-markup ``str`` (server headers) and a
+    Textual ``Content`` object (tool items, since the SEC-2 defense-in-depth
+    switch to ``Content.assemble``). For ``Content`` the plain text already has
+    every part rendered literally, so no markup parsing is involved.
+    """
+    from textual.content import Content
+
     content = widget._Static__content  # type: ignore[attr-defined]
+    if isinstance(content, Content):
+        return content.plain
     return str(content)
 
 
@@ -219,15 +229,23 @@ def _hostile_info() -> list[MCPServerInfo]:
 
 
 def _rendered_plain(widget: Static) -> str:
-    """Render the Static's stored markup to visible plain text.
+    """Render the Static's stored content to visible plain text.
 
-    Parses the exact markup string the widget will hand to Rich. Raises
-    `MarkupError` if any active tag survived sanitization — precisely the crash
-    SEC-2 must prevent.
+    For a ``Content`` renderable (the preferred tool-item path) the plain text
+    is already the literally-rendered output — no markup parser runs, so an
+    injected tag can never activate. For a Rich-markup ``str`` (server headers)
+    this parses the exact markup the widget hands to Rich, raising
+    ``MarkupError`` if any active tag survived sanitization — precisely the
+    crash SEC-2 must prevent.
     """
+    from textual.content import Content
+
+    content = widget._Static__content  # type: ignore[attr-defined]
+    if isinstance(content, Content):
+        return content.plain
     from rich.markup import render as render_markup
 
-    return render_markup(_widget_text(widget)).plain
+    return render_markup(str(content)).plain
 
 
 class TestMCPViewerMarkupSafety:
@@ -283,6 +301,46 @@ class TestMCPViewerMarkupSafety:
             assert "[/dim]" in plain
             assert "\x1b" not in plain
             assert "\u202e" not in plain
+
+    def test_content_assemble_path_renders_untrusted_text_literally(self) -> None:
+        """The tool item renders via `Content.assemble` (never markup-parsed).
+
+        Defense-in-depth beyond escape-at-interpolation: the widget content is a
+        Textual ``Content`` object whose *text* parts are literal, so an
+        injected ``[bold red]`` is impossible to activate regardless of
+        escaping. Styling is carried by spans, not by in-band markup tokens.
+        """
+        from textual.content import Content
+
+        item = MCPToolItem(
+            name=_HOSTILE_NAME,
+            description=_HOSTILE_DESC,
+            index=0,
+        )
+        content = item._Static__content  # type: ignore[attr-defined]
+        # The render path is Content, not a Rich-markup string.
+        assert isinstance(content, Content)
+        # Injected tags appear verbatim in the literal plain text.
+        assert "[bold red]x[/bold red]" in content.plain
+        # Terminal escapes and bidi overrides are stripped before assembly.
+        assert "\x1b" not in content.plain
+        assert "\\u202e" not in content.plain
+        # The `dim` styling lives in a span, never as an in-band markup token,
+        # so the description text itself carries no active tag.
+        assert any(span.style == "dim" for span in content.spans)
+
+    def test_hostile_expanded_content_is_literal_content(self) -> None:
+        """Expanded view is also a literal `Content` renderable."""
+        from textual.content import Content
+
+        item = MCPToolItem(name=_HOSTILE_NAME, description=_HOSTILE_DESC, index=0)
+        item.toggle_expand()
+        content = item._Static__content  # type: ignore[attr-defined]
+        assert isinstance(content, Content)
+        assert "[bold red]x[/bold red]" in content.plain
+        assert "[/dim]" in content.plain
+        assert "\x1b" not in content.plain
+        assert "\\u202e" not in content.plain
 
     async def test_stored_metadata_is_sanitized(self) -> None:
         """MCPToolItem stores the sanitized (escaped) name/description."""

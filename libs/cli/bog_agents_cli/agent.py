@@ -1231,6 +1231,12 @@ def create_cli_agent(
     project_skills_dir = None
     project_agent_skills_dir = None
     if enable_skills:
+        # Honor the skill-trust store when SkillsMiddleware lists directories:
+        # an explicitly-trusted symlinked skill dir is loaded, everything else
+        # is still refused (fail-closed default). Idempotent.
+        from bog_agents_cli.skill_trust import install_symlink_trust_hook
+
+        install_symlink_trust_hook()
         skills_dir = settings.ensure_user_skills_dir(assistant_id)
         user_agent_skills_dir = settings.get_user_agent_skills_dir()
         project_skills_dir = (

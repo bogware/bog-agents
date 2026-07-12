@@ -245,8 +245,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/skills",
-            "Show loaded skills and their search paths",
-            "abilities memory",
+            "Show loaded skills; `/skills trust` manages trusted symlinked skill dirs",
+            "abilities memory trust symlink",
             "config",
             available=True,
         ),

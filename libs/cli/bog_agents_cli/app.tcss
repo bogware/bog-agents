@@ -24,25 +24,13 @@
  *   $text-muted          lichen mute           #6f8478
  *   $warning             muted ochre           #b89968
  *   $error               heather rust          #b86a78
+ *
+ * These values are no longer hard-coded here. They now live in the registered
+ * `bog` Textual theme (bog_agents_cli/theme.py), which is set as the app's
+ * default so this stylesheet resolves the exact same colors while `/theme`
+ * can swap the whole palette at runtime. The variables below ($primary,
+ * $surface, $highlight, $boundary, $text, …) resolve from the active theme.
  */
-$primary: #7aa888;
-$primary-lighten-1: #9cc4a7;
-$primary-lighten-2: #c1d8c8;
-$primary-darken-1: #557a63;
-$primary-darken-2: #3a5a48;
-$highlight: #1f3328;
-$highlight-soft: #16271d;
-$secondary: #6a9b9b;
-$background: #060a07;
-$surface: #0d1410;
-$surface-lighten-1: #16201a;
-$surface-darken-1: #040705;
-$boundary: #243828;
-$text: #c8d4ca;
-$text-muted: #6f8478;
-$success: #7aa888;
-$warning: #b89968;
-$error: #b86a78;
 
 /* Define layers for z-ordering */
 Screen {

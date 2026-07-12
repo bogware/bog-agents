@@ -998,6 +998,28 @@ class BogAgentsApp(App):
 
         self._image_tracker = MediaTracker()
 
+        # Register themes and activate the saved (or default `bog`) theme HERE,
+        # in __init__, not on_mount: app.tcss references app-specific variables
+        # ($boundary, $highlight, $highlight-soft) that only the registered
+        # `bog` theme supplies, and the stylesheet is parsed before on_mount
+        # runs — so the theme must be active first or CSS resolution fails.
+        # Best-effort: a bad user theme must never block startup.
+        try:
+            from bog_agents_cli.config import load_selected_theme
+            from bog_agents_cli.theme import (
+                DEFAULT_THEME_NAME,
+                register_all_themes,
+                resolve_theme_name,
+            )
+
+            register_all_themes(self)
+            saved = load_selected_theme()
+            self.theme = (resolve_theme_name(saved) if saved else None) or (
+                DEFAULT_THEME_NAME
+            )
+        except Exception:
+            logger.debug("Theme registration failed; using Textual default")
+
     def _remote_agent(self) -> RemoteAgent | None:
         """Return the agent narrowed to `RemoteAgent`, or `None`.
 
@@ -7822,7 +7844,12 @@ class BogAgentsApp(App):
 
         model_spec = self._model_override or self._base_model_spec
         raw_arg = command.strip()[len("/effort") :].strip().lower()
-        if not raw_arg or raw_arg in {"show", "status"}:
+        if not raw_arg:
+            # Bare `/effort` opens the interactive picker; `/effort <level>`
+            # still applies directly, and `/effort show|status` prints text.
+            self._show_effort_selector(model_spec)
+            return
+        if raw_arg in {"show", "status"}:
             await self._mount_message(
                 AppMessage(render_effort_status(model_spec, self._effort_level))
             )
@@ -7842,6 +7869,37 @@ class BogAgentsApp(App):
                 f"Effort set to {raw_arg}. {blurb} "
                 "The new reasoning effort applies on the next agent turn."
             )
+        )
+
+    def _show_effort_selector(self, model_spec: str | None) -> None:
+        """Open the reasoning-effort picker modal for the active model.
+
+        Thin opener: the modal lists only the levels valid for `model_spec`;
+        applying a choice sets `self._effort_level` and confirms on-screen.
+
+        Args:
+            model_spec: `provider:model` spec for the active model.
+        """
+        from bog_agents_cli.reasoning_effort import EFFORT_DESCRIPTIONS
+        from bog_agents_cli.widgets.effort_selector import EffortSelectorScreen
+
+        def handle_result(level: str | None) -> None:
+            if level is not None and level != self._effort_level:
+                self._effort_level = level
+                blurb = EFFORT_DESCRIPTIONS.get(level, "")
+                self.call_later(
+                    self._mount_message,
+                    AppMessage(
+                        f"Effort set to {level}. {blurb} "
+                        "The new reasoning effort applies on the next agent turn."
+                    ),
+                )
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(
+            EffortSelectorScreen(model_spec=model_spec, current=self._effort_level),
+            handle_result,
         )
 
     async def _handle_diff_command(self, command: str) -> None:
@@ -9443,6 +9501,16 @@ class BogAgentsApp(App):
             command: Full slash command text.
         """
         await self._mount_message(UserMessage(command))
+
+        # `/skills trust ...` manages the symlinked-skill-dir trust store; it is
+        # handled by a standalone controller so the logic stays TUI-free. A
+        # non-None result means the subcommand was recognized and handled.
+        from bog_agents_cli.skill_trust_controller import handle_skills_command
+
+        trust_result = handle_skills_command(command)
+        if trust_result is not None:
+            await self._mount_message(AppMessage(trust_result))
+            return
 
         from bog_agents_cli.extensibility import get_extension_skill_dirs
         from bog_agents_cli.skills.load import list_skills
@@ -11532,6 +11600,13 @@ class BogAgentsApp(App):
             await self._sync_goal_state(goal_controller.GoalRecord())
             await self._mount_message(AppMessage("Goal cleared."))
             return
+        if sub == "review":
+            record = goal_controller.merge_agent_state(
+                goal_controller.load_goal(self._cwd),
+                await self._safe_goal_state_values(),
+            )
+            self._show_goal_review(record)
+            return
         if args and sub not in ("show", "status"):
             record = goal_controller.set_objective(self._cwd, args)
             await self._sync_goal_state(record)
@@ -11541,6 +11616,23 @@ class BogAgentsApp(App):
             goal_controller.load_goal(self._cwd), await self._safe_goal_state_values()
         )
         await self._mount_message(AppMessage(goal_controller.render_goal(record)))
+
+    def _show_goal_review(self, record: Any) -> None:  # noqa: ANN401 — GoalRecord
+        """Open the read-only goal review modal.
+
+        Thin opener over `widgets.goal_review.GoalReviewScreen`; the caller has
+        already loaded and merged the record.
+
+        Args:
+            record: The `goal_controller.GoalRecord` to display.
+        """
+        from bog_agents_cli.widgets.goal_review import GoalReviewScreen
+
+        def handle_result(_result: None) -> None:
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(GoalReviewScreen(record), handle_result)
 
     async def _handle_rubric_command(self, command: str) -> None:
         """Handle ``/rubric`` — draft/manage the goal's acceptance criteria.
@@ -16291,6 +16383,56 @@ class BogAgentsApp(App):
             cli_profile_override=self._profile_override,
         )
         self.push_screen(screen, handle_result)
+
+    async def _handle_theme_command(self, command: str) -> None:
+        """Change the color theme (thin glue; logic in `theme`).
+
+        `/theme` opens the picker, `/theme <name>` switches + persists, and
+        `/theme list` lists the available themes.
+        """
+        from bog_agents_cli.theme import handle_theme_command
+
+        arg = command.strip()[len("/theme") :].strip()
+        if not arg:
+            await self._show_theme_selector()
+            return
+        await self._mount_message(UserMessage(command))
+        result = handle_theme_command(arg, current=self.theme)
+        if result.apply is not None:
+            self._apply_and_persist_theme(result.apply)
+        await self._mount_message(
+            ErrorMessage(result.message)
+            if result.is_error
+            else AppMessage(result.message)
+        )
+
+    def _apply_and_persist_theme(self, name: str) -> None:
+        """Set the active theme and save it as the persisted preference.
+
+        Args:
+            name: The theme name to apply (already resolved to a real theme).
+        """
+        from bog_agents_cli.config import save_selected_theme
+
+        try:
+            self.theme = name
+        except Exception:
+            logger.warning("Could not apply theme %r", name, exc_info=True)
+            return
+        if not save_selected_theme(name):
+            logger.warning("Applied theme %r but could not persist it", name)
+
+    async def _show_theme_selector(self) -> None:
+        """Open the theme picker modal; apply + persist the chosen theme."""
+        from bog_agents_cli.widgets.theme_selector import ThemeSelectorScreen
+
+        def handle_result(name: str | None) -> None:
+            if name is not None:
+                self._apply_and_persist_theme(name)
+            if self._chat_input:
+                self._chat_input.focus_input()
+
+        self.push_screen(ThemeSelectorScreen(current=self.theme), handle_result)
 
     async def _show_settings_screen(self) -> None:
         """Show interactive settings screen as a modal."""
