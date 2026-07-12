@@ -13,6 +13,10 @@ from bog_agents.graph import DeepAgentState, create_agent
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # deepagents compatibility surface (see bog_agents.deepagents)
     "create_deep_agent": ("bog_agents.deepagents", "create_deep_agent"),
+    "create_sub_agent": ("bog_agents.middleware.subagents", "create_sub_agent"),
+    "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY": ("bog_agents.middleware.subagents", "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY"),
+    "SystemPromptConfig": ("bog_agents.graph", "SystemPromptConfig"),
+    "FsToolName": ("bog_agents.middleware.filesystem", "FsToolName"),
     "FilesystemPermission": ("bog_agents.middleware.permissions", "FilesystemPermission"),
     "FilesystemPermissionsMiddleware": ("bog_agents.middleware.permissions", "FilesystemPermissionsMiddleware"),
     "RubricMiddleware": ("bog_agents.middleware.rubric", "RubricMiddleware"),

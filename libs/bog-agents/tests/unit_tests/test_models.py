@@ -6,19 +6,36 @@ import pytest
 from langchain_core.language_models import BaseChatModel
 
 from bog_agents._models import (
+    _apply_openai_responses_default,
     _normalize_bedrock_model_id,
+    _normalize_provider,
     _resolve_bedrock_region_prefix,
     _string_value,
     get_model_identifier,
+    get_model_provider,
+    is_bedrock_model,
     model_matches_spec,
     resolve_model,
 )
 
 
-def _make_model(dump: dict) -> MagicMock:
-    """Create a mock BaseChatModel with a given model_dump return."""
+def _make_model(dump: dict, ls_params: dict | None = None) -> MagicMock:
+    """Create a mock BaseChatModel with a given model_dump / _get_ls_params.
+
+    Args:
+        dump: Value returned by `model.model_dump()` (drives the identifier).
+        ls_params: When provided, the mapping returned by `_get_ls_params()`
+            (drives the provider). When omitted, `_get_ls_params` is left as a
+            bare MagicMock so `get_model_provider` reports the provider as
+            uninspectable, matching a custom model with no LangSmith params.
+
+    Returns:
+        A configured mock chat model.
+    """
     model = MagicMock(spec=BaseChatModel)
     model.model_dump.return_value = dump
+    if ls_params is not None:
+        model._get_ls_params.return_value = ls_params
     return model
 
 
@@ -120,6 +137,30 @@ class TestModelMatchesSpec:
     def test_bare_spec_without_colon_no_false_positive(self) -> None:
         model = _make_model({"model_name": "gpt-5"})
         assert model_matches_spec(model, "gpt-4o") is False
+
+    def test_cross_provider_same_model_name_no_match(self) -> None:
+        # Same model-name half, different provider: the provider guard must
+        # reject this. Previously it returned True (provider was dropped).
+        model = _make_model({"model_name": "gpt-5"}, ls_params={"ls_provider": "anthropic"})
+        assert model_matches_spec(model, "openai:gpt-5") is False
+
+    def test_provider_prefixed_match_with_matching_provider(self) -> None:
+        model = _make_model({"model_name": "gpt-5"}, ls_params={"ls_provider": "openai"})
+        assert model_matches_spec(model, "openai:gpt-5") is True
+
+    def test_provider_uninspectable_falls_back_to_identifier(self) -> None:
+        # No ls_params -> provider uninspectable -> identifier-only fallback.
+        model = _make_model({"model_name": "gpt-5"})
+        assert model_matches_spec(model, "openai:gpt-5") is True
+
+    def test_provider_alias_normalization_matches(self) -> None:
+        # Spec says `mistralai`; ls_provider reports `mistral`. Aliased -> match.
+        model = _make_model({"model_name": "mistral-large"}, ls_params={"ls_provider": "mistral"})
+        assert model_matches_spec(model, "mistralai:mistral-large") is True
+
+    def test_provider_case_and_hyphen_normalization_matches(self) -> None:
+        model = _make_model({"model_name": "codex-mini"}, ls_params={"ls_provider": "openai-codex"})
+        assert model_matches_spec(model, "openai_codex:codex-mini") is True
 
 
 class TestStringValue:
@@ -236,3 +277,146 @@ class TestNormalizeBedrockModelId:
         # First positional arg is the rewritten spec.
         call_args = mock.call_args
         assert call_args.args[0] == "bedrock_converse:us.anthropic.claude-opus-4-7"
+
+
+class TestGetModelProvider:
+    """Tests for get_model_provider (with the tightened except)."""
+
+    def test_returns_provider_from_ls_params(self) -> None:
+        model = _make_model({"model_name": "gpt-5"}, ls_params={"ls_provider": "openai"})
+        assert get_model_provider(model) == "openai"
+
+    def test_non_mapping_ls_params_returns_none(self) -> None:
+        model = MagicMock(spec=BaseChatModel)
+        model._get_ls_params.return_value = "not-a-mapping"
+        assert get_model_provider(model) is None
+
+    def test_missing_provider_key_returns_none(self) -> None:
+        model = _make_model({"model_name": "x"}, ls_params={})
+        assert get_model_provider(model) is None
+
+    def test_raising_ls_params_returns_none(self) -> None:
+        model = MagicMock(spec=BaseChatModel)
+        model._get_ls_params.side_effect = NotImplementedError
+        assert get_model_provider(model) is None
+
+    def test_unexpected_exception_propagates(self) -> None:
+        # The bare `except` was narrowed: an unrelated error is no longer
+        # silently mapped to `None`.
+        model = MagicMock(spec=BaseChatModel)
+        model._get_ls_params.side_effect = KeyError("boom")
+        with pytest.raises(KeyError):
+            get_model_provider(model)
+
+
+class TestIsBedrockModel:
+    """Tests for is_bedrock_model."""
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            "bedrock:anthropic.claude-opus-4-7",
+            "bedrock_converse:us.anthropic.claude-opus-4-7",
+            "aws:anthropic.claude-sonnet-4-6",
+            "amazon.nova-pro-v1:0",
+            "us.amazon.nova-lite-v1:0",
+        ],
+    )
+    def test_bedrock_specs(self, spec: str) -> None:
+        assert is_bedrock_model(spec) is True
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            "openai:gpt-5",
+            "anthropic:claude-sonnet-4-6",
+            "google_genai:gemini-2.5-pro",
+            "gpt-5",
+        ],
+    )
+    def test_non_bedrock_specs(self, spec: str) -> None:
+        assert is_bedrock_model(spec) is False
+
+    def test_instance_provider_detects_bedrock(self) -> None:
+        model = _make_model({"model_name": "x"}, ls_params={"ls_provider": "bedrock_converse"})
+        assert is_bedrock_model(model) is True
+
+    def test_instance_class_name_detects_bedrock(self) -> None:
+        class ChatBedrockConverse:
+            def _get_ls_params(self) -> dict:
+                return {}
+
+        assert is_bedrock_model(ChatBedrockConverse()) is True  # type: ignore[arg-type]
+
+    def test_instance_non_bedrock(self) -> None:
+        model = _make_model({"model_name": "gpt-5"}, ls_params={"ls_provider": "openai"})
+        assert is_bedrock_model(model) is False
+
+
+class TestNormalizeProvider:
+    """Tests for _normalize_provider."""
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("openai", "openai"),
+            ("OpenAI", "openai"),
+            ("openai-codex", "openai_codex"),
+            ("azure_openai", "azure"),
+            ("mistralai", "mistral"),
+            ("Mistralai", "mistral"),
+        ],
+    )
+    def test_normalize(self, raw: str, expected: str) -> None:
+        assert _normalize_provider(raw) == expected
+
+
+class TestApplyOpenaiResponsesDefault:
+    """Tests for _apply_openai_responses_default (the overridable default)."""
+
+    def test_openai_gets_default_when_absent(self) -> None:
+        kwargs: dict = {}
+        _apply_openai_responses_default("openai:gpt-5", kwargs)
+        assert kwargs == {"use_responses_api": True}
+
+    def test_non_openai_untouched(self) -> None:
+        kwargs: dict = {}
+        _apply_openai_responses_default("anthropic:claude-sonnet-4-6", kwargs)
+        assert kwargs == {}
+
+    def test_existing_value_not_overridden(self) -> None:
+        # A profile (or caller) already decided -> the default must not clobber.
+        kwargs = {"use_responses_api": False}
+        _apply_openai_responses_default("openai:gpt-5", kwargs)
+        assert kwargs == {"use_responses_api": False}
+
+
+class TestResponsesApiOverridableEndToEnd:
+    """resolve_model must let a profile control use_responses_api for OpenAI."""
+
+    def test_profile_can_disable_responses_api(self) -> None:
+        # Simulate a ProviderProfile that sets use_responses_api=False by having
+        # apply_provider_profile return it. The post-profile default must then
+        # leave it alone (proving the override is no longer dead).
+        def fake_apply(spec: str, kwargs: dict) -> dict:
+            merged = dict(kwargs)
+            merged["use_responses_api"] = False
+            return merged
+
+        with (
+            patch("bog_agents.profiles.provider.provider_profiles.apply_provider_profile", side_effect=fake_apply),
+            patch("bog_agents._models.init_chat_model") as mock,
+        ):
+            mock.return_value = MagicMock(spec=BaseChatModel)
+            resolve_model("openai:gpt-5")
+
+        assert mock.call_args.kwargs.get("use_responses_api") is False
+
+    def test_default_responses_api_when_no_profile(self) -> None:
+        # No profile touches the key -> OpenAI still defaults to the Responses
+        # API (behavior preserved for today's users).
+        with patch("bog_agents._models.init_chat_model") as mock:
+            mock.return_value = MagicMock(spec=BaseChatModel)
+            resolve_model("openai:gpt-5")
+
+        assert mock.call_args.kwargs.get("use_responses_api") is True
