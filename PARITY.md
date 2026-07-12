@@ -1,5 +1,18 @@
 # bog-agents ⇄ deepagents 0.6.12 — Implementation-Ready Parity Report
 
+> **STATUS (2026-07-11): Waves 1–3 SHIPPED** on `chore/resiliency-hardening`
+> (commits 3e0ef8b → 38e7930). bog-agents is now a source-level drop-in for the
+> deepagents 0.6.12 public API and co-installable with it. Full SDK unit suite
+> green at 2521 passed / 136 skipped / 2 xfailed; daemon 141 passed; CLI
+> SDK-integration surface 280 passed. Delivered: co-install dep floors,
+> SystemPromptConfig + full export surface, backend rewrite (FileData v2, delete,
+> overwrite), the two permission-bypass security fixes, middleware interop
+> surface, built-in harness+provider profiles (unbreaks OpenRouter/Codex/Nemotron),
+> Bedrock prompt caching, and reachable video-frame read. Wave 4 (satellites —
+> QuickJS interpreter, LangGraph Platform deploy CLI, Talon, eval product, and the
+> deepagents-code feature ports) is deliberately DEFERRED and should be argued on
+> value before starting. The two SECURITY findings in §1 are both fixed and pinned.
+>
 > Scope note: the confirmed-gap list contains the same gap discovered independently by several dimension auditors under different ids (e.g. `system-prompt-config` / `system-prompt-config-missing`, `recursion-limit-9999` / `recursion-limit-200`, `fs-delete-tool-missing` / `backend-delete` / `delete-tool-missing`, `private-state-field-names` / `subagent-state-schema-and-private-keys` / `subagent-private-state-keys`). This report **merges** those into canonical items and lists the alias ids so nothing is double-implemented.
 
 ---
