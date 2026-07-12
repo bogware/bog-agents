@@ -125,6 +125,7 @@ Informational and configuration slash commands run without booting the TUI:
 bog-agents command "/help"          # full command reference
 bog-agents command "/commands"      # list commands; * marks headless-capable
 bog-agents command "/version" --json
+bog-agents command "/update"        # report whether a newer release is available
 bog-agents command "/model"         # show the configured model
 bog-agents command "/config"        # resolved config + file path
 ```
@@ -143,6 +144,14 @@ modal interactions, snapshots, assertions — see [Drive](#bog-agents-drive-exam
 ## What's new in 0.9.x
 
 - **0.10 — Claude-Code-style auto mode + self-verification.**
+  - **`/update`** — checks PyPI for a newer release, shows what you have vs.
+    what will download, asks y/n, then runs the right upgrade for how you
+    installed (uv tool / pipx / pip) and prompts a restart. Resilient by
+    design: source checkouts are detected and never auto-upgraded, and a
+    failed check or upgrade leaves your install untouched.
+  - **Select-to-copy** now runs the clipboard write off the UI thread, so
+    selecting text no longer briefly freezes the app and the "Copied" toast
+    shows immediately.
   - **Permission modes:** Shift+Tab cycles `default → accept-edits → plan`,
     Ctrl+T toggles bypass, with a live status indicator and a
     `--permission-mode {default,acceptEdits,plan,bypass,paranoid}` flag (and
@@ -334,7 +343,7 @@ respective extras; see the SDK docs for credentials and limits.
 | `-p MSG` | Same as `-n` but quiet — clean stdout for pipes. |
 | `--json` | Emit the result as a single JSON envelope (text + tool calls). |
 | `--jsonl` | Stream one JSON event per line (start / text / tool_call / tool_result / final). |
-| `command "/…"` | Run a headless-capable slash command (`/help`, `/version`, `/model`, `/config`, `/commands`, `/changelog`). |
+| `command "/…"` | Run a headless-capable slash command (`/help`, `/version`, `/update`, `/model`, `/config`, `/commands`, `/changelog`). |
 | `--prompt NAME` | Run a saved prompt from your prompt library. |
 | `--prompt-vars JSON` | Pass variable bindings to a saved prompt. |
 | `--pipeline NAME` | Run a saved pipeline from `.bog-agents/pipelines/`. |
