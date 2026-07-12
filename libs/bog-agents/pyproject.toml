@@ -39,7 +39,7 @@ dependencies = [
     # Must stay >=10.1 to remain co-installable with `deepagents` (which floors
     # wcmatch at 10.1). A <7.0 cap made the two packages unresolvable together,
     # which defeats the drop-in-replacement contract. See PARITY.md.
-    "wcmatch>=10.1,<11.0",
+    "wcmatch>=10.1,<12.0",
     "pyyaml>=6.0.0,<7.0.0",
 
     # ─── transitive-CVE floors ──────────────────────────────────────
