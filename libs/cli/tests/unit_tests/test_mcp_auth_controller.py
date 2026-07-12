@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from bog_agents_cli import mcp_auth_controller
 from bog_agents_cli.mcp_auth_controller import (
     _render_status,
@@ -16,8 +18,20 @@ from bog_agents_cli.mcp_auth_controller import (
     handle_mcp_auth_command,
 )
 
-if TYPE_CHECKING:
-    import pytest
+
+@pytest.fixture(autouse=True)
+def _allow_real_sockets():
+    """Permit real sockets: login delegation can build a loopback server
+    (127.0.0.1 inet bind), which CI's Linux `--disable-socket` blocks. No-op
+    under Windows CI's `-p no:socket`.
+    """
+    try:
+        import pytest_socket
+    except ImportError:
+        yield
+        return
+    pytest_socket.enable_socket()
+    yield
 
 
 class _FakeApp:

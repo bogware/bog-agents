@@ -18,6 +18,22 @@ from bog_agents_cli.mcp_login_controller import login, logout, status
 from bog_agents_cli.mcp_loopback import LoopbackCallbackServer, LoopbackTimeoutError
 from bog_agents_cli.mcp_token_storage import FileTokenStorage
 
+
+@pytest.fixture(autouse=True)
+def _allow_real_sockets():
+    """Permit real sockets: login() can build a loopback server (127.0.0.1 inet
+    bind), which CI's Linux `--disable-socket` blocks. No-op under Windows CI's
+    `-p no:socket`.
+    """
+    try:
+        import pytest_socket
+    except ImportError:
+        yield
+        return
+    pytest_socket.enable_socket()
+    yield
+
+
 SECRET = "super-secret-access-token"  # test fixture, not a real credential
 
 

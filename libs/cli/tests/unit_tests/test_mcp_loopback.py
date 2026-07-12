@@ -20,6 +20,24 @@ from bog_agents_cli.mcp_loopback import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _allow_real_sockets():
+    """Permit real sockets for these tests.
+
+    The loopback callback server binds a real `127.0.0.1` (inet) socket, which
+    CI's Linux `pytest --disable-socket --allow-unix-socket` step blocks. This
+    re-enables sockets per test. It is a no-op on the Windows CI step (which runs
+    `-p no:socket`, so nothing is blocking in the first place).
+    """
+    try:
+        import pytest_socket
+    except ImportError:
+        yield
+        return
+    pytest_socket.enable_socket()
+    yield
+
+
 def _get(url: str) -> tuple[int, str]:
     """Perform a blocking localhost GET, returning (status, body).
 

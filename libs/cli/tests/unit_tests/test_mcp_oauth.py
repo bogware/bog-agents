@@ -20,6 +20,21 @@ from bog_agents_cli.mcp_oauth import (
 from bog_agents_cli.mcp_token_storage import FileTokenStorage
 
 
+@pytest.fixture(autouse=True)
+def _allow_real_sockets():
+    """Permit real sockets: some tests build a loopback server (127.0.0.1 inet
+    bind), which CI's Linux `--disable-socket` blocks. No-op under Windows CI's
+    `-p no:socket` (nothing is blocking there).
+    """
+    try:
+        import pytest_socket
+    except ImportError:
+        yield
+        return
+    pytest_socket.enable_socket()
+    yield
+
+
 def test_default_client_metadata() -> None:
     """Metadata advertises a public PKCE client named bog-agents."""
     meta = default_client_metadata("http://localhost:5/callback", scope="a b")
