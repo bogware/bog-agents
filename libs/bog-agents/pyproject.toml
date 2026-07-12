@@ -39,7 +39,7 @@ dependencies = [
     # Must stay >=10.1 to remain co-installable with `deepagents` (which floors
     # wcmatch at 10.1). A <7.0 cap made the two packages unresolvable together,
     # which defeats the drop-in-replacement contract. See PARITY.md.
-    "wcmatch>=10.1,<11.0",
+    "wcmatch>=10.1,<12.0",
     "pyyaml>=6.0.0,<7.0.0",
 
     # ─── transitive-CVE floors ──────────────────────────────────────
@@ -69,7 +69,7 @@ pdf = ["pypdf>=4.0.0"]
 # Video-frame reading for the read_file tool (video_reader middleware). PyAV
 # decodes frames; Pillow encodes the sampled JPEGs. Both are imported lazily so
 # a default install stays lean.
-video = ["av>=17.0.0,<18.0.0", "pillow>=10.0.0,<13.0.0"]
+video = ["av>=17.0.0,<19.0.0", "pillow>=10.0.0,<13.0.0"]
 
 # ContextHubBackend — a persistent, versioned agent filesystem backed by a
 # LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
