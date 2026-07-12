@@ -651,6 +651,34 @@ def _format_skills_source_error(source_path: str, error: str) -> str:
     return f"Cannot load skills from '{source_path}': {error}"
 
 
+# --- symlink trust hook (opt-in relaxation of the P1-8 containment posture) ---
+#
+# By default `_filter_skill_dirs` refuses every symlinked skill directory. A
+# host process (e.g. the CLI) may register a checker here that grants an
+# explicit, per-resolved-path exception for directories the user has trusted.
+# The checker owns the entire trust decision (membership, resolve()-to-self
+# re-verification, fingerprinting); this module only asks it. When no checker is
+# registered the default "refuse all symlinks" behavior is unchanged, so the SDK
+# stays fail-closed and free of any dependency on the host's trust store.
+_symlink_trust_checker: Callable[[str], bool] | None = None
+
+
+def set_symlink_trust_checker(checker: Callable[[str], bool] | None) -> None:
+    """Register (or clear) a callback that may allow specific symlinked skill dirs.
+
+    The callback receives the backend-reported path of a directory already
+    determined to be a symlink and returns True to allow it (the caller has
+    verified the path is explicitly trusted) or False to keep refusing it.
+    A checker that raises is treated as a refusal. Pass None to restore the
+    default "refuse every symlink" posture.
+
+    Args:
+        checker: Trust callback, or None to clear.
+    """
+    global _symlink_trust_checker  # noqa: PLW0603  # single process-wide hook, mirrors other SDK registration setters
+    _symlink_trust_checker = checker
+
+
 def _filter_skill_dirs(items: Sequence[FileInfo]) -> list[str]:
     """Select the candidate skill directories from a directory listing.
 
@@ -661,6 +689,10 @@ def _filter_skill_dirs(items: Sequence[FileInfo]) -> list[str]:
     applied to the path the backend reported, so virtual-mode and absolute-mode
     are both covered.
 
+    A registered symlink trust checker (see `set_symlink_trust_checker`) can
+    grant a per-path exception for directories the user explicitly trusted;
+    without one, every symlink is refused.
+
     This is the single containment chokepoint shared by the sync and async
     listing paths. Previously only the sync path filtered, so an agent invoked
     via `ainvoke` bypassed the guard entirely.
@@ -669,22 +701,31 @@ def _filter_skill_dirs(items: Sequence[FileInfo]) -> list[str]:
         items: Directory entries as reported by the backend.
 
     Returns:
-        Paths of non-symlinked subdirectories, in listing order.
+        Paths of non-symlinked (or explicitly-trusted symlinked) subdirectories,
+            in listing order.
     """
     skill_dirs: list[str] = []
+    checker = _symlink_trust_checker
     for item in items:
         if not item.get("is_dir"):
             continue
         item_path = item["path"]
         try:
-            if os.path.islink(item_path):
-                logger.warning(
-                    "Skipping symlinked skill directory %s (P1-8 hardening)",
-                    item_path,
-                )
-                continue
+            is_link = os.path.islink(item_path)
         except OSError:
             continue
+        if is_link:
+            allowed = False
+            if checker is not None:
+                try:
+                    allowed = checker(item_path)
+                except Exception:  # a misbehaving checker must never grant access
+                    logger.warning("Skill symlink trust checker raised for %s; refusing", item_path, exc_info=True)
+                    allowed = False
+            if not allowed:
+                logger.warning("Skipping symlinked skill directory %s (P1-8 hardening)", item_path)
+                continue
+            logger.info("Loading symlinked skill directory %s (explicitly trusted)", item_path)
         skill_dirs.append(item_path)
     return skill_dirs
 
