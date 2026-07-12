@@ -33,6 +33,10 @@ from langchain.agents.middleware.types import (  # noqa: E402 — import grouped
     PrivateStateAttr,
 )
 
+from bog_agents_cli.unicode_security import (  # noqa: E402 — grouped after _IS_WINDOWS with the langchain imports above
+    sanitize_control_chars,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -62,22 +66,22 @@ def _build_mcp_context(servers: list[MCPServerInfo]) -> str:
     lines = [f"**MCP Servers** ({len(servers)} servers, {total_tools} tools):"]
 
     for server in servers:
+        # Server/tool metadata comes from remote MCP servers (untrusted), so
+        # neutralize terminal escape sequences and control bytes before it is
+        # rendered into the system prompt / displayed inventory.
+        name = sanitize_control_chars(server.name)
+        transport = sanitize_control_chars(server.transport)
         if not server.tools:
-            lines.append(f"- **{server.name}** ({server.transport}): (no tools)")
+            lines.append(f"- **{name}** ({transport}): (no tools)")
             continue
 
-        names = [t.name for t in server.tools]
+        names = [sanitize_control_chars(t.name) for t in server.tools]
         if len(names) > _TOOL_NAME_DISPLAY_LIMIT:
             shown = ", ".join(names[:_TOOL_NAME_DISPLAY_LIMIT])
             remaining = len(names) - _TOOL_NAME_DISPLAY_LIMIT
-            lines.append(
-                f"- **{server.name}** ({server.transport}): "
-                f"{shown}, and {remaining} more"
-            )
+            lines.append(f"- **{name}** ({transport}): {shown}, and {remaining} more")
         else:
-            lines.append(
-                f"- **{server.name}** ({server.transport}): {', '.join(names)}"
-            )
+            lines.append(f"- **{name}** ({transport}): {', '.join(names)}")
 
     return "\n".join(lines)
 

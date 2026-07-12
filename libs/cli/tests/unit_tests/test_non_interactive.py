@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage
+from langgraph.types import Command, Interrupt
 from rich.console import Console
 from rich.style import Style
 from rich.text import Text
@@ -17,6 +18,7 @@ from bog_agents_cli.non_interactive import (
     _build_non_interactive_header,
     _collect_action_request_warnings,
     _make_hitl_decision,
+    _run_agent_loop,
     _start_langsmith_thread_url_lookup,
     run_non_interactive,
 )
@@ -987,6 +989,174 @@ class TestMcpPreloadTaskCleanup:
         # No stray tasks should be left pending for this run.
         pending = [t for t in asyncio.all_tasks() if not t.done()]
         assert all(t is asyncio.current_task() for t in pending)
+
+
+class _RecordingAgent:
+    """Fake agent whose `astream` records each stream input and replays a
+    scripted sequence of chunk-lists (one list per successive call).
+    """
+
+    def __init__(self, responses: list[list[object]]) -> None:
+        self._responses = responses
+        self.calls: list[object] = []
+        self._idx = 0
+
+    def astream(self, stream_input: object, **_kwargs: object) -> AsyncIterator[object]:
+        self.calls.append(stream_input)
+        chunks = self._responses[self._idx] if self._idx < len(self._responses) else []
+        self._idx += 1
+        return _async_iter(chunks)
+
+
+def _updates_interrupt_chunk(interrupts: list[Interrupt]) -> tuple[str, str, object]:
+    """Build a main-agent `updates`-mode chunk carrying HITL interrupts."""
+    return ("", "updates", {"__interrupt__": interrupts})
+
+
+_VALID_HITL_VALUE = {
+    "action_requests": [{"name": "read_file", "args": {"path": "/tmp/x"}}],
+    "review_configs": [],
+}
+
+
+class TestMalformedInterruptFailClosed:
+    """The fail-closed reject for a malformed HITL payload must actually be
+    delivered in the resume `Command`, not silently dropped (which would wedge
+    the unattended run).
+    """
+
+    async def test_single_malformed_interrupt_resumes_with_reject(self) -> None:
+        """A lone malformed interrupt must drive one resume round whose
+        `Command(resume=...)` carries a reject decision for that id.
+        """
+        agent = _RecordingAgent(
+            [
+                [_updates_interrupt_chunk([Interrupt(value={"bogus": True}, id="m1")])],
+                [],  # resume round produces no further interrupts -> loop ends
+            ]
+        )
+        console = Console(quiet=True)
+        config = {"configurable": {"thread_id": "t1"}}
+
+        with (
+            patch(
+                "bog_agents_cli.non_interactive.dispatch_hook",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "bog_agents_cli.non_interactive.dispatch_hook_fire_and_forget",
+            ),
+        ):
+            await _run_agent_loop(
+                agent,
+                "task",
+                config,  # type: ignore[arg-type]
+                console,
+                MagicMock(),
+                quiet=True,
+            )
+
+        # Two astream calls: the initial run + exactly one resume round.
+        assert len(agent.calls) == 2
+        resume = agent.calls[1]
+        assert isinstance(resume, Command)
+        assert resume.resume == {
+            "m1": {"decisions": [{"type": "reject", "message": "Malformed interrupt"}]}
+        }
+
+    async def test_malformed_and_valid_interrupt_both_in_resume(self) -> None:
+        """When a malformed and a valid interrupt co-occur, the resume dict must
+        carry decisions for BOTH ids (the valid one is not enough to keep the
+        malformed reject from being wiped).
+        """
+        agent = _RecordingAgent(
+            [
+                [
+                    _updates_interrupt_chunk(
+                        [
+                            Interrupt(value={"bogus": True}, id="m1"),
+                            Interrupt(value=_VALID_HITL_VALUE, id="v1"),
+                        ]
+                    )
+                ],
+                [],
+            ]
+        )
+        console = Console(quiet=True)
+        config = {"configurable": {"thread_id": "t1"}}
+
+        with (
+            patch(
+                "bog_agents_cli.non_interactive.dispatch_hook",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "bog_agents_cli.non_interactive.dispatch_hook_fire_and_forget",
+            ),
+        ):
+            await _run_agent_loop(
+                agent,
+                "task",
+                config,  # type: ignore[arg-type]
+                console,
+                MagicMock(),
+                quiet=True,
+            )
+
+        assert len(agent.calls) == 2
+        resume = agent.calls[1]
+        assert isinstance(resume, Command)
+        assert resume.resume == {
+            "v1": {"decisions": [{"type": "approve"}]},
+            "m1": {"decisions": [{"type": "reject", "message": "Malformed interrupt"}]},
+        }
+
+
+class TestControlCharSanitization:
+    """Untrusted streamed model/tool output must be stripped of terminal escape
+    sequences before it reaches raw stdout (OSC 52 clipboard hijack, etc.).
+    """
+
+    async def test_osc52_clipboard_escape_neutralized_on_stdout(self) -> None:
+        """An OSC 52 clipboard-write sequence in streamed text must not survive
+        to stdout, while the surrounding readable text is preserved.
+        """
+        # ESC ] 52 ; c ; <base64> BEL  -> a clipboard-write hijack payload.
+        payload = "before\x1b]52;c;aGFjaw==\x07after"
+        ai_msg = MagicMock(spec=AIMessage)
+        ai_msg.content_blocks = [{"type": "text", "text": payload}]
+        ai_msg.usage_metadata = None
+        ai_msg.tool_calls = []
+
+        agent = _RecordingAgent([[("", "messages", (ai_msg, {}))]])
+        console = Console(quiet=True)
+        config = {"configurable": {"thread_id": "t1"}}
+
+        stdout_buf = io.StringIO()
+        with (
+            patch(
+                "bog_agents_cli.non_interactive.dispatch_hook", new_callable=AsyncMock
+            ),
+            patch("bog_agents_cli.non_interactive.dispatch_hook_fire_and_forget"),
+            patch.object(sys, "stdout", stdout_buf),
+        ):
+            await _run_agent_loop(
+                agent,
+                "task",
+                config,  # type: ignore[arg-type]
+                console,
+                MagicMock(),
+                quiet=True,
+            )
+
+        stdout = stdout_buf.getvalue()
+        # The escape introducer, the OSC 52 marker, and the BEL terminator are
+        # all gone; the readable text on either side remains intact.
+        assert "\x1b" not in stdout
+        assert "\x07" not in stdout
+        assert "52;c;" not in stdout
+        assert "before" in stdout
+        assert "after" in stdout
 
 
 async def _async_iter(items: list[object]) -> AsyncIterator[object]:

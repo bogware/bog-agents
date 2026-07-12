@@ -18,6 +18,33 @@ if TYPE_CHECKING:
     from bog_agents_cli.mcp_tools import MCPServerInfo
 
 from bog_agents_cli.config import CharsetMode, _detect_charset_mode, get_glyphs
+from bog_agents_cli.unicode_security import (
+    sanitize_control_chars,
+    strip_dangerous_unicode,
+)
+
+
+def _safe_markup(text: str) -> str:
+    """Make server-controlled MCP text safe to embed in Rich markup.
+
+    Applies, in order: `sanitize_control_chars` (strip terminal escape
+    sequences / control bytes), `strip_dangerous_unicode` (drop bidi and
+    zero-width confusables), then Rich markup escaping. Sanitizing BEFORE
+    escaping is deliberate: escaping first can leave an `ESC` byte directly in
+    front of a markup token, and stripping that escape afterwards consumes the
+    escaping backslash — re-exposing an active tag (e.g. a bare `[/dim]`) that
+    raises `MarkupError` at render time. Doing markup escaping last closes that
+    hole.
+
+    Args:
+        text: Untrusted, server-controlled string.
+
+    Returns:
+        Text safe to interpolate into a Rich-rendered `Static`.
+    """
+    from rich.markup import escape as escape_markup
+
+    return escape_markup(strip_dangerous_unicode(sanitize_control_chars(text)))
 
 
 class MCPToolItem(Static):
@@ -39,12 +66,18 @@ class MCPToolItem(Static):
             index: Flat index of this tool in the list.
             classes: CSS classes.
         """
-        label = f"  {name}"
-        if description:
-            label += f" [dim]{description}[/dim]"
+        # Tool name/description are fully server-controlled and untrusted:
+        # escape Rich markup, strip terminal escapes/control bytes, and remove
+        # bidi/zero-width confusables BEFORE any interpolation into markup. The
+        # sanitized forms are stored and reused by every render path below.
+        safe_name = _safe_markup(name)
+        safe_description = _safe_markup(description) if description else ""
+        label = f"  {safe_name}"
+        if safe_description:
+            label += f" [dim]{safe_description}[/dim]"
         super().__init__(label, classes=classes)
-        self.tool_name = name
-        self.tool_description = description
+        self.tool_name = safe_name
+        self.tool_description = safe_description
         self.index = index
         self._expanded = False
 
@@ -54,9 +87,15 @@ class MCPToolItem(Static):
         Truncates the description with `(...)` if it would overflow
         the widget width.
 
+        Expects `name`/`description` to already be markup-safe (see
+        `_safe_markup`, applied in `__init__`); the values wrapped here are the
+        stored `self.tool_name`/`self.tool_description`. Truncating escaped text
+        is safe because escaped brackets are backslash-prefixed, so a slice can
+        never re-expose an active tag.
+
         Args:
-            name: Tool name.
-            description: Tool description.
+            name: Sanitized tool name.
+            description: Sanitized tool description.
 
         Returns:
             Rich-markup label.
@@ -77,9 +116,12 @@ class MCPToolItem(Static):
     def _format_expanded(name: str, description: str) -> str:
         """Build the expanded (multi-line) label.
 
+        Expects markup-safe `name`/`description` (see `_safe_markup`, applied in
+        `__init__`).
+
         Args:
-            name: Tool name.
-            description: Tool description.
+            name: Sanitized tool name.
+            description: Sanitized tool description.
 
         Returns:
             Rich-markup label with full description on next line.
@@ -272,9 +314,12 @@ class MCPViewerScreen(ModalScreen[None]):
                     for server in self._server_info:
                         tool_count = len(server.tools)
                         t_label = "tool" if tool_count == 1 else "tools"
+                        # server.name / server.transport are server-controlled
+                        # and untrusted — escape markup + strip control/bidi
+                        # before interpolating into Rich markup.
                         yield Static(
-                            f"[bold]{server.name}[/bold]"
-                            f" [dim]{server.transport}"
+                            f"[bold]{_safe_markup(server.name)}[/bold]"
+                            f" [dim]{_safe_markup(server.transport)}"
                             f" {glyphs.bullet}"
                             f" {tool_count} {t_label}[/dim]",
                             classes="mcp-server-header",

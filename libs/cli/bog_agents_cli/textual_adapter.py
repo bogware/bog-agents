@@ -51,8 +51,17 @@ from bog_agents_cli.widgets.messages import (
 logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 
-_git_branch_cache: dict[str, str | None] = {}
-"""Cache git-branch lookups by current working directory."""
+_git_branch_cache: dict[str, tuple[float, str | None]] = {}
+"""Cache git-branch lookups by cwd as `(monotonic_ts, branch)` with a short TTL.
+
+The TTL exists because a mid-session branch switch (an explicit `/branch`, a
+`WorktreeMiddleware` switch, or a shell-tool `git checkout`) does not change the
+process cwd, so a permanently-memoized entry would misattribute every later
+checkpoint's `git_branch` metadata to the original branch.
+"""
+
+_GIT_BRANCH_CACHE_TTL_SECONDS = 2.5
+"""Max age of a cached branch before `_get_git_branch` re-runs `git rev-parse`."""
 
 
 def _find_todos_payload(node: object) -> list[object] | None:
@@ -345,7 +354,17 @@ _ASK_USER_INTERRUPT_ADAPTER = TypeAdapter(AskUserRequest)
 
 
 def _get_git_branch() -> str | None:
-    """Return the current git branch name, or None if not in a repo."""
+    """Return the current git branch name, or None if not in a repo.
+
+    Results are cached per-cwd for a short TTL (`_GIT_BRANCH_CACHE_TTL_SECONDS`)
+    so a mid-session branch switch that never changes the process cwd (a shell
+    `git checkout`, a `WorktreeMiddleware` switch) is picked up within a few
+    seconds rather than being memoized for the life of the process.
+
+    Returns:
+        The current branch name, or None if not in a git repo / git is
+        unavailable.
+    """
     import subprocess  # noqa: S404
 
     try:
@@ -353,8 +372,10 @@ def _get_git_branch() -> str | None:
     except OSError:
         logger.debug("Could not determine cwd for git branch lookup", exc_info=True)
         return None
-    if cwd in _git_branch_cache:
-        return _git_branch_cache[cwd]
+    now = time.monotonic()
+    cached = _git_branch_cache.get(cwd)
+    if cached is not None and now - cached[0] < _GIT_BRANCH_CACHE_TTL_SECONDS:
+        return cached[1]
 
     try:
         result = subprocess.run(
@@ -366,12 +387,26 @@ def _get_git_branch() -> str | None:
         )
         if result.returncode == 0:
             branch = result.stdout.strip() or None
-            _git_branch_cache[cwd] = branch
+            _git_branch_cache[cwd] = (now, branch)
             return branch
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         logger.debug("Could not determine git branch", exc_info=True)
-    _git_branch_cache[cwd] = None
+    _git_branch_cache[cwd] = (now, None)
     return None
+
+
+def _invalidate_git_branch_cache() -> None:
+    """Drop the cached branch for the current cwd so the next lookup re-runs git.
+
+    Called after an explicit in-CLI branch switch (`/branch create|switch`) so the
+    status bar reflects the new branch immediately rather than waiting out the TTL.
+    """
+    try:
+        cwd = str(Path.cwd())
+    except OSError:
+        _git_branch_cache.clear()
+        return
+    _git_branch_cache.pop(cwd, None)
 
 
 def _build_stream_config(

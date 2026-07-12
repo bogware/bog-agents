@@ -14,7 +14,10 @@ from typing import Any
 from bog_agents.backends import DEFAULT_EXECUTE_TIMEOUT
 
 from bog_agents_cli.config import MAX_ARG_LENGTH, get_glyphs
-from bog_agents_cli.unicode_security import strip_dangerous_unicode
+from bog_agents_cli.unicode_security import (
+    sanitize_control_chars,
+    strip_dangerous_unicode,
+)
 
 _HIDDEN_CHAR_MARKER = " [hidden chars removed]"
 """Marker appended to display values that had dangerous Unicode stripped, so
@@ -79,8 +82,9 @@ def truncate_value(value: str, max_length: int = MAX_ARG_LENGTH) -> str:
 def _sanitize_display_value(value: object, *, max_length: int = MAX_ARG_LENGTH) -> str:
     """Sanitize a value for safe, compact terminal display.
 
-    Hidden/deceptive Unicode controls are stripped. When stripping occurs, a
-    marker is appended so users know the value changed for display safety.
+    Hidden/deceptive Unicode controls are stripped and terminal escape
+    sequences / C0-C1 control bytes are neutralized. When the value changes, a
+    marker is appended so users know it was modified for display safety.
 
     Args:
         value: Any value to display.
@@ -90,7 +94,7 @@ def _sanitize_display_value(value: object, *, max_length: int = MAX_ARG_LENGTH) 
         Sanitized display string.
     """
     raw = str(value)
-    sanitized = strip_dangerous_unicode(raw)
+    sanitized = sanitize_control_chars(strip_dangerous_unicode(raw))
     display = truncate_value(sanitized, max_length)
     if sanitized != raw:
         return display + _HIDDEN_CHAR_MARKER
@@ -156,9 +160,10 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
         if path_value is None:
             path_value = tool_args.get("path")
         if path_value is not None:
-            path_raw = strip_dangerous_unicode(str(path_value))
+            original = str(path_value)
+            path_raw = sanitize_control_chars(strip_dangerous_unicode(original))
             path = abbreviate_path(path_raw)
-            if path_raw != str(path_value):
+            if path_raw != original:
                 path += _HIDDEN_CHAR_MARKER
             return f"{prefix} {tool_name}({path})"
 
@@ -187,9 +192,10 @@ def format_tool_display(tool_name: str, tool_args: dict) -> str:
     elif tool_name == "ls":
         # ls: show directory, or empty if current directory
         if tool_args.get("path"):
-            path_raw = strip_dangerous_unicode(str(tool_args["path"]))
+            original = str(tool_args["path"])
+            path_raw = sanitize_control_chars(strip_dangerous_unicode(original))
             path = abbreviate_path(path_raw)
-            if path_raw != str(tool_args["path"]):
+            if path_raw != original:
                 path += _HIDDEN_CHAR_MARKER
             return f"{prefix} {tool_name}({path})"
         return f"{prefix} {tool_name}()"
@@ -285,6 +291,9 @@ def _format_content_block(block: dict) -> str:
 def format_tool_message_content(content: Any) -> str:  # noqa: ANN401  # Content can be str, list, or dict
     """Convert `ToolMessage` content into a printable string.
 
+    Tool results are untrusted, so terminal escape sequences and C0/C1 control
+    bytes are neutralized (legitimate tabs/newlines/carriage returns are kept).
+
     Returns:
         Formatted string representation of the tool message content.
     """
@@ -302,5 +311,5 @@ def format_tool_message_content(content: Any) -> str:  # noqa: ANN401  # Content
                     parts.append(json.dumps(item))
                 except (TypeError, ValueError):
                     parts.append(str(item))
-        return "\n".join(parts)
-    return str(content)
+        return sanitize_control_chars("\n".join(parts))
+    return sanitize_control_chars(str(content))

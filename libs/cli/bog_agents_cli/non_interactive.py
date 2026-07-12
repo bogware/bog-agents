@@ -56,6 +56,7 @@ from bog_agents_cli.unicode_security import (
     format_warning_detail,
     iter_string_values,
     looks_like_url_key,
+    sanitize_control_chars,
     summarize_issues,
 )
 
@@ -133,16 +134,24 @@ def _resolve_stream_chunk_timeout() -> float | None:
 
 
 def _write_text(text: str) -> None:
-    """Write agent response text to stdout (without a trailing newline).
+    r"""Write agent response text to stdout (without a trailing newline).
 
     Uses `sys.stdout` directly (rather than the Rich Console) so that agent
     response text always appears on stdout, even in quiet mode where the
     Console is redirected to stderr.
 
+    This is the single raw-stdout sink for untrusted model/tool output, so
+    the text is run through `sanitize_control_chars` first: a malicious tool
+    result (or a model echoing one) can otherwise emit terminal escape
+    sequences — e.g. an OSC 52 clipboard-write to hijack the user's
+    clipboard, or CSI codes to spoof output — straight into the operator's
+    terminal. `\t`, `\n`, and `\r` are preserved; ordinary Unicode is
+    untouched.
+
     Args:
         text: The text string to write.
     """
-    sys.stdout.write(text)
+    sys.stdout.write(sanitize_control_chars(text))
     sys.stdout.flush()
 
 
@@ -213,6 +222,19 @@ class StreamState:
     decision dicts (each having a `'type'` key of `'approve'` or `'reject'`).
 
     Used to resume the agent after HITL processing.
+    """
+
+    malformed_rejects: dict[str, dict[str, list[dict[str, str]]]] = field(
+        default_factory=dict
+    )
+    """Fail-closed reject decisions for malformed HITL interrupts, keyed by
+    interrupt ID.
+
+    Kept separate from `hitl_response` because that dict is cleared at the top
+    of every resume round in `_run_agent_loop`; a reject staged here survives
+    the clear and is merged into the resume `Command` exactly once (then
+    cleared) so a malformed tool-approval request is *rejected* rather than
+    silently wedging the run.
     """
 
     interrupt_occurred: bool = False
@@ -302,11 +324,18 @@ def _process_interrupts(
                     f"[yellow]Warning: Received malformed tool approval "
                     f"request (interrupt {interrupt_obj.id}). Rejecting.[/yellow]"
                 )
-                # Fail-closed: record a reject decision for malformed interrupts
-
-                state.hitl_response[interrupt_obj.id] = {
+                # Fail-closed: record a reject decision for malformed
+                # interrupts AND mark that an interrupt occurred so the resume
+                # loop actually runs. The reject is staged in
+                # `malformed_rejects` (not `hitl_response`) because
+                # `_run_agent_loop` clears `hitl_response` at the top of each
+                # resume round — writing here directly would be wiped before
+                # the Command(resume=...) is built, leaving the graph paused
+                # and wedging the unattended run.
+                state.malformed_rejects[interrupt_obj.id] = {
                     "decisions": [{"type": "reject", "message": "Malformed interrupt"}]
                 }
+                state.interrupt_occurred = True
                 continue
             state.pending_interrupts[interrupt_obj.id] = validated_request
             state.interrupt_occurred = True
@@ -943,6 +972,12 @@ async def _run_agent_loop(
         state.interrupt_occurred = False
         state.hitl_response.clear()
         _process_hitl_interrupts(state, console)
+        # Merge in any fail-closed rejects staged for malformed interrupts.
+        # These are held out of `hitl_response` (which was just cleared) so
+        # they survive to here; deliver them exactly once, then clear so a
+        # subsequent resume round doesn't re-send a stale reject.
+        state.hitl_response.update(state.malformed_rejects)
+        state.malformed_rejects.clear()
         stream_input = Command(resume=state.hitl_response)
         await _stream_agent(
             agent, stream_input, config, state, console, file_op_tracker

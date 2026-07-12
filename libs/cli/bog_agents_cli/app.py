@@ -49,6 +49,7 @@ from bog_agents_cli.textual_adapter import (
     SessionStats,
     TextualUIAdapter,
     _get_git_branch,
+    _invalidate_git_branch_cache,
     execute_task_textual,
     format_token_count,
 )
@@ -7942,6 +7943,7 @@ class BogAgentsApp(App):
                     AppMessage(output or f"Could not create branch {branch_name}.")
                 )
                 return
+            _invalidate_git_branch_cache()
             if self._status_bar:
                 self._status_bar.branch = _get_git_branch() or ""
             message = output.strip() or f"Switched to a new branch `{branch_name}`."
@@ -7962,6 +7964,7 @@ class BogAgentsApp(App):
                     AppMessage(output or f"Could not switch to branch {branch_name}.")
                 )
                 return
+            _invalidate_git_branch_cache()
             if self._status_bar:
                 self._status_bar.branch = _get_git_branch() or ""
             message = output.strip() or f"Switched to branch `{branch_name}`."

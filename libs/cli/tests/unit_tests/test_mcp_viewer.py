@@ -194,3 +194,109 @@ class TestMCPViewerScreen:
             await pilot.click(MCPToolItem)
             await pilot.pause()
             assert widget._expanded
+
+
+# --- SEC-2: markup injection / control-char / trojan-source hardening --------
+
+# Fully server-controlled, hostile MCP metadata. Covers: active Rich markup
+# tags, a bare closing tag (crashes unescaped Rich with MarkupError), a raw
+# ANSI/CSI escape, an ESC byte glued directly to a markup tag (the case that
+# defeats escape-before-sanitize ordering), and a bidi RIGHT-TO-LEFT OVERRIDE.
+_HOSTILE_NAME = "read[bold red]x[/bold red]"
+_HOSTILE_DESC = "desc[/dim]\x1b[31mRED\x1b[0m\x1b[/dim]tail\u202eevil"
+_HOSTILE_SERVER = "srv[bold]inject[/bold]\x1b[/dim]"
+_HOSTILE_TRANSPORT = "std[/dim]io\u202e"
+
+
+def _hostile_info() -> list[MCPServerInfo]:
+    return [
+        MCPServerInfo(
+            name=_HOSTILE_SERVER,
+            transport=_HOSTILE_TRANSPORT,
+            tools=[MCPToolInfo(name=_HOSTILE_NAME, description=_HOSTILE_DESC)],
+        ),
+    ]
+
+
+def _rendered_plain(widget: Static) -> str:
+    """Render the Static's stored markup to visible plain text.
+
+    Parses the exact markup string the widget will hand to Rich. Raises
+    `MarkupError` if any active tag survived sanitization — precisely the crash
+    SEC-2 must prevent.
+    """
+    from rich.markup import render as render_markup
+
+    return render_markup(_widget_text(widget)).plain
+
+
+class TestMCPViewerMarkupSafety:
+    """SEC-2: untrusted server-controlled text must never crash or inject."""
+
+    async def test_hostile_metadata_mounts_and_renders_literally(self) -> None:
+        """Hostile tool/server metadata mounts without MarkupError.
+
+        The dangerous tokens must render as literal text (escaped), terminal
+        escape sequences and bidi overrides must be gone, and no active markup
+        may survive to raise at render time.
+        """
+        app = MCPViewerTestApp()
+        async with app.run_test() as pilot:
+            screen = MCPViewerScreen(server_info=_hostile_info())
+            # Mounting composes every untrusted Static; a MarkupError here
+            # would surface as a failed push_screen.
+            app.push_screen(screen)
+            await pilot.pause()
+
+            header = screen.query_one(".mcp-server-header", Static)
+            tool = screen.query_one(".mcp-tool-item", Static)
+
+            # Rendering exercises Rich's markup parser end-to-end. If any active
+            # tag survived sanitization this raises MarkupError and fails.
+            header_plain = _rendered_plain(header)
+            tool_plain = _rendered_plain(tool)
+
+            # Literal tag text is preserved verbatim (escaped, not interpreted).
+            assert "[bold red]x[/bold red]" in tool_plain
+            assert "[bold]inject[/bold]" in header_plain
+
+            # No raw ESC byte or bidi override leaks into rendered output.
+            for plain in (header_plain, tool_plain):
+                assert "\x1b" not in plain
+                assert "\u202e" not in plain
+
+    async def test_hostile_expanded_view_is_safe(self) -> None:
+        """Expanding a hostile tool renders full description without crashing."""
+        app = MCPViewerTestApp()
+        async with app.run_test() as pilot:
+            screen = MCPViewerScreen(server_info=_hostile_info())
+            app.push_screen(screen)
+            await pilot.pause()
+
+            widget = screen._tool_widgets[0]
+            await pilot.press("enter")
+            await pilot.pause()
+            assert widget._expanded
+
+            plain = _rendered_plain(widget)
+            # Description tag text shown literally; escape/bidi stripped.
+            assert "[/dim]" in plain
+            assert "\x1b" not in plain
+            assert "\u202e" not in plain
+
+    async def test_stored_metadata_is_sanitized(self) -> None:
+        """MCPToolItem stores the sanitized (escaped) name/description."""
+        item = MCPToolItem(
+            name=_HOSTILE_NAME,
+            description=_HOSTILE_DESC,
+            index=0,
+        )
+        # Escaped markup is backslash-prefixed; raw escape/bidi bytes are gone.
+        assert "\\[bold red]" in item.tool_name
+        assert "\x1b" not in item.tool_description
+        assert "\u202e" not in item.tool_description
+        # Idempotent: no active-tag / control-byte residue remains.
+        from rich.markup import render
+
+        render(item.tool_name)
+        render(item.tool_description)
