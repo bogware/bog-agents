@@ -311,6 +311,41 @@ class FilesystemBackend(BackendProtocol):
             return path
         return (self.cwd / path).resolve()
 
+    def _physical_base(self, key: str) -> Path:
+        r"""Physical path for `key` with its FINAL component left unresolved.
+
+        `_resolve_path` fully resolves the path — following a symlink at the final
+        component — which is exactly what the sandbox-escape check needs, but it
+        also defeats `O_NOFOLLOW` and `Path.is_symlink()` at the leaf (they end up
+        inspecting the symlink's *target*, not the link). Operations that must not
+        traverse a symlinked final component (`write`, `delete`) call
+        `_resolve_path` first for validation, then act on this leaf-unresolved
+        path so a symlinked leaf is refused (write) or unlinked as a link
+        (delete) instead of being followed into its target.
+
+        Ancestor directories are still followed by the OS; a symlinked ancestor
+        that escapes the sandbox is already rejected by the preceding
+        `_resolve_path` call, so only the final component needs guarding here.
+
+        Args:
+            key: The caller-supplied path, mapped the same way as `_resolve_path`.
+
+        Returns:
+            The physical `Path` whose parent may contain symlinks (validated
+                in-sandbox) but whose final component is not symlink-resolved.
+        """
+        if self.virtual_mode:
+            vpath = key if key.startswith("/") else "/" + key
+            return self.cwd / vpath.lstrip("/")
+        if sys.platform == "win32" and key.startswith(("/", "\\")) and not re.match(r"^[\\/][a-zA-Z]:", key):
+            stripped = key.lstrip("/\\")
+            if stripped:
+                return self.cwd / stripped
+        path = Path(key)
+        if path.is_absolute():
+            return path
+        return self.cwd / path
+
     def _to_virtual_path(self, path: Path) -> str:
         """Convert a filesystem path to a virtual path relative to cwd.
 
@@ -611,17 +646,22 @@ class FilesystemBackend(BackendProtocol):
             `WriteResult` with path on success, or an error message if the write fails.
                 External storage sets `files_update=None`.
         """
-        resolved_path = self._resolve_path(file_path)
+        # _resolve_path validates the sandbox (and rejects a symlink that escapes
+        # root). The actual open targets the leaf-unresolved path so O_NOFOLLOW
+        # refuses a write THROUGH a symlink at the final component — _resolve_path
+        # would have followed it to its target, silently defeating O_NOFOLLOW.
+        self._resolve_path(file_path)
+        nofollow_path = self._physical_base(file_path)
 
         try:
             # Create parent directories if needed
-            resolved_path.parent.mkdir(parents=True, exist_ok=True)
+            nofollow_path.parent.mkdir(parents=True, exist_ok=True)
 
             # Prefer O_NOFOLLOW to avoid writing through symlinks
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             if hasattr(os, "O_NOFOLLOW"):
                 flags |= os.O_NOFOLLOW
-            fd = os.open(resolved_path, flags, 0o644)
+            fd = os.open(nofollow_path, flags, 0o644)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
 
@@ -733,20 +773,26 @@ class FilesystemBackend(BackendProtocol):
                 disk rather than to graph state.
         """
         try:
-            resolved_path = self._resolve_path(file_path)
+            # Validate the sandbox (rejects a symlink whose target escapes root).
+            self._resolve_path(file_path)
         except (ValueError, OSError) as e:
             return DeleteResult(error=f"Error deleting '{file_path}': {e}")
 
+        # Operate on the leaf-unresolved path so a symlinked final component is
+        # removed as a *link* rather than followed into (and destroying) its
+        # target — _resolve_path would have resolved it to the target directory.
+        target = self._physical_base(file_path)
+
         try:
-            if not resolved_path.exists() and not resolved_path.is_symlink():
+            if not target.exists() and not target.is_symlink():
                 return DeleteResult(error=f"Error: '{file_path}' not found")
 
-            deleted_paths = self._deleted_paths_under(resolved_path, file_path)
+            deleted_paths = self._deleted_paths_under(target, file_path)
 
-            if resolved_path.is_symlink() or not resolved_path.is_dir():
-                resolved_path.unlink()
+            if target.is_symlink() or not target.is_dir():
+                target.unlink()
             else:
-                shutil.rmtree(resolved_path)
+                shutil.rmtree(target)
         except OSError as e:
             return DeleteResult(error=f"Error deleting '{file_path}': {e}")
 
