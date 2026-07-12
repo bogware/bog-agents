@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.9...bog-agents-daemon==0.9.10) (2026-07-12)
+
+
+### Features
+
+* **cli:** managed ripgrep auto-install + ${VAR} MCP header interpolation ([6c4df82](https://github.com/bogware/bog-agents/commit/6c4df82d0010c2d4601b7b9035088c373101ce5f))
+* **sdk:** deepagents 0.6.12 backend type foundation + dep floors ([3e0ef8b](https://github.com/bogware/bog-agents/commit/3e0ef8b2c3e6d112eef164cfd2e1468b2a27824f))
+
+
+### Bug Fixes
+
+* **daemon:** harden the unattended runner (triggers, token, scheduler, lint) ([0c9901b](https://github.com/bogware/bog-agents/commit/0c9901bf8d5592ca237249614818848d39617f72))
+* **daemon:** scheduler dispatch for event triggers + safe-by-default unattended shell ([63c04b5](https://github.com/bogware/bog-agents/commit/63c04b5099c4657378c0e727be1786bd0ae3bbf8))
+
 ## [0.9.9](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.8...bog-agents-daemon==0.9.9) (2026-06-19)
 
 

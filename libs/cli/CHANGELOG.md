@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.9...bog-agents-cli==0.9.10) (2026-07-12)
+
+
+### Features
+
+* **cli:** env-var registry + config manifest with real config command ([e602887](https://github.com/bogware/bog-agents/commit/e602887fc48b467a6c59922c5edecab51267f251))
+* **cli:** managed ripgrep auto-install + ${VAR} MCP header interpolation ([6c4df82](https://github.com/bogware/bog-agents/commit/6c4df82d0010c2d4601b7b9035088c373101ce5f))
+* **cli:** native reasoning-effort, ctrl+x external editor, /goal and /rubric ([9feaeb3](https://github.com/bogware/bog-agents/commit/9feaeb3067a13579905644de0af2e4fa84b2940a))
+* **cli:** spec-compliant MCP OAuth (mcp SDK OAuthClientProvider) ([c30d5ed](https://github.com/bogware/bog-agents/commit/c30d5edc6967af472a57f6e9b0152b594abf0f76))
+* **cli:** theme system, skill trust store, and UX polish ([8271f4b](https://github.com/bogware/bog-agents/commit/8271f4bf8c1bd315e0f0b1c41555007c1f399d4e))
+
+
+### Bug Fixes
+
+* **cli:** concurrency + lifecycle hardening (orchestrator, auto-commit race, fork lock, oauth state) ([5b0a0dc](https://github.com/bogware/bog-agents/commit/5b0a0dc413dff66db4f7ce4c087d52e9b64bd832))
+* **cli:** escape untrusted markup on trust surfaces + headless HITL/cache bugs ([70e4e50](https://github.com/bogware/bog-agents/commit/70e4e50769db5b9ba72ad81881dc287361d8c9cd))
+* **cli:** resiliency/reliability/observability hardening (TUI, auth, sessions, ops) ([b3fcbd1](https://github.com/bogware/bog-agents/commit/b3fcbd16417f2091c4aa48d2763950adbb095874))
+* **cli:** SSRF guards on web/agent fetch, sign TraceFile header, fix dreamscape laws ([11e589d](https://github.com/bogware/bog-agents/commit/11e589d1683d7ab304866095aec99a99418c1d67))
+
 ## [0.9.9](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.8...bog-agents-cli==0.9.9) (2026-06-19)
 
 
