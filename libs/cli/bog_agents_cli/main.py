@@ -149,6 +149,67 @@ def format_tool_warning_cli(tool: str) -> str:
     return f"{tool} is not installed."
 
 
+def provision_ripgrep(console: Any, *, block: bool) -> None:  # noqa: ANN401
+    """Ensure a usable ``rg`` is available, installing the managed copy if not.
+
+    `prepend_managed_bin_to_path()` is expected to have already run at startup,
+    so a previously-installed managed ``rg`` is already visible on ``PATH``.
+    When ``rg`` is still missing:
+
+    - If ``[tools].auto_install`` is disabled, emit the existing missing-tool
+      warning (blocking path only) and return without touching the network.
+    - Otherwise install the checksum-verified managed copy. When ``block`` is
+      ``True`` (non-interactive run) the install is synchronous and a warning
+      is emitted only if it fails. When ``block`` is ``False`` (interactive
+      TUI) the install runs in a background daemon thread so startup is never
+      delayed, and no warning is emitted (the TUI intentionally stays quiet;
+      the grep tool falls back to a pure-Python search transparently).
+
+    Any failure is swallowed — provisioning must never block or crash startup.
+
+    Args:
+        console: Rich console for the (blocking-path) warning.
+        block: Whether to install synchronously and warn on failure.
+    """
+    try:
+        from bog_agents_cli.managed_tools import ensure_ripgrep
+        from bog_agents_cli.model_config import tools_auto_install
+
+        if shutil.which("rg") is not None:
+            return
+
+        if not tools_auto_install():
+            if block:
+                _warn_missing_ripgrep(console)
+            return
+
+        if block:
+            if ensure_ripgrep() is None:
+                _warn_missing_ripgrep(console)
+            return
+
+        import threading
+
+        threading.Thread(
+            target=ensure_ripgrep,
+            name="bog-ripgrep-install",
+            daemon=True,
+        ).start()
+    except Exception:
+        # Provisioning is a convenience — never let it break startup.
+        logger.debug("ripgrep provisioning failed", exc_info=True)
+
+
+def _warn_missing_ripgrep(console: Any) -> None:  # noqa: ANN401
+    """Emit the missing-ripgrep warning unless the user suppressed it.
+
+    Args:
+        console: Rich console to print the warning to.
+    """
+    if "ripgrep" in check_optional_tools():
+        console.print(format_tool_warning_cli("ripgrep"))
+
+
 async def _preload_session_mcp_server_info(
     *,
     mcp_config_path: str | None,
@@ -1641,6 +1702,18 @@ def cli_main() -> None:
     if "--acp" not in sys.argv[1:] and "--serve" not in sys.argv[1:]:
         check_cli_dependencies()
 
+    # Prepend the managed-binary dir FIRST, before any `rg` lookup, so a
+    # previously-installed checksum-verified ripgrep resolves ahead of the
+    # system PATH. Idempotent and network-free; no-ops when nothing is
+    # installed. The actual (possibly-network) install is deferred to the
+    # agent-running paths below via `provision_ripgrep`.
+    try:
+        from bog_agents_cli.managed_tools import prepend_managed_bin_to_path
+
+        prepend_managed_bin_to_path()
+    except Exception:
+        logger.debug("managed bin PATH prepend failed", exc_info=True)
+
     # Translate the user's ``[timeouts]`` settings into env vars before any
     # SDK code reads them. Existing env values win, so a shell override
     # (``BOG_AGENTS_MODEL_READ_TIMEOUT=300 bog ...``) still takes precedence
@@ -2140,10 +2213,12 @@ def cli_main() -> None:
                 # No subcommand provided, show threads help screen
                 show_threads_help()
         elif args.non_interactive_message:
-            # Optional-tool warnings (e.g. missing ripgrep) used to fire here
-            # but were too noisy. The grep tool falls back to a pure-Python
-            # search transparently; users who want the prompt can still call
-            # ``check_optional_tools()`` directly.
+            # Provision the checksum-verified managed ripgrep synchronously
+            # (the managed bin dir was already prepended to PATH at startup).
+            # When install is disabled or fails, the existing missing-tool
+            # warning is emitted as the fallback; otherwise the grep tool
+            # falls back to a pure-Python search transparently.
+            provision_ripgrep(console, block=True)
             # Non-interactive mode - execute single task and exit
             from bog_agents_cli.non_interactive import run_non_interactive
 
@@ -2359,6 +2434,11 @@ def cli_main() -> None:
             # Generate new thread ID if not resuming
             if thread_id is None:
                 thread_id = generate_thread_id()
+
+            # Provision the managed ripgrep for the interactive TUI without
+            # blocking startup: the managed bin was already prepended, and any
+            # fresh install runs in a background daemon thread.
+            provision_ripgrep(console, block=False)
 
             # Check project MCP trust before launching TUI
             mcp_trust_decision = _check_mcp_project_trust(

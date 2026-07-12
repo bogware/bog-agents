@@ -253,7 +253,6 @@ def run_doctor() -> str:
     for tool, purpose in [
         ("git", "Version control"),
         ("ollama", "Local model runtime"),
-        ("rg", "Fast text search (ripgrep)"),
         ("ruff", "Python linter"),
         ("uv", "Package manager"),
         ("node", "Node.js runtime"),
@@ -263,6 +262,23 @@ def run_doctor() -> str:
             checks.append((f"Tool: {tool}", "OK", f"Found at {path}"))
         else:
             checks.append((f"Tool: {tool}", "WARN", f"Not found ({purpose})"))
+
+    # ripgrep gets a dedicated row so users can see whether the fast search
+    # path is served by the checksum-verified managed copy under
+    # ~/.bog-agents/bin, a system install on PATH, or is missing entirely.
+    try:
+        from bog_agents_cli.managed_tools import describe_ripgrep
+
+        rg_status, rg_detail = describe_ripgrep()
+    except Exception:  # diagnostic command must not crash
+        rg_status, rg_detail = "absent", "ripgrep status could not be determined"
+    checks.append(
+        (
+            "Tool: rg",
+            {"managed": "OK", "system": "OK"}.get(rg_status, "WARN"),
+            rg_detail,
+        )
+    )
 
     ollama_version = _get_ollama_version()
     if ollama_version:

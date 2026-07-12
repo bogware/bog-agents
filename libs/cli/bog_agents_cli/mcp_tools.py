@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -425,6 +426,79 @@ class MCPSessionManager:
             self.client = None
 
 
+_HEADER_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+"""Match ``${VAR}`` and ``${VAR:-default}`` placeholders in header values.
+
+The name production mirrors ``vars_store._NAME_RE`` (letter/underscore start,
+alphanumerics/underscore after). The optional ``:-default`` suffix (POSIX
+parameter-expansion syntax) supplies a fallback when the variable is unset.
+
+Deliberately distinct from bog's install-time ``{{VAR}}`` templating — remote
+MCP headers use ``${VAR}`` for Claude Code parity. Keep the two syntaxes
+separate.
+"""
+
+
+def _interpolate_headers(headers: dict[str, Any], server_name: str) -> dict[str, Any]:
+    """Resolve ``${VAR}`` references in remote-MCP header values.
+
+    Scans each header *value* for ``${VAR}`` (and ``${VAR:-default}``)
+    placeholders and substitutes them, resolving each name via the CLI secret
+    vault (`vars_store.get_var`) first, then the process environment. This lets
+    a user write `Authorization: Bearer ${GITHUB_TOKEN}` in `.mcp.json` instead
+    of committing a raw token.
+
+    Header *keys*, non-string values, and values without a `${...}` placeholder
+    are passed through unchanged. This uses `${VAR}` syntax (Claude Code parity)
+    and is intentionally separate from bog's install-time `{{VAR}}` templating.
+
+    Args:
+        headers: Header mapping from a remote (SSE/HTTP) server config.
+        server_name: Name of the server, used to make errors actionable.
+
+    Returns:
+        A new dict with the same keys and interpolated string values. Non-string
+        values are returned untouched.
+
+    Raises:
+        RuntimeError: If a referenced variable has no default and is unset in
+            both the vault and the environment. The message names the server
+            and the missing variable.
+    """  # noqa: DOC502 — raised by the _resolve substitution callback
+    from bog_agents_cli import vars_store
+
+    def _resolve(match: re.Match[str]) -> str:
+        name = match.group(1)
+        default = match.group(2)
+        try:
+            value = vars_store.get_var(name)
+        except ValueError:
+            # Name failed vault validation; treat as "not in vault" and let the
+            # environment (or default) answer instead of crashing.
+            value = None
+        if value is None:
+            value = os.environ.get(name)
+        if value is None:
+            if default is not None:
+                return default
+            error_msg = (
+                f"MCP server '{server_name}' header references undefined "
+                f"variable ${{{name}}}. Set it with `/vars set {name} <value>` "
+                f"(stored in the secret vault) or export {name} in your "
+                "environment before starting bog-agents."
+            )
+            raise RuntimeError(error_msg)
+        return value
+
+    resolved: dict[str, Any] = {}
+    for key, value in headers.items():
+        if isinstance(value, str):
+            resolved[key] = _HEADER_VAR_RE.sub(_resolve, value)
+        else:
+            resolved[key] = value
+    return resolved
+
+
 async def _load_tools_from_config(
     config: dict[str, Any],
 ) -> tuple[list[BaseTool], MCPSessionManager, list[MCPServerInfo]]:
@@ -469,7 +543,9 @@ async def _load_tools_from_config(
                     url=server_config["url"],
                 )
             if "headers" in server_config:
-                conn["headers"] = server_config["headers"]
+                conn["headers"] = _interpolate_headers(
+                    server_config["headers"], server_name
+                )
             connections[server_name] = conn
         else:
             # stdio server connection (default)

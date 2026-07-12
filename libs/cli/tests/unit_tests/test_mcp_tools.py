@@ -12,6 +12,7 @@ from bog_agents_cli.mcp_tools import (
     MCPSessionManager,
     MCPToolInfo,
     _filter_project_stdio_servers,
+    _interpolate_headers,
     classify_discovered_configs,
     discover_mcp_configs,
     extract_stdio_server_commands,
@@ -1547,6 +1548,96 @@ class TestFilterProjectStdioServers:
         config = {"mcpServers": {"a": {"command": "x", "args": []}}}
         result = _filter_project_stdio_servers(config)
         assert result["mcpServers"] == {}
+
+
+class TestInterpolateHeaders:
+    """Tests for ``${VAR}`` interpolation in remote-MCP header values."""
+
+    def test_env_var_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR}`` is resolved from the process environment."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_fromenv")
+
+        result = _interpolate_headers({"Authorization": "Bearer ${GITHUB_TOKEN}"}, "gh")
+        assert result == {"Authorization": "Bearer ghp_fromenv"}
+
+    def test_vault_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The secret vault is consulted first and wins over the environment."""
+        monkeypatch.setattr(
+            "bog_agents_cli.vars_store.get_var",
+            lambda name: "vault-secret" if name == "GITHUB_TOKEN" else None,
+        )
+        monkeypatch.setenv("GITHUB_TOKEN", "env-secret")
+
+        result = _interpolate_headers({"Authorization": "Bearer ${GITHUB_TOKEN}"}, "gh")
+        assert result == {"Authorization": "Bearer vault-secret"}
+
+    def test_vault_only_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A value present only in the vault resolves even with no env var."""
+        monkeypatch.setattr(
+            "bog_agents_cli.vars_store.get_var",
+            lambda name: "vaulted" if name == "API_KEY" else None,
+        )
+        monkeypatch.delenv("API_KEY", raising=False)
+
+        result = _interpolate_headers({"X-API-Key": "${API_KEY}"}, "svc")
+        assert result == {"X-API-Key": "vaulted"}
+
+    def test_unset_raises_naming_server_and_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unset variable raises a RuntimeError naming the server and var."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.delenv("MISSING_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            _interpolate_headers(
+                {"Authorization": "Bearer ${MISSING_TOKEN}"}, "my-server"
+            )
+        message = str(excinfo.value)
+        assert "my-server" in message
+        assert "MISSING_TOKEN" in message
+
+    def test_header_without_placeholder_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A header value with no ``${}`` placeholder passes through untouched."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        headers = {"Authorization": "Bearer raw-token", "X-Custom": "value"}
+        result = _interpolate_headers(headers, "svc")
+        assert result == headers
+
+    def test_default_used_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR:-default}`` falls back to the default when the var is unset."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.delenv("MISSING", raising=False)
+
+        result = _interpolate_headers({"X-Env": "${MISSING:-production}"}, "svc")
+        assert result == {"X-Env": "production"}
+
+    def test_default_overridden_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``${VAR:-default}`` prefers a resolved value over the default."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("MODE", "staging")
+
+        result = _interpolate_headers({"X-Env": "${MODE:-production}"}, "svc")
+        assert result == {"X-Env": "staging"}
+
+    def test_multiple_and_mixed_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Multiple placeholders resolve; non-string values pass through."""
+        monkeypatch.setattr("bog_agents_cli.vars_store.get_var", lambda _name: None)
+        monkeypatch.setenv("USER_NAME", "alice")
+        monkeypatch.setenv("PASSWORD", "s3cret")
+
+        result = _interpolate_headers(
+            {
+                "Authorization": "Basic ${USER_NAME}:${PASSWORD}",
+                "X-Numeric": 42,
+            },
+            "svc",
+        )
+        assert result["Authorization"] == "Basic alice:s3cret"
+        assert result["X-Numeric"] == 42
 
 
 # ---------------------------------------------------------------------------
