@@ -112,7 +112,10 @@ class TestFunctionXMLFormat:
         assert residual == "Run this."
 
     def test_multiple_function_blocks(self) -> None:
-        text = "<function=ls><parameter name=path>/</parameter></function> then <function=read_file><parameter name=file_path>/a.txt</parameter></function>"
+        text = (
+            "<function=ls><parameter name=path>/</parameter></function> then "
+            "<function=read_file><parameter name=file_path>/a.txt</parameter></function>"
+        )
         calls, residual = parse_tool_calls_from_text(text)
         assert [c["name"] for c in calls] == ["ls", "read_file"]
         assert "then" in residual

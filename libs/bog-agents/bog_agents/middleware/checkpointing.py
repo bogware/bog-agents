@@ -170,9 +170,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         # we just anchor the baseline at the user's current HEAD.
         if self._run_git("rev-parse", "--verify", "--quiet", "HEAD").returncode != 0:
             self._run_git("add", "-A")
-            commit_result = self._run_git(
-                *_CHECKPOINT_IDENTITY_ARGS, "commit", "--allow-empty", "-q", "-m", "bog-agents-checkpoint-baseline"
-            )
+            commit_result = self._run_git(*_CHECKPOINT_IDENTITY_ARGS, "commit", "--allow-empty", "-q", "-m", "bog-agents-checkpoint-baseline")
             if commit_result.returncode != 0:
                 logger.warning(
                     "Checkpointing initial commit failed: exit %d. stderr: %s",
