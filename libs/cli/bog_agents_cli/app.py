@@ -53,6 +53,7 @@ from bog_agents_cli.textual_adapter import (
     execute_task_textual,
     format_token_count,
 )
+from bog_agents_cli.turn_manager import TurnManager
 from bog_agents_cli.widgets.approval import ApprovalMenu
 from bog_agents_cli.widgets.ask_user import AskUserMenu
 from bog_agents_cli.widgets.chat_input import ChatInput
@@ -973,13 +974,14 @@ class BogAgentsApp(App):
         self._pending_ask_user_widget: AskUserMenu | None = None
         # Strong refs to background asyncio tasks so they aren't GC'd mid-flight.
         self._background_tasks: set[asyncio.Task[Any]] = set()
-        # Agent task tracking for interruption
-        self._agent_worker: Worker[None] | None = None
-        self._agent_running = False
+        # Turn lifecycle: the agent/shell run flags and the agent worker handle
+        # live in one coordinator so every begin/end goes through a single choke
+        # point. `_agent_running` / `_agent_worker` / `_shell_running` below are
+        # delegating properties over this object (v4 CLI-CORE-1/-4).
+        self._turns = TurnManager()
         # Shell command process tracking for interruption (! commands)
         self._shell_process: asyncio.subprocess.Process | None = None
         self._shell_worker: Worker[None] | None = None
-        self._shell_running = False
         self._loading_widget: LoadingWidget | None = None
         self._token_tracker: TextualTokenTracker | None = None
         # Cumulative usage stats across all turns in this session
@@ -1025,6 +1027,34 @@ class BogAgentsApp(App):
             )
         except Exception:
             logger.debug("Theme registration failed; using Textual default")
+
+    # Turn-lifecycle state is owned by `self._turns` (TurnManager); these
+    # properties keep the historical attribute names working for the ~25 read
+    # sites and any incidental write, while routing everything through the one
+    # coordinator (v4 CLI-CORE-1/-4).
+    @property
+    def _agent_running(self) -> bool:
+        return self._turns.agent_running
+
+    @_agent_running.setter
+    def _agent_running(self, value: bool) -> None:
+        self._turns.agent_running = value
+
+    @property
+    def _agent_worker(self) -> Worker[None] | None:
+        return self._turns.agent_worker
+
+    @_agent_worker.setter
+    def _agent_worker(self, value: Worker[None] | None) -> None:
+        self._turns.agent_worker = value
+
+    @property
+    def _shell_running(self) -> bool:
+        return self._turns.shell_running
+
+    @_shell_running.setter
+    def _shell_running(self, value: bool) -> None:
+        self._turns.shell_running = value
 
     def _remote_agent(self) -> RemoteAgent | None:
         """Return the agent narrowed to `RemoteAgent`, or `None`.
@@ -2055,7 +2085,7 @@ class BogAgentsApp(App):
         # If agent/shell is running or server is still starting up, enqueue
         # instead of processing. Messages queued during connection are drained
         # once the server is ready (see on_bog_agents_app_server_ready).
-        if self._agent_running or self._shell_running or self._connecting:
+        if self._turns.busy or self._connecting:
             self._pending_messages.append(QueuedMessage(text=value, mode=mode))
             queued_widget = QueuedUserMessage(value)
             self._queued_widgets.append(queued_widget)
@@ -2093,7 +2123,7 @@ class BogAgentsApp(App):
             command: The shell command to execute.
         """
         await self._mount_message(UserMessage(f"!{command}"))
-        self._shell_running = True
+        self._turns.begin_shell()
 
         if self._chat_input:
             self._chat_input.set_cursor_active(active=False)
@@ -2209,7 +2239,7 @@ class BogAgentsApp(App):
             self._shell_worker is not None and self._shell_worker.is_cancelled
         )
         self._shell_process = None
-        self._shell_running = False
+        self._turns.end_shell()
         self._shell_worker = None
         if was_interrupted:
             await self._mount_message(AppMessage("Command interrupted"))
@@ -14385,7 +14415,7 @@ class BogAgentsApp(App):
         # `execute_task_textual` on the live thread AND overwrite the user's
         # `_agent_worker` handle (CLI-CORE-4 / v4). The queued prompt drains in
         # FIFO order once the current turn finishes.
-        if self._agent_running or self._shell_running or self._connecting:
+        if self._turns.busy or self._connecting:
             self._pending_messages.append(
                 QueuedMessage(text=prompt, mode="normal", raw=True)
             )
@@ -14403,12 +14433,10 @@ class BogAgentsApp(App):
             pass
 
         if self._agent and self._ui_adapter and self._session_state:
-            self._agent_running = True
             if self._chat_input:
                 self._chat_input.set_cursor_active(active=False)
-            self._agent_worker = self.run_worker(
-                self._run_agent_task(prompt),
-                exclusive=False,
+            self._turns.begin_agent(
+                self.run_worker(self._run_agent_task(prompt), exclusive=False)
             )
         else:
             await self._mount_message(
@@ -14587,16 +14615,15 @@ class BogAgentsApp(App):
 
         # Check if agent is available
         if self._agent and self._ui_adapter and self._session_state:
-            self._agent_running = True
-
             if self._chat_input:
                 self._chat_input.set_cursor_active(active=False)
 
-            # Use run_worker to avoid blocking the main event loop
-            # This allows the UI to remain responsive during agent execution
-            self._agent_worker = self.run_worker(
-                self._run_agent_task(effective_message),
-                exclusive=False,
+            # Use run_worker to avoid blocking the main event loop so the UI
+            # stays responsive during agent execution.
+            self._turns.begin_agent(
+                self.run_worker(
+                    self._run_agent_task(effective_message), exclusive=False
+                )
             )
         else:
             await self._mount_message(
@@ -14872,8 +14899,7 @@ class BogAgentsApp(App):
         # Command mode messages complete synchronously without spawning
         # a worker, so cleanup won't fire again. Continue draining the
         # queue if no worker was started.
-        busy = self._agent_running or self._shell_running
-        if not busy and self._pending_messages:
+        if not self._turns.busy and self._pending_messages:
             await self._process_next_from_queue()
 
     async def _drain_queue_after_inline_task(self) -> None:
@@ -14909,9 +14935,8 @@ class BogAgentsApp(App):
         concurrently. Restore this turn's state fully, THEN drain.
         """
         # Set synchronously up front (no await in between) so the common path
-        # restores immediately; the finally re-asserts these defensively.
-        self._agent_running = False
-        self._agent_worker = None
+        # restores immediately; the finally re-asserts this defensively.
+        self._turns.end_agent()
 
         try:
             # Remove spinner if present
@@ -14946,8 +14971,7 @@ class BogAgentsApp(App):
             # Critical restoration that must run even if an await above is
             # cancelled or raises. Without this, an interrupted cleanup leaves
             # the input cursor disabled and the app looks wedged (P28).
-            self._agent_running = False
-            self._agent_worker = None
+            self._turns.end_agent()
             if self._chat_input:
                 try:
                     self._chat_input.set_cursor_active(active=True)

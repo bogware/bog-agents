@@ -26,7 +26,16 @@ from pathlib import Path
 # controller module (see CLAUDE.md and expert_controller.py for the pattern).
 # Only bump this constant when the growth genuinely belongs on BogAgentsApp, and
 # bump it deliberately in the same change that adds the lines.
-APP_PY_LINE_CEILING = 17_510
+#
+# Bumped 2026-07-23 to 17,575 for the v4 Wave-0 turn-lifecycle work: the
+# CLI-CORE-1/-3/-4 correctness fixes (queue-drain reorder, /clear thread-id
+# sync, busy-guarded deferral in _send_prompt_to_agent) plus the TurnManager
+# delegation. The lifecycle LOGIC moved OUT to the new turn_manager.py module;
+# what stays on BogAgentsApp is thin — three delegating properties (so the ~25
+# read sites are untouched) and begin/end calls at the dispatch sites — which is
+# the sanctioned "logic in a module, thin app surface" pattern this ratchet
+# exists to encourage.
+APP_PY_LINE_CEILING = 17_575
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 
