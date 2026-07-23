@@ -155,7 +155,9 @@ class TestRuntimeWorkflowControls:
             request, lambda r: (captured.append(r), _make_response())[1]
         )
 
-        assert captured[0].model_settings["max_tokens"] == 16384
+        # Non-introspectable mock => non-reasoning fallback: temperature only,
+        # never an output cap (RD-1 / v4).
+        assert "max_tokens" not in captured[0].model_settings
         assert captured[0].model_settings["temperature"] == 1.0
         assert captured[0].model_settings["top_p"] == 0.9
 
@@ -173,7 +175,7 @@ class TestRuntimeWorkflowControls:
             request, lambda r: (captured.append(r), _make_response())[1]
         )
 
-        assert captured[0].model_settings["max_tokens"] == 8192
+        assert "max_tokens" not in captured[0].model_settings
         assert captured[0].model_settings["temperature"] == 0.2
 
     def test_plan_mode_appends_system_prompt_and_filters_tools(self) -> None:
@@ -209,7 +211,11 @@ class TestRuntimeWorkflowControls:
 
         assert "Follow the review workflow." in _system_text(captured[0])
 
-    def test_effort_level_normalizes_ollama_token_setting(self) -> None:
+    def test_effort_level_leaves_ollama_output_uncapped(self) -> None:
+        # RD-1 / v4: effort no longer sets num_predict/max_tokens on a
+        # non-reasoning model; only temperature is nudged (and moved onto the
+        # ChatOllama instance). The max_tokens->num_predict aliasing itself is
+        # still covered by test_ollama_model_params_normalize_max_tokens.
         ollama_mod = pytest.importorskip("langchain_ollama")
 
         request = _make_request(
@@ -223,7 +229,6 @@ class TestRuntimeWorkflowControls:
         )
 
         assert captured[0].model_settings == {}
-        assert captured[0].model.num_predict == 8192  # ty: ignore[unresolved-attribute]
         assert captured[0].model.temperature == 0.7  # ty: ignore[unresolved-attribute]
 
 
@@ -280,9 +285,9 @@ class TestNativeReasoningEffort:
         assert "output_config" not in settings
         assert settings["top_p"] == 0.9
 
-    def test_non_reasoning_model_still_gets_preset_fallback(self) -> None:
-        # A mock whose provider cannot be inspected classifies as non-reasoning,
-        # so the legacy max_tokens/temperature preset still applies.
+    def test_non_reasoning_model_gets_temperature_preset_no_cap(self) -> None:
+        # A non-reasoning model gets the legacy preset — but temperature only,
+        # never a max_tokens cap that would truncate its output (RD-1 / v4).
         request = _make_request(
             _make_model("gpt-4o"),
             context=CLIContext(model="openai:gpt-4o", effort_level="low"),
@@ -293,7 +298,7 @@ class TestNativeReasoningEffort:
         )
 
         settings = captured[0].model_settings
-        assert settings["max_tokens"] == 1024
+        assert "max_tokens" not in settings
         assert settings["temperature"] == 0.3
 
 

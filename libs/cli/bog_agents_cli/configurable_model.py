@@ -55,8 +55,8 @@ class CLIContext(TypedDict, total=False):
 
     Translated per active model: a reasoning model receives its provider's
     native knob (e.g. Anthropic `output_config.effort`), while a non-reasoning
-    model falls back to the `{max_tokens, temperature}` presets. Never caps a
-    reasoning model's output. See `reasoning_effort.py`."""
+    model falls back to a `{temperature}` preset. Never caps any model's output
+    length (RD-1 / v4). See `reasoning_effort.py`."""
 
     plan_mode: bool
     """Whether read-only plan mode should be enforced for this turn."""
@@ -103,17 +103,21 @@ _ANTHROPIC_ONLY_SETTINGS: set[str] = {"cache_control"}
 must be stripped on cross-provider swap."""
 
 _EFFORT_LEVEL_SETTINGS: dict[str, dict[str, Any]] = {
-    "low": {"max_tokens": 1024, "temperature": 0.3},
-    "medium": {"max_tokens": 4096, "temperature": 0.5},
-    "high": {"max_tokens": 8192, "temperature": 0.7},
-    "max": {"max_tokens": 16384, "temperature": 1.0},
+    "low": {"temperature": 0.3},
+    "medium": {"temperature": 0.5},
+    "high": {"temperature": 0.7},
+    "max": {"temperature": 1.0},
 }
-"""Legacy `{max_tokens, temperature}` presets for effort levels.
+"""Legacy `{temperature}` presets for effort levels.
 
 Applied **only** as a fallback for models with no native reasoning knob (see
-`reasoning_effort.supported_efforts_for_model`). A reasoning model must never
-receive these — capping `max_tokens` at 1024 on `low` would truncate its
-reasoning. Reasoning models get native params via `model_params_for_effort`."""
+`reasoning_effort.supported_efforts_for_model`). These deliberately no longer
+set `max_tokens`: capping output was a truncation hack (RD-1 / v4) that cut a
+model off mid-response — worst on operator-routed `easy`-tier turns (effort
+`low` → 1024 tokens) and on Bedrock/Haiku models the native registry doesn't
+recognize. Reasoning models get native params via `model_params_for_effort`;
+non-reasoning models are left at their natural output length and only nudged on
+temperature."""
 
 _OLLAMA_SETTING_ALIASES: dict[str, str] = {
     "max_tokens": "num_predict",
@@ -229,7 +233,8 @@ def _effort_settings_for(
     Prefers the runtime override spec (already a `provider:model` string) and
     otherwise derives the spec from the resolved model instance. Reasoning
     models get their provider's native reasoning params; only models with no
-    native reasoning knob fall back to the `{max_tokens, temperature}` presets.
+    native reasoning knob fall back to the `{temperature}` presets (no output
+    cap).
 
     Args:
         override_spec: `provider:model` spec from `CLIContext.model`, if any.

@@ -361,10 +361,16 @@ class QueuedMessage:
     Attributes:
         text: The message text content.
         mode: The input mode that determines message routing.
+        raw: When True, `text` is an internal agent prompt (constructed by a
+            slash command, pipeline step, or file-watch trigger) that must be
+            re-dispatched via `_send_prompt_to_agent` on drain rather than shown
+            as a user message. Used to serialize background dispatch behind an
+            in-flight turn (CLI-CORE-4 / v4).
     """
 
     text: str
     mode: InputMode
+    raw: bool = False
 
 
 @dataclass(slots=True)
@@ -3148,6 +3154,12 @@ class BogAgentsApp(App):
         self._update_status("")
         if self._session_state:
             new_thread_id = self._session_state.reset_thread()
+            # Keep the langchain thread id in lockstep with session_state.
+            # Agent turns route on session_state.thread_id, but /compact, token
+            # counting, goal-state sync, and the exit resume hint all read
+            # self._lc_thread_id — leaving it stale makes /compact silently read
+            # and mutate the PRE-clear thread's checkpoint (CLI-CORE-3 / v4).
+            self._lc_thread_id = new_thread_id
             try:
                 banner = self.query_one("#welcome-banner", WelcomeBanner)
                 banner.update_thread_id(new_thread_id)
@@ -14366,6 +14378,22 @@ class BogAgentsApp(App):
         Args:
             prompt: The full prompt to send to the agent.
         """
+        # Defer instead of spawning a second concurrent turn when a turn (or a
+        # shell command, or server connect) is already in flight. Scheduled
+        # pipelines and file-watch triggers call this directly, off the normal
+        # input path, so without this guard they would start a second
+        # `execute_task_textual` on the live thread AND overwrite the user's
+        # `_agent_worker` handle (CLI-CORE-4 / v4). The queued prompt drains in
+        # FIFO order once the current turn finishes.
+        if self._agent_running or self._shell_running or self._connecting:
+            self._pending_messages.append(
+                QueuedMessage(text=prompt, mode="normal", raw=True)
+            )
+            queued_widget = QueuedUserMessage(prompt)
+            self._queued_widgets.append(queued_widget)
+            await self._mount_message(queued_widget)
+            return
+
         # Scroll to bottom
         try:
             chat = self.query_one("#chat", VerticalScroll)
@@ -14826,7 +14854,13 @@ class BogAgentsApp(App):
                 widget = self._queued_widgets.popleft()
                 await widget.remove()
 
-            await self._process_message(msg.text, msg.mode)
+            # Raw internal prompts (pipeline/watch/slash-command dispatch that
+            # was deferred behind an in-flight turn) go back through
+            # _send_prompt_to_agent, not the user-message path (CLI-CORE-4).
+            if msg.raw:
+                await self._send_prompt_to_agent(msg.text)
+            else:
+                await self._process_message(msg.text, msg.mode)
         except Exception:
             logger.exception("Failed to process queued message")
             await self._mount_message(
@@ -14863,8 +14897,16 @@ class BogAgentsApp(App):
         P28: the critical worker-state restoration (`_agent_running=False`,
         `_agent_worker=None`, cursor re-enable) lives in a `finally` so a
         cancellation interrupting one of the inner awaits (spinner removal,
-        stop-hook dispatch, queue drain) can never leave the input cursor
-        disabled and the app apparently wedged with no diagnostic.
+        stop-hook dispatch) can never leave the input cursor disabled and the
+        app apparently wedged with no diagnostic.
+
+        CLI-CORE-1 (v4 P0): the pending-queue drain runs AFTER that
+        state-restoration finally, not inside it. Draining a queued normal-mode
+        message starts the next turn (it sets `_agent_running=True` and assigns
+        `_agent_worker` synchronously before returning); if that happened inside
+        the try, the finally would then clobber the just-started turn's tracking
+        state — leaving it uninterruptible and letting a third message run
+        concurrently. Restore this turn's state fully, THEN drain.
         """
         # Set synchronously up front (no await in between) so the common path
         # restores immediately; the finally re-asserts these defensively.
@@ -14895,9 +14937,6 @@ class BogAgentsApp(App):
                 play_completion_sound()
             except Exception:  # noqa: S110
                 pass
-
-            # Process next message from queue if any
-            await self._process_next_from_queue()
         except Exception:
             # Log rather than swallow silently — a cleanup failure that isn't a
             # cancellation is a real bug worth surfacing in logs.
@@ -14914,6 +14953,14 @@ class BogAgentsApp(App):
                     self._chat_input.set_cursor_active(active=True)
                 except Exception:
                     logger.debug("failed to re-enable input cursor", exc_info=True)
+
+        # Drain the queue LAST, after this turn's state is fully restored, so a
+        # queued message that starts the next turn (setting _agent_running /
+        # _agent_worker) is not clobbered by the restoration above (CLI-CORE-1).
+        try:
+            await self._process_next_from_queue()
+        except Exception:
+            logger.exception("agent task cleanup queue drain failed")
 
     @staticmethod
     def _convert_messages_to_data(messages: list[Any]) -> list[MessageData]:
