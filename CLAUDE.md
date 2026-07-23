@@ -65,7 +65,7 @@ SDK type checking: `uv run --all-groups ty check bog_agents` (from `libs/bog-age
 
 The entry point is `create_agent()` which returns a compiled LangGraph graph. The agent ships with base tools (filesystem, shell, planning, sub-agents) and a composable **middleware stack**.
 
-**Middleware** (`bog_agents/middleware/`) is the primary extension mechanism. ~90 middleware implementations handle concerns like git tools, repo mapping, cost tracking, checkpointing, plan mode, auto-quality checks, context packing, summarization, street-sweeper context pruning, memory, skills, and the **Expert Mode** rule engine (`expert_rules.py` + `expert_engine/`). All middleware inherits from `AgentMiddleware`.
+**Middleware** (`bog_agents/middleware/`) is the primary extension mechanism. ~90 middleware implementations handle concerns like git tools, repo mapping, cost tracking, checkpointing, plan mode, auto-quality checks, context packing, summarization, street-sweeper context pruning, memory, skills, persistent goals (`goal_tools.py`, surfaced as `/goal` + `/rubric` in the CLI), and the **Expert Mode** rule engine (`expert_rules.py` + `expert_engine/`). All middleware inherits from `AgentMiddleware`.
 
 **Tool bundles vs. middleware** (W4, Wave W): a *bundle* is a free function in `bog_agents/tools/bundles.py` that returns `list[BaseTool]` — the right shape for "middleware whose only job is delivering tools". `git_tools_bundle`, `multi_edit_tool`, and `read_many_files_tool` are the canonical examples. New tool-only features should ship as bundles, not middleware. The corresponding middleware classes (`GitToolsMiddleware`, etc.) are kept as thin compatibility shims that delegate to the bundles.
 
@@ -79,6 +79,8 @@ The entry point is `create_agent()` which returns a compiled LangGraph graph. Th
 
 **Backends**: Pluggable file system backends (local, composite, sandbox), state management backends, and shell execution backends. `LocalShellBackend._DANGEROUS_PATTERNS` is an **accident-catcher**, not a security boundary; the real safeguard for adversarial input is HITL + `SafeToolsMiddleware`.
 
+**deepagents compatibility** (Waves 1–3, tracked in `PARITY.md`): bog-agents is a source-level drop-in for the deepagents 0.6.12 public API and co-installable with it in one venv. `bog_agents/deepagents.py` provides the deepagents-style names (`create_deep_agent`, `DeepAgentState`, `FilesystemPermission`, …), re-exported from top-level `bog_agents`. Built-in harness + provider profiles live in `bog_agents/profiles/`. Parity is a maintained guarantee, not a one-time port — when changing backend result types (`FileData`, `LsResult`, …) or the public export surface, check `PARITY.md` for what deepagents expects.
+
 ### CLI (`libs/cli/`)
 
 Built with Textual. Key patterns:
@@ -91,6 +93,11 @@ Built with Textual. Key patterns:
 - Help screen hand-maintained in `ui.show_help()` with drift-detection test against argparse
 - SDK version constraint in `libs/cli/pyproject.toml` is currently `bog-agents>=0.7.0,<1.0.0` (range, not exact pin). When this is tightened back to `==`, this paragraph should be updated and a CI smoketest added that the latest SDK still satisfies the constraint.
 - **Headless command surface** (`headless_commands.py`): `bog-agents command "/help"` runs a curated subset of slash commands without the TUI. Headless handlers are standalone functions `(args: str) -> HeadlessResult` registered in `HEADLESS_COMMANDS` — when adding an informational/config slash command, consider registering a headless twin.
+- **Config surface**: `config_manifest.py` is the single source of truth for user-tunable scalar options (type, typed default, env var name, `config.toml` location; precedence: env var > `config.toml` > default). Every `BOG_AGENTS_*` env var must be defined as a constant in `_env_vars.py` — a drift-detection test greps the package for unregistered string literals. Provider credentials are derived automatically from `PROVIDER_API_KEY_ENV`, so adding a provider needs no manifest change.
+- **Theme system** (`theme.py`): the matte-swamp palette is a registered Textual theme named `bog` (default), with user-defined themes via `/theme`. Do NOT re-introduce hard-coded `$primary:`-style variable overrides at the top of `app.tcss` — they shadow the active theme and break `/theme`.
+- **Skill trust store** (`skill_trust.py` + `skill_trust_controller.py`): the SDK refuses symlinked skill directories by default (`_filter_skill_dirs`, enforced on both the sync and async listing paths); `/skills trust <path>` records an explicit per-directory exception in a persistent trust store, wired into `SkillsMiddleware` through its pluggable symlink-trust checker hook.
+- **MCP OAuth** (`mcp_oauth.py`): remote MCP servers authenticate through the `mcp` SDK's `OAuthClientProvider` (RFC 9728 discovery, dynamic client registration, PKCE, auto-refresh — all inside the SDK). This module supplies only token storage (`~/.bog-agents/mcp-oauth/`), the browser redirect, and the loopback callback handler — don't reimplement OAuth steps by hand.
+- **`/effort`** (`reasoning_effort.py`): maps `low/medium/high/max` onto each provider's real reasoning knob (Anthropic `output_config.effort`, OpenAI `reasoning.effort`, Gemini `thinking_level`, …). Never map effort back onto `max_tokens`/`temperature` — the legacy hack truncated reasoning models.
 
 **Prompt-routing family** — three composable modes that intercept a plain user prompt in `_handle_user_message` (after @-mention resolution, before the agent worker launches): (1) **Operator** (`operator_mode.py`, `/operator`) — a judge model classifies each prompt `easy/medium/hard/max` and stages a one-turn model+effort override via `app._operator_turn_model` / `_operator_turn_effort` (consumed by `_build_cli_context`, cleared in `_run_agent_task`'s finally); presets (anthropic default, bedrock, local, hybrid) + user presets live in `~/.bog-agents/operator.toml`; the judge may also escalate a prompt to butcher or jtbd. Judge failures must never block a turn — every path falls through to the user's active model. (2) **Butcher** (`butcher.py`, `/butcher`) — a strong model slices a job into self-contained instruction files under `.bog-agents/butcher/<job-id>/` (manifest.json + slice-NN.md + report.md), then weak workers (sidecar-style async model→tool loop with scoped write tools) execute slices sequentially in-place, each verified by the butcher with a retry→escalation ladder. (3) **JTBD** (`jtbd.py`, `/jtbd`) — interview → Job Spec artifact (`.bog-agents/jtbd/<id>/job-spec.md`) → outcome-driven execution brief → outcome verification (`/jtbd verify`). All three are pure-logic modules with injected `invoke` callables; chat widgets import from `bog_agents_cli.widgets.messages` (NOT `widgets.chat_messages`, which never existed).
 
@@ -140,9 +147,14 @@ Only add `detect_provider()` entry if the provider has a distinctive model name 
 - **Always pass `encoding="utf-8"` to `Path.read_text` / `Path.write_text`** anywhere a user may have configured non-ASCII content (settings files, hooks, skills, prompts, oauth tokens, profile names). Windows in non-en-US locales decodes through cp1252/cp932/cp949 by default — a single smart quote in a hooks.json crashes the CLI. Fixed in P0-H sweep; ruff's `PLW1514` should be left enabled going forward.
 - **For secret-bearing files** (vault, oauth tokens, audit trail) use `bog_agents_cli.io_utils.atomic_write_text` AND call `vars_store._secure_owner_only(path)` which is cross-platform (POSIX chmod 0600 / Windows icacls). Don't trust a bare `chmod` on Windows — it's a no-op. See P0-E.
 
-## REVIEW.md
+## Root tracking docs
 
-`REVIEW.md` at the repo root tracks the Senior Principal Engineer audit
-findings (P0/P1/P2) and the long-arc feature roadmap. When you ship a
-change that addresses a P0/P1 entry, note the cross-reference in the
-commit message (e.g. "fixes P0-G") so reviewers can map back.
+- `REVIEW.md` — Senior Principal Engineer audit findings (P0/P1/P2). When you
+  ship a change that addresses a P0/P1 entry, note the cross-reference in the
+  commit message (e.g. "fixes P0-G") so reviewers can map back.
+- `ROADMAP.md` — strategic feature roadmap (companion to REVIEW.md, which
+  tracks the correctness findings the roadmap assumes get fixed first).
+- `PARITY.md` — deepagents 0.6.12 drop-in parity report. Waves 1–3 shipped;
+  Wave 4 (satellites) deliberately deferred pending a value argument.
+- `AGENTS.md` — generic agent-facing dev guidelines; overlaps this file's
+  conventions (uv/make workflow, backtick and `# noqa` policy).
