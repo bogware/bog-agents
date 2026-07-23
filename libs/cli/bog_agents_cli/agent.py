@@ -1021,13 +1021,85 @@ def _format_execute_description(
     return "\n".join(lines)
 
 
+def _format_git_commit_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_commit tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the git_commit tool call.
+    """
+    args = tool_call["args"]
+    message = strip_dangerous_unicode(str(args.get("message", "")))
+    files = args.get("files")
+    lines = [f"Git commit: {message}"]
+    if files:
+        joined = ", ".join(strip_dangerous_unicode(str(f)) for f in files)
+        lines.append(f"Staging first: {joined}")
+    else:
+        lines.append("Stages and commits all current changes.")
+    return "\n".join(lines)
+
+
+def _format_git_add_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_add tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the git_add tool call.
+    """
+    paths = tool_call["args"].get("paths") or []
+    joined = ", ".join(strip_dangerous_unicode(str(p)) for p in paths)
+    return f"Stage files for commit: {joined}" if joined else "Stage files for commit."
+
+
+def _format_git_branch_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_branch tool call for the approval prompt.
+
+    Only reached when a branch name is supplied (see the `when` predicate); a
+    bare `git_branch` call just lists branches and is not gated.
+
+    Returns:
+        Formatted description string for the git_branch tool call.
+    """
+    args = tool_call["args"]
+    name = strip_dangerous_unicode(str(args.get("name", "")))
+    if args.get("checkout"):
+        return f"Create and switch to branch: {name}"
+    return f"Create branch: {name}"
+
+
+def _format_git_stash_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_stash tool call for the approval prompt.
+
+    Only reached for mutating actions (push/pop/drop) — list/show are not gated.
+
+    Returns:
+        Formatted description string for the git_stash tool call.
+    """
+    action = str(tool_call["args"].get("action", "list"))
+    if action == "drop":
+        return (
+            f"{get_glyphs().warning}  git stash drop — permanently discards a "
+            "stash entry (cannot be undone)."
+        )
+    return f"git stash {action}"
+
+
 def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     """Configure human-in-the-loop interrupt settings for all gated tools.
 
     Every tool that can have side effects or access external resources
     (shell execution, file writes/edits, web search, URL fetch, task
-    delegation) is gated behind an approval prompt unless auto-approve
-    is enabled.
+    delegation, and the mutating git tools) is gated behind an approval prompt
+    unless auto-approve is enabled. The git tools are arg-conditional via a
+    `when` predicate so read-only paths (`git_branch` listing, `git_stash
+    list`/`show`) are never gated (CLI-CORE-2 / v4).
 
     Returns:
         Dictionary mapping tool names to their interrupt configuration.
@@ -1069,6 +1141,32 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
         "web_search": web_search_interrupt_config,
         "fetch_url": fetch_url_interrupt_config,
         "task": task_interrupt_config,
+    }
+
+    # Mutating git tools (default-on via GitToolsMiddleware) must be gated too —
+    # git_commit/git_add always mutate; git_branch mutates only when creating or
+    # switching a branch (a name is supplied); git_stash mutates on push/pop/drop
+    # (drop is destructive). The `when` predicates keep read-only calls
+    # (branch listing, `git stash list`/`show`) un-prompted (CLI-CORE-2 / v4).
+    interrupt_map["git_commit"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_commit_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
+    interrupt_map["git_add"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_add_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
+    interrupt_map["git_branch"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_branch_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+        "when": lambda req: req.tool_call["args"].get("name") is not None,
+    }
+    interrupt_map["git_stash"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_stash_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+        "when": lambda req: (
+            req.tool_call["args"].get("action", "list") in {"push", "pop", "drop"}
+        ),
     }
 
     if REQUIRE_COMPACT_TOOL_APPROVAL:

@@ -1445,6 +1445,23 @@ def _print_session_stats(stats: Any, console: Any) -> None:  # noqa: ANN401
     print_usage_table(stats, stats.wall_time_seconds, console)
 
 
+def _mcp_trust_env_override() -> bool:
+    """Whether `BOG_AGENTS_MCP_TRUST` is set truthy.
+
+    An allow-override for project MCP trust, honored on the interactive startup
+    path, `-n`, and ACP alike. Previously this variable was defined, surfaced in
+    the config manifest, and printed in the non-TTY deny message, but read
+    nowhere — a CI user following the printed instruction was silently denied
+    (CT-1 / v4).
+
+    Returns:
+        True when the variable is set to a recognizably truthy value.
+    """
+    from bog_agents_cli import _env_vars
+
+    return _env_vars.is_env_truthy(_env_vars.MCP_TRUST)
+
+
 def _check_mcp_project_trust(*, trust_flag: bool = False) -> bool | None:
     """Check whether project-level MCP stdio servers should be trusted.
 
@@ -1488,7 +1505,7 @@ def _check_mcp_project_trust(*, trust_flag: bool = False) -> bool | None:
     if not all_stdio:
         return None
 
-    if trust_flag:
+    if trust_flag or _mcp_trust_env_override():
         return True
 
     # Check trust store
@@ -1797,7 +1814,8 @@ def cli_main() -> None:
                     profile_override=profile_override,
                     mcp_config_path=getattr(args, "mcp_config", None),
                     no_mcp=getattr(args, "no_mcp", False),
-                    trust_project_mcp=getattr(args, "trust_project_mcp", False),
+                    trust_project_mcp=getattr(args, "trust_project_mcp", False)
+                    or _mcp_trust_env_override(),
                 )
             )
             sys.exit(exit_code)
@@ -2349,7 +2367,8 @@ def cli_main() -> None:
                     output_format=getattr(args, "output_format", "text"),
                     mcp_config_path=getattr(args, "mcp_config", None),
                     no_mcp=getattr(args, "no_mcp", False),
-                    trust_project_mcp=getattr(args, "trust_project_mcp", False),
+                    trust_project_mcp=getattr(args, "trust_project_mcp", False)
+                    or _mcp_trust_env_override(),
                     auto_commit=getattr(args, "auto_commit", False),
                     resume_thread_id=resume_thread_id,
                     auto_approve=getattr(args, "auto_approve", False),
