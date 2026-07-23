@@ -1708,6 +1708,13 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 return f"Error: Execution not available. {e}"
             except ValueError as e:
                 return f"Error: Invalid parameter. {e}"
+            except PermissionError as e:
+                # LocalShellBackend raises PermissionError for dangerous-command
+                # patterns (e.g. `rm -rf`). langgraph's default tool-error
+                # handler re-raises non-ToolInvocationError exceptions, which
+                # would abort the turn — surface the "blocked" message as a tool
+                # result the model can read and adapt to instead.
+                return f"Error: {e}"
 
             # Format output for LLM consumption
             parts = [result.output]
@@ -1763,6 +1770,11 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
                 return f"Error: Execution not available. {e}"
             except ValueError as e:
                 return f"Error: Invalid parameter. {e}"
+            except PermissionError as e:
+                # Dangerous-command guard (LocalShellBackend). See sync_execute:
+                # surface as a tool-error string rather than letting it abort
+                # the turn via langgraph's re-raising error handler.
+                return f"Error: {e}"
 
             # Format output for LLM consumption
             parts = [result.output]

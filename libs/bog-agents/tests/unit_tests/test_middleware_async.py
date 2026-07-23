@@ -298,6 +298,31 @@ class TestFilesystemMiddlewareAsync:
         )
         assert result == str([])
 
+    async def test_async_execute_returns_error_on_dangerous_permissionerror(self):
+        """SB-1 (async): a backend PermissionError becomes a tool-error string
+        on the async execute path, not a raised exception."""
+
+        class BlockingSandboxBackend(SandboxBackendProtocol, StateBackend):
+            async def aexecute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:  # noqa: ASYNC109
+                msg = "Dangerous command blocked: recursive delete. Pass allow_dangerous=True to bypass."
+                raise PermissionError(msg)
+
+            @property
+            def id(self):
+                return "blocking-async-sandbox-backend"
+
+        state = FilesystemState(messages=[], files={})
+        rt = ToolRuntime(state=state, context=None, tool_call_id="perm", store=InMemoryStore(), stream_writer=lambda _: None, config={})
+        backend = BlockingSandboxBackend(rt)
+        middleware = FilesystemMiddleware(backend=backend)
+
+        execute_tool = next(tool for tool in middleware.tools if tool.name == "execute")
+        result = await execute_tool.ainvoke({"command": "rm -rf build", "runtime": rt})
+
+        assert isinstance(result, str)
+        assert result.startswith("Error:")
+        assert "Dangerous command blocked" in result
+
     async def test_glob_timeout_returns_error_message_async(self):
         state = FilesystemState(messages=[], files={})
         middleware = FilesystemMiddleware()
