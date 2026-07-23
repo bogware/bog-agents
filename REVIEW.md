@@ -1,3 +1,160 @@
+# REVIEW.md v4 — Current-State Audit (2026-07-21)
+
+> **Scope:** Whole monorepo, post the resiliency-hardening (2026-06-22), deepagents-parity
+> (2026-07-11), and CLI world-class (2026-07-12) waves on `chore/resiliency-hardening`.
+> **Method:** 58-agent workflow — 10 dimension auditors (SDK core / context middleware /
+> safety middleware / backends / CLI core / CLI config+trust / routing+dreamscape / daemon /
+> satellites / delivery), adversarial verification of every P0/P1 candidate (2 independent
+> refuters per P0, 1 per P1; P2s ship unverified and are labeled so), plus status re-scores
+> of v3's P0/P1s, CLI_AUDIT.md's fix-now list, and ROADMAP.md's 20 killer features.
+> **Tally:** 65 findings → **1 P0 + 21 P1 confirmed** (4 of those are re-confirmed
+> still-open v3 items), 8 downgraded, 1 refuted, 30 unverified P2s.
+> **Killer-feature output** of this cycle lives in `ROADMAP.md` → "Killer features v2".
+> **Verdict in one line:** The correctness core is now genuinely strong — the prior waves
+> held, and every subsystem's load-bearing center passed adversarial audit. What v4 exposes
+> is a **truth gap at the seams**: controls that the constrained party can switch off
+> (RBAC/air-gap/butcher), guarantees that exist only in docstrings (daemon dispatch errors,
+> cron catch-up, serve threads), two dispatch paths that bypass the turn state machine, and
+> a delivery/satellite edge where everything CI never exercises turned out broken on first
+> inspection (`pip install bog-agents-cli[all]` fails for every user today).
+
+## 0. Executive summary — health by package
+
+| Package | State | One-line |
+|---|---|---|
+| **SDK core** | **Strong center, demo-grade edges** | `create_agent` assembly, profiles, exclusion audits, and the deepagents drop-in all passed adversarial re-audit; prior fixes verified in place. The rot is in the two newest satellites: `builder.py` force-enables cost tracking and rides the deprecated kwarg backdoor it will not survive at 1.0, and `serve.py`'s thread API is an illusion (no history replay, no checkpointer on any documented path). |
+| **SDK middleware (context)** | **Good core, seam defects** | Sweeper view-transform, event-based summarization, and eviction helpers are coherent and tested. Defects cluster where tests don't cross: CLI splice order inverts the documented sweeper-outside-summarization ordering, and `CheckpointingMiddleware` crashes every mutating tool call when git is missing/slow — on the CLI's default path. |
+| **SDK middleware (safety)** | **Plumbing solid, framing outruns guarantees** | `permissions.py` and the expert engine are genuinely well-built. The recurring anti-pattern: **the constrained party administers the control** — RBAC and air-gap expose their own policy setters as model-callable tools, so they bound a cooperative model, not an adversarial one. |
+| **SDK backends** | **Mature and well-hardened, two tools slipped the net** | Symlink/O_NOFOLLOW, atomic-write, and result-filtering work is thoughtful. But `multi_edit_file`/`read_many_files` bypass permission rules entirely, a dangerous-command `PermissionError` crashes the turn instead of becoming a tool error, and `git checkout -- <branch>` can never switch branches (breaks worktree merge). |
+| **CLI core** | **Hardened in the small, ambient state machine in the large** | Resume/rewind and headless HITL are in good shape. But turn lifecycle is bare booleans on a 17,504-line god class (one line under its ratchet), and it shows: a defensive `finally` from a prior hardening pass corrupts the next queued turn (the cycle's one P0), and pipelines/file-watchers dispatch prompts with no busy-guard. |
+| **CLI config/trust** | **Unusually well-engineered** | The freshly-landed OAuth, skill-trust, theme, and manifest modules passed audit with only integration-seam defects — headline: `BOG_AGENTS_MCP_TRUST` is documented, printed in the deny message, and read nowhere. |
+| **CLI routing/dreamscape** | **Strong cores, thin integration shell** | The two audited invariants hold (judge failures never block a turn; dreamscape is a verified no-op unless enabled). Defects are all at TUI wiring seams: `/expert watch` is dead in the live app, `/butcher` is pinned to hardcoded Anthropic presets, and the effort registry misses Bedrock/Haiku — silently capping output at 1024 tokens on operator-routed easy turns. |
+| **daemon** | **Good shape, undelivered promises** | Clean separation, atomic writes, HMAC auth. But several self-documented guarantees fail in code: dispatch errors can never be captured for any network target, cron misses fires with no catch-up, corrupt `jobs.json` is silently wiped on the next write, and token rotation never reaches the webhook endpoint (v3 P1-51, still). |
+| **Satellites** (harbor/acp/daytona/vscode) | **Drifting where CI doesn't look** | Harbor's suite is green while every eval run has broken ls/grep/glob (drifted off the backend API). ACP is red at HEAD against a stale PyPI lock. Only daytona could be handed to a user without embarrassment. None are in CI — which is exactly why. |
+| **Delivery** | **Spine works, edges all broken** | The three-package release pipeline demonstrably works. Every never-exercised path failed on first inspection: `[acp]`/`[all]` extras depend on a package that doesn't exist on PyPI, the GitHub Action's skills install always aborts, the daemon quickstart's first command doesn't exist, harbor+daytona lockfiles are stale today and nothing checks. |
+
+Throughline: **v3 was about safety nets with holes; v4 is about promises the code doesn't keep.** Nearly every confirmed finding is a place where a docstring, config flag, or security framing asserts a guarantee the implementation quietly lacks.
+
+---
+
+## 1. Prior-cycle scorecard
+
+- **v3 P0s: 8/10 fixed.** Still open: **P0-9** (VS Code extension strips provider API keys from the child env, so the documented env-var path cannot work) and **P0-10** (daemon quickstart documents a nonexistent command surface — re-confirmed this cycle as DEL-2).
+- **v3 P1s: roughly two-thirds fixed.** The open remainder clusters in: satellites (ACP shared-agent V3-15/P1-61, VS Code P1-62/63/64), CI/workflows (V3-8/19/20, P1-66/69/70/71/73), daemon (P1-51 = DMN-2, P1-86), harbor (P1-59 partial, P1-60), and a CLI stragglers set (P1-9 lifecycle-BLOCK no-op, P1-18 scheduled-reports stub, P1-22 plaintext MCP install secrets, P1-25/26/27/32 dead-or-partial commands, P1-46 dreamscape counter, P1-48 = RD-2/RD-3 family).
+- **CLI_AUDIT.md (2026-07-12): everything landed.** All six fix-now items (SEC-1, SEC-2, TEST-1, HITL, git-branch cache, ARCH-1 ratchet) verified fixed with tests; ports 1–8 shipped (port-8 stage 2 pending its `settings_screen` consumer); all three "defer" items (theme system, skill trust store, spec-compliant OAuth) subsequently shipped and verified.
+- **ROADMAP.md killer features: 4 shipped / 8 partial / 8 not-started.** Detailed per-feature status is now recorded in ROADMAP.md ("Killer features v1 scorecard").
+
+---
+
+## 2. New findings — adversarially verified
+
+IDs are stable (`v4 <ID>`); cross-reference them in commit messages (e.g. "fixes v4 CTX-1").
+Every P0/P1 below survived independent refutation attempts with code-reading (and in seven
+cases live-reproduction) evidence. Items marked *(= v3 X)* are re-confirmed prior findings,
+listed for completeness but not counted as new.
+
+### P0 — ship-blockers (1)
+
+- **CLI-CORE-1** — `_cleanup_agent_task`'s `finally` clobbers the queued next turn's worker state (`app.py:14906`). The try block's last statement drains the queue, which *starts turn 2* (sets `_agent_running=True`, assigns `_agent_worker`) — then the `finally` unconditionally re-asserts `_agent_running=False; _agent_worker=None` while turn 2's coroutine is live. Turn 2 becomes uninterruptible, a third message runs concurrently instead of queueing. Live-reproduced. Fix: drain the queue *after* the finally restores state (S).
+
+### P1 — serious (confirmed)
+
+**SDK**
+- **SDK-CORE-2** — every `AgentBuilder.build()` silently force-enables cost tracking (`CostConfig.enabled=True` default) and forwards it via the deprecated kwarg backdoor, spamming `DeprecationWarning` and guaranteeing wholesale `TypeError` at 1.0 (`builder.py:613`). Live-reproduced (S).
+- **SDK-CORE-4** — serve's thread API is stateless-amnesia: only the newest message is ever sent to the agent, and both documented wirings build the agent with no checkpointer — turn 2 silently loses all context while `/history` implies continuity (`serve.py:211`) (M).
+- **CTX-1** — `CheckpointingMiddleware._run_git` is a bare `subprocess.run` with no OSError/TimeoutExpired handling; on a machine without git in PATH, **every default-path CLI `write_file`/`edit_file`/`execute` crashes the turn** (`checkpointing.py:125`; CLI defaults `enable_checkpointing=True`). Live-reproduced (S).
+- **MW-SAFE-2** — RBAC is fail-open and self-administered: `enable_rbac=True` restricts nothing until the model itself calls `set_active_role`; there is no operator surface to pin a role (`rbac.py:331`) (M).
+- **SB-1** — dangerous-command `PermissionError` (incl. common `rm -r`) is uncaught by the execute tool and propagates out of the graph, aborting the turn instead of returning the intended "blocked" tool message (`filesystem.py:1704`). Live-reproduced (S).
+- **SB-2** — `multi_edit_file` and `read_many_files` bypass filesystem permission rules at both the boundary middleware and in-tool layers: a `deny /secrets/**` rule is writable-through and readable-through (`permissions.py:159`) (M).
+- **SB-3** — `git checkout -- <branch>` treats the branch as a pathspec (verified with real git), so `merge_worktree` never merges and the branch-restore safety net never restores (`worktree.py:398`) (S).
+
+**CLI**
+- **CLI-CORE-2** — default-mode HITL gates exactly six tools, but `GitToolsMiddleware` (default-on) ships mutating `git_commit`/`git_add`/`git_branch(checkout)`/`git_stash drop` with no approval prompt (`agent.py:1065`) (S).
+- **CLI-CORE-3** — `/clear` resets `session_state.thread_id` but leaves `_lc_thread_id` stale: `/compact` then reads *and mutates* the pre-clear thread's checkpoint while reporting success for the current conversation (`app.py:3150`) (S).
+- **CLI-CORE-4** — scheduled pipelines and file-watchers dispatch prompts via `_send_prompt_to_agent` with no busy-guard, spawning a second concurrent turn on the live thread and stealing the user's worker handle (`app.py:14377`) (M).
+- **CT-1** — `BOG_AGENTS_MCP_TRUST` / `mcp.trust` is a dead override: defined in the registry, exposed in the manifest, printed in the non-TTY deny message ("set BOG_AGENTS_MCP_TRUST=1 to override") — and read nowhere. A CI user following the printed instruction is silently denied (`main.py:1526`) (S).
+- **RD-1** — the native reasoning-effort registry has no Bedrock branch and no Haiku match, so the legacy `{max_tokens: 8192/1024, temperature: 0.7}` caps apply — the operator anthropic preset's easy tier truncates every routed turn at 1024 output tokens; the entire builtin bedrock preset is capped on all four tiers (`reasoning_effort.py:326`) (M).
+- **RD-2** — `/expert watch start|stop` is dead in the live TUI: dispatched via `asyncio.to_thread`, where `asyncio.get_event_loop()` raises on Python ≥3.11; the only working start path (K2 resume) then can't be stopped. Live-reproduced (`expert_watch.py:361`) (S).
+- **RD-4** — `/butcher` model resolution always resolves the hardcoded Anthropic preset tiers (operator `ensure_session` builds them even when operator mode is off), so the documented fall-back-to-active-model branch is unreachable — Bedrock/Ollama-only users get a hard failure, Anthropic users get silently switched models (`butcher.py:1030`) (S).
+- **RD-5** — butcher containment is weaker than documented: the claimed job-level approval gate does not exist (plan → immediate execution, and operator auto-escalates prompts to butcher by default), and the slice file-allowlist is prompt-only — workers run LLM-authored `shell=True` commands screened only by the accident-catcher patterns, bypassing the CLI's HITL/permission system entirely *(sharpens v3 P1-42)* (`butcher.py:437`) (M).
+
+**daemon**
+- **DMN-1** — unattended-trigger "shell guardrails" are a documented no-op: `virtual_mode=True` restricts only file tools; the shell tool runs unrestricted on the host with `inherit_env=os.environ.copy()` handed to jobs whose prompts can ingest attacker-authored content (git-push triggers) *(downgraded from P0: requires a configured daemon job; still the daemon's biggest posture gap)* (`runner.py:438`) (M).
+- **DMN-3** — `dispatch_errors` capture is dead code for every network target: email/slack/webhook/github dispatchers swallow their own failures, so a run whose delivery failed persists `COMPLETED` with an empty error — the exact failure the field was added to fix. Live-reproduced against all three (`runner.py:674`) (S).
+- **DMN-4** — a corrupt or partially-invalid `jobs.json` loads as empty (one bad enum poisons the whole list-comprehension), and the next mutation **atomically replaces the file with the empty view** — destroying every job plus embedded secrets, no backup. Live-reproduced (`store.py:211`) (M).
+- **DMN-5** — cron triggers silently miss fires: the matcher only fires when a tick's wall-clock matches the expression, so any restart, host sleep, or >60s tick overrun spanning the scheduled minute drops the job for the day; the docstring claims interval catch-up that was never implemented (`scheduler.py:104`) (M).
+- *(= v3 P1-51)* **DMN-2** — token rotation never reaches the webhook endpoint; the leaked old token authenticates (and skips HMAC) forever (`api.py:804`) (S).
+
+**Satellites & delivery**
+- **SAT-1** — `HarborSandbox` drifted off the SDK backend API: the structured `als`/`agrep`/`aglob` surface raises `NotImplementedError`, so **every harbor eval run has broken ls/grep/glob tools** while harbor's legacy-name tests stay green. Empirically reproduced (`harbor/backend.py:412`) (M).
+- **DEL-1** — published `[acp]`/`[all]` extras depend on `bog-agents-acp`, which does not exist on PyPI — `pip install 'bog-agents-cli[all]'` fails resolution for every user today; no release path exists for the acp package (`cli/pyproject.toml:137`) (S).
+- **DEL-5** — lockfile drift is unguarded and present: harbor + daytona `uv.lock` fail `uv lock --check` today; root `make lock-check` fails for any fresh contributor and CI never runs it (`ci.yml:42`) (S).
+- *(= v3 P0-10)* **DEL-2** — daemon quickstart's `bog-agents-daemon run` (and the whole `runs` family) doesn't exist; the systemd unit in the docs would crash-loop (S).
+- *(= v3 P1-69)* **DEL-3** — the GitHub Action's skills install always aborts on the first skill: `((SKILL_COUNT++))` returns exit 1 under `bash -e`. Empirically reproduced (`action.yml:190`) (S).
+- *(= v3 P1-66/70)* **DEL-4** — the VS Code release workflow runs bash-only syntax under the Windows default pwsh shell; the only build/publish path cannot complete (S).
+
+### Downgraded to P2 after verification (real, but bounded)
+
+- **SDK-CORE-1** — serve defaults `cors_origins=["*"]` with keyless localhost: a drive-by web page can drive the agent and read responses. Bounded because the default backend is ephemeral state (no host FS/shell) — impact is API-credit burn + reading the user's own local threads. Still an unforced error; default CORS to `[]`.
+- **SDK-CORE-3** — middleware ordering validation is exact-type, so a *subclassed* `ParallelWorktreeMiddleware` + `enable_result_synthesis=True` crashes `create_agent` despite subclassing being the documented pattern.
+- **CTX-2** — with the sweeper enabled, the overflow-clip path persists the *swept* view into canonical state and offloads elided text to the "full content" recovery file — breaking the lossless invariant on a narrow reachable path.
+- **CTX-3** — cost/budget accounting uses exact-match pricing and the CLI passes no `model_name` at all, so every model is billed at the (5,15) default; a strict `budget_usd` can overshoot 3–5× (Opus, Bedrock ids).
+- **MW-SAFE-1** — air-gap egress policy is model-mutable: `set_data_policy(allow_external=true)` is a model-callable tool that lifts the restriction the middleware exists to enforce.
+- **RD-3** — the expert watcher runs its blocking LLM proposer directly on the TUI event loop (freeze reproduced; bounded by RD-2 making the watcher hard to start).
+- **DMN-1** — see above (P0→P1).
+- **SAT-2** — ACP's lock resolves bog-agents 0.8.7 from PyPI (repo is 0.9.9); its flagship HITL test fails at HEAD. (Root cause is a missing `[tool.uv.sources]` path pin, not the version skew per se.)
+
+### Refuted (1) — do not re-flag
+
+- **MW-SAFE-3** ("DLP redact mode never scans tool-call arguments"): the code observation is accurate, but in redact mode the model only ever *receives* redacted views, so it cannot emit the raw secret in tool args — the exfiltration scenario is unreachable as claimed. (An egress-DLP `wrap_tool_call` remains a worthwhile *enhancement*; see quick wins.)
+
+### P2 — important, not urgent (30, unverified by design)
+
+Recorded from the dimension audits without adversarial verification; treat severity as provisional. Highlights by theme — full evidence in the audit transcripts:
+
+- **serve:** slow SSE clients hold concurrency slots forever (SDK-CORE-5); `enable_streaming`/`enable_websocket` are dead flags and the advertised WebSocket doesn't exist (SDK-CORE-6); `with_mcp()`/`with_sandbox(allow_dangerous)` are silent no-ops behind documented promises (SDK-CORE-7).
+- **context:** empty-string model names prefix-match the first table entry → bogus 1M context window (CTX-4); a failed sweeper offload write is never retried yet `recall_swept` is advertised (CTX-5); a failed summarizer call commits `"Error generating summary: …"` as the permanent summary, and the default factory disables trimming for the summary call (CTX-6); overflow read_file slices drop image blocks (CTX-7); the CLI attaches the sweeper via `middleware=`, splicing it *inner* of summarization — inverting the documented ordering so sweep savings never defer compaction (CTX-8 — arguably the most consequential P2 here).
+- **safety:** RBAC has no tool-call-boundary re-check (MW-SAFE-4); sync-path guardrails silently discard tripped async-only guardrails (MW-SAFE-5); a first-load rulebook parse error fails *open* with an empty rulebook (MW-SAFE-6); AuditTrail records model intent, not executions, while claiming FINRA-grade provenance and "immutable" logs that truncate (MW-SAFE-7).
+- **backends:** CompositeBackend write/edit don't remap `files_update` keys (SB-4); `write_file` is in-place O_TRUNC while edit/upload are atomic (SB-5).
+- **config/trust:** one undefined `${VAR}` header disables ALL MCP servers (CT-2); the OAuth token dir isn't owner-only-secured and the temp file is briefly 0644 (CT-3); the manifest under-reports provider-scoped thinking config despite its no-drift promise (CT-4).
+- **dreamscape:** stale on-disk IMAGINING/DREAMING states survive crashes and falsely credit imagination success stats, skewing the auto-disable kill-switch (RD-6).
+- **daemon:** file-change scan blocks the event loop up to 50k stats per tick (DMN-6); git-push branch patterns never match `feature/*` (DMN-7); PATCH accepts the `***` redaction placeholder as a literal secret — making webhook HMAC forgeable via the natural read-modify-write flow (DMN-8).
+- **satellites/delivery:** satellites absent from CI (SAT-3 = V3-8); daytona integration suite imports a vanished upstream class (SAT-4); ACP caches one agent for all sessions (SAT-5 = V3-15); VS Code sidebar view has no provider (SAT-6 = P1-62) and the webview overwrites prior replies (SAT-8); README overclaims per-package CI (DEL-6); the uv version pin in CI is a silent no-op (DEL-7 = V3-20); release-please daemon version marker missing (DEL-8).
+
+---
+
+## 3. Systemic themes
+
+1. **The constrained party administers the control.** RBAC and air-gap expose policy setters as model tools; butcher's approval gate exists only in a docstring; default-on git tools sit outside HITL. Controls that a cooperative model honors and an adversarial one switches off are *worse* than nothing — they emit false assurance. One fix pattern: policy pinned at construction (FeatureConfig/operator config), mutation tools dropped or HITL-gated, plus a unit test asserting no security middleware exposes policy-mutation tools to the model.
+2. **Documented-but-undelivered guarantees.** Daemon dispatch-error capture, cron catch-up, serve's thread continuity, `enable_websocket`, checkpointing's "missing git is logged-and-disabled", butcher's gate, `BOG_AGENTS_MCP_TRUST` — each was *believed* shipped because a docstring/flag/message says so. The countermeasure is behavioral tests derived from the doc claims (the daemon's flag-assert tests are the cautionary example).
+3. **Two dispatch paths, one ambient state machine.** CLI-CORE-1/-4 are the same disease: `_agent_running`/`_agent_worker` are bare attributes mutated from five call sites. A small single-flight TurnManager (asyncio.Lock + begin/end context managers) that *every* path (submit, queue drain, pipelines, peat, butcher) must traverse turns the bug class into a structural impossibility.
+4. **CI blindness at the edges = guaranteed rot.** Every surface with no automated run on record was broken on first inspection (harbor's drifted backend, acp at HEAD, the Action's skills loop, the VS Code workflow, stale lockfiles, phantom PyPI extras). The cheapest structural fix in this report: a satellite CI leg + `uv lock --check` job + a nightly published-install canary + an action.yml self-test.
+5. **Registry/table divergence.** Three divergent model tables (pricing, context windows ×2) with two lookup semantics; an effort registry missing the repo's own primary provider (Bedrock). One `bog_agents/_model_catalog.py` with normalized lookup ends the class.
+
+---
+
+## 4. Recommended sequencing
+
+### Wave 0 — Default-path correctness (days; all S/M)
+CLI-CORE-1 (P0), CLI-CORE-4, CLI-CORE-3, CTX-1, SB-1, RD-1 — every one is reachable by a normal user on defaults. Then the TurnManager refactor (theme 3) to lock the class.
+
+### Wave 1 — Trust honesty (the "constrained party" sweep)
+CLI-CORE-2 (git tools into HITL + a build-time mutating-tool/interrupt coverage assertion), RD-5 (butcher plan-approval gate + enforced slice allowlist), DMN-1 (drop shell or sandbox it for unattended triggers, stop inheriting env), MW-SAFE-2 + MW-SAFE-1 (operator-pinned RBAC/air-gap policy), CT-1, plus the self-modification guard for `.bog-agents` trust surfaces (see ROADMAP v2 #24).
+
+### Wave 2 — Delivery & satellites truth (mostly S; highest embarrassment-per-fix)
+DEL-1 (publish or de-advertise acp), DEL-2/3/4 (docs, Action, workflow), DEL-5 + satellite CI legs + nightly install canary + action.yml self-test, SAT-1 (rebase HarborSandbox on BaseSandbox + a shared `SandboxConformanceSuite` in `bog_agents.testing`), SAT-2 (path pin).
+
+### Wave 3 — Daemon reliability
+DMN-2/3/4/5 + croniter-style next-fire computation with persisted schedule state, watchdog-based file triggers (adopts the deferred watchdog dependency from the PR #150 backlog), startup recovery for orphaned RUNNING runs, per-job retry/backoff, secret *references* in jobs.json instead of cleartext.
+
+### Wave 4 — serve as a real surface
+SDK-CORE-4 (history replay for checkpointer-less agents — turns the flaw into a feature), SDK-CORE-1 (CORS default `[]` + key-required), SDK-CORE-5 (decouple production from consumption), SDK-CORE-6/7 (kill or implement dead flags), SDK-CORE-2 (builder → FeatureConfig assembly). This wave is a prerequisite for ROADMAP v2's fleet/teleport features.
+
+### Quick wins (each ≤ half a day)
+`/queue` inspect/drop; seed the token tracker on thread resume; `/clear` undo hint (+ fixes CLI-CORE-3 at the same site); `git switch` helper (SB-3); atomic `write_file` (SB-5); export `ResultSynthesisMiddleware`/`GuardrailMiddleware` in lazy imports; serve OpenAPI drift test; version-coherence tests per package; root `make ci`; egress-DLP `wrap_tool_call` (the constructive residue of refuted MW-SAFE-3); `/theme preview` + `/theme export`; `/mcp trust` verb for remote-only projects; dreamscape state doctor.
+
+---
+
 # REVIEW.md v3 — Current-State Audit (2026-06-14)
 
 > **Scope:** Whole monorepo — SDK (`libs/bog-agents`), CLI (`libs/cli`), daemon, ACP, harbor, partners/daytona, VS Code extension, CI/packaging, docs.

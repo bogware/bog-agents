@@ -5,6 +5,12 @@
 > survey (CLI agents, IDE agents, frameworks/SDKs, autonomous/background agents)
 > and a full internal architecture audit. Companion to `REVIEW.md` (which tracks
 > the correctness/quality findings this roadmap assumes get fixed first).
+>
+> **Refreshed 2026-07-21** (REVIEW v4 cycle): the original 20 killer features are
+> now score-carded below (4 shipped / 8 partial / 8 not-started), and a second
+> generation — "Killer features v2" — was added from a fresh live four-front
+> survey with per-idea novelty checks against the code. The original feature
+> write-ups (§1–20) are kept verbatim as the reference spec for the partials.
 
 **Author's thesis in one line:** bog-agents has already won the *engine* war
 (~90 middleware, MCP, skills, memory, street-sweeper, prompt-routing, sandboxes,
@@ -109,6 +115,31 @@ a moat (hard for competitors to copy because they exploit our middleware depth).
 
 Strategic axes: **AUT** = autonomy · **MA** = multi-agent · **ENT** = enterprise ·
 **UX** = UX/reliability · **PLAT** = platform/distribution.
+
+### Killer features v1 scorecard (verified against code, 2026-07-21)
+
+| # | Feature | Status | What exists / what's missing |
+|---|---|---|---|
+| 1 | CI-aware self-fix loop | **partial** | `/ci-fix` (gh-backed status + failing logs + fix prompt) shipped; missing the autonomous half — no CI-failed daemon trigger, no push-until-green budget loop. → completed by **v2 #30**. |
+| 2 | Evidence self-verification | **partial** | `bog-agents verify` + jtbd outcome verification exist; no `VerificationEvidenceMiddleware`, no evidence bundle attached to PRs. → completed by **v2 #29**. |
+| 3 | Self-review-own-diff gate | **shipped** | `self_review_controller.py` (five lenses, SHIP/FIX-FIRST verdict, `--fix` loop) + `/self-review`. Minor gap: docstring claims a headless subcommand that isn't registered. |
+| 4 | MCP server mode | **shipped** | `mcp_server.py` stdio server (`run_task` with thread continuity, `get_info`) + `bog-agents mcp-server`. |
+| 5 | Semantic `@codebase` index | **partial** | `@codebase` mention with on-demand incremental embedding index + hybrid search shipped; missing the always-on file-watcher-maintained index. |
+| 6 | P2P handoffs / swarm | **not-started** | Sub-agent infra remains strictly hierarchical. → superseded by **v2 #21** (agent teams). |
+| 7 | GitHub Action + App | **not-started** | `action.yml` is a run-the-CLI action; no @-mention handler, no issue-assignment entry point. → folded into **v2 #30**. |
+| 8 | Durable resumable sessions | **not-started** | Daemon runs are one-shot; no comment→resume, no durable-execution backend. → sharpened by **v2 #33/#39**. |
+| 9 | `bog_agents.evals` | **shipped** | `bog_agents/evals/` (Case/Dataset/Scorer/run_evals/EvalReport + `assert_pass_rate`; Contains/ExactMatch/Regex/LLMJudge scorers). |
+| 10 | IDE diff overlay | **not-started** | Extension unchanged (thin webview, no diff/ACP). → v2 #28 covers the TUI half; the extension needs the ACP-client rebuild. |
+| 11 | Mission Control TUI | **partial** | `/dashboard` live multi-agent grid shipped (watch half); missing launch/stop/diff/merge actions (control half). |
+| 12 | Live run event stream | **not-started** | No unified event bus; observability still split across audit trail / notifications / dashboard callbacks. |
+| 13 | Agent-written auto-memories | **shipped** | `auto_memory.py` — agent-callable remember tool, provenance-tagged, deduped, auto-injected via the project-memory cascade. |
+| 14 | `.prompt.md` → `/command` | **partial** | Loader shipped (`prompt_commands.py`, frontmatter, `$ARGUMENTS`, precedence); missing the event-triggered playbook half (daemon wiring). |
+| 15 | Cloud/web async runner | **partial** | Pieces exist (`/remote` submit, RemoteGraph client, SSH sandbox seeding, daemon); no assembly, no `apply`-back, no web/mobile surface. → **v2 #42**. |
+| 16 | Declarative sandbox env | **partial** | `sandbox_config.py` loads `.bog-agents/sandbox.toml` incl. network allowlist — but `load_sandbox_config()` has **no consumers**; egress enforcement missing. → **v2 #22**. |
+| 17 | Shareable permalinks + team | **not-started** | Signed TraceFile export/import/verify exists; no `/share`, no hosted viewer, no team layer. |
+| 18 | Typed deps + guardrail façade | **partial** | Guardrail half shipped (`bog_agents/guardrails/`, tripwire semantics); typed-deps half absent. |
+| 19 | Butcher v2 cloud fan-out | **not-started** | Slices still sequential, in-place, untyped. → prerequisite work in **v2 #21/#31**. |
+| 20 | Living wiki + A2A | **not-started** | No wiki generator; no A2A surface (one stale docstring mention). → A2A half is **v2 #41**. |
 
 ---
 
@@ -390,6 +421,184 @@ Strategic axes: **AUT** = autonomy · **MA** = multi-agent · **ENT** = enterpri
   (companion to the MCP-server #4 and ACP we already ship).
 - **Inspired by:** Devin DeepWiki; Pydantic-AI / Google ADK A2A.
 - **Axis:** UX (wiki) + PLAT (A2A) · **Impact:** 2 · **Effort:** M · **Deps:** repo-map (have), `serve.py` (have).
+
+---
+
+## Killer features v2 — 2026-07-21 refresh
+
+From a fresh live survey of all four fronts (CLI agents, IDE agents,
+frameworks/SDKs, background agents), with every idea novelty-checked against the
+code so nothing below re-proposes something already shipped. Numbering continues
+from v1 (#21+). Each entry names the competitor that set the bar and the *delta*
+over what bog already has.
+
+**What the market moved to since the v1 survey (June):** shared-tasklist agent
+teams with peer messaging (Claude Code, Devin, Factory); OS-level local sandboxes
+with network allowlists (Claude `/sandbox`, Codex) — with **no native Windows
+sandbox anywhere** (open flank); named trust profiles replacing blanket auto-approve
+(Codex); runtime-evidence debugging (Cursor Debug Mode — "arguably its best
+feature"; Junie drives the real debugger); per-line provenance (Cursor Blame);
+evidence-bearing merge-ready PRs (Cursor cloud agents: video/screenshots attached,
+30-35% of internal merged PRs agent-authored); assign-the-issue acquisition UX
+(Copilot, Jules); CI-red auto-repair (Jules); ACP as the settled editor-interop
+layer (JetBrains co-develops, 50+ agents / 12+ clients); A2A at 150+ orgs under
+Linux Foundation; CodeAct converging across smolagents/MAF/OpenAI; and **deepagents
+0.7 alphas already shipping breaking changes** against our 0.6.12 parity badge.
+
+### Tier 1 — Table stakes (users now expect these; mostly S/M)
+
+- **#23 Named trust profiles + risk-graded reviewer approvals** *(Codex)* — bundle
+  RBAC/expert-rules/safe-tools/auto-mode into user-nameable trust profiles
+  (`bog --profile audit`: read-only, no-network, write-limited) and route the
+  approval long tail through a cheap reviewer model that stamps a risk level on the
+  HITL dialog. `profiles.py` exists but bundles model/effort, not trust policy.
+  Requires the REVIEW v4 Wave-1 pinning work (RBAC/air-gap operator-owned) first. (M)
+- **#24 Self-modification guard** *(CVE-2026-25725 class)* — the agent must not be
+  able to edit its own authority. Hooks and stdio-MCP configs are already
+  fingerprint-gated; extend the same fail-closed posture to `.bog-agents/expert_rules/`,
+  `laws.md`, the skill/MCP trust stores, and `config.toml` — enforced below the tool
+  layer, with `/why` explaining denials. Every reviewer now checks for this attack. (S)
+- **#25 Per-agent cost ledger + runaway caps** *(Claude Code, June 2026)* — attribute
+  cost per subagent/worktree/teammate (TUI tree + `/cost`), and session-wide default
+  caps on subagent spawns and web searches. Prerequisite: the model-pricing catalog
+  fix (REVIEW v4 CTX-3). As bog leans into parallelism this is a liability shield,
+  not polish. (M)
+- **#26 deepagents 0.7 parity pack** — upstream 0.7 alphas (a1–a7 live) ship breaking
+  changes: ls/glob "No files found" sentinel, read_file pagination/gutter format,
+  backend delete protocol shape, bounded streaming grep, private subagent state.
+  Parity is now a treadmill, not a badge — track the alpha line and land the pack
+  before 0.7 GA invalidates the drop-in claim. (M)
+- **#27 Wire the declarative environment spec** — `sandbox_config.py` implements
+  `.bog-agents/sandbox.toml` (v1 #16) but has **zero consumers**. Wire it through the
+  sandbox factory, daemon, and GitHub Action; enforce the network allowlist in the
+  backends. Prerequisite for #22, #30, and #42. (M)
+- **#28 Turn-end changes tray in the TUI** *(VS Code Changes panel, Cline, Kiro)* —
+  every competitor ends a turn with a reviewable changeset. bog has checkpoint
+  commits, `/diff`, `/undo`, `/rewind` — add the surface: per-file diff stats after
+  each turn, side-by-side view, per-hunk accept/reject wired to the existing
+  checkpoints. (M)
+- **#38 OTel GenAI-semconv observability** *(MAF, ADK)* — vendor-neutral OTLP spans
+  for model/tool/middleware/subagent events with cost attributes. The plumbing
+  exists but is LangSmith-bound; make LangSmith one exporter among many. Unblocks
+  enterprise checklists (Datadog/Grafana/MLflow). (M)
+
+### Tier 2 — Differentiators (win deals; exploit the middleware moat)
+
+- **#21 Agent Teams — the first *governed* team mode** *(Claude Code teams, Devin
+  teams, Factory Missions)* — peer teammates in parallel worktrees with a shared
+  claimable task ledger and inter-agent mailboxes. bog's `/team` registry, parallel
+  worktrees, and orchestrator are 60% of it; the delta is peer messaging + task
+  claiming + lead-as-coordinator. The moat: run it under expert rules, DLP, audit
+  trail, and per-agent cost caps (#25) — Claude's version is an ungoverned
+  experiment behind an env flag. Supersedes v1 #6. (L)
+- **#22 Native local OS sandbox — own Windows** *(Claude `/sandbox`, Codex)* —
+  `sandbox/local_sandbox.py` already implements bubblewrap/seatbelt wrapping but is
+  **unwired**. Wire it into LocalShellBackend, add the localhost network-allowlist
+  proxy, and ship the thing nobody has: a native **Windows** sandbox (AppContainer +
+  Job Objects). bog is Windows-first by development reality — this is the open
+  flank. Completes v1 #16 with #27. (L)
+- **#29 Evidence bundle on every autonomous PR** *(Cursor's merge-ready bar)* —
+  `EvidenceBundleMiddleware` packaging test output, before/after screenshots,
+  optional browser-session recording, and the rubric verdict into one artifact
+  attached to the PR/dispatch target. All ingredients shipped (`/qa`, rubric,
+  browser/computer use, audit trail); zero packaging. Completes v1 #2. (M)
+- **#30 Assign-to-bog + draft-PR etiquette + CI-red auto-repair** *(Copilot, Jules)* —
+  the background-agent acquisition UX: daemon trigger on issue-assigned/labeled,
+  open a `[WIP]` draft PR immediately, stream commits, keep the description updated,
+  treat review comments as revision triggers; plus a check-run consumer that re-enters
+  the originating session on a red build with attempt caps and human escalation.
+  Completes v1 #1/#7 and the inbound half of #8. (L)
+- **#31 Best-of-N attempts with rubric auto-judge** *(Codex `--attempts`)* — extend
+  `/race` + `/jury` (currently bare chat completions) to full agent runs in isolated
+  worktrees, optionally across models via the portfolio, scored by `/rubric`//`/qa`,
+  ranked diff comparison, keep the winner. Nearly free on bog's primitives; no OSS
+  framework ships it end-to-end. (M)
+- **#32 Two-way Slack sessions** *(Cursor's Slack agents)* — upgrade Slack from
+  outbound dispatch to conversational surface: Events API consumer, @bog in a thread
+  launches a run with the thread as context, replies steer it, PR + evidence bundle
+  land back in-thread. How background agents spread inside orgs. (M)
+- **#33 Session teleport across surfaces** *(Claude teleport — but both directions)* —
+  `bog attach <run-id>` hydrates a daemon/serve session into the TUI mid-flight;
+  push a TUI session to the daemon to keep running after the laptop closes.
+  Checkpointing makes this transport + locking. Every incumbent is one-directional;
+  the community explicitly begs for the inverse. Groundwork for #42. (L)
+- **#34 Cross-ecosystem plugin importer** *(Qwen Code's smartest move)* — extend
+  `claude_code_compat.py` (already imports Claude skills/commands and syncs MCP
+  configs) into full install-time conversion of Claude Code Marketplace plugins and
+  the now-orphaned Gemini CLI extensions. Ecosystem gravity is the hardest moat to
+  build organically; borrow the two biggest. (M)
+- **#35 Recipes v2 + registry** *(Goose: 60% of Block on this one primitive)* —
+  `recipes.py`/`pipeline.py` shipped the run-time; add typed parameter validation,
+  auto-provisioning of declared MCP servers/extensions, repo-committed recipes, and
+  a shareable registry. The unit of adoption that spreads an agent beyond power
+  users. (M)
+- **#36 CodeAct execution mode** *(smolagents, MAF, OpenAI "in development";
+  deepagents QuickJS)* — a middleware exposing the tool registry as a scriptable API
+  inside bog's sandbox backends, with expert rules intercepting each tool invocation
+  from generated code. This is the value argument the deferred Wave-4 QuickJS item
+  was waiting for — and bog's rule-engine governance makes its version defensible. (L)
+- **#39 Durable crash-safe runs** *(PydanticAI + Temporal/Restate; LangGraph 1.x
+  positioning)* — resume-after-death for serve and daemon: durable run IDs,
+  idempotency keys on tool execution, per-tool at-least-once/at-most-once replay
+  policy (destructive tools re-confirm), optional Temporal/Restate adapter.
+  Sharpens v1 #8's durable-execution half. (L)
+- **#40 Versioned immutable AgentSpecs** *(Anthropic Managed Agents architecture)* —
+  daemon triggers and serve sessions pin an immutable spec version (model, prompt,
+  tools, MCP, skills); rollback, traffic-split A/B, and an audit-trail link from
+  every run to the spec that produced it. Ops-grade answer to "which config did
+  this?". (M)
+- **#41 A2A server + A2A sub-agents** *(150+ orgs, Linux Foundation)* — publish an
+  Agent Card over serve mode (bog as a callable peer for ADK/MAF/enterprise
+  orchestrators) and an `A2ASubAgentBackend` so remote A2A agents slot into the
+  sub-agent machinery. Same move as MCP-server, one layer up. Completes v1 #20's
+  A2A half. (M)
+- **#43 `/debug` — runtime-evidence debugging** *(Cursor Debug Mode, Junie)* — the
+  agent instruments code with log statements reporting to a local collector server,
+  asks you to reproduce, fixes from captured runtime data, strips instrumentation;
+  later, a DAP client for real breakpoints. **No terminal agent has this.** (L)
+- **#44 `bog blame` — per-line provenance** *(Cursor Blame)* — sidecar index mapping
+  file/line ranges → (session, turn, model, tool) recorded at checkpoint time,
+  reconciled with git blame; `/blame file:line` opens the originating conversation;
+  headless twin for CI. Natural fit for bog's enterprise audit posture. (M)
+
+### Tier 3 — Moonshots
+
+- **#42 `bog fleet` — self-hostable cloud runner** *(Anthropic Managed Agents,
+  Cursor self-hosted cloud agents)* — compose serve (sessions API) + daemon
+  (queue/triggers) + sandbox providers + #27's environment spec into one
+  deployable: submit task → isolated sandbox → stream events → draft PR with
+  evidence bundle → steer from the TUI via #33. Self-hostable first — the
+  enterprise-shaped variant the incumbents charge for. Sharpens v1 #15. (XL)
+- **#45 Outcome-graded self-improvement loop** *(Anthropic dreaming + outcomes,
+  Mastra goals — none close the loop end-to-end)* — durable outcomes attached to
+  daemon triggers and serve sessions, graded by the existing rubric engine after
+  every run; dreamscape's dormancy learning grounded in the graded history instead
+  of ungraded transcripts; expert-rule proposals generated from failure patterns.
+  Uniquely composable from parts only bog owns. (XL)
+
+### Deferred items — re-evaluated this cycle
+
+- **`app.py` god-class extraction** (deferred 2026-05-07): partially reopen.
+  The full 3-PR mixin split stays parked, but REVIEW v4's P0 argues for extracting
+  a **TurnManager** (single-flight turn lifecycle) now, and continuing the
+  controller-per-handler pattern under the existing ratchet.
+- **Wave 4 satellites** (deferred 2026-07-11): QuickJS code interpreter →
+  **answered** by #36 (CodeAct) — build it as governed CodeAct, not a port. Deploy
+  CLI → subsumed by #42. Talon + eval-product → remain deferred.
+- **PR #150 backlog** (2026-06-18): watchdog dependency → **adopt** (REVIEW v4
+  Wave 3 daemon file-triggers). Sandbox providers → already largely shipped (five
+  wired via `sandbox_factory.py`); remaining delta is E2B + Manifest-style
+  credential isolation, folded into #27/#42. Dreamscape backends → remain deferred.
+
+### Sequencing update (2026-07-21)
+
+REVIEW v4's Waves 0–2 (default-path correctness, trust honesty, delivery truth)
+gate everything — several Tier-1/2 items stand directly on code v4 flags (e.g.
+#23 needs the RBAC/air-gap pinning; #25 needs the pricing catalog; #30 needs the
+daemon reliability wave). After that: **Tier 1 in one wave** (small, mostly
+packaging), then Tier 2 opening with **#21 Agent Teams + #29 Evidence bundles +
+#30 Assign-to-bog** — the three that most directly convert bog's engine depth
+into the trust-and-distribution story the original thesis says we're losing.
 
 ---
 
