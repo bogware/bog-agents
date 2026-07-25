@@ -100,6 +100,10 @@ jobs:
         with:
           python-version: "3.12"
           working-directory: libs/bog-agents
+          # A lock check must resolve against the live index, not a warm cache
+          # restored from another job — a stale/cross-uv-version cache makes the
+          # deterministic re-resolution differ from the committed lockfile.
+          enable-cache: "false"
       - run: make lock-check
 
   # SAT-3/DEL-6/v4: the satellite packages ship Makefiles, tests, and lockfiles
