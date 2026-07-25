@@ -324,6 +324,16 @@ ignore-var-parameters = true
     "PLR6301", # Method could be a function
     "SLF001",  # Private member access — tests need this
 ]
+# Test-support utilities shipped in the package (e.g. SandboxConformanceSuite):
+# pytest-style mixins that legitimately use `assert` and have no per-method
+# docstrings, same as the test files that consume them.
+"bog_agents/testing/**" = [
+    "S101",    # Use of assert — the whole point of a conformance suite
+    "D102",    # Missing docstring in public method — test methods are self-describing
+    "PLR6301", # Method could be a function — pytest test methods take `self`
+    "PT",      # pytest-style conventions
+    "EM101",   # Exception string literal — fine for the fixture NotImplementedError
+]
 # Scripts: allow prints, broad exceptions, and standalone modules
 "scripts/**" = [
     "BLE001",  # Blind exception catch — resilience in standalone scripts

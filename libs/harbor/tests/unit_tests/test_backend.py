@@ -5,6 +5,12 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from bog_agents.backends.protocol import (
+    GlobResult,
+    GrepResult,
+    LsResult,
+    ReadResult,
+)
 
 from bog_agents_harbor.backend import (
     _EXIT_DECODE_FAILED,
@@ -49,50 +55,51 @@ def test_id_returns_session_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sync methods raise NotImplementedError
+# Sync methods raise NotImplementedError (HarborSandbox is async-only; the
+# BaseSandbox sync surface routes through the raising sync `execute`).
 # ---------------------------------------------------------------------------
 
 
-def test_execute_raises() -> None:
+def test_sync_execute_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
         sandbox.execute("ls")
 
 
-def test_read_raises() -> None:
+def test_sync_read_file_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
-        sandbox.read("file.txt")
+        sandbox.read_file("file.txt")
 
 
-def test_write_raises() -> None:
+def test_sync_write_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
         sandbox.write("file.txt", "content")
 
 
-def test_edit_raises() -> None:
+def test_sync_ls_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
-        sandbox.edit("file.txt", "old", "new")
+        sandbox.ls(".")
 
 
-def test_ls_info_raises() -> None:
+def test_sync_grep_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
-        sandbox.ls_info(".")
+        sandbox.grep("pattern")
 
 
-def test_grep_raw_raises() -> None:
+def test_sync_glob_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
-        sandbox.grep_raw("pattern")
+        sandbox.glob("*.py")
 
 
-def test_glob_info_raises() -> None:
+def test_upload_files_raises() -> None:
     _, sandbox = _make_env()
     with pytest.raises(NotImplementedError):
-        sandbox.glob_info("*.py")
+        sandbox.upload_files([("f.txt", b"x")])
 
 
 # ---------------------------------------------------------------------------
@@ -149,32 +156,6 @@ class TestAExecute:
             await sandbox.aexecute("cmd")
             _, kwargs = mock_wait.call_args
             assert kwargs.get("timeout") == DEFAULT_COMMAND_TIMEOUT_SEC
-
-
-# ---------------------------------------------------------------------------
-# aread
-# ---------------------------------------------------------------------------
-
-
-class TestARead:
-    async def test_reads_file(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="     1\thello\n     2\tworld")
-        content = await sandbox.aread("file.txt")
-        assert "hello" in content
-        assert "world" in content
-
-    async def test_file_not_found(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="Error: File not found", return_code=1)
-        content = await sandbox.aread("missing.txt")
-        assert "not found" in content.lower()
-
-    async def test_nonzero_exit_code(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(return_code=1)
-        content = await sandbox.aread("file.txt")
-        assert "not found" in content.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -263,97 +244,52 @@ class TestAEdit:
 
 
 # ---------------------------------------------------------------------------
-# als_info
+# Structured listing/read/search surface (SAT-1)
+#
+# HarborSandbox inherits als / aread_file / agrep / aglob / adelete from
+# BaseSandbox, which derives each from `aexecute()`. Before the rebase these
+# raised NotImplementedError (HarborSandbox only overrode the *deprecated*
+# als_info/agrep_raw/aglob_info names), so every eval run had broken ls/grep/glob
+# tools. These tests pin that the structured methods now delegate to the Harbor
+# environment and return the structured result types. End-to-end parsing of real
+# shell output is covered by SandboxConformanceSuite against a real shell.
 # ---------------------------------------------------------------------------
 
 
-class TestAlsInfo:
-    async def test_lists_directory(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="file.py|false\nsubdir|true\n")
-        infos = await sandbox.als_info(".")
-        assert len(infos) == 2
-        assert any(i["path"] == "file.py" and not i["is_dir"] for i in infos)
-        assert any(i["path"] == "subdir" and i["is_dir"] for i in infos)
-
-    async def test_nonzero_exit_returns_empty(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(return_code=1)
-        infos = await sandbox.als_info("/nonexistent")
-        assert infos == []
-
-    async def test_empty_dir_returns_empty(self) -> None:
+class TestStructuredSurfaceDelegatesToExec:
+    async def test_als_delegates_and_returns_lsresult(self) -> None:
         env, sandbox = _make_env()
         env.exec.return_value = _make_exec_result(stdout="", return_code=0)
-        infos = await sandbox.als_info(".")
-        assert infos == []
+        result = await sandbox.als("/app")
+        assert isinstance(result, LsResult)
+        assert env.exec.await_count == 1
 
-    async def test_malformed_lines_skipped(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(
-            stdout="good_file|false\nbad_line_no_pipe\nanother|true\n"
-        )
-        infos = await sandbox.als_info(".")
-        assert len(infos) == 2
-
-
-# ---------------------------------------------------------------------------
-# agrep_raw
-# ---------------------------------------------------------------------------
-
-
-class TestAgrepRaw:
-    async def test_returns_matches(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="src/main.py:10:def hello():\n")
-        matches = await sandbox.agrep_raw("hello", "src/")
-        assert isinstance(matches, list)
-        assert len(matches) == 1
-        assert matches[0]["path"] == "src/main.py"
-        assert matches[0]["line"] == 10
-        assert "hello" in matches[0]["text"]
-
-    async def test_no_matches_returns_empty_list(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="")
-        matches = await sandbox.agrep_raw("nonexistent")
-        assert matches == []
-
-    async def test_glob_pattern_in_command(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="")
-        await sandbox.agrep_raw("pattern", glob="*.py")
-        cmd = env.exec.call_args[0][0]
-        assert "*.py" in cmd
-
-    async def test_malformed_lines_skipped(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="good:1:text\nbad_no_colons\n")
-        matches = await sandbox.agrep_raw("text")
-        assert len(matches) == 1
-
-
-# ---------------------------------------------------------------------------
-# aglob_info
-# ---------------------------------------------------------------------------
-
-
-class TestAglobInfo:
-    async def test_finds_files(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(stdout="main.py|false\nutils.py|false\n")
-        infos = await sandbox.aglob_info("*.py")
-        assert len(infos) == 2
-        assert all(not i["is_dir"] for i in infos)
-
-    async def test_nonzero_exit_returns_empty(self) -> None:
-        env, sandbox = _make_env()
-        env.exec.return_value = _make_exec_result(return_code=1)
-        infos = await sandbox.aglob_info("*.xyz", path="/no/such/dir")
-        assert infos == []
-
-    async def test_empty_output_returns_empty(self) -> None:
+    async def test_aread_file_delegates_and_returns_readresult(self) -> None:
         env, sandbox = _make_env()
         env.exec.return_value = _make_exec_result(stdout="", return_code=0)
-        infos = await sandbox.aglob_info("*.py")
-        assert infos == []
+        result = await sandbox.aread_file("/app/x.txt")
+        assert isinstance(result, ReadResult)
+        assert env.exec.await_count >= 1
+
+    async def test_agrep_delegates_and_returns_grepresult(self) -> None:
+        env, sandbox = _make_env()
+        env.exec.return_value = _make_exec_result(stdout="", return_code=0)
+        result = await sandbox.agrep("hello", path="/app")
+        assert isinstance(result, GrepResult)
+        assert env.exec.await_count >= 1
+
+    async def test_aglob_delegates_and_returns_globresult(self) -> None:
+        env, sandbox = _make_env()
+        env.exec.return_value = _make_exec_result(stdout="", return_code=0)
+        result = await sandbox.aglob("*.py", path="/app")
+        assert isinstance(result, GlobResult)
+        assert env.exec.await_count >= 1
+
+    async def test_structured_methods_do_not_raise_not_implemented(self) -> None:
+        # The exact regression: none of these may raise NotImplementedError.
+        env, sandbox = _make_env()
+        env.exec.return_value = _make_exec_result(stdout="", return_code=0)
+        await sandbox.als("/app")
+        await sandbox.aread_file("/app/x.txt")
+        await sandbox.agrep("x", path="/app")
+        await sandbox.aglob("*", path="/app")

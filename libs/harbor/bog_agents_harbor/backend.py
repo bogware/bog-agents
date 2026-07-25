@@ -19,15 +19,16 @@ import asyncio
 import base64
 import json
 import shlex
+from typing import Any
 
 from bog_agents.backends.protocol import (
     EditResult,
     ExecuteResponse,
-    FileInfo,
-    GrepMatch,
-    SandboxBackendProtocol,
+    FileDownloadResponse,
+    FileUploadResponse,
     WriteResult,
 )
+from bog_agents.backends.sandbox import BaseSandbox
 from harbor.environments.base import BaseEnvironment
 
 _SYNC_NOT_SUPPORTED = (
@@ -68,21 +69,27 @@ _EXIT_DECODE_FAILED = 4
 DEFAULT_COMMAND_TIMEOUT_SEC = 300
 """Default per-command timeout (5 minutes) to prevent stuck command hangs."""
 
-_PIPE_FIELD_COUNT = 2
-"""Expected number of pipe-separated fields in `ls`/`glob` output."""
-
-_GREP_FIELD_COUNT = 3
-"""Minimum number of colon-separated fields in `grep` output."""
 
 _COMMAND_PREVIEW_CHAR_LIMIT = 200
 """Maximum chars included in timeout error command previews."""
 
 
-class HarborSandbox(SandboxBackendProtocol):
-    """A sandbox implementation using shell commands.
+class HarborSandbox(BaseSandbox):
+    """A sandbox implementation using shell commands, on top of `BaseSandbox`.
 
-    Note: The edit operation requires python3 for JSON parsing. Other operations
-    (read, write, ls, grep, glob) use only standard shell utilities.
+    SAT-1 (v4): the structured listing/read/search surface (`als`, `aread_file`,
+    `agrep`, `aglob`, `adelete`) is inherited from `BaseSandbox`, which derives
+    every one from `aexecute()`. HarborSandbox only supplies the async
+    command-execution primitive (`aexecute`) plus its own exec-based
+    `awrite`/`aedit` (Harbor environments expose no native file-transfer API, so
+    the `upload_files`/`download_files`-based defaults do not apply). Previously
+    this class overrode the *deprecated* `als_info`/`agrep_raw`/`aglob_info`
+    names, so the SDK's `als`/`agrep`/`aglob` fell through to a raising stub and
+    every eval run had broken ls/grep/glob tools.
+
+    Async-only: sync entry points (`execute`, `upload_files`, ...) raise. The
+    edit operation requires python3 for JSON parsing; other operations use only
+    standard shell utilities.
     """
 
     def __init__(self, environment: BaseEnvironment) -> None:
@@ -180,50 +187,6 @@ class HarborSandbox(SandboxBackendProtocol):
         """Unique identifier for the sandbox backend."""
         return self.environment.session_id
 
-    async def aread(
-        self,
-        file_path: str,
-        offset: int = 0,
-        limit: int = 2000,
-    ) -> str:
-        """Read file content with line numbers using shell commands."""
-        # Escape file path for shell
-        safe_path = shlex.quote(file_path)
-
-        # Check if file exists and handle empty files
-        cmd = f"""
-if [ ! -f {safe_path} ]; then
-    echo "Error: File not found"
-    exit 1
-fi
-if [ ! -s {safe_path} ]; then
-    echo "System reminder: File exists but has empty contents"
-    exit 0
-fi
-# Use awk to add line numbers and handle offset/limit
-awk -v offset={offset} -v limit={limit} '
-    NR > offset && NR <= offset + limit {{
-        printf "%6d\\t%s\\n", NR, $0
-    }}
-    NR > offset + limit {{ exit }}
-' {safe_path}
-"""
-        result = await self.aexecute(cmd)
-
-        if result.exit_code != 0 or "Error: File not found" in result.output:
-            return f"Error: File '{file_path}' not found"
-
-        return result.output.rstrip()
-
-    def read(
-        self,
-        file_path: str,
-        offset: int = 0,
-        limit: int = 2000,
-    ) -> str:
-        """Read file content with line numbers using shell commands."""
-        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
-
     async def awrite(
         self,
         file_path: str,
@@ -260,20 +223,14 @@ fi
 
         return WriteResult(path=file_path, files_update=None)
 
-    def write(
-        self,
-        file_path: str,
-        content: str,
-    ) -> WriteResult:
-        """Create a new file using shell commands."""
-        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
-
     async def aedit(
         self,
         file_path: str,
         old_string: str,
         new_string: str,
         replace_all: bool = False,
+        *,
+        base_content: dict[str, Any] | None = None,  # noqa: ARG002  # accepted for BaseSandbox parity; the sandbox is the source of truth
     ) -> EditResult:
         """Edit a file by replacing string occurrences using shell commands."""
         # Create JSON payload with old and new strings, then base64 encode
@@ -365,156 +322,17 @@ __BOG_AGENTS_EOF__
 
         return EditResult(path=file_path, files_update=None, occurrences=count)
 
-    def edit(
-        self,
-        file_path: str,
-        old_string: str,
-        new_string: str,
-        replace_all: bool = False,
-    ) -> EditResult:
-        """Edit a file by replacing string occurrences using shell commands."""
-        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
+    # -- required by BaseSandbox (Harbor has no native file-transfer API) ------
 
-    async def als_info(self, path: str) -> list[FileInfo]:
-        """List directory contents with metadata using shell commands."""
-        safe_path = shlex.quote(path)
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """Not supported: Harbor environments expose no native upload API.
 
-        cmd = f"""
-if [ ! -d {safe_path} ]; then
-    exit 1
-fi
-for entry in {safe_path}/*; do
-    if [ -e "$entry" ]; then
-        name=$(basename "$entry")
-        if [ -d "$entry" ]; then
-            printf '%s|true\\n' "$name"
-        else
-            printf '%s|false\\n' "$name"
-        fi
-    fi
-done
-"""
-        result = await self.aexecute(cmd)
-
-        if result.exit_code != 0:
-            return []
-
-        file_infos: list[FileInfo] = []
-        for line in result.output.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) == _PIPE_FIELD_COUNT:
-                file_infos.append({"path": parts[0], "is_dir": parts[1] == "true"})
-
-        return file_infos
-
-    def ls_info(self, path: str) -> list[FileInfo]:
-        """List directory contents with metadata using shell commands."""
-        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
-
-    async def agrep_raw(
-        self,
-        pattern: str,
-        path: str | None = None,
-        glob: str | None = None,
-    ) -> list[GrepMatch] | str:
-        """Search for pattern in files using grep."""
-        search_path = shlex.quote(path or ".")
-
-        # Build grep command
-        grep_opts = "-rHn"  # recursive, with filename, with line number
-
-        # Add glob pattern if specified
-        glob_pattern = ""
-        if glob:
-            glob_pattern = f"--include={shlex.quote(glob)}"
-
-        # Escape pattern for grep
-        safe_pattern = shlex.quote(pattern)
-
-        cmd = f"grep {grep_opts} {glob_pattern} -e {safe_pattern} {search_path} 2>/dev/null || true"
-        result = await self.aexecute(cmd)
-
-        output = result.output.rstrip()
-        if not output:
-            return []
-
-        # Parse grep output into GrepMatch objects
-        matches: list[GrepMatch] = []
-        for line in output.split("\n"):
-            # Format is: path:line_number:text
-            parts = line.split(":", 2)
-            if len(parts) >= _GREP_FIELD_COUNT:
-                try:
-                    matches.append(
-                        {
-                            "path": parts[0],
-                            "line": int(parts[1]),
-                            "text": parts[2],
-                        }
-                    )
-                except ValueError:
-                    continue
-
-        return matches
-
-    def grep_raw(
-        self,
-        pattern: str,
-        path: str | None = None,
-        glob: str | None = None,
-    ) -> list[GrepMatch] | str:
-        """Search for pattern in files using grep."""
-        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
-
-    async def aglob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Find files matching glob pattern using shell commands.
-
-        Please note that this implementation does not currently support all glob
-        patterns.
+        `BaseSandbox` calls this only from its default `awrite`/`aedit`, both of
+        which HarborSandbox overrides with exec-based implementations, so this is
+        never reached on the normal path.
         """
-        safe_path = shlex.quote(path)
-        safe_pattern = shlex.quote(pattern)
+        raise NotImplementedError(_SYNC_NOT_SUPPORTED)
 
-        cmd = f"""
-cd {safe_path} 2>/dev/null || exit 1
-# Use find with shell globbing
-for file in {safe_pattern}; do
-    if [ -e "$file" ]; then
-        if [ -d "$file" ]; then
-            printf '%s|true\\n' "$file"
-        else
-            printf '%s|false\\n' "$file"
-        fi
-    fi
-done
-"""
-        result = await self.aexecute(cmd)
-
-        if result.exit_code != 0:
-            return []
-
-        output = result.output.strip()
-        if not output:
-            return []
-
-        # Parse output into FileInfo dicts
-        file_infos: list[FileInfo] = []
-        for line in output.split("\n"):
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) == _PIPE_FIELD_COUNT:
-                file_infos.append(
-                    {
-                        "path": parts[0],
-                        "is_dir": parts[1] == "true",
-                    }
-                )
-
-        return file_infos
-
-    def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Find files matching glob pattern using shell commands."""
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Not supported: Harbor reads go through `aread_file` / `aexecute`."""
         raise NotImplementedError(_SYNC_NOT_SUPPORTED)
