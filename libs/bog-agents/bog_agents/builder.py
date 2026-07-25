@@ -80,7 +80,10 @@ class SandboxConfig:
 class CostConfig:
     """Cost tracking settings."""
 
-    enabled: bool = True
+    # SDK-CORE-2: default OFF. Previously True, so every AgentBuilder.build()
+    # silently force-enabled cost tracking even when the caller never asked;
+    # `with_cost_tracking()` sets it explicitly when the user opts in.
+    enabled: bool = False
     max_cost_usd: float | None = None
     budget_usd: float | None = None
 
@@ -496,13 +499,27 @@ class AgentBuilder:
         return self
 
     def with_mcp(self, *servers: str) -> AgentBuilder:
-        """Enable MCP servers by registry ID.
+        """Not supported at the SDK builder layer — wire MCP via middleware.
+
+        SDK-CORE-7: there is no SDK-level MCP registry/loader, so collecting
+        server IDs here used to silently produce an agent with **no** MCP tools.
+        Rather than lie, this raises with the supported path: construct the MCP
+        tools/middleware for your servers and pass them via `with_middleware(...)`
+        or `with_tools(...)`. (The CLI provides registry-based MCP wiring.)
 
         Args:
-            *servers: Server IDs from the MCP registry (e.g. "github", "jira").
+            *servers: Ignored — MCP-by-registry-ID is not wired here.
+
+        Raises:
+            NotImplementedError: Always.
         """
-        self._config.mcp_servers.extend(servers)
-        return self
+        msg = (
+            "AgentBuilder.with_mcp() is not implemented: the SDK has no MCP "
+            "registry/loader, so server IDs cannot be resolved here. Build your "
+            "MCP tools/middleware and pass them via with_middleware(...) or "
+            "with_tools(...) instead."
+        )
+        raise NotImplementedError(msg)
 
     def with_subagents(self, *subagents: Any) -> AgentBuilder:
         """Add sub-agents available to the main agent.
@@ -601,12 +618,13 @@ class AgentBuilder:
         sbx = self._config.sandbox
         if sbx.backend is not None:
             kwargs["backend"] = sbx.backend
-        # Note: ``allow_dangerous`` is consumed at the *backend* layer
-        # (e.g. LocalShellBackend), not by ``create_agent`` directly. The
-        # builder accepts it for ergonomics but the value is only honored
-        # when the caller also constructs the sandbox backend themselves.
-        # Forwarding the flag as a top-level kwarg crashes ``create_agent``
-        # — drop it here and surface the limitation in the docstring.
+        elif sbx.allow_dangerous:
+            # SDK-CORE-7: allow_dangerous is a LocalShellBackend setting, not a
+            # create_agent kwarg — it used to be silently dropped when no backend
+            # was supplied. Honor it by constructing the backend it describes.
+            from bog_agents.backends.local_shell import LocalShellBackend
+
+            kwargs["backend"] = LocalShellBackend(allow_dangerous=True)
 
         # Cost
         cost = self._config.cost
@@ -663,16 +681,25 @@ class AgentBuilder:
         if self._config.subagents:
             kwargs["subagents"] = list(self._config.subagents)
 
-        # MCP servers — there is no dedicated ``create_agent`` kwarg today,
-        # and forwarding ``mcp_servers=...`` crashes the early-validation in
-        # ``_resolve_feature_config``. Users wiring MCP must construct the
-        # corresponding middleware (``mcp_tools.load_mcp_tools_for_agents``)
-        # and pass it via ``with_middleware(...)`` for now.
+        # SDK-CORE-2: route feature flags through ``config=FeatureConfig(...)``
+        # rather than the deprecated bare-``enable_*``-kwarg backdoor, which
+        # emitted a DeprecationWarning on every build() and becomes a hard
+        # TypeError at bog-agents 1.0. Everything that is a FeatureConfig field
+        # is folded into the config; real create_agent params stay direct.
+        import dataclasses as _dataclasses
 
-        # Extra kwargs override everything above
-        kwargs.update(self._config.extra_kwargs)
+        from bog_agents.feature_config import FeatureConfig
 
-        return create_agent(**kwargs)
+        feature_field_names = {f.name for f in _dataclasses.fields(FeatureConfig)}
+        feature_kwargs = {k: v for k, v in kwargs.items() if k in feature_field_names}
+        direct_kwargs = {k: v for k, v in kwargs.items() if k not in feature_field_names}
+        if feature_kwargs:
+            direct_kwargs["config"] = FeatureConfig(**feature_kwargs)
+
+        # Extra kwargs override everything above (escape hatch).
+        direct_kwargs.update(self._config.extra_kwargs)
+
+        return create_agent(**direct_kwargs)
 
     def __repr__(self) -> str:  # noqa: D105
         return f"AgentBuilder(model={self._config.model!r})"
