@@ -1573,9 +1573,23 @@ def create_cli_agent(
 
     # Configure interrupt_on based on auto_approve setting
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None
-    if auto_approve:  # noqa: SIM108  # if-else more readable for interrupt_on config
-        # No interrupts - all tools run automatically
-        interrupt_on = {}
+    if auto_approve:
+        # No interrupts for ordinary tools — but the self-modification guard
+        # (#24) still forces approval for a shell command that appears to write
+        # an authority file, even unattended. Writes to authority files via the
+        # file tools are gated by the interrupt-mode permission rules below,
+        # which the SDK merges into interrupt_on regardless of this setting.
+        from bog_agents_cli.self_protection import command_targets_authority_file
+
+        interrupt_on = {
+            "execute": {
+                "allowed_decisions": ["approve", "reject"],
+                "description": _format_execute_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+                "when": lambda req: command_targets_authority_file(
+                    str(req.tool_call["args"].get("command", ""))
+                ),
+            }
+        }
     else:
         # Full HITL for destructive operations
         interrupt_on = _add_interrupt_on()  # type: ignore[assignment]  # InterruptOnConfig is compatible at runtime
@@ -1859,6 +1873,12 @@ def create_cli_agent(
         logger.debug("street sweeper attach failed; skipping", exc_info=True)
 
     # Create the agent
+    # Self-modification guard (#24): gate writes to the agent's own authority
+    # files (Expert rules, dreamscape laws, hooks, .mcp.json) behind human
+    # approval. These interrupt-mode rules are merged into interrupt_on by
+    # create_agent even under --auto-approve, so the guard can't be bypassed.
+    from bog_agents_cli.self_protection import authority_file_permissions
+
     agent = create_agent(
         model=model,
         system_prompt=system_prompt,
@@ -1866,6 +1886,7 @@ def create_cli_agent(
         backend=composite_backend,
         middleware=agent_middleware,
         interrupt_on=interrupt_on,
+        permissions=authority_file_permissions(),
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
     ).with_config(config)
