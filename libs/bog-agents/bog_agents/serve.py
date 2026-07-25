@@ -1,6 +1,6 @@
 """HTTP API server for bog-agents.
 
-Exposes a running agent as a REST/WebSocket API server. Enables production
+Exposes a running agent as a REST + SSE API server. Enables production
 deployments via ``bog-agents --serve`` or programmatic use in Docker containers,
 microservices, and orchestration systems.
 
@@ -19,6 +19,7 @@ Endpoints
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -34,16 +35,28 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ServerConfig:
-    """Configuration for the bog-agents HTTP server."""
+    """Configuration for the bog-agents HTTP server.
+
+    Attributes:
+        cors_origins: Browser origins allowed to read responses cross-origin.
+            Defaults to ``[]`` (no cross-origin access) — SDK-CORE-1: the old
+            ``["*"]`` default let any drive-by web page drive the agent and read
+            its replies. Set explicit origins to opt in.
+        enable_streaming: When False, ``POST /stream`` returns 501 instead of
+            silently streaming anyway (the flag used to be inert).
+        stream_queue_maxsize: Bound on the per-stream producer→consumer buffer.
+            Decouples agent production from client consumption so a slow reader
+            can't pin a concurrency slot indefinitely (SDK-CORE-5).
+    """
 
     host: str = "127.0.0.1"
     port: int = 8420
-    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=list)
     api_key: str | None = None
     max_concurrent_requests: int = 10
     request_timeout: float = 300.0
     enable_streaming: bool = True
-    enable_websocket: bool = True
+    stream_queue_maxsize: int = 256
     max_tracked_threads: int = 1000
 
 
@@ -121,6 +134,16 @@ class AgentServer:
                 "Running on localhost without API key. Set BOG_AGENTS_SERVE_API_KEY for authenticated access.",
             )
 
+        # SDK-CORE-1: wildcard CORS with no key is the drive-by-web-page hole —
+        # any site the user visits could script the agent and read its replies.
+        # The default is now [] (no cross-origin), so this only fires when a
+        # caller explicitly opens it up without also requiring a key.
+        if "*" in self.config.cors_origins and self.config.api_key is None:
+            logger.warning(
+                "cors_origins allows '*' with no API key: any web page can drive this "
+                "agent and read its responses. Set an api_key or restrict cors_origins.",
+            )
+
     def _get_or_create_thread(self, thread_id: str | None = None) -> ThreadState:
         """Get an existing thread or create a new one.
 
@@ -186,6 +209,40 @@ class AgentServer:
             self.config.api_key.encode("utf-8"),
         )
 
+    def _has_checkpointer(self) -> bool:
+        """Whether the wrapped agent persists conversation state itself.
+
+        A compiled LangGraph agent exposes a ``checkpointer`` attribute when one
+        was configured. When present, thread continuity is the graph's job and
+        we send only the new turn; when absent, the server must replay its own
+        tracked history (see ``_build_input`` / SDK-CORE-4).
+        """
+        return getattr(self.agent, "checkpointer", None) is not None
+
+    def _build_input(self, thread: ThreadState, message: str) -> dict[str, Any]:
+        """Build the ``messages`` input for an agent invocation.
+
+        SDK-CORE-4: without a checkpointer, sending only the newest message made
+        every turn amnesiac — turn 2 silently lost all prior context while
+        ``/history`` implied continuity. When the agent has no checkpointer we
+        replay the thread's full tracked history (which already includes the
+        just-appended user message); when it has one we send only the new turn
+        and let the graph resume from its own state.
+
+        Args:
+            thread: The conversation thread (its ``messages`` already include
+                the current user message).
+            message: The current user message.
+
+        Returns:
+            The ``input_data`` dict to pass to the agent.
+        """
+        if self._has_checkpointer():
+            return {"messages": [{"role": "user", "content": message}]}
+        # Replay the full conversation so a checkpointer-less agent still sees
+        # the prior turns. Copy so downstream mutation can't corrupt our record.
+        return {"messages": [dict(m) for m in thread.messages]}
+
     async def invoke(
         self,
         message: str,
@@ -208,7 +265,7 @@ class AgentServer:
         self._request_count += 1
 
         config = {"configurable": {"thread_id": thread.thread_id}}
-        input_data = {"messages": [{"role": "user", "content": message}]}
+        input_data = self._build_input(thread, message)
 
         # Gate concurrency and bound each invocation by request_timeout so a
         # hung/slow agent cannot block the server indefinitely.
@@ -275,33 +332,62 @@ class AgentServer:
         self._request_count += 1
 
         config = {"configurable": {"thread_id": thread.thread_id}}
-        input_data = {"messages": [{"role": "user", "content": message}]}
+        input_data = self._build_input(thread, message)
 
-        # Gate concurrency and bound the total stream by request_timeout so a
-        # stalled stream cannot occupy a slot / connection indefinitely.
-        async with self._get_request_semaphore():
-            try:
-                stream = self.agent.astream_events(input_data, config=config, version="v2")
-                async for event in _timeboxed_aiter(stream, timeout=self.config.request_timeout):
-                    yield {
-                        "event": event.get("event", ""),
-                        "data": event.get("data", {}),
-                    }
-            except TimeoutError:
-                logger.warning(
-                    "Agent stream timed out after %ss (thread=%s)",
-                    self.config.request_timeout,
-                    thread.thread_id,
-                )
-                yield {
-                    "event": "error",
-                    "data": {"error": "Gateway timeout: agent did not respond in time", "status_code": 504},
-                }
-            except Exception as exc:
-                yield {
-                    "event": "error",
-                    "data": {"error": str(exc)},
-                }
+        # SDK-CORE-5: decouple production from consumption. A background producer
+        # holds a concurrency slot ONLY while producing, pushing events into a
+        # bounded queue; each enqueue is bounded by request_timeout, so a slow
+        # client that stops draining releases the slot after the timeout instead
+        # of pinning it forever. The client drains the queue WITHOUT holding a
+        # slot, so a stalled reader can no longer exhaust max_concurrent_requests.
+        maxsize = max(1, self.config.stream_queue_maxsize)
+        queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+        done = object()
+        timeout = self.config.request_timeout
+
+        async def _bounded_put(item: Any) -> None:
+            # A full queue means the client isn't draining; bound the wait so a
+            # stalled reader can't pin the producer's slot past request_timeout.
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(queue.put(item), timeout=timeout)
+
+        async def _produce() -> None:
+            async with self._get_request_semaphore():
+                try:
+                    events = self.agent.astream_events(input_data, config=config, version="v2")
+                    async for event in _timeboxed_aiter(events, timeout=timeout):
+                        await _bounded_put({"event": event.get("event", ""), "data": event.get("data", {})})
+                except TimeoutError:
+                    logger.warning("Agent stream timed out after %ss (thread=%s)", timeout, thread.thread_id)
+                    await _bounded_put({"event": "error", "data": {"error": "Gateway timeout: agent did not respond in time", "status_code": 504}})
+                except Exception as exc:
+                    await _bounded_put({"event": "error", "data": {"error": str(exc)}})
+                finally:
+                    await _bounded_put(done)
+
+        producer = asyncio.create_task(_produce())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except TimeoutError:
+                    # Wake periodically so a dropped terminal marker (producer
+                    # gave up under backpressure) still ends the stream.
+                    if producer.done():
+                        while not queue.empty():
+                            leftover = queue.get_nowait()
+                            if leftover is not done:
+                                yield leftover
+                        break
+                    continue
+                if item is done:
+                    break
+                yield item
+        finally:
+            if not producer.done():
+                producer.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await producer
 
     def get_health(self) -> dict[str, Any]:
         """Get server health status.
@@ -340,7 +426,6 @@ class AgentServer:
                 "host": self.config.host,
                 "port": self.config.port,
                 "streaming": self.config.enable_streaming,
-                "websocket": self.config.enable_websocket,
             },
         }
 
@@ -577,6 +662,13 @@ class AgentServer:
         async def stream_endpoint(request: Request) -> JSONResponse | EventSourceResponse:
             if not server._check_api_key(_extract_bearer(request)):
                 return _unauthorized()
+            # SDK-CORE-6: enable_streaming was inert — /stream streamed regardless.
+            # Honor it: when disabled, refuse instead of silently streaming.
+            if not server.config.enable_streaming:
+                return JSONResponse(
+                    {"error": "Streaming is disabled on this server"},
+                    status_code=501,
+                )
             try:
                 body = await request.json()
             except (json.JSONDecodeError, ValueError):
