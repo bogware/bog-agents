@@ -9,18 +9,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agent-client-protocol"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/21/5c/d60196c536c8f66bb6a238c8a6d0d6fa84a2e3436008c139cb4a79003a25/agent_client_protocol-0.10.0.tar.gz", hash = "sha256:f8a6041e27423131e42e4d0cdd850d5b094b1092f79cc29501ab2bd57b92ee88", size = 81502, upload-time = "2026-05-07T19:11:56.784Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/cc/139895c0c5cd2acefc365085da0735d93df0cf8427ff4ee351961090e1af/agent_client_protocol-0.10.0-py3-none-any.whl", hash = "sha256:97a1a69c5d094e2625b09c4dbc2d5cf19637c4943630ceed52ab0578ecd5e14c", size = 65400, upload-time = "2026-05-07T19:11:55.614Z" },
-]
-
-[[package]]
 name = "aiofiles"
 version = "24.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -401,36 +389,6 @@ test = [
 ]
 
 [[package]]
-name = "bog-agents-acp"
-version = "0.0.4"
-source = { editable = "../acp" }
-dependencies = [
-    { name = "agent-client-protocol" },
-    { name = "bog-agents" },
-    { name = "python-dotenv" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agent-client-protocol", specifier = ">=0.8.0" },
-    { name = "bog-agents", specifier = ">=0.7.0,<1.0.0" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "pytest", specifier = ">=8.3.4" },
-    { name = "pytest-asyncio", specifier = ">=0.25.3" },
-    { name = "pytest-cov", specifier = ">=6.0.0" },
-    { name = "pytest-mock", specifier = ">=3.14.0" },
-    { name = "pytest-socket", specifier = ">=0.7.0" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
-    { name = "pytest-watcher", specifier = ">=0.3.4,<1.0.0" },
-    { name = "ruff", specifier = ">=0.9.7" },
-    { name = "ty", specifier = ">=0.0.1,<1.0.0" },
-]
-
-[[package]]
 name = "bog-agents-cli"
 version = "0.9.9"
 source = { editable = "." }
@@ -470,11 +428,7 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-acp = [
-    { name = "bog-agents-acp" },
-]
 all = [
-    { name = "bog-agents-acp" },
     { name = "daytona" },
     { name = "langchain-anthropic" },
     { name = "langchain-aws" },
@@ -621,8 +575,7 @@ test = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0,<1.0.0" },
     { name = "bog-agents", editable = "../bog-agents" },
-    { name = "bog-agents-acp", marker = "extra == 'acp'", editable = "../acp" },
-    { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search", "acp"], marker = "extra == 'all'" },
+    { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search"], marker = "extra == 'all'" },
     { name = "bog-agents-cli", extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai"], marker = "extra == 'all-providers'" },
     { name = "croniter", specifier = ">=3.0.0,<4.0.0" },
     { name = "cryptography", specifier = ">=46.0.7" },
@@ -683,7 +636,7 @@ requires-dist = [
     { name = "urllib3", specifier = ">=2.7.0" },
     { name = "uuid-utils", specifier = ">=0.10.0,<1.0.0" },
 ]
-provides-extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai", "all-providers", "sandbox", "daytona-sandbox", "modal-sandbox", "runloop-sandbox", "langsmith-sandbox", "web-search", "acp", "all"]
+provides-extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai", "all-providers", "sandbox", "daytona-sandbox", "modal-sandbox", "runloop-sandbox", "langsmith-sandbox", "web-search", "all"]
 
 [package.metadata.requires-dev]
 test = [

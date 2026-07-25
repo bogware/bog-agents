@@ -55,6 +55,12 @@ Twitter = "https://x.com/LangChain"
 [tool.uv]
 package = true
 
+# SAT-2/v4: resolve the SDK from the in-repo editable source (like harbor and
+# daytona) rather than the published wheel. Without this the lock pinned an old
+# PyPI `bog-agents` and the HITL bridge tested against a stale `create_agent`.
+[tool.uv.sources]
+bog-agents = { path = "../bog-agents", editable = true }
+
 [tool.ty.environment]
 python-version = "3.11"
 

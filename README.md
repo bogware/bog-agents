@@ -259,7 +259,9 @@ make lint        # ruff check + ruff format --diff + ty
 make format      # ruff fix + ruff format
 ```
 
-CI runs `make lint` + `make test` per package on every PR. See
+CI runs `make lint` + `make test` for the SDK, CLI, and daemon on every PR,
+`make test` for the satellites (acp, harbor, daytona), and a lockfile-drift
+check across all packages. The VS Code extension builds on manual dispatch. See
 `.github/workflows/ci.yml`.
 
 ---

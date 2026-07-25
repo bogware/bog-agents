@@ -1,4 +1,5 @@
-# CI: Lint and test SDK, CLI, and daemon on push to main and PRs.
+# CI: Lint and test SDK, CLI, daemon, and satellites (acp/harbor/daytona), plus
+# a lockfile-drift guard, on push to main and PRs.
 
 name: CI
 
@@ -83,4 +84,51 @@ jobs:
       - name: Run tests
         if: matrix.package.name == 'daemon'
         run: uv run --group test pytest tests/ -q --timeout=30
+        working-directory: ${{ matrix.package.dir }}
+
+  # DEL-5/v4: guard against lockfile drift (harbor + daytona locks were stale and
+  # nothing caught it — the test jobs `uv sync` without --frozen, so they silently
+  # re-resolve). `make lock-check` runs `uv lock --check` for every package dir.
+  lock-check:
+    name: "Lock check"
+    runs-on: [self-hosted, Linux]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/uv_setup"
+        with:
+          python-version: "3.12"
+          working-directory: libs/bog-agents
+      - run: make lock-check
+
+  # SAT-3/DEL-6/v4: the satellite packages ship Makefiles, tests, and lockfiles
+  # but had no PR CI — which is how SAT-1 (harbor's tests green while its backend
+  # was broken) and SAT-2 (acp red at HEAD) shipped unnoticed. Linux-only leg,
+  # py3.12 (harbor requires >=3.12).
+  satellites:
+    name: "Satellites (${{ matrix.package.name }})"
+    runs-on: [self-hosted, Linux]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - { name: acp, dir: libs/acp }
+          - { name: harbor, dir: libs/harbor }
+          - { name: daytona, dir: libs/partners/daytona }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/uv_setup"
+        with:
+          python-version: "3.12"
+          working-directory: ${{ matrix.package.dir }}
+      - run: uv sync --group test
+        working-directory: ${{ matrix.package.dir }}
+      # `make test` (not the whole tests dir) so daytona's `TEST_FILE` default
+      # skips its integration suite. Lint is intentionally omitted for now —
+      # these packages carry pre-existing lint debt; the drift guard that matters
+      # is that their unit tests actually run.
+      - run: make test
         working-directory: ${{ matrix.package.dir }}

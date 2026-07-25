@@ -133,11 +133,16 @@ runloop-sandbox = ["runloop-api-client>=0.69.0"]
 langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
 # Web search
 web-search = ["tavily-python>=0.7.21,<1.0.0"]
-# Agent Client Protocol
-acp = ["bog-agents-acp>=0.0.4"]
-# Everything
+# Agent Client Protocol.
+#
+# NOTE (DEL-1): `bog-agents-acp` is not published to PyPI yet, so it is
+# intentionally NOT part of `all` — otherwise `pip install bog-agents-cli[all]`
+# fails resolution for every user. Install ACP from source (the local editable
+# path pin below) until the package is published and wired into the release
+# machinery. Re-add `acp` to `all` in the same change that publishes it.
+# Everything (publishable extras only).
 all = [
-    "bog-agents-cli[all-providers,sandbox,web-search,acp]",
+    "bog-agents-cli[all-providers,sandbox,web-search]",
 ]
 
 # Console-script entry points.

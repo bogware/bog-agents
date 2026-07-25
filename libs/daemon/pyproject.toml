@@ -78,12 +78,16 @@ daytona-sandbox = ["daytona>=0.113.0,<1.0.0"]
 langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
 # Web search
 web-search = ["tavily-python>=0.7.21,<1.0.0"]
-# Agent Client Protocol
-acp = ["bog-agents-acp>=0.0.4"]
-# Everything (excludes harbor: harbor requires Python 3.12+ but the daemon
-# supports 3.11+ — users on 3.12+ can `pip install bog-agents-harbor` directly)
+# Agent Client Protocol.
+#
+# NOTE (DEL-1): `bog-agents-acp` is not on PyPI yet, so it is intentionally NOT
+# part of `all` — including it makes `pip install bog-agents-daemon[all]` fail
+# resolution for every user. Install ACP from source until it is published.
+# Everything (publishable extras only; excludes harbor: harbor requires Python
+# 3.12+ but the daemon supports 3.11+ — users on 3.12+ can
+# `pip install bog-agents-harbor` directly)
 all = [
-    "bog-agents-daemon[all-providers,sandbox,web-search,acp]",
+    "bog-agents-daemon[all-providers,sandbox,web-search]",
 ]
 
 [project.scripts]
