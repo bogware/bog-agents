@@ -11,8 +11,10 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from bog_agents_cli.butcher import (
+    ButcherConfig,
     ButcherJob,
     Slice,
+    _confirm_butcher_plan,
     build_worker_tools,
     load_butcher_config,
     parse_plan_response,
@@ -649,3 +651,98 @@ class TestButcherConfig:
         assert len(cfg.escalation_models) == 2
         assert cfg.max_slices == 16  # clamped
         assert cfg.worker_max_iterations == 4
+
+
+class TestSliceAllowlist:
+    """RD-5: writes/edits are restricted to the slice's declared file allowlist."""
+
+    def _tools(self, tmp_path: Path, allowed: list[str] | None) -> dict[str, Any]:
+        return {t.name: t for t in build_worker_tools(tmp_path, allowed_files=allowed)}
+
+    def test_allowlist_permits_declared_file(self, tmp_path: Path) -> None:
+        tools = self._tools(tmp_path, ["src/a.py"])
+        out = tools["write_file"].invoke({"path": "src/a.py", "content": "x = 1\n"})
+        assert "Wrote" in out
+        assert (tmp_path / "src" / "a.py").exists()
+
+    def test_allowlist_blocks_undeclared_file(self, tmp_path: Path) -> None:
+        tools = self._tools(tmp_path, ["src/a.py"])
+        out = tools["write_file"].invoke({"path": "src/b.py", "content": "boom"})
+        assert "Error" in out
+        assert "not in this slice's allowed files" in out
+        assert not (tmp_path / "src" / "b.py").exists()
+
+    def test_allowlist_supports_globs(self, tmp_path: Path) -> None:
+        tools = self._tools(tmp_path, ["src/*.py"])
+        assert "Wrote" in tools["write_file"].invoke(
+            {"path": "src/x.py", "content": "1"}
+        )
+        out = tools["write_file"].invoke({"path": "docs/y.md", "content": "1"})
+        assert "Error" in out
+        assert not (tmp_path / "docs" / "y.md").exists()
+
+    def test_edit_respects_allowlist(self, tmp_path: Path) -> None:
+        (tmp_path / "a.py").write_text("alpha\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text("beta\n", encoding="utf-8")
+        tools = self._tools(tmp_path, ["a.py"])
+        assert "Edited" in tools["edit_file"].invoke(
+            {"path": "a.py", "old_string": "alpha", "new_string": "x"}
+        )
+        out = tools["edit_file"].invoke(
+            {"path": "b.py", "old_string": "beta", "new_string": "y"}
+        )
+        assert "Error" in out
+        # b.py must be untouched.
+        assert (tmp_path / "b.py").read_text(encoding="utf-8") == "beta\n"
+
+    def test_empty_allowlist_keeps_working_dir_scope(self, tmp_path: Path) -> None:
+        # Backward compat: a slice with no declared files can write anywhere in
+        # the working directory (still no traversal/symlink escape).
+        tools = self._tools(tmp_path, [])
+        assert "Wrote" in tools["write_file"].invoke(
+            {"path": "anywhere.py", "content": "1"}
+        )
+        out = tools["write_file"].invoke({"path": "../evil.py", "content": "boom"})
+        assert "Error" in out
+
+
+class TestButcherAutoApprove:
+    def test_defaults_false(self) -> None:
+        assert ButcherConfig().auto_approve is False
+
+    def test_parsed_from_toml(self, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "butcher.toml"
+        cfg_path.write_text("auto_approve = true\n", encoding="utf-8")
+        assert load_butcher_config(cfg_path).auto_approve is True
+
+
+class TestConfirmButcherPlan:
+    """RD-5 approval gate: fail-safe deny, honor the modal decision."""
+
+    def _job(self) -> ButcherJob:
+        return ButcherJob(
+            job_id="j1",
+            prompt="p",
+            title="T",
+            slices=[Slice(number=1, title="s1", instructions="do")],
+            butcher_model="m",
+            worker_model="w",
+        )
+
+    async def test_denied_without_interactive_surface(self) -> None:
+        # A headless app (no push_screen_wait) must not auto-run the plan.
+        assert await _confirm_butcher_plan(object(), self._job()) is False
+
+    async def test_approval_returned_from_modal(self) -> None:
+        class _App:
+            async def push_screen_wait(self, _screen: object) -> bool:
+                return True
+
+        assert await _confirm_butcher_plan(_App(), self._job()) is True
+
+    async def test_denial_returned_from_modal(self) -> None:
+        class _App:
+            async def push_screen_wait(self, _screen: object) -> bool:
+                return False
+
+        assert await _confirm_butcher_plan(_App(), self._job()) is False
