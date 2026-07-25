@@ -376,20 +376,78 @@ def _allow_unattended_shell() -> bool:
     return os.environ.get("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "").strip().lower() in ("1", "true", "yes")
 
 
+def _select_backend(root_dir: Path, job: AmbientJob, trigger_type: TriggerType) -> Any:
+    """Choose the agent backend for a run based on the trigger's trust level.
+
+    DMN-1 (v4): `virtual_mode` confines only *filesystem* tools — the SDK is
+    explicit that a shell-capable backend's `execute()` runs unrestricted on the
+    host regardless. So for unattended triggers (cron, interval, file-change,
+    git-push, and the HMAC-secret-only webhook path) confining the shell means
+    NOT giving the agent a shell-capable backend at all, and NOT handing it the
+    daemon's environment (secrets). A git-push job whose prompt ingests
+    attacker-authored commit text is the worst case.
+
+    - MANUAL triggers are token-authenticated (an operator is at the keyboard):
+      unrestricted real-path `LocalShellBackend` with the inherited environment,
+      mirroring the CLI.
+    - Non-MANUAL triggers get a non-sandbox `FilesystemBackend` rooted at
+      `working_dir`, so filesystem read/grep for skills/pipelines still works but
+      the `execute` tool reports "not available" and no host environment is
+      exposed. Operators can opt back into unrestricted shell per deployment with
+      `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`; when they do and a network-reachable
+      trigger fires, a WARNING is logged.
+
+    Args:
+        root_dir: The job's working directory, used as the backend root.
+        job: The job (for identifying it in the opt-in warning).
+        trigger_type: How the run was initiated.
+
+    Returns:
+        A `BackendProtocol` for `create_agent`.
+    """
+    is_manual = trigger_type == TriggerType.MANUAL
+    shell_allowed = is_manual or _allow_unattended_shell()
+
+    if not shell_allowed:
+        from bog_agents.backends.filesystem import FilesystemBackend
+
+        # No shell tool (non-sandbox backend), no inherited env; filesystem
+        # tools stay confined to root_dir via virtual_mode.
+        return FilesystemBackend(root_dir=root_dir, virtual_mode=True)
+
+    from bog_agents.backends.local_shell import LocalShellBackend
+
+    if not is_manual:
+        logger.warning(
+            "Unattended %s job %s (%s) is running with UNRESTRICTED host shell and "
+            "the daemon's environment because BOG_DAEMON_ALLOW_UNATTENDED_SHELL is "
+            "set; a network-reachable trigger now has real-path shell on the host.",
+            trigger_type.value,
+            job.job_id,
+            job.name,
+        )
+    # virtual_mode=False operates on real absolute paths inside the project tree
+    # (mirrors the CLI); execute() runs on the host.
+    return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=False)
+
+
 async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
     Uses a lazy import to avoid circular imports at module load time.  Enforces
     a per-job timeout (default 30 minutes, override with BOG_DAEMON_AGENT_TIMEOUT).
 
-    Safe-by-default unattended posture (V3-11): for non-MANUAL triggers (cron,
-    interval, file-change, git-push, and especially externally-reachable
-    webhooks) the shell/filesystem backend is built with `virtual_mode=True`,
-    confining tool execution to the job's `working_dir` (path guardrails on).
-    A MANUAL trigger is token-authenticated and keeps the unrestricted
-    real-path behaviour. Operators who deliberately want unrestricted shell
-    for unattended triggers must opt in with `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`;
-    when they do, and a network-reachable trigger fires, a WARNING is logged.
+    Safe-by-default unattended posture (V3-11, hardened in DMN-1/v4): for
+    non-MANUAL triggers (cron, interval, file-change, git-push, and especially
+    externally-reachable webhooks) the agent gets a non-sandbox
+    `FilesystemBackend` — filesystem read/grep for skills/pipelines still works,
+    but there is no host shell (`execute` reports "not available") and the
+    daemon's environment is not exposed. `virtual_mode` alone was insufficient:
+    it confines only filesystem tools, never the shell. A MANUAL trigger is
+    token-authenticated and keeps the unrestricted real-path `LocalShellBackend`.
+    Operators who deliberately want unrestricted unattended shell opt in with
+    `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`; when they do and a network-reachable
+    trigger fires, a WARNING is logged. See `_select_backend`.
 
     Args:
         job: The job providing model and working_dir configuration.
@@ -404,7 +462,6 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
         TimeoutError: If the agent does not complete within the allowed time.
     """
     from bog_agents import create_agent
-    from bog_agents.backends.local_shell import LocalShellBackend
     from bog_agents.feature_config import FeatureConfig
 
     # Root the agent's filesystem and shell at the job's working_dir so
@@ -413,29 +470,7 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
     # are mounted" even when --working-dir was set.
     root_dir = Path(job.working_dir) if job.working_dir else Path.cwd()
 
-    # Decide the shell sandbox posture. MANUAL triggers are token-authenticated
-    # (the operator is at the keyboard) and keep unrestricted real-path shell.
-    # Every other trigger is unattended and (in the webhook case) externally
-    # reachable, so it is hardened with virtual_mode=True unless the operator
-    # has explicitly opted into unrestricted shell.
-    is_manual = trigger_type == TriggerType.MANUAL
-    allow_unattended = _allow_unattended_shell()
-    use_virtual_mode = not (is_manual or allow_unattended)
-    # WEBHOOK is the only trigger reachable purely via an HMAC secret (no daemon
-    # token), so an unrestricted webhook run is the highest-risk posture.
-    if not is_manual and not use_virtual_mode:
-        logger.warning(
-            "Unattended %s job %s (%s) is running with shell guardrails DISABLED "
-            "(virtual_mode=False) because BOG_DAEMON_ALLOW_UNATTENDED_SHELL is set; "
-            "a network-reachable trigger now has unrestricted real-path shell on the host.",
-            trigger_type.value,
-            job.job_id,
-            job.name,
-        )
-
-    # virtual_mode confines the shell/filesystem to root_dir; virtual_mode=False
-    # operates on real absolute paths inside the project tree (mirrors the CLI).
-    backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=use_virtual_mode)
+    backend = _select_backend(root_dir, job, trigger_type)
 
     # V3-13: use the FeatureConfig path instead of the deprecated bare
     # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and

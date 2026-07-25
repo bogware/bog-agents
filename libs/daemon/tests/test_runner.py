@@ -125,6 +125,54 @@ class TestInvokeAgent:
 
 
 # ---------------------------------------------------------------------------
+# _select_backend — unattended shell posture (DMN-1)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectBackend:
+    """Unattended triggers must not get a host shell or the daemon's env."""
+
+    def test_manual_trigger_gets_shell_backend(self, tmp_path: Path) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+        from bog_agents.middleware.filesystem import _supports_execution
+
+        from bog_agents_daemon.runner import _select_backend
+
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.MANUAL)
+
+        assert isinstance(backend, LocalShellBackend)
+        assert _supports_execution(backend) is True
+
+    def test_unattended_trigger_gets_no_shell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents.backends.filesystem import FilesystemBackend
+        from bog_agents.middleware.filesystem import _supports_execution
+
+        from bog_agents_daemon.runner import _select_backend
+
+        monkeypatch.delenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", raising=False)
+        job = AmbientJob(name="j", prompt="go")
+
+        for trigger in (TriggerType.WEBHOOK, TriggerType.GIT_PUSH, TriggerType.CRON):
+            backend = _select_backend(tmp_path, job, trigger)
+            # Non-sandbox backend => the execute tool is unavailable (no host
+            # shell), and FilesystemBackend takes no env (daemon secrets stay out).
+            assert isinstance(backend, FilesystemBackend), trigger
+            assert _supports_execution(backend) is False, trigger
+
+    def test_opt_in_env_restores_shell_for_unattended(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+
+        from bog_agents_daemon.runner import _select_backend
+
+        monkeypatch.setenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "1")
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.WEBHOOK)
+
+        assert isinstance(backend, LocalShellBackend)
+
+
+# ---------------------------------------------------------------------------
 # run_job — end-to-end orchestration
 # ---------------------------------------------------------------------------
 
