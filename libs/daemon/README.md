@@ -66,7 +66,7 @@ bog-agents-daemon run --port 7878
 Add a job that runs every weekday morning:
 
 ```bash
-bog-agents-daemon job add \
+bog-agents daemon jobs create \
   --name morning-brief \
   --cron "0 9 * * 1-5" \
   --prompt "Summarize what changed in this repo since yesterday." \
