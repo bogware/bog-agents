@@ -18,6 +18,11 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bog_agents.middleware.air_gapped import DataPolicy
+    from bog_agents.middleware.rbac import Role
 
 
 @dataclass
@@ -201,6 +206,12 @@ class FeatureConfig:
     enable_model_portfolio: bool = False
     enable_knowledge_graph: bool = False
     enable_rbac: bool = False
+    rbac_roles: list[Role] | None = None
+    """Operator-owned RBAC role definitions (MW-SAFE-2). Provide alongside
+    `rbac_active_role` to run RBAC in operator-pinned mode."""
+    rbac_active_role: str = ""
+    """The RBAC role to pin. When set, the model cannot redefine/switch roles and
+    access is deny-by-default."""
     enable_fact_check: bool = False
     enable_approval_gates: bool = False
 
@@ -212,6 +223,10 @@ class FeatureConfig:
     enable_computer_use: bool = False
     enable_opensearch_rag: bool = False
     enable_air_gapped: bool = False
+    air_gap_policy: DataPolicy | None = None
+    """Operator-owned air-gap data-flow policy (MW-SAFE-1). When `enable_air_gapped`
+    is set, the flag path pins a policy (this one, or a default fail-closed
+    `DataPolicy`) so the model cannot lift egress restrictions via tools."""
     enable_dashboard: bool = False
     enable_scheduled_reports: bool = False
     enable_collaborative_sessions: bool = False

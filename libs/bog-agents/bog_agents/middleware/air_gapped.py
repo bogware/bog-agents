@@ -258,6 +258,20 @@ You have access to tools for managing on-premise / air-gapped deployments.
 - Audit logs track all external access attempts for compliance"""
 
 
+AIR_GAPPED_PINNED_SYSTEM_PROMPT = """## Air-Gapped Deployment (operator-enforced)
+
+You are operating under an operator-pinned data-flow policy. External network
+egress is governed by that policy and you CANNOT change it — `set_data_policy`
+and `clear_air_gap` are operator-only controls and are not available to you.
+
+**Available Tools:**
+- `register_local_model`: Register local model endpoints
+- `check_data_flow`: Verify whether an external request is allowed by the policy
+- `air_gap_status`: View the current deployment configuration and audit log
+
+Prefer local models; every external attempt is audited for compliance."""
+
+
 # Tool-name substrings that identify a direct egress (network-fetch) tool.
 _EGRESS_TOOL_NAME_MARKERS: tuple[str, ...] = ("web_fetch", "fetch_url", "http_request")
 
@@ -370,12 +384,30 @@ class AirGappedMiddleware(AgentMiddleware[AirGappedState, ContextT, ResponseT]):
 
     state_schema = AirGappedState
 
-    def __init__(self) -> None:
+    def __init__(self, *, policy: DataPolicy | None = None) -> None:
+        """Initialize the air-gap middleware.
+
+        Args:
+            policy: An operator-owned data-flow policy. When provided, the
+                middleware runs in operator-pinned mode: the policy governs
+                egress and the model-callable `set_data_policy` / `clear_air_gap`
+                tools are withheld, so a jailbroken model cannot lift its own
+                restrictions (MW-SAFE-1). When omitted, the legacy self-service
+                behavior applies (default fail-closed policy, but the model can
+                mutate it) — intended only for cooperative experimentation.
+        """
         self.store = AirGapStore()
+        self._operator_pinned = policy is not None
+        if policy is not None:
+            self.store.policy = policy
         self.tools: list[BaseTool] = self._build_tools()
 
     def _build_tools(self) -> list[BaseTool]:
-        """Build air-gapped deployment tools."""
+        """Build air-gapped deployment tools.
+
+        In operator-pinned mode the policy-mutation tools (`set_data_policy`,
+        `clear_air_gap`) are withheld from the model.
+        """
         mw = self
 
         def register_local_model(
@@ -445,18 +477,26 @@ class AirGappedMiddleware(AgentMiddleware[AirGappedState, ContextT, ResponseT]):
             mw.store = AirGapStore()
             return f"Cleared air-gap config: {models} models, {attempts} audit entries."
 
-        return [
+        read_and_register_tools = [
             StructuredTool.from_function(
                 name="register_local_model", description="Register a local model endpoint for air-gapped operation.", func=register_local_model
-            ),
-            StructuredTool.from_function(
-                name="set_data_policy", description="Configure data flow restrictions and audit settings.", func=set_data_policy
             ),
             StructuredTool.from_function(
                 name="check_data_flow", description="Check if an external request is allowed by the data policy.", func=check_data_flow
             ),
             StructuredTool.from_function(
                 name="air_gap_status", description="View current air-gap deployment configuration and audit log.", func=air_gap_status
+            ),
+        ]
+
+        if self._operator_pinned:
+            # The model cannot mutate an operator-pinned policy.
+            return read_and_register_tools
+
+        return [
+            *read_and_register_tools,
+            StructuredTool.from_function(
+                name="set_data_policy", description="Configure data flow restrictions and audit settings.", func=set_data_policy
             ),
             StructuredTool.from_function(name="clear_air_gap", description="Reset all air-gap configuration and audit data.", func=clear_air_gap),
         ]
@@ -470,7 +510,8 @@ class AirGappedMiddleware(AgentMiddleware[AirGappedState, ContextT, ResponseT]):
         Returns:
             Modified request.
         """
-        return request.override(system_message=append_to_system_message(request.system_message, AIR_GAPPED_SYSTEM_PROMPT))
+        prompt = AIR_GAPPED_PINNED_SYSTEM_PROMPT if self._operator_pinned else AIR_GAPPED_SYSTEM_PROMPT
+        return request.override(system_message=append_to_system_message(request.system_message, prompt))
 
     def wrap_model_call(
         self,

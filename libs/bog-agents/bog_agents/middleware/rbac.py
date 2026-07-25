@@ -107,6 +107,10 @@ class RBACStore:
 
     roles: dict[str, Role] = field(default_factory=dict)
     active_role: str = ""
+    strict: bool = False
+    """Deny-by-default posture. When True (set for an operator-pinned role), an
+    empty active role or one naming an undefined role denies all tools rather
+    than falling open. Unpinned/legacy stores stay permissive by default."""
 
     def define_role(
         self,
@@ -161,13 +165,15 @@ class RBACStore:
             tool_name: Name of the tool to check.
 
         Returns:
-            True if the tool is permitted (or no active role), False otherwise.
+            True if the tool is permitted, False otherwise. With no active role
+            (or an undefined active role) a legacy store falls open (returns
+            True); a `strict` store denies (returns False).
         """
         if not self.active_role:
-            return True
+            return not self.strict
         role = self.roles.get(self.active_role)
         if role is None:
-            return True
+            return not self.strict
         return role.can_use_tool(tool_name)
 
     def format_roles(self) -> str:
@@ -217,6 +223,16 @@ based on the active role.
 Always check permissions before attempting restricted operations."""
 
 
+RBAC_PINNED_SYSTEM_PROMPT = """## Role-Based Access Control
+
+You are operating under an operator-pinned role. Tool access is restricted to
+that role's allow-list and you CANNOT change the active role or redefine roles —
+those are operator-only controls. Denied tools are removed from your tool set.
+
+Use `check_permission` to see whether a tool is allowed and `list_roles` to
+review the active policy."""
+
+
 class RBACState(TypedDict):
     """State for RBAC middleware."""
 
@@ -224,19 +240,53 @@ class RBACState(TypedDict):
 class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
     """Middleware for role-based access control on tools.
 
-    Provides tools for defining roles, setting the active role, checking
-    permissions, and listing role definitions. Logs warnings when the active
-    role lacks permission for certain tools.
+    Two modes:
+
+    - **Operator-pinned** (`active_role` provided at construction): the operator
+      owns the policy. The model gets only the read-only `check_permission` /
+      `list_roles` tools — it cannot call `define_role` / `set_active_role` to
+      lift its own restrictions (MW-SAFE-2). The store is `strict`, so an empty
+      or undefined pinned role denies all tools rather than falling open.
+    - **Legacy/self-service** (no `active_role`): the historical behavior — all
+      four tools are exposed and, until the model activates a role, access is
+      unrestricted. This gives no boundary against an adversarial model and is
+      intended only for cooperative, model-driven role experimentation.
+
+    Args:
+        roles: Role definitions to seed (operator-owned).
+        active_role: The role to pin. When set, switches to operator-pinned mode.
     """
 
     state_schema = RBACState
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        roles: list[Role] | None = None,
+        active_role: str = "",
+    ) -> None:
         self.store = RBACStore()
+        for role in roles or []:
+            self.store.roles[role.name] = role
+        self.store.active_role = active_role
+        # Operator-pinned mode: policy is theirs to set; the model must not be
+        # able to redefine roles or switch the active role, and deny-by-default.
+        self._operator_pinned = bool(active_role)
+        self.store.strict = self._operator_pinned
+        if self._operator_pinned and active_role not in self.store.roles:
+            logger.warning(
+                "RBAC pinned to undefined role '%s'; denying all tools (deny-by-default).",
+                active_role,
+            )
         self.tools: list[BaseTool] = self._build_tools()
 
     def _build_tools(self) -> list[BaseTool]:
-        """Build RBAC tools."""
+        """Build RBAC tools.
+
+        In operator-pinned mode the policy-mutation tools (`define_role`,
+        `set_active_role`) are withheld from the model, leaving only the
+        read-only `check_permission` / `list_roles` tools.
+        """
         mw = self
 
         def define_role(
@@ -288,6 +338,23 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
             """List all defined roles and their permissions."""
             return mw.store.format_roles()
 
+        read_only_tools = [
+            StructuredTool.from_function(
+                name="check_permission",
+                description="Check if a specific tool is allowed for the active role.",
+                func=check_permission,
+            ),
+            StructuredTool.from_function(
+                name="list_roles",
+                description="List all defined roles and their permissions.",
+                func=list_roles,
+            ),
+        ]
+
+        if self._operator_pinned:
+            # The model cannot change an operator-pinned policy.
+            return read_only_tools
+
         return [
             StructuredTool.from_function(
                 name="define_role",
@@ -299,16 +366,7 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
                 description="Set the active role for the session, restricting tool access accordingly.",
                 func=set_active_role,
             ),
-            StructuredTool.from_function(
-                name="check_permission",
-                description="Check if a specific tool is allowed for the active role.",
-                func=check_permission,
-            ),
-            StructuredTool.from_function(
-                name="list_roles",
-                description="List all defined roles and their permissions.",
-                func=list_roles,
-            ),
+            *read_only_tools,
         ]
 
     # RBAC's own admin tools are always permitted regardless of active role,
@@ -326,13 +384,20 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
             Modified request with RBAC instructions and tools restricted to
             the active role's allow-list.
         """
-        new_system_message = append_to_system_message(request.system_message, RBAC_SYSTEM_PROMPT)
+        prompt = RBAC_PINNED_SYSTEM_PROMPT if self._operator_pinned else RBAC_SYSTEM_PROMPT
+        new_system_message = append_to_system_message(request.system_message, prompt)
 
         if not self.store.active_role:
-            return request.override(system_message=new_system_message)
+            # No active role: legacy stores fall open; a strict store denies all.
+            if not self.store.strict:
+                return request.override(system_message=new_system_message)
+            role = None
+        else:
+            role = self.store.roles.get(self.store.active_role)
 
-        role = self.store.roles.get(self.store.active_role)
-        if role is None:
+        if role is None and not self.store.strict:
+            # Active role names an undefined role and we're not strict: fall open
+            # (legacy behavior).
             return request.override(system_message=new_system_message)
 
         allowed_tools: list[BaseTool | dict[str, Any]] = []
@@ -341,13 +406,16 @@ class RBACMiddleware(AgentMiddleware[RBACState, ContextT, ResponseT]):
             if not tool_name:
                 allowed_tools.append(tool)
                 continue
-            if tool_name in self._ADMIN_TOOLS or role.can_use_tool(tool_name):
+            # In strict mode with an undefined role, only the (read-only) admin
+            # tools survive — everything else is denied by default.
+            permitted = tool_name in self._ADMIN_TOOLS or (role is not None and role.can_use_tool(tool_name))
+            if permitted:
                 allowed_tools.append(tool)
             else:
                 logger.warning(
                     "RBAC: stripping tool '%s' from request — denied by role '%s'",
                     tool_name,
-                    self.store.active_role,
+                    self.store.active_role or "(none)",
                 )
 
         return request.override(system_message=new_system_message, tools=allowed_tools)

@@ -1245,7 +1245,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if f.enable_rbac:
         from bog_agents.middleware.rbac import RBACMiddleware
 
-        agents_middleware.append(RBACMiddleware())
+        # MW-SAFE-2: pass operator-owned roles/active_role so the model can't
+        # self-administer the policy. Without a pinned role RBAC has nothing to
+        # enforce (no boundary against an adversarial model) — warn so the
+        # operator isn't given false assurance.
+        if not f.rbac_active_role:
+            _logging.getLogger(__name__).warning(
+                "enable_rbac=True without rbac_active_role: RBAC exposes role tools to the model but enforces no restriction until a role is pinned."
+            )
+        agents_middleware.append(RBACMiddleware(roles=f.rbac_roles, active_role=f.rbac_active_role))
 
     if f.enable_provenance_loop or f.enable_fact_check:
         from bog_agents.middleware.fact_check import FactCheckMiddleware
@@ -1289,9 +1297,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         agents_middleware.append(OpenSearchRAGMiddleware())
 
     if f.enable_air_gapped:
-        from bog_agents.middleware.air_gapped import AirGappedMiddleware
+        from bog_agents.middleware.air_gapped import AirGappedMiddleware, DataPolicy
 
-        agents_middleware.append(AirGappedMiddleware())
+        # MW-SAFE-1: the flag path always pins a policy (operator-supplied, or a
+        # default fail-closed one) so egress is operator-owned and the model
+        # cannot lift it via set_data_policy/clear_air_gap.
+        air_gap_policy = f.air_gap_policy if f.air_gap_policy is not None else DataPolicy()
+        agents_middleware.append(AirGappedMiddleware(policy=air_gap_policy))
 
     if f.enable_dashboard:
         from bog_agents.middleware.dashboard import DashboardMiddleware
