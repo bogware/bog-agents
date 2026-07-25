@@ -7,6 +7,17 @@ inputs:
   python-version:
     description: Python version, supporting MAJOR.MINOR only
     required: true
+  # DEL-7/v4: this MUST be an input, not a top-level `env:` — composite action
+  # metadata has no top-level `env` key, so the runner ignored the old
+  # `env.UV_VERSION` and setup-uv fell back to *latest* uv on every run. That
+  # made lock resolution non-deterministic (CI's latest uv resolved lockfiles
+  # differently than a contributor's uv, breaking `lock-check`). Keep this in
+  # lockstep with the uv version used to generate the committed lockfiles; bump
+  # it deliberately (and re-run `make lock`) rather than floating.
+  uv-version:
+    description: Pinned uv version for reproducible dependency resolution
+    required: false
+    default: "0.11.6"
   enable-cache:
     description: Enable caching for uv dependencies
     required: false
@@ -20,16 +31,13 @@ inputs:
     required: false
     default: "**"
 
-env:
-  UV_VERSION: "0.8.17"
-
 runs:
   using: composite
   steps:
     - name: Install uv and set the python version
       uses: astral-sh/setup-uv@v7
       with:
-        version: ${{ env.UV_VERSION }}
+        version: ${{ inputs.uv-version }}
         python-version: ${{ inputs.python-version }}
         enable-cache: ${{ inputs.enable-cache }}
         cache-dependency-glob: |
