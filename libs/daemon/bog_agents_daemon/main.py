@@ -15,7 +15,7 @@ import uvicorn
 from bog_agents_daemon.api import create_app
 from bog_agents_daemon.runner import run_job
 from bog_agents_daemon.scheduler import DaemonScheduler
-from bog_agents_daemon.store import load_jobs
+from bog_agents_daemon.store import load_jobs, reconcile_orphaned_runs
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,14 @@ async def _run_daemon(port: int, token: str) -> None:
         port: TCP port to listen on.
         token: Auth token for API authentication.
     """
+    # Reconcile any runs a prior daemon left mid-flight (status=RUNNING) before
+    # accepting new work, so `/runs` reflects an honest terminal state instead
+    # of runs that will never finish.
+    try:
+        reconcile_orphaned_runs()
+    except Exception:  # pragma: no cover — startup reconciliation must never block boot
+        logger.exception("Orphaned-run reconciliation failed; continuing startup")
+
     scheduler = DaemonScheduler(store_loader=load_jobs, runner=run_job)
 
     config = uvicorn.Config(

@@ -93,6 +93,26 @@ class TestCreateJob:
     def test_create_job_no_auth_401(self, client: TestClient) -> None:
         assert client.post("/jobs", json={"name": "x", "prompt": "y"}).status_code == 401
 
+    def test_create_with_retry_policy(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post(
+            "/jobs",
+            json={"name": "retry-job", "prompt": "x", "max_retries": 3, "retry_backoff_seconds": 1.5},
+            headers=auth,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["max_retries"] == 3
+        assert data["retry_backoff_seconds"] == 1.5
+
+    def test_retry_policy_defaults_when_omitted(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        data = client.post("/jobs", json={"name": "default-retry", "prompt": "x"}, headers=auth).json()
+        assert data["max_retries"] == 0
+        assert data["retry_backoff_seconds"] == 2.0
+
+    def test_max_retries_over_cap_rejected(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post("/jobs", json={"name": "greedy", "prompt": "x", "max_retries": 999}, headers=auth)
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # GET /jobs — list

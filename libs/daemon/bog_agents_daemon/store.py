@@ -144,6 +144,8 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
         skill_name=d.get("skill_name", ""),
         model=d.get("model", ""),
         working_dir=d.get("working_dir", ""),
+        max_retries=d.get("max_retries", 0),
+        retry_backoff_seconds=d.get("retry_backoff_seconds", 2.0),
         triggers=triggers,
         outputs=outputs,
         enabled=d.get("enabled", True),
@@ -190,26 +192,84 @@ def _run_from_dict(d: dict[str, Any]) -> JobRun:
         error=d.get("error", ""),
         trigger_type=TriggerType(d.get("trigger_type", "manual")),
         trigger_context=d.get("trigger_context", {}),
+        attempts=d.get("attempts", 1),
         # P1-52: without this the field silently reset to [] on every disk
         # read-back, so dispatch failures vanished from `list_runs`.
         dispatch_errors=d.get("dispatch_errors", []),
     )
 
 
+def _quarantine_corrupt_jobs(reason: str) -> None:
+    """Move an unreadable jobs.json aside so the next save can't overwrite it.
+
+    A parse failure used to return `[]`, and the very next `upsert_job`/
+    `save_jobs` would replace the unreadable file with a fresh (near-empty)
+    list — permanently destroying whatever jobs it held, with only a log
+    line to show for it. Renaming the bad file to a timestamped sibling
+    preserves the original bytes for manual recovery and makes the failure
+    loud (ERROR, not WARNING). After the rename the path no longer exists,
+    so subsequent loads simply start from an empty set rather than
+    re-quarantining on every tick.
+
+    Args:
+        reason: Short description of why the file was rejected, for the log.
+    """
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    quarantine = _JOBS_FILE.with_name(f"{_JOBS_FILE.name}.corrupt-{stamp}")
+    # Guard against a same-second collision (the source is renamed away after
+    # the first hit, so this is only reachable in pathological cases).
+    counter = 1
+    while quarantine.exists():
+        quarantine = _JOBS_FILE.with_name(f"{_JOBS_FILE.name}.corrupt-{stamp}-{counter}")
+        counter += 1
+    try:
+        _JOBS_FILE.replace(quarantine)
+    except OSError:
+        logger.exception("Failed to quarantine corrupt jobs file %s", _JOBS_FILE)
+        return
+    logger.error(
+        "Jobs file %s was unreadable (%s); moved aside to %s. Starting with an "
+        "empty job set — restore from the quarantine file or a backup to recover.",
+        _JOBS_FILE,
+        reason,
+        quarantine,
+    )
+
+
 def _load_jobs_unlocked() -> list[AmbientJob]:
-    """Load jobs without acquiring the lock (caller must hold _jobs_lock)."""
+    """Load jobs without acquiring the lock (caller must hold _jobs_lock).
+
+    Genuinely corrupt content (unparseable JSON, wrong top-level type, or an
+    item that fails deserialization) is quarantined via
+    `_quarantine_corrupt_jobs` so a later write can't clobber it. A transient
+    `OSError` (a momentary lock or permission blip) is NOT quarantined — the
+    file may be perfectly good — it just yields an empty list for this read.
+    """
     _ensure_dirs()
     if not _JOBS_FILE.exists():
         return []
     try:
         raw = _JOBS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        # Transient read failure — do not move the file; it may be fine.
+        logger.exception("Failed to read jobs from %s", _JOBS_FILE)
+        return []
+    try:
         data = json.loads(raw)
-        if not isinstance(data, list):
-            logger.warning("Jobs file is not a list, resetting: %s", _JOBS_FILE)
-            return []
+    except ValueError:
+        # Unparseable JSON (JSONDecodeError) — genuinely corrupt.
+        logger.exception("Jobs file %s is not valid JSON", _JOBS_FILE)
+        _quarantine_corrupt_jobs("invalid JSON")
+        return []
+    if not isinstance(data, list):
+        logger.error("Jobs file %s is not a JSON list", _JOBS_FILE)
+        _quarantine_corrupt_jobs("not a JSON list")
+        return []
+    try:
         return [_job_from_dict(item) for item in data]
     except Exception:
-        logger.exception("Failed to load jobs from %s", _JOBS_FILE)
+        logger.exception("Failed to deserialize jobs from %s", _JOBS_FILE)
+        _quarantine_corrupt_jobs("deserialization error")
         return []
 
 
@@ -355,6 +415,21 @@ def delete_job(job_id: str) -> bool:
 _MAX_RUNS_PER_JOB = int(os.environ.get("BOG_DAEMON_MAX_RUNS_PER_JOB", "100"))
 
 
+def _write_json_durable(path: Path, obj: Any) -> None:
+    """Write `obj` as pretty JSON to `path`, fsyncing before close.
+
+    Shared by `save_run` and `reconcile_orphaned_runs` so a crash between the
+    write and the disk flush can't leave a half-written run record. Falls back
+    gracefully on the rare platform without `fsync` on regular files.
+    """
+    serialised = json.dumps(obj, indent=2)
+    with path.open("w", encoding="utf-8") as f:
+        f.write(serialised)
+        f.flush()
+        with contextlib.suppress(OSError, AttributeError):
+            os.fsync(f.fileno())
+
+
 def save_run(run: JobRun) -> None:
     """Persist a job run record to disk, pruning old runs to cap disk usage.
 
@@ -366,14 +441,7 @@ def save_run(run: JobRun) -> None:
     """
     _ensure_dirs()
     run_file = _RUNS_DIR / f"{run.job_id}_{run.run_id}.json"
-    serialised = json.dumps(_run_to_dict(run), indent=2)
-    # Durable write — fsync before close so a daemon crash between write
-    # and disk-flush can't lose the run record. Mirrors _save_jobs_unlocked.
-    with run_file.open("w", encoding="utf-8") as f:
-        f.write(serialised)
-        f.flush()
-        with contextlib.suppress(OSError, AttributeError):
-            os.fsync(f.fileno())
+    _write_json_durable(run_file, _run_to_dict(run))
     _prune_runs(run.job_id)
 
 
@@ -414,3 +482,47 @@ def list_runs(job_id: str | None = None, *, limit: int = 20) -> list[JobRun]:
             logger.debug("Could not read run file %s", run_file)
     runs.sort(key=lambda r: r.started_at, reverse=True)
     return runs[:limit]
+
+
+def reconcile_orphaned_runs() -> int:
+    """Reconcile runs a crashed daemon left in the RUNNING state.
+
+    `run_job` persists a run as RUNNING before invoking the (possibly long)
+    agent and only rewrites it to COMPLETED/FAILED afterwards. If the daemon
+    is killed mid-run, that record stays RUNNING forever — nothing ever
+    reconciles it, so `/runs` and the CLI keep showing a run that will never
+    finish. Call this once on startup: every run still marked RUNNING with no
+    `finished_at` is stamped FAILED with an explanatory error and a
+    `finished_at` of now, giving operators an honest terminal state.
+
+    The on-disk dict is patched in place (rather than round-tripped through
+    `JobRun`) so unknown/forward-compat fields survive.
+
+    Returns:
+        The number of orphaned runs reconciled.
+    """
+    _ensure_dirs()
+    reconciled = 0
+    note = "run interrupted: the daemon stopped or crashed mid-run; reconciled to FAILED on startup"
+    for run_file in _RUNS_DIR.glob("*.json"):
+        try:
+            data = json.loads(run_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.debug("Could not read run file %s during reconciliation", run_file)
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("status") != JobStatus.RUNNING.value or data.get("finished_at"):
+            continue
+        data["status"] = JobStatus.FAILED.value
+        data["finished_at"] = time.time()
+        prior = data.get("error") or ""
+        data["error"] = f"{prior}; {note}" if prior else note
+        try:
+            _write_json_durable(run_file, data)
+            reconciled += 1
+        except OSError:
+            logger.warning("Could not rewrite orphaned run file %s", run_file)
+    if reconciled:
+        logger.info("Reconciled %d orphaned run(s) left RUNNING by a prior daemon", reconciled)
+    return reconciled

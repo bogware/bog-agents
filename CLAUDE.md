@@ -107,6 +107,14 @@ Built with Textual. Key patterns:
 
 A long-running FastAPI service that fires agents on cron, interval, file-change, webhook, or git-push triggers and dispatches results to log, stdout, file, Slack, webhook, email, or GitHub-comment targets. Currently the healthiest satellite — keep its tests (flat `tests/` directory, no unit/integration split) passing when touching the SDK's `create_agent` signature.
 
+**Reliability posture (Wave 3):**
+- **Cron uses `croniter`** (`scheduler.py:_is_cron_due`) with **missed-slot catch-up**: if the daemon was down across a scheduled slot, the job fires *once* on restart (not N-times backfill), because the baseline is `last_run_at`, not "now". Interval triggers already self-catch-up.
+- **File triggers are event-driven** via `file_watch.py:FileWatchManager` (watchdog), activated only inside `run_forever` — a bare `_tick()` (unit tests) never starts an observer. First runs and unwatchable dirs fall back to the `os.walk` poll (`_check_file_trigger`); `_detect_file_change` picks which path. watchdog is a hard dep but the code degrades to polling if it's absent.
+- **Per-job retry** is opt-in: `AmbientJob.max_retries` / `retry_backoff_seconds` (default 0 = single-shot, unchanged) retry both the agent invocation *and* each output dispatch with exponential backoff (`runner.py:_invoke_agent_with_retry`, `_dispatch_with_retry`). Prompt/skill resolution errors are deterministic and are NOT retried.
+- **Startup reconciles orphaned runs** (`store.py:reconcile_orphaned_runs`, wired in `main.py:_run_daemon`): a run left `RUNNING` by a crash is stamped `FAILED` so `/runs` is honest.
+- **Corrupt `jobs.json` is quarantined, never overwritten** (`store.py:_quarantine_corrupt_jobs`): unparseable content is renamed to `jobs.json.corrupt-<ts>` before the next save, so a bad file can't silently destroy every job. A transient `OSError` on read is NOT quarantined.
+- **Network dispatch failures are recorded**: the webhook/slack/email/github dispatchers now raise on failure so `run_job` captures them in `run.dispatch_errors` (they used to swallow `URLError` and vanish into the log).
+
 ## Code Conventions
 
 - **Type hints**: Mandatory on all public functions, no `any` type

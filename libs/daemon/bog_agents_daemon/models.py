@@ -135,6 +135,11 @@ class AmbientJob:
         skill_name: Name of a skill to invoke instead of a raw prompt.
         model: Model identifier override (uses daemon default if empty).
         working_dir: Working directory for the agent (uses cwd if empty).
+        max_retries: Extra attempts on a transient failure (agent invocation
+            and each output dispatch). 0 (default) preserves single-shot
+            behaviour; total attempts = max_retries + 1.
+        retry_backoff_seconds: Base delay before the first retry; doubles each
+            subsequent attempt (exponential backoff).
         triggers: One or more trigger configurations.
         outputs: One or more output delivery configurations.
         enabled: Whether the job is active and eligible for scheduling.
@@ -154,6 +159,9 @@ class AmbientJob:
     skill_name: str = ""
     model: str = ""
     working_dir: str = ""
+    # Retry policy (opt-in; 0 retries = prior single-shot behaviour)
+    max_retries: int = 0
+    retry_backoff_seconds: float = 2.0
     # When to run
     triggers: list[TriggerConfig] = field(default_factory=list)
     # Where to send output
@@ -194,6 +202,12 @@ class JobRun:
     error: str = ""
     trigger_type: TriggerType = TriggerType.MANUAL
     trigger_context: dict[str, Any] = field(default_factory=dict)
+    attempts: int = 1
+    """Number of agent invocation attempts made for this run.
+
+    1 for a first-try success or a job with no retry policy; higher when
+    `AmbientJob.max_retries` triggered one or more retries.
+    """
     dispatch_errors: list[dict[str, str]] = field(default_factory=list)
     """Per-target dispatch failures captured after the agent finished.
 

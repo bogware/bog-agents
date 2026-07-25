@@ -116,6 +116,9 @@ _MAX_MODEL_LEN = 256
 _MAX_WORKING_DIR_LEN = 4_096
 _MAX_TRIGGERS = 64
 _MAX_OUTPUTS = 64
+# Retry policy bounds — capped so a job can't spin unbounded or wait forever.
+_MAX_RETRIES = 10
+_MAX_RETRY_BACKOFF_SECONDS = 3_600.0
 
 
 class CreateJobRequest(BaseModel):
@@ -130,6 +133,8 @@ class CreateJobRequest(BaseModel):
     skill_name: str = Field("", max_length=_MAX_SKILL_NAME_LEN)
     model: str = Field("", max_length=_MAX_MODEL_LEN)
     working_dir: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    max_retries: int = Field(0, ge=0, le=_MAX_RETRIES)
+    retry_backoff_seconds: float = Field(2.0, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
     triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
@@ -159,6 +164,8 @@ class UpdateJobRequest(BaseModel):
     skill_name: str | None = Field(default=None, max_length=_MAX_SKILL_NAME_LEN)
     model: str | None = Field(default=None, max_length=_MAX_MODEL_LEN)
     working_dir: str | None = Field(default=None, max_length=_MAX_WORKING_DIR_LEN)
+    max_retries: int | None = Field(default=None, ge=0, le=_MAX_RETRIES)
+    retry_backoff_seconds: float | None = Field(default=None, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
     triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
     enabled: bool | None = None
@@ -475,6 +482,8 @@ def create_app(
             skill_name=body.skill_name,
             model=body.model,
             working_dir=body.working_dir,
+            max_retries=body.max_retries,
+            retry_backoff_seconds=body.retry_backoff_seconds,
             triggers=[_trigger_config_from_model(t) for t in body.triggers],
             outputs=[_output_config_from_model(o) for o in body.outputs],
             enabled=body.enabled,
@@ -541,6 +550,10 @@ def create_app(
             updates["model"] = body.model
         if body.working_dir is not None:
             updates["working_dir"] = body.working_dir
+        if body.max_retries is not None:
+            updates["max_retries"] = body.max_retries
+        if body.retry_backoff_seconds is not None:
+            updates["retry_backoff_seconds"] = body.retry_backoff_seconds
         if body.triggers is not None:
             updates["triggers"] = [_trigger_config_from_model(t) for t in body.triggers]
         if body.outputs is not None:

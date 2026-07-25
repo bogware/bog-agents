@@ -26,6 +26,15 @@ dependencies = [
     "uvicorn>=0.30.0,<1.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "aiofiles>=23.0.0,<25.0.0",
+    # Cron parsing + missed-slot catch-up (DMN-5). Replaces the hand-rolled
+    # 5-field parser: correct ranges/steps/lists/macros and, crucially,
+    # get_next()-based catch-up so a scheduled slot missed during downtime
+    # still fires once on restart.
+    "croniter>=2.0.0,<7.0.0",
+    # Event-driven file-change triggers (inotify/FSEvents/ReadDirectoryChangesW)
+    # replacing 30s os.walk polling; the scheduler falls back to polling if the
+    # observer can't start on a given platform/filesystem.
+    "watchdog>=4.0.0,<7.0.0",
 
     # ─── transitive-CVE floors (mirror libs/bog-agents and libs/cli so
     # bog-agents-daemon resolves a patched set on a clean install) ───

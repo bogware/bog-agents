@@ -8,7 +8,6 @@ import logging
 import os
 import smtplib
 import time
-import urllib.error
 import urllib.request
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -73,14 +72,21 @@ async def run_job(
 
     try:
         prompt = _build_prompt(job)
-        output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
-        run.output = output
-        run.status = JobStatus.COMPLETED
     except Exception as exc:
-        logger.exception("Job %s (%s) failed", job.job_id, job.name)
+        # Prompt/skill/pipeline resolution is deterministic — retrying it would
+        # just fail identically, so mark FAILED without consuming retries.
+        logger.exception("Job %s (%s) prompt resolution failed", job.job_id, job.name)
         run.error = str(exc)
         run.status = JobStatus.FAILED
-    finally:
+        run.finished_at = time.time()
+    else:
+        output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type)
+        if agent_exc is None:
+            run.output = output
+            run.status = JobStatus.COMPLETED
+        else:
+            run.error = str(agent_exc)
+            run.status = JobStatus.FAILED
         run.finished_at = time.time()
 
     # Update job state. Merge ONLY run-state fields into the current on-disk
@@ -115,7 +121,13 @@ async def run_job(
     overflow_count = 0
     for output_config in job.outputs:
         try:
-            await _dispatch_output(run, output_config, working_dir=job_wd)
+            await _dispatch_with_retry(
+                run,
+                output_config,
+                working_dir=job_wd,
+                max_retries=job.max_retries,
+                backoff=job.retry_backoff_seconds,
+            )
         except Exception as exc:
             logger.exception(
                 "Output dispatch failed for job %s target %s",
@@ -512,6 +524,103 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
         raise TimeoutError(msg) from None
 
 
+async def _invoke_agent_with_retry(
+    job: AmbientJob,
+    prompt: str,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+) -> tuple[str, int, Exception | None]:
+    """Invoke the agent, retrying transient failures per the job's retry policy.
+
+    Retries up to `job.max_retries` additional times (total attempts =
+    `max_retries + 1`) with exponential backoff starting at
+    `job.retry_backoff_seconds` and doubling each retry. With the default
+    `max_retries=0` this is a single attempt, identical to the pre-retry
+    behaviour, so existing jobs are unaffected.
+
+    Args:
+        job: The job supplying model config and retry policy.
+        prompt: The resolved prompt to run.
+        trigger_type: How this run was initiated (controls the shell posture).
+
+    Returns:
+        A tuple of `(output, attempts, last_exception)`. `last_exception` is
+        None on success; on exhaustion it holds the final failure and `output`
+        is the empty string.
+    """
+    total = max(0, job.max_retries) + 1
+    delay = max(0.0, job.retry_backoff_seconds)
+    last_exc: Exception | None = None
+    for attempt in range(1, total + 1):
+        try:
+            output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < total:
+                logger.warning(
+                    "Job %s (%s) agent attempt %d/%d failed (%s); retrying in %.1fs",
+                    job.job_id,
+                    job.name,
+                    attempt,
+                    total,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+                continue
+            logger.exception("Job %s (%s) failed after %d attempt(s)", job.job_id, job.name, attempt)
+            return "", attempt, exc
+        else:
+            if attempt > 1:
+                logger.info("Job %s (%s) succeeded on retry attempt %d/%d", job.job_id, job.name, attempt, total)
+            return output, attempt, None
+    # Unreachable — the loop always returns — but keeps the return type total.
+    return "", total, last_exc
+
+
+async def _dispatch_with_retry(
+    run: JobRun,
+    output: OutputConfig,
+    *,
+    working_dir: Path | None = None,
+    max_retries: int = 0,
+    backoff: float = 2.0,
+) -> None:
+    """Dispatch one output target, retrying transient delivery failures.
+
+    Retries up to `max_retries` additional times with exponential backoff. The
+    final failure is re-raised so `run_job` records it in `run.dispatch_errors`
+    (bounded by `_MAX_DISPATCH_ERRORS`).
+
+    Args:
+        run: The completed job run to deliver.
+        output: The output target configuration.
+        working_dir: Optional job working directory (anchors file output).
+        max_retries: Extra delivery attempts on failure (0 = single-shot).
+        backoff: Base backoff in seconds, doubled each retry.
+    """
+    total = max(0, max_retries) + 1
+    delay = max(0.0, backoff)
+    for attempt in range(1, total + 1):
+        try:
+            await _dispatch_output(run, output, working_dir=working_dir)
+            return
+        except Exception:
+            if attempt >= total:
+                raise
+            logger.warning(
+                "Dispatch to %s for job %s failed (attempt %d/%d); retrying in %.1fs",
+                output.target,
+                run.job_id,
+                attempt,
+                total,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            delay *= 2
+
+
 async def _dispatch_output(run: JobRun, output: OutputConfig, *, working_dir: Path | None = None) -> None:
     """Send run output to a configured target.
 
@@ -624,13 +733,16 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
 async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
     """POST run output to a webhook URL.
 
+    Delivery failures propagate to `run_job`, which records them in
+    `run.dispatch_errors` (capped) so a failed POST is visible in the run
+    record — not only in the log. (An earlier version swallowed `URLError`
+    here, so the outer capture never saw network-target failures — the very
+    targets most likely to fail. DMN-3b/v4.)
+
     Args:
         run: The completed job run.
         output: The webhook output configuration.
     """
-    import json
-    import urllib.error
-
     url = output.webhook_url
     if not url:
         logger.warning("Webhook output for job %s has no webhook_url configured", run.job_id)
@@ -650,12 +762,7 @@ async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
     headers: dict[str, str] = {"Content-Type": "application/json", **output.webhook_headers}
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
 
-    import asyncio
-
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-    except urllib.error.URLError:
-        logger.exception("Webhook dispatch failed for job %s", run.job_id)
+    await asyncio.to_thread(_urlopen_blocking, req)
 
 
 async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
@@ -703,11 +810,10 @@ async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
                     smtp.login(output.smtp_username, output.smtp_password)
                 smtp.sendmail(from_addr, to_addrs, msg.as_string())
 
-    try:
-        await asyncio.to_thread(_send_blocking)
-        logger.debug("Email sent for job %s to %s", run.job_id, to_addrs)
-    except Exception:
-        logger.exception("Email dispatch failed for job %s", run.job_id)
+    # Delivery failures (SMTP auth/connection errors) propagate to run_job so
+    # they land in run.dispatch_errors, not just the log. (DMN-3b/v4.)
+    await asyncio.to_thread(_send_blocking)
+    logger.debug("Email sent for job %s to %s", run.job_id, to_addrs)
 
 
 async def _dispatch_slack(run: JobRun, output: OutputConfig) -> None:
@@ -732,11 +838,9 @@ async def _dispatch_slack(run: JobRun, output: OutputConfig) -> None:
         method="POST",
     )
 
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-        logger.debug("Slack notification sent for job %s", run.job_id)
-    except urllib.error.URLError:
-        logger.exception("Slack dispatch failed for job %s", run.job_id)
+    # Delivery failures propagate to run_job → run.dispatch_errors. (DMN-3b/v4.)
+    await asyncio.to_thread(_urlopen_blocking, req)
+    logger.debug("Slack notification sent for job %s", run.job_id)
 
 
 async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
@@ -784,11 +888,9 @@ async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
         method="POST",
     )
 
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-        logger.debug("GitHub comment posted for job %s on %s#%d", run.job_id, repo, issue_number)
-    except urllib.error.URLError:
-        logger.exception("GitHub comment dispatch failed for job %s", run.job_id)
+    # Delivery failures propagate to run_job → run.dispatch_errors. (DMN-3b/v4.)
+    await asyncio.to_thread(_urlopen_blocking, req)
+    logger.debug("GitHub comment posted for job %s on %s#%d", run.job_id, repo, issue_number)
 
 
 def _urlopen_blocking(req: urllib.request.Request) -> None:
