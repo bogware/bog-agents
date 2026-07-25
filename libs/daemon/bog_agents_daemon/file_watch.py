@@ -20,21 +20,28 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
 
-try:
+if TYPE_CHECKING:
+    # Give the type checker a single, unambiguous view — the real watchdog types.
+    # At runtime the try/except below provides the graceful-degradation fallback.
     from watchdog.events import FileSystemEvent, FileSystemEventHandler
     from watchdog.observers import Observer
 
     _WATCHDOG_AVAILABLE = True
-except Exception:  # pragma: no cover - watchdog is a declared dep; guard for minimal installs
-    _WATCHDOG_AVAILABLE = False
+else:
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
 
-    class FileSystemEventHandler:  # type: ignore[no-redef]
-        """Minimal stand-in so this module imports without watchdog installed."""
+        _WATCHDOG_AVAILABLE = True
+    except Exception:  # pragma: no cover - watchdog is a declared dep; guard for minimal installs
+        _WATCHDOG_AVAILABLE = False
 
-    FileSystemEvent = object  # type: ignore[assignment,misc]
+        class FileSystemEventHandler:
+            """Minimal stand-in so this module imports without watchdog installed."""
 
 
 # Directories never worth recording events from — mirror the poll-path prune set
@@ -80,7 +87,7 @@ class _ChangeCollector(FileSystemEventHandler):
     def __init__(self, state: _WatchState) -> None:
         self._state = state
 
-    def on_any_event(self, event: FileSystemEvent) -> None:  # type: ignore[override]
+    def on_any_event(self, event: FileSystemEvent) -> None:
         if getattr(event, "is_directory", False):
             return
         if getattr(event, "event_type", "") not in _RECORD_EVENT_TYPES:
@@ -106,7 +113,9 @@ class FileWatchManager:
     """
 
     def __init__(self, *, max_events_per_dir: int = _MAX_EVENTS_PER_DIR) -> None:
-        self._observer: Observer | None = None  # type: ignore[valid-type]
+        # `Observer` is a platform-selected factory (a value, not a type), so the
+        # handle is held as Any rather than annotated with it directly.
+        self._observer: Any = None
         self._watches: dict[str, tuple[object, _WatchState]] = {}
         self._max_events = max_events_per_dir
         self._enabled = _WATCHDOG_AVAILABLE
@@ -188,7 +197,7 @@ class FileWatchManager:
             return
         state = _WatchState(self._max_events)
         try:
-            watch = self._observer.schedule(_ChangeCollector(state), str(path), recursive=True)  # type: ignore[union-attr]
+            watch = self._observer.schedule(_ChangeCollector(state), str(path), recursive=True)
         except Exception:
             logger.warning("Could not watch %s; falling back to polling for it", watch_dir, exc_info=True)
             return

@@ -814,7 +814,12 @@ def create_app(
         # never matched the rejection logic below. See
         # tests/unit_tests/test_webhook_auth.py for the pinned behaviour.
         provided_token = request.headers.get("X-Daemon-Token", "")
-        is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token)
+        # DMN-2/v4: compare against the *current* token (token_holder), not the
+        # captured `token` closure — otherwise /admin/rotate-token never
+        # invalidates the leaked old token here and rejects the new one, while
+        # /webhooks/git-push (which uses token_holder) rotates correctly.
+        current_token = token_holder["value"]
+        is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, current_token)
         raw_body = await request.body()
         try:
             import json as _json

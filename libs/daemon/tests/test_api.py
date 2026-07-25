@@ -436,6 +436,41 @@ class TestWebhooks:
         assert resp.status_code == 200
         assert job.job_id in resp.json()["triggered"]
 
+    def test_webhook_honors_rotated_token(
+        self,
+        client: TestClient,
+        auth: dict,
+        tmp_daemon_dir: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # DMN-2: after /admin/rotate-token the webhook path must reject the old
+        # token and accept the new one. It previously compared against a stale
+        # closure, so a leaked old token authenticated here forever.
+        import bog_agents_daemon.api as api_mod
+        from bog_agents_daemon.models import TriggerConfig
+
+        # Keep the rotated token write inside tmp_path, not the real home dir.
+        monkeypatch.setattr(api_mod, "_TOKEN_FILE", tmp_path / "token")
+
+        job = AmbientJob(name="rotate-hook", prompt="build")
+        job.triggers = [TriggerConfig(type=TriggerType.WEBHOOK, webhook_path="/hooks/ci")]
+        upsert_job(job)
+
+        new_token = client.post("/admin/rotate-token", headers=auth).json()["token"]
+        assert new_token != _TEST_TOKEN
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            # Old token: no longer valid and the trigger has no HMAC secret → skipped.
+            old = client.post("/webhooks/hooks/ci", json={"event": "push"}, headers={"X-Daemon-Token": _TEST_TOKEN})
+            assert old.status_code == 200
+            assert job.job_id not in old.json()["triggered"]
+
+            # New token: authenticates → triggered.
+            new = client.post("/webhooks/hooks/ci", json={"event": "push"}, headers={"X-Daemon-Token": new_token})
+            assert new.status_code == 200
+            assert job.job_id in new.json()["triggered"]
+
 
 # ---------------------------------------------------------------------------
 # Webhook auth — fail-closed security contract
