@@ -20,6 +20,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "FilesystemPermission": ("bog_agents.middleware.permissions", "FilesystemPermission"),
     "FilesystemPermissionsMiddleware": ("bog_agents.middleware.permissions", "FilesystemPermissionsMiddleware"),
     "RubricMiddleware": ("bog_agents.middleware.rubric", "RubricMiddleware"),
+    # Evidence bundles (#29) — proof-of-work packaging for autonomous changes.
+    "EvidenceBundle": ("bog_agents.evidence", "EvidenceBundle"),
+    "render_evidence_markdown": ("bog_agents.evidence", "render_evidence_markdown"),
+    "EvidenceBundleMiddleware": ("bog_agents.middleware.evidence_bundle", "EvidenceBundleMiddleware"),
     "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),
     "HarnessProfileConfig": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfileConfig"),
     "GeneralPurposeSubagentProfile": ("bog_agents.profiles.harness.harness_profiles", "GeneralPurposeSubagentProfile"),

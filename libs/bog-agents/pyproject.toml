@@ -204,6 +204,9 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
+# Evidence bundles run git + user-configured verification commands by design
+# (argv form, no shell) — the same system-call posture as backends/middleware.
+"bog_agents/evidence.py" = ["S603", "S607"]  # argv-form git/check subprocess by design
 # Evals: task-agnostic primitives (arbitrary Any I/O) + intentional per-case
 # resilience (a task/scorer crash is a failed case, not a runner crash).
 "bog_agents/evals/**" = [
