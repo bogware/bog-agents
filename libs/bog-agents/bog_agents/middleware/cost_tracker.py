@@ -9,6 +9,7 @@ Feature #8: Effort/thinking levels — control reasoning depth.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -28,18 +29,29 @@ from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
 
-# Approximate cost per 1M tokens for common models (input/output)
+# Approximate cost per 1M tokens for common models (input/output). Keys are
+# *normalized base ids* (see `_normalize_model_for_pricing`) so a full spec such
+# as `anthropic:claude-opus-4-6`, a Bedrock id `us.anthropic.claude-opus-4-6-v1:0`,
+# or a dated `claude-opus-4-6-20250101` all resolve to the same row. Longest key
+# wins on a prefix match, so `claude-opus` can't shadow `claude-opus-4-6`.
 _MODEL_COSTS: dict[str, tuple[float, float]] = {
     # Anthropic
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-opus-4-6": (15.0, 75.0),
     "claude-haiku-4-5": (0.80, 4.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-sonnet-5": (3.0, 15.0),
+    "claude-opus-4-6": (15.0, 75.0),
+    "claude-opus-4-7": (15.0, 75.0),
+    "claude-opus-4-8": (15.0, 75.0),
+    # Family fallbacks (shorter keys, matched only when a specific row doesn't).
+    "claude-haiku": (0.80, 4.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-opus": (15.0, 75.0),
     # OpenAI
     "gpt-5": (10.0, 30.0),
-    "gpt-4o": (2.50, 10.0),
     "gpt-4o-mini": (0.15, 0.60),
-    "o3": (10.0, 40.0),
+    "gpt-4o": (2.50, 10.0),
     "o4-mini": (1.10, 4.40),
+    "o3": (10.0, 40.0),
     # Google
     "gemini-2.5-pro": (1.25, 10.0),
     "gemini-3-flash": (0.15, 0.60),
@@ -48,6 +60,61 @@ _MODEL_COSTS: dict[str, tuple[float, float]] = {
     "deepseek-r1": (0.55, 2.19),
     "deepseek-v3": (0.27, 1.10),
 }
+
+# Cost assumed for a model we can't price. The normalized lookup resolves the
+# common prefixed/suffixed ids now, so this default is hit far less often than
+# under the old exact-match scheme that mis-billed 3-5x on Opus/Bedrock (CTX-3).
+_DEFAULT_MODEL_COST: tuple[float, float] = (5.0, 15.0)
+
+# Provider/route prefixes stripped before matching: `anthropic:`, `openai:`,
+# `bedrock:`, `openrouter/`, `us.anthropic.`, `eu.meta.`, `us-gov.amazon.`, …
+_PROVIDER_PREFIX_RE = re.compile(r"^(?:[a-z0-9-]+[:/])+")
+_BEDROCK_REGION_RE = re.compile(r"^(?:us|eu|apac|us-gov|ap|ca|sa)[.-](?:anthropic|meta|amazon|cohere|mistral|ai21)\.")
+_VENDOR_DOT_RE = re.compile(r"^(?:anthropic|meta|amazon|cohere|mistral|ai21|google)\.")
+_BEDROCK_VERSION_RE = re.compile(r"[-:]v\d+(?::\d+)?$")
+_DATE_SUFFIX_RE = re.compile(r"-\d{6,8}$")
+_PRICED_KEYS_BY_LEN: list[str] = sorted(_MODEL_COSTS, key=len, reverse=True)
+
+
+def _normalize_model_for_pricing(name: str) -> str:
+    """Reduce a full model spec to a base id for pricing lookup.
+
+    Handles the id shapes CTX-3 broke on: provider prefixes (`anthropic:`,
+    `openrouter/`), Bedrock region+vendor prefixes and `-v1:0` version suffixes,
+    and trailing date stamps. Best-effort and lossless-enough for pricing — it
+    never raises.
+    """
+    if not name:
+        return ""
+    s = name.strip().lower()
+    # Order matters: strip the Bedrock `-v1:0` version suffix FIRST, otherwise the
+    # generic `word:`/`word/` provider-prefix rule greedily eats the `v1:` and
+    # leaves just `0`. Then region+vendor prefix, then provider prefix, then date.
+    s = _BEDROCK_VERSION_RE.sub("", s)
+    s = _BEDROCK_REGION_RE.sub("", s)
+    s = _PROVIDER_PREFIX_RE.sub("", s)
+    s = _VENDOR_DOT_RE.sub("", s)
+    s = _DATE_SUFFIX_RE.sub("", s)
+    return s
+
+
+def price_for_model(name: str) -> tuple[float, float] | None:
+    """Return (input, output) $/1M tokens for `name`, or None when unpriced.
+
+    Tries an exact normalized match, then the longest catalog key that is a
+    prefix of (or contained in) the normalized id, so `claude-opus-4-6` beats
+    the `claude-opus` family fallback.
+    """
+    norm = _normalize_model_for_pricing(name)
+    if not norm:
+        return None
+    if norm in _MODEL_COSTS:
+        return _MODEL_COSTS[norm]
+    for key in _PRICED_KEYS_BY_LEN:
+        if norm.startswith(key) or key in norm:
+            return _MODEL_COSTS[key]
+    return None
+
 
 # Default context window sizes.
 #
@@ -152,8 +219,8 @@ class CostTracker:
 
     @property
     def estimated_cost_usd(self) -> float:
-        """Estimated cost in USD based on model pricing."""
-        costs = _MODEL_COSTS.get(self.model_name, (5.0, 15.0))
+        """Estimated cost in USD based on normalized model pricing (CTX-3)."""
+        costs = price_for_model(self.model_name) or _DEFAULT_MODEL_COST
         input_cost = (self.input_tokens / 1_000_000) * costs[0]
         output_cost = (self.output_tokens / 1_000_000) * costs[1]
         return input_cost + output_cost

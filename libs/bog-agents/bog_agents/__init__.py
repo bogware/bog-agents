@@ -24,6 +24,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "EvidenceBundle": ("bog_agents.evidence", "EvidenceBundle"),
     "render_evidence_markdown": ("bog_agents.evidence", "render_evidence_markdown"),
     "EvidenceBundleMiddleware": ("bog_agents.middleware.evidence_bundle", "EvidenceBundleMiddleware"),
+    # Per-agent cost ledger + runaway caps (#25); CTX-3-fixed pricing lookup.
+    "CostLedger": ("bog_agents.cost_ledger", "CostLedger"),
+    "RunawayCaps": ("bog_agents.cost_ledger", "RunawayCaps"),
+    "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),
     "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),
     "HarnessProfileConfig": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfileConfig"),
     "GeneralPurposeSubagentProfile": ("bog_agents.profiles.harness.harness_profiles", "GeneralPurposeSubagentProfile"),
