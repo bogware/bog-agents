@@ -305,6 +305,7 @@ def test_server_config_has_no_websocket_flag() -> None:
 
 
 def test_stream_endpoint_returns_501_when_disabled() -> None:
+    pytest.importorskip("starlette")
     from starlette.testclient import TestClient
 
     server = AgentServer(_StreamingAgent(), config=ServerConfig(enable_streaming=False))
@@ -314,6 +315,7 @@ def test_stream_endpoint_returns_501_when_disabled() -> None:
 
 
 def test_default_cors_does_not_allow_wildcard_origin() -> None:
+    pytest.importorskip("starlette")
     from starlette.testclient import TestClient
 
     server = AgentServer(_FakeAgent(), config=ServerConfig())

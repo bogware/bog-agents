@@ -83,6 +83,47 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 
+  # Example projects. These pull heavy notebook/demo deps (jupyter, pillow,
+  # mistune, bleach, tornado) that were UNMONITORED before — the critical
+  # jupyter-server XSS and ~55 other alerts live here. Not published, so they
+  # are not in the CI test matrix, but they ship in the repo and must stay
+  # patched.
+  - package-ecosystem: "uv"
+    directory: "/examples/deep_research"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "uv"
+    directory: "/examples/nvidia_deep_agent"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "uv"
+    directory: "/examples/text-to-sql-agent"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      all-dependencies:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+    commit-message:
+      prefix: "chore(deps)"
+
   - package-ecosystem: "npm"
     directory: "/libs/vscode-extension"
     schedule:

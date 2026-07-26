@@ -41,11 +41,12 @@ dependencies = [
     # CVE-2026-44431 + CVE-2026-44432 — urllib3 SSRF/cookie fixes
     "urllib3>=2.7.0",
     # CVE-2026-40347 — python-multipart DoS fix via starlette/uvicorn chain
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.31",
     # CVE-2026-45134 — langsmith stale-token bug (langchain pulls it transitively)
-    "langsmith>=0.8.0",
-    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes
-    "cryptography>=46.0.7",
+    "langsmith>=0.8.18",
+    # GHSA-537c-gmf6-5ccf — vulnerable OpenSSL bundled in cryptography wheels
+    # (needs 48.0.1; forces langchain-litellm>=0.7.0, which had capped it low).
+    "cryptography>=48.0.1",
     # CVE-2026-25645 — requests CRLF fix
     "requests>=2.33.0",
 ]

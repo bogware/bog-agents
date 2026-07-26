@@ -43,10 +43,11 @@ dependencies = [
     "pyyaml>=6.0.0,<7.0.0",
 
     # ─── transitive-CVE floors ──────────────────────────────────────
-    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes
-    "cryptography>=46.0.7",
+    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes; GHSA-537c-gmf6-5ccf
+    # — vulnerable OpenSSL bundled in cryptography wheels (needs 48.0.1)
+    "cryptography>=48.0.1",
     # CVE-2026-30922 — pyasn1 DoS fix
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.4",
     # CVE-2026-25645 — requests fix (langchain pulls via langsmith)
     "requests>=2.33.0",
     # CVE-2026-4539 — pygments ReDoS fix
@@ -75,7 +76,7 @@ video = ["av>=17.0.0,<18.0.0", "pillow>=10.0.0,<13.0.0"]
 # LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
 # the backend needs `Client.pull_agent` / `push_agent`, so pin the floor here.
 # CVE-2026-45134 — langsmith fix landed in 0.8.0.
-hub = ["langsmith>=0.8.0"]
+hub = ["langsmith>=0.8.18"]
 
 # ─── provider extras ────────────────────────────────────────────────
 # `resolve_model` dispatches through langchain's `init_chat_model`, which
@@ -112,6 +113,11 @@ test = [
   "langchain-openai>=1.1.14",
   "twine",
   "build",
+  # serve endpoint tests (test_serve_hardening) exercise create_app() via the
+  # Starlette TestClient — pull the serve extra's deps so the 501/CORS coverage
+  # runs deterministically in CI instead of skipping when it's absent.
+  "starlette>=0.41.0",
+  "sse-starlette>=2.0.0",
 ]
 
 serve = [
@@ -122,7 +128,7 @@ serve = [
 
 evals = [
   # CVE-2026-45134 — langsmith fix landed in 0.8.0
-  "langsmith>=0.8.0",
+  "langsmith>=0.8.18",
   "langchain-xai",
   "langchain-mistralai",
   "langchain-deepseek",
