@@ -148,12 +148,33 @@ class FileInfo(TypedDict):
     modified_at: NotRequired[str]  # ISO timestamp if known
 
 
+class ContextLine(TypedDict):
+    """A non-matching line surrounding a grep match (deepagents 0.7 shape).
+
+    Emitted in `content` output mode when context is requested. bog's grep does
+    not populate context lines yet, so `GrepMatch.context_before/after` stay
+    absent here today — the type exists for source-level drop-in parity so a
+    0.7 consumer's `match.get("context_before")` type-checks and returns `None`.
+    """
+
+    line: int
+    text: str
+
+
 class GrepMatch(TypedDict):
-    """Structured grep match entry."""
+    """Structured grep match entry.
+
+    `context_before` / `context_after` mirror deepagents 0.7's `GrepMatch`; they
+    are `NotRequired` and currently unpopulated by bog's backends (bog bounds
+    grep by time rather than emitting context windows), so consumers should treat
+    them as optional.
+    """
 
     path: str
     line: int
     text: str
+    context_before: NotRequired[list["ContextLine"]]
+    context_after: NotRequired[list["ContextLine"]]
 
 
 class FileData(TypedDict):
@@ -189,10 +210,33 @@ class ReadResult:
         file_data: `FileData` dict on success, `None` on failure. The `content`
             it carries is the *sliced* window requested by the caller, not
             necessarily the whole file.
+        total_lines: Total lines in the file, when known (`None` if not tracked).
+        start_line: 1-indexed first line of the returned window, when known.
+        end_line: 1-indexed last line of the returned window, when known.
+        next_offset: Offset to pass to continue reading past this window, or
+            `None` at EOF / when pagination is not tracked.
+
+    The four pagination fields mirror deepagents 0.7's `ReadResult`. They are
+    optional (default `None`) so bog's existing construction sites remain valid;
+    a backend that doesn't track pagination simply leaves them unset.
     """
 
     error: str | None = None
     file_data: FileData | None = None
+    total_lines: int | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    next_offset: int | None = None
+
+    def __post_init__(self) -> None:
+        """Validate pagination fields leniently (all-None stays valid)."""
+        # bog's common result leaves every pagination field None ("not tracked"),
+        # which must stay valid. Only reject values that are outright impossible.
+        for field_name in ("total_lines", "start_line", "end_line", "next_offset"):
+            value = getattr(self, field_name)
+            if value is not None and value < 0:
+                msg = f"ReadResult.{field_name} must be non-negative, got {value}"
+                raise ValueError(msg)
 
 
 @dataclass
