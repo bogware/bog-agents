@@ -5926,6 +5926,63 @@ class BogAgentsApp(App):
                 )
             )
 
+    async def _handle_best_of_n_command(self, command: str) -> None:
+        """``/best-of-n [count] <prompt>`` — run N full agent attempts, keep the rubric-judged winner.
+
+        Unlike ``/race`` (bare model completions), each attempt is a full agent
+        run in its own git worktree that actually edits files; the resulting
+        diffs are graded by the rubric and ranked. The winning worktree is kept
+        for inspection; the rest are removed.
+        """
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+
+        n = 3
+        parts = rest.split(maxsplit=1)
+        if parts and parts[0].isdigit():
+            n = max(1, min(int(parts[0]), 8))
+            rest = parts[1] if len(parts) > 1 else ""
+        prompt = rest.strip()
+        if not prompt:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/best-of-n [count] <prompt>[/bold] — run N full agent attempts "
+                    "in isolated worktrees and keep the rubric-judged winner (default 3, max 8)."
+                )
+            )
+            return
+
+        from bog_agents_cli.best_of_n import run_best_of_n_session
+        from bog_agents_cli.config import create_model, settings
+
+        repo_dir = Path(settings.project_root or self._cwd)
+        model_spec = self._model_override or settings.model_name
+
+        def _resolve(spec: str) -> Any:  # noqa: ANN401 - returns a langchain chat model
+            return create_model(spec, profile_overrides=self._profile_override).model
+
+        await self._set_spinner(f"Best-of-{n}: running attempts in worktrees")
+        try:
+            report, winner_path = await run_best_of_n_session(
+                prompt, n=n, repo_dir=repo_dir, model_spec=model_spec, resolve_model=_resolve
+            )
+        except Exception as exc:
+            await self._mount_message(ErrorMessage(f"/best-of-n failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+        if winner_path:
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]Winner worktree kept at:[/bold green] [cyan]{winner_path}[/cyan]\n"
+                    "Inspect it, then merge its branch or copy the changes across. The other "
+                    "attempt worktrees were removed."
+                )
+            )
+
     async def _handle_jury_command(self, command: str) -> None:
         """``/jury`` — multi-reviewer vote on the current diff.
 

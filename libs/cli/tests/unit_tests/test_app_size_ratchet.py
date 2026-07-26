@@ -35,7 +35,14 @@ from pathlib import Path
 # read sites are untouched) and begin/end calls at the dispatch sites — which is
 # the sanctioned "logic in a module, thin app surface" pattern this ratchet
 # exists to encourage.
-APP_PY_LINE_CEILING = 17_575
+#
+# Bumped 2026-07-26 to 17,635 for the `/best-of-n` handler (killer feature #31).
+# All of the orchestration — worktree fan-out, rubric judging, ranking, winner
+# selection, worktree wiring — lives in the testable `best_of_n.py` module (12
+# unit tests, injected runner+judge). What lands on BogAgentsApp is only the
+# thin arg-parse + spinner + result-mount glue that needs `self._mount_message`
+# / `self._model_override` — exactly the sanctioned split.
+APP_PY_LINE_CEILING = 17_635
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 
