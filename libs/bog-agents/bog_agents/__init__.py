@@ -20,6 +20,19 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "FilesystemPermission": ("bog_agents.middleware.permissions", "FilesystemPermission"),
     "FilesystemPermissionsMiddleware": ("bog_agents.middleware.permissions", "FilesystemPermissionsMiddleware"),
     "RubricMiddleware": ("bog_agents.middleware.rubric", "RubricMiddleware"),
+    # Evidence bundles (#29) — proof-of-work packaging for autonomous changes.
+    "EvidenceBundle": ("bog_agents.evidence", "EvidenceBundle"),
+    "render_evidence_markdown": ("bog_agents.evidence", "render_evidence_markdown"),
+    "EvidenceBundleMiddleware": ("bog_agents.middleware.evidence_bundle", "EvidenceBundleMiddleware"),
+    # Per-agent cost ledger + runaway caps (#25); CTX-3-fixed pricing lookup.
+    "CostLedger": ("bog_agents.cost_ledger", "CostLedger"),
+    "RunawayCaps": ("bog_agents.cost_ledger", "RunawayCaps"),
+    "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),
+    # Governed agent teams (#21) — claimable task ledger + mailboxes + coordinator.
+    "TaskLedger": ("bog_agents.teams", "TaskLedger"),
+    "Mailbox": ("bog_agents.teams", "Mailbox"),
+    "run_team": ("bog_agents.teams", "run_team"),
+    "TeamReport": ("bog_agents.teams", "TeamReport"),
     "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),
     "HarnessProfileConfig": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfileConfig"),
     "GeneralPurposeSubagentProfile": ("bog_agents.profiles.harness.harness_profiles", "GeneralPurposeSubagentProfile"),

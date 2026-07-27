@@ -41,6 +41,26 @@ class TestIsCronDue:
         result = _is_cron_due("0,30 * * * *", 0)
         assert isinstance(result, bool)
 
+    def test_missed_daily_slot_catches_up(self):
+        # DMN-5: last run was 2 days ago, so the daily 9am slot elapsed while
+        # the daemon was down → fire once to catch up (was silently skipped).
+        assert _is_cron_due("0 9 * * *", time.time() - 2 * 86400) is True
+
+    def test_just_ran_never_immediately_refires(self):
+        # Baseline == now → the next scheduled slot is strictly in the future
+        # for any expression → not due (dedup, no double-fire on a busy tick).
+        now = time.time()
+        assert _is_cron_due("0 * * * *", now) is False
+        assert _is_cron_due("0 9 * * *", now) is False
+
+    def test_macro_expression_supported(self):
+        # croniter accepts @hourly-style macros the hand-rolled parser couldn't.
+        assert _is_cron_due("@hourly", time.time() - 2 * 3600) is True
+
+    def test_malformed_expression_does_not_raise(self):
+        # A garbage expression must be swallowed, not crash the tick.
+        assert _is_cron_due("not a cron", 0) is False
+
 
 class TestIsIntervalDue:
     def test_never_run_returns_true(self):

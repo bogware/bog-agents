@@ -111,6 +111,54 @@ class TestSupportedEffortsOtherProviders:
         assert supported_efforts_for_model("xai:grok-3") == ()
 
 
+class TestBedrockNativeEffort:
+    """RD-1: Anthropic-on-Bedrock models get native effort, not legacy caps."""
+
+    def test_bedrock_opus_maps_to_anthropic_table(self) -> None:
+        # Opus 4.6 predates xhigh, exactly as on the direct Anthropic path.
+        assert supported_efforts_for_model("bedrock:anthropic.claude-opus-4-6") == (
+            ANTHROPIC_EFFORTS_NO_XHIGH
+        )
+
+    def test_bedrock_converse_full_inference_profile_id(self) -> None:
+        # Regional prefix + date + `-v1:0` version suffix must still classify.
+        assert (
+            supported_efforts_for_model(
+                "bedrock_converse:us.anthropic.claude-opus-4-8-20250101-v1:0"
+            )
+            == ANTHROPIC_EFFORTS
+        )
+
+    def test_bedrock_haiku_is_non_reasoning(self) -> None:
+        # Haiku has no effort knob -> empty set -> no legacy output cap applied.
+        assert supported_efforts_for_model("bedrock:anthropic.claude-haiku-4-5") == ()
+
+    def test_bedrock_params_nest_under_additional_request_fields(self) -> None:
+        params = model_params_for_effort("bedrock:anthropic.claude-opus-4-6", "high")
+        assert params == {
+            "additional_model_request_fields": {
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "output_config": {"effort": "high"},
+            }
+        }
+
+    def test_bedrock_unsupported_level_returns_none(self) -> None:
+        # xhigh is not accepted by Opus 4.6 -> emit nothing rather than cap.
+        assert (
+            model_params_for_effort("bedrock:anthropic.claude-opus-4-6", "xhigh")
+            is None
+        )
+
+    def test_bedrock_default_and_levels(self) -> None:
+        assert default_effort_for_model("bedrock:anthropic.claude-opus-4-6") == "high"
+        assert effort_levels_for_model("bedrock:anthropic.claude-opus-4-6") == (
+            ANTHROPIC_EFFORTS_NO_XHIGH
+        )
+
+    def test_bedrock_non_anthropic_id_unsupported(self) -> None:
+        assert supported_efforts_for_model("bedrock:meta.llama3-70b") == ()
+
+
 class TestSupportedEffortsEdgeCases:
     def test_none_spec(self) -> None:
         assert supported_efforts_for_model(None) == ()
@@ -159,6 +207,7 @@ class TestModelParamsTranslation:
         for level in ("none", "low", "medium", "high", "xhigh", "max"):
             for spec in (
                 "anthropic:claude-opus-4-8",
+                "bedrock:anthropic.claude-opus-4-8",
                 "openai:gpt-5.6",
                 "google_genai:gemini-3-pro",
                 "fireworks:accounts/fireworks/models/deepseek-v4-pro",

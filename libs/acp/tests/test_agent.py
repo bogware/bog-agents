@@ -20,7 +20,6 @@ from acp.schema import (
     TextResourceContents,
     ToolCallUpdate,
 )
-from bog_agents import create_agent
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.tools import ToolRuntime
@@ -264,7 +263,7 @@ async def test_acp_bog_agent_hitl_interrupt_on_edit_file_requests_permission() -
     graph = create_agent(
         model=model,
         checkpointer=MemorySaver(),
-        interrupt_on={"edit_file": True},
+        middleware=[HumanInTheLoopMiddleware(interrupt_on={"edit_file": True})],
     )
 
     agent = AgentServerACP(agent=graph)

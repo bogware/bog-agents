@@ -93,6 +93,26 @@ class TestCreateJob:
     def test_create_job_no_auth_401(self, client: TestClient) -> None:
         assert client.post("/jobs", json={"name": "x", "prompt": "y"}).status_code == 401
 
+    def test_create_with_retry_policy(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post(
+            "/jobs",
+            json={"name": "retry-job", "prompt": "x", "max_retries": 3, "retry_backoff_seconds": 1.5},
+            headers=auth,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["max_retries"] == 3
+        assert data["retry_backoff_seconds"] == 1.5
+
+    def test_retry_policy_defaults_when_omitted(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        data = client.post("/jobs", json={"name": "default-retry", "prompt": "x"}, headers=auth).json()
+        assert data["max_retries"] == 0
+        assert data["retry_backoff_seconds"] == 2.0
+
+    def test_max_retries_over_cap_rejected(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post("/jobs", json={"name": "greedy", "prompt": "x", "max_retries": 999}, headers=auth)
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # GET /jobs — list
@@ -416,6 +436,41 @@ class TestWebhooks:
         assert resp.status_code == 200
         assert job.job_id in resp.json()["triggered"]
 
+    def test_webhook_honors_rotated_token(
+        self,
+        client: TestClient,
+        auth: dict,
+        tmp_daemon_dir: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # DMN-2: after /admin/rotate-token the webhook path must reject the old
+        # token and accept the new one. It previously compared against a stale
+        # closure, so a leaked old token authenticated here forever.
+        import bog_agents_daemon.api as api_mod
+        from bog_agents_daemon.models import TriggerConfig
+
+        # Keep the rotated token write inside tmp_path, not the real home dir.
+        monkeypatch.setattr(api_mod, "_TOKEN_FILE", tmp_path / "token")
+
+        job = AmbientJob(name="rotate-hook", prompt="build")
+        job.triggers = [TriggerConfig(type=TriggerType.WEBHOOK, webhook_path="/hooks/ci")]
+        upsert_job(job)
+
+        new_token = client.post("/admin/rotate-token", headers=auth).json()["token"]
+        assert new_token != _TEST_TOKEN
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            # Old token: no longer valid and the trigger has no HMAC secret → skipped.
+            old = client.post("/webhooks/hooks/ci", json={"event": "push"}, headers={"X-Daemon-Token": _TEST_TOKEN})
+            assert old.status_code == 200
+            assert job.job_id not in old.json()["triggered"]
+
+            # New token: authenticates → triggered.
+            new = client.post("/webhooks/hooks/ci", json={"event": "push"}, headers={"X-Daemon-Token": new_token})
+            assert new.status_code == 200
+            assert job.job_id in new.json()["triggered"]
+
 
 # ---------------------------------------------------------------------------
 # Webhook auth — fail-closed security contract
@@ -548,3 +603,60 @@ class TestWebhookFailClosed:
 
         assert resp.status_code == 200
         assert job.job_id not in resp.json()["triggered"]
+
+
+# ---------------------------------------------------------------------------
+# GitHub webhook (#30, Assign-to-bog)
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubWebhook:
+    def test_issue_assigned_triggers_github_job(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="fix the issue")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/github",
+                json={"action": "assigned", "assignee": {"login": "bot"}, "issue": {"number": 5, "title": "t", "body": "b"}},
+                headers={**auth, "X-GitHub-Event": "issues"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert job.job_id in body["triggered"]
+        assert body["kind"] == "issue_assigned"
+
+    def test_non_actionable_event_triggers_nothing(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="x")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "opened", "issue": {"number": 1}},
+            headers={**auth, "X-GitHub-Event": "issues"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["triggered"] == []
+        assert resp.json()["actionable"] is False
+
+    def test_unsigned_request_without_token_refused(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        # No daemon token AND no configured GitHub secret → fail closed.
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="x")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "assigned", "assignee": {"login": "bot"}, "issue": {"number": 5}},
+            headers={"X-GitHub-Event": "issues"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["triggered"] == []

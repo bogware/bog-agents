@@ -17,6 +17,61 @@
 
 ---
 
+## 0. 0.7.0b2 TRACKING UPDATE (2026-07-26)
+
+> deepagents advanced to the **0.7 line** (currently `0.7.0b2`, beta, 2026-07-24).
+> A source-verified scout against the b2 tag confirmed the delta is **small** —
+> bog independently matured the flagged surfaces during Waves 1–3 and its own
+> development, so 0.7 is *format-alignment + dependency floors*, not a rebuild.
+> **bog remains a co-installable superset drop-in for 0.7.0b2's public API.**
+>
+> **Load-bearing fix — co-install floors (DONE, validated).** 0.7 raises the
+> floors that must match for the two to resolve in one venv. bog now floors:
+> `langchain-core>=1.5.0`, `langchain>=1.3.14`, `langchain-anthropic>=1.5.0`,
+> `langchain-google-genai>=4.3.1`, `langsmith>=0.10.9`, **`wcmatch>=11.0,<12.0`**
+> (was `<11.0` — the hard cap that would have made 0.7 un-co-installable, exactly
+> the `wcmatch<7` break from the 0.6.12 pass). Full SDK suite green under
+> langchain-core 1.5.1 + wcmatch 11.0 (2576 passed).
+>
+> **Already at parity (no work needed):** ls/glob `"No files found"` and grep
+> `"No matches found"` sentinels are byte-identical; `EMPTY_CONTENT_WARNING`
+> matches; `DeleteResult` + `delete`/`adelete` present (bog's is a superset —
+> `+deleted_paths`); private subagent state uses the same `private_state_field_names`
+> mechanism, bidirectional; `FsToolName` is exported; neither `BASE_AGENT_PROMPT`
+> nor `DEFAULT_AGENT_PROMPT` is a public export in 0.7, so bog's internal
+> `BASE_AGENT_PROMPT` is a non-issue.
+>
+> **Result-type shape parity (DONE this pass):** `ReadResult` gained 0.7's
+> `total_lines` / `start_line` / `end_line` / `next_offset` (optional, default
+> `None`, lenient `__post_init__` so bog's existing sites stay valid); `GrepMatch`
+> gained `context_before` / `context_after` (`NotRequired`); new `ContextLine`
+> TypedDict. A 0.7 consumer importing these types now type-checks against bog.
+>
+> **Intentional / benign divergences (bog keeps — documented, not bugs):**
+> - **read_file gutter** — bog emits fixed-width-6 + tab (`cat -n`); 0.7 emits
+>   dynamic-width + two-space. This is *model-facing tool output*, not public API;
+>   functionally equivalent. Not reformatted (would churn model-facing internals
+>   for no contract gain).
+> - **ReadResult pagination populate + "N lines remaining" notice** — the fields
+>   exist (shape parity) but bog's backends don't yet populate them and the read
+>   tool doesn't emit 0.7's pagination notice. Behavioral follow-up if a consumer
+>   needs it; not required for the drop-in contract.
+> - **grep bounding** — bog bounds by time (`DEFAULT_GREP_TIMEOUT=15s`); 0.7 adds a
+>   `grep_max_count=1000` count cap. Different strategy, both bounded.
+> - **`files_update` on `WriteResult`/`EditResult`** — 0.7 *removed* it; bog
+>   **keeps** it because bog's state/store backends return updates to the caller
+>   (a deliberate architectural difference — see `DeleteResult` docstring). Extra
+>   optional field; 0.7 consumers reading `WriteResult(error, path)` are unaffected.
+> - **`SystemPromptConfig`** — 0.7 added it in a4 then *reverted* before beta; bog
+>   keeps it as a superset capability (plain `str` still works).
+> - **`TodoListMiddleware` in defaults** and the **authored default prompt** — 0.7
+>   dropped both from its lean defaults; bog keeps them (bog is a fuller framework,
+>   not a minimal port).
+> - **Removed 0.7 exports** (`BackendFactory` / `BACKEND_TYPES` / `FileFormat` /
+>   `Unset`) — bog keeps them, so it supports **both** 0.6.12 and 0.7 consumers.
+
+---
+
 ## 1. VERDICT
 
 bog-agents is **not** a drop-in for deepagents 0.6.12 today, but the distance is smaller than the raw gap count suggests: the *architecture* is at parity (same `AgentMiddleware` base, same LangGraph `create_agent` delegation, byte-identical `_messages_delta_reducer` / `DeepAgentState` / `_excluded_middleware` / profile registry / `BASE_AGENT_PROMPT`), and roughly half the confirmed gaps are one-file wiring or one-string prose fixes. The headline breakages are: (a) **bog forked before the deepagents 0.5.0 backend rewrite** — no `LsResult`/`ReadResult`/`GrepResult`/`GlobResult`/`DeleteResult`, no v2 `FileData` (`content: str` + `encoding`), no `delete()` anywhere, `StateBackend`/`StoreBackend` constructors incompatible — which is the single largest and most-coupled wave; (b) **the profile registry ships zero built-in profiles** (`_builtin_profiles.py:148` literally says "This port ships none"), so Anthropic/Codex/Nemotron prompt tuning and the OpenRouter Azure-ignore fix are all absent, and three `HarnessProfile` fields (`general_purpose_subagent`, `tool_description_overrides` on built-ins, per-subagent profile resolution) are parsed but never consumed; (c) **a pile of small but genuinely fatal interop breaks** — `SystemPromptConfig` raises `TypeError`, `FsToolName` doesn't exist, `recursion_limit` is hard-clamped at 1000 (deepagents uses 9,999), user middleware colliding with a built-in name is silently *dropped* instead of replacing it, and `wcmatch<7.0` in `pyproject.toml` makes bog and deepagents **literally un-co-installable in one venv**.

@@ -12,6 +12,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from croniter import croniter
+
+from bog_agents_daemon.file_watch import FileWatchManager
 from bog_agents_daemon.models import AmbientJob, JobRun, JobStatus, TriggerConfig, TriggerType
 
 logger = logging.getLogger(__name__)
@@ -28,88 +31,51 @@ _FILE_TRIGGER_MAX_FILES = 50_000
 
 
 def _is_cron_due(cron_expr: str, last_run_at: float) -> bool:
-    """Check whether a 5-field cron expression would have fired since last_run_at.
+    """Check whether a cron trigger should fire now, catching up missed slots.
 
-    Implements a simple 5-field check (minute hour day month weekday) against
-    the current UTC time without external dependencies. For each enabled field,
-    checks whether the current time unit matches the expression and whether the
-    expression would have fired in the interval since the last run.
+    Uses croniter for correct parsing (5-field standard, 6-field with seconds,
+    ranges/steps/lists, and `@daily`-style macros) and, crucially, *catch-up*:
+    if the daemon was down while a scheduled slot elapsed, the job fires once
+    on the next tick rather than silently skipping to the following slot.
+    (DMN-5/v4. Interval triggers already self-catch-up via elapsed time; cron
+    did not — a daily 9am report simply vanished if the daemon was restarting
+    across 9:00.)
 
-    Supported syntax: ``*``, single values, comma-separated lists, and
-    ``*/step`` syntax. Ranges (``1-5``) are also supported.
+    The rule: compute the first scheduled time strictly after the baseline
+    (`last_run_at`, or one minute ago for a job that has never run). If that
+    time has already passed, a slot is due — fire once. Because the baseline
+    advances to the run's start time after each fire, a job that just ran is
+    never immediately re-fired (dedup), and a multi-slot outage collapses to a
+    single catch-up run rather than a backfill storm.
+
+    All comparisons are in UTC, matching the daemon's prior behaviour. A
+    malformed expression is logged and treated as not-due so one bad cron can't
+    abort the scheduler tick and starve every later job. (REVIEW.md v2 P1-53.)
 
     Args:
-        cron_expr: A 5-field cron expression string.
-        last_run_at: Unix timestamp of the last run (0 means never run).
+        cron_expr: A cron expression (5-field, 6-field with seconds, or a macro
+            such as `@hourly`).
+        last_run_at: Unix timestamp of the last run (0/negative means never run).
 
     Returns:
-        True if the cron expression is due to fire, False otherwise.
+        True if a scheduled slot is due, False otherwise.
     """
-    fields = cron_expr.strip().split()
-    if len(fields) != 5:
-        logger.warning("Invalid cron expression (expected 5 fields): %r", cron_expr)
+    if not croniter.is_valid(cron_expr):
+        logger.warning("Invalid cron expression: %r", cron_expr)
         return False
 
-    now = datetime.now(tz=UTC)
-    # If we have never run, use a point 60 seconds before now as the baseline
-    last_dt = datetime.fromtimestamp(last_run_at, tz=UTC) if last_run_at > 0 else None
-
-    minute_field, hour_field, dom_field, month_field, dow_field = fields
-
-    def _matches_field(field: str, value: int, min_val: int) -> bool:
-        """Return True when *value* is covered by a cron *field* expression.
-
-        A malformed field (non-integer step/range/value) is treated as
-        'not matching' rather than raising — a single bad cron must not abort
-        the scheduler tick and starve every later job. (REVIEW.md v2 P1-53.)
-        """
-        if field == "*":
-            return True
-        try:
-            for part in field.split(","):
-                if "/" in part:
-                    base, step_str = part.split("/", 1)
-                    step = int(step_str)
-                    base_val = min_val if base == "*" else int(base)
-                    if step > 0 and (value - base_val) >= 0 and (value - base_val) % step == 0:
-                        return True
-                elif "-" in part:
-                    lo, hi = part.split("-", 1)
-                    if int(lo) <= value <= int(hi):
-                        return True
-                elif value == int(part):
-                    return True
-        except ValueError:
-            logger.warning("Unparsable cron field %r in %r — treating as not due", field, cron_expr)
-            return False
+    now = time.time()
+    # Never run → baseline one minute back so a cron matching the current
+    # minute fires immediately on the first tick (mirrors the old behaviour).
+    base_ts = last_run_at if last_run_at > 0 else now - 60
+    base_dt = datetime.fromtimestamp(base_ts, tz=UTC)
+    try:
+        next_dt = croniter(cron_expr, start_time=base_dt).get_next(datetime)
+    except (ValueError, KeyError, OverflowError):
+        # is_valid passed but resolution still failed — never crash the tick.
+        logger.warning("Could not evaluate cron expression %r; treating as not due", cron_expr)
         return False
-
-    # Check if current time matches the cron fields
-    if not _matches_field(month_field, now.month, 1):
-        return False
-    if not _matches_field(dom_field, now.day, 1):
-        return False
-    # weekday: cron uses 0=Sunday..6=Saturday; Python isoweekday 1=Mon..7=Sun
-    iso_wd = now.isoweekday()  # 1=Mon..7=Sun
-    cron_wd = iso_wd % 7  # 0=Sun..6=Sat
-    if not _matches_field(dow_field, cron_wd, 0):
-        return False
-    if not _matches_field(hour_field, now.hour, 0):
-        return False
-    if not _matches_field(minute_field, now.minute, 0):
-        return False
-
-    # The fields match the current time. Now check we haven't already fired
-    # this minute (last_run was within the current minute).
-    if last_dt is not None:
-        # Truncate both timestamps to the current minute
-        now_minute_ts = now.replace(second=0, microsecond=0).timestamp()
-        last_minute_ts = last_dt.replace(second=0, microsecond=0).timestamp()
-        if last_minute_ts >= now_minute_ts:
-            # Already fired this minute
-            return False
-
-    return True
+    return next_dt.timestamp() <= now
 
 
 def _is_interval_due(interval_seconds: int, last_run_at: float) -> bool:
@@ -167,6 +133,11 @@ class DaemonScheduler:
         # Maps job_id -> unix timestamp when a file-change was first detected,
         # used to implement per-trigger debounce_seconds.
         self._file_change_pending: dict[str, float] = {}
+        # Event-driven file watching is only activated by the long-running
+        # loop (run_forever); a bare _tick() never starts an observer thread,
+        # keeping unit tests on the polling path with no thread leak.
+        self._file_watcher = FileWatchManager()
+        self._file_watching_active = False
 
     async def run_forever(self, *, tick_seconds: float = 30) -> None:
         """Run the scheduling loop indefinitely.
@@ -181,15 +152,22 @@ class DaemonScheduler:
             asyncio.CancelledError: When the task is cancelled.
         """
         logger.info("Scheduler started (tick=%.0fs)", tick_seconds)
-        while True:
-            try:
-                await self._tick()
-            except asyncio.CancelledError:
-                logger.info("Scheduler cancelled")
-                raise
-            except Exception:
-                logger.exception("Scheduler tick error")
-            await asyncio.sleep(tick_seconds)
+        # Activate event-driven file watching for the lifetime of the loop; the
+        # finally tears the observer thread down on shutdown/cancellation.
+        self._file_watching_active = True
+        try:
+            while True:
+                try:
+                    await self._tick()
+                except asyncio.CancelledError:
+                    logger.info("Scheduler cancelled")
+                    raise
+                except Exception:
+                    logger.exception("Scheduler tick error")
+                await asyncio.sleep(tick_seconds)
+        finally:
+            self._file_watching_active = False
+            self._file_watcher.stop()
 
     def reload_jobs(self) -> list[AmbientJob]:
         """Force the scheduler to re-read jobs from the store.
@@ -216,6 +194,18 @@ class DaemonScheduler:
         for jid in list(self._file_change_pending):
             if jid not in live_ids:
                 self._file_change_pending.pop(jid, None)
+
+        # Reconcile file-change observers to the current job set (only while the
+        # long-running loop is active — see run_forever / __init__).
+        if self._file_watching_active:
+            watch_dirs = {
+                trigger.watch_dir
+                for job in jobs
+                if job.enabled
+                for trigger in job.triggers
+                if trigger.type == TriggerType.FILE_CHANGE and trigger.watch_dir
+            }
+            self._file_watcher.sync(watch_dirs)
 
         for job in jobs:
             if not job.enabled:
@@ -388,7 +378,7 @@ class DaemonScheduler:
                     return TriggerType.INTERVAL, None
 
             elif trigger.type == TriggerType.FILE_CHANGE:
-                changed_path = _check_file_trigger(trigger, job.last_run_at)
+                changed_path = self._detect_file_change(trigger, job.last_run_at)
                 if changed_path is not None:
                     debounce = max(0.0, trigger.debounce_seconds)
                     if debounce > 0:
@@ -420,6 +410,30 @@ class DaemonScheduler:
                     self._file_change_pending.pop(job.job_id, None)
 
         return None, None
+
+    def _detect_file_change(self, trigger: TriggerConfig, last_run_at: float) -> Path | None:
+        """Detect a matching file change, preferring watchdog events over polling.
+
+        A first run (`last_run_at <= 0`) or a directory with no live observer
+        walks the tree via `_check_file_trigger`, so pre-existing files are seen
+        and unwatchable directories still work. Once the daemon is running and a
+        directory is being watched, subsequent runs consult the observer's
+        recorded events instead — firing within OS event latency and costing
+        nothing per tick.
+
+        Args:
+            trigger: The FILE_CHANGE trigger to evaluate.
+            last_run_at: Unix timestamp of the job's last run (0 = never run).
+
+        Returns:
+            The changed path that should fire the trigger, or None.
+        """
+        watch_dir = trigger.watch_dir
+        if not watch_dir:
+            return None
+        if last_run_at <= 0 or not self._file_watcher.is_watching(watch_dir):
+            return _check_file_trigger(trigger, last_run_at)
+        return self._file_watcher.changed_since(watch_dir, trigger.watch_patterns, last_run_at)
 
 
 def _check_file_trigger(trigger: TriggerConfig, last_run_at: float) -> Path | None:

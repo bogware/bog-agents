@@ -187,7 +187,11 @@ runs:
           skill_name=$(basename "$skill_dir")
           cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
           echo "Installed skill: $skill_name"
-          ((SKILL_COUNT++))
+          # DEL-1/v4: `$(( ... ))` always returns exit 0, unlike `(( SKILL_COUNT++ ))`
+          # which evaluates to 0 on the first (0->1) increment and, under the
+          # composite action's `bash -eo pipefail`, aborts the whole step after
+          # the first skill. Every consumer passing skills_repo hit this.
+          SKILL_COUNT=$((SKILL_COUNT + 1))
         done < <(find "$CLONE_DIR" -name "SKILL.md" -type f)
 
         if [ "$SKILL_COUNT" -eq 0 ]; then

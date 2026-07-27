@@ -10,7 +10,7 @@ Covers:
 - P6: event triggers (manual/git-push/webhook) route through
   DaemonScheduler.dispatch, honouring the _running_jobs overlap guard and
   the concurrency semaphore; a second dispatch of a running job is SKIPPED.
-- P7: unattended (non-MANUAL) agent builds default to virtual_mode=True
+- P7 / DMN-1: unattended (non-MANUAL) agent builds get a non-shell backend
   (path guardrails on) unless BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1 opts in.
 """
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -344,15 +343,6 @@ class TestEndpointsUseDispatch:
 # ---------------------------------------------------------------------------
 
 
-class _CapturingBackend:
-    """Stand-in LocalShellBackend capturing the virtual_mode it was built with."""
-
-    last_kwargs: ClassVar[dict] = {}
-
-    def __init__(self, **kwargs: object) -> None:
-        type(self).last_kwargs = kwargs
-
-
 class _StubAgent:
     """Minimal agent whose astream yields one AI message."""
 
@@ -365,79 +355,90 @@ class _StubAgent:
 
 
 class TestUnattendedShellPosture:
+    """DMN-1 (v4): unattended triggers get a non-shell backend, not merely
+    virtual_mode (which never confined the shell). See also test_runner.py's
+    TestSelectBackend for the unit-level coverage of the selection logic."""
+
     @pytest.fixture()
-    def patched_invoke(self, monkeypatch: pytest.MonkeyPatch) -> type[_CapturingBackend]:
-        """Patch the lazily-imported create_agent + backend used by _invoke_agent."""
+    def captured_backend(self, monkeypatch: pytest.MonkeyPatch) -> dict:
+        """Capture the backend that _invoke_agent hands to create_agent."""
         import bog_agents
-        import bog_agents.backends.local_shell as local_shell_mod
-        import bog_agents.feature_config as feature_config_mod
 
-        _CapturingBackend.last_kwargs = {}
-        monkeypatch.setattr(local_shell_mod, "LocalShellBackend", _CapturingBackend)
-        monkeypatch.setattr(bog_agents, "create_agent", lambda **_kw: _StubAgent())
-        # FeatureConfig is imported but only constructed; leave as-is.
-        assert feature_config_mod.FeatureConfig is not None
-        return _CapturingBackend
+        captured: dict = {}
 
-    async def test_webhook_defaults_to_virtual_mode(
-        self, patched_invoke: type[_CapturingBackend], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+        def _fake_create_agent(**kw: object) -> _StubAgent:
+            captured["backend"] = kw.get("backend")
+            return _StubAgent()
+
+        monkeypatch.setattr(bog_agents, "create_agent", _fake_create_agent)
+        return captured
+
+    async def test_webhook_gets_no_shell(self, captured_backend: dict, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from bog_agents.backends.filesystem import FilesystemBackend
+        from bog_agents.middleware.filesystem import _supports_execution
+
         from bog_agents_daemon.runner import _invoke_agent
 
         monkeypatch.delenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", raising=False)
         job = AmbientJob(name="wh", prompt="x", working_dir=str(tmp_path))
         out = await _invoke_agent(job, "hi", trigger_type=TriggerType.WEBHOOK)
         assert out == "done"
-        assert patched_invoke.last_kwargs["virtual_mode"] is True
+        backend = captured_backend["backend"]
+        assert isinstance(backend, FilesystemBackend)
+        assert _supports_execution(backend) is False
 
-    async def test_git_push_defaults_to_virtual_mode(
-        self, patched_invoke: type[_CapturingBackend], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    async def test_git_push_gets_no_shell(self, captured_backend: dict, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from bog_agents.backends.filesystem import FilesystemBackend
+
         from bog_agents_daemon.runner import _invoke_agent
 
         monkeypatch.delenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", raising=False)
         job = AmbientJob(name="gp", prompt="x", working_dir=str(tmp_path))
         await _invoke_agent(job, "hi", trigger_type=TriggerType.GIT_PUSH)
-        assert patched_invoke.last_kwargs["virtual_mode"] is True
+        assert isinstance(captured_backend["backend"], FilesystemBackend)
 
-    async def test_manual_keeps_unrestricted_shell(
-        self, patched_invoke: type[_CapturingBackend], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    async def test_manual_keeps_unrestricted_shell(self, captured_backend: dict, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+
         from bog_agents_daemon.runner import _invoke_agent
 
         monkeypatch.delenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", raising=False)
         job = AmbientJob(name="m", prompt="x", working_dir=str(tmp_path))
         await _invoke_agent(job, "hi", trigger_type=TriggerType.MANUAL)
-        assert patched_invoke.last_kwargs["virtual_mode"] is False
+        assert isinstance(captured_backend["backend"], LocalShellBackend)
 
-    async def test_opt_in_env_disables_guardrails_and_warns(
+    async def test_opt_in_env_restores_shell_and_warns(
         self,
-        patched_invoke: type[_CapturingBackend],
+        captured_backend: dict,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+
         from bog_agents_daemon.runner import _invoke_agent
 
         monkeypatch.setenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "1")
         job = AmbientJob(name="wh", prompt="x", working_dir=str(tmp_path))
         with caplog.at_level(logging.WARNING, logger="bog_agents_daemon.runner"):
             await _invoke_agent(job, "hi", trigger_type=TriggerType.WEBHOOK)
-        assert patched_invoke.last_kwargs["virtual_mode"] is False
-        assert any("guardrails DISABLED" in rec.message for rec in caplog.records)
+        assert isinstance(captured_backend["backend"], LocalShellBackend)
+        assert any("UNRESTRICTED host shell" in rec.message for rec in caplog.records)
 
     async def test_opt_in_does_not_warn_for_manual(
         self,
-        patched_invoke: type[_CapturingBackend],
+        captured_backend: dict,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+
         from bog_agents_daemon.runner import _invoke_agent
 
         monkeypatch.setenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "1")
         job = AmbientJob(name="m", prompt="x", working_dir=str(tmp_path))
         with caplog.at_level(logging.WARNING, logger="bog_agents_daemon.runner"):
             await _invoke_agent(job, "hi", trigger_type=TriggerType.MANUAL)
-        assert patched_invoke.last_kwargs["virtual_mode"] is False
-        assert not any("guardrails DISABLED" in rec.message for rec in caplog.records)
+        assert isinstance(captured_backend["backend"], LocalShellBackend)
+        assert not any("UNRESTRICTED host shell" in rec.message for rec in caplog.records)

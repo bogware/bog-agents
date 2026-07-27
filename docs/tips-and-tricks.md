@@ -365,6 +365,70 @@ sleep 5
 The server starts the model once. Subsequent CLI invocations talk
 to it via HTTP. Per-invocation startup drops from ~3s to ~200ms.
 
+## Governed autonomy — turn the engine up
+
+These are the moves that separate "chatbot in a terminal" from "an agent you
+trust to work while you're asleep." Each one is deterministic and composes with
+the cost caps below — no runaway spend.
+
+### Run a whole team on one prompt
+
+```text
+/team run --chain design the schema | write the migration | add tests
+```
+
+Spins up a governed **agent team**: each task is a claimable item on a shared
+ledger, each teammate is a non-interactive agent working in the same repo.
+`--chain` makes it a pipeline (task N waits for N-1); drop it and independent
+tasks run as workers free up. `--members alice,bob` sets the roster (default
+two). Every teammate spawn is counted against a spend cap, so a team can't
+fork-bomb your wallet.
+
+### Best-of-N when the first answer isn't good enough
+
+```text
+/best-of-n 3 refactor the auth module to remove the global session
+```
+
+Runs **N full agent attempts, each in its own git worktree**, then the rubric
+grader ranks the resulting diffs and keeps the winner's worktree for you to
+inspect. The losers are cleaned up. This is the "I want the *good* version, not
+the *first* version" button. Default 3, max 8.
+
+### Vote on a diff before you trust it
+
+```text
+/jury
+```
+
+A panel of reviewer models each votes on the current `git diff` — approve /
+request-changes with reasons. `/jury staged` for staged changes, `/jury <ref>`
+against a base. Turns "looks fine to me" into "three independent reviewers
+agreed." The juror models come from `[jury].models` in your config; unset =
+the active model votes three times.
+
+### Let bog pick the effort for you
+
+```text
+/operator on
+```
+
+A cheap judge classifies every prompt `easy / medium / hard / max` and, for that
+one turn, escalates both the **model** and the **`/effort`** knob — and can route
+a genuinely hard job to `butcher` (decompose into slices) or `jtbd` (interview →
+job spec → execute). Trivial prompts stay on Haiku; a gnarly refactor gets Opus
+at high effort automatically. Judge failures never block a turn — they fall
+through to your active model. Presets live in `~/.bog-agents/operator.toml`.
+
+### Proof-of-work on every autonomous change
+
+When an agent finishes an unattended job, the **evidence bundle** packages the
+diff stat, the test/verify command output, and the rubric verdict into one
+artifact — `merge_ready` is true only when checks pass *and* the rubric is
+satisfied. It's what makes "the daemon fixed it overnight" auditable instead of
+"trust me." Attached automatically on daemon + serve runs; the pieces are in
+`bog_agents.evidence` if you want to build your own.
+
 ## Less obvious
 
 ### The agent reads AGENTS.md
@@ -424,6 +488,36 @@ The shell runs inside a container. The filesystem is the container's,
 not your host. The container dies when the session ends. Use for
 "try this risky migration script and tell me what happens" without
 risking your real filesystem.
+
+### Native OS sandbox + egress allowlist (Linux/macOS)
+
+No container needed. Drop a `.bog-agents/sandbox.toml`:
+
+```toml
+[sandbox]
+local_sandbox = "workspace-write"        # read-only | workspace-write | full-access
+require_sandbox = true                    # fail closed if no launcher (don't run unconfined)
+network_allowlist = ["pypi.org", "github.com"]
+```
+
+Now every shell command the agent runs is wrapped in **bubblewrap** (Linux) or
+**seatbelt** (macOS): filesystem writes are confined to the working dir, and
+network egress is either cut entirely (omit `network_allowlist`) or routed
+through a **localhost allowlist proxy** that only lets the listed hosts through
+(everything else gets a `403`). `require_sandbox = true` means "refuse to run
+rather than run unconfined" — the safe posture on a box without a launcher
+(Windows today; native AppContainer is on the roadmap). Honesty note: the
+allowlist constrains cooperating tools (pip / git / curl), not a process that
+opens a raw socket — use no-allowlist mode for a hard network cut.
+
+### Turn on a completion chime (it's off by default)
+
+A beep on every response gets old fast, so notification sounds ship **off**.
+If you *do* want a chime when a long unattended run finishes:
+
+```bash
+BOG_AGENTS_SOUNDS=1 bog-agents -n "the long thing" --auto-approve
+```
 
 ---
 

@@ -24,8 +24,8 @@ dependencies = [
     "langchain-anthropic>=1.0.0",
     "langchain-openai>=1.0.0",
     "bog-agents>=0.7.0,<1.0.0",
-    # LangSmith for observability
-    "langsmith>=0.4.0",
+    # LangSmith for observability (>=0.8.18: CVE-2026-45134 + GHSA follow-ups)
+    "langsmith>=0.8.18",
     "modal>=0.64.0",
     "bog-agents-cli>=0.7.0,<1.0.0",
 ]
@@ -61,10 +61,12 @@ include = ["bog_agents_harbor*"]
 override-dependencies = [
     "openai>=1.109.1,<2.0.0",
     "e2b==2.4.3",
-    # CVE-2026-24486: path traversal vulnerability in < 0.0.22
-    "python-multipart>=0.0.22",
+    # CVE-2026-24486: path traversal vulnerability in < 0.0.22 (0.0.31: DoS fix)
+    "python-multipart>=0.0.31",
     # CVE-2026-0994: JSON recursion depth bypass DoS in <= 6.33.4
     "protobuf>=6.33.5",
+    # GHSA-537c-gmf6-5ccf — vulnerable OpenSSL bundled in cryptography wheels
+    "cryptography>=48.0.1",
 ]
 
 [tool.uv.sources]

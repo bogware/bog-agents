@@ -105,6 +105,10 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
         self._shadow_dir = shadow_dir
         self._checkpoints: list[Checkpoint] = []
         self._initialized = False
+        # Set once when git is unavailable (not on PATH) or a git call times
+        # out, so the self-disable warning is logged exactly once rather than
+        # on every mutating tool call.
+        self._git_unavailable = False
         # Checkpointing stages files (`git add -A`) to build stash snapshots. It
         # MUST NOT touch the user's real git index — a user running the agent in
         # their own repo would otherwise find their whole working tree staged.
@@ -120,17 +124,39 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
             cwd: Override working directory.
 
         Returns:
-            Completed process result.
+            Completed process result. On a missing `git` binary (not on PATH)
+            or a git call that exceeds the timeout, checkpointing self-disables
+            and a synthetic non-zero result is returned so every caller degrades
+            gracefully instead of the exception propagating out of the tool node
+            and aborting the whole agent turn.
         """
-        return subprocess.run(
-            ["git", *args],
-            cwd=cwd or self._working_dir,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-            env={**os.environ, "GIT_INDEX_FILE": self._index_file},
-        )
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=cwd or self._working_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+                env={**os.environ, "GIT_INDEX_FILE": self._index_file},
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # FileNotFoundError (git not installed) or TimeoutExpired (git add -A
+            # on a huge/cold repo exceeding the deadline). langgraph's default
+            # tool-error handler re-raises anything that is not a
+            # ToolInvocationError, so an uncaught error here kills the run — and
+            # the CLI ships checkpointing on by default, making every write_file
+            # / edit_file / execute crash on a git-less box. Degrade instead.
+            self._enabled = False
+            if not self._git_unavailable:
+                self._git_unavailable = True
+                logger.warning(
+                    "Checkpointing disabled: `git %s` failed (%s: %s). Undo/rewind will be unavailable this session.",
+                    " ".join(args[:1]),
+                    type(exc).__name__,
+                    str(exc)[:200],
+                )
+            return subprocess.CompletedProcess(args=["git", *args], returncode=1, stdout="", stderr=str(exc))
 
     def _ensure_initialized(self) -> None:
         """Initialize the shadow git tracking if not already done.

@@ -8,7 +8,6 @@ import logging
 import os
 import smtplib
 import time
-import urllib.error
 import urllib.request
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -73,14 +72,21 @@ async def run_job(
 
     try:
         prompt = _build_prompt(job)
-        output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
-        run.output = output
-        run.status = JobStatus.COMPLETED
     except Exception as exc:
-        logger.exception("Job %s (%s) failed", job.job_id, job.name)
+        # Prompt/skill/pipeline resolution is deterministic — retrying it would
+        # just fail identically, so mark FAILED without consuming retries.
+        logger.exception("Job %s (%s) prompt resolution failed", job.job_id, job.name)
         run.error = str(exc)
         run.status = JobStatus.FAILED
-    finally:
+        run.finished_at = time.time()
+    else:
+        output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type)
+        if agent_exc is None:
+            run.output = output
+            run.status = JobStatus.COMPLETED
+        else:
+            run.error = str(agent_exc)
+            run.status = JobStatus.FAILED
         run.finished_at = time.time()
 
     # Update job state. Merge ONLY run-state fields into the current on-disk
@@ -115,7 +121,13 @@ async def run_job(
     overflow_count = 0
     for output_config in job.outputs:
         try:
-            await _dispatch_output(run, output_config, working_dir=job_wd)
+            await _dispatch_with_retry(
+                run,
+                output_config,
+                working_dir=job_wd,
+                max_retries=job.max_retries,
+                backoff=job.retry_backoff_seconds,
+            )
         except Exception as exc:
             logger.exception(
                 "Output dispatch failed for job %s target %s",
@@ -376,20 +388,90 @@ def _allow_unattended_shell() -> bool:
     return os.environ.get("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "").strip().lower() in ("1", "true", "yes")
 
 
+def _select_backend(root_dir: Path, job: AmbientJob, trigger_type: TriggerType) -> Any:
+    """Choose the agent backend for a run based on the trigger's trust level.
+
+    DMN-1 (v4): `virtual_mode` confines only *filesystem* tools — the SDK is
+    explicit that a shell-capable backend's `execute()` runs unrestricted on the
+    host regardless. So for unattended triggers (cron, interval, file-change,
+    git-push, and the HMAC-secret-only webhook path) confining the shell means
+    NOT giving the agent a shell-capable backend at all, and NOT handing it the
+    daemon's environment (secrets). A git-push job whose prompt ingests
+    attacker-authored commit text is the worst case.
+
+    - MANUAL triggers are token-authenticated (an operator is at the keyboard):
+      unrestricted real-path `LocalShellBackend` with the inherited environment,
+      mirroring the CLI.
+    - Non-MANUAL triggers get a non-sandbox `FilesystemBackend` rooted at
+      `working_dir`, so filesystem read/grep for skills/pipelines still works but
+      the `execute` tool reports "not available" and no host environment is
+      exposed. Operators can opt back into unrestricted shell per deployment with
+      `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`; when they do and a network-reachable
+      trigger fires, a WARNING is logged.
+
+    Args:
+        root_dir: The job's working directory, used as the backend root.
+        job: The job (for identifying it in the opt-in warning).
+        trigger_type: How the run was initiated.
+
+    Returns:
+        A `BackendProtocol` for `create_agent`.
+    """
+    is_manual = trigger_type == TriggerType.MANUAL
+    shell_allowed = is_manual or _allow_unattended_shell()
+
+    if not shell_allowed:
+        from bog_agents.backends.filesystem import FilesystemBackend
+
+        # No shell tool (non-sandbox backend), no inherited env; filesystem
+        # tools stay confined to root_dir via virtual_mode.
+        return FilesystemBackend(root_dir=root_dir, virtual_mode=True)
+
+    from bog_agents.backends.local_shell import LocalShellBackend
+
+    if not is_manual:
+        logger.warning(
+            "Unattended %s job %s (%s) is running with UNRESTRICTED host shell and "
+            "the daemon's environment because BOG_DAEMON_ALLOW_UNATTENDED_SHELL is "
+            "set; a network-reachable trigger now has real-path shell on the host.",
+            trigger_type.value,
+            job.job_id,
+            job.name,
+        )
+    # virtual_mode=False operates on real absolute paths inside the project tree
+    # (mirrors the CLI); execute() runs on the host.
+    env = os.environ.copy()
+    # #27: honor the committed `.bog-agents/sandbox.toml` egress allowlist for
+    # unattended shell runs by surfacing it in the backend's env, where the #22
+    # local-sandbox proxy reads it. (Preinstall is deliberately NOT auto-run on
+    # the daemon host — that would run committed shell unattended, the exact risk
+    # DMN-1 guards; provider sandboxes run it via the CLI factory instead.)
+    from bog_agents.sandbox_config import SANDBOX_NETWORK_ALLOWLIST_ENV, load_sandbox_config
+
+    spec = load_sandbox_config(root_dir)
+    if spec is not None and spec.network_allowlist:
+        env[SANDBOX_NETWORK_ALLOWLIST_ENV] = ",".join(spec.network_allowlist)
+        logger.info("Applying sandbox spec for job %s (%s): %s", job.job_id, job.name, spec.summary())
+    return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=env, virtual_mode=False)
+
+
 async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
     Uses a lazy import to avoid circular imports at module load time.  Enforces
     a per-job timeout (default 30 minutes, override with BOG_DAEMON_AGENT_TIMEOUT).
 
-    Safe-by-default unattended posture (V3-11): for non-MANUAL triggers (cron,
-    interval, file-change, git-push, and especially externally-reachable
-    webhooks) the shell/filesystem backend is built with `virtual_mode=True`,
-    confining tool execution to the job's `working_dir` (path guardrails on).
-    A MANUAL trigger is token-authenticated and keeps the unrestricted
-    real-path behaviour. Operators who deliberately want unrestricted shell
-    for unattended triggers must opt in with `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`;
-    when they do, and a network-reachable trigger fires, a WARNING is logged.
+    Safe-by-default unattended posture (V3-11, hardened in DMN-1/v4): for
+    non-MANUAL triggers (cron, interval, file-change, git-push, and especially
+    externally-reachable webhooks) the agent gets a non-sandbox
+    `FilesystemBackend` — filesystem read/grep for skills/pipelines still works,
+    but there is no host shell (`execute` reports "not available") and the
+    daemon's environment is not exposed. `virtual_mode` alone was insufficient:
+    it confines only filesystem tools, never the shell. A MANUAL trigger is
+    token-authenticated and keeps the unrestricted real-path `LocalShellBackend`.
+    Operators who deliberately want unrestricted unattended shell opt in with
+    `BOG_DAEMON_ALLOW_UNATTENDED_SHELL=1`; when they do and a network-reachable
+    trigger fires, a WARNING is logged. See `_select_backend`.
 
     Args:
         job: The job providing model and working_dir configuration.
@@ -404,7 +486,6 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
         TimeoutError: If the agent does not complete within the allowed time.
     """
     from bog_agents import create_agent
-    from bog_agents.backends.local_shell import LocalShellBackend
     from bog_agents.feature_config import FeatureConfig
 
     # Root the agent's filesystem and shell at the job's working_dir so
@@ -413,29 +494,7 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
     # are mounted" even when --working-dir was set.
     root_dir = Path(job.working_dir) if job.working_dir else Path.cwd()
 
-    # Decide the shell sandbox posture. MANUAL triggers are token-authenticated
-    # (the operator is at the keyboard) and keep unrestricted real-path shell.
-    # Every other trigger is unattended and (in the webhook case) externally
-    # reachable, so it is hardened with virtual_mode=True unless the operator
-    # has explicitly opted into unrestricted shell.
-    is_manual = trigger_type == TriggerType.MANUAL
-    allow_unattended = _allow_unattended_shell()
-    use_virtual_mode = not (is_manual or allow_unattended)
-    # WEBHOOK is the only trigger reachable purely via an HMAC secret (no daemon
-    # token), so an unrestricted webhook run is the highest-risk posture.
-    if not is_manual and not use_virtual_mode:
-        logger.warning(
-            "Unattended %s job %s (%s) is running with shell guardrails DISABLED "
-            "(virtual_mode=False) because BOG_DAEMON_ALLOW_UNATTENDED_SHELL is set; "
-            "a network-reachable trigger now has unrestricted real-path shell on the host.",
-            trigger_type.value,
-            job.job_id,
-            job.name,
-        )
-
-    # virtual_mode confines the shell/filesystem to root_dir; virtual_mode=False
-    # operates on real absolute paths inside the project tree (mirrors the CLI).
-    backend = LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=use_virtual_mode)
+    backend = _select_backend(root_dir, job, trigger_type)
 
     # V3-13: use the FeatureConfig path instead of the deprecated bare
     # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and
@@ -475,6 +534,103 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
     except TimeoutError:
         msg = f"Agent timed out after {_AGENT_TIMEOUT_SECONDS}s for job {job.job_id} ({job.name})"
         raise TimeoutError(msg) from None
+
+
+async def _invoke_agent_with_retry(
+    job: AmbientJob,
+    prompt: str,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+) -> tuple[str, int, Exception | None]:
+    """Invoke the agent, retrying transient failures per the job's retry policy.
+
+    Retries up to `job.max_retries` additional times (total attempts =
+    `max_retries + 1`) with exponential backoff starting at
+    `job.retry_backoff_seconds` and doubling each retry. With the default
+    `max_retries=0` this is a single attempt, identical to the pre-retry
+    behaviour, so existing jobs are unaffected.
+
+    Args:
+        job: The job supplying model config and retry policy.
+        prompt: The resolved prompt to run.
+        trigger_type: How this run was initiated (controls the shell posture).
+
+    Returns:
+        A tuple of `(output, attempts, last_exception)`. `last_exception` is
+        None on success; on exhaustion it holds the final failure and `output`
+        is the empty string.
+    """
+    total = max(0, job.max_retries) + 1
+    delay = max(0.0, job.retry_backoff_seconds)
+    last_exc: Exception | None = None
+    for attempt in range(1, total + 1):
+        try:
+            output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < total:
+                logger.warning(
+                    "Job %s (%s) agent attempt %d/%d failed (%s); retrying in %.1fs",
+                    job.job_id,
+                    job.name,
+                    attempt,
+                    total,
+                    exc,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
+                continue
+            logger.exception("Job %s (%s) failed after %d attempt(s)", job.job_id, job.name, attempt)
+            return "", attempt, exc
+        else:
+            if attempt > 1:
+                logger.info("Job %s (%s) succeeded on retry attempt %d/%d", job.job_id, job.name, attempt, total)
+            return output, attempt, None
+    # Unreachable — the loop always returns — but keeps the return type total.
+    return "", total, last_exc
+
+
+async def _dispatch_with_retry(
+    run: JobRun,
+    output: OutputConfig,
+    *,
+    working_dir: Path | None = None,
+    max_retries: int = 0,
+    backoff: float = 2.0,
+) -> None:
+    """Dispatch one output target, retrying transient delivery failures.
+
+    Retries up to `max_retries` additional times with exponential backoff. The
+    final failure is re-raised so `run_job` records it in `run.dispatch_errors`
+    (bounded by `_MAX_DISPATCH_ERRORS`).
+
+    Args:
+        run: The completed job run to deliver.
+        output: The output target configuration.
+        working_dir: Optional job working directory (anchors file output).
+        max_retries: Extra delivery attempts on failure (0 = single-shot).
+        backoff: Base backoff in seconds, doubled each retry.
+    """
+    total = max(0, max_retries) + 1
+    delay = max(0.0, backoff)
+    for attempt in range(1, total + 1):
+        try:
+            await _dispatch_output(run, output, working_dir=working_dir)
+            return
+        except Exception:
+            if attempt >= total:
+                raise
+            logger.warning(
+                "Dispatch to %s for job %s failed (attempt %d/%d); retrying in %.1fs",
+                output.target,
+                run.job_id,
+                attempt,
+                total,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 async def _dispatch_output(run: JobRun, output: OutputConfig, *, working_dir: Path | None = None) -> None:
@@ -589,13 +745,16 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
 async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
     """POST run output to a webhook URL.
 
+    Delivery failures propagate to `run_job`, which records them in
+    `run.dispatch_errors` (capped) so a failed POST is visible in the run
+    record — not only in the log. (An earlier version swallowed `URLError`
+    here, so the outer capture never saw network-target failures — the very
+    targets most likely to fail. DMN-3b/v4.)
+
     Args:
         run: The completed job run.
         output: The webhook output configuration.
     """
-    import json
-    import urllib.error
-
     url = output.webhook_url
     if not url:
         logger.warning("Webhook output for job %s has no webhook_url configured", run.job_id)
@@ -615,12 +774,7 @@ async def _dispatch_webhook(run: JobRun, output: OutputConfig) -> None:
     headers: dict[str, str] = {"Content-Type": "application/json", **output.webhook_headers}
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
 
-    import asyncio
-
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-    except urllib.error.URLError:
-        logger.exception("Webhook dispatch failed for job %s", run.job_id)
+    await asyncio.to_thread(_urlopen_blocking, req)
 
 
 async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
@@ -668,11 +822,10 @@ async def _dispatch_email(run: JobRun, output: OutputConfig) -> None:
                     smtp.login(output.smtp_username, output.smtp_password)
                 smtp.sendmail(from_addr, to_addrs, msg.as_string())
 
-    try:
-        await asyncio.to_thread(_send_blocking)
-        logger.debug("Email sent for job %s to %s", run.job_id, to_addrs)
-    except Exception:
-        logger.exception("Email dispatch failed for job %s", run.job_id)
+    # Delivery failures (SMTP auth/connection errors) propagate to run_job so
+    # they land in run.dispatch_errors, not just the log. (DMN-3b/v4.)
+    await asyncio.to_thread(_send_blocking)
+    logger.debug("Email sent for job %s to %s", run.job_id, to_addrs)
 
 
 async def _dispatch_slack(run: JobRun, output: OutputConfig) -> None:
@@ -697,11 +850,9 @@ async def _dispatch_slack(run: JobRun, output: OutputConfig) -> None:
         method="POST",
     )
 
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-        logger.debug("Slack notification sent for job %s", run.job_id)
-    except urllib.error.URLError:
-        logger.exception("Slack dispatch failed for job %s", run.job_id)
+    # Delivery failures propagate to run_job → run.dispatch_errors. (DMN-3b/v4.)
+    await asyncio.to_thread(_urlopen_blocking, req)
+    logger.debug("Slack notification sent for job %s", run.job_id)
 
 
 async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
@@ -749,11 +900,9 @@ async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
         method="POST",
     )
 
-    try:
-        await asyncio.to_thread(_urlopen_blocking, req)
-        logger.debug("GitHub comment posted for job %s on %s#%d", run.job_id, repo, issue_number)
-    except urllib.error.URLError:
-        logger.exception("GitHub comment dispatch failed for job %s", run.job_id)
+    # Delivery failures propagate to run_job → run.dispatch_errors. (DMN-3b/v4.)
+    await asyncio.to_thread(_urlopen_blocking, req)
+    logger.debug("GitHub comment posted for job %s on %s#%d", run.job_id, repo, issue_number)
 
 
 def _urlopen_blocking(req: urllib.request.Request) -> None:

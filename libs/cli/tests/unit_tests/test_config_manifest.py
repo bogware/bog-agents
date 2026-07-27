@@ -146,6 +146,39 @@ def test_resolve_precedence_env_beats_toml_beats_default(
     assert source == "env (BOG_AGENTS_TEST_SCALAR_XYZ)"
 
 
+def test_none_sentinel_coerces_to_none_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A documented `none`/`off` sentinel on a FLOAT option resolves to None, no warning."""
+    option = ConfigOption(
+        key="test.timeout",
+        group="Test",
+        summary="",
+        kind=OptionKind.FLOAT,
+        env_var="BOG_AGENTS_TEST_TIMEOUT_XYZ",
+        none_sentinels=("none", "off"),
+    )
+    for sentinel in ("none", "OFF", "  none  "):
+        monkeypatch.setenv("BOG_AGENTS_TEST_TIMEOUT_XYZ", sentinel)
+        with caplog.at_level("WARNING"):
+            value, source = resolve_scalar(option, toml_data={})
+        assert value is None
+        assert source == "env (BOG_AGENTS_TEST_TIMEOUT_XYZ)"
+        assert "Ignoring" not in caplog.text
+    # A real number still parses; garbage still warns + falls through to default.
+    monkeypatch.setenv("BOG_AGENTS_TEST_TIMEOUT_XYZ", "30")
+    assert resolve_scalar(option, toml_data={})[0] == 30.0
+    monkeypatch.setenv("BOG_AGENTS_TEST_TIMEOUT_XYZ", "banana")
+    assert resolve_scalar(option, toml_data={})[1] == "default"
+
+
+def test_remote_read_timeout_option_accepts_none() -> None:
+    """The real `runtime.remote_read_timeout` option carries the none/off sentinels."""
+    option = get_option("runtime.remote_read_timeout")
+    assert option is not None
+    assert "none" in option.none_sentinels
+
+
 def test_resolve_empty_env_falls_through(monkeypatch: pytest.MonkeyPatch) -> None:
     """An empty env value counts as unset and falls through to the default."""
     option = ConfigOption(

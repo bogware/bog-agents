@@ -3900,3 +3900,91 @@ class TestWaveNTaskExceptionLogging:
             assert not any("failed" in r.message for r in caplog.records)
         finally:
             loop.close()
+
+
+class TestTurnLifecycleHardening:
+    """Wave-0 v4 fixes for the turn state machine (CLI-CORE-1/-3/-4)."""
+
+    async def test_clear_syncs_lc_thread_id(self) -> None:
+        """CLI-CORE-3: /clear keeps _lc_thread_id in lockstep with the session."""
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._session_state = TextualSessionState(thread_id="thread-old")
+            app._lc_thread_id = "thread-old"
+
+            await app._handle_clear_command("/clear")
+            await pilot.pause()
+
+            assert app._lc_thread_id == app._session_state.thread_id
+            assert app._lc_thread_id != "thread-old"
+
+    async def test_send_prompt_defers_when_agent_running(self) -> None:
+        """CLI-CORE-4: an in-flight turn defers a background prompt instead of
+        spawning a second concurrent turn and stealing the worker handle.
+        """
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._agent_running = True
+            worker_sentinel = object()
+            app._agent_worker = worker_sentinel
+
+            await app._send_prompt_to_agent("internal prompt")
+            await pilot.pause()
+
+            # Deferred, not spawned: the user's worker handle is untouched.
+            assert app._agent_worker is worker_sentinel
+            assert len(app._pending_messages) == 1
+            queued = app._pending_messages[0]
+            assert queued.raw is True
+            assert queued.text == "internal prompt"
+
+    async def test_drain_redispatches_raw_prompt_via_send(self) -> None:
+        """CLI-CORE-4: a deferred raw prompt drains back through
+        _send_prompt_to_agent, not the user-message path.
+        """
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app._agent_running = True
+            await app._send_prompt_to_agent("raw internal")
+            await pilot.pause()
+            assert len(app._pending_messages) == 1
+
+            # Turn finished; the queue drain must route the raw prompt back
+            # through _send_prompt_to_agent.
+            app._agent_running = False
+            spy = AsyncMock()
+            app._send_prompt_to_agent = spy  # type: ignore[method-assign]
+
+            await app._process_next_from_queue()
+            await pilot.pause()
+
+            spy.assert_awaited_once_with("raw internal")
+            assert not app._pending_messages
+
+    async def test_cleanup_queue_drain_runs_after_state_restore(self) -> None:
+        """CLI-CORE-1 (P0): the cleanup queue drain runs AFTER this turn's state
+        is restored, so a queued message that starts the next turn is not
+        clobbered by the restoration finally.
+        """
+        app = BogAgentsApp()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            sentinel_worker = object()
+
+            async def fake_drain() -> None:
+                # Emulate a queued message starting the next turn synchronously,
+                # exactly as _handle_user_message / _send_prompt_to_agent do.
+                app._agent_running = True
+                app._agent_worker = sentinel_worker
+
+            app._process_next_from_queue = fake_drain  # type: ignore[method-assign]
+
+            await app._cleanup_agent_task()
+            await pilot.pause()
+
+            # With the pre-fix ordering the finally reset these to False/None.
+            assert app._agent_running is True
+            assert app._agent_worker is sentinel_worker

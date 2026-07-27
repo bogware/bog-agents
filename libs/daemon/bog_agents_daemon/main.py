@@ -15,7 +15,7 @@ import uvicorn
 from bog_agents_daemon.api import create_app
 from bog_agents_daemon.runner import run_job
 from bog_agents_daemon.scheduler import DaemonScheduler
-from bog_agents_daemon.store import load_jobs
+from bog_agents_daemon.store import load_jobs, reconcile_orphaned_runs
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,14 @@ async def _run_daemon(port: int, token: str) -> None:
         port: TCP port to listen on.
         token: Auth token for API authentication.
     """
+    # Reconcile any runs a prior daemon left mid-flight (status=RUNNING) before
+    # accepting new work, so `/runs` reflects an honest terminal state instead
+    # of runs that will never finish.
+    try:
+        reconcile_orphaned_runs()
+    except Exception:  # pragma: no cover — startup reconciliation must never block boot
+        logger.exception("Orphaned-run reconciliation failed; continuing startup")
+
     scheduler = DaemonScheduler(store_loader=load_jobs, runner=run_job)
 
     config = uvicorn.Config(
@@ -417,7 +425,8 @@ def main() -> None:
     """Entry point for the bog-agents-daemon CLI command.
 
     Subcommands:
-        start (default): run the daemon in the foreground.
+        start (default): run the daemon in the foreground. `run` is an alias
+                         (DEL-2: the quickstart and systemd unit document `run`).
         stop:            request graceful shutdown via HTTP, optionally
                          falling back to a platform force-kill.
         status:          print whether a daemon is running.
@@ -429,9 +438,18 @@ def main() -> None:
     parser.add_argument("--log-level", default="INFO")
     sub = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("start", help="Run the daemon (default)")
+    # DEL-2/v4: the same global flags must also be accepted AFTER the subcommand
+    # so the documented form `bog-agents-daemon run --port 7878` (and the systemd
+    # unit) parse. argparse subparsers otherwise reject flags that follow the
+    # subcommand. SUPPRESS defaults so a flag given before the subcommand is not
+    # clobbered back to the default by the subparser.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--port", type=int, default=argparse.SUPPRESS)
+    common.add_argument("--log-level", default=argparse.SUPPRESS)
 
-    stop_p = sub.add_parser("stop", help="Stop a running daemon")
+    sub.add_parser("start", aliases=["run"], parents=[common], help="Run the daemon (default)")
+
+    stop_p = sub.add_parser("stop", parents=[common], help="Stop a running daemon")
     stop_p.add_argument(
         "--force",
         action="store_true",
@@ -444,7 +462,7 @@ def main() -> None:
         help="Seconds to wait for the process to exit after graceful shutdown",
     )
 
-    sub.add_parser("status", help="Show whether the daemon is running")
+    sub.add_parser("status", parents=[common], help="Show whether the daemon is running")
 
     args = parser.parse_args()
     cmd = args.cmd or "start"

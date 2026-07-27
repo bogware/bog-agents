@@ -110,6 +110,16 @@ class ConfigOption:
     default: Any = None
     """Typed default value, or `None` when there is no static default."""
 
+    none_sentinels: tuple[str, ...] = ()
+    """Case-insensitive string values that coerce to `None` (i.e. "disabled").
+
+    For a numeric (`INT`/`FLOAT`) option whose consumer treats a word like
+    `none`/`off` as "no limit", listing those words here makes the manifest
+    coerce them to `None` instead of warning `Ignoring …=… (expected number)`.
+    Keeps the manifest honest with a documented sentinel (e.g. the help text for
+    `BOG_AGENTS_REMOTE_READ_TIMEOUT` tells users to set it to `none`).
+    """
+
     env_var: str | None = None
     """Primary environment variable name the loader reads, or `None`."""
 
@@ -246,6 +256,10 @@ def _coerce_env(option: ConfigOption, raw: str, name: str) -> object:
         The typed value, or `_INVALID` when the raw value cannot be coerced.
     """
     kind = option.kind
+    # A documented "disabled" sentinel (e.g. `none`/`off` for a timeout) coerces
+    # to None rather than tripping the numeric/bool warnings below.
+    if option.none_sentinels and raw.strip().lower() in option.none_sentinels:
+        return None
     if kind is OptionKind.BOOL:
         classified = classify_env_bool(raw)
         if classified is None:
@@ -282,6 +296,12 @@ def _coerce_toml(option: ConfigOption, raw: object) -> object:
     kind = option.kind
     label = option.toml_path or option.key
 
+    if (
+        option.none_sentinels
+        and isinstance(raw, str)
+        and raw.strip().lower() in option.none_sentinels
+    ):
+        return None
     if kind in {OptionKind.BOOL, OptionKind.BOOL_PRESENCE}:
         if isinstance(raw, bool):
             return raw
@@ -598,9 +618,10 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
     ConfigOption(
         key="runtime.remote_read_timeout",
         group="Runtime",
-        summary="Read-timeout (seconds) for the remote client HTTP requests.",
+        summary="Read-timeout (seconds) for the remote client HTTP requests; `none` disables it.",
         kind=OptionKind.FLOAT,
         env_var=_env_vars.REMOTE_READ_TIMEOUT,
+        none_sentinels=("none", "off"),
     ),
     # --- Updates -------------------------------------------------------
     ConfigOption(
@@ -615,9 +636,9 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
     ConfigOption(
         key="ui.sounds",
         group="UI",
-        summary="Play CLI notification sounds.",
+        summary="Play a notification sound when the agent finishes (off by default; opt in with 1/true).",
         kind=OptionKind.BOOL,
-        default=True,
+        default=False,
         env_var=_env_vars.SOUNDS,
     ),
     # --- Hooks ---------------------------------------------------------

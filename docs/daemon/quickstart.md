@@ -54,7 +54,7 @@ You'll see:
 In another terminal, add a job:
 
 ```bash
-bog-agents-daemon job add \
+bog-agents daemon jobs create \
   --name morning-brief \
   --cron "0 9 * * 1-5" \
   --prompt "Summarize what changed in this repo since yesterday." \
@@ -67,7 +67,7 @@ The scheduler picks it up on the next tick.
 To run it once immediately (without waiting for the cron tick):
 
 ```bash
-bog-agents-daemon job run morning-brief
+bog-agents daemon jobs run morning-brief
 ```
 
 ## Triggers
@@ -224,25 +224,32 @@ Full API at [`daemon/api.md`](api.md) (todo: write this).
 
 ## CLI reference
 
+**Server lifecycle** — the `bog-agents-daemon` binary:
+
 ```bash
-bog-agents-daemon run                       # foreground server
-bog-agents-daemon status                    # is the daemon running?
-
-bog-agents-daemon job add ...               # see flags below
-bog-agents-daemon job list
-bog-agents-daemon job show <name>
-bog-agents-daemon job enable <name>
-bog-agents-daemon job disable <name>
-bog-agents-daemon job delete <name>
-bog-agents-daemon job run <name>            # one-off invocation
-
-bog-agents-daemon runs list                 # recent run history
-bog-agents-daemon runs show <run-id>        # full run record
-bog-agents-daemon runs prune --older-than 30d
+bog-agents-daemon run                        # foreground server (alias of `start`)
+bog-agents-daemon stop                       # graceful shutdown
+bog-agents-daemon status                     # is the daemon running?
 ```
 
+**Job management** — the `bog-agents` CLI (needs `bog-agents-cli` installed) or
+the daemon's HTTP API:
+
+```bash
+bog-agents daemon jobs create ...            # see flags below
+bog-agents daemon jobs list
+bog-agents daemon jobs show <name>
+bog-agents daemon jobs enable <name>
+bog-agents daemon jobs disable <name>
+bog-agents daemon jobs delete <name>
+bog-agents daemon jobs run <name>            # one-off invocation
+```
+
+Run history is exposed by the daemon's HTTP API (`GET /runs`,
+`GET /jobs/{id}/runs`), not a `runs` subcommand.
+
 Full flags: `bog-agents-daemon --help` and
-`bog-agents-daemon job add --help`.
+`bog-agents daemon jobs create --help`.
 
 ## Observability
 
@@ -262,7 +269,7 @@ Full flags: `bog-agents-daemon --help` and
 ### Pattern: nightly summary
 
 ```bash
-bog-agents-daemon job add \
+bog-agents daemon jobs create \
   --name nightly-summary \
   --cron "0 22 * * *" \
   --prompt "Summarize what changed in this repo today. Surface anything risky." \
@@ -274,7 +281,7 @@ bog-agents-daemon job add \
 ### Pattern: webhook investigator
 
 ```bash
-bog-agents-daemon job add \
+bog-agents daemon jobs create \
   --name ci-failure-investigator \
   --webhook ci-failure-investigator \
   --prompt "A CI run failed. Context:\n{trigger_context_json}\n\nInvestigate and propose a fix." \
@@ -293,7 +300,7 @@ curl -X POST http://daemon.internal:7878/webhook/ci-failure-investigator \
 ### Pattern: file watcher
 
 ```bash
-bog-agents-daemon job add \
+bog-agents daemon jobs create \
   --name downloads-classifier \
   --file-change "~/Downloads/*" \
   --prompt "Classify the new file at {trigger_path} into one of: invoices/, receipts/, screenshots/, misc/. Move it." \

@@ -25,6 +25,11 @@ on:
 
 defaults:
   run:
+    # DEL-4/v4: the jobs run on `[self-hosted, Windows]`, where GitHub's default
+    # shell for `run:` is pwsh — but the "Validate and update version" step uses
+    # bash `[[ ... =~ ]]` syntax and `$VAR` refs. Git Bash ships on Windows
+    # runners, so pin bash for every step (npm commands run fine under it too).
+    shell: bash
     working-directory: libs/vscode-extension
 
 jobs:

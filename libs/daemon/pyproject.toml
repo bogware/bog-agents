@@ -26,17 +26,27 @@ dependencies = [
     "uvicorn>=0.30.0,<1.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "aiofiles>=23.0.0,<25.0.0",
+    # Cron parsing + missed-slot catch-up (DMN-5). Replaces the hand-rolled
+    # 5-field parser: correct ranges/steps/lists/macros and, crucially,
+    # get_next()-based catch-up so a scheduled slot missed during downtime
+    # still fires once on restart.
+    "croniter>=2.0.0,<7.0.0",
+    # Event-driven file-change triggers (inotify/FSEvents/ReadDirectoryChangesW)
+    # replacing 30s os.walk polling; the scheduler falls back to polling if the
+    # observer can't start on a given platform/filesystem.
+    "watchdog>=4.0.0,<7.0.0",
 
     # ─── transitive-CVE floors (mirror libs/bog-agents and libs/cli so
     # bog-agents-daemon resolves a patched set on a clean install) ───
     # CVE-2026-44431 + CVE-2026-44432 — urllib3 SSRF/cookie fixes
     "urllib3>=2.7.0",
     # CVE-2026-40347 — python-multipart DoS fix via starlette/uvicorn chain
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.31",
     # CVE-2026-45134 — langsmith stale-token bug (langchain pulls it transitively)
-    "langsmith>=0.8.0",
-    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes
-    "cryptography>=46.0.7",
+    "langsmith>=0.8.18",
+    # GHSA-537c-gmf6-5ccf — vulnerable OpenSSL bundled in cryptography wheels
+    # (needs 48.0.1; forces langchain-litellm>=0.7.0, which had capped it low).
+    "cryptography>=48.0.1",
     # CVE-2026-25645 — requests CRLF fix
     "requests>=2.33.0",
 ]
@@ -78,12 +88,16 @@ daytona-sandbox = ["daytona>=0.113.0,<1.0.0"]
 langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
 # Web search
 web-search = ["tavily-python>=0.7.21,<1.0.0"]
-# Agent Client Protocol
-acp = ["bog-agents-acp>=0.0.4"]
-# Everything (excludes harbor: harbor requires Python 3.12+ but the daemon
-# supports 3.11+ — users on 3.12+ can `pip install bog-agents-harbor` directly)
+# Agent Client Protocol.
+#
+# NOTE (DEL-1): `bog-agents-acp` is not on PyPI yet, so it is intentionally NOT
+# part of `all` — including it makes `pip install bog-agents-daemon[all]` fail
+# resolution for every user. Install ACP from source until it is published.
+# Everything (publishable extras only; excludes harbor: harbor requires Python
+# 3.12+ but the daemon supports 3.11+ — users on 3.12+ can
+# `pip install bog-agents-harbor` directly)
 all = [
-    "bog-agents-daemon[all-providers,sandbox,web-search,acp]",
+    "bog-agents-daemon[all-providers,sandbox,web-search]",
 ]
 
 [project.scripts]
@@ -113,6 +127,7 @@ test = [
     "pytest-timeout>=2.3.1",
     "httpx>=0.27.0",
     "ruff>=0.12.0,<0.16.0",
+    "ty>=0.0.1,<1.0.0",  # V3-10: daemon source is now type-checked in CI
 ]
 
 [tool.pytest.ini_options]
@@ -137,3 +152,18 @@ ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN", "S", "ARG"]
+
+[tool.ty.environment]
+python-version = "3.11"
+extra-paths = ["../bog-agents"]
+
+[tool.ty.rules]
+# https://docs.astral.sh/ty/rules/
+# Model-provider extras (langchain-*) and the optional daytona/langsmith sandbox
+# deps are not installed in the base venv — suppress unresolved-import noise.
+unresolved-import = "ignore"
+# The daemon leans on dynamic typing at the create_agent / astream boundary
+# (Any-typed chunks, **kwargs config) — mirror the CLI/SDK ty posture.
+invalid-argument-type = "ignore"
+possibly-missing-attribute = "ignore"
+unused-ignore-comment = "ignore"

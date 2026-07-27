@@ -19,6 +19,7 @@ from bog_agents_daemon.store import (
     get_job,
     list_runs,
     load_jobs,
+    reconcile_orphaned_runs,
     record_run_result,
     save_jobs,
     save_run,
@@ -80,12 +81,120 @@ class TestLoadSaveJobs:
         jobs_file.write_text("NOT JSON", encoding="utf-8")
         assert load_jobs() == []
 
+
+class TestCorruptQuarantine:
+    """DMN-4b: an unreadable jobs.json is moved aside, never silently overwritten."""
+
+    def test_invalid_json_is_quarantined(self, tmp_daemon_dir: Path):
+        jobs_file = tmp_daemon_dir / "jobs.json"
+        jobs_file.write_text("NOT JSON", encoding="utf-8")
+        assert load_jobs() == []
+        # The original bytes are preserved in a quarantine sibling, and the
+        # live path is gone so it can't be clobbered.
+        assert not jobs_file.exists()
+        quarantined = list(tmp_daemon_dir.glob("jobs.json.corrupt-*"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text(encoding="utf-8") == "NOT JSON"
+
+    def test_non_list_json_is_quarantined(self, tmp_daemon_dir: Path):
+        jobs_file = tmp_daemon_dir / "jobs.json"
+        jobs_file.write_text('{"not": "a list"}', encoding="utf-8")
+        assert load_jobs() == []
+        assert list(tmp_daemon_dir.glob("jobs.json.corrupt-*"))
+
+    def test_next_save_does_not_destroy_quarantined_jobs(self, tmp_daemon_dir: Path):
+        # The core data-loss guard: after a corrupt read, a subsequent write
+        # must not overwrite the preserved copy.
+        jobs_file = tmp_daemon_dir / "jobs.json"
+        jobs_file.write_text('[{"job_id": "keepme"}]... truncated garbage', encoding="utf-8")
+        original = jobs_file.read_text(encoding="utf-8")
+        assert load_jobs() == []
+        save_jobs([AmbientJob(name="fresh")])  # would previously clobber the original
+        quarantined = list(tmp_daemon_dir.glob("jobs.json.corrupt-*"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text(encoding="utf-8") == original
+
+    def test_transient_oserror_does_not_quarantine(self, tmp_daemon_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        # A momentary read error must NOT move a possibly-good file aside.
+        import bog_agents_daemon.store as store_mod
+
+        job = AmbientJob(name="valuable")
+        save_jobs([job])
+
+        real_read_text = Path.read_text
+        state = {"fail_next": True}
+
+        def _flaky_read(self: Path, *args: object, **kwargs: object) -> str:
+            # Fail the very first read of the jobs file, then behave normally —
+            # simulating a momentary lock/permission blip that clears.
+            if self == store_mod._JOBS_FILE and state["fail_next"]:
+                state["fail_next"] = False
+                raise OSError("device busy")
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _flaky_read)
+        # First read hits the transient error → empty list, but NO quarantine.
+        assert load_jobs() == []
+        assert not list(tmp_daemon_dir.glob("jobs.json.corrupt-*"))
+        # Once the blip clears the untouched file loads fine.
+        assert len(load_jobs()) == 1
+
+
+class TestOrphanedRunRecovery:
+    """A run left RUNNING by a crashed daemon is reconciled to FAILED on startup."""
+
+    def test_running_run_reconciled_to_failed(self, tmp_daemon_dir: Path):
+        orphan = JobRun(job_id="j1", job_name="j", status=JobStatus.RUNNING)
+        orphan.finished_at = 0.0
+        save_run(orphan)
+
+        count = reconcile_orphaned_runs()
+        assert count == 1
+
+        reloaded = list_runs("j1")[0]
+        assert reloaded.status == JobStatus.FAILED
+        assert reloaded.finished_at > 0
+        assert "interrupted" in reloaded.error.lower()
+
+    def test_completed_run_left_untouched(self, tmp_daemon_dir: Path):
+        done = JobRun(job_id="j1", job_name="j", status=JobStatus.COMPLETED, output="ok")
+        done.finished_at = 123.0
+        save_run(done)
+
+        assert reconcile_orphaned_runs() == 0
+        reloaded = list_runs("j1")[0]
+        assert reloaded.status == JobStatus.COMPLETED
+        assert reloaded.finished_at == 123.0
+
+    def test_reconcile_is_idempotent(self, tmp_daemon_dir: Path):
+        orphan = JobRun(job_id="j1", job_name="j", status=JobStatus.RUNNING)
+        orphan.finished_at = 0.0
+        save_run(orphan)
+        assert reconcile_orphaned_runs() == 1
+        # A second pass finds nothing left to fix.
+        assert reconcile_orphaned_runs() == 0
+
     def test_save_is_atomic(self, tmp_daemon_dir: Path):
         """Saving uses a temp file then replaces — jobs.json never partially written."""
         jobs = [AmbientJob(name=f"job-{i}") for i in range(10)]
         save_jobs(jobs)
         loaded = load_jobs()
         assert len(loaded) == 10
+
+    def test_retry_policy_survives_round_trip(self, tmp_daemon_dir: Path):
+        job = AmbientJob(name="r", prompt="x", max_retries=3, retry_backoff_seconds=5.5)
+        save_jobs([job])
+        loaded = load_jobs()[0]
+        assert loaded.max_retries == 3
+        assert loaded.retry_backoff_seconds == 5.5
+
+    def test_legacy_job_without_retry_fields_defaults(self, tmp_daemon_dir: Path):
+        # A jobs.json written before retry existed must load with safe defaults.
+        jobs_file = tmp_daemon_dir / "jobs.json"
+        jobs_file.write_text('[{"job_id": "old", "name": "legacy"}]', encoding="utf-8")
+        loaded = load_jobs()[0]
+        assert loaded.max_retries == 0
+        assert loaded.retry_backoff_seconds == 2.0
 
 
 class TestUpsertDeleteJob:
@@ -146,6 +255,21 @@ class TestUpsertDeleteJob:
         assert merged.last_status == JobStatus.COMPLETED  # run-state applied
         assert merged.last_run_at == 123.0
         assert merged.run_count == 1
+
+
+class TestRunAttempts:
+    def test_attempts_survive_disk_round_trip(self, tmp_daemon_dir: Path):
+        run = JobRun(run_id="r1", job_id="j1", job_name="j", attempts=4)
+        save_run(run)
+        assert list_runs("j1")[0].attempts == 4
+
+    def test_legacy_run_without_attempts_defaults_to_one(self, tmp_daemon_dir: Path):
+        runs_dir = tmp_daemon_dir / "runs"
+        (runs_dir / "j1_r1.json").write_text(
+            '{"run_id": "r1", "job_id": "j1", "job_name": "j", "status": "completed"}',
+            encoding="utf-8",
+        )
+        assert list_runs("j1")[0].attempts == 1
 
 
 class TestRunDispatchErrors:

@@ -1274,6 +1274,38 @@ class TestFilesystemMiddleware:
         assert "Error: Execution not available" in result
         assert "does not support command execution" in result
 
+    def test_execute_tool_returns_error_on_dangerous_command_permissionerror(self):
+        """SB-1: a backend PermissionError (dangerous-command guard) becomes a
+        tool-error string instead of propagating and aborting the turn."""
+
+        class BlockingSandboxBackend(SandboxBackendProtocol, StateBackend):
+            def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+                msg = "Dangerous command blocked: recursive delete. Pass allow_dangerous=True to bypass."
+                raise PermissionError(msg)
+
+            @property
+            def id(self):
+                return "blocking-mock-sandbox-backend"
+
+        state = FilesystemState(messages=[], files={})
+        rt = ToolRuntime(
+            state=state,
+            context=None,
+            tool_call_id="test_perm",
+            store=InMemoryStore(),
+            stream_writer=lambda _: None,
+            config={},
+        )
+        backend = BlockingSandboxBackend(rt)
+        middleware = FilesystemMiddleware(backend=backend)
+
+        execute_tool = next(tool for tool in middleware.tools if tool.name == "execute")
+        result = execute_tool.invoke({"command": "rm -rf build", "runtime": rt})
+
+        assert isinstance(result, str)
+        assert "Dangerous command blocked" in result
+        assert result.startswith("Error:")
+
     def test_execute_tool_output_formatting(self):
         """Test execute tool formats output correctly."""
 

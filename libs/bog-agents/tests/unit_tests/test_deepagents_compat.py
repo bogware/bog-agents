@@ -294,3 +294,43 @@ def test_profile_cannot_exclude_required_scaffolding() -> None:
     """Excluding `FilesystemMiddleware`/`SubAgentMiddleware` is rejected at construction."""
     with pytest.raises(ValueError, match="scaffolding"):
         HarnessProfile(excluded_middleware=frozenset({"FilesystemMiddleware"}))
+
+
+# ---------------------------------------------------------------------------
+# deepagents 0.7 result-type shape parity
+# ---------------------------------------------------------------------------
+
+
+def test_readresult_carries_07_pagination_fields() -> None:
+    """ReadResult exposes 0.7's total_lines/start_line/end_line/next_offset."""
+    from bog_agents.backends.protocol import ReadResult
+
+    # Default (bog's common case): pagination not tracked, all None, no error.
+    default = ReadResult(file_data={"content": "x"})
+    assert default.total_lines is None
+    assert default.start_line is None
+    assert default.end_line is None
+    assert default.next_offset is None
+
+    # A backend that does track pagination populates them.
+    paged = ReadResult(file_data={"content": "x"}, total_lines=500, start_line=1, end_line=100, next_offset=100)
+    assert (paged.total_lines, paged.start_line, paged.end_line, paged.next_offset) == (500, 1, 100, 100)
+
+
+def test_readresult_rejects_negative_pagination() -> None:
+    from bog_agents.backends.protocol import ReadResult
+
+    with pytest.raises(ValueError, match="non-negative"):
+        ReadResult(total_lines=-1)
+
+
+def test_grepmatch_accepts_07_context_fields() -> None:
+    """GrepMatch/ContextLine match 0.7's shape (context is NotRequired)."""
+    from bog_agents.backends.protocol import ContextLine, GrepMatch
+
+    before: list[ContextLine] = [{"line": 4, "text": "prev"}]
+    match: GrepMatch = {"path": "/a.py", "line": 5, "text": "hit", "context_before": before}
+    assert match["context_before"][0]["line"] == 4
+    # Context is optional — a match without it is still valid.
+    minimal: GrepMatch = {"path": "/a.py", "line": 5, "text": "hit"}
+    assert minimal.get("context_after") is None

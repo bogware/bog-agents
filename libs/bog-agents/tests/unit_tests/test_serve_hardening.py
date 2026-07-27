@@ -187,3 +187,139 @@ async def test_timeboxed_aiter_raises_on_stall() -> None:
 
     with pytest.raises(asyncio.TimeoutError):
         await _drain()
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-1 — CORS default is closed
+# --------------------------------------------------------------------------- #
+
+
+def test_cors_origins_default_is_empty() -> None:
+    # The old default of ["*"] let any drive-by page drive the agent.
+    assert ServerConfig().cors_origins == []
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-4 — history replay for checkpointer-less agents
+# --------------------------------------------------------------------------- #
+
+
+class _CapturingAgent:
+    """Records the last ``input_data`` and reports checkpointer presence."""
+
+    def __init__(self, *, checkpointer: object | None = None) -> None:
+        self.checkpointer = checkpointer
+        self.last_input: dict | None = None
+
+    async def ainvoke(self, input_data: dict, *, config: dict) -> dict:
+        self.last_input = input_data
+        return {"messages": [{"role": "assistant", "content": "ok"}]}
+
+
+async def test_checkpointerless_agent_replays_full_history() -> None:
+    agent = _CapturingAgent(checkpointer=None)
+    server = AgentServer(agent, config=ServerConfig())
+    await server.invoke("first", thread_id="t1")
+    await server.invoke("second", thread_id="t1")
+    # Turn 2 must carry the whole conversation, not just "second".
+    contents = [m["content"] for m in agent.last_input["messages"]]
+    assert contents == ["first", "ok", "second"]
+
+
+async def test_checkpointer_agent_sends_only_new_message() -> None:
+    agent = _CapturingAgent(checkpointer=object())
+    server = AgentServer(agent, config=ServerConfig())
+    await server.invoke("first", thread_id="t1")
+    await server.invoke("second", thread_id="t1")
+    # With a checkpointer the graph resumes its own state; send only the turn.
+    contents = [m["content"] for m in agent.last_input["messages"]]
+    assert contents == ["second"]
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-5 — stream decouples production from consumption
+# --------------------------------------------------------------------------- #
+
+
+class _StreamingAgent:
+    """Fake agent exposing both ainvoke and astream_events."""
+
+    def __init__(self, *, n: int = 3, checkpointer: object | None = None) -> None:
+        self.n = n
+        self.checkpointer = checkpointer
+
+    async def ainvoke(self, _input_data: dict, *, config: dict) -> dict:
+        return {"messages": [{"role": "assistant", "content": "done"}]}
+
+    async def astream_events(self, _input_data: dict, *, config: dict, version: str) -> object:
+        for i in range(self.n):
+            yield {"event": "on_chunk", "data": {"i": i}}
+
+
+async def test_stream_yields_all_events_and_terminates() -> None:
+    server = AgentServer(_StreamingAgent(n=3), config=ServerConfig())
+    events = [e async for e in server.stream("hi", thread_id="t1")]
+    assert [e["data"] for e in events] == [{"i": 0}, {"i": 1}, {"i": 2}]
+
+
+async def test_stream_releases_slot_between_runs() -> None:
+    # With a single slot, two sequential streams both complete only if the slot
+    # is released when production ends (not held by the client connection).
+    server = AgentServer(_StreamingAgent(n=2), config=ServerConfig(max_concurrent_requests=1))
+    for _ in range(2):
+        events = [e async for e in server.stream("hi")]
+        assert len(events) == 2
+
+
+async def test_abandoned_stream_frees_slot() -> None:
+    # A client that starts consuming then disconnects must not pin the only slot.
+    server = AgentServer(_StreamingAgent(n=100), config=ServerConfig(max_concurrent_requests=1, request_timeout=5.0))
+    gen = server.stream("hi")
+    await gen.__anext__()  # begin consuming
+    await gen.aclose()  # client disconnects mid-stream
+    # The slot must be free for a fresh invocation.
+    result = await asyncio.wait_for(server.invoke("next"), timeout=2.0)
+    assert result.get("response") == "done"
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-6 — dead flags killed / enforced
+# --------------------------------------------------------------------------- #
+
+
+def test_get_info_does_not_advertise_websocket() -> None:
+    server = AgentServer(_FakeAgent(), config=ServerConfig())
+    info = server.get_info()
+    assert "websocket" not in info["config"]
+    assert info["config"]["streaming"] is True
+
+
+def test_server_config_has_no_websocket_flag() -> None:
+    # The dead enable_websocket flag was removed, not silently kept.
+    assert not hasattr(ServerConfig(), "enable_websocket")
+
+
+# --------------------------------------------------------------------------- #
+# Endpoint-level (Starlette) — 501 enforcement + closed CORS default
+# --------------------------------------------------------------------------- #
+
+
+def test_stream_endpoint_returns_501_when_disabled() -> None:
+    pytest.importorskip("starlette")
+    from starlette.testclient import TestClient
+
+    server = AgentServer(_StreamingAgent(), config=ServerConfig(enable_streaming=False))
+    client = TestClient(server.create_app())
+    resp = client.post("/stream", json={"message": "hi"})
+    assert resp.status_code == 501
+
+
+def test_default_cors_does_not_allow_wildcard_origin() -> None:
+    pytest.importorskip("starlette")
+    from starlette.testclient import TestClient
+
+    server = AgentServer(_FakeAgent(), config=ServerConfig())
+    client = TestClient(server.create_app())
+    resp = client.get("/health", headers={"Origin": "https://evil.example"})
+    # With the closed default, no cross-origin allowance is echoed back.
+    assert resp.headers.get("access-control-allow-origin") != "*"

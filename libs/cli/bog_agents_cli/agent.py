@@ -1021,13 +1021,85 @@ def _format_execute_description(
     return "\n".join(lines)
 
 
+def _format_git_commit_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_commit tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the git_commit tool call.
+    """
+    args = tool_call["args"]
+    message = strip_dangerous_unicode(str(args.get("message", "")))
+    files = args.get("files")
+    lines = [f"Git commit: {message}"]
+    if files:
+        joined = ", ".join(strip_dangerous_unicode(str(f)) for f in files)
+        lines.append(f"Staging first: {joined}")
+    else:
+        lines.append("Stages and commits all current changes.")
+    return "\n".join(lines)
+
+
+def _format_git_add_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_add tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the git_add tool call.
+    """
+    paths = tool_call["args"].get("paths") or []
+    joined = ", ".join(strip_dangerous_unicode(str(p)) for p in paths)
+    return f"Stage files for commit: {joined}" if joined else "Stage files for commit."
+
+
+def _format_git_branch_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_branch tool call for the approval prompt.
+
+    Only reached when a branch name is supplied (see the `when` predicate); a
+    bare `git_branch` call just lists branches and is not gated.
+
+    Returns:
+        Formatted description string for the git_branch tool call.
+    """
+    args = tool_call["args"]
+    name = strip_dangerous_unicode(str(args.get("name", "")))
+    if args.get("checkout"):
+        return f"Create and switch to branch: {name}"
+    return f"Create branch: {name}"
+
+
+def _format_git_stash_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a git_stash tool call for the approval prompt.
+
+    Only reached for mutating actions (push/pop/drop) — list/show are not gated.
+
+    Returns:
+        Formatted description string for the git_stash tool call.
+    """
+    action = str(tool_call["args"].get("action", "list"))
+    if action == "drop":
+        return (
+            f"{get_glyphs().warning}  git stash drop — permanently discards a "
+            "stash entry (cannot be undone)."
+        )
+    return f"git stash {action}"
+
+
 def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     """Configure human-in-the-loop interrupt settings for all gated tools.
 
     Every tool that can have side effects or access external resources
     (shell execution, file writes/edits, web search, URL fetch, task
-    delegation) is gated behind an approval prompt unless auto-approve
-    is enabled.
+    delegation, and the mutating git tools) is gated behind an approval prompt
+    unless auto-approve is enabled. The git tools are arg-conditional via a
+    `when` predicate so read-only paths (`git_branch` listing, `git_stash
+    list`/`show`) are never gated (CLI-CORE-2 / v4).
 
     Returns:
         Dictionary mapping tool names to their interrupt configuration.
@@ -1069,6 +1141,32 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
         "web_search": web_search_interrupt_config,
         "fetch_url": fetch_url_interrupt_config,
         "task": task_interrupt_config,
+    }
+
+    # Mutating git tools (default-on via GitToolsMiddleware) must be gated too —
+    # git_commit/git_add always mutate; git_branch mutates only when creating or
+    # switching a branch (a name is supplied); git_stash mutates on push/pop/drop
+    # (drop is destructive). The `when` predicates keep read-only calls
+    # (branch listing, `git stash list`/`show`) un-prompted (CLI-CORE-2 / v4).
+    interrupt_map["git_commit"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_commit_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
+    interrupt_map["git_add"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_add_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
+    interrupt_map["git_branch"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_branch_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+        "when": lambda req: req.tool_call["args"].get("name") is not None,
+    }
+    interrupt_map["git_stash"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_git_stash_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+        "when": lambda req: (
+            req.tool_call["args"].get("action", "list") in {"push", "pop", "drop"}
+        ),
     }
 
     if REQUIRE_COMPACT_TOOL_APPROVAL:
@@ -1433,6 +1531,22 @@ def create_cli_agent(
             if settings.user_langchain_project:
                 shell_env["LANGSMITH_PROJECT"] = settings.user_langchain_project
 
+            # Optional OS-level sandbox (#22): when `.bog-agents/sandbox.toml`
+            # declares `local_sandbox = "..."`, confine shell commands with
+            # bubblewrap/seatbelt and enforce the network allowlist. Opt-in and
+            # a safe no-op where no launcher exists (unless require_sandbox).
+            local_sandbox = None
+            require_sandbox = False
+            try:
+                from bog_agents.sandbox_config import load_sandbox_config
+
+                sbx_cfg = load_sandbox_config(root_dir)
+                if sbx_cfg is not None and sbx_cfg.local_sandbox:
+                    local_sandbox = sbx_cfg.build_local_sandbox(root_dir)
+                    require_sandbox = sbx_cfg.require_sandbox
+            except Exception:
+                logger.debug("Could not load local sandbox config", exc_info=True)
+
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
             # on the execute tool natively. Honour the same
@@ -1442,6 +1556,8 @@ def create_cli_agent(
                 inherit_env=True,
                 env=shell_env,
                 virtual_mode=not unsandboxed,
+                sandbox=local_sandbox,
+                require_sandbox=require_sandbox,
             )
         else:
             # No shell access - use plain FilesystemBackend with the
@@ -1475,9 +1591,23 @@ def create_cli_agent(
 
     # Configure interrupt_on based on auto_approve setting
     interrupt_on: dict[str, bool | InterruptOnConfig] | None = None
-    if auto_approve:  # noqa: SIM108  # if-else more readable for interrupt_on config
-        # No interrupts - all tools run automatically
-        interrupt_on = {}
+    if auto_approve:
+        # No interrupts for ordinary tools — but the self-modification guard
+        # (#24) still forces approval for a shell command that appears to write
+        # an authority file, even unattended. Writes to authority files via the
+        # file tools are gated by the interrupt-mode permission rules below,
+        # which the SDK merges into interrupt_on regardless of this setting.
+        from bog_agents_cli.self_protection import command_targets_authority_file
+
+        interrupt_on = {
+            "execute": {
+                "allowed_decisions": ["approve", "reject"],
+                "description": _format_execute_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+                "when": lambda req: command_targets_authority_file(
+                    str(req.tool_call["args"].get("command", ""))
+                ),
+            }
+        }
     else:
         # Full HITL for destructive operations
         interrupt_on = _add_interrupt_on()  # type: ignore[assignment]  # InterruptOnConfig is compatible at runtime
@@ -1761,6 +1891,12 @@ def create_cli_agent(
         logger.debug("street sweeper attach failed; skipping", exc_info=True)
 
     # Create the agent
+    # Self-modification guard (#24): gate writes to the agent's own authority
+    # files (Expert rules, dreamscape laws, hooks, .mcp.json) behind human
+    # approval. These interrupt-mode rules are merged into interrupt_on by
+    # create_agent even under --auto-approve, so the guard can't be bypassed.
+    from bog_agents_cli.self_protection import authority_file_permissions
+
     agent = create_agent(
         model=model,
         system_prompt=system_prompt,
@@ -1768,6 +1904,7 @@ def create_cli_agent(
         backend=composite_backend,
         middleware=agent_middleware,
         interrupt_on=interrupt_on,
+        permissions=authority_file_permissions(),
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
     ).with_config(config)

@@ -26,7 +26,30 @@ from pathlib import Path
 # controller module (see CLAUDE.md and expert_controller.py for the pattern).
 # Only bump this constant when the growth genuinely belongs on BogAgentsApp, and
 # bump it deliberately in the same change that adds the lines.
-APP_PY_LINE_CEILING = 17_510
+#
+# Bumped 2026-07-23 to 17,575 for the v4 Wave-0 turn-lifecycle work: the
+# CLI-CORE-1/-3/-4 correctness fixes (queue-drain reorder, /clear thread-id
+# sync, busy-guarded deferral in _send_prompt_to_agent) plus the TurnManager
+# delegation. The lifecycle LOGIC moved OUT to the new turn_manager.py module;
+# what stays on BogAgentsApp is thin — three delegating properties (so the ~25
+# read sites are untouched) and begin/end calls at the dispatch sites — which is
+# the sanctioned "logic in a module, thin app surface" pattern this ratchet
+# exists to encourage.
+#
+# Bumped 2026-07-26 to 17,635 for the `/best-of-n` handler (killer feature #31).
+# All of the orchestration — worktree fan-out, rubric judging, ranking, winner
+# selection, worktree wiring — lives in the testable `best_of_n.py` module (12
+# unit tests, injected runner+judge). What lands on BogAgentsApp is only the
+# thin arg-parse + spinner + result-mount glue that needs `self._mount_message`
+# / `self._model_override` — exactly the sanctioned split.
+#
+# Bumped 2026-07-26 to 17,695 for the `/team run` subcommand (killer feature
+# #21's CLI surface). The ledger construction, arg parsing (`parse_team_run_args`),
+# real teammate-runner wiring, and cap-governed session all live in the testable
+# `team_executor.py` module (9 unit tests, injected runner). What lands on
+# BogAgentsApp is only the thin subcommand branch: model resolution + spinner +
+# `report.format_summary()` mount — the same sanctioned split as `/best-of-n`.
+APP_PY_LINE_CEILING = 17_695
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 

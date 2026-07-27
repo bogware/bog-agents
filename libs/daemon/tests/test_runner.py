@@ -125,6 +125,69 @@ class TestInvokeAgent:
 
 
 # ---------------------------------------------------------------------------
+# _select_backend — unattended shell posture (DMN-1)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectBackend:
+    """Unattended triggers must not get a host shell or the daemon's env."""
+
+    def test_manual_trigger_gets_shell_backend(self, tmp_path: Path) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+        from bog_agents.middleware.filesystem import _supports_execution
+
+        from bog_agents_daemon.runner import _select_backend
+
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.MANUAL)
+
+        assert isinstance(backend, LocalShellBackend)
+        assert _supports_execution(backend) is True
+
+    def test_unattended_trigger_gets_no_shell(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents.backends.filesystem import FilesystemBackend
+        from bog_agents.middleware.filesystem import _supports_execution
+
+        from bog_agents_daemon.runner import _select_backend
+
+        monkeypatch.delenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", raising=False)
+        job = AmbientJob(name="j", prompt="go")
+
+        for trigger in (TriggerType.WEBHOOK, TriggerType.GIT_PUSH, TriggerType.CRON):
+            backend = _select_backend(tmp_path, job, trigger)
+            # Non-sandbox backend => the execute tool is unavailable (no host
+            # shell), and FilesystemBackend takes no env (daemon secrets stay out).
+            assert isinstance(backend, FilesystemBackend), trigger
+            assert _supports_execution(backend) is False, trigger
+
+    def test_opt_in_env_restores_shell_for_unattended(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from bog_agents.backends.local_shell import LocalShellBackend
+
+        from bog_agents_daemon.runner import _select_backend
+
+        monkeypatch.setenv("BOG_DAEMON_ALLOW_UNATTENDED_SHELL", "1")
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.WEBHOOK)
+
+        assert isinstance(backend, LocalShellBackend)
+
+    def test_manual_shell_applies_sandbox_spec_allowlist(self, tmp_path: Path) -> None:
+        # #27: a committed .bog-agents/sandbox.toml egress allowlist is surfaced
+        # in the shell backend's env for the #22 proxy to enforce.
+        from bog_agents.backends.local_shell import LocalShellBackend
+        from bog_agents.sandbox_config import SANDBOX_NETWORK_ALLOWLIST_ENV
+
+        from bog_agents_daemon.runner import _select_backend
+
+        (tmp_path / ".bog-agents").mkdir()
+        (tmp_path / ".bog-agents" / "sandbox.toml").write_text('[sandbox]\nnetwork_allowlist = ["pypi.org", "github.com"]\n', encoding="utf-8")
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.MANUAL)
+        assert isinstance(backend, LocalShellBackend)
+        assert backend._env[SANDBOX_NETWORK_ALLOWLIST_ENV] == "pypi.org,github.com"
+
+
+# ---------------------------------------------------------------------------
 # run_job — end-to-end orchestration
 # ---------------------------------------------------------------------------
 
@@ -175,6 +238,164 @@ class TestRunJob:
 
         assert run.trigger_context == ctx
         assert run.trigger_type == TriggerType.GIT_PUSH
+
+
+class TestDispatchErrorCapture:
+    """DMN-3b: network-target delivery failures land in run.dispatch_errors."""
+
+    async def test_failing_webhook_recorded(self, tmp_daemon_dir: Path) -> None:
+        import urllib.error
+
+        job = AmbientJob(
+            name="notify",
+            prompt="go",
+            outputs=[OutputConfig(target=OutputTarget.WEBHOOK, webhook_url="http://127.0.0.1:1/hook")],
+        )
+
+        def _boom(_req: object) -> None:
+            raise urllib.error.URLError("connection refused")
+
+        with (
+            patch("bog_agents_daemon.runner._invoke_agent", new_callable=AsyncMock, return_value="done"),
+            patch("bog_agents_daemon.runner._urlopen_blocking", side_effect=_boom),
+        ):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        # The agent itself still succeeded; the failure is in delivery and is
+        # now visible on the run record, not swallowed into the log.
+        assert run.status == JobStatus.COMPLETED
+        assert run.dispatch_errors
+        assert run.dispatch_errors[0]["target"] == "webhook"
+        assert "connection refused" in run.dispatch_errors[0]["error"]
+        # Surfaced via the universal `error` signal callers already check.
+        assert "output target" in run.error
+
+    async def test_successful_webhook_records_nothing(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(
+            name="notify",
+            prompt="go",
+            outputs=[OutputConfig(target=OutputTarget.WEBHOOK, webhook_url="http://127.0.0.1:1/hook")],
+        )
+        with (
+            patch("bog_agents_daemon.runner._invoke_agent", new_callable=AsyncMock, return_value="done"),
+            patch("bog_agents_daemon.runner._urlopen_blocking", return_value=None),
+        ):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.COMPLETED
+        assert run.dispatch_errors == []
+        assert run.error == ""
+
+
+class TestRetryPolicy:
+    """Opt-in per-job retry for the agent invocation and each output dispatch."""
+
+    async def test_agent_retries_then_succeeds(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(name="flaky", prompt="go", max_retries=3, retry_backoff_seconds=0.0)
+        calls = {"n": 0}
+
+        async def _flaky(_job: AmbientJob, _prompt: str, **_kw: object) -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                msg = "transient 529"
+                raise RuntimeError(msg)
+            return "recovered"
+
+        with patch("bog_agents_daemon.runner._invoke_agent", side_effect=_flaky):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.COMPLETED
+        assert run.output == "recovered"
+        assert run.attempts == 3
+        assert calls["n"] == 3
+
+    async def test_agent_exhausts_retries(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(name="broken", prompt="go", max_retries=2, retry_backoff_seconds=0.0)
+
+        async def _always_fail(_job: AmbientJob, _prompt: str, **_kw: object) -> str:
+            msg = "still broken"
+            raise RuntimeError(msg)
+
+        with patch("bog_agents_daemon.runner._invoke_agent", side_effect=_always_fail):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.FAILED
+        assert "still broken" in run.error
+        assert run.attempts == 3  # 1 initial + 2 retries
+
+    async def test_default_policy_is_single_attempt(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(name="once", prompt="go")  # max_retries defaults to 0
+        calls = {"n": 0}
+
+        async def _fail_once(_job: AmbientJob, _prompt: str, **_kw: object) -> str:
+            calls["n"] += 1
+            msg = "boom"
+            raise RuntimeError(msg)
+
+        with patch("bog_agents_daemon.runner._invoke_agent", side_effect=_fail_once):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.FAILED
+        assert run.attempts == 1
+        assert calls["n"] == 1
+
+    async def test_prompt_resolution_error_is_not_retried(self, tmp_daemon_dir: Path) -> None:
+        # A missing skill is deterministic — it must fail once, not burn retries.
+        job = AmbientJob(name="noskill", skill_name="definitely-missing-xyz", max_retries=5, retry_backoff_seconds=0.0)
+        run = await run_job(job, trigger_type=TriggerType.MANUAL)
+        assert run.status == JobStatus.FAILED
+        assert run.attempts == 1
+
+    async def test_dispatch_retries_then_succeeds(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(
+            name="notify",
+            prompt="go",
+            max_retries=3,
+            retry_backoff_seconds=0.0,
+            outputs=[OutputConfig(target=OutputTarget.WEBHOOK, webhook_url="http://127.0.0.1:1/hook")],
+        )
+        attempts = {"n": 0}
+
+        def _flaky_send(_req: object) -> None:
+            import urllib.error
+
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise urllib.error.URLError("temporary")
+
+        with (
+            patch("bog_agents_daemon.runner._invoke_agent", new_callable=AsyncMock, return_value="done"),
+            patch("bog_agents_daemon.runner._urlopen_blocking", side_effect=_flaky_send),
+        ):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.COMPLETED
+        assert run.dispatch_errors == []  # delivery succeeded within the retry budget
+        assert attempts["n"] == 3
+
+    async def test_dispatch_exhausts_retries_records_error(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(
+            name="notify",
+            prompt="go",
+            max_retries=1,
+            retry_backoff_seconds=0.0,
+            outputs=[OutputConfig(target=OutputTarget.WEBHOOK, webhook_url="http://127.0.0.1:1/hook")],
+        )
+
+        def _always_fail(_req: object) -> None:
+            import urllib.error
+
+            raise urllib.error.URLError("down")
+
+        with (
+            patch("bog_agents_daemon.runner._invoke_agent", new_callable=AsyncMock, return_value="done"),
+            patch("bog_agents_daemon.runner._urlopen_blocking", side_effect=_always_fail),
+        ):
+            run = await run_job(job, trigger_type=TriggerType.MANUAL)
+
+        assert run.status == JobStatus.COMPLETED  # agent succeeded; only delivery failed
+        assert run.dispatch_errors
+        assert "down" in run.dispatch_errors[0]["error"]
 
 
 # ---------------------------------------------------------------------------

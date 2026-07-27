@@ -78,6 +78,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/best-of-n",
+            "Run N full agent attempts in isolated worktrees, judge each by the rubric, keep the winner",
+            "attempts best-of-n parallel worktree rubric judge winner race agents",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_best_of_n_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/qa",
             "Author and run acceptance-criteria QA plans against a deployed product",
             "test acceptance criteria ac jira plan deploy verify",

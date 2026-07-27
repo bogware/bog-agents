@@ -2,8 +2,25 @@
 
 from __future__ import annotations
 
+import warnings
+
+import pytest
+
 from bog_agents.builder import AgentBuilder
+from bog_agents.feature_config import FeatureConfig
 from bog_agents.middleware.parallel_agents import ParallelAgentsMiddleware
+
+
+def _capture_create_agent(monkeypatch) -> dict:
+    """Patch create_agent to capture the kwargs build() forwards."""
+    captured: dict = {}
+
+    def fake_create_agent(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "GRAPH"
+
+    monkeypatch.setattr("bog_agents.graph.create_agent", fake_create_agent)
+    return captured
 
 
 def test_with_multi_agent_wires_parallel_agents_middleware(monkeypatch) -> None:
@@ -44,3 +61,59 @@ def test_build_without_multi_agent_omits_parallel_middleware(monkeypatch) -> Non
 
     middleware = captured.get("middleware", [])
     assert not any(isinstance(m, ParallelAgentsMiddleware) for m in middleware)
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-2 — feature flags via FeatureConfig, cost not force-enabled
+# --------------------------------------------------------------------------- #
+
+
+def test_build_does_not_force_enable_cost_tracking(monkeypatch) -> None:
+    captured = _capture_create_agent(monkeypatch)
+    AgentBuilder("anthropic:claude-sonnet-4-6").build()
+    # Cost tracking must not be silently on, and never via the bare-kwarg backdoor.
+    assert "enable_cost_tracking" not in captured
+    cfg = captured.get("config")
+    assert cfg is None or cfg.enable_cost_tracking is False
+
+
+def test_build_routes_feature_flags_through_config(monkeypatch) -> None:
+    captured = _capture_create_agent(monkeypatch)
+    AgentBuilder("anthropic:claude-sonnet-4-6").with_cost_tracking(budget_usd=5).build()
+    cfg = captured.get("config")
+    assert isinstance(cfg, FeatureConfig)
+    assert cfg.enable_cost_tracking is True
+    assert cfg.budget_usd == 5
+    # Feature flags must NOT also leak through as bare (deprecated) kwargs.
+    assert "enable_cost_tracking" not in captured
+    assert "budget_usd" not in captured
+
+
+def test_real_build_emits_no_legacy_flag_deprecation() -> None:
+    # The definitive SDK-CORE-2 check: a real build() with feature flags must not
+    # trip create_agent's "feature flags as kwargs" DeprecationWarning.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        agent = AgentBuilder("anthropic:claude-sonnet-4-6").with_cost_tracking(budget_usd=1).build()
+    assert agent is not None
+    assert not any("feature flags as kwargs" in str(w.message) for w in caught), [str(w.message) for w in caught]
+
+
+# --------------------------------------------------------------------------- #
+# SDK-CORE-7 — mcp / sandbox no-ops made honest
+# --------------------------------------------------------------------------- #
+
+
+def test_with_mcp_raises_not_implemented() -> None:
+    with pytest.raises(NotImplementedError, match="with_mcp"):
+        AgentBuilder("anthropic:claude-sonnet-4-6").with_mcp("github")
+
+
+def test_with_sandbox_allow_dangerous_builds_local_backend(monkeypatch) -> None:
+    from bog_agents.backends.local_shell import LocalShellBackend
+
+    captured = _capture_create_agent(monkeypatch)
+    AgentBuilder("anthropic:claude-sonnet-4-6").with_sandbox(allow_dangerous=True).build()
+    backend = captured.get("backend")
+    assert isinstance(backend, LocalShellBackend)
+    assert backend._allow_dangerous is True

@@ -27,26 +27,30 @@ classifiers = [
 ]
 dependencies = [
     "anyio>=4.0.0,<5.0.0",
-    # CVE-2026-40087 (langchain-core 1.2.x): fix landed in 1.2.28
-    "langchain-core>=1.4.9,<2.0.0",
-    "langchain>=1.3.12,<2.0.0",
+    # CVE-2026-40087 (langchain-core 1.2.x): fix landed in 1.2.28.
+    # Floors track deepagents 0.7.0b2 so the two stay co-installable in one venv
+    # (0.7 requires langchain-core>=1.5.0 / langchain>=1.3.14). See PARITY.md.
+    "langchain-core>=1.5.0,<2.0.0",
+    "langchain>=1.3.14,<2.0.0",
     # graph.py and ~15 middleware modules import langgraph directly (BaseCache,
     # channels, CompiledStateGraph, …); declare it explicitly instead of
     # relying on it arriving transitively via langchain. (REVIEW.md v2 P1-72.)
     "langgraph>=1.2.0,<2.0.0",
-    "langchain-anthropic>=1.4.8,<2.0.0",
-    "langchain-google-genai>=4.2.0,<5.0.0",
-    # Must stay >=10.1 to remain co-installable with `deepagents` (which floors
-    # wcmatch at 10.1). A <7.0 cap made the two packages unresolvable together,
-    # which defeats the drop-in-replacement contract. See PARITY.md.
-    "wcmatch>=10.1,<11.0",
+    "langchain-anthropic>=1.5.0,<2.0.0",
+    "langchain-google-genai>=4.3.1,<5.0.0",
+    # Must track deepagents' wcmatch floor to remain co-installable in one venv:
+    # deepagents 0.6.12 floored it at 10.1, 0.7.0b2 raised it to 11.0. A mismatched
+    # cap makes the two packages unresolvable together, defeating the drop-in
+    # contract. See PARITY.md.
+    "wcmatch>=11.0,<12.0",
     "pyyaml>=6.0.0,<7.0.0",
 
     # ─── transitive-CVE floors ──────────────────────────────────────
-    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes
-    "cryptography>=46.0.7",
+    # CVE-2026-34073 + CVE-2026-39892 — cryptography TLS fixes; GHSA-537c-gmf6-5ccf
+    # — vulnerable OpenSSL bundled in cryptography wheels (needs 48.0.1)
+    "cryptography>=48.0.1",
     # CVE-2026-30922 — pyasn1 DoS fix
-    "pyasn1>=0.6.3",
+    "pyasn1>=0.6.4",
     # CVE-2026-25645 — requests fix (langchain pulls via langsmith)
     "requests>=2.33.0",
     # CVE-2026-4539 — pygments ReDoS fix
@@ -75,7 +79,7 @@ video = ["av>=17.0.0,<18.0.0", "pillow>=10.0.0,<13.0.0"]
 # LangSmith Hub agent repo. langsmith arrives transitively via langchain, but
 # the backend needs `Client.pull_agent` / `push_agent`, so pin the floor here.
 # CVE-2026-45134 — langsmith fix landed in 0.8.0.
-hub = ["langsmith>=0.8.0"]
+hub = ["langsmith>=0.10.9"]
 
 # ─── provider extras ────────────────────────────────────────────────
 # `resolve_model` dispatches through langchain's `init_chat_model`, which
@@ -112,6 +116,11 @@ test = [
   "langchain-openai>=1.1.14",
   "twine",
   "build",
+  # serve endpoint tests (test_serve_hardening) exercise create_app() via the
+  # Starlette TestClient — pull the serve extra's deps so the 501/CORS coverage
+  # runs deterministically in CI instead of skipping when it's absent.
+  "starlette>=0.41.0",
+  "sse-starlette>=2.0.0",
 ]
 
 serve = [
@@ -122,7 +131,7 @@ serve = [
 
 evals = [
   # CVE-2026-45134 — langsmith fix landed in 0.8.0
-  "langsmith>=0.8.0",
+  "langsmith>=0.10.9",
   "langchain-xai",
   "langchain-mistralai",
   "langchain-deepseek",
@@ -195,6 +204,9 @@ convention = "google"  # Google-style docstrings
 ignore-var-parameters = true
 
 [tool.ruff.lint.per-file-ignores]
+# Evidence bundles run git + user-configured verification commands by design
+# (argv form, no shell) — the same system-call posture as backends/middleware.
+"bog_agents/evidence.py" = ["S603", "S607"]  # argv-form git/check subprocess by design
 # Evals: task-agnostic primitives (arbitrary Any I/O) + intentional per-case
 # resilience (a task/scorer crash is a failed case, not a runner crash).
 "bog_agents/evals/**" = [
@@ -323,6 +335,16 @@ ignore-var-parameters = true
     "PT011",   # pytest.raises without match
     "PLR6301", # Method could be a function
     "SLF001",  # Private member access — tests need this
+]
+# Test-support utilities shipped in the package (e.g. SandboxConformanceSuite):
+# pytest-style mixins that legitimately use `assert` and have no per-method
+# docstrings, same as the test files that consume them.
+"bog_agents/testing/**" = [
+    "S101",    # Use of assert — the whole point of a conformance suite
+    "D102",    # Missing docstring in public method — test methods are self-describing
+    "PLR6301", # Method could be a function — pytest test methods take `self`
+    "PT",      # pytest-style conventions
+    "EM101",   # Exception string literal — fine for the fixture NotImplementedError
 ]
 # Scripts: allow prints, broad exceptions, and standalone modules
 "scripts/**" = [

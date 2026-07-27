@@ -87,6 +87,12 @@ class ButcherConfig:
     worker_max_iterations: int = 16
     """Hard cap on one worker's model→tool cycles per attempt."""
 
+    auto_approve: bool = False
+    """Skip the plan-approval prompt and execute slices immediately. Off by
+    default: butcher runs LLM-authored shell/edit slices that bypass the CLI's
+    normal HITL, so a human confirms the plan first unless this is explicitly
+    enabled (RD-5)."""
+
 
 def butcher_config_path() -> Path:
     """Return ``~/.bog-agents/butcher.toml``."""
@@ -118,6 +124,8 @@ def load_butcher_config(path: Path | None = None) -> ButcherConfig:
         cfg.max_slices = max(1, min(_MAX_SLICES, data["max_slices"]))
     if isinstance(data.get("worker_max_iterations"), int):
         cfg.worker_max_iterations = max(2, min(64, data["worker_max_iterations"]))
+    if isinstance(data.get("auto_approve"), bool):
+        cfg.auto_approve = data["auto_approve"]
     return cfg
 
 
@@ -434,8 +442,10 @@ def screen_dangerous_command(command: str) -> str | None:
     shell backend's accident-catcher patterns (rm -rf, mkfs, dd to a device,
     fork bombs, curl|sh, etc.) so the most dangerous commands are refused
     before execution rather than run blindly. It is an accident-catcher, not a
-    security boundary — the real safeguard is the job-level approval gate.
-    (REVIEW.md v2 P1-42.)
+    security boundary — the real safeguards are the plan-approval gate in
+    `start_butcher_job` (RD-5, unless butcher.toml sets `auto_approve`) and the
+    per-slice file allowlist enforced in `build_worker_tools`. (REVIEW.md v2
+    P1-42, hardened in v4 RD-5.)
     """
     if not command or not isinstance(command, str):
         return None
@@ -450,13 +460,27 @@ def screen_dangerous_command(command: str) -> str | None:
     return None
 
 
-def build_worker_tools(working_dir: Path) -> list[BaseTool]:
+def build_worker_tools(
+    working_dir: Path, allowed_files: list[str] | None = None
+) -> list[BaseTool]:
     """Read tools (sidecar's trio) + scoped write/edit/run tools for workers.
 
     Same path-escape rules as the sidecar: nothing above ``working_dir``,
     no symlinks. ``run_command`` exists so a worker can run its slice's
     acceptance check or a quick compile — it is not a general shell.
+
+    RD-5: when ``allowed_files`` is non-empty (the slice's declared file
+    allowlist), writes and edits are restricted to those paths — the allowlist
+    is enforced, not merely stated in the worker prompt. Entries are matched as
+    root-relative paths, either exactly or as ``fnmatch`` globs (e.g.
+    ``src/pkg/*.py``). An empty allowlist keeps the whole-working-dir scope.
+
+    Args:
+        working_dir: Repo root the worker operates in.
+        allowed_files: The slice's declared writable paths, or None/empty for
+            no per-slice restriction.
     """
+    import fnmatch
     import subprocess  # noqa: S404 — scoped check-runner for slice verification
 
     from langchain_core.tools import StructuredTool
@@ -464,16 +488,27 @@ def build_worker_tools(working_dir: Path) -> list[BaseTool]:
     from bog_agents_cli.sidecar import build_readonly_tools
 
     root = working_dir.resolve()
+    allow = [f.strip() for f in (allowed_files or []) if f.strip()]
+
+    def _in_allowlist(rel_posix: str) -> bool:
+        for pattern in allow:
+            pat = pattern.replace("\\", "/").lstrip("./")
+            if rel_posix == pat or fnmatch.fnmatch(rel_posix, pat):
+                return True
+        return False
 
     def _resolve_safe(rel: str) -> Path:
         candidate = (root / rel).resolve()
         try:
-            candidate.relative_to(root)
+            rel_posix = candidate.relative_to(root).as_posix()
         except ValueError as exc:
             msg = f"path {rel!r} resolves outside the working directory"
             raise PermissionError(msg) from exc
         if candidate.is_symlink():
             msg = f"refusing to follow symlink {rel!r}"
+            raise PermissionError(msg)
+        if allow and not _in_allowlist(rel_posix):
+            msg = f"path {rel!r} is not in this slice's allowed files ({', '.join(allow)})"
             raise PermissionError(msg)
         return candidate
 
@@ -928,7 +963,7 @@ async def run_butcher_job(
                     "Butcher worker model %r unavailable", model_spec, exc_info=True
                 )
                 continue
-            tools = build_worker_tools(working_dir)
+            tools = build_worker_tools(working_dir, allowed_files=sl.files)
             outcome = await run_worker(
                 slice_text,
                 model=model,
@@ -1049,6 +1084,33 @@ def _resolve_models(app: object, cfg: ButcherConfig) -> tuple[str, str, list[str
     return butcher_model, worker_model, ladder
 
 
+async def _confirm_butcher_plan(app: object, job: ButcherJob) -> bool:
+    """Ask the user to approve a butcher plan before any slice executes (RD-5).
+
+    Fail-safe: if the app exposes no interactive modal surface (e.g. a headless
+    driver), the plan is treated as NOT approved rather than run unattended.
+
+    Args:
+        app: The CLI app (expected to provide `push_screen_wait` in the TUI).
+        job: The planned job to approve.
+
+    Returns:
+        True only when the user explicitly approves.
+    """
+    push = getattr(app, "push_screen_wait", None)
+    if push is None or not callable(push):
+        return False
+    try:
+        from bog_agents_cli.widgets.butcher_approval import ButcherPlanApprovalScreen
+
+        return bool(await push(ButcherPlanApprovalScreen(job)))
+    except Exception:
+        logger.warning(
+            "Butcher plan approval failed; treating as denied", exc_info=True
+        )
+        return False
+
+
 async def start_butcher_job(app: object, prompt: str) -> None:
     """Plan and run a butcher job end-to-end, reporting into the chat."""
     from bog_agents_cli.config import create_model_with_fallback
@@ -1124,10 +1186,21 @@ async def start_butcher_job(app: object, prompt: str) -> None:
         AppMessage(
             f"[bold]{job.title}[/bold] — {len(job.slices)} slices → [cyan]{job_dir}[/cyan]\n{plan_lines}\n\n"
             "[dim]Workers run shell commands in this directory; obviously-destructive "
-            "commands (rm -rf, curl|sh, dd, …) are screened and refused. "
-            "Executing sequentially…[/dim]"
+            "commands (rm -rf, curl|sh, dd, …) are screened and refused.[/dim]"
         )
     )
+
+    # RD-5: butcher executes model-authored shell/edit slices that bypass the
+    # normal per-tool HITL, and operator mode can auto-escalate a plain prompt
+    # here — so require explicit plan approval before running unless the operator
+    # opted into auto_approve in butcher.toml.
+    if not cfg.auto_approve:
+        approved = await _confirm_butcher_plan(app, job)
+        if not approved:
+            await app._mount_message(  # type: ignore[attr-defined]
+                AppMessage("Butcher job cancelled — plan not approved.")
+            )
+            return
 
     async def _progress(text: str) -> None:
         await app._mount_message(AppMessage(f"[dim]butcher:[/dim] {text}"))  # type: ignore[attr-defined]

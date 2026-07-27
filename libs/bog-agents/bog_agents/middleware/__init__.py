@@ -101,6 +101,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "DeepResearchMiddleware": ("deep_research", "DeepResearchMiddleware"),
     "EnhancedSkillsMiddleware": ("enhanced_skills", "EnhancedSkillsMiddleware"),
     "EnterpriseMiddleware": ("enterprise", "EnterpriseMiddleware"),
+    "EvidenceBundleMiddleware": ("evidence_bundle", "EvidenceBundleMiddleware"),
     "ExpertRulesMiddleware": ("expert_rules", "ExpertRulesMiddleware"),
     "FactCheckMiddleware": ("fact_check", "FactCheckMiddleware"),
     "FilesystemMiddleware": ("filesystem", "FilesystemMiddleware"),

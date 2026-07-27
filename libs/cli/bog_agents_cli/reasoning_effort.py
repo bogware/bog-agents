@@ -40,20 +40,23 @@ supported by a *specific* model — that is enforced at runtime by
 """
 
 ReasoningProvider: TypeAlias = Literal[
-    "anthropic", "fireworks", "google_genai", "openai", "xai"
+    "anthropic", "bedrock", "fireworks", "google_genai", "openai", "xai"
 ]
 """Provider identifiers that support model-specific reasoning effort controls.
 
 Values must stay byte-identical to the provider strings from `ModelSpec.parse`
-used throughout `model_config.py`.
+used throughout `model_config.py`. `bedrock` covers both the `bedrock` and
+`bedrock_converse` provider strings for Anthropic-on-Bedrock models.
 """
 
 LEGACY_EFFORT_LEVELS: tuple[str, ...] = ("low", "medium", "high", "max")
 """Fallback `/effort` vocabulary for models with no native reasoning knob.
 
-These map to `{max_tokens, temperature}` presets in `configurable_model.py`.
-They are the *only* place `max_tokens` capping is still applied, and only ever
-for a non-reasoning model.
+These map to `{temperature}` presets in `configurable_model.py`. They never cap
+`max_tokens`: capping output was a truncation hack (RD-1 / v4) that cut off a
+model mid-response — including operator-routed `easy`-tier turns at 1024 tokens.
+A non-reasoning model is left at its natural output length; only its sampling
+temperature is nudged by effort.
 """
 
 EFFORT_DESCRIPTIONS: dict[str, str] = {
@@ -221,6 +224,59 @@ def _anthropic_model_params(effort: str) -> dict[str, Any]:
     }
 
 
+def _normalize_bedrock_anthropic_model(model: str) -> str | None:
+    """Return the underlying `claude-...` name for a Bedrock Anthropic id.
+
+    Bedrock ids embed the Anthropic model behind a vendor (and optional region)
+    prefix and a version/date suffix — e.g. `us.anthropic.claude-opus-4-6-20250101-v1:0`
+    or the bare `anthropic.claude-opus-4-6` used by the operator preset. Slicing
+    from `claude-` lets the Anthropic effort tables (which match on
+    `claude-opus-`/`claude-sonnet-` plus a version token) apply unchanged.
+
+    Args:
+        model: Lowercased Bedrock model id.
+
+    Returns:
+        The `claude-...` slice, or `None` when the id is not an Anthropic model.
+    """
+    idx = model.find("claude-")
+    if idx == -1:
+        return None
+    return model[idx:]
+
+
+def _bedrock_supported_efforts(model: str) -> tuple[EffortLabel, ...]:
+    """Return effort levels for a Bedrock Anthropic model (Opus/Sonnet).
+
+    Delegates to the Anthropic version-gated tables so a Bedrock Claude id gets
+    exactly the levels its underlying model accepts. Non-Anthropic and
+    non-reasoning Bedrock ids (e.g. Haiku) yield an empty tuple.
+    """
+    normalized = _normalize_bedrock_anthropic_model(model)
+    if normalized is None:
+        return ()
+    return _anthropic_supported_efforts(normalized)
+
+
+def _bedrock_default_effort(model: str) -> EffortLabel | None:
+    """Return the Bedrock Anthropic default effort when known."""
+    normalized = _normalize_bedrock_anthropic_model(model)
+    if normalized is None:
+        return None
+    return _anthropic_default_effort(normalized)
+
+
+def _bedrock_model_params(effort: str) -> dict[str, Any]:
+    """Return Bedrock reasoning params for an effort label.
+
+    `ChatBedrockConverse` forwards provider-specific fields to the underlying
+    Anthropic model via `additional_model_request_fields`, so the same
+    `thinking` + `output_config.effort` payload the direct Anthropic path uses
+    is nested there rather than passed as top-level invocation kwargs.
+    """
+    return {"additional_model_request_fields": _anthropic_model_params(effort)}
+
+
 def _google_supported_efforts(_model: str) -> tuple[EffortLabel, ...]:
     """Return Gemini thinking levels."""
     return GOOGLE_EFFORTS
@@ -296,6 +352,11 @@ _PROVIDER_CONFIGS: dict[ReasoningProvider, ReasoningProviderConfig] = {
         default_effort=_anthropic_default_effort,
         model_params=_anthropic_model_params,
     ),
+    "bedrock": ReasoningProviderConfig(
+        supported_efforts=_bedrock_supported_efforts,
+        default_effort=_bedrock_default_effort,
+        model_params=_bedrock_model_params,
+    ),
     "google_genai": ReasoningProviderConfig(
         supported_efforts=_google_supported_efforts,
         default_effort=_google_default_effort,
@@ -336,6 +397,13 @@ def _classify_reasoning_provider(provider: str, model: str) -> ReasoningProvider
         ("claude-opus-", "claude-sonnet-")
     ):
         return "anthropic"
+    if provider in ("bedrock", "bedrock_converse") and _bedrock_supported_efforts(
+        model_lower
+    ):
+        # Only Anthropic Opus/Sonnet on Bedrock have a native effort knob; Haiku
+        # and non-Anthropic ids fall through to None (non-reasoning), which no
+        # longer caps output (see configurable_model._EFFORT_LEVEL_SETTINGS).
+        return "bedrock"
     if provider == "google_genai" and model_lower.startswith("gemini-3"):
         return "google_genai"
     if provider == "fireworks" and model_lower.startswith("accounts/fireworks/models/"):
@@ -436,7 +504,7 @@ def effort_levels_for_model(model_spec: str | None) -> tuple[str, ...]:
 
     For a reasoning model this is its native supported set; for any other
     model it is the legacy `low/medium/high/max` preset vocabulary (which
-    `configurable_model` translates to `{max_tokens, temperature}`). This is
+    `configurable_model` translates to a `{temperature}` preset). This is
     the set the `/effort` command validates a requested level against.
 
     Args:

@@ -126,3 +126,66 @@ def test_wrap_tool_call_invokes_create_checkpoint(tmp_path, monkeypatch):
     middleware.wrap_tool_call(_make_request("multi_edit_file", "call_9"), handler)
 
     assert calls == [("multi_edit_file", "call_9")]
+
+
+def test_run_git_missing_binary_self_disables(tmp_path, monkeypatch):
+    """CTX-1: a missing `git` binary returns a synthetic failure and disables."""
+    import bog_agents.middleware.checkpointing as ckpt
+
+    def boom(*_a: object, **_k: object):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(ckpt.subprocess, "run", boom)
+    middleware = CheckpointingMiddleware(working_dir=tmp_path)
+
+    result = middleware._run_git("status")
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert middleware._enabled is False
+
+
+def test_run_git_timeout_self_disables(tmp_path, monkeypatch):
+    """CTX-1: a git call that times out returns a synthetic failure and disables."""
+    import bog_agents.middleware.checkpointing as ckpt
+
+    def boom(*_a: object, **_k: object):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=30)
+
+    monkeypatch.setattr(ckpt.subprocess, "run", boom)
+    middleware = CheckpointingMiddleware(working_dir=tmp_path)
+
+    result = middleware._run_git("add", "-A")
+
+    assert result.returncode == 1
+    assert middleware._enabled is False
+
+
+def test_wrap_tool_call_survives_missing_git(tmp_path, monkeypatch):
+    """CTX-1: a mutating tool call must not crash when git is unavailable.
+
+    The CLI ships checkpointing on by default, so on a box without git every
+    write_file/edit_file/execute reached _run_git via _create_checkpoint. The
+    uncaught FileNotFoundError previously propagated out of the tool node (which
+    langgraph re-raises) and killed the whole turn.
+    """
+    import bog_agents.middleware.checkpointing as ckpt
+
+    def boom(*_a: object, **_k: object):
+        raise FileNotFoundError("git not found")
+
+    monkeypatch.setattr(ckpt.subprocess, "run", boom)
+    middleware = CheckpointingMiddleware(working_dir=tmp_path)
+
+    handled: list[ToolCallRequest] = []
+
+    def handler(request: ToolCallRequest) -> ToolMessage:
+        handled.append(request)
+        return ToolMessage(content="ok", tool_call_id="call_1")
+
+    # Must not raise; the downstream tool still runs and gets its result.
+    result = middleware.wrap_tool_call(_make_request("write_file"), handler)
+
+    assert isinstance(result, ToolMessage)
+    assert handled  # downstream handler was invoked despite git being absent
+    assert middleware._enabled is False

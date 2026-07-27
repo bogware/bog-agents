@@ -53,6 +53,7 @@ from bog_agents_cli.textual_adapter import (
     execute_task_textual,
     format_token_count,
 )
+from bog_agents_cli.turn_manager import TurnManager
 from bog_agents_cli.widgets.approval import ApprovalMenu
 from bog_agents_cli.widgets.ask_user import AskUserMenu
 from bog_agents_cli.widgets.chat_input import ChatInput
@@ -361,10 +362,16 @@ class QueuedMessage:
     Attributes:
         text: The message text content.
         mode: The input mode that determines message routing.
+        raw: When True, `text` is an internal agent prompt (constructed by a
+            slash command, pipeline step, or file-watch trigger) that must be
+            re-dispatched via `_send_prompt_to_agent` on drain rather than shown
+            as a user message. Used to serialize background dispatch behind an
+            in-flight turn (CLI-CORE-4 / v4).
     """
 
     text: str
     mode: InputMode
+    raw: bool = False
 
 
 @dataclass(slots=True)
@@ -967,13 +974,14 @@ class BogAgentsApp(App):
         self._pending_ask_user_widget: AskUserMenu | None = None
         # Strong refs to background asyncio tasks so they aren't GC'd mid-flight.
         self._background_tasks: set[asyncio.Task[Any]] = set()
-        # Agent task tracking for interruption
-        self._agent_worker: Worker[None] | None = None
-        self._agent_running = False
+        # Turn lifecycle: the agent/shell run flags and the agent worker handle
+        # live in one coordinator so every begin/end goes through a single choke
+        # point. `_agent_running` / `_agent_worker` / `_shell_running` below are
+        # delegating properties over this object (v4 CLI-CORE-1/-4).
+        self._turns = TurnManager()
         # Shell command process tracking for interruption (! commands)
         self._shell_process: asyncio.subprocess.Process | None = None
         self._shell_worker: Worker[None] | None = None
-        self._shell_running = False
         self._loading_widget: LoadingWidget | None = None
         self._token_tracker: TextualTokenTracker | None = None
         # Cumulative usage stats across all turns in this session
@@ -1019,6 +1027,34 @@ class BogAgentsApp(App):
             )
         except Exception:
             logger.debug("Theme registration failed; using Textual default")
+
+    # Turn-lifecycle state is owned by `self._turns` (TurnManager); these
+    # properties keep the historical attribute names working for the ~25 read
+    # sites and any incidental write, while routing everything through the one
+    # coordinator (v4 CLI-CORE-1/-4).
+    @property
+    def _agent_running(self) -> bool:
+        return self._turns.agent_running
+
+    @_agent_running.setter
+    def _agent_running(self, value: bool) -> None:
+        self._turns.agent_running = value
+
+    @property
+    def _agent_worker(self) -> Worker[None] | None:
+        return self._turns.agent_worker
+
+    @_agent_worker.setter
+    def _agent_worker(self, value: Worker[None] | None) -> None:
+        self._turns.agent_worker = value
+
+    @property
+    def _shell_running(self) -> bool:
+        return self._turns.shell_running
+
+    @_shell_running.setter
+    def _shell_running(self, value: bool) -> None:
+        self._turns.shell_running = value
 
     def _remote_agent(self) -> RemoteAgent | None:
         """Return the agent narrowed to `RemoteAgent`, or `None`.
@@ -2049,7 +2085,7 @@ class BogAgentsApp(App):
         # If agent/shell is running or server is still starting up, enqueue
         # instead of processing. Messages queued during connection are drained
         # once the server is ready (see on_bog_agents_app_server_ready).
-        if self._agent_running or self._shell_running or self._connecting:
+        if self._turns.busy or self._connecting:
             self._pending_messages.append(QueuedMessage(text=value, mode=mode))
             queued_widget = QueuedUserMessage(value)
             self._queued_widgets.append(queued_widget)
@@ -2087,7 +2123,7 @@ class BogAgentsApp(App):
             command: The shell command to execute.
         """
         await self._mount_message(UserMessage(f"!{command}"))
-        self._shell_running = True
+        self._turns.begin_shell()
 
         if self._chat_input:
             self._chat_input.set_cursor_active(active=False)
@@ -2203,7 +2239,7 @@ class BogAgentsApp(App):
             self._shell_worker is not None and self._shell_worker.is_cancelled
         )
         self._shell_process = None
-        self._shell_running = False
+        self._turns.end_shell()
         self._shell_worker = None
         if was_interrupted:
             await self._mount_message(AppMessage("Command interrupted"))
@@ -3148,6 +3184,12 @@ class BogAgentsApp(App):
         self._update_status("")
         if self._session_state:
             new_thread_id = self._session_state.reset_thread()
+            # Keep the langchain thread id in lockstep with session_state.
+            # Agent turns route on session_state.thread_id, but /compact, token
+            # counting, goal-state sync, and the exit resume hint all read
+            # self._lc_thread_id — leaving it stale makes /compact silently read
+            # and mutate the PRE-clear thread's checkpoint (CLI-CORE-3 / v4).
+            self._lc_thread_id = new_thread_id
             try:
                 banner = self.query_one("#welcome-banner", WelcomeBanner)
                 banner.update_thread_id(new_thread_id)
@@ -5881,6 +5923,67 @@ class BogAgentsApp(App):
                 AppMessage(
                     f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
                     f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+                )
+            )
+
+    async def _handle_best_of_n_command(self, command: str) -> None:
+        """``/best-of-n [count] <prompt>`` — run N full agent attempts, keep the rubric-judged winner.
+
+        Unlike ``/race`` (bare model completions), each attempt is a full agent
+        run in its own git worktree that actually edits files; the resulting
+        diffs are graded by the rubric and ranked. The winning worktree is kept
+        for inspection; the rest are removed.
+        """
+        await self._mount_message(UserMessage(command))
+        prefix = self._command_name(command)
+        rest = command.strip()[len(prefix) :].strip()
+
+        n = 3
+        parts = rest.split(maxsplit=1)
+        if parts and parts[0].isdigit():
+            n = max(1, min(int(parts[0]), 8))
+            rest = parts[1] if len(parts) > 1 else ""
+        prompt = rest.strip()
+        if not prompt:
+            await self._mount_message(
+                AppMessage(
+                    "Usage: [bold]/best-of-n [count] <prompt>[/bold] — run N full agent attempts "
+                    "in isolated worktrees and keep the rubric-judged winner (default 3, max 8)."
+                )
+            )
+            return
+
+        from bog_agents_cli.best_of_n import run_best_of_n_session
+        from bog_agents_cli.config import create_model, settings
+
+        repo_dir = Path(settings.project_root or self._cwd)
+        model_spec = self._model_override or settings.model_name
+
+        def _resolve(spec: str) -> Any:  # noqa: ANN401 - returns a langchain chat model
+            return create_model(spec, profile_overrides=self._profile_override).model
+
+        await self._set_spinner(f"Best-of-{n}: running attempts in worktrees")
+        try:
+            report, winner_path = await run_best_of_n_session(
+                prompt,
+                n=n,
+                repo_dir=repo_dir,
+                model_spec=model_spec,
+                resolve_model=_resolve,
+            )
+        except Exception as exc:
+            await self._mount_message(ErrorMessage(f"/best-of-n failed: {exc}"))
+            return
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+        if winner_path:
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]Winner worktree kept at:[/bold green] [cyan]{winner_path}[/cyan]\n"
+                    "Inspect it, then merge its branch or copy the changes across. The other "
+                    "attempt worktrees were removed."
                 )
             )
 
@@ -13316,6 +13419,63 @@ class BogAgentsApp(App):
             )
             return
 
+        if action == "run":
+            from bog_agents.cost_ledger import RunawayCaps
+
+            from bog_agents_cli.config import create_model, settings
+            from bog_agents_cli.team_executor import (
+                parse_team_run_args,
+                run_team_session,
+            )
+
+            req = parse_team_run_args(raw_arg[len("run") :].lstrip())
+            if not req.task_specs:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/team run [--members a,b] [--chain] "
+                        "<task1> | <task2> | ...[/bold]\n"
+                        "Runs a governed agent team over the tasks — each teammate is a "
+                        "non-interactive, auto-approving agent sharing the repo working "
+                        "directory, coordinated by a claimable task ledger.\n"
+                        "  • [bold]--chain[/bold] makes each task depend on the previous "
+                        "(linear pipeline); otherwise tasks run as workers free up.\n"
+                        "  • [bold]--members[/bold] overrides the worker roster "
+                        "(default two workers)."
+                    )
+                )
+                return
+
+            members = req.members or ["worker-1", "worker-2"]
+            repo_dir = Path(settings.project_root or self._cwd)
+            model_spec = self._model_override or settings.model_name
+
+            def _resolve(spec: str) -> Any:  # noqa: ANN401 - langchain chat model
+                return create_model(
+                    spec, profile_overrides=self._profile_override
+                ).model
+
+            caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
+            await self._set_spinner(
+                f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
+            )
+            try:
+                report = await run_team_session(
+                    req.task_specs,
+                    members,
+                    repo_dir=repo_dir,
+                    resolve_model=_resolve,
+                    model_spec=model_spec,
+                    caps=caps,
+                )
+            except Exception as exc:
+                await self._mount_message(ErrorMessage(f"/team run failed: {exc}"))
+                return
+            finally:
+                await self._set_spinner("")
+
+            await self._mount_message(AppMessage(report.format_summary()))
+            return
+
         if action == "whoami":
             identity = load_user_identity()
             sub = tokens[1].lower() if len(tokens) > 1 else "show"
@@ -14366,6 +14526,22 @@ class BogAgentsApp(App):
         Args:
             prompt: The full prompt to send to the agent.
         """
+        # Defer instead of spawning a second concurrent turn when a turn (or a
+        # shell command, or server connect) is already in flight. Scheduled
+        # pipelines and file-watch triggers call this directly, off the normal
+        # input path, so without this guard they would start a second
+        # `execute_task_textual` on the live thread AND overwrite the user's
+        # `_agent_worker` handle (CLI-CORE-4 / v4). The queued prompt drains in
+        # FIFO order once the current turn finishes.
+        if self._turns.busy or self._connecting:
+            self._pending_messages.append(
+                QueuedMessage(text=prompt, mode="normal", raw=True)
+            )
+            queued_widget = QueuedUserMessage(prompt)
+            self._queued_widgets.append(queued_widget)
+            await self._mount_message(queued_widget)
+            return
+
         # Scroll to bottom
         try:
             chat = self.query_one("#chat", VerticalScroll)
@@ -14375,12 +14551,10 @@ class BogAgentsApp(App):
             pass
 
         if self._agent and self._ui_adapter and self._session_state:
-            self._agent_running = True
             if self._chat_input:
                 self._chat_input.set_cursor_active(active=False)
-            self._agent_worker = self.run_worker(
-                self._run_agent_task(prompt),
-                exclusive=False,
+            self._turns.begin_agent(
+                self.run_worker(self._run_agent_task(prompt), exclusive=False)
             )
         else:
             await self._mount_message(
@@ -14559,16 +14733,15 @@ class BogAgentsApp(App):
 
         # Check if agent is available
         if self._agent and self._ui_adapter and self._session_state:
-            self._agent_running = True
-
             if self._chat_input:
                 self._chat_input.set_cursor_active(active=False)
 
-            # Use run_worker to avoid blocking the main event loop
-            # This allows the UI to remain responsive during agent execution
-            self._agent_worker = self.run_worker(
-                self._run_agent_task(effective_message),
-                exclusive=False,
+            # Use run_worker to avoid blocking the main event loop so the UI
+            # stays responsive during agent execution.
+            self._turns.begin_agent(
+                self.run_worker(
+                    self._run_agent_task(effective_message), exclusive=False
+                )
             )
         else:
             await self._mount_message(
@@ -14826,7 +14999,13 @@ class BogAgentsApp(App):
                 widget = self._queued_widgets.popleft()
                 await widget.remove()
 
-            await self._process_message(msg.text, msg.mode)
+            # Raw internal prompts (pipeline/watch/slash-command dispatch that
+            # was deferred behind an in-flight turn) go back through
+            # _send_prompt_to_agent, not the user-message path (CLI-CORE-4).
+            if msg.raw:
+                await self._send_prompt_to_agent(msg.text)
+            else:
+                await self._process_message(msg.text, msg.mode)
         except Exception:
             logger.exception("Failed to process queued message")
             await self._mount_message(
@@ -14838,8 +15017,7 @@ class BogAgentsApp(App):
         # Command mode messages complete synchronously without spawning
         # a worker, so cleanup won't fire again. Continue draining the
         # queue if no worker was started.
-        busy = self._agent_running or self._shell_running
-        if not busy and self._pending_messages:
+        if not self._turns.busy and self._pending_messages:
             await self._process_next_from_queue()
 
     async def _drain_queue_after_inline_task(self) -> None:
@@ -14863,13 +15041,20 @@ class BogAgentsApp(App):
         P28: the critical worker-state restoration (`_agent_running=False`,
         `_agent_worker=None`, cursor re-enable) lives in a `finally` so a
         cancellation interrupting one of the inner awaits (spinner removal,
-        stop-hook dispatch, queue drain) can never leave the input cursor
-        disabled and the app apparently wedged with no diagnostic.
+        stop-hook dispatch) can never leave the input cursor disabled and the
+        app apparently wedged with no diagnostic.
+
+        CLI-CORE-1 (v4 P0): the pending-queue drain runs AFTER that
+        state-restoration finally, not inside it. Draining a queued normal-mode
+        message starts the next turn (it sets `_agent_running=True` and assigns
+        `_agent_worker` synchronously before returning); if that happened inside
+        the try, the finally would then clobber the just-started turn's tracking
+        state — leaving it uninterruptible and letting a third message run
+        concurrently. Restore this turn's state fully, THEN drain.
         """
         # Set synchronously up front (no await in between) so the common path
-        # restores immediately; the finally re-asserts these defensively.
-        self._agent_running = False
-        self._agent_worker = None
+        # restores immediately; the finally re-asserts this defensively.
+        self._turns.end_agent()
 
         try:
             # Remove spinner if present
@@ -14895,9 +15080,6 @@ class BogAgentsApp(App):
                 play_completion_sound()
             except Exception:  # noqa: S110
                 pass
-
-            # Process next message from queue if any
-            await self._process_next_from_queue()
         except Exception:
             # Log rather than swallow silently — a cleanup failure that isn't a
             # cancellation is a real bug worth surfacing in logs.
@@ -14907,13 +15089,20 @@ class BogAgentsApp(App):
             # Critical restoration that must run even if an await above is
             # cancelled or raises. Without this, an interrupted cleanup leaves
             # the input cursor disabled and the app looks wedged (P28).
-            self._agent_running = False
-            self._agent_worker = None
+            self._turns.end_agent()
             if self._chat_input:
                 try:
                     self._chat_input.set_cursor_active(active=True)
                 except Exception:
                     logger.debug("failed to re-enable input cursor", exc_info=True)
+
+        # Drain the queue LAST, after this turn's state is fully restored, so a
+        # queued message that starts the next turn (setting _agent_running /
+        # _agent_worker) is not clobbered by the restoration above (CLI-CORE-1).
+        try:
+            await self._process_next_from_queue()
+        except Exception:
+            logger.exception("agent task cleanup queue drain failed")
 
     @staticmethod
     def _convert_messages_to_data(messages: list[Any]) -> list[MessageData]:
