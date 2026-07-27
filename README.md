@@ -1,22 +1,53 @@
-# Bog Agents
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.svg">
+    <img alt="Bog Agents" src=".github/images/logo-light.svg" width="440">
+  </picture>
+</p>
 
-> *Pass through in harmony. Opinionated where it matters.*
+<p align="center">
+  <strong>A production-ready AI agent framework built on LangGraph.</strong><br>
+  Run it in your terminal, embed it in your app, or leave it working on a server —
+  one install, a compiled agent, nothing to wire up.
+</p>
 
-**v0.10** — a production-ready AI agent framework built on LangGraph.
-Patient by design, watchful by default. It does the careful work so you
-don't have to wire it up yourself.
+<p align="center">
+  <a href="https://pypi.org/project/bog-agents-cli/"><img alt="PyPI" src="https://img.shields.io/pypi/v/bog-agents-cli?color=1f6feb&label=pypi"></a>
+  <a href="https://pypi.org/project/bog-agents-cli/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/bog-agents-cli?color=1f6feb"></a>
+  <a href="https://github.com/bogware/bog-agents/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/bogware/bog-agents/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-1f6feb"></a>
+</p>
 
-Three packages, one philosophy:
+<p align="center">
+  <img alt="The bog-agents CLI answering a question in the terminal" src=".github/images/screenshot-tui.svg" width="820">
+</p>
+
+Most frameworks hand you the parts and wish you luck. Bog Agents hands you a
+working agent — file tools, a real shell, git, sub-agents, plan mode, and ~90
+composable middlewares out of the box — then lets you peel layers away or bolt
+new ones on as the job demands. Secure-by-default backends, bounded retries,
+and governed autonomy are the baseline, not an afterthought.
+
+Three packages, one stack:
 
 - **[`bog-agents`](libs/bog-agents)** — the Python SDK. `create_agent()` returns a
   compiled LangGraph agent with file tools, a shell, git, sub-agents, plan mode,
-  retry-with-backoff, and 90+ composable middlewares. Drop-in
+  retry-with-backoff, and ~90 composable middlewares. Governed autonomy is
+  first-class: **agent teams** (`bog_agents.teams`), **runaway cost caps**
+  (`bog_agents.cost_ledger`), **proof-of-work evidence bundles**
+  (`bog_agents.evidence`), evals + guardrails as importable primitives, and an
+  **OS-level sandbox** (bubblewrap/seatbelt + an egress-allowlist proxy) for
+  `LocalShellBackend`. Drop-in
   [deepagents](https://github.com/langchain-ai/deepagents) compatibility, too —
   `create_deep_agent`, `DeepAgentState`, filesystem permissions, harness/provider
   profiles.
 - **[`bog-agents-cli`](libs/cli)** — a coding agent that lives in your terminal.
-  120+ slash commands, any LLM, persistent memory, MCP marketplace, `/peat`
-  personal scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`,
+  125+ slash commands, any LLM, persistent memory, MCP marketplace. Turn the
+  engine up when it matters: **`/team run`** (a governed team over a task ledger),
+  **`/best-of-n`** (N worktree attempts, rubric-judged winner), **`/jury`**
+  (multi-reviewer vote on a diff), **`/operator`** (auto difficulty routing), and
+  **`/effort`** (real per-provider reasoning knobs). Plus `/peat` personal
+  scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`, an
   in-memory secrets vault, `bog-agents drive` for scripted runs, and a full
   **headless surface** so an AI agent or CI job can drive it without a human
   at the keyboard. Matte-swamp TUI.
@@ -24,31 +55,27 @@ Three packages, one philosophy:
   agents on cron / file-change / webhook / git-push triggers; survives
   reboots; reports back via Slack / email / GitHub / file / webhook.
 
-Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT.
+Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT-licensed.
 
 ---
 
-## Philosophy
+## Why Bog Agents
 
-Out on the frontier a careful hand beats a fast one. Most agent frameworks
-hand you the parts and wish you luck. Bog Agents hands you a working agent —
-then lets you peel away or bolt on layers as you learn what the job actually
-asks for.
-
-- **Patient by default.** Failures retry with bounded backoff. Hung commands
-  time out. Provider hiccups don't kill the run. A crash drops a redacted
-  panic dump so a bug report writes itself.
-- **Opinionated where it matters.** Secure-by-default backends. A
-  memory-only secrets vault that never touches disk. Structured event
-  logging at every chokepoint. Tokens written atomically at `0o600`
-  before the rename — no world-readable race window.
-- **No ceremony.** `pipx install bog-agents-cli && bog-agents` and you have a
-  working agent in under a minute. `pip install bog-agents` and one function
-  call gets you a compiled agent.
-- **Composable.** 90+ middlewares snap on or off. Subagents nest. Backends
-  swap. The framework gets out of your way.
-
-The bog is calm, deep, and unhurried. So is the agent.
+- **Resilient by default.** Failures retry with bounded backoff, hung commands
+  time out, and a provider hiccup never kills the run. A crash drops a redacted
+  panic dump so the bug report writes itself.
+- **Secure where it counts.** Secure-by-default backends, an optional OS-level
+  sandbox with a network egress allowlist, a memory-only secrets vault that
+  never touches disk, and tokens written atomically at `0o600` before the
+  rename — no world-readable race window.
+- **Governed autonomy.** Agent teams, best-of-N with a rubric judge, and
+  multi-reviewer diff votes — all bounded by hard cost caps and packaged with
+  proof-of-work evidence, so you can trust a run you didn't watch.
+- **No ceremony.** `pipx install bog-agents-cli && bog-agents` puts a working
+  agent in front of you in under a minute; `pip install bog-agents` plus one
+  function call embeds one in your code.
+- **Composable to the core.** ~90 middlewares snap on or off, sub-agents nest,
+  backends swap. The framework gets out of the way as your needs sharpen.
 
 ---
 
@@ -143,10 +170,26 @@ hardened a different stretch of trail.
     `remember` tool that persists conventions/gotchas to the AGENTS.md cascade),
     and **shell pass-through** (`!command` output now enters the agent's
     context so it can see what you ran).
+  - **Governed autonomy — turn the engine up.** **`/team run`** runs a real
+    agent team over a claimable, dependency-aware task ledger; **`/best-of-n`**
+    runs N attempts in isolated git worktrees and keeps the rubric-judged winner;
+    **`/jury`** gets a multi-reviewer vote on a diff; **`/operator`** lets a cheap
+    judge auto-escalate model + effort (and route hard jobs to `butcher` /
+    `jtbd`). All bounded by **runaway cost caps** so nothing fork-bombs the bill.
+  - **OS-level sandbox.** `.bog-agents/sandbox.toml` (`local_sandbox` +
+    `network_allowlist`) wraps every shell command in bubblewrap (Linux) /
+    seatbelt (macOS), with a hard network cut or a **localhost egress-allowlist
+    proxy**; `require_sandbox` fails closed where no launcher exists.
+  - **Assign-to-bog.** The daemon's `POST /webhooks/github` front door turns an
+    assigned issue / applied label / review comment / red CI run into an agent
+    job (HMAC-verified, fail-closed).
   - **SDK:** `bog_agents.evals` (Dataset / scorers / `run_evals` /
-    `assert_pass_rate`) and `bog_agents.guardrails` (composable input/output
-    tripwire guardrails + `create_agent(guardrails=[...])`), plus a declarative
-    `.bog-agents/sandbox.toml`. Hardened by a fresh Senior-Principal-Engineer
+    `assert_pass_rate`), `bog_agents.guardrails` (composable input/output
+    tripwire guardrails + `create_agent(guardrails=[...])`), `bog_agents.teams`
+    (ledger + mailbox + `run_team`), `bog_agents.cost_ledger`
+    (`CostLedger` + `RunawayCaps`), and `bog_agents.evidence` (proof-of-work
+    bundles), plus the declarative `.bog-agents/sandbox.toml` and the
+    `LocalShellBackend` OS sandbox. Hardened by a fresh Senior-Principal-Engineer
     audit (see [REVIEW.md](REVIEW.md)) and a competitive roadmap
     ([ROADMAP.md](ROADMAP.md)).
 - **0.9.4 — deepagents parity, headless driving, provider resilience.**

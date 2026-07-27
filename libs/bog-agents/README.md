@@ -249,15 +249,28 @@ Streaming is supported via the standard LangGraph stream APIs.
 
 ## What's new in 0.9.x
 
-- **0.10** — two new first-class primitives + safer middleware ordering:
+- **0.10** — new first-class primitives, governed autonomy, and OS sandboxing:
   - **`bog_agents.evals`** — evaluation as an importable primitive: `Dataset`,
     rule-based + LLM-as-judge `Scorer`s, `run_evals(...)`, and
     `EvalReport.assert_pass_rate()` to gate releases in CI.
   - **`bog_agents.guardrails`** — composable input/output guardrails with
     fail-fast tripwire semantics (`Blocklist` / `MaxLength` / `NoSecrets` /
     `LLMGuardrail`), plus `create_agent(guardrails=[...])`.
-  - A declarative **`.bog-agents/sandbox.toml`** (preinstall / runner size /
-    snapshot / network egress allowlist) loader.
+  - **`bog_agents.teams`** — governed agent teams: an atomic, dependency-aware
+    `TaskLedger`, peer `Mailbox`, and a `run_team(...)` coordinator that runs
+    under cost caps (surfaced as `/team run` in the CLI).
+  - **`bog_agents.cost_ledger`** — per-agent cost attribution + `RunawayCaps`
+    (max subagents / web searches / spend), so autonomous runs can't fork-bomb
+    the bill.
+  - **`bog_agents.evidence`** — proof-of-work bundles (diff stat + verify-command
+    output + rubric verdict; `merge_ready` gates on both) for autonomous changes.
+  - **OS-level sandbox for `LocalShellBackend`** — pass a `LocalSandbox` to wrap
+    every shell command in bubblewrap (Linux) / seatbelt (macOS), with a hard
+    network cut or a `bog_agents.sandbox.egress_proxy` **allowlist proxy** for
+    bounded egress; `require_sandbox=True` fails closed where no launcher exists.
+  - A declarative **`.bog-agents/sandbox.toml`** loader (preinstall / runner
+    size / snapshot / `network_allowlist`, plus `local_sandbox` +
+    `require_sandbox` to drive the OS sandbox above).
   - Correctness fixes from a fresh SPE audit (see `REVIEW.md`): `MemoryMiddleware`
     now runs before prompt caching (was defeating the cache) and `DLPMiddleware`
     before `AuditTrailMiddleware` (was logging unredacted values).

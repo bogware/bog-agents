@@ -10,20 +10,22 @@ import os
 import platform
 import threading
 
-# Module-level toggle, overridden by BOG_AGENTS_SOUNDS env var at import time.
-_sound_enabled: bool = os.environ.get("BOG_AGENTS_SOUNDS", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
+# Module-level toggle, set from BOG_AGENTS_SOUNDS at import time. OFF by default
+# — a beep on every response is intrusive in a terminal; opt in explicitly.
+_sound_enabled: bool = os.environ.get("BOG_AGENTS_SOUNDS", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
 }
 
 
 def is_sound_enabled() -> bool:
     """Return True if sounds are enabled.
 
-    Reads the BOG_AGENTS_SOUNDS environment variable (default enabled).
-    Can be overridden for the session via `toggle_sounds()`.
+    Reads the BOG_AGENTS_SOUNDS environment variable (default **disabled**;
+    set it to 1/true/yes/on to enable). Can be overridden for the session via
+    `toggle_sounds()`.
 
     Returns:
         True if sounds should play; False otherwise.

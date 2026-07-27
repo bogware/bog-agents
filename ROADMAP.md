@@ -576,6 +576,24 @@ Linux Foundation; CodeAct converging across smolagents/MAF/OpenAI; and **deepage
   of ungraded transcripts; expert-rule proposals generated from failure patterns.
   Uniquely composable from parts only bog owns. (XL)
 
+- **#46 Unified effort ladder — one dial scales *both* parameters and algorithm**
+  *(no comparator ships this; Claude Code/Cursor scale reasoning tokens only,
+  bog already owns the algorithm half)* — today the two halves are separate:
+  `/effort` (`reasoning_effort.py`) scales the **provider reasoning knob**
+  (`output_config.effort` / `reasoning.effort` / `thinking_level`, per-model
+  capability-gated), and `/operator` (`operator_mode.py`) does **judge-driven
+  workflow routing** (`direct` → `butcher` → `jtbd`). Neither turns a single
+  user-facing dial that *also* composes the heavier algorithms bog now owns.
+  Build one **effort ladder** where each rung adds both more reasoning budget
+  *and* a heavier algorithm: `low` = single-shot; `medium` = +reasoning effort;
+  `high` = best-of-N (#31) with the rubric grader; `xhigh` = best-of-N +
+  `/jury` adversarial verification + evidence bundle (#29); `max` = team
+  decomposition (#21) / butcher with per-slice verification. The knob is one
+  word; the escalation is deterministic (not judge-guessed) and composes parts
+  only bog has end-to-end. Surfaces as `/effort` (manual) and as the automatic
+  target of `/operator`'s difficulty classification. **Deps:** #21, #29, #31,
+  `/jury`, operator + reasoning-effort (all shipped). (M–L)
+
 ### Deferred items — re-evaluated this cycle
 
 - **`app.py` god-class extraction** (deferred 2026-05-07): partially reopen.
