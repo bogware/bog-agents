@@ -440,7 +440,19 @@ def _select_backend(root_dir: Path, job: AmbientJob, trigger_type: TriggerType) 
         )
     # virtual_mode=False operates on real absolute paths inside the project tree
     # (mirrors the CLI); execute() runs on the host.
-    return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=os.environ.copy(), virtual_mode=False)
+    env = os.environ.copy()
+    # #27: honor the committed `.bog-agents/sandbox.toml` egress allowlist for
+    # unattended shell runs by surfacing it in the backend's env, where the #22
+    # local-sandbox proxy reads it. (Preinstall is deliberately NOT auto-run on
+    # the daemon host — that would run committed shell unattended, the exact risk
+    # DMN-1 guards; provider sandboxes run it via the CLI factory instead.)
+    from bog_agents.sandbox_config import SANDBOX_NETWORK_ALLOWLIST_ENV, load_sandbox_config
+
+    spec = load_sandbox_config(root_dir)
+    if spec is not None and spec.network_allowlist:
+        env[SANDBOX_NETWORK_ALLOWLIST_ENV] = ",".join(spec.network_allowlist)
+        logger.info("Applying sandbox spec for job %s (%s): %s", job.job_id, job.name, spec.summary())
+    return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=env, virtual_mode=False)
 
 
 async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:

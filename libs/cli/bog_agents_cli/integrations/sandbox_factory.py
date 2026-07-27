@@ -6,7 +6,7 @@ import os
 import shlex
 import string
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -72,24 +72,37 @@ def create_sandbox(
     *,
     sandbox_id: str | None = None,
     setup_script_path: str | None = None,
+    cwd: str | Path | None = None,
 ) -> Generator[SandboxBackendProtocol, None, None]:
     """Create or connect to a sandbox of the specified provider.
 
     This is the unified interface for sandbox creation using the provider abstraction.
 
+    #27: when `cwd` is given, the committed `.bog-agents/sandbox.toml` spec is
+    resolved and applied — its `preinstall` steps run as the setup script (unless
+    an explicit `setup_script_path` overrides them) and its `network_allowlist`
+    is surfaced on the backend as `network_allowlist` for an egress proxy (#22)
+    to enforce. This is what turns the previously consumer-less spec live.
+
     Args:
         provider: Sandbox provider ("daytona", "docker", "langsmith", "modal", "runloop")
         sandbox_id: Optional existing sandbox ID to reuse
         setup_script_path: Optional path to setup script to run after sandbox starts
+        cwd: Project root to load `.bog-agents/sandbox.toml` from (None = no spec).
 
     Yields:
         SandboxBackendProtocol instance
     """
+    from bog_agents_cli.sandbox_config import resolve_sandbox_setup
+
     # Get provider instance
     provider_obj = _get_provider(provider)
 
     # Determine if we should cleanup (only cleanup if we created it)
     should_cleanup = sandbox_id is None
+
+    # Resolve the declarative spec (#27) — an explicit setup script still wins.
+    setup = resolve_sandbox_setup(cwd, explicit_setup_script=setup_script_path)
 
     # Create or connect to sandbox
     console.print(f"[yellow]Starting {provider} sandbox...[/yellow]")
@@ -100,9 +113,17 @@ def create_sandbox(
         f"{backend.id}[/green]"
     )
 
-    # Run setup script if provided
-    if setup_script_path:
-        _run_sandbox_setup(backend, setup_script_path)
+    # Apply the spec: log the posture and surface the egress allowlist for the
+    # backend / #22 proxy to enforce (best-effort attribute; Protocol-typed).
+    if setup.config is not None:
+        console.print(f"[dim]{setup.config.summary()}[/dim]")
+        if setup.network_allowlist:
+            with suppress(Exception):
+                backend.network_allowlist = setup.network_allowlist  # type: ignore[attr-defined]
+
+    # Run setup script (explicit, or materialized from the spec's preinstall).
+    if setup.setup_script_path:
+        _run_sandbox_setup(backend, setup.setup_script_path)
 
     try:
         yield backend

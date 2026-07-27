@@ -171,6 +171,23 @@ class TestSelectBackend:
 
         assert isinstance(backend, LocalShellBackend)
 
+    def test_manual_shell_applies_sandbox_spec_allowlist(self, tmp_path: Path) -> None:
+        # #27: a committed .bog-agents/sandbox.toml egress allowlist is surfaced
+        # in the shell backend's env for the #22 proxy to enforce.
+        from bog_agents.backends.local_shell import LocalShellBackend
+        from bog_agents.sandbox_config import SANDBOX_NETWORK_ALLOWLIST_ENV
+
+        from bog_agents_daemon.runner import _select_backend
+
+        (tmp_path / ".bog-agents").mkdir()
+        (tmp_path / ".bog-agents" / "sandbox.toml").write_text(
+            '[sandbox]\nnetwork_allowlist = ["pypi.org", "github.com"]\n', encoding="utf-8"
+        )
+        job = AmbientJob(name="j", prompt="go")
+        backend = _select_backend(tmp_path, job, TriggerType.MANUAL)
+        assert isinstance(backend, LocalShellBackend)
+        assert backend._env[SANDBOX_NETWORK_ALLOWLIST_ENV] == "pypi.org,github.com"
+
 
 # ---------------------------------------------------------------------------
 # run_job — end-to-end orchestration
