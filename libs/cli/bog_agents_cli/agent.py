@@ -1531,6 +1531,22 @@ def create_cli_agent(
             if settings.user_langchain_project:
                 shell_env["LANGSMITH_PROJECT"] = settings.user_langchain_project
 
+            # Optional OS-level sandbox (#22): when `.bog-agents/sandbox.toml`
+            # declares `local_sandbox = "..."`, confine shell commands with
+            # bubblewrap/seatbelt and enforce the network allowlist. Opt-in and
+            # a safe no-op where no launcher exists (unless require_sandbox).
+            local_sandbox = None
+            require_sandbox = False
+            try:
+                from bog_agents.sandbox_config import load_sandbox_config
+
+                sbx_cfg = load_sandbox_config(root_dir)
+                if sbx_cfg is not None and sbx_cfg.local_sandbox:
+                    local_sandbox = sbx_cfg.build_local_sandbox(root_dir)
+                    require_sandbox = sbx_cfg.require_sandbox
+            except Exception:
+                logger.debug("Could not load local sandbox config", exc_info=True)
+
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
             # on the execute tool natively. Honour the same
@@ -1540,6 +1556,8 @@ def create_cli_agent(
                 inherit_env=True,
                 env=shell_env,
                 virtual_mode=not unsandboxed,
+                sandbox=local_sandbox,
+                require_sandbox=require_sandbox,
             )
         else:
             # No shell access - use plain FilesystemBackend with the

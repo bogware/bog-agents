@@ -56,6 +56,13 @@ class SandboxConfig:
         preinstall: Shell commands run once to provision the environment.
         network_allowlist: Hostnames the sandbox may reach; empty means the
             backend's default (no restriction declared here).
+        local_sandbox: OS-level local sandbox level for `LocalShellBackend`
+            (#22): one of `read-only`, `workspace-write`, `full-access`, or ``""``
+            (default, disabled). When set, shell commands run confined by
+            bubblewrap/seatbelt with egress restricted to `network_allowlist`.
+        require_sandbox: When True and `local_sandbox` is set, fail closed if no
+            native launcher is available (e.g. Windows) rather than running
+            unsandboxed.
         source: Path the config was loaded from.
     """
 
@@ -64,6 +71,8 @@ class SandboxConfig:
     snapshot: str | None = None
     preinstall: list[str] = field(default_factory=list)
     network_allowlist: list[str] = field(default_factory=list)
+    local_sandbox: str = ""
+    require_sandbox: bool = False
     source: str = ""
 
     def materialize_setup_script(self, dest: str | Path) -> Path:
@@ -88,9 +97,39 @@ class SandboxConfig:
     def summary(self) -> str:
         """A one-line human summary of the sandbox config."""
         net = f"{len(self.network_allowlist)} allowed host(s)" if self.network_allowlist else "no egress allowlist"
+        local = f", local-sandbox={self.local_sandbox}" if self.local_sandbox else ""
         return (
             f"sandbox: image={self.base_image or 'default'}, size={self.runner_size}, "
-            f"snapshot={self.snapshot or 'none'}, {len(self.preinstall)} preinstall step(s), {net}"
+            f"snapshot={self.snapshot or 'none'}, {len(self.preinstall)} preinstall step(s), {net}{local}"
+        )
+
+    def build_local_sandbox(self, working_dir: str | Path) -> object | None:
+        """Build a `LocalSandbox` from this config, or None when disabled.
+
+        Maps `local_sandbox` (the level) and `network_allowlist` onto a
+        `bog_agents.sandbox.LocalSandbox` suitable for
+        `LocalShellBackend(sandbox=...)`. Returns None when `local_sandbox` is
+        empty/unset (the common case — OS sandboxing is opt-in).
+
+        Args:
+            working_dir: The directory the sandbox confines writes to.
+
+        Returns:
+            A `LocalSandbox`, or None when no local sandbox is configured.
+        """
+        if not self.local_sandbox:
+            return None
+        from bog_agents.sandbox import LocalSandbox, SandboxLevel
+
+        try:
+            level = SandboxLevel(self.local_sandbox)
+        except ValueError:
+            logger.warning("Unknown local_sandbox level %r; disabling OS sandbox", self.local_sandbox)
+            return None
+        return LocalSandbox(
+            level=level,
+            working_dir=Path(working_dir),
+            network_allowlist=list(self.network_allowlist),
         )
 
 
@@ -132,12 +171,15 @@ def load_sandbox_config(cwd: str | Path | None = None) -> SandboxConfig | None:
 
     base_image = section.get("base_image")
     snapshot = section.get("snapshot")
+    local_level = str(section.get("local_sandbox", "")).strip().lower()
     return SandboxConfig(
         base_image=str(base_image).strip() if base_image else None,
         runner_size=size,
         snapshot=str(snapshot).strip() if snapshot else None,
         preinstall=_coerce_str_list(section.get("preinstall")),
         network_allowlist=_coerce_str_list(section.get("network_allowlist")),
+        local_sandbox=local_level,
+        require_sandbox=bool(section.get("require_sandbox", False)),
         source=str(path),
     )
 

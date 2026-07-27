@@ -562,7 +562,12 @@ class TestCreateCliAgentFsSandboxToggle:
         return mock_settings
 
     def _build(
-        self, *, enable_shell: bool, env: dict[str, str], tmp_path: Path
+        self,
+        *,
+        enable_shell: bool,
+        env: dict[str, str],
+        tmp_path: Path,
+        cwd: Path | None = None,
     ) -> tuple[Mock, Mock]:
         """Construct the agent with the given env, return (LocalShellBackend, FilesystemBackend) mocks."""
         (tmp_path / "agent").mkdir(exist_ok=True)
@@ -594,6 +599,7 @@ class TestCreateCliAgentFsSandboxToggle:
                 enable_skills=False,
                 enable_shell=enable_shell,
                 interactive=False,
+                cwd=cwd,
             )
         return mock_shell, mock_fs
 
@@ -657,6 +663,35 @@ class TestCreateCliAgentFsSandboxToggle:
         assert kwargs.get("virtual_mode") is False, (
             f"flag={flag!r} should disable sandbox"
         )
+
+    def test_no_sandbox_toml_leaves_backend_unsandboxed(self, tmp_path: Path) -> None:
+        """With no `.bog-agents/sandbox.toml`, the backend gets ``sandbox=None`` (#22)."""
+        mock_shell, _ = self._build(
+            enable_shell=True, env={}, tmp_path=tmp_path, cwd=tmp_path
+        )
+        _, kwargs = mock_shell.call_args
+        assert kwargs.get("sandbox") is None
+        assert kwargs.get("require_sandbox") is False
+
+    def test_sandbox_toml_wires_local_sandbox(self, tmp_path: Path) -> None:
+        """`local_sandbox` in sandbox.toml flows into ``LocalShellBackend(sandbox=...)`` (#22)."""
+        from bog_agents.sandbox import LocalSandbox
+
+        cfg_dir = tmp_path / ".bog-agents"
+        cfg_dir.mkdir()
+        (cfg_dir / "sandbox.toml").write_text(
+            '[sandbox]\nlocal_sandbox = "workspace-write"\n'
+            'require_sandbox = true\nnetwork_allowlist = ["pypi.org"]\n',
+            encoding="utf-8",
+        )
+        mock_shell, _ = self._build(
+            enable_shell=True, env={}, tmp_path=tmp_path, cwd=tmp_path
+        )
+        _, kwargs = mock_shell.call_args
+        sandbox = kwargs.get("sandbox")
+        assert isinstance(sandbox, LocalSandbox)
+        assert sandbox.network_allowlist == ["pypi.org"]
+        assert kwargs.get("require_sandbox") is True
 
 
 class TestCreateCliAgentInteractiveForwarding:
