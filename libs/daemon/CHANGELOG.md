@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.9.11](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.10...bog-agents-daemon==0.9.11) (2026-07-27)
+
+
+### Features
+
+* **daemon:** /webhooks/github endpoint — Assign-to-bog end-to-end ([#30](https://github.com/bogware/bog-agents/issues/30)) ([a7ca1fa](https://github.com/bogware/bog-agents/commit/a7ca1fa33446b4cc47937d56d1cf38f444b9e370))
+* **daemon:** GitHub event parser — Assign-to-bog front door ([#30](https://github.com/bogware/bog-agents/issues/30) core) ([afa109f](https://github.com/bogware/bog-agents/commit/afa109f5487530cf0a0550b9b2abd7b21c882fcb))
+* **daemon:** wave 3 reliability — cron catch-up, watchdog triggers, retry, crash recovery ([75fb169](https://github.com/bogware/bog-agents/commit/75fb1691de294f2e7d7bde6612628349e14393a5))
+* **sdk:** deepagents 0.7.0b2 co-installable parity ([66cca89](https://github.com/bogware/bog-agents/commit/66cca89622d389540716139ff7e7800c2abbb163))
+* wire the declarative sandbox spec end-to-end ([#27](https://github.com/bogware/bog-agents/issues/27)) ([7eafe90](https://github.com/bogware/bog-agents/commit/7eafe9097796a531afb6328a570e090ee58eb533))
+
+
+### Bug Fixes
+
+* **build:** de-advertise the unpublished acp extra, refresh stale locks, add lock+satellite CI ([3d9e7e0](https://github.com/bogware/bog-agents/commit/3d9e7e06280f5f4c6de6f36bd2fde52e0bc9600c))
+* **daemon:** give unattended triggers a non-shell backend, not just virtual_mode ([2fee5ba](https://github.com/bogware/bog-agents/commit/2fee5ba24ae1be01a919a7ba97b761d4bf05478d))
+* **daemon:** make `run` a real command and correct the quickstart CLI surface ([b331da8](https://github.com/bogware/bog-agents/commit/b331da8a41fbda9a2af44a55b06f57ff9a23ea92))
+* **daemon:** rotate token on the webhook path (DMN-2) and type-check the daemon (V3-10) ([9d85d8f](https://github.com/bogware/bog-agents/commit/9d85d8f3051c69ce868424e4e64fa72d0d7dfd50))
+* **deps:** patch CVEs across shipped-lib lockfiles + widen dependabot (V3-9) ([6bf8cd8](https://github.com/bogware/bog-agents/commit/6bf8cd804c1a23b52918e54f1b91242dfce28e7f))
+
 ## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.9...bog-agents-daemon==0.9.10) (2026-07-12)
 
 

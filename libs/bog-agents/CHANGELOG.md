@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.11](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.10...bog-agents==0.9.11) (2026-07-27)
+
+
+### Features
+
+* **sdk,cli:** make the OS sandbox reachable via .bog-agents/sandbox.toml ([#22](https://github.com/bogware/bog-agents/issues/22)) ([7ee356a](https://github.com/bogware/bog-agents/commit/7ee356ac169d4da4f4a941825f9871845acca3d1))
+* **sdk:** deepagents 0.7.0b2 co-installable parity ([66cca89](https://github.com/bogware/bog-agents/commit/66cca89622d389540716139ff7e7800c2abbb163))
+* **sdk:** evidence bundles — proof-of-work on every autonomous change ([#29](https://github.com/bogware/bog-agents/issues/29)) ([716b2c9](https://github.com/bogware/bog-agents/commit/716b2c9e35630cf6fef5fb45d87ac5d9f4ad94d7))
+* **sdk:** governed agent teams — claimable task ledger + mailboxes + coordinator ([#21](https://github.com/bogware/bog-agents/issues/21)) ([8114225](https://github.com/bogware/bog-agents/commit/81142258f7ccd1fe88141692f9b0f8d81d5f9e9e))
+* **sdk:** harden serve as a real surface (SDK-CORE-1/4/5/6) ([f45c2b9](https://github.com/bogware/bog-agents/commit/f45c2b959891ce7820cd78ca1ba752a171dd2b82))
+* **sdk:** operator-pinned RBAC and air-gap policy the model can't lift ([d7c5271](https://github.com/bogware/bog-agents/commit/d7c5271ba1c1bcd1aadc2fa75d116bbf7dcbd6ff))
+* **sdk:** per-agent cost ledger + runaway caps, CTX-3 pricing fix ([#25](https://github.com/bogware/bog-agents/issues/25)) ([132cbae](https://github.com/bogware/bog-agents/commit/132cbae5f40722e278735b8e51c5f3011a6bb6c9))
+* **sdk:** wire OS sandbox into LocalShellBackend + allowlist egress proxy ([#22](https://github.com/bogware/bog-agents/issues/22)) ([0dce459](https://github.com/bogware/bog-agents/commit/0dce459cfc20c420a942cbcb09c76935ba4b8182))
+* wire the declarative sandbox spec end-to-end ([#27](https://github.com/bogware/bog-agents/issues/27)) ([7eafe90](https://github.com/bogware/bog-agents/commit/7eafe9097796a531afb6328a570e090ee58eb533))
+
+
+### Bug Fixes
+
+* **cli:** silence the response beep by default + accept `none` for remote-read-timeout; refresh docs ([d24dab2](https://github.com/bogware/bog-agents/commit/d24dab27c21ca6f50a8cee50b98ac1fb49cc9ad0))
+* **deps:** patch CVEs across shipped-lib lockfiles + widen dependabot (V3-9) ([6bf8cd8](https://github.com/bogware/bog-agents/commit/6bf8cd804c1a23b52918e54f1b91242dfce28e7f))
+* **sdk:** builder feature-flag assembly + honest mcp/sandbox (SDK-CORE-2/7) ([fc79ee9](https://github.com/bogware/bog-agents/commit/fc79ee9b70e06e2bc33b90e12c027243fa9b88f8))
+* **sdk:** don't crash the turn on missing git or a blocked dangerous command ([915b623](https://github.com/bogware/bog-agents/commit/915b6239433ec533f0842376c0de35c02f672c49))
+
 ## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.9...bog-agents==0.9.10) (2026-07-12)
 
 
