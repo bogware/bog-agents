@@ -1,8 +1,14 @@
-"""`LocalShellBackend`: Filesystem backend with unrestricted local shell execution.
+"""`LocalShellBackend`: Filesystem backend with local shell execution.
 
-This backend extends FilesystemBackend to add shell command execution on the local
-host system. It provides NO sandboxing or isolation - all operations run directly
-on the host machine with full system access.
+This backend extends FilesystemBackend to add shell command execution on the
+local host system. By default it provides NO sandboxing or isolation — all
+operations run directly on the host machine with full system access.
+
+An OS-level sandbox is available opt-in via the `sandbox=` parameter (#22):
+pass a `bog_agents.sandbox.LocalSandbox` to confine each command with
+bubblewrap (Linux) or seatbelt (macOS) — filesystem confinement plus a hard
+network cut or a proxy-enforced egress allowlist. Set `require_sandbox=True` to
+fail closed where no native launcher is available (e.g. Windows today).
 """
 
 from __future__ import annotations
@@ -17,9 +23,13 @@ from typing import TYPE_CHECKING
 
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
+from bog_agents.sandbox import egress_proxy, local_sandbox
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from bog_agents.sandbox.egress_proxy import AllowlistEgressProxy
+    from bog_agents.sandbox.local_sandbox import LocalSandbox
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +190,8 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         env: dict[str, str] | None = None,
         inherit_env: bool = False,
         allow_dangerous: bool = False,
+        sandbox: LocalSandbox | None = None,
+        require_sandbox: bool = False,
     ) -> None:
         """Initialize local shell backend with filesystem access.
 
@@ -236,6 +248,20 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 allowed but a WARNING is logged. Never set this to `True` in production
                 environments.
 
+            sandbox: Optional OS-level sandbox (bubblewrap on Linux, seatbelt on
+                macOS). When set, `execute()` wraps each command in the native
+                launcher — confining filesystem access to the sandbox's
+                `working_dir` and cutting or allowlisting network egress. Off by
+                default (this backend is unrestricted unless a sandbox is given).
+                Windows has no launcher yet (ROADMAP #22), so on Windows a
+                sandbox is honored only via `require_sandbox`.
+
+            require_sandbox: Fail closed. When `True` and a `sandbox` is
+                configured but no native launcher is available on this platform,
+                `execute()` raises `PermissionError` rather than silently running
+                the command unsandboxed. When `False` (default), an unavailable
+                launcher logs a warning and the command runs unsandboxed.
+
         Raises:
             ValueError: If timeout is not positive.
         """
@@ -277,6 +303,11 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 self._env.update(env)
         else:
             self._env = env if env is not None else {}
+
+        # OS-level sandbox wiring (opt-in; #22).
+        self._sandbox = sandbox
+        self._require_sandbox = require_sandbox
+        self._egress_proxy: AllowlistEgressProxy | None = None
 
         # Generate unique sandbox ID
         self._sandbox_id = f"local-{uuid.uuid4().hex[:8]}"
@@ -394,11 +425,16 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
             msg = f"timeout must be positive, got {effective_timeout}"
             raise ValueError(msg)
 
+        # Resolve the actual process invocation (possibly sandbox-wrapped) and
+        # the environment (possibly carrying egress-proxy vars). May raise
+        # PermissionError when a sandbox is required but unavailable.
+        popen_command, use_shell, run_env = self._prepare_execution(command)
+
         try:
             result = subprocess.run(
-                command,
+                popen_command,
                 check=False,
-                shell=True,  # Intentional: designed for LLM-controlled shell execution
+                shell=use_shell,  # False when sandbox-wrapped (argv list), else LLM shell string
                 capture_output=True,
                 text=True,
                 # Force UTF-8 decoding for stdout/stderr regardless of the
@@ -419,7 +455,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 # always retry with a non-interactive flag.
                 stdin=subprocess.DEVNULL,
                 timeout=effective_timeout,
-                env=self._env,
+                env=run_env,
                 cwd=str(self.cwd),  # Use the root_dir from FilesystemBackend
             )
 
@@ -470,6 +506,103 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 exit_code=1,
                 truncated=False,
             )
+
+    def _prepare_execution(self, command: str) -> tuple[str | list[str], bool, dict[str, str]]:
+        """Resolve the process invocation, shell flag, and environment for a command.
+
+        Without a sandbox this is a no-op: the command runs as a shell string in
+        `self._env`. With a sandbox it wraps the command in the native launcher
+        (argv list, `shell=False`) and merges egress-proxy env when the sandbox
+        permits network. When a sandbox is configured but no launcher exists,
+        either raises (`require_sandbox=True`) or falls back to unsandboxed
+        execution with a warning.
+
+        Args:
+            command: The raw shell command the agent asked to run.
+
+        Returns:
+            ``(popen_command, use_shell, env)`` for `subprocess.run`.
+
+        Raises:
+            PermissionError: If a sandbox is required but unavailable here.
+        """
+        sandbox = self._sandbox
+        if sandbox is None or sandbox.level == local_sandbox.SandboxLevel.DISABLED:
+            return command, True, self._env
+
+        if not local_sandbox.sandbox_launcher_available():
+            if self._require_sandbox:
+                support = local_sandbox.get_platform_sandbox_support()
+                msg = (
+                    f"Sandbox required but no OS launcher available on "
+                    f"'{support.platform}' (need bubblewrap on Linux or "
+                    f"sandbox-exec on macOS). Refusing to run unsandboxed."
+                )
+                raise PermissionError(msg)
+            logger.warning(
+                "Sandbox requested but no OS launcher available; running command unsandboxed. "
+                "Pass require_sandbox=True to fail closed instead."
+            )
+            return command, True, self._env
+
+        wrapped = local_sandbox.wrap_command_with_sandbox(command, sandbox)
+        return wrapped, False, self._sandbox_env()
+
+    def _sandbox_env(self) -> dict[str, str]:
+        """Build the child environment for a sandboxed run, incl. egress proxy.
+
+        When the sandbox permits network and an allowlist proxy is available
+        (either a runner-provided `BOG_AGENTS_SANDBOX_EGRESS_PROXY`, or an
+        internal proxy started on demand from the sandbox's `network_allowlist`),
+        the proxy env vars are merged so well-behaved tools route egress through
+        it. Unrestricted network (`allow_network=True`, no allowlist) adds no
+        proxy vars.
+
+        Returns:
+            The environment dict to pass to the sandboxed subprocess.
+        """
+        env = dict(self._env)
+        sandbox = self._sandbox
+        if sandbox is None or not sandbox.network_enabled:
+            return env
+
+        proxy_url = env.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV) or os.environ.get(
+            egress_proxy.SANDBOX_EGRESS_PROXY_ENV, ""
+        )
+        if not proxy_url and sandbox.network_allowlist:
+            proxy_url = self._ensure_egress_proxy(sandbox.network_allowlist)
+        if proxy_url:
+            env.update(egress_proxy.egress_env_for(proxy_url))
+        return env
+
+    def _ensure_egress_proxy(self, allowlist: list[str]) -> str:
+        """Start (once) an internal allowlist egress proxy and return its URL.
+
+        The proxy lives for the backend's lifetime (daemon threads, so it dies
+        with the process); `close()` stops it eagerly.
+
+        Args:
+            allowlist: Hostnames egress is permitted to.
+
+        Returns:
+            The proxy URL, or "" if the proxy could not be started.
+        """
+        if self._egress_proxy is not None:
+            return self._egress_proxy.url
+        try:
+            proxy = egress_proxy.AllowlistEgressProxy(allowlist)
+            proxy.start()
+        except OSError as exc:
+            logger.warning("Could not start egress allowlist proxy: %s", exc)
+            return ""
+        self._egress_proxy = proxy
+        return proxy.url
+
+    def close(self) -> None:
+        """Release backend resources (stops the internal egress proxy if any)."""
+        if self._egress_proxy is not None:
+            self._egress_proxy.stop()
+            self._egress_proxy = None
 
 
 __all__ = ["DEFAULT_EXECUTE_TIMEOUT", "LocalShellBackend"]

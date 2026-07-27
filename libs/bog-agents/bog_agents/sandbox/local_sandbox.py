@@ -88,6 +88,21 @@ def get_platform_sandbox_support() -> SandboxSupport:
     return support
 
 
+def sandbox_launcher_available() -> bool:
+    """Whether a native OS sandbox launcher exists on this platform.
+
+    True when bubblewrap (Linux) or sandbox-exec/seatbelt (macOS) is present.
+    Callers use this to decide between wrapping a command and either
+    failing closed or running it unsandboxed. Windows has no launcher yet
+    (AppContainer wiring is tracked as ROADMAP #22).
+
+    Returns:
+        True if `wrap_command_with_sandbox` will actually confine the command.
+    """
+    support = get_platform_sandbox_support()
+    return support.bubblewrap_available or support.seatbelt_available
+
+
 @dataclass
 class LocalSandbox:
     """Configuration for OS-level sandboxing.
@@ -95,7 +110,12 @@ class LocalSandbox:
     Args:
         level: Sandbox restriction level.
         working_dir: Directory the agent can access.
-        allow_network: Whether to allow network access.
+        allow_network: Whether to allow *unrestricted* network access.
+        network_allowlist: Hostnames egress is restricted to. When non-empty,
+            the network namespace is kept (so egress works) but traffic is
+            expected to be routed through an allowlist proxy — see
+            `bog_agents.sandbox.egress_proxy`. Empty + `allow_network=False`
+            means a hard network cut (`--unshare-net` on Linux).
         extra_read_paths: Additional paths to allow read access to.
         extra_write_paths: Additional paths to allow write access to.
     """
@@ -103,12 +123,22 @@ class LocalSandbox:
     level: SandboxLevel = SandboxLevel.WORKSPACE_WRITE
     working_dir: Path = field(default_factory=Path.cwd)
     allow_network: bool = False
+    network_allowlist: list[str] = field(default_factory=list)
     extra_read_paths: list[str] = field(default_factory=list)
     extra_write_paths: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Detect platform support."""
         self._support = get_platform_sandbox_support()
+
+    @property
+    def network_enabled(self) -> bool:
+        """Whether the sandbox keeps a network namespace (any egress possible).
+
+        True for unrestricted access *or* allowlisted access (the allowlist is
+        enforced by a proxy, not the namespace, so the namespace must stay).
+        """
+        return self.allow_network or bool(self.network_allowlist)
 
 
 def _build_bubblewrap_args(sandbox: LocalSandbox) -> list[str]:
@@ -159,9 +189,11 @@ def _build_bubblewrap_args(sandbox: LocalSandbox) -> list[str]:
         if Path(path).exists():
             args.extend(["--bind", path, path])
 
-    # Network access
-    if not sandbox.allow_network:
-        args.append("--unshare-net")
+    # Network access. `--unshare-all` already cut the net namespace; re-share
+    # it when egress is wanted (unrestricted OR allowlisted — the allowlist is
+    # enforced downstream by the egress proxy, so the namespace must stay).
+    if sandbox.network_enabled:
+        args.append("--share-net")
 
     # Set working directory
     args.extend(["--chdir", work_dir])
@@ -223,8 +255,9 @@ def _build_seatbelt_profile(sandbox: LocalSandbox) -> str:
         profile_parts.append(f'(allow file-read* (subpath "{path}"))')
         profile_parts.append(f'(allow file-write* (subpath "{path}"))')
 
-    # Network access
-    if sandbox.allow_network:
+    # Network access (allowlist egress is enforced by the proxy, so the profile
+    # must still permit network when an allowlist is configured).
+    if sandbox.network_enabled:
         profile_parts.append("(allow network*)")
     else:
         profile_parts.append(";; Network denied by default")
@@ -279,6 +312,7 @@ def create_local_sandbox(
     level: SandboxLevel = SandboxLevel.WORKSPACE_WRITE,
     working_dir: Path | None = None,
     allow_network: bool = False,
+    network_allowlist: list[str] | None = None,
     extra_read_paths: list[str] | None = None,
     extra_write_paths: list[str] | None = None,
 ) -> LocalSandbox:
@@ -287,7 +321,10 @@ def create_local_sandbox(
     Args:
         level: Sandbox restriction level.
         working_dir: Directory the agent can access.
-        allow_network: Whether to allow network access.
+        allow_network: Whether to allow unrestricted network access.
+        network_allowlist: Hostnames egress is restricted to (proxy-enforced);
+            keeps the network namespace open while a hard cut is applied when
+            both this is empty and `allow_network` is False.
         extra_read_paths: Additional paths to allow read access to.
         extra_write_paths: Additional paths to allow write access to.
 
@@ -298,6 +335,7 @@ def create_local_sandbox(
         level=level,
         working_dir=working_dir or Path.cwd(),
         allow_network=allow_network,
+        network_allowlist=network_allowlist or [],
         extra_read_paths=extra_read_paths or [],
         extra_write_paths=extra_write_paths or [],
     )
