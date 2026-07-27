@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.11](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.10...bog-agents-cli==0.9.11) (2026-07-27)
+
+
+### Features
+
+* **cli:** best-of-n attempts with rubric auto-judge ([#31](https://github.com/bogware/bog-agents/issues/31)) ([5d67d88](https://github.com/bogware/bog-agents/commit/5d67d88df1e1fc1807ca3e852f65811e5a099c9c))
+* **cli:** self-modification guard — gate writes to the agent's own authority files ([b245ee0](https://github.com/bogware/bog-agents/commit/b245ee026e7ebed5aa46bb06f36c7961416a7798))
+* **cli:** wire /team run — governed agent team over a task ledger ([#21](https://github.com/bogware/bog-agents/issues/21)) ([68ffc9c](https://github.com/bogware/bog-agents/commit/68ffc9c480a7f8dae81c30d28c25bba7a07738c3))
+* **sdk,cli:** make the OS sandbox reachable via .bog-agents/sandbox.toml ([#22](https://github.com/bogware/bog-agents/issues/22)) ([7ee356a](https://github.com/bogware/bog-agents/commit/7ee356ac169d4da4f4a941825f9871845acca3d1))
+* **sdk:** deepagents 0.7.0b2 co-installable parity ([66cca89](https://github.com/bogware/bog-agents/commit/66cca89622d389540716139ff7e7800c2abbb163))
+* wire the declarative sandbox spec end-to-end ([#27](https://github.com/bogware/bog-agents/issues/27)) ([7eafe90](https://github.com/bogware/bog-agents/commit/7eafe9097796a531afb6328a570e090ee58eb533))
+
+
+### Bug Fixes
+
+* **build:** de-advertise the unpublished acp extra, refresh stale locks, add lock+satellite CI ([3d9e7e0](https://github.com/bogware/bog-agents/commit/3d9e7e06280f5f4c6de6f36bd2fde52e0bc9600c))
+* **cli:** gate butcher plans behind approval and enforce the per-slice allowlist ([79a0f94](https://github.com/bogware/bog-agents/commit/79a0f94abb46b72f793a6fae8c29cb577276729d))
+* **cli:** gate mutating git tools behind HITL and honor BOG_AGENTS_MCP_TRUST ([a8a0818](https://github.com/bogware/bog-agents/commit/a8a08180ccfb727f8e65303f2f34aa0b5db053da))
+* **cli:** serialize turn dispatch and stop effort truncating non-reasoning models ([6a3c8c5](https://github.com/bogware/bog-agents/commit/6a3c8c53f21d997e7674941127c5601417dcc75d))
+* **cli:** silence the response beep by default + accept `none` for remote-read-timeout; refresh docs ([d24dab2](https://github.com/bogware/bog-agents/commit/d24dab27c21ca6f50a8cee50b98ac1fb49cc9ad0))
+* **deps:** patch CVEs across shipped-lib lockfiles + widen dependabot (V3-9) ([6bf8cd8](https://github.com/bogware/bog-agents/commit/6bf8cd804c1a23b52918e54f1b91242dfce28e7f))
+
 ## [0.9.10](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.9...bog-agents-cli==0.9.10) (2026-07-12)
 
 
