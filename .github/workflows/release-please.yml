@@ -29,14 +29,14 @@ jobs:
       daemon-release: ${{ steps.check-daemon.outputs.is-release }}
       pr: ${{ steps.release.outputs.pr }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.BOG_PAT }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
 
@@ -75,7 +75,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ fromJson(needs.release-please.outputs.pr).headBranchName }}
           token: ${{ secrets.BOG_PAT }}
