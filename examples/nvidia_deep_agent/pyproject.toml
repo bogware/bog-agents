@@ -4,18 +4,18 @@ version = "0.1.0"
 description = "General-purpose bog-agents agent: frontier orchestrator + Nemotron Super subagents + NVIDIA GPU skills"
 requires-python = ">=3.11"
 dependencies = [
-    "bog-agents>=0.3.0",
+    "bog-agents>=0.9.10",
     "langchain>=0.3.0",
     "langchain-anthropic>=0.3.0",
     "langgraph>=0.4.0",
-    "tavily-python>=0.5.0",
+    "tavily-python>=0.7.26",
     "httpx>=0.28.0",
-    "markdownify>=1.2.0",
+    "markdownify>=1.2.3",
     "python-dotenv>=1.0.0",
     "langgraph-cli[inmem]>=0.1.55",
-    "modal>=0.73.0",
-    "langchain-modal>=0.0.2",
-    "langchain-nvidia-ai-endpoints>=1.1.0",
+    "modal>=1.5.3",
+    "langchain-modal>=0.0.5",
+    "langchain-nvidia-ai-endpoints>=1.4.3",
 ]
 
 [build-system]
