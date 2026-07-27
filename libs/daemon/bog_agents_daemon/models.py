@@ -16,6 +16,7 @@ class TriggerType(StrEnum):
     FILE_CHANGE = "file_change"
     WEBHOOK = "webhook"
     GIT_PUSH = "git_push"
+    GITHUB = "github"  # issue-assigned/labeled, comment, CI-failure (#30)
     MANUAL = "manual"
     INTERVAL = "interval"
 

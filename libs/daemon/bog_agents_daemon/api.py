@@ -775,6 +775,76 @@ def create_app(
 
         return {"triggered": triggered, "count": len(triggered)}
 
+    @app.post("/webhooks/github")
+    async def receive_github(request: Request) -> dict[str, Any]:
+        """Handle a GitHub webhook (Assign-to-bog, #30).
+
+        Parses the event via `github_events.parse_github_event` and, when it is
+        actionable (issue assigned/labeled, comment, CI failure), dispatches
+        every enabled job with a GITHUB trigger — passing the parsed event as
+        trigger_context so the agent can open a draft PR, revise, or repair.
+
+        Auth (fail closed): a repo-level GitHub webhook can't send the daemon
+        token, so the `X-Hub-Signature-256` HMAC is verified against
+        `BOG_DAEMON_GITHUB_WEBHOOK_SECRET`. A valid daemon token is also accepted
+        (the in-process test path). With neither a token nor a configured
+        secret, the request is refused.
+        """
+        import json as _json
+        import os as _os
+
+        from bog_agents_daemon.github_events import parse_github_event
+        from bog_agents_daemon.models import JobStatus
+
+        raw_body = await request.body()
+        provided_token = request.headers.get("X-Daemon-Token", "")
+        is_token_authed = bool(provided_token) and hmac.compare_digest(provided_token, token_holder["value"])
+        if not is_token_authed:
+            secret = _os.environ.get("BOG_DAEMON_GITHUB_WEBHOOK_SECRET", "")
+            if not secret:
+                logger.warning("Refusing GitHub webhook: no BOG_DAEMON_GITHUB_WEBHOOK_SECRET configured")
+                return {"triggered": [], "count": 0}
+            sig = request.headers.get("X-Hub-Signature-256", "")
+            expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, expected):
+                logger.warning("GitHub webhook signature mismatch")
+                return {"triggered": [], "count": 0}
+
+        event_type = request.headers.get("X-GitHub-Event", "")
+        try:
+            payload = _json.loads(raw_body) if raw_body else {}
+        except (ValueError, TypeError):
+            payload = {}
+
+        event = parse_github_event(
+            event_type,
+            payload if isinstance(payload, dict) else {},
+            bot_login=_os.environ.get("BOG_DAEMON_GITHUB_BOT_LOGIN", ""),
+            trigger_label=_os.environ.get("BOG_DAEMON_GITHUB_TRIGGER_LABEL", ""),
+        )
+        if event is None:
+            return {"triggered": [], "count": 0, "actionable": False}
+
+        ctx = {
+            "github_event": event.kind,
+            "number": event.number,
+            "title": event.title,
+            "body": event.body,
+            "branch": event.branch,
+            "repo": event.repo,
+            "actor": event.actor,
+        }
+        jobs = load_jobs()
+        triggered: list[str] = []
+        for job in jobs:
+            if not job.enabled:
+                continue
+            if any(t.type == TriggerType.GITHUB for t in job.triggers):
+                dispatched = scheduler.dispatch(job, trigger_type=TriggerType.GITHUB, trigger_context=ctx)
+                if dispatched.status != JobStatus.SKIPPED:
+                    triggered.append(job.job_id)
+        return {"triggered": triggered, "count": len(triggered), "kind": event.kind}
+
     @app.post("/webhooks/{webhook_path:path}")
     async def receive_webhook(request: Request, webhook_path: str) -> dict[str, Any]:
         """Receive an inbound webhook and trigger any matching jobs.

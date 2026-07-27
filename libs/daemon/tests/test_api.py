@@ -603,3 +603,60 @@ class TestWebhookFailClosed:
 
         assert resp.status_code == 200
         assert job.job_id not in resp.json()["triggered"]
+
+
+# ---------------------------------------------------------------------------
+# GitHub webhook (#30, Assign-to-bog)
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubWebhook:
+    def test_issue_assigned_triggers_github_job(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="fix the issue")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/github",
+                json={"action": "assigned", "assignee": {"login": "bot"}, "issue": {"number": 5, "title": "t", "body": "b"}},
+                headers={**auth, "X-GitHub-Event": "issues"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert job.job_id in body["triggered"]
+        assert body["kind"] == "issue_assigned"
+
+    def test_non_actionable_event_triggers_nothing(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="x")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "opened", "issue": {"number": 1}},
+            headers={**auth, "X-GitHub-Event": "issues"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["triggered"] == []
+        assert resp.json()["actionable"] is False
+
+    def test_unsigned_request_without_token_refused(self, client: TestClient, tmp_daemon_dir: Path) -> None:
+        # No daemon token AND no configured GitHub secret → fail closed.
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name="gh", prompt="x")
+        job.triggers = [TriggerConfig(type=TriggerType.GITHUB)]
+        upsert_job(job)
+
+        resp = client.post(
+            "/webhooks/github",
+            json={"action": "assigned", "assignee": {"login": "bot"}, "issue": {"number": 5}},
+            headers={"X-GitHub-Event": "issues"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["triggered"] == []
