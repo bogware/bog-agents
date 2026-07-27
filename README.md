@@ -1,11 +1,4 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset=".github/images/logo-dark.svg">
-    <img alt="Bog Agents" src=".github/images/logo-light.svg" width="440">
-  </picture>
-</p>
-
-<p align="center">
   <strong>A production-ready AI agent framework built on LangGraph.</strong><br>
   Run it in your terminal, embed it in your app, or leave it working on a server —
   one install, a compiled agent, nothing to wire up.
