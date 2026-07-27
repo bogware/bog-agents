@@ -211,7 +211,7 @@ class _CapturingAgent:
         self.checkpointer = checkpointer
         self.last_input: dict | None = None
 
-    async def ainvoke(self, input_data: dict, *, config: dict) -> dict:  # noqa: ARG002
+    async def ainvoke(self, input_data: dict, *, config: dict) -> dict:
         self.last_input = input_data
         return {"messages": [{"role": "assistant", "content": "ok"}]}
 
@@ -248,10 +248,10 @@ class _StreamingAgent:
         self.n = n
         self.checkpointer = checkpointer
 
-    async def ainvoke(self, _input_data: dict, *, config: dict) -> dict:  # noqa: ARG002
+    async def ainvoke(self, _input_data: dict, *, config: dict) -> dict:
         return {"messages": [{"role": "assistant", "content": "done"}]}
 
-    async def astream_events(self, _input_data: dict, *, config: dict, version: str) -> object:  # noqa: ARG002
+    async def astream_events(self, _input_data: dict, *, config: dict, version: str) -> object:
         for i in range(self.n):
             yield {"event": "on_chunk", "data": {"i": i}}
 

@@ -5965,7 +5965,11 @@ class BogAgentsApp(App):
         await self._set_spinner(f"Best-of-{n}: running attempts in worktrees")
         try:
             report, winner_path = await run_best_of_n_session(
-                prompt, n=n, repo_dir=repo_dir, model_spec=model_spec, resolve_model=_resolve
+                prompt,
+                n=n,
+                repo_dir=repo_dir,
+                model_spec=model_spec,
+                resolve_model=_resolve,
             )
         except Exception as exc:
             await self._mount_message(ErrorMessage(f"/best-of-n failed: {exc}"))
@@ -13464,9 +13468,7 @@ class BogAgentsApp(App):
                     caps=caps,
                 )
             except Exception as exc:
-                await self._mount_message(
-                    ErrorMessage(f"/team run failed: {exc}")
-                )
+                await self._mount_message(ErrorMessage(f"/team run failed: {exc}"))
                 return
             finally:
                 await self._set_spinner("")

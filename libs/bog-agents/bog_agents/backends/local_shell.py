@@ -540,8 +540,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 )
                 raise PermissionError(msg)
             logger.warning(
-                "Sandbox requested but no OS launcher available; running command unsandboxed. "
-                "Pass require_sandbox=True to fail closed instead."
+                "Sandbox requested but no OS launcher available; running command unsandboxed. Pass require_sandbox=True to fail closed instead."
             )
             return command, True, self._env
 
@@ -566,9 +565,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         if sandbox is None or not sandbox.network_enabled:
             return env
 
-        proxy_url = env.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV) or os.environ.get(
-            egress_proxy.SANDBOX_EGRESS_PROXY_ENV, ""
-        )
+        proxy_url = env.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV) or os.environ.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV, "")
         if not proxy_url and sandbox.network_allowlist:
             proxy_url = self._ensure_egress_proxy(sandbox.network_allowlist)
         if proxy_url:

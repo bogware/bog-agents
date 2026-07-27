@@ -145,9 +145,7 @@ class TestProxyLoopback:
         proxy.start()
         try:
             client = _connect(proxy.address)
-            client.sendall(
-                f"CONNECT {echo_host}:{echo_port} HTTP/1.1\r\n\r\n".encode("latin-1")
-            )
+            client.sendall(f"CONNECT {echo_host}:{echo_port} HTTP/1.1\r\n\r\n".encode("latin-1"))
             established = client.recv(1024)
             assert b"200" in established
             client.sendall(b"ping")

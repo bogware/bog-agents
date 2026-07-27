@@ -274,12 +274,9 @@ class AllowlistEgressProxy:
 
     def _respond(self, client: socket.socket, code: int, reason: str, body: str) -> None:
         payload = body.encode("utf-8")
-        header = (
-            f"HTTP/1.1 {code} {reason}\r\n"
-            f"Content-Length: {len(payload)}\r\n"
-            "Content-Type: text/plain\r\n"
-            "Connection: close\r\n\r\n"
-        ).encode("latin-1")
+        header = (f"HTTP/1.1 {code} {reason}\r\nContent-Length: {len(payload)}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n").encode(
+            "latin-1"
+        )
         with _suppress_oserror():
             client.sendall(header + payload)
 

@@ -180,9 +180,7 @@ class TestSelectBackend:
         from bog_agents_daemon.runner import _select_backend
 
         (tmp_path / ".bog-agents").mkdir()
-        (tmp_path / ".bog-agents" / "sandbox.toml").write_text(
-            '[sandbox]\nnetwork_allowlist = ["pypi.org", "github.com"]\n', encoding="utf-8"
-        )
+        (tmp_path / ".bog-agents" / "sandbox.toml").write_text('[sandbox]\nnetwork_allowlist = ["pypi.org", "github.com"]\n', encoding="utf-8")
         job = AmbientJob(name="j", prompt="go")
         backend = _select_backend(tmp_path, job, TriggerType.MANUAL)
         assert isinstance(backend, LocalShellBackend)
