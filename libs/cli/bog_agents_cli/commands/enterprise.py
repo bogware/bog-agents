@@ -9,8 +9,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/team",
-            "Team shared config (members, context, prompts) and multi-agent coordination",
-            "enterprise org swarm coordination invite members shared context prompts config",
+            "Team shared config + `/team run` to run a governed agent team over a task ledger",
+            "enterprise org swarm coordination invite members shared context prompts config run ledger workers",
             "enterprise",
             available=True,
         ),

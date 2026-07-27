@@ -13415,6 +13415,65 @@ class BogAgentsApp(App):
             )
             return
 
+        if action == "run":
+            from bog_agents.cost_ledger import RunawayCaps
+
+            from bog_agents_cli.config import create_model, settings
+            from bog_agents_cli.team_executor import (
+                parse_team_run_args,
+                run_team_session,
+            )
+
+            req = parse_team_run_args(raw_arg[len("run") :].lstrip())
+            if not req.task_specs:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/team run [--members a,b] [--chain] "
+                        "<task1> | <task2> | ...[/bold]\n"
+                        "Runs a governed agent team over the tasks — each teammate is a "
+                        "non-interactive, auto-approving agent sharing the repo working "
+                        "directory, coordinated by a claimable task ledger.\n"
+                        "  • [bold]--chain[/bold] makes each task depend on the previous "
+                        "(linear pipeline); otherwise tasks run as workers free up.\n"
+                        "  • [bold]--members[/bold] overrides the worker roster "
+                        "(default two workers)."
+                    )
+                )
+                return
+
+            members = req.members or ["worker-1", "worker-2"]
+            repo_dir = Path(settings.project_root or self._cwd)
+            model_spec = self._model_override or settings.model_name
+
+            def _resolve(spec: str) -> Any:  # noqa: ANN401 - langchain chat model
+                return create_model(
+                    spec, profile_overrides=self._profile_override
+                ).model
+
+            caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
+            await self._set_spinner(
+                f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
+            )
+            try:
+                report = await run_team_session(
+                    req.task_specs,
+                    members,
+                    repo_dir=repo_dir,
+                    resolve_model=_resolve,
+                    model_spec=model_spec,
+                    caps=caps,
+                )
+            except Exception as exc:
+                await self._mount_message(
+                    ErrorMessage(f"/team run failed: {exc}")
+                )
+                return
+            finally:
+                await self._set_spinner("")
+
+            await self._mount_message(AppMessage(report.format_summary()))
+            return
+
         if action == "whoami":
             identity = load_user_identity()
             sub = tokens[1].lower() if len(tokens) > 1 else "show"

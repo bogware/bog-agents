@@ -42,7 +42,14 @@ from pathlib import Path
 # unit tests, injected runner+judge). What lands on BogAgentsApp is only the
 # thin arg-parse + spinner + result-mount glue that needs `self._mount_message`
 # / `self._model_override` — exactly the sanctioned split.
-APP_PY_LINE_CEILING = 17_635
+#
+# Bumped 2026-07-26 to 17,695 for the `/team run` subcommand (killer feature
+# #21's CLI surface). The ledger construction, arg parsing (`parse_team_run_args`),
+# real teammate-runner wiring, and cap-governed session all live in the testable
+# `team_executor.py` module (9 unit tests, injected runner). What lands on
+# BogAgentsApp is only the thin subcommand branch: model resolution + spinner +
+# `report.format_summary()` mount — the same sanctioned split as `/best-of-n`.
+APP_PY_LINE_CEILING = 17_695
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 
