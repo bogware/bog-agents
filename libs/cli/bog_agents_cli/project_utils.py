@@ -181,38 +181,35 @@ def find_project_root(start_path: str | Path | None = None) -> Path | None:
 
 
 def find_project_agent_md(project_root: Path) -> list[Path]:
-    """Find project-specific AGENTS.md and CLAUDE.md file(s).
+    """Find project-specific instruction files (multi-vendor; Tier-1 #5).
 
-    Checks these locations and returns ALL that exist:
-    1. project_root/.bog-agents/AGENTS.md
-    2. project_root/AGENTS.md
-    3. project_root/CLAUDE.md
+    Returns ALL that exist, in load order:
+    1. ``project_root/.bog-agents/AGENTS.md``
+    2. Top-level files: ``AGENTS.md``, ``AGENT.md``, ``CLAUDE.md``,
+       ``CLAUDE.local.md``
+    3. Every ``*.md`` under ``.bog-agents/rules/``, ``.claude/rules/``,
+       ``.cursor/rules/``, plus ``.cursorrules``
 
-    Both AGENTS.md and CLAUDE.md are loaded into the agent's memory context
-    to provide project-specific guidance. CLAUDE.md follows the convention
-    used by Claude Code for repository instructions.
+    Loading Claude Code (``CLAUDE.md``/``CLAUDE.local.md``) and Cursor
+    (``.cursor/rules/``/``.cursorrules``) conventions alongside AGENTS.md lets a
+    repo carry all three ecosystems' instructions at once.
 
     Args:
         project_root: Path to the project root directory.
 
     Returns:
-        Existing context file paths.
-
-            Empty if no files exist, otherwise all found paths in discovery
-            order.
+        Existing context file paths in load order (empty if none exist).
     """
-    candidates = [
-        project_root / ".bog-agents" / "AGENTS.md",
-        project_root / "AGENTS.md",
-        project_root / "CLAUDE.md",
-    ]
     paths: list[Path] = []
-    for candidate in candidates:
-        try:
-            if candidate.exists():
-                paths.append(candidate)
-        except OSError:
-            pass
+    dotbog = project_root / ".bog-agents" / "AGENTS.md"
+    try:
+        if dotbog.is_file():
+            paths.append(dotbog)
+    except OSError:
+        pass
+    # Top-level instruction files (AGENTS/AGENT/CLAUDE/CLAUDE.local) + the
+    # vendor-neutral rules directories (.bog-agents/.claude/.cursor rules).
+    paths.extend(_agent_md_in_dir(project_root))
     return paths
 
 
@@ -270,16 +267,64 @@ def find_hierarchical_skill_dirs(
     return found
 
 
-def _agent_md_in_dir(directory: Path) -> list[Path]:
-    """Return AGENTS.md / CLAUDE.md files directly inside ``directory``."""
+# Recognised top-level instruction filenames (all matching files in a directory
+# load). Superset of Claude Code (CLAUDE.md, CLAUDE.local.md) and the AGENTS.md
+# convention (Tier-1 #5 multi-vendor compat).
+_AGENT_MD_FILENAMES: tuple[str, ...] = (
+    "AGENTS.md",
+    "AGENT.md",
+    "CLAUDE.md",
+    "CLAUDE.local.md",
+)
+
+# Vendor-neutral rules directories: every ``*.md`` inside these loads regardless
+# of name, so a repo can carry bog / Claude / Cursor rule sets simultaneously.
+# ``.cursorrules`` is Cursor's older single-file convention.
+_RULES_SUBDIRS: tuple[str, ...] = (
+    ".bog-agents/rules",
+    ".claude/rules",
+    ".cursor/rules",
+)
+_SINGLE_RULE_FILES: tuple[str, ...] = (".cursorrules",)
+
+
+def _rule_files_in_dir(directory: Path) -> list[Path]:
+    """Return rule files from the vendor-neutral rules dirs inside ``directory``."""
     out: list[Path] = []
-    for name in ("AGENTS.md", "CLAUDE.md"):
+    for subdir in _RULES_SUBDIRS:
+        rules_dir = directory / subdir
+        try:
+            if rules_dir.is_dir():
+                out.extend(sorted(p for p in rules_dir.glob("*.md") if p.is_file()))
+        except OSError:
+            pass
+    for name in _SINGLE_RULE_FILES:
         candidate = directory / name
         try:
             if candidate.is_file():
                 out.append(candidate)
         except OSError:
             pass
+    return out
+
+
+def _agent_md_in_dir(directory: Path) -> list[Path]:
+    """Return instruction files inside ``directory`` (multi-vendor; Tier-1 #5).
+
+    Top-level files (`AGENTS.md`, `AGENT.md`, `CLAUDE.md`, `CLAUDE.local.md`)
+    come first, then every `*.md` under the vendor-neutral rules directories
+    (`.bog-agents/rules/`, `.claude/rules/`, `.cursor/rules/`) plus
+    `.cursorrules`.
+    """
+    out: list[Path] = []
+    for name in _AGENT_MD_FILENAMES:
+        candidate = directory / name
+        try:
+            if candidate.is_file():
+                out.append(candidate)
+        except OSError:
+            pass
+    out.extend(_rule_files_in_dir(directory))
     return out
 
 
