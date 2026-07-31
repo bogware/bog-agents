@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from bog_agents.exec_risk import command_has_exec_risk
+
 logger = logging.getLogger(__name__)
 
 
@@ -130,6 +132,16 @@ def is_tool_safe(
                     break
             if not all_match:
                 continue
+
+        # Exec-risk veto (Tier-1 #2): a shell command that *looks* read-only can
+        # still execute attacker-controlled code via a flag/config (e.g.
+        # `git -c core.fsmonitor=…`, `sort --compress-program=…`). Never
+        # auto-approve those — fall through to human-in-the-loop even if a rule
+        # matched. Only applies to command-bearing tool calls.
+        command = tool_args.get("command")
+        if isinstance(command, str) and command_has_exec_risk(command):
+            logger.info("SafeTools: refusing auto-approval — exec-risk in command: %s", command)
+            return False
 
         return True
 
