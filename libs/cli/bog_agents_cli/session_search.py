@@ -1,0 +1,243 @@
+"""Full-text search over session history (Tier-1 #4).
+
+Grok Build keeps session history as append-only JSONL (the source of truth) and
+a *rebuildable* SQLite FTS index over titles/prompts so `grok sessions search`
+is instant. bog's source of truth is the LangGraph SQLite checkpointer
+(`~/.bog-agents/sessions.db`); this module adds the sibling **rebuildable FTS
+index** (`~/.bog-agents/sessions_fts.db`) plus a search API and a populate
+helper, so `/threads search <query>` can find an old thread by what was said in
+it — not just by recency.
+
+The index is a cache: it can be dropped and rebuilt from the checkpointer at any
+time without losing history. FTS5 is used when the runtime's sqlite3 supports it
+(the common case) and the code degrades to a `LIKE` scan otherwise, so search
+always works.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Self
+
+
+@dataclass
+class SessionHit:
+    """One search result.
+
+    Attributes:
+        thread_id: The matching thread's id.
+        title: The thread's title/summary (may be empty).
+        snippet: A short excerpt around the match (best-effort).
+        score: Relevance score (lower is better with BM25; 0.0 for LIKE).
+    """
+
+    thread_id: str
+    title: str
+    snippet: str
+    score: float
+
+
+def _fts5_available(conn: sqlite3.Connection) -> bool:
+    """Return True if this sqlite3 build supports FTS5."""
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(x)")
+        conn.execute("DROP TABLE IF EXISTS _fts5_probe")
+    except sqlite3.OperationalError:
+        return False
+    return True
+
+
+class SessionSearchIndex:
+    """A rebuildable full-text index over session threads.
+
+    Backed by SQLite FTS5 when available, else a `LIKE` fallback. Safe to drop
+    and rebuild from the checkpointer at any time.
+    """
+
+    def __init__(self, db_path: str | Path) -> None:
+        """Open (creating if needed) the index at ``db_path``."""
+        self._path = Path(db_path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self._path))
+        self._fts = _fts5_available(self._conn)
+        self._create_schema()
+
+    def _create_schema(self) -> None:
+        if self._fts:
+            # `thread_id` is UNINDEXED (stored, not tokenized); title/body are searchable.
+            self._conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts "
+                "USING fts5(thread_id UNINDEXED, title, body, tokenize='porter unicode61')"
+            )
+        else:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS sessions ("
+                "thread_id TEXT PRIMARY KEY, title TEXT, body TEXT)"
+            )
+        self._conn.commit()
+
+    def index(self, thread_id: str, title: str, body: str) -> None:
+        """Insert or replace the searchable text for one thread."""
+        if not thread_id:
+            return
+        if self._fts:
+            self._conn.execute(
+                "DELETE FROM sessions_fts WHERE thread_id = ?", (thread_id,)
+            )
+            self._conn.execute(
+                "INSERT INTO sessions_fts (thread_id, title, body) VALUES (?, ?, ?)",
+                (thread_id, title or "", body or ""),
+            )
+        else:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO sessions (thread_id, title, body) VALUES (?, ?, ?)",
+                (thread_id, title or "", body or ""),
+            )
+        self._conn.commit()
+
+    def remove(self, thread_id: str) -> None:
+        """Drop a thread from the index."""
+        table = "sessions_fts" if self._fts else "sessions"
+        self._conn.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))  # noqa: S608 - table name is a fixed literal
+        self._conn.commit()
+
+    def clear(self) -> None:
+        """Empty the index (before a full rebuild)."""
+        table = "sessions_fts" if self._fts else "sessions"
+        self._conn.execute(f"DELETE FROM {table}")  # noqa: S608 - table name is a fixed literal
+        self._conn.commit()
+
+    def count(self) -> int:
+        """Number of indexed threads."""
+        table = "sessions_fts" if self._fts else "sessions"
+        row = self._conn.execute(f"SELECT count(*) FROM {table}").fetchone()  # noqa: S608 - fixed literal
+        return int(row[0]) if row else 0
+
+    def search(self, query: str, *, limit: int = 20) -> list[SessionHit]:
+        """Return threads matching ``query``, most-relevant first.
+
+        Args:
+            query: Free-text query. With FTS5 this is an FTS MATCH expression
+                (a bare word or phrase works); with the LIKE fallback it is a
+                substring.
+            limit: Maximum results.
+
+        Returns:
+            A list of `SessionHit` (empty when nothing matches or the query is
+            blank).
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+        if self._fts:
+            return self._search_fts(query, limit)
+        return self._search_like(query, limit)
+
+    def _search_fts(self, query: str, limit: int) -> list[SessionHit]:
+        # Quote the query as a single FTS5 phrase so punctuation/operators in a
+        # user's text can't produce a syntax error or an unintended query.
+        match = '"' + query.replace('"', '""') + '"'
+        try:
+            rows = self._conn.execute(
+                "SELECT thread_id, title, "
+                "snippet(sessions_fts, 2, '[', ']', '…', 12) AS snip, "
+                "bm25(sessions_fts) AS score "
+                "FROM sessions_fts WHERE sessions_fts MATCH ? ORDER BY score LIMIT ?",
+                (match, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [
+            SessionHit(
+                thread_id=r[0], title=r[1] or "", snippet=r[2] or "", score=float(r[3])
+            )
+            for r in rows
+        ]
+
+    def _search_like(self, query: str, limit: int) -> list[SessionHit]:
+        like = f"%{query}%"
+        rows = self._conn.execute(
+            "SELECT thread_id, title, body FROM sessions "
+            "WHERE title LIKE ? OR body LIKE ? LIMIT ?",
+            (like, like, limit),
+        ).fetchall()
+        hits: list[SessionHit] = []
+        for thread_id, title, body in rows:
+            snippet = _excerpt(body or "", query)
+            hits.append(
+                SessionHit(
+                    thread_id=thread_id, title=title or "", snippet=snippet, score=0.0
+                )
+            )
+        return hits
+
+    def close(self) -> None:
+        """Close the underlying connection."""
+        self._conn.close()
+
+    def __enter__(self) -> Self:
+        """Return the open index for use as a context manager."""
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        """Close the index on context exit."""
+        self.close()
+
+
+def _excerpt(body: str, query: str, *, width: int = 60) -> str:
+    """A best-effort excerpt around the first case-insensitive match of query."""
+    idx = body.lower().find(query.lower())
+    if idx < 0:
+        return body[:width]
+    start = max(0, idx - width // 2)
+    end = min(len(body), idx + len(query) + width // 2)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(body) else ""
+    return f"{prefix}{body[start:end]}{suffix}"
+
+
+def default_index_path() -> Path:
+    """Path to the FTS index, a sibling of the checkpointer's ``sessions.db``."""
+    from bog_agents_cli.sessions import get_db_path
+
+    return get_db_path().parent / "sessions_fts.db"
+
+
+async def search_sessions(query: str, *, limit: int = 20) -> list[SessionHit]:
+    """Search past threads for ``query`` and return the best matches.
+
+    Rebuilds the FTS index from the checkpointer's thread list (title/summary
+    text) and runs the search. Message-body indexing is a follow-up; today the
+    searchable text is each thread's title/summary. Best-effort — a store error
+    yields no results rather than raising.
+
+    Args:
+        query: Free-text query.
+        limit: Maximum results.
+
+    Returns:
+        Ranked `SessionHit`s (empty on a blank query or store error).
+    """
+    if not query.strip():
+        return []
+    index = SessionSearchIndex(default_index_path())
+    try:
+        try:
+            from bog_agents_cli.sessions import list_threads
+
+            threads = await list_threads(limit=1000)
+        except Exception:  # search must never crash on a store hiccup
+            threads = []
+        index.clear()
+        for thread in threads:
+            thread_id = str(thread.get("thread_id") or "")
+            title = str(thread.get("summary") or thread.get("agent_name") or "")
+            index.index(thread_id, title, title)
+        return index.search(query, limit=limit)
+    finally:
+        index.close()
+
+
+__all__ = ["SessionHit", "SessionSearchIndex", "default_index_path", "search_sessions"]

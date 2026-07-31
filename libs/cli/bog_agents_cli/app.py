@@ -3204,8 +3204,31 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await self._handle_compact()
 
-    async def _handle_threads_command(self, _command: str) -> None:
-        """Open the interactive thread selector."""
+    async def _handle_threads_command(self, command: str) -> None:
+        """Open the interactive thread selector, or `/threads search <text>` (Tier-1 #4)."""
+        rest = command.strip()[len("/threads") :].strip()
+        if rest.lower().startswith("search"):
+            query = rest[len("search") :].strip()
+            await self._mount_message(UserMessage(command))
+            if not query:
+                await self._mount_message(
+                    AppMessage("Usage: [bold]/threads search <text>[/bold] — full-text search past threads.")
+                )
+                return
+            from bog_agents_cli.session_search import search_sessions
+
+            hits = await search_sessions(query, limit=20)
+            if not hits:
+                await self._mount_message(AppMessage(f"No threads matched '{query}'."))
+                return
+            lines = [f"[bold]Threads matching '{query}':[/bold]"]
+            for hit in hits:
+                title = hit.title or "(untitled)"
+                snip = f" — {hit.snippet}" if hit.snippet else ""
+                lines.append(f"  [cyan]{hit.thread_id[:12]}[/cyan]  {title}{snip}")
+            lines.append("\nResume one with [bold]/resume <thread-id>[/bold].")
+            await self._mount_message(AppMessage("\n".join(lines)))
+            return
         await self._show_thread_selector()
 
     async def _dispatch_background_command(self, command: str) -> None:

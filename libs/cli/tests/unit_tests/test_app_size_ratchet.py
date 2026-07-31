@@ -49,7 +49,12 @@ from pathlib import Path
 # `team_executor.py` module (9 unit tests, injected runner). What lands on
 # BogAgentsApp is only the thin subcommand branch: model resolution + spinner +
 # `report.format_summary()` mount — the same sanctioned split as `/best-of-n`.
-APP_PY_LINE_CEILING = 17_695
+# Bumped 2026-07-31 to 17,720 for the `/threads search <text>` subcommand
+# (Tier-1 #4). The full-text index, FTS5/LIKE fallback, and populate/search
+# logic all live in the testable `session_search.py` module (9 unit tests);
+# what lands on BogAgentsApp is only the thin subcommand branch: parse, call
+# `search_sessions`, render hits — the sanctioned split.
+APP_PY_LINE_CEILING = 17_720
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 
