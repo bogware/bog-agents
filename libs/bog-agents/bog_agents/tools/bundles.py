@@ -41,7 +41,9 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "background_shell_tools_bundle",
     "git_tools_bundle",
+    "memory_search_tool_bundle",
     "multi_edit_tool",
     "read_many_files_tool",
 ]
@@ -314,3 +316,104 @@ def read_many_files_tool(
     from bog_agents.middleware.read_many_files import create_read_many_files_tool
 
     return create_read_many_files_tool(backend, get_backend)
+
+
+def background_shell_tools_bundle(backend: Any) -> list[BaseTool]:  # noqa: ANN401 - a LocalShellBackend
+    """Return tools to retrieve/manage background shell commands (Tier-1 #1).
+
+    Pairs with `LocalShellBackend(auto_background_after=...)` and
+    `execute(background=True)`: when a command is backgrounded, the agent uses
+    these tools to read its output, wait for it, or stop it. No-op-safe if the
+    backend lacks the background API (returns an empty list).
+
+    Args:
+        backend: A `LocalShellBackend` (or any backend exposing
+            `poll_background` / `wait_background` / `kill_background` /
+            `list_background`).
+
+    Returns:
+        A list of `StructuredTool`s, or empty if the backend has no background API.
+    """
+    if not hasattr(backend, "poll_background"):
+        return []
+
+    def _fmt(result: Any) -> str:  # noqa: ANN401 - a BackgroundResult
+        if result is None:
+            return "No such background task."
+        status = "running" if result.running else f"exited (code {result.exit_code})"
+        body = result.output or "<no output>"
+        return f"[{result.task_id}] {status}\n{body}"
+
+    def poll_background_command(runtime: ToolRuntime[None, Any], task_id: str) -> str:
+        """Read the current output + status of a background shell command by its task id."""
+        del runtime
+        return _fmt(backend.poll_background(task_id))
+
+    def wait_background_command(runtime: ToolRuntime[None, Any], task_id: str, timeout_seconds: float = 60.0) -> str:
+        """Wait up to timeout_seconds for a background command to finish, then read it."""
+        del runtime
+        results = backend.wait_background([task_id], mode="all", timeout=timeout_seconds)
+        return _fmt(results[0]) if results else "No such background task."
+
+    def kill_background_command(runtime: ToolRuntime[None, Any], task_id: str) -> str:
+        """Stop a running background shell command (and its process tree)."""
+        del runtime
+        return f"Killed {task_id}." if backend.kill_background(task_id) else "No such background task."
+
+    def list_background_commands(runtime: ToolRuntime[None, Any]) -> str:
+        """List all background shell commands and their status."""
+        del runtime
+        rows = backend.list_background()
+        if not rows:
+            return "No background commands."
+        return "\n".join(f"[{r.task_id}] {'running' if r.running else 'exited'}" for r in rows)
+
+    return [
+        StructuredTool.from_function(func=poll_background_command),
+        StructuredTool.from_function(func=wait_background_command),
+        StructuredTool.from_function(func=kill_background_command),
+        StructuredTool.from_function(func=list_background_commands),
+    ]
+
+
+def memory_search_tool_bundle(sources: list[str | Path]) -> list[BaseTool]:
+    """Return a `memory_search` tool over the given memory files (Tier-2 #8).
+
+    Builds a `HybridMemoryIndex` from the memory source files (AGENTS.md /
+    CLAUDE.md / rules, etc.), chunked on blank lines, so the agent can *search*
+    its memory for relevant notes instead of relying only on the whole cascade
+    being in context. Keyword mode (FTS5/LIKE) — no embedder needed; the hybrid
+    vector path activates only when an embedder is supplied elsewhere.
+
+    Args:
+        sources: Memory file paths (unreadable ones are skipped).
+
+    Returns:
+        A single-tool list, or empty if no source had readable content.
+    """
+    from pathlib import Path as _Path
+
+    from bog_agents.hybrid_memory import SOURCE_WORKSPACE, HybridMemoryIndex
+
+    index = HybridMemoryIndex()
+    origin: dict[str, str] = {}
+    for src in sources:
+        path = _Path(src)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for cid in index.add_markdown(text, source=SOURCE_WORKSPACE):
+            origin[cid] = path.name
+    if not origin:
+        return []
+
+    def memory_search(runtime: ToolRuntime[None, Any], query: str, limit: int = 5) -> str:
+        """Search your project/user memory (AGENTS.md, CLAUDE.md, rules) for notes relevant to a query."""
+        del runtime
+        hits = index.search(query, k=limit)
+        if not hits:
+            return f"No memory matched '{query}'."
+        return "\n\n".join(f"[{origin.get(h.chunk.chunk_id, 'memory')}] {h.chunk.text[:300]}" for h in hits)
+
+    return [StructuredTool.from_function(func=memory_search)]

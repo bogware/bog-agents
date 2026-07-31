@@ -21,13 +21,17 @@ broader rationale.
 from __future__ import annotations
 
 from bog_agents.tools.bundles import (
+    background_shell_tools_bundle,
     git_tools_bundle,
+    memory_search_tool_bundle,
     multi_edit_tool,
     read_many_files_tool,
 )
 
 __all__ = [
+    "background_shell_tools_bundle",
     "git_tools_bundle",
+    "memory_search_tool_bundle",
     "multi_edit_tool",
     "read_many_files_tool",
 ]

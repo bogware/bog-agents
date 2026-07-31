@@ -141,11 +141,17 @@ REMOTE_READ_TIMEOUT = "BOG_AGENTS_REMOTE_READ_TIMEOUT"
 SHELL_ALLOW_LIST = "BOG_AGENTS_SHELL_ALLOW_LIST"
 """Comma-separated shell commands to allow (or `recommended`/`all`)."""
 
+SHELL_AUTO_BACKGROUND_AFTER = "BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER"
+"""Seconds before a slow foreground shell command is moved to the background."""
+
 SOUNDS = "BOG_AGENTS_SOUNDS"
 """Toggle CLI notification sounds."""
 
 STALL_DUMP_SECS = "BOG_AGENTS_STALL_DUMP_SECS"
 """Seconds of apparent stall after which the server graph dumps diagnostics."""
+
+STOP_GATE_CHECKS = "BOG_AGENTS_STOP_GATE_CHECKS"
+"""Semicolon-separated commands that must pass before the agent may finish a turn."""
 
 STREAM_CHUNK_TIMEOUT_SECONDS = "BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS"
 """Per-chunk timeout (seconds) for non-interactive streaming output."""

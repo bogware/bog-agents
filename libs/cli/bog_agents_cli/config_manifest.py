@@ -623,6 +623,21 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         env_var=_env_vars.REMOTE_READ_TIMEOUT,
         none_sentinels=("none", "off"),
     ),
+    ConfigOption(
+        key="runtime.shell_auto_background_after",
+        group="Runtime",
+        summary="Seconds before a slow foreground shell command is moved to the background instead of killed; `off` disables (default).",
+        kind=OptionKind.FLOAT,
+        env_var=_env_vars.SHELL_AUTO_BACKGROUND_AFTER,
+        none_sentinels=("off", "none"),
+    ),
+    ConfigOption(
+        key="runtime.stop_gate_checks",
+        group="Runtime",
+        summary="Semicolon-separated commands that must pass before the agent may finish a turn (e.g. 'uv run pytest -q').",
+        kind=OptionKind.STR,
+        env_var=_env_vars.STOP_GATE_CHECKS,
+    ),
     # --- Updates -------------------------------------------------------
     ConfigOption(
         key="update.no_update_check",

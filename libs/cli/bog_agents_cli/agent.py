@@ -1447,6 +1447,15 @@ def create_cli_agent(
                 sources=memory_sources,
             )
         )
+        # A `memory_search` tool over the same memory files (Tier-2 #8): lets the
+        # agent search its memory for relevant notes instead of relying only on
+        # the whole cascade being in context.
+        try:
+            from bog_agents.tools import memory_search_tool_bundle
+
+            tools.extend(memory_search_tool_bundle(memory_sources))
+        except Exception:
+            logger.debug("Could not build memory_search tool", exc_info=True)
 
     # Add skills middleware
     if enable_skills:
@@ -1547,6 +1556,19 @@ def create_cli_agent(
             except Exception:
                 logger.debug("Could not load local sandbox config", exc_info=True)
 
+            # Auto-background-on-timeout (Tier-1 #1): when
+            # BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER is a positive number, a
+            # foreground command that overruns it is moved to the background
+            # instead of killed. Off by default (`off`/`none`/0/unset).
+            auto_background_after: float | None = None
+            raw_abg = os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER", "").strip().lower()
+            if raw_abg and raw_abg not in ("off", "none", "0"):
+                try:
+                    abg_val = float(raw_abg)
+                    auto_background_after = abg_val if abg_val > 0 else None
+                except ValueError:
+                    logger.debug("Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r", raw_abg)
+
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
             # on the execute tool natively. Honour the same
@@ -1558,7 +1580,14 @@ def create_cli_agent(
                 virtual_mode=not unsandboxed,
                 sandbox=local_sandbox,
                 require_sandbox=require_sandbox,
+                auto_background_after=auto_background_after,
             )
+            # When auto-background is on, give the agent tools to read/wait/kill
+            # a detached command (Tier-1 #1).
+            if auto_background_after is not None:
+                from bog_agents.tools import background_shell_tools_bundle
+
+                tools.extend(background_shell_tools_bundle(backend))
         else:
             # No shell access - use plain FilesystemBackend with the
             # same virtual_mode policy as the shell branch.
@@ -1579,6 +1608,22 @@ def create_cli_agent(
         agent_middleware.append(
             LocalContextMiddleware(backend=backend, mcp_server_info=mcp_server_info)
         )
+
+        # Keep-working Stop gates (Tier-1 #3): BOG_AGENTS_STOP_GATE_CHECKS is a
+        # semicolon-separated list of commands that must pass before the agent
+        # may end a turn (e.g. "uv run pytest -q; uv run ruff check .").
+        stop_checks_raw = os.environ.get("BOG_AGENTS_STOP_GATE_CHECKS", "").strip()
+        if stop_checks_raw:
+            from bog_agents.middleware.stop_gate import (
+                StopGateMiddleware,
+                command_stop_check,
+            )
+
+            commands = [c.strip() for c in stop_checks_raw.split(";") if c.strip()]
+            if commands:
+                agent_middleware.append(
+                    StopGateMiddleware([command_stop_check(backend, cmd) for cmd in commands])
+                )
 
     # Get or use custom system prompt
     if system_prompt is None:
