@@ -284,5 +284,27 @@ So this exercise is about **sharpening**, not catching up.
 Ship **Tier 1** (the difference between "impressive demo" and "trustworthy
 1.0") plus **one Tier-2 headliner**. Bank Tier 3 as the post-1.0 moat.
 
-**In progress (this branch):** Tier 1 (#1–#5) then Tier 2 #8 (hybrid memory),
-then reassess.
+## Shipped (branch `feat/v1-grok-inspired-tier1`, 2026-07-31)
+
+Tier 1 + one Tier-2 headliner, each a tested core:
+
+| # | What shipped | Where |
+|---|---|---|
+| T1 #1 | Background shell commands + auto-background-on-timeout (never kill a slow command) | `backends/background_shell.py`, `LocalShellBackend` |
+| T1 #2 | `exec-risk` analyzer + SafeTools auto-approval veto (git `-c` retargeting, `sort --compress-program`, …) | `bog_agents/exec_risk.py`, `middleware/safe_tools.py` |
+| T1 #3 | Keep-working **Stop gates** (enforce a definition of done; capped, fail-open) | `middleware/stop_gate.py` |
+| T1 #4 | Full-text **session search** (`/threads search`, FTS5 + LIKE fallback) | `bog_agents_cli/session_search.py` |
+| T1 #5 | Multi-vendor project-rules ingestion (`AGENT.md`/`CLAUDE.local.md` + `.claude`/`.cursor` rules dirs + `.cursorrules`) | `bog_agents_cli/project_utils.py` |
+| T2 #8 | Hybrid local-RAG memory (FTS5 + injectable-embedder vector fusion + decay + MMR) | `bog_agents/hybrid_memory.py` |
+
+**Scoped-out / follow-ups** (deliberate, noted in each commit):
+- T1 #1: full persistent shell *state* (cwd/env/aliases) rides on the Tier-2 PTY
+  harness (#6), whose long-lived shell is the correct substrate.
+- T1 #3: expanding the CLI hook bus to grok's 15 events + PreToolUse deny +
+  Claude/Cursor hook-file compat (incremental breadth on the Stop-gate core).
+- T1 #4: indexing full message bodies incrementally on save (today: title/summary).
+- T2 #8: wiring the ranking core into `MemoryMiddleware` / a `memory_search` tool.
+
+**Next up (recommended):** the remaining Tier-2 headliner options — **#6 PTY
+harness** (unique capability; also unblocks #1's persistent shell) or **#7 Voice**
+— then Tier-3 (#11 process-level sandbox, #10 leader process).
