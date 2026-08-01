@@ -14,8 +14,14 @@ def _index(tmp_path: Path) -> SessionSearchIndex:
 class TestSessionSearchIndex:
     def test_index_and_find_by_body(self, tmp_path: Path) -> None:
         with _index(tmp_path) as idx:
-            idx.index("t1", "Refactor auth", "We removed the global session and added a token store")
-            idx.index("t2", "Fix CI", "The lockfile drifted so the lock-check job failed")
+            idx.index(
+                "t1",
+                "Refactor auth",
+                "We removed the global session and added a token store",
+            )
+            idx.index(
+                "t2", "Fix CI", "The lockfile drifted so the lock-check job failed"
+            )
             hits = idx.search("lockfile")
             assert [h.thread_id for h in hits] == ["t2"]
 

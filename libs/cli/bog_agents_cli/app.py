@@ -3212,7 +3212,9 @@ class BogAgentsApp(App):
             await self._mount_message(UserMessage(command))
             if not query:
                 await self._mount_message(
-                    AppMessage("Usage: [bold]/threads search <text>[/bold] — full-text search past threads.")
+                    AppMessage(
+                        "Usage: [bold]/threads search <text>[/bold] — full-text search past threads."
+                    )
                 )
                 return
             from bog_agents_cli.session_search import search_sessions
