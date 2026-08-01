@@ -265,54 +265,53 @@ class WaitResult:
 
 
 def pty_supported() -> bool:
-    """Whether a live `PtySession` can run on this platform (POSIX only today)."""
-    return os.name == "posix"
+    """Whether a live `PtySession` can run on this platform.
 
-
-@dataclass
-class PtySession:
-    """Drive a program in a real pseudo-terminal (POSIX).
-
-    Spawn a command, send vim-notation keystrokes, read the rendered screen, and
-    wait on screen conditions. Construction raises on an unsupported platform;
-    check `pty_supported()` first (Windows ConPTY support is a follow-up).
+    True on POSIX (stdlib `pty`), and on Windows when `pywinpty` (ConPTY) is
+    installed — `pip install bog-agents[pty]` or `pip install pywinpty`.
     """
+    return os.name == "posix" or _winpty_available()
 
-    command: list[str]
-    env: dict[str, str] | None = None
-    cwd: str | None = None
-    _pid: int = field(default=0, init=False)
-    _fd: int = field(default=-1, init=False)
-    _out: TerminalOutput = field(default_factory=TerminalOutput, init=False)
-    _last_change: float = field(default=0.0, init=False)
-    _last_len: int = field(default=0, init=False)
 
-    def __post_init__(self) -> None:
-        """Validate the platform (fail closed on Windows)."""
-        if not pty_supported():
-            msg = "PtySession requires a POSIX PTY; Windows ConPTY support is not implemented yet"
-            raise RuntimeError(msg)
+def _winpty_available() -> bool:
+    """True on Windows with `pywinpty` importable."""
+    if os.name != "nt":
+        return False
+    try:
+        import winpty  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
-    def start(self) -> None:
-        """Fork the child into a new PTY and force a truecolor xterm."""
-        import pty as _pty  # POSIX-only stdlib module; imported lazily
 
-        env = dict(os.environ if self.env is None else self.env)
-        env.setdefault("TERM", "xterm-256color")
-        env.setdefault("COLORTERM", "truecolor")
+class _PosixPtyBackend:
+    """A PTY backed by the stdlib `pty` (fork + fd)."""
+
+    def __init__(self) -> None:
+        self._pid = 0
+        self._fd = -1
+
+    def spawn(self, command: list[str], env: dict[str, str] | None, cwd: str | None) -> None:
+        import pty as _pty  # POSIX-only stdlib module
+
+        environ = dict(os.environ if env is None else env)
+        environ.setdefault("TERM", "xterm-256color")
+        environ.setdefault("COLORTERM", "truecolor")
         pid, fd = _pty.fork()
         if pid == 0:  # child
-            if self.cwd:
-                os.chdir(self.cwd)
-            os.execvpe(self.command[0], self.command, env)  # noqa: S606 - intentional PTY child exec
+            if cwd:
+                os.chdir(cwd)
+            os.execvpe(command[0], command, environ)  # noqa: S606 - intentional PTY child exec
         self._pid = pid
         self._fd = fd
-        self._last_change = time.monotonic()
 
-    def _drain(self) -> None:
-        """Read whatever is currently available from the PTY (non-blocking)."""
+    def write(self, data: bytes) -> None:
+        os.write(self._fd, data)
+
+    def read_available(self) -> bytes:
         import select
 
+        chunks = bytearray()
         while True:
             ready, _, _ = select.select([self._fd], [], [], 0)
             if not ready:
@@ -323,6 +322,101 @@ class PtySession:
                 break
             if not data:
                 break
+            chunks.extend(data)
+        return bytes(chunks)
+
+    def close(self) -> None:
+        if self._fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(self._fd)
+            self._fd = -1
+        if self._pid > 0:
+            with contextlib.suppress(OSError):
+                os.waitpid(self._pid, os.WNOHANG)
+
+
+class _WindowsPtyBackend:
+    """A PTY backed by `pywinpty` (ConPTY)."""
+
+    def __init__(self, *, cols: int = 120, rows: int = 40) -> None:
+        self._cols = cols
+        self._rows = rows
+        self._pty: object | None = None
+
+    def spawn(self, command: list[str], env: dict[str, str] | None, cwd: str | None) -> None:
+        import shutil
+        import subprocess
+
+        from winpty import PTY
+
+        # CreateProcess does not PATH-search the application name, so resolve it.
+        # pywinpty prepends `appname` as argv[0], so `cmdline` is the args only.
+        appname = shutil.which(command[0]) or command[0]
+        cmdline = subprocess.list2cmdline(command[1:]) if len(command) > 1 else ""
+        env_block: str | None = None
+        if env is not None:
+            env_block = "".join(f"{k}={v}\0" for k, v in env.items()) + "\0"
+        self._pty = PTY(self._cols, self._rows)
+        self._pty.spawn(appname, cmdline=cmdline, cwd=cwd, env=env_block)  # type: ignore[attr-defined]
+
+    def write(self, data: bytes) -> None:
+        if self._pty is not None:
+            self._pty.write(data.decode("utf-8", errors="replace"))  # type: ignore[attr-defined]
+
+    def read_available(self) -> bytes:
+        if self._pty is None:
+            return b""
+        try:
+            text = self._pty.read(blocking=False)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - pywinpty raises varied errors at EOF
+            return b""
+        return text.encode("utf-8", errors="replace") if text else b""
+
+    def close(self) -> None:
+        # pywinpty terminates the child when the PTY object is dropped.
+        self._pty = None
+
+
+def _make_backend() -> _PosixPtyBackend | _WindowsPtyBackend:
+    """Pick the PTY backend for this platform (raises if unsupported)."""
+    if os.name == "posix":
+        return _PosixPtyBackend()
+    if _winpty_available():
+        return _WindowsPtyBackend()
+    msg = "PtySession is unsupported here: POSIX needs stdlib pty; Windows needs pywinpty (pip install pywinpty)"
+    raise RuntimeError(msg)
+
+
+@dataclass
+class PtySession:
+    """Drive a program in a real pseudo-terminal (POSIX or Windows/ConPTY).
+
+    Spawn a command, send vim-notation keystrokes, read the rendered screen, and
+    wait on screen conditions. Construction raises on an unsupported platform;
+    check `pty_supported()` first.
+    """
+
+    command: list[str]
+    env: dict[str, str] | None = None
+    cwd: str | None = None
+    _backend: _PosixPtyBackend | _WindowsPtyBackend = field(init=False)
+    _out: TerminalOutput = field(default_factory=TerminalOutput, init=False)
+    _last_change: float = field(default=0.0, init=False)
+    _last_len: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        """Select a PTY backend (fail closed on an unsupported platform)."""
+        self._backend = _make_backend()
+
+    def start(self) -> None:
+        """Spawn the command in a new PTY (truecolor xterm)."""
+        self._backend.spawn(self.command, self.env, self.cwd)
+        self._last_change = time.monotonic()
+
+    def _drain(self) -> None:
+        """Read whatever is currently available from the PTY (non-blocking)."""
+        data = self._backend.read_available()
+        if data:
             self._out.feed(data)
         length = len(self._out.text)
         if length != self._last_len:
@@ -331,7 +425,7 @@ class PtySession:
 
     def send(self, notation: str) -> None:
         """Encode `notation` and write it to the PTY."""
-        os.write(self._fd, encode_keys(notation))
+        self._backend.write(encode_keys(notation))
 
     def screen(self, *, tail_lines: int | None = None) -> str:
         """Drain pending output and return the current rendered screen."""
@@ -352,17 +446,108 @@ class PtySession:
 
     def close(self) -> None:
         """Close the PTY and reap the child."""
-        if self._fd >= 0:
-            with contextlib.suppress(OSError):
-                os.close(self._fd)
-            self._fd = -1
-        if self._pid > 0:
-            with contextlib.suppress(OSError):
-                os.waitpid(self._pid, os.WNOHANG)
+        self._backend.close()
+
+
+class PtyController:
+    """A registry of named `PtySession`s for agent tools (Tier-2 #6).
+
+    Holds interactive terminal sessions across tool calls so an agent can
+    `start` a program, `send` keystrokes, read the `screen`, and `wait` on
+    conditions — driving `vim`/`top`/REPLs. All methods return human-readable
+    strings suitable for a tool result and never raise on bad input.
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty session registry."""
+        self._sessions: dict[str, PtySession] = {}
+
+    def start(self, name: str, command: str, *, cwd: str | None = None) -> str:
+        """Start `command` in a new PTY under `name` (replacing any existing one)."""
+        import shlex
+
+        if not pty_supported():
+            return "PTY sessions are unavailable here (POSIX needs stdlib pty; Windows needs `pip install pywinpty`)."
+        if name in self._sessions:
+            self.close(name)
+        try:
+            argv = shlex.split(command, posix=os.name == "posix")
+            if not argv:
+                return "Empty command."
+            session = PtySession(command=argv, cwd=cwd)
+            session.start()
+        except Exception as exc:  # noqa: BLE001 - a tool entry point must never crash the turn
+            return f"Could not start '{command}': {exc}"
+        self._sessions[name] = session
+        return f"Started PTY session '{name}' running: {command}"
+
+    def send(self, name: str, keys: str) -> str:
+        """Send vim-notation keystrokes to session `name`."""
+        session = self._sessions.get(name)
+        if session is None:
+            return f"No PTY session named '{name}'."
+        try:
+            session.send(keys)
+        except (OSError, KeyEncodeError) as exc:
+            return f"Could not send keys: {exc}"
+        return f"Sent to '{name}'."
+
+    def screen(self, name: str, *, tail_lines: int = 40) -> str:
+        """Return the current rendered screen of session `name`."""
+        session = self._sessions.get(name)
+        if session is None:
+            return f"No PTY session named '{name}'."
+        return session.screen(tail_lines=tail_lines) or "<no output yet>"
+
+    def wait(self, name: str, until: str, target: str = "", *, timeout_s: float = 10.0) -> str:
+        """Wait on a screen condition, then return the screen.
+
+        `until` is one of ``text`` / ``regex`` / ``gone`` / ``stable`` (for
+        ``stable``, `target` is the quiet-milliseconds, default 500).
+        """
+        session = self._sessions.get(name)
+        if session is None:
+            return f"No PTY session named '{name}'."
+        condition: WaitCondition
+        kind = until.strip().lower()
+        if kind == "text":
+            condition = WaitText(target)
+        elif kind == "regex":
+            condition = WaitRegex(target)
+        elif kind == "gone":
+            condition = WaitGone(target)
+        elif kind == "stable":
+            condition = WaitStable(quiet_ms=float(target) if target else 500.0)
+        else:
+            return f"Unknown wait kind '{until}' (use text/regex/gone/stable)."
+        result = session.wait(condition, timeout_s=timeout_s)
+        status = "matched" if result.ok else f"timed out after {result.elapsed_s:.1f}s"
+        return f"[{status}]\n{session.screen(tail_lines=40)}"
+
+    def close(self, name: str) -> str:
+        """Close and remove session `name`."""
+        session = self._sessions.pop(name, None)
+        if session is None:
+            return f"No PTY session named '{name}'."
+        session.close()
+        return f"Closed PTY session '{name}'."
+
+    def list_sessions(self) -> str:
+        """List active PTY session names."""
+        if not self._sessions:
+            return "No active PTY sessions."
+        return "Active PTY sessions: " + ", ".join(sorted(self._sessions))
+
+    def shutdown(self) -> None:
+        """Close every session (call on agent teardown)."""
+        for session in list(self._sessions.values()):
+            session.close()
+        self._sessions.clear()
 
 
 __all__ = [
     "KeyEncodeError",
+    "PtyController",
     "PtySession",
     "TerminalOutput",
     "WaitContext",

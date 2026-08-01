@@ -17,6 +17,7 @@ from bog_agents.pty_harness import (
     WaitRegex,
     WaitStable,
     WaitText,
+    _winpty_available,
     encode_keys,
     pty_supported,
     strip_ansi,
@@ -127,7 +128,22 @@ class TestPtySessionPosix:
             session.close()
 
 
-@pytest.mark.skipif(pty_supported(), reason="tests the Windows fail-closed path")
-def test_pty_session_fails_closed_off_posix() -> None:
-    with pytest.raises(RuntimeError, match="POSIX PTY"):
+@pytest.mark.skipif(not _winpty_available(), reason="requires pywinpty (Windows ConPTY)")
+class TestPtySessionWindows:
+    def test_drive_python_repl(self) -> None:
+        import sys
+
+        session = PtySession(command=[sys.executable, "-i", "-q", "-u"])
+        session.start()
+        try:
+            assert session.wait(WaitText(">>>"), timeout_s=15).ok is True
+            session.send("print('pong123')<CR>")
+            assert session.wait(WaitText("pong123"), timeout_s=15).ok is True
+        finally:
+            session.close()
+
+
+@pytest.mark.skipif(pty_supported(), reason="tests the fail-closed path when no PTY backend exists")
+def test_pty_session_fails_closed_when_unsupported() -> None:
+    with pytest.raises(RuntimeError, match=r"pywinpty|pty"):
         PtySession(command=["cmd"])

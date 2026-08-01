@@ -25,6 +25,7 @@ from bog_agents.tools.bundles import (
     git_tools_bundle,
     memory_search_tool_bundle,
     multi_edit_tool,
+    pty_tools_bundle,
     read_many_files_tool,
 )
 
@@ -33,5 +34,6 @@ __all__ = [
     "git_tools_bundle",
     "memory_search_tool_bundle",
     "multi_edit_tool",
+    "pty_tools_bundle",
     "read_many_files_tool",
 ]

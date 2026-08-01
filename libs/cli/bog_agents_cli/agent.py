@@ -1588,6 +1588,19 @@ def create_cli_agent(
                 from bog_agents.tools import background_shell_tools_bundle
 
                 tools.extend(background_shell_tools_bundle(backend))
+
+            # PTY harness tools (Tier-2 #6): let the agent drive interactive
+            # full-screen programs (vim/top/REPLs). Available on POSIX, and on
+            # Windows when pywinpty is installed (`pip install bog-agents-cli[pty]`).
+            try:
+                from bog_agents.pty_harness import PtyController, pty_supported
+
+                if pty_supported():
+                    from bog_agents.tools import pty_tools_bundle
+
+                    tools.extend(pty_tools_bundle(PtyController()))
+            except Exception:
+                logger.debug("Could not wire PTY tools", exc_info=True)
         else:
             # No shell access - use plain FilesystemBackend with the
             # same virtual_mode policy as the shell branch.

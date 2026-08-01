@@ -45,6 +45,7 @@ __all__ = [
     "git_tools_bundle",
     "memory_search_tool_bundle",
     "multi_edit_tool",
+    "pty_tools_bundle",
     "read_many_files_tool",
 ]
 
@@ -417,3 +418,58 @@ def memory_search_tool_bundle(sources: list[str | Path]) -> list[BaseTool]:
         return "\n\n".join(f"[{origin.get(h.chunk.chunk_id, 'memory')}] {h.chunk.text[:300]}" for h in hits)
 
     return [StructuredTool.from_function(func=memory_search)]
+
+
+def pty_tools_bundle(controller: Any) -> list[BaseTool]:  # noqa: ANN401 - a PtyController
+    """Return tools to drive interactive terminal programs (Tier-2 #6).
+
+    Wraps a `bog_agents.pty_harness.PtyController` so the agent can run
+    full-screen TUIs (`vim`, `top`, a REPL): start a session, send vim-notation
+    keystrokes, read the screen, and wait on screen conditions.
+
+    Args:
+        controller: A `PtyController` holding the agent's sessions.
+
+    Returns:
+        A list of `StructuredTool`s (`pty_start` / `pty_send` / `pty_screen` /
+        `pty_wait` / `pty_close` / `pty_list`).
+    """
+
+    def pty_start(runtime: ToolRuntime[None, Any], name: str, command: str) -> str:
+        """Start an interactive program in a new PTY session (e.g. name='vim', command='vim notes.txt')."""
+        del runtime
+        return controller.start(name, command)
+
+    def pty_send(runtime: ToolRuntime[None, Any], name: str, keys: str) -> str:
+        """Send keystrokes to a PTY session in vim notation (e.g. '<Esc>:wq<CR>', 'ihello<Esc>', '<C-c>')."""
+        del runtime
+        return controller.send(name, keys)
+
+    def pty_screen(runtime: ToolRuntime[None, Any], name: str, tail_lines: int = 40) -> str:
+        """Read the current rendered screen of a PTY session."""
+        del runtime
+        return controller.screen(name, tail_lines=tail_lines)
+
+    def pty_wait(runtime: ToolRuntime[None, Any], name: str, until: str, target: str = "", timeout_seconds: float = 10.0) -> str:
+        """Wait for a PTY session's screen condition, then read it. until: text|regex|gone|stable."""
+        del runtime
+        return controller.wait(name, until, target, timeout_s=timeout_seconds)
+
+    def pty_close(runtime: ToolRuntime[None, Any], name: str) -> str:
+        """Close an interactive PTY session."""
+        del runtime
+        return controller.close(name)
+
+    def pty_list(runtime: ToolRuntime[None, Any]) -> str:
+        """List active PTY sessions."""
+        del runtime
+        return controller.list_sessions()
+
+    return [
+        StructuredTool.from_function(func=pty_start),
+        StructuredTool.from_function(func=pty_send),
+        StructuredTool.from_function(func=pty_screen),
+        StructuredTool.from_function(func=pty_wait),
+        StructuredTool.from_function(func=pty_close),
+        StructuredTool.from_function(func=pty_list),
+    ]
