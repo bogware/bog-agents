@@ -240,6 +240,32 @@ def evaluate_decision_hooks(
     return HookDecision()
 
 
+def load_pretooluse_hooks(
+    project_root: Path,
+    *,
+    config_hooks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Assemble the decision-capable `PreToolUse` hooks for a project.
+
+    Merges ingested Claude/Cursor hook files (`load_vendor_hooks`) with any bog
+    `hooks.json` entries that subscribe to the `PreToolUse` event, so both native
+    and migrated decision hooks enforce.
+
+    Args:
+        project_root: The project directory (for vendor hook files).
+        config_hooks: bog's own hook dicts (e.g. from `hooks._load_hooks()`).
+
+    Returns:
+        bog-format decision hooks (may be empty).
+    """
+    hooks = list(load_vendor_hooks(project_root))
+    for hook in config_hooks or []:
+        events = hook.get("events")
+        if events and "PreToolUse" in events and isinstance(hook.get("command"), list):
+            hooks.append(hook)
+    return hooks
+
+
 def _run_decision_hook(
     command: list[str], payload_bytes: bytes, timeout: float
 ) -> HookDecision:
@@ -271,6 +297,7 @@ __all__ = [
     "HookDecision",
     "alias_tool_name",
     "evaluate_decision_hooks",
+    "load_pretooluse_hooks",
     "load_vendor_hooks",
     "parse_hook_decision",
 ]

@@ -1638,6 +1638,22 @@ def create_cli_agent(
                     StopGateMiddleware([command_stop_check(backend, cmd) for cmd in commands])
                 )
 
+    # PreToolUse hook enforcement (hook-bus completion): a decision hook can
+    # deny a tool call. Loads ingested Claude/Cursor hook files + bog hooks.json
+    # PreToolUse entries; only added when such hooks exist.
+    try:
+        from bog_agents_cli.hook_decisions import load_pretooluse_hooks
+        from bog_agents_cli.hook_middleware import PreToolUseHookMiddleware
+        from bog_agents_cli.hooks import _load_hooks
+
+        hook_project_root = project_context.project_root if project_context is not None else None
+        if hook_project_root is not None:
+            decision_hooks = load_pretooluse_hooks(hook_project_root, config_hooks=_load_hooks())
+            if decision_hooks:
+                agent_middleware.append(PreToolUseHookMiddleware(decision_hooks))
+    except Exception:
+        logger.debug("Could not wire PreToolUse hook enforcement", exc_info=True)
+
     # Get or use custom system prompt
     if system_prompt is None:
         system_prompt = get_system_prompt(
