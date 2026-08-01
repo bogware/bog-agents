@@ -297,14 +297,20 @@ Tier 1 + one Tier-2 headliner, each a tested core:
 | T1 #5 | Multi-vendor project-rules ingestion (`AGENT.md`/`CLAUDE.local.md` + `.claude`/`.cursor` rules dirs + `.cursorrules`) | `bog_agents_cli/project_utils.py` |
 | T2 #8 | Hybrid local-RAG memory (FTS5 + injectable-embedder vector fusion + decay + MMR) | `bog_agents/hybrid_memory.py` |
 
-**Scoped-out / follow-ups** (deliberate, noted in each commit):
-- T1 #1: full persistent shell *state* (cwd/env/aliases) rides on the Tier-2 PTY
-  harness (#6), whose long-lived shell is the correct substrate.
-- T1 #3: expanding the CLI hook bus to grok's 15 events + PreToolUse deny +
-  Claude/Cursor hook-file compat (incremental breadth on the Stop-gate core).
-- T1 #4: indexing full message bodies incrementally on save (today: title/summary).
-- T2 #8: wiring the ranking core into `MemoryMiddleware` / a `memory_search` tool.
+**Also shipped since:**
 
-**Next up (recommended):** the remaining Tier-2 headliner options — **#6 PTY
-harness** (unique capability; also unblocks #1's persistent shell) or **#7 Voice**
-— then Tier-3 (#11 process-level sandbox, #10 leader process).
+| Item | What | Where |
+|---|---|---|
+| Wiring pass | auto-background tools + Stop-gate config + `memory_search` tool wired into `create_cli_agent` | `agent.py`, `tools/bundles.py` |
+| T2 #6 (finished) | PTY harness → **Windows ConPTY** (pywinpty, validated live) + agent tools (`pty_start`/`send`/`screen`/`wait`/`close`/`list`) | `pty_harness.py`, `tools/bundles.py` |
+| #3 hook bus (completed) | 15-event set + decision parsing (deny/block) + Claude/Cursor hook-file compat + `PreToolUseHookMiddleware` enforcing denials in the tool path | `hook_decisions.py`, `hook_middleware.py` |
+| T3 #11 (partial) | sandbox deepened: **secret-env stripping** + **read-deny paths** (closes the `mv secret x` bypass) | `sandbox/local_sandbox.py`, `LocalShellBackend` |
+
+**Remaining follow-ups (deliberate):**
+- T3 #11: kernel-level **Landlock filesystem confinement + seccomp** network/
+  anti-escape BPF — a Linux-only layer that needs a Linux dev box to implement +
+  validate safely (the argv/env hardening that closes real bypasses is shipped).
+- PTY: a `pyte`-backed full grid (line buffer today — fine for text/regex/stable).
+- T1 #4: index full message bodies incrementally on save (today: title/summary).
+- T2 #8: wire an embedder to light up the hybrid-memory vector path.
+- Persistent shell *state* (cwd/env/aliases) now has its substrate (the PTY).
