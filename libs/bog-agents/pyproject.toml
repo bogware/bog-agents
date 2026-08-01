@@ -36,7 +36,7 @@ dependencies = [
     # channels, CompiledStateGraph, …); declare it explicitly instead of
     # relying on it arriving transitively via langchain. (REVIEW.md v2 P1-72.)
     "langgraph>=1.2.0,<2.0.0",
-    "langchain-anthropic>=1.5.0,<2.0.0",
+    "langchain-anthropic>=1.5.3,<2.0.0",
     "langchain-google-genai>=4.3.1,<5.0.0",
     # Must track deepagents' wcmatch floor to remain co-installable in one venv:
     # deepagents 0.6.12 floored it at 10.1, 0.7.0b2 raised it to 11.0. A mismatched
