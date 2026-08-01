@@ -72,13 +72,46 @@ class TestTerminalOutput:
 
     def test_snapshot_tail_lines(self) -> None:
         out = TerminalOutput()
-        out.feed(b"a\nb\nc\nd\n")
+        # Real PTYs emit CRLF; bare LF would staircase under a real terminal grid.
+        out.feed(b"a\r\nb\r\nc\r\nd\r\n")
         assert out.snapshot(tail_lines=2).splitlines() == ["c", "d"]
 
 
 class TestStripAnsi:
     def test_removes_color_and_cursor_moves(self) -> None:
         assert strip_ansi("\x1b[2J\x1b[H\x1b[32mok\x1b[0m") == "ok"
+
+
+def _pyte_available() -> bool:
+    try:
+        import pyte  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _pyte_available(), reason="requires pyte")
+class TestPyteGrid:
+    def test_grid_collapses_cursor_redraws(self) -> None:
+        out = TerminalOutput(cols=20, rows=3)
+        # Move cursor right then write — a naive line buffer keeps both; the grid
+        # renders the final screen position.
+        out.feed(b"a\x1b[2Cb\r\nsecond")
+        grid = out.grid()
+        assert grid is not None
+        assert grid.splitlines()[0] == "a  b"
+        assert "second" in grid
+
+    def test_snapshot_uses_grid_when_available(self) -> None:
+        out = TerminalOutput(cols=20, rows=3)
+        out.feed(b"hello world\r\n")
+        assert "hello world" in out.snapshot()
+
+    def test_wait_still_matches_line_buffer(self) -> None:
+        # Even with pyte on, .text (used by wait conditions) keeps all output.
+        out = TerminalOutput(cols=10, rows=2)
+        out.feed(b"\x1b[31mMARKER\x1b[0m\r\n")
+        assert "MARKER" in out.text
 
 
 class TestWaitConditions:

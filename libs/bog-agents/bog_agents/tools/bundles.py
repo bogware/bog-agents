@@ -377,24 +377,30 @@ def background_shell_tools_bundle(backend: Any) -> list[BaseTool]:  # noqa: ANN4
     ]
 
 
-def memory_search_tool_bundle(sources: list[str | Path]) -> list[BaseTool]:
+def memory_search_tool_bundle(sources: list[str | Path], *, embedder: Any = None) -> list[BaseTool]:  # noqa: ANN401 - an Embedder
     """Return a `memory_search` tool over the given memory files (Tier-2 #8).
 
     Builds a `HybridMemoryIndex` from the memory source files (AGENTS.md /
     CLAUDE.md / rules, etc.), chunked on blank lines, so the agent can *search*
     its memory for relevant notes instead of relying only on the whole cascade
-    being in context. Keyword mode (FTS5/LIKE) — no embedder needed; the hybrid
-    vector path activates only when an embedder is supplied elsewhere.
+    being in context.
+
+    Keyword mode (FTS5/LIKE) by default. When an `embedder` is supplied, each
+    chunk is embedded at index time and the query is embedded at search time, so
+    ranking becomes the full **hybrid** BM25 + vector fusion. Embedding failures
+    degrade gracefully to keyword-only.
 
     Args:
         sources: Memory file paths (unreadable ones are skipped).
+        embedder: Optional `text -> vector` callable (see
+            `bog_agents.hybrid_memory.embedder_from_langchain`).
 
     Returns:
         A single-tool list, or empty if no source had readable content.
     """
     from pathlib import Path as _Path
 
-    from bog_agents.hybrid_memory import SOURCE_WORKSPACE, HybridMemoryIndex
+    from bog_agents.hybrid_memory import SOURCE_WORKSPACE, HybridMemoryIndex, MemoryChunk
 
     index = HybridMemoryIndex()
     origin: dict[str, str] = {}
@@ -404,7 +410,16 @@ def memory_search_tool_bundle(sources: list[str | Path]) -> list[BaseTool]:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        for cid in index.add_markdown(text, source=SOURCE_WORKSPACE):
+        for block in (b.strip() for b in text.split("\n\n")):
+            if not block:
+                continue
+            embedding = None
+            if embedder is not None:
+                try:
+                    embedding = list(embedder(block))
+                except Exception:  # noqa: BLE001 - embedding is best-effort; fall back to keyword
+                    embedding = None
+            cid = index.add(MemoryChunk(text=block, source=SOURCE_WORKSPACE, embedding=embedding))
             origin[cid] = path.name
     if not origin:
         return []
@@ -412,7 +427,7 @@ def memory_search_tool_bundle(sources: list[str | Path]) -> list[BaseTool]:
     def memory_search(runtime: ToolRuntime[None, Any], query: str, limit: int = 5) -> str:
         """Search your project/user memory (AGENTS.md, CLAUDE.md, rules) for notes relevant to a query."""
         del runtime
-        hits = index.search(query, k=limit)
+        hits = index.search(query, embedder=embedder, k=limit)
         if not hits:
             return f"No memory matched '{query}'."
         return "\n\n".join(f"[{origin.get(h.chunk.chunk_id, 'memory')}] {h.chunk.text[:300]}" for h in hits)

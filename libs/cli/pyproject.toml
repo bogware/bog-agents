@@ -134,9 +134,12 @@ runloop-sandbox = ["runloop-api-client>=0.69.0"]
 langsmith-sandbox = ["langsmith[sandbox]>=0.7.7"]
 # Web search
 web-search = ["tavily-python>=0.7.21,<1.0.0"]
-# Interactive-TUI driving (PTY harness). POSIX uses the stdlib; Windows needs
-# pywinpty (ConPTY). No-op on POSIX where the marker excludes it.
-pty = ["pywinpty>=2.0.0; sys_platform == 'win32'"]
+# Interactive-TUI driving (PTY harness). `pyte` renders a clean terminal grid
+# everywhere; `pywinpty` (ConPTY) provides the PTY on Windows (POSIX uses stdlib).
+pty = [
+    "pyte>=0.8.0",
+    "pywinpty>=2.0.0; sys_platform == 'win32'",
+]
 # Agent Client Protocol.
 #
 # NOTE (DEL-1): `bog-agents-acp` is not published to PyPI yet, so it is

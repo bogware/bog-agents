@@ -68,3 +68,40 @@ class TestMemorySearchToolBundle:
 
     def test_empty_when_no_readable_sources(self, tmp_path: Path) -> None:
         assert memory_search_tool_bundle([tmp_path / "missing.md"]) == []
+
+    def test_hybrid_path_with_injected_embedder(self, tmp_path: Path) -> None:
+        # A toy embedder over a fixed vocab: the query embeds closest to the
+        # chunk that shares its terms, so the vector fusion promotes it.
+        vocab = ["auth", "token", "sandbox", "egress", "cost", "cache"]
+
+        def embed(text: str) -> list[float]:
+            words = text.lower().split()
+            return [float(words.count(w)) for w in vocab]
+
+        a = tmp_path / "AGENTS.md"
+        a.write_text("auth token rotation\n\nsandbox egress proxy notes", encoding="utf-8")
+        tools = memory_search_tool_bundle([a], embedder=embed)
+        out = tools[0].func(None, "token")
+        assert "auth token" in out
+
+    def test_embedder_failure_degrades_to_keyword(self, tmp_path: Path) -> None:
+        def broken(_text: str) -> list[float]:
+            raise RuntimeError("embedder down")
+
+        a = tmp_path / "AGENTS.md"
+        a.write_text("run the migration with --dry-run", encoding="utf-8")
+        # Index build must not crash when the embedder throws; keyword still works.
+        tools = memory_search_tool_bundle([a], embedder=broken)
+        assert "dry-run" in tools[0].func(None, "migration")
+
+
+class TestEmbedderAdapter:
+    def test_wraps_langchain_embeddings(self) -> None:
+        from bog_agents.hybrid_memory import embedder_from_langchain
+
+        class _FakeEmbeddings:
+            def embed_query(self, text: str) -> list[float]:
+                return [float(len(text)), 1.0]
+
+        embed = embedder_from_langchain(_FakeEmbeddings())
+        assert embed("abc") == [3.0, 1.0]

@@ -1449,11 +1449,37 @@ def create_cli_agent(
         )
         # A `memory_search` tool over the same memory files (Tier-2 #8): lets the
         # agent search its memory for relevant notes instead of relying only on
-        # the whole cascade being in context.
+        # the whole cascade being in context. Keyword mode by default; set
+        # BOG_AGENTS_MEMORY_VECTOR=1 to light up hybrid vector search (uses the
+        # same embedding model as @codebase — Ollama nomic-embed-text / OpenAI).
         try:
             from bog_agents.tools import memory_search_tool_bundle
 
-            tools.extend(memory_search_tool_bundle(memory_sources))
+            memory_embedder = None
+            if os.environ.get("BOG_AGENTS_MEMORY_VECTOR", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                try:
+                    from bog_agents.hybrid_memory import embedder_from_langchain
+                    from bog_agents.middleware.hybrid_search import (
+                        _get_embedding_model,  # noqa: PLC2701 - reuse @codebase's Ollama/OpenAI resolver
+                    )
+
+                    model = _get_embedding_model()
+                    if model is not None:
+                        memory_embedder = embedder_from_langchain(model)
+                except Exception:
+                    logger.debug(
+                        "Could not resolve a memory embedder; keyword-only",
+                        exc_info=True,
+                    )
+
+            tools.extend(
+                memory_search_tool_bundle(memory_sources, embedder=memory_embedder)
+            )
         except Exception:
             logger.debug("Could not build memory_search tool", exc_info=True)
 
@@ -1561,13 +1587,20 @@ def create_cli_agent(
             # foreground command that overruns it is moved to the background
             # instead of killed. Off by default (`off`/`none`/0/unset).
             auto_background_after: float | None = None
-            raw_abg = os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER", "").strip().lower()
+            raw_abg = (
+                os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER", "")
+                .strip()
+                .lower()
+            )
             if raw_abg and raw_abg not in ("off", "none", "0"):
                 try:
                     abg_val = float(raw_abg)
                     auto_background_after = abg_val if abg_val > 0 else None
                 except ValueError:
-                    logger.debug("Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r", raw_abg)
+                    logger.debug(
+                        "Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r",
+                        raw_abg,
+                    )
 
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
@@ -1635,7 +1668,9 @@ def create_cli_agent(
             commands = [c.strip() for c in stop_checks_raw.split(";") if c.strip()]
             if commands:
                 agent_middleware.append(
-                    StopGateMiddleware([command_stop_check(backend, cmd) for cmd in commands])
+                    StopGateMiddleware(
+                        [command_stop_check(backend, cmd) for cmd in commands]
+                    )
                 )
 
     # PreToolUse hook enforcement (hook-bus completion): a decision hook can
@@ -1646,9 +1681,13 @@ def create_cli_agent(
         from bog_agents_cli.hook_middleware import PreToolUseHookMiddleware
         from bog_agents_cli.hooks import _load_hooks
 
-        hook_project_root = project_context.project_root if project_context is not None else None
+        hook_project_root = (
+            project_context.project_root if project_context is not None else None
+        )
         if hook_project_root is not None:
-            decision_hooks = load_pretooluse_hooks(hook_project_root, config_hooks=_load_hooks())
+            decision_hooks = load_pretooluse_hooks(
+                hook_project_root, config_hooks=_load_hooks()
+            )
             if decision_hooks:
                 agent_middleware.append(PreToolUseHookMiddleware(decision_hooks))
     except Exception:

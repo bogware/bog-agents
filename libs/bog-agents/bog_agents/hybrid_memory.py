@@ -14,8 +14,9 @@ Design for testability + light dependencies:
     the ranking is unit-tested deterministically with a toy embedder.
 
 The index is a cache over Markdown you can still hand-edit; it can be rebuilt at
-any time. Wiring it to `MemoryMiddleware` / a `memory_search` tool is a
-follow-up — this is the ranking core.
+any time. It backs the CLI `memory_search` tool (keyword by default; set
+`BOG_AGENTS_MEMORY_VECTOR=1` to light up the vector path via
+`embedder_from_langchain`).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # Source kinds. Curated memory (global/workspace) is exempt from decay; session
 # memory decays so stale chatter fades.
@@ -41,6 +43,25 @@ _VECTOR_WEIGHT = 0.7
 _BM25_WEIGHT = 0.3
 
 Embedder = Callable[[str], Sequence[float]]
+
+
+def embedder_from_langchain(embeddings: Any) -> Embedder:  # noqa: ANN401 - a LangChain Embeddings
+    """Adapt a LangChain `Embeddings` object into an `Embedder` callable.
+
+    Lets the hybrid vector path be lit by any provider's embeddings (Ollama,
+    OpenAI, …) via `embeddings.embed_query`.
+
+    Args:
+        embeddings: A LangChain `Embeddings` instance (has `embed_query`).
+
+    Returns:
+        A `text -> vector` callable.
+    """
+
+    def _embed(text: str) -> Sequence[float]:
+        return embeddings.embed_query(text)
+
+    return _embed
 
 
 @dataclass
@@ -285,8 +306,11 @@ class HybridMemoryIndex:
         bm25 = self._bm25(query)
         vector: dict[str, float] = {}
         if embedder is not None:
-            qvec = list(embedder(query))
-            vector = {cid: cosine(qvec, emb) for cid, emb in self._all_embeddings().items()}
+            try:
+                qvec = list(embedder(query))
+                vector = {cid: cosine(qvec, emb) for cid, emb in self._all_embeddings().items()}
+            except Exception:  # noqa: BLE001 - a failing embedder degrades to keyword-only, never crashes
+                vector = {}
 
         fused = fuse_scores(bm25, vector)
         if not fused:
@@ -332,6 +356,7 @@ __all__ = [
     "MemoryChunk",
     "MemoryHit",
     "cosine",
+    "embedder_from_langchain",
     "fuse_scores",
     "mmr_rerank",
     "temporal_decay_factor",

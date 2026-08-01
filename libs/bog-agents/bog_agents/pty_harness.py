@@ -29,6 +29,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 # --- keystroke encoding (pure) ----------------------------------------------
 
@@ -144,24 +145,42 @@ def strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
 
 
-class TerminalOutput:
-    """Accumulates PTY bytes and renders a bounded plain-text view.
+def _make_pyte_screen(cols: int, rows: int) -> tuple[Any, Any] | None:
+    """Return a `(pyte.Screen, pyte.Stream)` pair, or None when pyte is absent."""
+    try:
+        import pyte
+    except ImportError:
+        return None
+    screen = pyte.Screen(cols, rows)
+    return screen, pyte.Stream(screen)
 
-    This is a line buffer (ANSI stripped), not a full cursor-addressable grid —
-    enough for text/regex/quiescence waits. A `pyte`-backed full grid is a
-    documented follow-up.
+
+class TerminalOutput:
+    """Accumulates PTY bytes into two complementary views.
+
+    - a rolling **line buffer** (ANSI stripped) for "did X ever appear" waits,
+    - a **pyte-backed grid** (when `pyte` is installed) for a clean, cursor-
+      addressable *current-screen* render — vim/top redraws collapse to what a
+      user would actually see, instead of a char-by-char redraw trail.
+
+    Wait conditions match the line buffer (forgiving); `snapshot()` returns the
+    pyte grid when available (clean), else the line-buffer tail.
     """
 
-    def __init__(self, *, max_chars: int = 200_000) -> None:
-        """Initialize with a rolling capacity of `max_chars` decoded characters."""
+    def __init__(self, *, max_chars: int = 200_000, cols: int = 120, rows: int = 40) -> None:
+        """Initialize the buffers (a pyte grid of `cols`x`rows` when available)."""
         self._raw = bytearray()
         self._max = max_chars
+        self._pyte = _make_pyte_screen(cols, rows)
 
     def feed(self, data: bytes) -> None:
-        """Append raw PTY bytes."""
+        """Append raw PTY bytes to both the line buffer and the pyte grid."""
         self._raw.extend(data)
         if len(self._raw) > self._max * 4:  # bytes can be >1/char; keep a generous tail
             del self._raw[: len(self._raw) - self._max * 4]
+        if self._pyte is not None:
+            with contextlib.suppress(Exception):
+                self._pyte[1].feed(data.decode("utf-8", errors="replace"))
 
     @property
     def text(self) -> str:
@@ -175,11 +194,23 @@ class TerminalOutput:
         """The plain-text view split into lines."""
         return self.text.splitlines()
 
+    def grid(self) -> str | None:
+        """The clean current screen from the pyte grid, or None if pyte is absent."""
+        if self._pyte is None:
+            return None
+        rows = [row.rstrip() for row in self._pyte[0].display]
+        while rows and not rows[-1]:  # drop trailing blank rows
+            rows.pop()
+        return "\n".join(rows)
+
     def snapshot(self, *, tail_lines: int | None = None) -> str:
-        """Return the plain-text view, optionally only the last `tail_lines`."""
-        if tail_lines is None:
-            return self.text
-        return "\n".join(self.lines[-tail_lines:])
+        """Return the current screen — the pyte grid when available, else the tail."""
+        rendered = self.grid()
+        if rendered is None:
+            return self.text if tail_lines is None else "\n".join(self.lines[-tail_lines:])
+        if tail_lines is not None:
+            return "\n".join(rendered.splitlines()[-tail_lines:])
+        return rendered
 
 
 # --- wait conditions (pure) -------------------------------------------------

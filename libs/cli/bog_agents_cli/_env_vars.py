@@ -104,6 +104,9 @@ MCP_STARTUP_TIMEOUT = "BOG_AGENTS_MCP_STARTUP_TIMEOUT"
 MCP_TRUST = "BOG_AGENTS_MCP_TRUST"
 """Pre-approve project MCP servers (trust decision) when truthy."""
 
+MEMORY_VECTOR = "BOG_AGENTS_MEMORY_VECTOR"
+"""Enable hybrid vector search in the memory_search tool (needs an embedder)."""
+
 MODEL = "BOG_AGENTS_MODEL"
 """Override the active model identifier."""
 
