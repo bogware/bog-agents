@@ -600,7 +600,16 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         """
         env = dict(self._env)
         sandbox = self._sandbox
-        if sandbox is None or not sandbox.network_enabled:
+        if sandbox is None:
+            return env
+
+        # Strip secret-looking env vars from the sandboxed child (#11) — applies
+        # regardless of network, so an approved command can't read a credential
+        # from the environment. The egress proxy vars are added afterward.
+        if sandbox.strip_secret_env:
+            env = local_sandbox.strip_secret_env(env, sandbox.secret_env_patterns or None)
+
+        if not sandbox.network_enabled:
             return env
 
         proxy_url = env.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV) or os.environ.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV, "")
