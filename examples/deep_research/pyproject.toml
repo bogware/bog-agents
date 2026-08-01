@@ -4,17 +4,17 @@ version = "0.1.0"
 description = "Deep research agent example using bog-agents package"
 requires-python = ">=3.11"
 dependencies = [
-    "langchain-openai>=1.0.2",
-    "langchain-anthropic>=1.0.3",
-    "langchain_tavily>=0.2.13",
-    "pydantic>=2.0.0",
-    "rich>=14.0.0",
+    "langchain-openai>=1.4.1",
+    "langchain-anthropic>=1.5.3",
+    "langchain_tavily>=0.2.18",
+    "pydantic>=2.13.4",
+    "rich>=15.0.0",
     "jupyter>=1.0.0",
-    "ipykernel>=6.20.0",
-    "tavily-python>=0.5.0",
+    "ipykernel>=7.3.0",
+    "tavily-python>=0.7.26",
     "httpx>=0.28.1",
-    "markdownify>=1.2.0",
-    "bog-agents>=0.2.6",
+    "markdownify>=1.2.3",
+    "bog-agents>=0.9.11",
     "python-dotenv>=1.0.0",
     "langgraph-cli[inmem]>=0.1.55",
     "langchain-google-genai>=3.1.0",
@@ -28,8 +28,8 @@ override-dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.11.1",
-    "ruff>=0.6.1",
+    "mypy>=2.3.0",
+    "ruff>=0.16.0",
 ]
 
 [build-system]
