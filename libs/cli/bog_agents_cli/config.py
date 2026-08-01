@@ -190,6 +190,46 @@ def load_selected_theme(config_path: Path | None = None) -> str | None:
     return theme if isinstance(theme, str) and theme.strip() else None
 
 
+def vim_input_mode_enabled() -> bool:
+    """Return whether vim-style modal input is enabled for the chat input.
+
+    The user can opt in via the `BOG_AGENTS_VIM_MODE` environment variable
+    (values `1`/`true`/`yes`/`on`) or a `[ui].vim_mode = true` entry in the
+    user's `config.toml`. An explicit env var value wins over the config file.
+
+    Returns:
+        `True` when vim input mode should be active, `False` otherwise.
+    """
+    from bog_agents_cli import _env_vars
+
+    raw = os.environ.get(_env_vars.VIM_MODE)
+    if raw is not None and raw.strip():
+        classified = _env_vars.classify_env_bool(raw)
+        if classified is not None:
+            return classified
+
+    import tomllib
+
+    from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+    try:
+        with DEFAULT_CONFIG_PATH.open("rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return False
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.warning(
+            "Could not read vim_mode preference from %s", DEFAULT_CONFIG_PATH
+        )
+        return False
+
+    ui_section = data.get("ui")
+    if not isinstance(ui_section, dict):
+        return False
+    value = ui_section.get("vim_mode")
+    return value if isinstance(value, bool) else False
+
+
 def save_selected_theme(name: str, config_path: Path | None = None) -> bool:
     """Persist the UI theme name to `[ui].theme` in the config file.
 

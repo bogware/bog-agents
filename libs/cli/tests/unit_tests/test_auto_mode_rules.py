@@ -469,6 +469,119 @@ class TestLoadAutoModeSettings:
 
 
 # ---------------------------------------------------------------------------
+# Consolidated git classifier (Feature #10) — new coverage beyond ask-list
+# ---------------------------------------------------------------------------
+
+
+class TestGitClassifierWiring:
+    def _engine(self) -> AutoModeRuleEngine:
+        return AutoModeRuleEngine(AutoModeSettings())
+
+    def _eval(self, cmd: str) -> RuleVerdict:
+        return self._engine().evaluate("bash", {"command": cmd})
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git push -ff origin main",
+            "git branch -D stale",
+            "git branch -d stale",
+            "git tag -d v1.0",
+            "git stash drop",
+            "git stash clear",
+            "git checkout -- file.py",
+            "git checkout -f main",
+            "git filter-branch -- --all",
+            "git submodule update --force",
+        ],
+    )
+    def test_destructive_git_asks(self, cmd: str) -> None:
+        v = self._eval(cmd)
+        assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
+        assert v.rule_source == "git_ops", cmd
+
+    def test_ask_list_cases_still_keep_priority(self) -> None:
+        for cmd in (
+            "git push --force origin main",
+            "git reset --hard HEAD~1",
+            "git clean -fd",
+            "git checkout .",
+            "cd /tmp && git clean -fdx",
+        ):
+            v = self._eval(cmd)
+            assert v.decision == AutoDecision.ASK, cmd
+            assert v.rule_source == "ask_list", cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git ls-tree HEAD",
+            "git blame src/main.py",
+            "git grep TODO src",
+            "git reflog",
+            "git stash list",
+        ],
+    )
+    def test_read_only_git_is_allowed(self, cmd: str) -> None:
+        v = self._eval(cmd)
+        assert v.decision == AutoDecision.ALLOW, f"Expected ALLOW for: {cmd!r}"
+        assert v.rule_source == "git_ops", cmd
+
+    def test_mutating_git_still_falls_through(self) -> None:
+        v = self._eval("git commit -m 'fix'")
+        assert v.decision == AutoDecision.ALLOW
+        assert v.rule_source == "default"
+
+
+# ---------------------------------------------------------------------------
+# Bash-hygiene gate (Feature #9) — hang-prone / blocking commands
+# ---------------------------------------------------------------------------
+
+
+class TestBashHygieneWiring:
+    def _engine(self) -> AutoModeRuleEngine:
+        return AutoModeRuleEngine(AutoModeSettings())
+
+    def _eval(self, cmd: str) -> RuleVerdict:
+        return self._engine().evaluate("bash", {"command": cmd})
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "sleep 3600",
+            "while true; do echo hi; done",
+            "yes",
+            "ping 8.8.8.8",
+            "watch df -h",
+            "less big_file.txt",
+            "read answer",
+            "curl https://api.example.com",
+            "ssh deploy@prod",
+            "git commit",
+        ],
+    )
+    def test_hang_prone_commands_ask(self, cmd: str) -> None:
+        v = self._eval(cmd)
+        assert v.decision == AutoDecision.ASK, f"Expected ASK for: {cmd!r}"
+        assert v.rule_source == "bash_hygiene", cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "timeout 30 sleep 3600",
+            "sleep 5",
+            "yes | head -5",
+            "git commit -m done",
+            "ping -c 4 8.8.8.8",
+            "tail -f app.log",  # explicitly allow-listed -> allow_list wins
+        ],
+    )
+    def test_bounded_commands_not_hygiene_asked(self, cmd: str) -> None:
+        v = self._eval(cmd)
+        assert v.decision != AutoDecision.ASK or v.rule_source != "bash_hygiene", cmd
+
+
+# ---------------------------------------------------------------------------
 # detect_ambiguities — heuristic pattern matching
 # ---------------------------------------------------------------------------
 

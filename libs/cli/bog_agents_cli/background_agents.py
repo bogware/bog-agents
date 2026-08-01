@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from bog_agents_cli.sidechain import SidechainStore
+
 logger = logging.getLogger(__name__)
 
 _PROMPT_PREVIEW_LEN = 50
@@ -114,6 +116,7 @@ class BackgroundAgentManager:
         agent_factory: Callable[[], Any] | None = None,
         max_concurrent: int = 5,
         on_complete: Callable[[BackgroundTask], None] | None = None,
+        sidechain_store: SidechainStore | None = None,
     ) -> None:
         """Initialize the background agent manager.
 
@@ -121,11 +124,15 @@ class BackgroundAgentManager:
             agent_factory: Callable that creates a new agent instance.
             max_concurrent: Maximum concurrent background tasks.
             on_complete: Callback(task) when a task finishes.
+            sidechain_store: Optional sidechain store; every task appends
+                `submission`/`result`/`error`/`cancelled` records keyed by
+                its task id and tagged with `parent_thread_id` when set.
         """
         self._tasks: dict[str, BackgroundTask] = {}
         self._agent_factory = agent_factory
         self._max_concurrent = max_concurrent
         self._on_complete = on_complete
+        self._sidechain_store = sidechain_store
         self._counter = 0
 
     def _next_id(self) -> str:
@@ -161,6 +168,7 @@ class BackgroundAgentManager:
         worktree_branch: str | None = None,
         metadata: dict[str, Any] | None = None,
         runner: Callable[[BackgroundTask], Awaitable[Any]] | None = None,
+        continue_from: str | None = None,
     ) -> str:
         """Submit a new background agent task.
 
@@ -174,6 +182,10 @@ class BackgroundAgentManager:
             worktree_branch: Associated worktree branch for isolated tasks.
             metadata: Extra structured metadata for status/reporting.
             runner: Optional custom async task runner.
+            continue_from: Optional prior task id to continue. When set (and a
+                sidechain store is configured), the prompt is prefixed with
+                that task's recorded transcript (agentId continuation) and the
+                task metadata records `continue_from` plus the original prompt.
 
         Returns:
             Task ID.
@@ -189,17 +201,26 @@ class BackgroundAgentManager:
             )
             raise RuntimeError(msg)
 
+        meta = dict(metadata or {})
+        effective_prompt = prompt
+        if continue_from and self._sidechain_store is not None:
+            effective_prompt = self._sidechain_store.continuation_prompt(
+                continue_from, prompt
+            )
+            meta["continue_from"] = continue_from
+            meta["original_prompt"] = prompt
+
         task_id = self._next_id()
         task = BackgroundTask(
             task_id=task_id,
-            prompt=prompt,
+            prompt=effective_prompt,
             label=label,
             strategy=strategy,
             model=model,
             working_dir=working_dir,
             parent_thread_id=parent_thread_id,
             worktree_branch=worktree_branch,
-            metadata=dict(metadata or {}),
+            metadata=meta,
             _runner=runner,
         )
         self._tasks[task_id] = task
@@ -225,6 +246,10 @@ class BackgroundAgentManager:
         """
         task.status = BackgroundStatus.RUNNING
         task.started_at = time.time()
+        # A continuation task's sidechain records the *original* instruction —
+        # the composed transcript is derivable from the referenced sidechain.
+        submission = task.metadata.get("original_prompt", task.prompt)
+        self._record_sidechain(task, "submission", submission)
 
         try:
             if task._runner is not None:
@@ -249,6 +274,8 @@ class BackgroundAgentManager:
                     task.metadata.update(metadata)
             task.status = BackgroundStatus.COMPLETED
             task.completed_at = time.time()
+            if task.result:
+                self._record_sidechain(task, "result", task.result)
             logger.info(
                 "Background task %s completed in %.1fs",
                 task.task_id,
@@ -257,10 +284,12 @@ class BackgroundAgentManager:
         except asyncio.CancelledError:
             task.status = BackgroundStatus.CANCELLED
             task.completed_at = time.time()
+            self._record_sidechain(task, "cancelled", "cancelled")
             logger.info("Background task %s cancelled", task.task_id)
-        except Exception:
+        except Exception as exc:
             task.status = BackgroundStatus.FAILED
             task.completed_at = time.time()
+            self._record_sidechain(task, "error", str(exc))
             logger.exception("Background task %s failed", task.task_id)
 
         if self._on_complete:
@@ -268,6 +297,30 @@ class BackgroundAgentManager:
                 self._on_complete(task)
             except Exception:
                 logger.debug("on_complete callback failed", exc_info=True)
+
+    def _record_sidechain(self, task: BackgroundTask, kind: str, content: str) -> None:
+        """Append an event to a task's sidechain transcript, if enabled.
+
+        The record is keyed by the task id and tagged with the parent
+        interactive thread id (consumed here, when present) so a follow-up
+        agentId continuation can replay what the task produced.
+
+        Args:
+            task: The finished/in-progress background task.
+            kind: Event kind (`submission`, `result`, `error`, `cancelled`).
+            content: Event payload text.
+        """
+        if self._sidechain_store is None:
+            return
+        try:
+            self._sidechain_store.record(
+                task.task_id,
+                kind,
+                content,
+                parent_thread_id=task.parent_thread_id,
+            )
+        except OSError:
+            logger.debug("sidechain record failed for %s", task.task_id, exc_info=True)
 
     def get_status(self, task_id: str) -> BackgroundTask | None:
         """Get status of a background task.

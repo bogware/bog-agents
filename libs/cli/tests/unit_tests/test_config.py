@@ -1757,3 +1757,91 @@ class TestDetectProvider:
         ):
             assert detect_provider("deepseek-coder-v2:16b") == "ollama"
             assert detect_provider("qwen3-coder-next") == "ollama"
+
+
+class TestVimInputModeConfig:
+    """Tests for `vim_input_mode_enabled` env-var and config precedence."""
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "TRUE", " On "])
+    def test_env_truthy_enables(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """Truthy env values enable vim mode."""
+        monkeypatch.setenv("BOG_AGENTS_VIM_MODE", value)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        assert vim_input_mode_enabled() is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "off", "FALSE", " Off "])
+    def test_env_falsy_disables(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """Explicit falsy env values disable vim mode."""
+        monkeypatch.setenv("BOG_AGENTS_VIM_MODE", value)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        assert vim_input_mode_enabled() is False
+
+    def test_env_wins_over_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An explicit env value beats the config file in either direction."""
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[ui]\nvim_mode = false\n")
+        monkeypatch.setenv("BOG_AGENTS_VIM_MODE", "true")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is True
+
+        config_path.write_text("[ui]\nvim_mode = true\n")
+        monkeypatch.setenv("BOG_AGENTS_VIM_MODE", "false")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is False
+
+    def test_config_toml_true_enables(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A `[ui].vim_mode = true` entry enables vim mode when no env is set."""
+        monkeypatch.delenv("BOG_AGENTS_VIM_MODE", raising=False)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[ui]\nvim_mode = true\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is True
+
+    def test_missing_config_disables(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No env var and no config file means vim mode is off."""
+        monkeypatch.delenv("BOG_AGENTS_VIM_MODE", raising=False)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        config_path = tmp_path / "missing.toml"
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is False
+
+    def test_invalid_config_disables_without_raising(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A corrupt config file falls back to disabled instead of raising."""
+        monkeypatch.delenv("BOG_AGENTS_VIM_MODE", raising=False)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("not = [valid toml\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is False
+
+    def test_non_bool_config_value_disables(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A non-boolean `vim_mode` value (e.g. a string) is ignored."""
+        monkeypatch.delenv("BOG_AGENTS_VIM_MODE", raising=False)
+        from bog_agents_cli.config import vim_input_mode_enabled
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[ui]\nvim_mode = "yes"\n')
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert vim_input_mode_enabled() is False

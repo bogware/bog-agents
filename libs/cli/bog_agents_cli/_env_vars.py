@@ -177,6 +177,13 @@ TRUST_PROJECT_HOOKS = "BOG_AGENTS_TRUST_PROJECT_HOOKS"
 TURN_TIMEOUT_SECONDS = "BOG_AGENTS_TURN_TIMEOUT_SECONDS"
 """Wall-clock timeout (seconds) for a single agent turn."""
 
+VIM_MODE = "BOG_AGENTS_VIM_MODE"
+"""Enable vim-style modal editing in the chat input.
+
+Parsed as a boolean: `1`/`true`/`yes`/`on` (case-insensitive) count as enabled.
+An explicit value wins over the `[ui].vim_mode` config-file entry.
+"""
+
 # ---------------------------------------------------------------------------
 # Shared boolean parsing helpers.
 # ---------------------------------------------------------------------------

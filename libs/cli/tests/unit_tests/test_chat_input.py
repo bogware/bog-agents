@@ -17,6 +17,7 @@ from bog_agents_cli.widgets import chat_input as chat_input_module
 from bog_agents_cli.widgets.autocomplete import MAX_SUGGESTIONS, SLASH_COMMANDS
 from bog_agents_cli.widgets.chat_input import (
     ChatInput,
+    ChatTextArea,
     CompletionOption,
     CompletionPopup,
 )
@@ -2079,3 +2080,174 @@ class TestRightClickPasteOffThread:
 
             assert recorded.get("thread") is True
             assert recorded.get("exit_on_error") is False
+
+
+class _VimChatInputTestApp(App[None]):
+    """App that hosts a ChatInput with vim-style editing enabled."""
+
+    def compose(self) -> ComposeResult:
+        yield ChatInput(id="chat-input", vim_enabled=True)
+
+
+class TestVimModeIntegration:
+    """Integration tests for vim-style modal editing in the chat input."""
+
+    async def _setup(
+        self, pilot: Pilot[None]
+    ) -> tuple[ChatInput, ChatTextArea, Static]:
+        """Return (chat, text_area, prompt) for the vim-enabled app."""
+        chat = pilot.app.query_one(ChatInput)
+        text_area = chat._text_area
+        assert text_area is not None
+        prompt = chat.query_one("#prompt", Static)
+        return chat, text_area, prompt
+
+    async def test_normal_mode_keys_do_not_insert(self) -> None:
+        """In normal mode, letter keys move the cursor instead of typing."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            _, text_area, _ = await self._setup(pilot)
+            assert text_area._vim_mode == "normal"
+
+            text_area.text = "some text"
+            text_area.move_cursor((0, 0))
+            await pilot.pause()
+
+            # `l` and `w` are motions; they must not leak text into the buffer.
+            await pilot.press("l")
+            await pilot.press("w")
+            await pilot.pause()
+            assert text_area.text == "some text"
+            assert text_area._vim_cursor_offset() > 0
+
+    async def test_insert_and_escape(self) -> None:
+        """`i` enters insert mode; typing inserts; `escape` returns to normal."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            _, text_area, _ = await self._setup(pilot)
+
+            await pilot.press("i")
+            assert text_area._vim_mode == "insert"
+            await pilot.press("h", "e", "l", "l", "o")
+            assert text_area.text == "hello"
+            await pilot.press("escape")
+            await pilot.pause()
+            assert text_area._vim_mode == "normal"
+            # escape moves the cursor one char left, onto the last 'o'
+            assert text_area._vim_cursor_offset() == 4
+
+    async def test_prompt_shows_norm_and_ins(self) -> None:
+        """With vim enabled the prompt reflects the modal state."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            _, _, prompt = await self._setup(pilot)
+            await pilot.pause()
+            assert _prompt_text(prompt) == "NORM"
+
+            await pilot.press("i")
+            await pilot.pause()
+            assert _prompt_text(prompt) == "INS "
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert _prompt_text(prompt) == "NORM"
+
+    async def test_enter_in_insert_mode_inserts_newline(self) -> None:
+        """Enter in insert mode adds a newline rather than submitting."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            _, text_area, _ = await self._setup(pilot)
+            await pilot.press("i")
+            await pilot.press("a", "enter", "b")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert text_area.text == "a\nb"
+
+    async def test_dd_clears_line_in_normal_mode(self) -> None:
+        """`dd` deletes the whole line without going through the clipboard."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat, text_area, _ = await self._setup(pilot)
+            chat._text_area = text_area
+            await pilot.press("i")
+            await pilot.press("h", "i")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert text_area.text == "hi"
+
+            await pilot.press("d", "d")
+            await pilot.pause()
+            assert text_area.text == ""
+
+    async def test_vim_disabled_still_types_normally(self) -> None:
+        """The default (non-vim) ChatInput inserts text on letter keys."""
+        app = _ChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat = app.query_one(ChatInput)
+            text_area = chat._text_area
+            assert text_area is not None
+            assert text_area._vim_enabled is False
+
+            await pilot.press("w", "o", "r", "l", "d")
+            await pilot.pause()
+            assert text_area.text == "world"
+
+    async def test_set_vim_mode_runtime_toggle(self) -> None:
+        """`set_vim_mode` enables vim editing and resets to normal mode."""
+        app = _ChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat = app.query_one(ChatInput)
+            text_area = chat._text_area
+            assert text_area is not None
+
+            chat.set_vim_mode(enabled=True)
+            await pilot.pause()
+            assert text_area._vim_enabled is True
+            assert text_area._vim_mode == "normal"
+
+            # Now normal-mode keys must not insert.
+            await pilot.press("w")
+            await pilot.pause()
+            assert text_area.text == ""
+
+            chat.set_vim_mode(enabled=False)
+            await pilot.pause()
+            await pilot.press("w")
+            await pilot.pause()
+            assert text_area.text == "w"
+
+    async def test_history_recall_resets_vim_to_normal(self) -> None:
+        """Recalling history exits insert mode and resets pending state."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat, text_area, prompt = await self._setup(pilot)
+            chat._history._entries.append("recalled")
+
+            await pilot.press("i")
+            await pilot.pause()
+            assert text_area._vim_mode == "insert"
+
+            await pilot.press("up")
+            await pilot.pause()
+            assert text_area.text == "recalled"
+            assert text_area._vim_mode == "normal"
+            assert _prompt_text(prompt) == "NORM"
+
+    async def test_submit_clears_and_resets_vim_mode(self) -> None:
+        """Submitting clears the input and returns vim to normal mode."""
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            _, text_area, prompt = await self._setup(pilot)
+
+            await pilot.press("i")
+            await pilot.press("q", "u", "e", "s", "t", "i", "o", "n")
+            await pilot.press("escape")
+            await pilot.pause()
+            assert text_area._vim_mode == "normal"
+            assert text_area.text == "question"
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert text_area.text == ""
+            assert text_area._vim_mode == "normal"
+            assert _prompt_text(prompt) == "NORM"

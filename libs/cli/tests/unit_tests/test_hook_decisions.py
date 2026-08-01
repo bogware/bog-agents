@@ -8,9 +8,16 @@ from pathlib import Path
 
 from bog_agents_cli.hook_decisions import (
     CANONICAL_EVENTS,
+    GATE_EVENTS,
+    GATING_EVENTS,
+    HOOK_TYPES,
+    MODIFY_EVENTS,
+    OBSERVE_EVENTS,
     HookDecision,
+    HookType,
     alias_tool_name,
     evaluate_decision_hooks,
+    hook_type_for_event,
     load_vendor_hooks,
     parse_hook_decision,
 )
@@ -176,3 +183,46 @@ def test_canonical_events_include_grok_set() -> None:
 
 def test_hook_decision_default_allows() -> None:
     assert HookDecision().blocks is False
+
+
+class TestHookTypes:
+    def test_canonical_events_typed(self) -> None:
+        assert hook_type_for_event("PreToolUse") is HookType.MODIFY
+        assert hook_type_for_event("UserPromptSubmit") is HookType.MODIFY
+        assert hook_type_for_event("Stop") is HookType.GATE
+        assert hook_type_for_event("SubagentStop") is HookType.GATE
+        assert hook_type_for_event("PostToolUse") is HookType.OBSERVE
+        assert hook_type_for_event("Notification") is HookType.OBSERVE
+
+    def test_dotted_events_typed(self) -> None:
+        assert hook_type_for_event("shell.pre_execute") is HookType.GATE
+        assert hook_type_for_event("file.pre_write") is HookType.GATE
+        assert hook_type_for_event("file.pre_edit") is HookType.GATE
+        assert hook_type_for_event("model.pre_call") is HookType.GATE
+        assert hook_type_for_event("tool.pre_call") is HookType.MODIFY
+        assert hook_type_for_event("tool.post_call") is HookType.OBSERVE
+        assert hook_type_for_event("file.post_write") is HookType.OBSERVE
+        assert hook_type_for_event("shell.post_execute") is HookType.OBSERVE
+
+    def test_new_canonical_events_present(self) -> None:
+        for name in ("FileWrite", "FileEdit", "ShellExecute", "ModelCall"):
+            assert name in CANONICAL_EVENTS
+            assert hook_type_for_event(name) is HookType.GATE
+
+    def test_per_tool_event_normalized_to_family(self) -> None:
+        assert hook_type_for_event("tool.pre_call.execute") is HookType.MODIFY
+        assert hook_type_for_event("tool.post_call.read_file") is HookType.OBSERVE
+
+    def test_unknown_event_defaults_to_observe(self) -> None:
+        assert hook_type_for_event("totally.new.event") is HookType.OBSERVE
+
+    def test_derived_sets_are_exhaustive_and_disjoint(self) -> None:
+        assert set(HOOK_TYPES) == GATE_EVENTS | MODIFY_EVENTS | OBSERVE_EVENTS
+        assert GATE_EVENTS.isdisjoint(OBSERVE_EVENTS)
+        assert GATE_EVENTS.isdisjoint(MODIFY_EVENTS)
+        assert MODIFY_EVENTS.isdisjoint(OBSERVE_EVENTS)
+        assert GATING_EVENTS == GATE_EVENTS | MODIFY_EVENTS
+        assert "PreToolUse" in MODIFY_EVENTS
+        assert "Stop" in GATE_EVENTS
+        assert "Notification" in OBSERVE_EVENTS
+        assert "shell.pre_execute" in GATE_EVENTS

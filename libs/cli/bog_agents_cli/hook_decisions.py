@@ -24,6 +24,7 @@ import json
 import logging
 import subprocess  # noqa: S404
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -46,9 +47,118 @@ CANONICAL_EVENTS: tuple[str, ...] = (
     "PreCompact",
     "PostCompact",
     "SessionEnd",
+    "FileWrite",
+    "FileEdit",
+    "ShellExecute",
+    "ModelCall",
 )
 DENY_EVENTS = frozenset({"PreToolUse"})  # may return decision=deny
 BLOCK_EVENTS = frozenset({"Stop", "SubagentStop"})  # may return decision=block
+
+
+# ---------------------------------------------------------------------------
+# Hook types — what a hook event is allowed to do with the action it sees
+# ---------------------------------------------------------------------------
+
+
+class HookType(StrEnum):
+    """Capability of a hook event type.
+
+    A type is a ceiling — a hook may use less, never more:
+
+    - `OBSERVE` — fire-and-forget; cannot change the action.
+    - `GATE` — may allow or block the action (deny/block decisions).
+    - `MODIFY` — may rewrite the action's input (prompt/args) and gate it.
+    """
+
+    OBSERVE = "observe"
+    GATE = "gate"
+    MODIFY = "modify"
+
+
+# Canonical (Claude/Cursor-style) events.
+_CANONICAL_TYPES: dict[str, HookType] = {
+    "SessionStart": HookType.OBSERVE,
+    "UserPromptSubmit": HookType.MODIFY,
+    "PreToolUse": HookType.MODIFY,
+    "PostToolUse": HookType.OBSERVE,
+    "PostToolUseFailure": HookType.OBSERVE,
+    "PermissionDenied": HookType.OBSERVE,
+    "Stop": HookType.GATE,
+    "StopFailure": HookType.OBSERVE,
+    "Notification": HookType.OBSERVE,
+    "SubagentStart": HookType.OBSERVE,
+    "SubagentStop": HookType.GATE,
+    "PreCompact": HookType.OBSERVE,
+    "PostCompact": HookType.OBSERVE,
+    "SessionEnd": HookType.OBSERVE,
+    "FileWrite": HookType.GATE,
+    "FileEdit": HookType.GATE,
+    "ShellExecute": HookType.GATE,
+    "ModelCall": HookType.GATE,
+}
+
+# Dotted hook-bus events (`~/.bog-agents/hooks.json` `events`).
+_DOTTED_TYPES: dict[str, HookType] = {
+    "session.start": HookType.OBSERVE,
+    "session.end": HookType.OBSERVE,
+    "user.prompt": HookType.MODIFY,
+    "context.compact": HookType.OBSERVE,
+    "compact": HookType.OBSERVE,
+    "error": HookType.OBSERVE,
+    "tool.pre_call": HookType.MODIFY,
+    "tool.post_call": HookType.OBSERVE,
+    "model.pre_call": HookType.GATE,
+    "model.post_call": HookType.OBSERVE,
+    "file.pre_read": HookType.OBSERVE,
+    "file.post_read": HookType.OBSERVE,
+    "file.pre_write": HookType.GATE,
+    "file.post_write": HookType.OBSERVE,
+    "file.pre_edit": HookType.GATE,
+    "file.post_edit": HookType.OBSERVE,
+    "shell.pre_execute": HookType.GATE,
+    "shell.post_execute": HookType.OBSERVE,
+}
+
+HOOK_TYPES: dict[str, HookType] = {**_CANONICAL_TYPES, **_DOTTED_TYPES}
+
+# Derived sets, useful for "does this event gate?" checks.
+GATE_EVENTS: frozenset[str] = frozenset(
+    event for event, hook_type in HOOK_TYPES.items() if hook_type is HookType.GATE
+)
+MODIFY_EVENTS: frozenset[str] = frozenset(
+    event for event, hook_type in HOOK_TYPES.items() if hook_type is HookType.MODIFY
+)
+OBSERVE_EVENTS: frozenset[str] = frozenset(
+    event for event, hook_type in HOOK_TYPES.items() if hook_type is HookType.OBSERVE
+)
+# Events that can block or deny the action (gate plus modify).
+GATING_EVENTS: frozenset[str] = GATE_EVENTS | MODIFY_EVENTS
+
+
+def _normalize_event(event: str) -> str:
+    """Strip the per-tool suffix from a tool event family."""
+    for prefix in ("tool.pre_call.", "tool.post_call."):
+        if event.startswith(prefix):
+            return prefix[:-1]
+    return event
+
+
+def hook_type_for_event(event: str) -> HookType:
+    """Return the hook type for an event.
+
+    Per-tool events like ``tool.pre_call.execute`` are normalized to their
+    family before lookup. Unknown events default to `OBSERVE`.
+
+    Args:
+        event: A canonical (``PreToolUse``) or dotted (``shell.pre_execute``)
+            event name.
+
+    Returns:
+        The `HookType` for the event.
+    """
+    return HOOK_TYPES.get(_normalize_event(event), HookType.OBSERVE)
+
 
 # Claude Code / Cursor tool names → bog tool names, so a migrated hook's
 # `matcher` fires on the right tool.
@@ -294,9 +404,16 @@ __all__ = [
     "BLOCK_EVENTS",
     "CANONICAL_EVENTS",
     "DENY_EVENTS",
+    "GATE_EVENTS",
+    "GATING_EVENTS",
+    "HOOK_TYPES",
+    "MODIFY_EVENTS",
+    "OBSERVE_EVENTS",
     "HookDecision",
+    "HookType",
     "alias_tool_name",
     "evaluate_decision_hooks",
+    "hook_type_for_event",
     "load_pretooluse_hooks",
     "load_vendor_hooks",
     "parse_hook_decision",

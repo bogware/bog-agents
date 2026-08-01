@@ -1002,6 +1002,19 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # New feature middleware (#1-50)
     _wd = Path(f.working_dir) if f.working_dir else None
 
+    # Deferred tool schemas: hide selected tool schemas from the model until
+    # `tool_search` / `select` activate them, saving per-turn input tokens.
+    # Placed at the head of the feature batch so its wrap runs before the
+    # tool-injecting middleware below; the registry itself is populated from
+    # the fully assembled request, so tools contributed by those middleware
+    # (filesystem, subagent, …) are deferrable too.
+    if f.enable_deferred_tools and f.deferred_tools:
+        from bog_agents.middleware.deferred_tools import DeferredToolsMiddleware
+
+        agents_middleware.append(
+            DeferredToolsMiddleware(deferred_names=frozenset(f.deferred_tools))
+        )
+
     if f.enable_git_tools:
         from bog_agents.middleware.git_tools import GitToolsMiddleware
 
