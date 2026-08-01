@@ -35,7 +35,7 @@ jobs:
           - { name: cli, dir: libs/cli }
           - { name: daemon, dir: libs/daemon }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.11"
@@ -63,7 +63,7 @@ jobs:
           - { name: daemon, dir: libs/daemon }
         python: ["3.12", "3.13"]  # 3.11 temporarily disabled
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: ${{ matrix.python }}
@@ -95,7 +95,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.12"
@@ -144,7 +144,7 @@ jobs:
           - { name: harbor, dir: libs/harbor }
           - { name: daytona, dir: libs/partners/daytona }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: "./.github/actions/uv_setup"
         with:
           python-version: "3.12"
