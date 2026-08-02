@@ -555,7 +555,7 @@ class ChatTextArea(TextArea):
         # TextArea's default insertion path. Insert mode falls through to the
         # regular handling below except for `esc` (back to normal) and
         # `enter` (insert newline, matching vim insert semantics).
-        if self._vim_enabled and self._handle_vim_key(event, now):
+        if self._vim_enabled and self._handle_vim_key_safe(event, now):
             return
 
         # Mouse-tracking escape-sequence swallower.
@@ -753,6 +753,30 @@ class ChatTextArea(TextArea):
     )
     """Keys that always fall through to the normal input handling, even in vim
     normal mode (arrows for history/navigation, Enter to submit, etc.)."""
+
+    def _handle_vim_key_safe(self, event: events.Key, now: float) -> bool:
+        """Run the vim key handler, falling through to normal input on error.
+
+        The engine is a large state machine on the path every keystroke takes.
+        A bug in one motion or operator must not make the input box unusable
+        (or crash the app) -- the user can still type, they just lose modal
+        editing for that key. Mirrors the `_safe` containment the dreamscape
+        middleware uses for the same reason.
+
+        Args:
+            event: The key event being processed.
+            now: Monotonic timestamp from the caller.
+
+        Returns:
+            `True` when the event was consumed by vim handling.
+        """
+        try:
+            return self._handle_vim_key(event, now)
+        except Exception:
+            logger.exception("vim key handling failed; falling through to normal input")
+            self._vim.reset()
+            self._vim_mode = self._vim.mode
+            return False
 
     def _handle_vim_key(self, event: events.Key, now: float) -> bool:
         """Route a key event through the vim engine.

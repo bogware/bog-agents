@@ -2251,3 +2251,42 @@ class TestVimModeIntegration:
             assert text_area.text == ""
             assert text_area._vim_mode == "normal"
             assert _prompt_text(prompt) == "NORM"
+
+
+class TestVimEngineFailureContained:
+    """A vim-engine bug must not make the input box unusable."""
+
+    async def test_engine_exception_falls_through_to_normal_typing(self) -> None:
+        app = _VimChatInputTestApp()
+        async with app.run_test() as pilot:
+            chat = pilot.app.query_one(ChatInput)
+            text_area = chat._text_area
+            assert text_area is not None
+
+            # Simulate a latent bug anywhere in the engine's key handling.
+            def _boom(*_args: object, **_kwargs: object) -> None:
+                msg = "engine exploded"
+                raise RuntimeError(msg)
+
+            text_area._vim.feed = _boom  # type: ignore[method-assign]
+            text_area.text = ""
+            await pilot.pause()
+
+            # The keystroke must not propagate the error out of the handler.
+            await pilot.press("i")
+            await pilot.pause()
+            assert app.is_running, "app should survive an engine failure"
+
+    def test_safe_wrapper_returns_false_on_error(self) -> None:
+        # Unit-level: the wrapper swallows, resets, and reports "not consumed"
+        # so the caller runs the normal input path.
+        area = ChatTextArea()
+        area._vim_enabled = True
+
+        def _boom(*_args: object, **_kwargs: object) -> bool:
+            msg = "engine exploded"
+            raise RuntimeError(msg)
+
+        area._handle_vim_key = _boom  # type: ignore[method-assign]
+        assert area._handle_vim_key_safe(object(), 0.0) is False  # type: ignore[arg-type]
+        assert area._vim_mode == "normal"
