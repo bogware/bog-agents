@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 # Leading tokens that don't change what ultimately runs — peel them so
 # `env git -c … log` and `timeout 5 sort --compress-program=…` still match.
-_WRAPPERS = frozenset({"timeout", "nice", "ionice", "chrt", "stdbuf", "env", "nohup", "setsid", "time"})
+_WRAPPERS = frozenset({"timeout", "nice", "ionice", "chrt", "stdbuf", "env", "nohup", "setsid", "time", "sudo", "command"})
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 # git config keys whose value is executed (or which retarget git at another repo

@@ -110,3 +110,33 @@ def test_middleware_is_lazily_exported() -> None:
     import bog_agents.middleware as mw
 
     assert mw.StopGateMiddleware is StopGateMiddleware
+
+
+class TestContinuationBudgetResets:
+    """The budget is per-turn, not per-thread."""
+
+    def _gate(self) -> StopGateMiddleware:
+        return StopGateMiddleware([lambda ctx: StopDecision(block=True, reason="run the tests")], max_continuations=2)
+
+    def test_before_agent_clears_a_spent_budget(self) -> None:
+        gate = self._gate()
+        # A previous turn exhausted the budget and checkpointed the counter.
+        assert gate.before_agent({"_stop_gate_continuations": 2}, None) == {"_stop_gate_continuations": 0}
+
+    def test_before_agent_is_a_noop_when_unspent(self) -> None:
+        gate = self._gate()
+        assert gate.before_agent({}, None) is None
+        assert gate.before_agent({"_stop_gate_continuations": 0}, None) is None
+
+    def test_gate_enforces_again_on_the_next_turn(self) -> None:
+        gate = self._gate()
+        state: dict = {"messages": []}
+        # Turn one: blocks until the cap, then lets the turn end.
+        for _ in range(2):
+            update = gate.after_agent(state, None)
+            assert update is not None, "gate should still be blocking"
+            state.update(update)
+        assert gate.after_agent(state, None) is None, "cap reached, turn may end"
+        # Turn two: the reset restores enforcement instead of staying disabled.
+        state.update(gate.before_agent(state, None) or {})
+        assert gate.after_agent(state, None) is not None

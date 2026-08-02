@@ -98,6 +98,25 @@ class StopGateMiddleware(AgentMiddleware[StopGateState, ContextT, ResponseT]):
         self._checks = list(checks)
         self._max_continuations = max(1, max_continuations)
 
+    def before_agent(self, state: StopGateState, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        """Reset the continuation budget at the start of each turn.
+
+        The counter lives in checkpointed state, so without this it only ever
+        grows: one turn that exhausts the budget would leave every later turn
+        on the same thread above the cap, silently disabling the gate for the
+        life of the thread. `before_agent` is its own graph node entered once
+        per invocation -- a `jump_to="model"` loop does not re-enter it -- so
+        resetting here bounds each turn independently.
+        """
+        del runtime
+        if not isinstance(state, dict) or not state.get("_stop_gate_continuations"):
+            return None
+        return {"_stop_gate_continuations": 0}
+
+    async def abefore_agent(self, state: StopGateState, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        """Async twin of `before_agent`."""
+        return self.before_agent(state, runtime)
+
     @hook_config(can_jump_to=["model"])
     def after_agent(self, state: StopGateState, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
         """Run the stop checks at natural stop; loop back to the model if any block."""

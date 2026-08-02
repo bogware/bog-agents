@@ -23,6 +23,9 @@ class TestGitConfigExec:
             "git --upload-pack=/tmp/x clone ssh://h/r",
             "git --git-dir=/tmp/evil/.git log",
             "git -c diff.foo.command=/tmp/x diff",
+            # Wrapper prefixes must be peeled or the vector hides behind them.
+            "sudo git -c core.pager=/tmp/evil log",
+            "command git -c core.fsmonitor=/tmp/evil.sh status",
         ],
     )
     def test_flagged(self, cmd: str) -> None:
