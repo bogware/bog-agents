@@ -198,3 +198,39 @@ class TestEdgeCases:
     def test_force_flag_embedded_in_ref_name_is_not_force(self) -> None:
         assert classify_git_command("git push origin feat/f") is GitOpType.MUTATING
         assert classify_git_command("git push origin -f") is GitOpType.DESTRUCTIVE
+
+
+class TestWrapperPeelingStaysInSyncWithExecRisk:
+    """`git_ops` (CLI) and `exec_risk` (SDK) both peel wrapper prefixes.
+
+    They parse git independently -- which is exactly how they drifted once:
+    `git_ops` peeled `sudo`, `exec_risk` did not, so `sudo git -c
+    core.pager=... log` hid its exec vector from the SDK analyzer while the
+    CLI still classified it as a git command. A real merge is a cross-package
+    refactor; until then, pin the overlap so the drift cannot come back
+    silently.
+    """
+
+    def test_every_git_ops_prefix_is_an_exec_risk_wrapper(self) -> None:
+        from bog_agents.exec_risk import _WRAPPERS
+
+        from bog_agents_cli.git_ops import _PREFIX_WORDS
+
+        missing = _PREFIX_WORDS - _WRAPPERS
+        assert not missing, (
+            f"exec_risk._WRAPPERS is missing {sorted(missing)}; a command behind "
+            "that prefix would be classified by git_ops but skipped by the "
+            "exec-risk analyzer"
+        )
+
+    @pytest.mark.parametrize(
+        "prefix", sorted({"sudo", "env", "command", "nohup", "time", "timeout"})
+    )
+    def test_both_modules_see_through_the_same_prefix(self, prefix: str) -> None:
+        from bog_agents.exec_risk import command_has_exec_risk
+
+        # A wrapper must hide neither the risk level nor the exec vector.
+        assert (
+            classify_git_command(f"{prefix} git push --force") is GitOpType.DESTRUCTIVE
+        )
+        assert command_has_exec_risk(f"{prefix} git -c core.pager=/tmp/evil log")
