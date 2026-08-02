@@ -219,20 +219,26 @@ class TestFailedExecDoesNotForkADuplicate:
         # Run in a child interpreter: if this regressed, the duplicate process
         # would otherwise go on to corrupt *this* pytest session.
         marker = tmp_path / "reached.txt"
-        script = (
-            "import importlib.util, sys\n"
-            f"spec = importlib.util.spec_from_file_location('ph', {str(PTY_HARNESS_PATH)!r})\n"
-            "mod = importlib.util.module_from_spec(spec)\n"
-            "sys.modules['ph'] = mod\n"
-            "spec.loader.exec_module(mod)\n"
-            "ctl = mod.PtyController()\n"
-            "ctl.start('x', 'this-binary-does-not-exist-zzz')\n"
-            # Every process that gets here appends one line.
-            f"open({str(marker)!r}, 'a').write('reached\n')\n"
-            "ctl.shutdown()\n"
-            "import time; time.sleep(0.3)\n"
+        # No backslash escapes anywhere in the generated source -- an escape that
+        # survives one layer of quoting but not the next produces a SyntaxError
+        # in the child, which looks like a product failure but is a test bug.
+        script = "\n".join(
+            (
+                "import importlib.util, sys",
+                f"spec = importlib.util.spec_from_file_location('ph', {str(PTY_HARNESS_PATH)!r})",
+                "mod = importlib.util.module_from_spec(spec)",
+                "sys.modules['ph'] = mod",
+                "spec.loader.exec_module(mod)",
+                "ctl = mod.PtyController()",
+                "ctl.start('x', 'this-binary-does-not-exist-zzz')",
+                # Every process that reaches here appends one token.
+                f"open({str(marker)!r}, 'a').write('reached ')",
+                "ctl.shutdown()",
+                "import time; time.sleep(0.3)",
+            )
         )
+        compile(script, "<generated>", "exec")  # fail loudly here, not in the child
         result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False)
         assert result.returncode == 0, result.stderr
-        lines = [ln for ln in marker.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(lines) == 1, f"a failed exec forked a duplicate process: {lines}"
+        reached = marker.read_text(encoding="utf-8").count("reached")
+        assert reached == 1, f"a failed exec forked a duplicate process ({reached} reached the marker)"
