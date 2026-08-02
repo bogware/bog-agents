@@ -21,6 +21,7 @@ from bog_agents.sandbox.local_sandbox import (
     create_local_sandbox,
     get_platform_sandbox_support,
     sandbox_launcher_available,
+    strip_secret_env,
     wrap_command_with_sandbox,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "host_allowed",
     "parse_connect_target",
     "sandbox_launcher_available",
+    "strip_secret_env",
     "wrap_command_with_sandbox",
 ]

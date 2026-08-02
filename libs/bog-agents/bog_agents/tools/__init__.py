@@ -21,13 +21,29 @@ broader rationale.
 from __future__ import annotations
 
 from bog_agents.tools.bundles import (
+    background_shell_tools_bundle,
     git_tools_bundle,
+    memory_search_tool_bundle,
     multi_edit_tool,
+    pty_tools_bundle,
     read_many_files_tool,
+)
+from bog_agents.tools.coercion import (
+    SemanticBool,
+    SemanticNumber,
+    semantic_bool,
+    semantic_number,
 )
 
 __all__ = [
+    "SemanticBool",
+    "SemanticNumber",
+    "background_shell_tools_bundle",
     "git_tools_bundle",
+    "memory_search_tool_bundle",
     "multi_edit_tool",
+    "pty_tools_bundle",
     "read_many_files_tool",
+    "semantic_bool",
+    "semantic_number",
 ]

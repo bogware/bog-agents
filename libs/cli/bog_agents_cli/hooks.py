@@ -13,7 +13,7 @@ Config format (`~/.bog-agents/hooks.json`):
 
 If `events` is omitted or empty the hook receives **all** events.
 
-Supported events (Features #25, #29, #30):
+Supported events (Features #25, #29, #30, #8):
   - session.start / session.end — session lifecycle
   - tool.pre_call / tool.post_call — before/after any tool execution
   - tool.pre_call.<tool_name> — before a specific tool
@@ -21,9 +21,15 @@ Supported events (Features #25, #29, #30):
   - model.pre_call / model.post_call — before/after LLM calls
   - file.pre_write / file.post_write — before/after file writes
   - file.pre_edit / file.post_edit — before/after file edits
+  - file.pre_read / file.post_read — before/after file reads
   - shell.pre_execute / shell.post_execute — before/after shell commands
   - error — on agent errors
   - compact — on context compaction
+
+The typed `file.*` / `shell.*` events are fired automatically from
+`dispatch_tool_pre_hook` / `dispatch_tool_post_hook` based on the tool name
+(see `_typed_tool_events`), so the hooks.json bus and the decision-capable
+`hook_decisions.HookType` taxonomy agree on what each event may do.
 """
 
 from __future__ import annotations
@@ -246,6 +252,8 @@ async def dispatch_tool_pre_hook(
     payload = {"tool_name": tool_name, "tool_args": tool_args}
     await dispatch_hook("tool.pre_call", payload)
     await dispatch_hook(f"tool.pre_call.{tool_name}", payload)
+    for event, typed_payload in _typed_tool_events(tool_name, tool_args, pre=True):
+        await dispatch_hook(event, typed_payload)
 
     # Project-local harness hooks have authority over the call.
     from bog_agents_cli.project_hooks import run_hooks
@@ -275,6 +283,8 @@ async def dispatch_tool_post_hook(
     }
     await dispatch_hook("tool.post_call", payload)
     await dispatch_hook(f"tool.post_call.{tool_name}", payload)
+    for event, typed_payload in _typed_tool_events(tool_name, tool_args, pre=False):
+        await dispatch_hook(event, typed_payload)
     # Project-local hooks: post-tool can audit / notify but cannot block.
     from bog_agents_cli.project_hooks import run_hooks
 
@@ -333,3 +343,62 @@ async def dispatch_shell_hook(event: str, command: str, **kwargs: Any) -> None:
     """
     payload: dict[str, Any] = {"command": command, **kwargs}
     await dispatch_hook(event, payload)
+
+
+# Tool families that map onto the typed file/shell hook events.
+_SHELL_TOOLS = frozenset({"execute", "run_command", "shell", "bash"})
+_WRITE_TOOLS = frozenset({"write_file", "create_file"})
+_EDIT_TOOLS = frozenset({"edit_file", "multi_edit_file"})
+_READ_TOOLS = frozenset(
+    {
+        "read_file",
+        "read_many_files",
+        "glob",
+        "grep",
+        "list_directory",
+        "get_file_info",
+        "search_files",
+    }
+)
+
+
+def _file_path_of(tool_args: dict[str, Any]) -> str:
+    """Extract a file path from tool args across the common key spellings."""
+    return str(
+        tool_args.get("path")
+        or tool_args.get("file_path")
+        or tool_args.get("target")
+        or ""
+    )
+
+
+def _typed_tool_events(
+    tool_name: str, tool_args: dict[str, Any], *, pre: bool
+) -> list[tuple[str, dict[str, Any]]]:
+    """Map a tool call onto the typed file/shell hook events.
+
+    Fires `shell.pre_execute`/`shell.post_execute`,
+    `file.pre_write`/`file.post_write`, `file.pre_edit`/`file.post_edit`, and
+    `file.pre_read`/`file.post_read` so the documented-but-dead
+    `dispatch_shell_hook`/`dispatch_file_hook` event families actually fire on
+    the live tool path.
+
+    Args:
+        tool_name: Name of the tool being called.
+        tool_args: Tool arguments.
+        pre: `True` for the pre-call phase, `False` for post-call.
+
+    Returns:
+        A list of `(event, payload)` pairs; empty for unrelated tools.
+    """
+    phase = "pre_" if pre else "post_"
+    if tool_name in _SHELL_TOOLS:
+        command = str(tool_args.get("command") or tool_args.get("cmd") or "")
+        return [(f"shell.{phase}execute", {"command": command})]
+    if tool_name in _WRITE_TOOLS:
+        return [(f"file.{phase}write", {"file_path": _file_path_of(tool_args)})]
+    if tool_name in _EDIT_TOOLS:
+        return [(f"file.{phase}edit", {"file_path": _file_path_of(tool_args)})]
+    if tool_name in _READ_TOOLS:
+        return [(f"file.{phase}read", {"file_path": _file_path_of(tool_args)})]
+    return []

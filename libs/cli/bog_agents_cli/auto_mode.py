@@ -16,6 +16,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bog_agents_cli.bash_hygiene import analyze_bash_hygiene
+from bog_agents_cli.git_ops import GitOpType, classify_git_command
+
 logger = logging.getLogger(__name__)
 
 
@@ -395,12 +398,33 @@ class AutoModeRuleEngine:
                 return RuleVerdict(
                     AutoDecision.ASK, f"ask: {rx.pattern[:50]}", "ask_list"
                 )
+        # Consolidated git classifier closes gaps the ask-list misses (force-push
+        # spelled `-ff`, `branch -D`, `stash drop`, ...). Must run before the
+        # allow-list, whose broad patterns like `git\s+branch\b` would otherwise
+        # swallow destructive subcommands.
+        git_op = classify_git_command(cmd)
+        if git_op is GitOpType.DESTRUCTIVE:
+            return RuleVerdict(
+                AutoDecision.ASK, "git: destructive git operation", "git_ops"
+            )
         # Allow-list (fast path for known-safe commands with no destructive pattern)
         for rx in self._allow_re:
             if rx.search(cmd):
                 return RuleVerdict(
                     AutoDecision.ALLOW, f"allow: {rx.pattern[:50]}", "allow_list"
                 )
+        # Known read-only git ops not explicitly allow-listed are safe to approve.
+        if git_op is GitOpType.READ_ONLY:
+            return RuleVerdict(AutoDecision.ALLOW, "git read-only", "git_ops")
+        # Bash-hygiene gate: flag hang-prone / blocking commands (long sleeps,
+        # infinite loops, interactive tools, network calls without timeouts).
+        # Explicitly allow-listed commands (e.g. `tail -f`) win over this gate.
+        hygiene = analyze_bash_hygiene(cmd)
+        if hygiene:
+            message = "; ".join(finding.message for finding in hygiene[:2])
+            return RuleVerdict(
+                AutoDecision.ASK, f"bash hygiene: {message}", "bash_hygiene"
+            )
         # Falls through to Haiku (caller decides)
         return RuleVerdict(
             AutoDecision.ALLOW,

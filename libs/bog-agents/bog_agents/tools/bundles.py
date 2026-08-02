@@ -41,8 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 __all__ = [
+    "background_shell_tools_bundle",
     "git_tools_bundle",
+    "memory_search_tool_bundle",
     "multi_edit_tool",
+    "pty_tools_bundle",
     "read_many_files_tool",
 ]
 
@@ -314,3 +317,174 @@ def read_many_files_tool(
     from bog_agents.middleware.read_many_files import create_read_many_files_tool
 
     return create_read_many_files_tool(backend, get_backend)
+
+
+def background_shell_tools_bundle(backend: Any) -> list[BaseTool]:  # noqa: ANN401 - a LocalShellBackend
+    """Return tools to retrieve/manage background shell commands (Tier-1 #1).
+
+    Pairs with `LocalShellBackend(auto_background_after=...)` and
+    `execute(background=True)`: when a command is backgrounded, the agent uses
+    these tools to read its output, wait for it, or stop it. No-op-safe if the
+    backend lacks the background API (returns an empty list).
+
+    Args:
+        backend: A `LocalShellBackend` (or any backend exposing
+            `poll_background` / `wait_background` / `kill_background` /
+            `list_background`).
+
+    Returns:
+        A list of `StructuredTool`s, or empty if the backend has no background API.
+    """
+    if not hasattr(backend, "poll_background"):
+        return []
+
+    def _fmt(result: Any) -> str:  # noqa: ANN401 - a BackgroundResult
+        if result is None:
+            return "No such background task."
+        status = "running" if result.running else f"exited (code {result.exit_code})"
+        body = result.output or "<no output>"
+        return f"[{result.task_id}] {status}\n{body}"
+
+    def poll_background_command(runtime: ToolRuntime[None, Any], task_id: str) -> str:
+        """Read the current output + status of a background shell command by its task id."""
+        del runtime
+        return _fmt(backend.poll_background(task_id))
+
+    def wait_background_command(runtime: ToolRuntime[None, Any], task_id: str, timeout_seconds: float = 60.0) -> str:
+        """Wait up to timeout_seconds for a background command to finish, then read it."""
+        del runtime
+        results = backend.wait_background([task_id], mode="all", timeout=timeout_seconds)
+        return _fmt(results[0]) if results else "No such background task."
+
+    def kill_background_command(runtime: ToolRuntime[None, Any], task_id: str) -> str:
+        """Stop a running background shell command (and its process tree)."""
+        del runtime
+        return f"Killed {task_id}." if backend.kill_background(task_id) else "No such background task."
+
+    def list_background_commands(runtime: ToolRuntime[None, Any]) -> str:
+        """List all background shell commands and their status."""
+        del runtime
+        rows = backend.list_background()
+        if not rows:
+            return "No background commands."
+        return "\n".join(f"[{r.task_id}] {'running' if r.running else 'exited'}" for r in rows)
+
+    return [
+        StructuredTool.from_function(func=poll_background_command),
+        StructuredTool.from_function(func=wait_background_command),
+        StructuredTool.from_function(func=kill_background_command),
+        StructuredTool.from_function(func=list_background_commands),
+    ]
+
+
+def memory_search_tool_bundle(sources: list[str | Path], *, embedder: Any = None) -> list[BaseTool]:  # noqa: ANN401 - an Embedder
+    """Return a `memory_search` tool over the given memory files (Tier-2 #8).
+
+    Builds a `HybridMemoryIndex` from the memory source files (AGENTS.md /
+    CLAUDE.md / rules, etc.), chunked on blank lines, so the agent can *search*
+    its memory for relevant notes instead of relying only on the whole cascade
+    being in context.
+
+    Keyword mode (FTS5/LIKE) by default. When an `embedder` is supplied, each
+    chunk is embedded at index time and the query is embedded at search time, so
+    ranking becomes the full **hybrid** BM25 + vector fusion. Embedding failures
+    degrade gracefully to keyword-only.
+
+    Args:
+        sources: Memory file paths (unreadable ones are skipped).
+        embedder: Optional `text -> vector` callable (see
+            `bog_agents.hybrid_memory.embedder_from_langchain`).
+
+    Returns:
+        A single-tool list, or empty if no source had readable content.
+    """
+    from pathlib import Path as _Path
+
+    from bog_agents.hybrid_memory import SOURCE_WORKSPACE, HybridMemoryIndex, MemoryChunk
+
+    index = HybridMemoryIndex()
+    origin: dict[str, str] = {}
+    for src in sources:
+        path = _Path(src)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for block in (b.strip() for b in text.split("\n\n")):
+            if not block:
+                continue
+            embedding = None
+            if embedder is not None:
+                try:
+                    embedding = list(embedder(block))
+                except Exception:  # noqa: BLE001 - embedding is best-effort; fall back to keyword
+                    embedding = None
+            cid = index.add(MemoryChunk(text=block, source=SOURCE_WORKSPACE, embedding=embedding))
+            origin[cid] = path.name
+    if not origin:
+        return []
+
+    def memory_search(runtime: ToolRuntime[None, Any], query: str, limit: int = 5) -> str:
+        """Search your project/user memory (AGENTS.md, CLAUDE.md, rules) for notes relevant to a query."""
+        del runtime
+        hits = index.search(query, embedder=embedder, k=limit)
+        if not hits:
+            return f"No memory matched '{query}'."
+        return "\n\n".join(f"[{origin.get(h.chunk.chunk_id, 'memory')}] {h.chunk.text[:300]}" for h in hits)
+
+    return [StructuredTool.from_function(func=memory_search)]
+
+
+def pty_tools_bundle(controller: Any) -> list[BaseTool]:  # noqa: ANN401 - a PtyController
+    """Return tools to drive interactive terminal programs (Tier-2 #6).
+
+    Wraps a `bog_agents.pty_harness.PtyController` so the agent can run
+    full-screen TUIs (`vim`, `top`, a REPL): start a session, send vim-notation
+    keystrokes, read the screen, and wait on screen conditions.
+
+    Args:
+        controller: A `PtyController` holding the agent's sessions.
+
+    Returns:
+        A list of `StructuredTool`s (`pty_start` / `pty_send` / `pty_screen` /
+        `pty_wait` / `pty_close` / `pty_list`).
+    """
+
+    def pty_start(runtime: ToolRuntime[None, Any], name: str, command: str) -> str:
+        """Start an interactive program in a new PTY session (e.g. name='vim', command='vim notes.txt')."""
+        del runtime
+        return controller.start(name, command)
+
+    def pty_send(runtime: ToolRuntime[None, Any], name: str, keys: str) -> str:
+        """Send keystrokes to a PTY session in vim notation (e.g. '<Esc>:wq<CR>', 'ihello<Esc>', '<C-c>')."""
+        del runtime
+        return controller.send(name, keys)
+
+    def pty_screen(runtime: ToolRuntime[None, Any], name: str, tail_lines: int = 40) -> str:
+        """Read the current rendered screen of a PTY session."""
+        del runtime
+        return controller.screen(name, tail_lines=tail_lines)
+
+    def pty_wait(runtime: ToolRuntime[None, Any], name: str, until: str, target: str = "", timeout_seconds: float = 10.0) -> str:
+        """Wait for a PTY session's screen condition, then read it. until: text|regex|gone|stable."""
+        del runtime
+        return controller.wait(name, until, target, timeout_s=timeout_seconds)
+
+    def pty_close(runtime: ToolRuntime[None, Any], name: str) -> str:
+        """Close an interactive PTY session."""
+        del runtime
+        return controller.close(name)
+
+    def pty_list(runtime: ToolRuntime[None, Any]) -> str:
+        """List active PTY sessions."""
+        del runtime
+        return controller.list_sessions()
+
+    return [
+        StructuredTool.from_function(func=pty_start),
+        StructuredTool.from_function(func=pty_send),
+        StructuredTool.from_function(func=pty_screen),
+        StructuredTool.from_function(func=pty_wait),
+        StructuredTool.from_function(func=pty_close),
+        StructuredTool.from_function(func=pty_list),
+    ]

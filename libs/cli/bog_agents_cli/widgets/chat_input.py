@@ -24,6 +24,7 @@ from bog_agents_cli.config import (
     CharsetMode,
     _detect_charset_mode,
     get_glyphs,
+    vim_input_mode_enabled,
 )
 from bog_agents_cli.input import IMAGE_PLACEHOLDER_PATTERN, VIDEO_PLACEHOLDER_PATTERN
 from bog_agents_cli.widgets.autocomplete import (
@@ -35,6 +36,16 @@ from bog_agents_cli.widgets.autocomplete import (
     SlashSubcommandController,
 )
 from bog_agents_cli.widgets.history import HistoryManager
+from bog_agents_cli.widgets.vim_mode import (
+    VimCommand,
+    VimEngine,
+    VimMove,
+    VimRedo,
+    VimReplace,
+    VimSetMode,
+    VimUndo,
+    VimYank,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -366,15 +377,32 @@ class ChatTextArea(TextArea):
             self.paths = paths
             super().__init__()
 
+    class VimModeChanged(Message):
+        """Message sent when the vim editing mode (normal/insert) changes."""
+
+        def __init__(self, mode: str) -> None:
+            """Initialize with the new vim mode name."""
+            self.mode = mode
+            super().__init__()
+
     def __init__(self, **kwargs: Any) -> None:
         """Initialize the chat text area."""
         # Remove placeholder if passed, TextArea doesn't support it the same way
         kwargs.pop("placeholder", None)
+        # Vim-style modal editing is opt-in via config; see
+        # `vim_input_mode_enabled()`.
+        self._vim_enabled = bool(kwargs.pop("vim_enabled", False))
         super().__init__(**kwargs)
         self._navigating_history = False
         self._in_history = False
         self._completion_active = False
         self._app_has_focus = True
+        # Vim modal-editing state. The engine is pure; edits are applied back
+        # to the real document so TextArea's undo/redo stacks stay intact.
+        self._vim = VimEngine()
+        self._vim_mode: str = self._vim.mode
+        self._vim_insert_anchor = 0
+        self._vim_insert_before = ""
         # Buffer quote-prefixed high-frequency key bursts from terminals that
         # emulate paste via rapid key events instead of dispatching a paste
         # event.
@@ -387,6 +415,19 @@ class ChatTextArea(TextArea):
         # so they don't drown the input box. Full content is expanded back in
         # at submit time. Lazy-imported to avoid pulling input.py at startup.
         self._pasted_text_tracker: PastedTextTracker | None = None
+
+    def set_vim_mode(self, *, enabled: bool) -> None:
+        """Enable or disable vim-style modal editing at runtime.
+
+        Args:
+            enabled: Whether vim mode should be active.
+        """
+        self._vim_enabled = enabled
+        self._vim.reset()
+        self._vim_mode = self._vim.mode
+        self._vim_insert_anchor = 0
+        self._vim_insert_before = ""
+        self.post_message(self.VimModeChanged(self._vim_mode))
 
     def set_app_focus(self, *, has_focus: bool) -> None:
         """Set whether the app should show the cursor as active.
@@ -509,6 +550,13 @@ class ChatTextArea(TextArea):
     async def _on_key(self, event: events.Key) -> None:
         """Handle key events."""
         now = time.monotonic()
+
+        # Vim modal editing runs first so normal-mode keys never reach the
+        # TextArea's default insertion path. Insert mode falls through to the
+        # regular handling below except for `esc` (back to normal) and
+        # `enter` (insert newline, matching vim insert semantics).
+        if self._vim_enabled and self._handle_vim_key_safe(event, now):
+            return
 
         # Mouse-tracking escape-sequence swallower.
         #
@@ -681,6 +729,191 @@ class ChatTextArea(TextArea):
                 return
 
         await super()._on_key(event)
+
+    # =========================================================================
+    # Vim modal editing
+    # =========================================================================
+
+    _VIM_FALLTHROUGH_KEYS = frozenset(
+        {
+            "enter",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "page_up",
+            "page_down",
+            "delete",
+            "backspace",
+            "tab",
+            "shift+tab",
+        }
+    )
+    """Keys that always fall through to the normal input handling, even in vim
+    normal mode (arrows for history/navigation, Enter to submit, etc.)."""
+
+    def _handle_vim_key_safe(self, event: events.Key, now: float) -> bool:
+        """Run the vim key handler, falling through to normal input on error.
+
+        The engine is a large state machine on the path every keystroke takes.
+        A bug in one motion or operator must not make the input box unusable
+        (or crash the app) -- the user can still type, they just lose modal
+        editing for that key. Mirrors the `_safe` containment the dreamscape
+        middleware uses for the same reason.
+
+        Args:
+            event: The key event being processed.
+            now: Monotonic timestamp from the caller.
+
+        Returns:
+            `True` when the event was consumed by vim handling.
+        """
+        try:
+            return self._handle_vim_key(event, now)
+        except Exception:
+            logger.exception("vim key handling failed; falling through to normal input")
+            self._vim.reset()
+            self._vim_mode = self._vim.mode
+            return False
+
+    def _handle_vim_key(self, event: events.Key, now: float) -> bool:
+        """Route a key event through the vim engine.
+
+        Args:
+            event: The key event being processed.
+            now: Monotonic timestamp from the caller.
+
+        Returns:
+            `True` when the event was consumed by vim handling.
+        """
+        if self._vim.mode == "insert":
+            if event.key == "escape":
+                self._escape_swallow_until = now + 0.2
+                event.prevent_default()
+                event.stop()
+                self._vim_exit_insert()
+                return True
+            if event.key == "enter":
+                event.prevent_default()
+                event.stop()
+                self.insert("\n")
+                return True
+            return False
+
+        # Normal mode.
+        if event.key == "ctrl+r":
+            event.prevent_default()
+            event.stop()
+            self.action_redo()
+            return True
+        if event.key in self._VIM_FALLTHROUGH_KEYS:
+            return False
+        if event.key.startswith(("ctrl+", "alt+", "super+", "cmd+")):
+            return False
+        if len(event.key) != 1 and event.key != "space":
+            return False
+
+        key = " " if event.key == "space" else event.key
+        commands = self._vim.process_key(self.text, self._vim_cursor_offset(), key)
+        if commands:
+            event.prevent_default()
+            event.stop()
+            self._apply_vim_commands(commands)
+            return True
+        if key.isprintable():
+            # Unknown printable keys are consumed (no-op) in normal mode so
+            # they never leak into the buffer as literal text.
+            event.prevent_default()
+            event.stop()
+            return True
+        return False
+
+    def _vim_cursor_offset(self) -> int:
+        """Return the cursor position as a character offset."""
+        return self.document.get_index_from_location(self.cursor_location)  # type: ignore[attr-defined]  # Document has this method; DocumentBase stub is narrower
+
+    def _vim_location(self, offset: int) -> tuple[int, int]:
+        """Convert a clamped character offset into a document location."""
+        length = len(self.text)
+        clamped = max(0, min(offset, length))
+        return self.document.get_location_from_index(clamped)  # type: ignore[attr-defined]  # Document has this method; DocumentBase stub is narrower
+
+    def _apply_vim_commands(self, commands: list[VimCommand]) -> None:
+        """Apply vim commands to the document.
+
+        Edits go through the document's replace path so TextArea's undo/redo
+        stacks record them like any other edit.
+        """
+        for command in commands:
+            if isinstance(command, VimMove):
+                self.move_cursor(self._vim_location(command.offset))
+            elif isinstance(command, VimReplace):
+                self._apply_vim_replace(command)
+            elif isinstance(command, VimYank):
+                self._vim.yank(self.text[command.start : command.end], command.linewise)
+            elif isinstance(command, VimUndo):
+                self.action_undo()
+            elif isinstance(command, VimRedo):
+                self.action_redo()
+            elif isinstance(command, VimSetMode):
+                self._vim.mode = command.mode
+                self._vim_mode_changed()
+        self.refresh()
+
+    def _apply_vim_replace(self, command: VimReplace) -> None:
+        """Apply a single vim replace command to the document."""
+        length = len(self.text)
+        start = max(0, min(command.start, length))
+        end = max(start, min(command.end, length))
+        start_location = self._vim_location(start)
+        end_location = self._vim_location(end)
+        if command.text != self.text[start:end]:
+            self.document.replace_range(start_location, end_location, command.text)  # type: ignore[attr-defined]  # Document has this method; DocumentBase stub is narrower
+        if command.cursor is not None:
+            self.move_cursor(self._vim_location(command.cursor))
+
+    def _vim_mode_changed(self) -> None:
+        """Notify listeners of a normal/insert mode transition."""
+        self._vim_mode = self._vim.mode
+        if self._vim.mode == "insert":
+            self._vim_insert_anchor = self._vim_cursor_offset()
+            self._vim_insert_before = self.text
+        else:
+            self._vim_insert_anchor = 0
+            self._vim_insert_before = ""
+        self.post_message(self.VimModeChanged(self._vim_mode))
+
+    def _vim_exit_insert(self) -> None:
+        """Leave insert mode, recording the typed text for `.` repetition."""
+        inserted = ""
+        anchor = self._vim_insert_anchor
+        before = self._vim_insert_before
+        cursor_off = self._vim_cursor_offset()
+        if (
+            cursor_off >= anchor
+            and self.text[:anchor] == before[:anchor]
+            and self.text[cursor_off:] == before[anchor:]
+        ):
+            # Plain typing at the anchor (the common case) — the inserted
+            # text sits between the anchor and the cursor.
+            inserted = self.text[anchor:cursor_off]
+        elif self.text.startswith(before):
+            # Fallback: insert happened at the very end of the buffer.
+            inserted = self.text[len(before) :]
+        self._vim.record_insert(inserted)
+        self._apply_vim_commands(self._vim.exit_insert_mode(cursor_off))
+        self._vim_mode_changed()
+
+    def _vim_reset_if_enabled(self) -> None:
+        """Reset vim state (e.g. after submit or history recall)."""
+        if not self._vim_enabled:
+            return
+        was_insert = self._vim.mode == "insert"
+        self._vim.reset()
+        if was_insert or self._vim_mode != "normal":
+            self._vim_mode_changed()
 
     def _delete_image_placeholder(self, *, backwards: bool) -> bool:
         """Delete a full image placeholder token in one keypress.
@@ -914,6 +1147,7 @@ class ChatTextArea(TextArea):
         last_col = len(lines[last_row])
         self.move_cursor((last_row, last_col))
         self._navigating_history = False
+        self._vim_reset_if_enabled()
 
     def clear_text(self) -> None:
         """Clear the text area."""
@@ -926,6 +1160,7 @@ class ChatTextArea(TextArea):
             self._pasted_text_tracker.clear()
         self.text = ""
         self.move_cursor((0, 0))
+        self._vim_reset_if_enabled()
 
 
 class _CompletionViewAdapter:
@@ -1044,6 +1279,7 @@ class ChatInput(Vertical):
         cwd: str | Path | None = None,
         history_file: Path | None = None,
         image_tracker: MediaTracker | None = None,
+        vim_enabled: bool | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the chat input widget.
@@ -1052,6 +1288,8 @@ class ChatInput(Vertical):
             cwd: Current working directory for file completion
             history_file: Path to history file (default: ~/.bog-agents/history.jsonl)
             image_tracker: Optional tracker for attached images
+            vim_enabled: Whether vim-style modal editing is active. Defaults to
+                the user's configuration (see `vim_input_mode_enabled`).
             **kwargs: Additional arguments for parent
         """
         super().__init__(**kwargs)
@@ -1061,6 +1299,10 @@ class ChatInput(Vertical):
         self._popup: CompletionPopup | None = None
         self._completion_manager: MultiCompletionManager | None = None
         self._completion_view: _CompletionViewAdapter | None = None
+        self._vim_enabled = (
+            vim_input_mode_enabled() if vim_enabled is None else bool(vim_enabled)
+        )
+        self._vim_mode = "normal"
 
         # Guard flag: set True before programmatically stripping the mode
         # prefix character so the resulting text-change event does not
@@ -1093,7 +1335,7 @@ class ChatInput(Vertical):
             history_file = Path.home() / ".bog-agents" / "history.jsonl"
         self._history = HistoryManager(history_file)
 
-    def compose(self) -> ComposeResult:  # noqa: PLR6301  # Textual widget method convention
+    def compose(self) -> ComposeResult:
         """Compose the chat input layout.
 
         Yields:
@@ -1101,7 +1343,7 @@ class ChatInput(Vertical):
         """
         with Horizontal(classes="input-row"):
             yield Static("<>", classes="input-prompt", id="prompt")
-            yield ChatTextArea(id="chat-input")
+            yield ChatTextArea(id="chat-input", vim_enabled=self._vim_enabled)
 
         yield CompletionPopup(id="completion-popup")
 
@@ -1112,6 +1354,7 @@ class ChatInput(Vertical):
 
         self._text_area = self.query_one("#chat-input", ChatTextArea)
         self._popup = self.query_one("#completion-popup", CompletionPopup)
+        self._refresh_prompt(self.query_one("#prompt", Static))
 
         # Both controllers implement the CompletionController protocol but have
         # different concrete types; the list-item warning is a false positive.
@@ -1748,19 +1991,52 @@ class ChatInput(Vertical):
             logger.warning("watch_mode: #prompt widget not found")
             self.post_message(self.ModeChanged(mode))
             return
+        self._refresh_prompt(prompt)
+        self.post_message(self.ModeChanged(mode))
+
+    def on_chat_text_area_vim_mode_changed(
+        self, event: ChatTextArea.VimModeChanged
+    ) -> None:
+        """Reflect vim normal/insert transitions in the prompt indicator."""
+        self._vim_mode = event.mode
+        try:
+            prompt = self.query_one("#prompt", Static)
+        except NoMatches:
+            return
+        self._refresh_prompt(prompt)
+
+    def _refresh_prompt(self, prompt: Static) -> None:
+        """Render the prompt indicator for the current input/vim state.
+
+        When vim mode is enabled the indicator shows the vim editing mode
+        (`NORM`/`INS `) instead of the prefix-mode glyph so the modal state is
+        always visible. Otherwise the original prefix-mode glyph logic applies.
+        """
         self.remove_class("mode-shell", "mode-command")
-        glyph = MODE_DISPLAY_GLYPHS.get(mode)
+        if self._vim_enabled:
+            prompt.update("INS " if self._vim_mode == "insert" else "NORM")
+            return
+        glyph = MODE_DISPLAY_GLYPHS.get(self.mode)
         if glyph:
             prompt.update(glyph)
-            self.add_class(f"mode-{mode}")
+            self.add_class(f"mode-{self.mode}")
         else:
-            if mode != "normal":
+            if self.mode != "normal":
                 logger.warning(
                     "No display glyph for mode %r; falling back to '<>'",
-                    mode,
+                    self.mode,
                 )
             prompt.update("<>")
-        self.post_message(self.ModeChanged(mode))
+
+    def set_vim_mode(self, *, enabled: bool) -> None:
+        """Enable or disable vim-style modal editing.
+
+        Args:
+            enabled: Whether vim mode should be active.
+        """
+        self._vim_enabled = enabled
+        if self._text_area is not None:
+            self._text_area.set_vim_mode(enabled=enabled)
 
     def focus_input(self) -> None:
         """Focus the input field."""

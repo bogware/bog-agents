@@ -60,14 +60,16 @@ class TestCanonicalMiddlewareOrder:
 
         # Core stack always present in this order. The tail order
         # (FilesystemMiddleware -> SubAgentMiddleware ->
-        # SummarizationMiddleware -> PatchToolCallsMiddleware) is the
-        # default-append block in graph.py; it is what every agent
-        # built without explicit middleware= relies on.
+        # SummarizationMiddleware -> PatchToolCallsMiddleware ->
+        # OutputTruncationMiddleware) is the default-append block in
+        # graph.py; it is what every agent built without explicit
+        # middleware= relies on.
         assert names[0] == "TodoListMiddleware", names
         assert "FilesystemMiddleware" in names
         assert "SubAgentMiddleware" in names
         assert "_BogAgentsSummarizationMiddleware" in names
         assert "PatchToolCallsMiddleware" in names
+        assert "OutputTruncationMiddleware" in names
         assert "AnthropicPromptCachingMiddleware" in names
 
         # PromptCaching is the closest middleware to the model — must
@@ -91,6 +93,17 @@ class TestCanonicalMiddlewareOrder:
         """
         names = _capture_middleware_list(monkeypatch)
         assert names.index("_BogAgentsSummarizationMiddleware") < names.index("AnthropicPromptCachingMiddleware")
+
+    def test_output_truncation_is_innermost_of_summarization_stack(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OutputTruncation wraps inside PatchToolCalls but outside prompt caching.
+
+        It sits after PatchToolCalls (argument truncation) and Summarization
+        (compaction) so a continuation re-invokes only the raw model call, yet
+        stays outside PromptCaching so every cached prefix is still tagged.
+        """
+        names = _capture_middleware_list(monkeypatch)
+        assert names.index("PatchToolCallsMiddleware") < names.index("OutputTruncationMiddleware")
+        assert names.index("OutputTruncationMiddleware") < names.index("AnthropicPromptCachingMiddleware")
 
     def test_cost_tracker_before_default_summarization(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """CostTracker wraps Summarization so it observes the full request size.

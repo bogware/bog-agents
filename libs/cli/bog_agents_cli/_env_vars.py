@@ -104,6 +104,9 @@ MCP_STARTUP_TIMEOUT = "BOG_AGENTS_MCP_STARTUP_TIMEOUT"
 MCP_TRUST = "BOG_AGENTS_MCP_TRUST"
 """Pre-approve project MCP servers (trust decision) when truthy."""
 
+MEMORY_VECTOR = "BOG_AGENTS_MEMORY_VECTOR"
+"""Enable hybrid vector search in the memory_search tool (needs an embedder)."""
+
 MODEL = "BOG_AGENTS_MODEL"
 """Override the active model identifier."""
 
@@ -141,11 +144,17 @@ REMOTE_READ_TIMEOUT = "BOG_AGENTS_REMOTE_READ_TIMEOUT"
 SHELL_ALLOW_LIST = "BOG_AGENTS_SHELL_ALLOW_LIST"
 """Comma-separated shell commands to allow (or `recommended`/`all`)."""
 
+SHELL_AUTO_BACKGROUND_AFTER = "BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER"
+"""Seconds before a slow foreground shell command is moved to the background."""
+
 SOUNDS = "BOG_AGENTS_SOUNDS"
 """Toggle CLI notification sounds."""
 
 STALL_DUMP_SECS = "BOG_AGENTS_STALL_DUMP_SECS"
 """Seconds of apparent stall after which the server graph dumps diagnostics."""
+
+STOP_GATE_CHECKS = "BOG_AGENTS_STOP_GATE_CHECKS"
+"""Semicolon-separated commands that must pass before the agent may finish a turn."""
 
 STREAM_CHUNK_TIMEOUT_SECONDS = "BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS"
 """Per-chunk timeout (seconds) for non-interactive streaming output."""
@@ -167,6 +176,13 @@ TRUST_PROJECT_HOOKS = "BOG_AGENTS_TRUST_PROJECT_HOOKS"
 
 TURN_TIMEOUT_SECONDS = "BOG_AGENTS_TURN_TIMEOUT_SECONDS"
 """Wall-clock timeout (seconds) for a single agent turn."""
+
+VIM_MODE = "BOG_AGENTS_VIM_MODE"
+"""Enable vim-style modal editing in the chat input.
+
+Parsed as a boolean: `1`/`true`/`yes`/`on` (case-insensitive) count as enabled.
+An explicit value wins over the `[ui].vim_mode` config-file entry.
+"""
 
 # ---------------------------------------------------------------------------
 # Shared boolean parsing helpers.

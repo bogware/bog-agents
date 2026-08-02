@@ -129,6 +129,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/btw",
+            "Save an out-of-band note to the current agent's sidechain transcript (kept out of the main thread)",
+            "note sidechain transcript aside out-of-band sticky memo btw",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_btw_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/index",
             "Build and search a local knowledge-base index of the codebase",
             "search knowledge base symbol tfidf find query",

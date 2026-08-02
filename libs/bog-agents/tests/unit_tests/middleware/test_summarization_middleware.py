@@ -2338,7 +2338,124 @@ async def test_async_context_overflow_triggers_summarization() -> None:
     assert len(backend.write_calls) == 1
 
 
-def test_profile_inference_triggers_summary() -> None:
+def test_provider_context_length_error_triggers_summarization() -> None:
+    """Test that a provider-side 400 context-length error triggers summarization."""
+    backend = MockBackend()
+    mock_model = make_mock_model(summary_response="Fallback summary")
+
+    middleware = SummarizationMiddleware(
+        model=mock_model,
+        backend=backend,
+        trigger=("messages", 100),  # High threshold - won't trigger normally
+        keep=("messages", 2),
+    )
+
+    messages = make_conversation_messages(num_old=6, num_recent=2)
+    state = cast("AgentState[Any]", {"messages": messages})
+    runtime = make_mock_runtime()
+
+    # Handler raises an OpenAI-style HTTP 400 context-length rejection first
+    call_count = {"count": 0}
+
+    def handler_with_overflow(_req: ModelRequest) -> "ModelResponse":
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            raise RuntimeError(
+                "Error code: 400 - This model's maximum context length is 200000 tokens. However, you requested 260000 tokens in the messages."
+            )
+        # Second call with summarized messages succeeds
+        return AIMessage(content="Success after summarization")
+
+    request = make_model_request(state, runtime)
+
+    with mock_get_config():
+        result = middleware.wrap_model_call(request, handler_with_overflow)
+
+    # Should have triggered summarization as fallback
+    assert isinstance(result, ExtendedModelResponse)
+    assert result.command is not None
+    assert result.command.update is not None
+    assert result.command.update["_summarization_event"]
+
+    # Should have called handler twice (once failed, once succeeded)
+    assert call_count["count"] == 2
+
+    # Backend should have offloaded messages
+    assert len(backend.write_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_async_provider_context_length_error_triggers_summarization() -> None:
+    """Test that a provider-side 400 context-length error triggers summarization (async)."""
+    backend = MockBackend()
+    mock_model = make_mock_model(summary_response="Fallback summary")
+    mock_model.ainvoke = MagicMock(return_value=MagicMock(text="Async fallback summary"))
+
+    middleware = SummarizationMiddleware(
+        model=mock_model,
+        backend=backend,
+        trigger=("messages", 100),  # High threshold - won't trigger normally
+        keep=("messages", 2),
+    )
+
+    messages = make_conversation_messages(num_old=6, num_recent=2)
+    state = cast("AgentState[Any]", {"messages": messages})
+    runtime = make_mock_runtime()
+
+    call_count = {"count": 0}
+
+    async def handler_with_overflow(_req: ModelRequest) -> "ModelResponse":
+        call_count["count"] += 1
+        if call_count["count"] == 1:
+            raise RuntimeError("prompt is too long: 200000 tokens max, 260000 tokens requested")
+        # Second call with summarized messages succeeds
+        return AIMessage(content="Success after summarization")
+
+    request = make_model_request(state, runtime)
+
+    with mock_get_config():
+        result = await middleware.awrap_model_call(request, handler_with_overflow)
+
+    # Should have triggered summarization as fallback
+    assert isinstance(result, ExtendedModelResponse)
+    assert result.command is not None
+    assert result.command.update is not None
+    assert "_summarization_event" in result.command.update
+
+    # Should have called handler twice (once failed, once succeeded)
+    assert call_count["count"] == 2
+
+    # Backend should have offloaded messages
+    assert len(backend.write_calls) == 1
+
+
+def test_unrelated_provider_error_is_re_raised() -> None:
+    """Test that a non-context provider error still propagates unchanged."""
+    backend = MockBackend()
+    mock_model = make_mock_model(summary_response="Fallback summary")
+
+    middleware = SummarizationMiddleware(
+        model=mock_model,
+        backend=backend,
+        trigger=("messages", 100),  # High threshold - won't trigger normally
+        keep=("messages", 2),
+    )
+
+    messages = make_conversation_messages(num_old=6, num_recent=2)
+    state = cast("AgentState[Any]", {"messages": messages})
+    runtime = make_mock_runtime()
+
+    def handler_with_error(_req: ModelRequest) -> "ModelResponse":
+        raise RuntimeError("Connection reset by peer")
+
+    request = make_model_request(state, runtime)
+
+    with mock_get_config(), pytest.raises(RuntimeError, match="Connection reset by peer"):
+        middleware.wrap_model_call(request, handler_with_error)
+
+    # No summarization should have been attempted
+    assert len(backend.write_calls) == 0
+
     """Ensure automatic profile inference triggers summarization when limits are exceeded."""
 
     def token_counter(messages: list[BaseMessage], **_kwargs: Any) -> int:

@@ -118,6 +118,16 @@ class LocalSandbox:
             means a hard network cut (`--unshare-net` on Linux).
         extra_read_paths: Additional paths to allow read access to.
         extra_write_paths: Additional paths to allow write access to.
+        deny_read_paths: Paths that must NOT be readable even inside the
+            workspace (#11 hardening). On Linux each is bound over with
+            `/dev/null` (files) or an empty tmpfs (dirs), so the secret reads as
+            empty *and* can't be `mv`'d out and read elsewhere; on macOS an
+            explicit seatbelt `(deny file-read* …)` rule is emitted.
+        strip_secret_env: When True (default), environment variables whose names
+            look secret (`*KEY*` / `*SECRET*` / `*TOKEN*` / `*PASSWORD*` /
+            `*CREDENTIAL*`) are removed from the sandboxed child's environment,
+            so an approved command can't read a secret sitting in the shell env.
+        secret_env_patterns: Override the default secret-name substrings.
     """
 
     level: SandboxLevel = SandboxLevel.WORKSPACE_WRITE
@@ -126,6 +136,9 @@ class LocalSandbox:
     network_allowlist: list[str] = field(default_factory=list)
     extra_read_paths: list[str] = field(default_factory=list)
     extra_write_paths: list[str] = field(default_factory=list)
+    deny_read_paths: list[str] = field(default_factory=list)
+    strip_secret_env: bool = True
+    secret_env_patterns: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Detect platform support."""
@@ -139,6 +152,37 @@ class LocalSandbox:
         enforced by a proxy, not the namespace, so the namespace must stay).
         """
         return self.allow_network or bool(self.network_allowlist)
+
+
+# Substrings (case-insensitive) that mark an env var name as secret-bearing.
+_DEFAULT_SECRET_ENV_PATTERNS: tuple[str, ...] = (
+    "KEY",
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE",
+    "API",
+)
+
+
+def strip_secret_env(env: dict[str, str], patterns: list[str] | None = None) -> dict[str, str]:
+    """Return `env` with secret-looking variables removed (#11 hardening).
+
+    A variable is dropped when its NAME contains any of `patterns` (default
+    `KEY`/`SECRET`/`TOKEN`/`PASSWORD`/…), case-insensitively — so an approved
+    sandboxed command can't read a credential sitting in the shell environment.
+
+    Args:
+        env: The environment mapping.
+        patterns: Override the default secret-name substrings.
+
+    Returns:
+        A new dict with secret-named variables removed.
+    """
+    pats = tuple(p.upper() for p in (patterns or _DEFAULT_SECRET_ENV_PATTERNS))
+    return {k: v for k, v in env.items() if not any(p in k.upper() for p in pats)}
 
 
 def _build_bubblewrap_args(sandbox: LocalSandbox) -> list[str]:
@@ -188,6 +232,17 @@ def _build_bubblewrap_args(sandbox: LocalSandbox) -> list[str]:
     for path in sandbox.extra_write_paths:
         if Path(path).exists():
             args.extend(["--bind", path, path])
+
+    # Deny-read paths (#11): bind /dev/null over a secret file (reads empty) or
+    # an empty tmpfs over a secret dir. Placed AFTER the workspace bind so it
+    # wins, and it also closes the `mv secret x && cat x` bypass since the bind
+    # is on the path, not a copy. Applied last so nothing re-exposes them.
+    for path in sandbox.deny_read_paths:
+        p = Path(path)
+        if p.is_dir():
+            args.extend(["--tmpfs", path])
+        elif p.exists():
+            args.extend(["--ro-bind", "/dev/null", path])
 
     # Network access. `--unshare-all` already cut the net namespace; re-share
     # it when egress is wanted (unrestricted OR allowlisted — the allowlist is
@@ -255,6 +310,11 @@ def _build_seatbelt_profile(sandbox: LocalSandbox) -> str:
         profile_parts.append(f'(allow file-read* (subpath "{path}"))')
         profile_parts.append(f'(allow file-write* (subpath "{path}"))')
 
+    # Deny-read paths (#11): emitted LAST so an explicit deny overrides any
+    # allow above (Seatbelt applies the most recent matching rule). This is
+    # airtight on macOS and covers files created after launch.
+    profile_parts.extend(f'(deny file-read* (subpath "{path}"))' for path in sandbox.deny_read_paths)
+
     # Network access (allowlist egress is enforced by the proxy, so the profile
     # must still permit network when an allowlist is configured).
     if sandbox.network_enabled:
@@ -315,6 +375,8 @@ def create_local_sandbox(
     network_allowlist: list[str] | None = None,
     extra_read_paths: list[str] | None = None,
     extra_write_paths: list[str] | None = None,
+    deny_read_paths: list[str] | None = None,
+    strip_secret_env: bool = True,
 ) -> LocalSandbox:
     """Create a local sandbox configuration.
 
@@ -327,6 +389,8 @@ def create_local_sandbox(
             both this is empty and `allow_network` is False.
         extra_read_paths: Additional paths to allow read access to.
         extra_write_paths: Additional paths to allow write access to.
+        deny_read_paths: Paths that must not be readable (bound over / denied).
+        strip_secret_env: Remove secret-looking env vars from the child (#11).
 
     Returns:
         Configured LocalSandbox instance.
@@ -338,4 +402,6 @@ def create_local_sandbox(
         network_allowlist=network_allowlist or [],
         extra_read_paths=extra_read_paths or [],
         extra_write_paths=extra_write_paths or [],
+        deny_read_paths=deny_read_paths or [],
+        strip_secret_env=strip_secret_env,
     )

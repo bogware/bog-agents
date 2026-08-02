@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -361,3 +362,115 @@ class TestDispatchHookFireAndForget:
         # Call from sync context with no running loop — should not raise
         hooks_mod.dispatch_hook_fire_and_forget("session.start", {})
         assert len(hooks_mod._background_tasks) == 0
+
+
+# ---------------------------------------------------------------------------
+# Typed file/shell events (Feature #8) fired from the tool hook dispatchers
+# ---------------------------------------------------------------------------
+
+
+class TestTypedToolEvents:
+    """`dispatch_tool_pre_hook` / `dispatch_tool_post_hook` fire typed events."""
+
+    def _harness(self) -> tuple[list[tuple[str, dict]], ExitStack]:
+        seen: list[tuple[str, dict]] = []
+
+        async def fake_dispatch(event: str, payload: dict) -> None:
+            seen.append((event, payload))
+
+        decision = MagicMock()
+        decision.blocked = False
+        decision.modified_args = None
+        run_hooks = AsyncMock(return_value=decision)
+        stack = ExitStack()
+        stack.enter_context(
+            patch("bog_agents_cli.hooks.dispatch_hook", side_effect=fake_dispatch)
+        )
+        stack.enter_context(
+            patch("bog_agents_cli.project_hooks.run_hooks", new=run_hooks)
+        )
+        return seen, stack
+
+    async def test_shell_pre_execute_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            result = await hooks_mod.dispatch_tool_pre_hook(
+                "execute", {"command": "ls -la"}
+            )
+        assert result is None
+        assert ("shell.pre_execute", {"command": "ls -la"}) in seen
+        # Generic and per-tool events still fire alongside the typed one.
+        assert any(e == "tool.pre_call" for e, _ in seen)
+        assert any(e == "tool.pre_call.execute" for e, _ in seen)
+
+    async def test_shell_post_execute_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_post_hook("execute", {"cmd": "pwd"}, "out")
+        assert ("shell.post_execute", {"command": "pwd"}) in seen
+
+    async def test_file_pre_write_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_pre_hook("write_file", {"path": "a.py"})
+        assert ("file.pre_write", {"file_path": "a.py"}) in seen
+
+    async def test_file_post_write_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_post_hook(
+                "write_file", {"file_path": "b.py"}, "written"
+            )
+        assert ("file.post_write", {"file_path": "b.py"}) in seen
+
+    async def test_file_pre_edit_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_pre_hook("edit_file", {"path": "c.py"})
+        assert ("file.pre_edit", {"file_path": "c.py"}) in seen
+
+    async def test_file_pre_read_fires(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_pre_hook("read_file", {"path": "d.py"})
+        assert ("file.pre_read", {"file_path": "d.py"}) in seen
+
+    async def test_unrelated_tool_fires_no_typed_event(self) -> None:
+        seen, patches = self._harness()
+        with patches:
+            await hooks_mod.dispatch_tool_pre_hook("web_search", {"query": "x"})
+        events = [e for e, _ in seen]
+        assert "file.pre_read" not in events
+        assert "shell.pre_execute" not in events
+        assert "tool.pre_call.web_search" in events
+
+    async def test_modify_action_still_supported(self) -> None:
+        seen: list[tuple[str, dict]] = []
+
+        async def fake_dispatch(event: str, payload: dict) -> None:
+            seen.append((event, payload))
+
+        decision = MagicMock()
+        decision.blocked = False
+        decision.modified_args = {"path": "new.py"}
+        run_hooks = AsyncMock(return_value=decision)
+        with (
+            patch("bog_agents_cli.hooks.dispatch_hook", side_effect=fake_dispatch),
+            patch("bog_agents_cli.project_hooks.run_hooks", new=run_hooks),
+        ):
+            result = await hooks_mod.dispatch_tool_pre_hook(
+                "write_file", {"path": "old.py"}
+            )
+        assert result == {"action": "modify", "args": {"path": "new.py"}}
+        assert ("file.pre_write", {"file_path": "old.py"}) in seen
+
+    def test_typed_tool_events_direct(self) -> None:
+        mapping = hooks_mod._typed_tool_events("bash", {"command": "echo hi"}, pre=True)
+        assert mapping == [("shell.pre_execute", {"command": "echo hi"})]
+        assert hooks_mod._typed_tool_events("create_file", {"path": "x"}, pre=True) == [
+            ("file.pre_write", {"file_path": "x"})
+        ]
+        assert hooks_mod._typed_tool_events(
+            "read_file", {"file_path": "y"}, pre=False
+        ) == [("file.post_read", {"file_path": "y"})]
+        assert hooks_mod._typed_tool_events("web_search", {}, pre=True) == []

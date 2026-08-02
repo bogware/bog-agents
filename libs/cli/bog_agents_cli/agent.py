@@ -58,6 +58,44 @@ from bog_agents_cli.unicode_security import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_auto_background_after(raw: str | float | None) -> float | None:
+    """Resolve the shell auto-background threshold from an env or config value.
+
+    Auto-backgrounding is **opt-in**: an unset/empty value disables it and
+    preserves the classic kill-on-timeout behaviour. Turning it on silently
+    would report `exit_code=0` for any build or test run that outlives the
+    threshold, which reads as success to an agent that does not poll. Set a
+    positive number of seconds (env var or `config.toml`) to enable it;
+    ``off``/``none``/``0`` and any non-numeric string keep it off.
+
+    Args:
+        raw: The raw `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` value from the
+            env var or `runtime.shell_auto_background_after` in config.toml.
+
+    Returns:
+        Seconds to wait before auto-backgrounding, or `None` to disable.
+    """
+    if raw is None or not isinstance(raw, (str, int, float)):
+        # Unset, or an unexpected type (e.g. an unconfigured settings mock).
+        return None
+    if isinstance(raw, (int, float)):
+        threshold = float(raw)
+        return threshold if threshold > 0 else None
+    normalized = raw.strip().lower()
+    if not normalized or normalized in ("off", "none", "0"):
+        return None
+    try:
+        threshold = float(normalized)
+    except ValueError:
+        logger.debug(
+            "Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r; "
+            "auto-backgrounding stays off",
+            raw,
+        )
+        return None
+    return threshold if threshold > 0 else None
+
+
 def _resolve_thinking_config() -> tuple[bool, int]:
     """Determine the initial state of the extended-thinking middleware.
 
@@ -1447,6 +1485,41 @@ def create_cli_agent(
                 sources=memory_sources,
             )
         )
+        # A `memory_search` tool over the same memory files (Tier-2 #8): lets the
+        # agent search its memory for relevant notes instead of relying only on
+        # the whole cascade being in context. Keyword mode by default; set
+        # BOG_AGENTS_MEMORY_VECTOR=1 to light up hybrid vector search (uses the
+        # same embedding model as @codebase — Ollama nomic-embed-text / OpenAI).
+        try:
+            from bog_agents.tools import memory_search_tool_bundle
+
+            memory_embedder = None
+            if os.environ.get("BOG_AGENTS_MEMORY_VECTOR", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                try:
+                    from bog_agents.hybrid_memory import embedder_from_langchain
+                    from bog_agents.middleware.hybrid_search import (
+                        _get_embedding_model,  # noqa: PLC2701 - reuse @codebase's Ollama/OpenAI resolver
+                    )
+
+                    model = _get_embedding_model()
+                    if model is not None:
+                        memory_embedder = embedder_from_langchain(model)
+                except Exception:
+                    logger.debug(
+                        "Could not resolve a memory embedder; keyword-only",
+                        exc_info=True,
+                    )
+
+            tools.extend(
+                memory_search_tool_bundle(memory_sources, embedder=memory_embedder)
+            )
+        except Exception:
+            logger.debug("Could not build memory_search tool", exc_info=True)
 
     # Add skills middleware
     if enable_skills:
@@ -1547,6 +1620,17 @@ def create_cli_agent(
             except Exception:
                 logger.debug("Could not load local sandbox config", exc_info=True)
 
+            # Auto-background-on-timeout (Tier-1 #1): a foreground command
+            # that overruns `auto_background_after` seconds is moved to the
+            # background instead of killed. Defaults ON at 60s; `off`/`none`/`0`
+            # disables, and an explicit per-call timeout under the threshold
+            # still runs synchronously. Env var beats `runtime.shell_auto_background_after`
+            # in config.toml, which beats the default.
+            auto_background_after = _resolve_auto_background_after(
+                os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER")
+                or settings.shell_auto_background_after
+            )
+
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout
             # on the execute tool natively. Honour the same
@@ -1558,7 +1642,27 @@ def create_cli_agent(
                 virtual_mode=not unsandboxed,
                 sandbox=local_sandbox,
                 require_sandbox=require_sandbox,
+                auto_background_after=auto_background_after,
             )
+            # When auto-background is on, give the agent tools to read/wait/kill
+            # a detached command (Tier-1 #1).
+            if auto_background_after is not None:
+                from bog_agents.tools import background_shell_tools_bundle
+
+                tools.extend(background_shell_tools_bundle(backend))
+
+            # PTY harness tools (Tier-2 #6): let the agent drive interactive
+            # full-screen programs (vim/top/REPLs). Available on POSIX, and on
+            # Windows when pywinpty is installed (`pip install bog-agents-cli[pty]`).
+            try:
+                from bog_agents.pty_harness import PtyController, pty_supported
+
+                if pty_supported():
+                    from bog_agents.tools import pty_tools_bundle
+
+                    tools.extend(pty_tools_bundle(PtyController()))
+            except Exception:
+                logger.debug("Could not wire PTY tools", exc_info=True)
         else:
             # No shell access - use plain FilesystemBackend with the
             # same virtual_mode policy as the shell branch.
@@ -1579,6 +1683,44 @@ def create_cli_agent(
         agent_middleware.append(
             LocalContextMiddleware(backend=backend, mcp_server_info=mcp_server_info)
         )
+
+        # Keep-working Stop gates (Tier-1 #3): BOG_AGENTS_STOP_GATE_CHECKS is a
+        # semicolon-separated list of commands that must pass before the agent
+        # may end a turn (e.g. "uv run pytest -q; uv run ruff check .").
+        stop_checks_raw = os.environ.get("BOG_AGENTS_STOP_GATE_CHECKS", "").strip()
+        if stop_checks_raw:
+            from bog_agents.middleware.stop_gate import (
+                StopGateMiddleware,
+                command_stop_check,
+            )
+
+            commands = [c.strip() for c in stop_checks_raw.split(";") if c.strip()]
+            if commands:
+                agent_middleware.append(
+                    StopGateMiddleware(
+                        [command_stop_check(backend, cmd) for cmd in commands]
+                    )
+                )
+
+    # PreToolUse hook enforcement (hook-bus completion): a decision hook can
+    # deny a tool call. Loads ingested Claude/Cursor hook files + bog hooks.json
+    # PreToolUse entries; only added when such hooks exist.
+    try:
+        from bog_agents_cli.hook_decisions import load_pretooluse_hooks
+        from bog_agents_cli.hook_middleware import PreToolUseHookMiddleware
+        from bog_agents_cli.hooks import _load_hooks
+
+        hook_project_root = (
+            project_context.project_root if project_context is not None else None
+        )
+        if hook_project_root is not None:
+            decision_hooks = load_pretooluse_hooks(
+                hook_project_root, config_hooks=_load_hooks()
+            )
+            if decision_hooks:
+                agent_middleware.append(PreToolUseHookMiddleware(decision_hooks))
+    except Exception:
+        logger.debug("Could not wire PreToolUse hook enforcement", exc_info=True)
 
     # Get or use custom system prompt
     if system_prompt is None:

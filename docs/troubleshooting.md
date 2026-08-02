@@ -168,6 +168,7 @@ caught — within ~5 minutes — instead of hanging forever.
 | `BOG_AGENTS_STREAM_CHUNK_TIMEOUT_SECONDS` | per-chunk gap in headless `-p` mode | disabled |
 | `BOG_AGENTS_TURN_TIMEOUT_SECONDS` | wall-clock cap on one whole turn | 21600s (6h) |
 | `BOG_AGENTS_TOOL_TIMEOUT` | a single shell command | 7200s (2h) |
+| `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` | foreground shell command auto-background threshold | disabled |
 
 All are tunable. Set any to a positive number to impose a hard cap,
 or to `none` / `0` to disable. They also live in
@@ -187,6 +188,27 @@ number of seconds.
 Shell commands hit `BOG_AGENTS_TOOL_TIMEOUT` (2h default). A genuine
 long build/test suite is fine; raise the env var if you need more, or
 set it to `none` to disable the per-command cap entirely.
+
+Optionally, a foreground shell command that has run for
+`BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` seconds can be **moved to the
+background** as a pollable task instead of being killed at the tool
+timeout, so the agent can keep working while it finishes. This is **off
+by default**: a backgrounded command returns `exit_code=0`, so a build
+or test run that outlives the threshold looks like success to an agent
+that does not poll `poll_background`. Opt in with a positive number of
+seconds — pick one comfortably above your slowest routine command:
+
+```toml
+[runtime]
+shell_auto_background_after = 180
+```
+
+Or per-shell: `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=180`. Set it to
+`off` / `none` / `0` to turn it back off.
+
+The env var wins over the config file. The backgrounded task is listed
+with the agent's `list_background`/`wait_background`/`kill_background`
+tools.
 
 ### "Cost exceeded $X — continue?" but you set no budget
 

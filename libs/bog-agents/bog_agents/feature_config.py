@@ -106,6 +106,9 @@ class FeatureConfig:
         enable_messaging_integration: Enable messaging integration.
         enable_voice_io: Enable voice I/O middleware.
         enable_competitive_intel: Enable competitive intelligence.
+        enable_deferred_tools: Hide selected tool schemas from the model until
+            activated via the `tool_search`/`select` metatools.
+        deferred_tools: Tool names to defer (requires ``enable_deferred_tools``).
 
     Note (Wave V): the vertical-market middleware flags
     (portfolio_analysis, client_reports, scenario_engine,
@@ -234,3 +237,7 @@ class FeatureConfig:
     enable_voice_io: bool = False
     enable_competitive_intel: bool = False
     enable_result_synthesis: bool = False
+
+    # Deferred tool schemas — keep large tool definitions out of context.
+    enable_deferred_tools: bool = False
+    deferred_tools: list[str] | None = None

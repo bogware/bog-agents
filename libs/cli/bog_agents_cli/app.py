@@ -45,6 +45,7 @@ from bog_agents_cli.config import (
 from bog_agents_cli.configurable_model import CLIContext
 from bog_agents_cli.hooks import dispatch_hook
 from bog_agents_cli.model_config import ModelSpec, save_recent_model
+from bog_agents_cli.prompt_cache import cache_break_note, thread_reset_message
 from bog_agents_cli.textual_adapter import (
     SessionStats,
     TextualUIAdapter,
@@ -2376,6 +2377,12 @@ class BogAgentsApp(App):
         link.stylize(f"link {url}", 0)
         await self._mount_message(AppMessage(link))
 
+    async def _handle_btw_command(self, command: str) -> None:
+        """Save an out-of-band note to the current agent's sidechain."""
+        from bog_agents_cli.sidechain import handle_btw_command
+
+        await handle_btw_command(self, command)
+
     @staticmethod
     def _match_slash_commands(query: str, *, limit: int = 8) -> list[tuple[str, str]]:
         """Return best matching slash commands for a help/typo query.
@@ -2588,6 +2595,7 @@ class BogAgentsApp(App):
             return
 
         from bog_agents_cli.background_agents import BackgroundAgentManager
+        from bog_agents_cli.sidechain import SidechainStore
 
         def _create_bg_agent():
             """Create an isolated agent instance for background tasks."""
@@ -2609,6 +2617,7 @@ class BogAgentsApp(App):
 
         self._bg_manager = BackgroundAgentManager(
             agent_factory=_make_agent,
+            sidechain_store=SidechainStore(settings.user_agents_dir),
             on_complete=lambda task: self.call_from_thread(
                 self._notify_background_complete, task
             ),
@@ -2812,7 +2821,7 @@ class BogAgentsApp(App):
 
         async def _run(task: Any) -> Any:  # noqa: ANN401
             from bog_agents_cli.agent import create_cli_agent
-            from bog_agents_cli.config import settings
+            from bog_agents_cli.config import create_model, settings
 
             model_spec = (
                 task.model
@@ -2821,8 +2830,12 @@ class BogAgentsApp(App):
                 or self._base_model_spec
                 or "openai:gpt-5.4-mini"
             )
+            # Reuse the live model config (fresh instance; no shared caches).
+            resolved = create_model(
+                model_spec, profile_overrides=self._profile_override
+            )
             agent_graph, _backend = create_cli_agent(
-                model=model_spec,
+                model=resolved.model,
                 assistant_id=self._assistant_id,
                 auto_approve=self._auto_approve,
                 enable_plan_mode=self._plan_mode_enabled,
@@ -3184,11 +3197,9 @@ class BogAgentsApp(App):
         self._update_status("")
         if self._session_state:
             new_thread_id = self._session_state.reset_thread()
-            # Keep the langchain thread id in lockstep with session_state.
-            # Agent turns route on session_state.thread_id, but /compact, token
-            # counting, goal-state sync, and the exit resume hint all read
-            # self._lc_thread_id — leaving it stale makes /compact silently read
-            # and mutate the PRE-clear thread's checkpoint (CLI-CORE-3 / v4).
+            # Keep the langchain thread id in lockstep with session_state so
+            # /compact, token counting, and resume don't read a stale thread
+            # (CLI-CORE-3 / v4).
             self._lc_thread_id = new_thread_id
             try:
                 banner = self.query_one("#welcome-banner", WelcomeBanner)
@@ -3196,7 +3207,7 @@ class BogAgentsApp(App):
             except NoMatches:
                 pass
             await self._mount_message(
-                AppMessage(f"Started new thread: {new_thread_id}")
+                thread_reset_message(new_thread_id, settings.model_provider)
             )
 
     async def _handle_compact_command(self, command: str) -> None:
@@ -3204,8 +3215,27 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await self._handle_compact()
 
-    async def _handle_threads_command(self, _command: str) -> None:
-        """Open the interactive thread selector."""
+    async def _handle_threads_command(self, command: str) -> None:
+        """Open the interactive thread selector, or `/threads search <text>` (Tier-1 #4)."""
+        rest = command.strip()[len("/threads") :].strip()
+        if rest.lower().startswith("search"):
+            query = rest[len("search") :].strip()
+            await self._mount_message(UserMessage(command))
+            if not query:
+                await self._mount_message(
+                    AppMessage(
+                        "Usage: [bold]/threads search <text>[/bold] — full-text search past threads."
+                    )
+                )
+                return
+            from bog_agents_cli.session_search import (
+                format_search_results,
+                search_sessions,
+            )
+
+            hits = await search_sessions(query, limit=20)
+            await self._mount_message(AppMessage(format_search_results(query, hits)))
+            return
         await self._show_thread_selector()
 
     async def _dispatch_background_command(self, command: str) -> None:
@@ -6702,12 +6732,9 @@ class BogAgentsApp(App):
         raw_arg = command.strip()[len("/resume") :].strip()
         lowered = raw_arg.lower()
 
-        # Bare ``/resume`` (and the explicit list/browse forms) opens the
-        # interactive thread-selector modal so the user can pick from
-        # recent threads with previews. The old "auto-jump-to-the-most-
-        # recent-other-thread" behaviour is preserved under the explicit
-        # ``/resume last`` (or ``latest`` / ``recent``) keyword for
-        # users who want a one-keystroke jump.
+        # Bare ``/resume`` (and list/browse) opens the thread-selector modal
+        # with previews; the old auto-jump-to-most-recent behaviour is kept
+        # under ``/resume last`` (or latest/recent) for one-keystroke jumps.
         if not raw_arg or lowered in {"list", "browse"}:
             await self._show_thread_selector()
             return
@@ -11162,15 +11189,10 @@ class BogAgentsApp(App):
 
         if raw_arg.startswith("enable"):
             # /dreamscape enable [--session] [--with imagination,creative,...]
-            #
             # Default: master on + lifecycle + laws + shared_memory +
-            # dreams.auto_on_dormancy + dashboard. Imagination stays OFF
-            # by default (Phase 14: neutral-to-negative on engineering
-            # work, which is the dogfooding target).
-            #
-            # --session: don't touch the TOML; set env vars for this
-            # shell process only. Reverts when the shell exits.
-            # --with imagination: also enable imagination injection.
+            # dreams.auto_on_dormancy + dashboard. Imagination stays OFF by
+            # default (Phase 14: neutral-to-negative on engineering work).
+            # --session: env-vars only, no TOML. --with imagination: enable it.
             from bog_agents_cli.dreamscape import (
                 config as ds_config,
                 load_dreamscape_config,
@@ -14404,6 +14426,7 @@ class BogAgentsApp(App):
                     f"{summarized_after} tokens\n"
                     f"Total context: {before} \u2192 {after} tokens "
                     f"({pct}% decrease), {len(to_keep)} messages unchanged."
+                    f"{cache_break_note(settings.model_provider)}"
                 )
             )
 
@@ -14531,8 +14554,7 @@ class BogAgentsApp(App):
         # pipelines and file-watch triggers call this directly, off the normal
         # input path, so without this guard they would start a second
         # `execute_task_textual` on the live thread AND overwrite the user's
-        # `_agent_worker` handle (CLI-CORE-4 / v4). The queued prompt drains in
-        # FIFO order once the current turn finishes.
+        # `_agent_worker` handle (CLI-CORE-4 / v4). FIFO drains on turn end.
         if self._turns.busy or self._connecting:
             self._pending_messages.append(
                 QueuedMessage(text=prompt, mode="normal", raw=True)
@@ -14757,13 +14779,12 @@ class BogAgentsApp(App):
         if self._ui_adapter is None:
             return
         turn_stats: SessionStats | None = None
-        # H1: cap the per-turn agent execution. Without this, a hung
-        # remote (model stall, network outage, runaway tool loop)
-        # freezes the entire TUI. The cap is generous (default 1h)
-        # because legitimate long-running turns exist; users can
-        # override via BOG_AGENTS_TURN_TIMEOUT_SECONDS=N or =0/none for
-        # no cap. On timeout we surface a recovery-aware error and
-        # leave the thread state intact so the user can resume.
+        # H1: cap the per-turn agent execution. Without this, a hung remote
+        # (model stall, network outage, runaway tool loop) freezes the TUI.
+        # Cap is generous (default 1h) because legit long turns exist; users
+        # override via BOG_AGENTS_TURN_TIMEOUT_SECONDS=N or =0/none for no cap.
+        # On timeout we surface a recovery-aware error and leave thread state
+        # intact so the user can resume.
         turn_timeout_seconds = _resolve_turn_timeout()
         try:
             agent_coro = execute_task_textual(
@@ -14836,10 +14857,10 @@ class BogAgentsApp(App):
                 model_id = (self._base_model_spec or "").lower()
                 if model_id.startswith("ollama:"):
                     is_tool_capability_error = True
-            # Bedrock-specific: when the langgraph remote stream wraps a
-            # botocore TokenRetrievalError it ends up here as a generic
-            # 'internal error occurred' message. Detect by exception
-            # *name* (RemoteException carries the original class name in
+            # Bedrock-specific: a botocore TokenRetrievalError wrapped by the
+            # langgraph remote stream surfaces here as a generic 'internal
+            # error occurred'. Detect by exception *name* (RemoteException
+            # carries the original class name in
             # str(e) on most paths) AND by checking whether the active
             # model is bedrock-flavoured. We surface a Bedrock-specific
             # action hint below.

@@ -21,6 +21,7 @@ import uuid
 import warnings
 from typing import TYPE_CHECKING
 
+from bog_agents.backends.background_shell import BackgroundResult, BackgroundShellManager
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.backends.protocol import ExecuteResponse, SandboxBackendProtocol
 from bog_agents.sandbox import egress_proxy, local_sandbox
@@ -192,6 +193,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         allow_dangerous: bool = False,
         sandbox: LocalSandbox | None = None,
         require_sandbox: bool = False,
+        auto_background_after: float | None = None,
     ) -> None:
         """Initialize local shell backend with filesystem access.
 
@@ -262,6 +264,15 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 the command unsandboxed. When `False` (default), an unavailable
                 launcher logs a warning and the command runs unsandboxed.
 
+            auto_background_after: Seconds after which a still-running foreground
+                command is *moved to the background* instead of killed (Tier-1
+                #1). When set and a command blocks past this budget, `execute()`
+                returns a "backgrounded (task <id>)" response and the process
+                keeps running — retrieve it via `poll_background` /
+                `wait_background` / `kill_background`. `None` (default) preserves
+                the classic kill-on-timeout behaviour. Ignored for a single call
+                when `execute(background=True)` is passed explicitly.
+
         Raises:
             ValueError: If timeout is not positive.
         """
@@ -309,6 +320,10 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         self._require_sandbox = require_sandbox
         self._egress_proxy: AllowlistEgressProxy | None = None
 
+        # Background command registry (Tier-1 #1). Lazily created on first use.
+        self._auto_background_after = auto_background_after
+        self._bg_manager: BackgroundShellManager | None = None
+
         # Generate unique sandbox ID
         self._sandbox_id = f"local-{uuid.uuid4().hex[:8]}"
 
@@ -327,6 +342,7 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         *,
         timeout: int | None = None,
         allow_dangerous: bool = False,
+        background: bool = False,
     ) -> ExecuteResponse:
         r"""Execute a shell command directly on the host system.
 
@@ -364,6 +380,10 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
             allow_dangerous: Bypass the built-in dangerous-command gate. Only set
                 this when the caller has already obtained explicit human approval
                 (e.g., HITL middleware confirmed the command). Defaults to False.
+            background: Start the command in the background and return a task id
+                immediately instead of waiting (Tier-1 #1). Retrieve output via
+                `poll_background` / `wait_background`; stop it with
+                `kill_background`. Defaults to False.
 
         Returns:
             ExecuteResponse containing:
@@ -429,6 +449,30 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         # the environment (possibly carrying egress-proxy vars). May raise
         # PermissionError when a sandbox is required but unavailable.
         popen_command, use_shell, run_env = self._prepare_execution(command)
+
+        # Background execution (Tier-1 #1). Explicit `background=True` detaches
+        # immediately; otherwise a foreground command that overruns
+        # `auto_background_after` is moved to the background instead of killed.
+        if background:
+            task_id = self._background_manager().start(popen_command, cwd=str(self.cwd), env=run_env, shell=use_shell, display=command)
+            return ExecuteResponse(
+                output=(
+                    f"Command started in the background as task {task_id}. "
+                    f"Use poll_background('{task_id}') to read output, "
+                    f"wait_background(['{task_id}']) to await it, or "
+                    f"kill_background('{task_id}') to stop it."
+                ),
+                exit_code=0,
+                truncated=False,
+            )
+        # Auto-background engages only when the caller did NOT pin a shorter
+        # per-call timeout: an explicit `timeout <= auto_background_after`
+        # means the model wants a bounded synchronous wait, so run the classic
+        # path (killed at that timeout). Otherwise a slow command is moved to
+        # the background after `auto_background_after` seconds instead of being
+        # killed at the (usually much larger) default timeout.
+        if self._auto_background_after is not None and (timeout is None or timeout > self._auto_background_after):
+            return self._run_auto_background(command, popen_command, use_shell, run_env)
 
         try:
             result = subprocess.run(
@@ -562,7 +606,16 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         """
         env = dict(self._env)
         sandbox = self._sandbox
-        if sandbox is None or not sandbox.network_enabled:
+        if sandbox is None:
+            return env
+
+        # Strip secret-looking env vars from the sandboxed child (#11) — applies
+        # regardless of network, so an approved command can't read a credential
+        # from the environment. The egress proxy vars are added afterward.
+        if sandbox.strip_secret_env:
+            env = local_sandbox.strip_secret_env(env, sandbox.secret_env_patterns or None)
+
+        if not sandbox.network_enabled:
             return env
 
         proxy_url = env.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV) or os.environ.get(egress_proxy.SANDBOX_EGRESS_PROXY_ENV, "")
@@ -595,11 +648,73 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         self._egress_proxy = proxy
         return proxy.url
 
+    def _background_manager(self) -> BackgroundShellManager:
+        """Return the lazily-created background command registry."""
+        if self._bg_manager is None:
+            self._bg_manager = BackgroundShellManager(max_output_bytes=self._max_output_bytes)
+        return self._bg_manager
+
+    def _run_auto_background(self, display: str, popen_command: str | list[str], use_shell: bool, run_env: dict[str, str]) -> ExecuteResponse:
+        """Run a command, moving it to the background if it overruns the budget.
+
+        Starts the command in the registry, waits up to `auto_background_after`
+        seconds for it to finish, and either returns its completed output (and
+        drops it from the registry) or leaves it running in the background.
+        """
+        mgr = self._background_manager()
+        task_id = mgr.start(popen_command, cwd=str(self.cwd), env=run_env, shell=use_shell, display=display)
+        snaps = mgr.wait([task_id], mode="all", timeout=self._auto_background_after)
+        snap = snaps[0] if snaps else None
+        if snap is not None and not snap.running:
+            mgr.discard(task_id)
+            return self._response_from_background(snap)
+        budget = self._auto_background_after
+        return ExecuteResponse(
+            output=(
+                f"Command still running after {budget:g}s; moved to the background as "
+                f"task {task_id} (not killed). Use poll_background('{task_id}'), "
+                f"wait_background(['{task_id}']), or kill_background('{task_id}')."
+            ),
+            exit_code=0,
+            truncated=False,
+        )
+
+    def _response_from_background(self, snap: BackgroundResult) -> ExecuteResponse:
+        """Convert a finished background snapshot into an `ExecuteResponse`."""
+        output = snap.output or "<no output>"
+        truncated = snap.truncated
+        if len(output) > self._max_output_bytes:
+            output = output[: self._max_output_bytes]
+            output += f"\n\n... Output truncated at {self._max_output_bytes} bytes."
+            truncated = True
+        if snap.exit_code:
+            output = f"{output.rstrip()}\n\nExit code: {snap.exit_code}"
+        return ExecuteResponse(output=output, exit_code=snap.exit_code or 0, truncated=truncated)
+
+    def poll_background(self, task_id: str) -> BackgroundResult | None:
+        """Return the current state of a background command (None if unknown)."""
+        return self._background_manager().poll(task_id)
+
+    def wait_background(self, task_ids: list[str], *, mode: str = "any", timeout: float | None = None) -> list[BackgroundResult]:
+        """Wait for one (``mode="any"``) or all background commands, then snapshot."""
+        return self._background_manager().wait(task_ids, mode=mode, timeout=timeout)
+
+    def kill_background(self, task_id: str) -> bool:
+        """Kill a background command and its process tree (False if unknown)."""
+        return self._background_manager().kill(task_id)
+
+    def list_background(self) -> list[BackgroundResult]:
+        """Snapshot every background command (running and exited)."""
+        return self._background_manager().list()
+
     def close(self) -> None:
-        """Release backend resources (stops the internal egress proxy if any)."""
+        """Release backend resources (egress proxy + background commands)."""
         if self._egress_proxy is not None:
             self._egress_proxy.stop()
             self._egress_proxy = None
+        if self._bg_manager is not None:
+            self._bg_manager.close()
+            self._bg_manager = None
 
 
 __all__ = ["DEFAULT_EXECUTE_TIMEOUT", "LocalShellBackend"]
