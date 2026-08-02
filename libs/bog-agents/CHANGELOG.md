@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.9.12](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.11...bog-agents==0.9.12) (2026-08-02)
+
+
+### Features
+
+* **cli:** wire the Tier-1/[#8](https://github.com/bogware/bog-agents/issues/8) cores to user surfaces (auto-background, stop gate, memory search) ([a713568](https://github.com/bogware/bog-agents/commit/a713568d5b8f50fb036eb5f87ae857c2a9834e81))
+* finish the PTY harness — Windows ConPTY + agent tools (Tier-2 [#6](https://github.com/bogware/bog-agents/issues/6)) ([ef2b006](https://github.com/bogware/bog-agents/commit/ef2b006e9c335143ddb2d8adbb6a0f77b70accc7))
+* finish tier-1 remainder (vim editing, git/bash gates, hook types, sidechain continuation) ([4733dda](https://github.com/bogware/bog-agents/commit/4733ddad6aa070ac8ba518b8e07d6dc7f9d75731))
+* polish — pyte terminal grid + hybrid-memory vector path ([c887cc3](https://github.com/bogware/bog-agents/commit/c887cc3519b65fb968548746d34bdc1a32934cf9))
+* **sdk:** background shell commands + auto-background-on-timeout (Tier-1 [#1](https://github.com/bogware/bog-agents/issues/1)) ([dc32db8](https://github.com/bogware/bog-agents/commit/dc32db8d356bc18af4cf40f06bb6402647f5a169))
+* **sdk:** deepen the OS sandbox — secret-env stripping + read-deny paths (Tier-3 [#11](https://github.com/bogware/bog-agents/issues/11)) ([cd6a4be](https://github.com/bogware/bog-agents/commit/cd6a4bef1946ad38bce08ee0d17068bbca99a619))
+* **sdk:** exec-risk analyzer + SafeTools auto-approval veto (Tier-1 [#2](https://github.com/bogware/bog-agents/issues/2)) ([bb974bc](https://github.com/bogware/bog-agents/commit/bb974bc57697fa7c1c93341297ae8b14cffbf475))
+* **sdk:** heal context-length & truncation, auto-background by default ([fdf3962](https://github.com/bogware/bog-agents/commit/fdf39628806c1947e42cdd1baa70b676d82bf106))
+* **sdk:** hybrid local-RAG memory ranking stack (Tier-2 [#8](https://github.com/bogware/bog-agents/issues/8)) ([eab5526](https://github.com/bogware/bog-agents/commit/eab552655e52bebea57927967c99f3566e2c3d91))
+* **sdk:** keep-working Stop gates — enforce a definition of done (Tier-1 [#3](https://github.com/bogware/bog-agents/issues/3)) ([ef970ce](https://github.com/bogware/bog-agents/commit/ef970ce7fc65ccff67bf76d06ee7d4759f73b296))
+* **sdk:** PTY harness — drive interactive terminal programs (Tier-2 [#6](https://github.com/bogware/bog-agents/issues/6)) ([f4d6128](https://github.com/bogware/bog-agents/commit/f4d61284f63495a1831013cf0a97b2f6504f3d64))
+* tier-1 resilience, hook bus, and agent surfaces ([6c96304](https://github.com/bogware/bog-agents/commit/6c96304398ca649d9bf3eaf0c44756735451796e))
+* tier-1 resilience, hook bus, and agent surfaces ([6c96304](https://github.com/bogware/bog-agents/commit/6c96304398ca649d9bf3eaf0c44756735451796e))
+
+
+### Bug Fixes
+
+* **sdk,cli:** make multi-word FTS queries actually retrieve ([21760a0](https://github.com/bogware/bog-agents/commit/21760a09b380f9a074cac647694efe3a5c71d9ed))
+* **sdk/tests:** build the PTY child script without escapes ([4b3ce81](https://github.com/bogware/bog-agents/commit/4b3ce8152b1ce0f0513da65d375798a55ac9a86f))
+* **sdk:** exit the PTY child when exec fails, instead of forking a duplicate ([83ccfa4](https://github.com/bogware/bog-agents/commit/83ccfa4ddad5645f8e5dcf66a12235579b1ecfee))
+* **sdk:** keep usage and prior text when healing truncated output ([8d0f573](https://github.com/bogware/bog-agents/commit/8d0f57363f6cba70897f942415edc06e57b9ee27))
+* **sdk:** reset the stop-gate budget per turn; peel sudo in exec-risk ([e79c5ca](https://github.com/bogware/bog-agents/commit/e79c5ca802842eca07203fab4cc84e8ca8ae23a5))
+
 ## [0.9.11](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.10...bog-agents==0.9.11) (2026-07-27)
 
 

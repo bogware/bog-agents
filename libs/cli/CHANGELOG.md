@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.9.12](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.11...bog-agents-cli==0.9.12) (2026-08-02)
+
+
+### Features
+
+* **cli:** decision-capable hooks + Claude/Cursor compat (hook-bus completion) ([a119c55](https://github.com/bogware/bog-agents/commit/a119c55539463ae8aa7e208b2148482cc9887b08))
+* **cli:** enforce PreToolUse hook denials in the tool path (hook-bus completion) ([bc86d8a](https://github.com/bogware/bog-agents/commit/bc86d8a0bc48660ca3ee43a3b811ed831e7c25e8))
+* **cli:** full-text session search — /threads search &lt;text&gt; (Tier-1 [#4](https://github.com/bogware/bog-agents/issues/4)) ([f1e503b](https://github.com/bogware/bog-agents/commit/f1e503b8f4b12e2ca225eadba9268150a7eb983c))
+* **cli:** multi-vendor project-rules ingestion (Tier-1 [#5](https://github.com/bogware/bog-agents/issues/5)) ([4240adc](https://github.com/bogware/bog-agents/commit/4240adce2c3029be905ef32ef98e55dc6f06c5e2))
+* **cli:** wire the Tier-1/[#8](https://github.com/bogware/bog-agents/issues/8) cores to user surfaces (auto-background, stop gate, memory search) ([a713568](https://github.com/bogware/bog-agents/commit/a713568d5b8f50fb036eb5f87ae857c2a9834e81))
+* finish the PTY harness — Windows ConPTY + agent tools (Tier-2 [#6](https://github.com/bogware/bog-agents/issues/6)) ([ef2b006](https://github.com/bogware/bog-agents/commit/ef2b006e9c335143ddb2d8adbb6a0f77b70accc7))
+* finish tier-1 remainder (vim editing, git/bash gates, hook types, sidechain continuation) ([4733dda](https://github.com/bogware/bog-agents/commit/4733ddad6aa070ac8ba518b8e07d6dc7f9d75731))
+* polish — pyte terminal grid + hybrid-memory vector path ([c887cc3](https://github.com/bogware/bog-agents/commit/c887cc3519b65fb968548746d34bdc1a32934cf9))
+* **sdk:** heal context-length & truncation, auto-background by default ([fdf3962](https://github.com/bogware/bog-agents/commit/fdf39628806c1947e42cdd1baa70b676d82bf106))
+* tier-1 resilience, hook bus, and agent surfaces ([6c96304](https://github.com/bogware/bog-agents/commit/6c96304398ca649d9bf3eaf0c44756735451796e))
+* tier-1 resilience, hook bus, and agent surfaces ([6c96304](https://github.com/bogware/bog-agents/commit/6c96304398ca649d9bf3eaf0c44756735451796e))
+
+
+### Bug Fixes
+
+* **cli:** catch clustered force-push, +refspec, and remote deletes ([d4b05ec](https://github.com/bogware/bog-agents/commit/d4b05ec544fc66d57e90988aa5a03d28eb68fa26))
+* **cli:** contain vim-engine failures on the keystroke path ([08fb063](https://github.com/bogware/bog-agents/commit/08fb0635f08b36ee188c7feab41bdcfe4c0b87c0))
+* **cli:** escape session text in /threads search results ([3465960](https://github.com/bogware/bog-agents/commit/34659600c4137e5960456a46901bd0e1ffa4c616))
+* **cli:** ingest Cursor .mdc project rules ([e7ef6cc](https://github.com/bogware/bog-agents/commit/e7ef6cc3bc63e2f8e9b69bc32633cd7da1e794ab))
+* **cli:** make shell auto-backgrounding opt-in ([939c52b](https://github.com/bogware/bog-agents/commit/939c52b44273d7db5fed5d0716bbdf979d6726ee))
+* **cli:** register vim_mode and memory_vector in the config manifest ([c1e3aae](https://github.com/bogware/bog-agents/commit/c1e3aaec7890de757404e9d931712e8609016bae))
+* **sdk,cli:** make multi-word FTS queries actually retrieve ([21760a0](https://github.com/bogware/bog-agents/commit/21760a09b380f9a074cac647694efe3a5c71d9ed))
+
 ## [0.9.11](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.10...bog-agents-cli==0.9.11) (2026-07-27)
 
 
