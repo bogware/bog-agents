@@ -83,3 +83,39 @@ class TestSessionSearchIndex:
             idx.index("t1", "title", "the quick brown fox jumps over the lazy dog")
             hits = idx.search("brown")
             assert hits and hits[0].snippet  # non-empty excerpt
+
+
+class TestSnippetRendersSafely:
+    """FTS snippets are Rich-hostile: every match is wrapped in `[`...`]`."""
+
+    def test_snippet_wraps_matches_in_brackets(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.index("t1", "Ship it", "we should deploy the service tomorrow")
+            hits = idx.search("deploy")
+            assert hits, "expected a hit"
+            assert "[deploy]" in hits[0].snippet
+
+    def test_escaped_snippet_survives_markup_rendering(self, tmp_path: Path) -> None:
+        # Interpolated raw into a message containing closing tags, Rich either
+        # eats a match naming a real style or drops the whole message to
+        # literal on one that does not. Escaping keeps both readable.
+        from rich.markup import escape
+
+        from bog_agents_cli.widgets.messages import _safe_render_markup
+
+        with _index(tmp_path) as idx:
+            idx.index("t1", "Ship it", "we should deploy the service")
+            idx.index("t2", "Styling", "make the text bold please")
+            for term in ("deploy", "bold"):
+                hits = idx.search(term)
+                assert hits, term
+                rendered = str(
+                    _safe_render_markup(
+                        f"[bold]Threads matching '{escape(term)}':[/bold]\n"
+                        f"  [cyan]abc123[/cyan]  {escape(hits[0].title)}"
+                        f" — {escape(hits[0].snippet)}"
+                    )
+                )
+                # Styling consumed, highlight markers preserved verbatim.
+                assert "[bold]Threads" not in rendered, term
+                assert f"[{term}]" in rendered, term
