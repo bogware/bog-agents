@@ -632,6 +632,23 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         none_sentinels=("off", "none"),
     ),
     ConfigOption(
+        key="ui.vim_mode",
+        group="UI",
+        summary="Vim-style modal editing (normal/insert) in the chat input.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.VIM_MODE,
+        toml_keys=("ui", "vim_mode"),
+    ),
+    ConfigOption(
+        key="runtime.memory_vector",
+        group="Runtime",
+        summary="Light up the vector path in `memory_search` (needs an embeddings-capable provider); keyword-only when off.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.MEMORY_VECTOR,
+    ),
+    ConfigOption(
         key="runtime.stop_gate_checks",
         group="Runtime",
         summary="Semicolon-separated commands that must pass before the agent may finish a turn (e.g. 'uv run pytest -q').",
