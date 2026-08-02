@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 import time
 import uuid
@@ -92,6 +93,52 @@ class MemoryHit:
 
 
 # --- pure ranking helpers ---------------------------------------------------
+
+
+_TERM_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def query_terms(query: str) -> list[str]:
+    """Split free-text `query` into FTS-safe terms (no operators, no quotes).
+
+    Args:
+        query: Raw user or model search text.
+
+    Returns:
+        The alphanumeric terms, in order.
+    """
+    return _TERM_RE.findall(query)
+
+
+def fts_match_expression(query: str) -> str:
+    """Build an FTS5 MATCH expression from free-text `query`.
+
+    Quoting the whole query as one phrase — the obvious safe move — turns
+    BM25 into exact-substring matching: `"deploy pipeline"` finds nothing in
+    a document that says "deploy the pipeline", so any multi-word query
+    returns zero hits and the ranking never runs. Instead each term is quoted
+    individually (which is what keeps user input from being read as FTS
+    syntax) and OR-ed, so BM25 ranks documents by how many terms they match.
+
+    A query the caller already wrapped in double quotes is kept as a phrase,
+    so exact-match search stays available.
+
+    Args:
+        query: Raw user or model search text.
+
+    Returns:
+        An FTS5 MATCH expression; terms are always quoted.
+    """
+    stripped = query.strip()
+    if len(stripped) > 1 and stripped.startswith('"') and stripped.endswith('"'):
+        inner = stripped[1:-1]
+        return '"' + inner.replace('"', '""') + '"'
+    terms = query_terms(stripped)
+    if not terms:
+        # No usable terms: fall back to the quoted original so the caller's
+        # OperationalError handling stays on the same path as before.
+        return '"' + stripped.replace('"', '""') + '"'
+    return " OR ".join(f'"{term}"' for term in terms)
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
@@ -244,19 +291,23 @@ class HybridMemoryIndex:
     def _bm25(self, query: str) -> dict[str, float]:
         """Return {chunk_id: relevance} for the keyword match (higher = better)."""
         if self._fts:
-            match = '"' + query.replace('"', '""') + '"'
             try:
                 rows = self._conn.execute(
                     "SELECT chunk_id, bm25(chunks_fts) FROM chunks_fts WHERE chunks_fts MATCH ?",
-                    (match,),
+                    (fts_match_expression(query),),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return {}
             # bm25() returns lower = better; flip so higher = better.
             return {cid: -score for cid, score in rows}
-        like = f"%{query}%"
-        rows = self._conn.execute("SELECT chunk_id FROM chunks WHERE text LIKE ?", (like,)).fetchall()
-        return dict.fromkeys((r[0] for r in rows), 1.0)
+        # LIKE fallback: match any term so multi-word queries still retrieve.
+        terms = query_terms(query) or [query]
+        seen: dict[str, float] = {}
+        for term in terms:
+            rows = self._conn.execute("SELECT chunk_id FROM chunks WHERE text LIKE ?", (f"%{term}%",)).fetchall()
+            for row in rows:
+                seen[row[0]] = seen.get(row[0], 0.0) + 1.0
+        return seen
 
     def _all_embeddings(self) -> dict[str, Sequence[float]]:
         rows = self._conn.execute("SELECT chunk_id, embedding FROM chunks WHERE embedding IS NOT NULL").fetchall()
@@ -357,7 +408,9 @@ __all__ = [
     "MemoryHit",
     "cosine",
     "embedder_from_langchain",
+    "fts_match_expression",
     "fuse_scores",
     "mmr_rerank",
+    "query_terms",
     "temporal_decay_factor",
 ]

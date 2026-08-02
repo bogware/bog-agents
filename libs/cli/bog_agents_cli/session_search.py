@@ -21,6 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+# Shared with the SDK's memory index so both FTS surfaces tokenize identically.
+from bog_agents.hybrid_memory import fts_match_expression, query_terms
+
 
 @dataclass
 class SessionHit:
@@ -136,9 +139,11 @@ class SessionSearchIndex:
         return self._search_like(query, limit)
 
     def _search_fts(self, query: str, limit: int) -> list[SessionHit]:
-        # Quote the query as a single FTS5 phrase so punctuation/operators in a
-        # user's text can't produce a syntax error or an unintended query.
-        match = '"' + query.replace('"', '""') + '"'
+        # Each term is quoted (so punctuation/operators in a user's text can't
+        # produce a syntax error) and OR-ed, so BM25 ranks by how many terms a
+        # thread matches. Quoting the whole query as one phrase instead made
+        # any multi-word search return nothing.
+        match = fts_match_expression(query)
         try:
             rows = self._conn.execute(
                 "SELECT thread_id, title, "
@@ -157,11 +162,17 @@ class SessionSearchIndex:
         ]
 
     def _search_like(self, query: str, limit: int) -> list[SessionHit]:
-        like = f"%{query}%"
+        # Match any term, mirroring the FTS path so the fallback does not
+        # silently return fewer results for a multi-word query.
+        terms = query_terms(query) or [query]
+        clause = " OR ".join(["title LIKE ? OR body LIKE ?"] * len(terms))
+        params: list[object] = []
+        for term in terms:
+            params.extend([f"%{term}%", f"%{term}%"])
+        params.append(limit)
         rows = self._conn.execute(
-            "SELECT thread_id, title, body FROM sessions "
-            "WHERE title LIKE ? OR body LIKE ? LIMIT ?",
-            (like, like, limit),
+            f"SELECT DISTINCT thread_id, title, body FROM sessions WHERE {clause} LIMIT ?",  # noqa: S608 - clause is built from a fixed literal repeated per term; all values are bound
+            params,
         ).fetchall()
         hits: list[SessionHit] = []
         for thread_id, title, body in rows:

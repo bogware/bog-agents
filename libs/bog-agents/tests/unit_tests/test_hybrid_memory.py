@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from bog_agents.hybrid_memory import (
     SOURCE_GLOBAL,
     SOURCE_SESSION,
@@ -123,3 +125,37 @@ class TestHybridIndex:
         idx = HybridMemoryIndex()
         assert idx.search("   ") == []
         idx.close()
+
+
+class TestFtsMatchExpression:
+    """Multi-word queries must retrieve, not return nothing."""
+
+    def test_terms_are_ored_not_one_phrase(self) -> None:
+        from bog_agents.hybrid_memory import fts_match_expression
+
+        assert fts_match_expression("deploy the pipeline") == '"deploy" OR "the" OR "pipeline"'
+
+    def test_explicit_quotes_stay_a_phrase(self) -> None:
+        from bog_agents.hybrid_memory import fts_match_expression
+
+        assert fts_match_expression('"exact phrase"') == '"exact phrase"'
+
+    def test_fts_operators_are_neutralized(self) -> None:
+        from bog_agents.hybrid_memory import fts_match_expression
+
+        # Operators become quoted literals, so no syntax error and no
+        # unintended query semantics.
+        assert fts_match_expression('foo AND (bar) OR* "x') == '"foo" OR "AND" OR "bar" OR "OR" OR "x"'
+
+    def test_multi_word_query_retrieves(self, tmp_path: Path) -> None:
+        from bog_agents.hybrid_memory import HybridMemoryIndex, MemoryChunk
+
+        idx = HybridMemoryIndex(tmp_path / "m.db")
+        try:
+            idx.add(MemoryChunk(text="the deploy pipeline uses github actions"))
+            # Terms present but never as this contiguous phrase.
+            assert idx.search("github pipeline deploy", k=5)
+            assert idx.search("deploy dependencies", k=5)
+            assert not idx.search("zzz nothing", k=5)
+        finally:
+            idx.close()

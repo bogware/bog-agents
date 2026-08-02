@@ -126,3 +126,31 @@ class TestSnippetRendersSafely:
         from bog_agents_cli.session_search import format_search_results
 
         assert format_search_results("nope", []) == "No threads matched 'nope'."
+
+
+class TestMultiWordSearch:
+    """A multi-word query must find a thread that contains the terms."""
+
+    def test_terms_need_not_be_contiguous(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.index(
+                "t1",
+                "Refactor auth",
+                "we removed the global session and added a token store",
+            )
+            idx.index(
+                "t2", "Fix CI", "the lockfile drifted so the lock-check job failed"
+            )
+            assert [h.thread_id for h in idx.search("token store session")] == ["t1"]
+            assert [h.thread_id for h in idx.search("lockfile drifted")] == ["t2"]
+
+    def test_unrelated_query_still_returns_nothing(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.index("t1", "Refactor auth", "token store")
+            assert idx.search("kubernetes helm chart") == []
+
+    def test_operator_like_query_does_not_error(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.index("t1", "Notes", "we discussed AND then OR semantics")
+            # Must not raise and must still match the literal words.
+            assert [h.thread_id for h in idx.search("AND OR")] == ["t1"]
