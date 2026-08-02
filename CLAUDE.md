@@ -38,17 +38,24 @@ uv sync
 # Run unit tests (no network, parallel)
 make test                    # in any package dir
 
-# Run a single test file
+# Run a single test file — either form works
+make test TEST_FILE=tests/unit_tests/test_specific.py
 uv run --group test pytest tests/unit_tests/test_specific.py
 
 # Run integration tests (network allowed)
 make integration_test
 
-# Lint (ruff + ty type checker)
+# Lint (ruff check + ruff format --diff + ty type check)
 make lint
+
+# Type check only (source package, not tests — mocks confuse ty)
+make type
 
 # Format
 make format
+
+# SDK only: refresh smoke-test snapshots after an intentional prompt/graph change
+make update-snapshots
 
 # From repo root: lint/format all packages, refresh/verify lockfiles
 make lint
@@ -59,11 +66,23 @@ make lock-check
 
 SDK type checking: `uv run --all-groups ty check bog_agents` (from `libs/bog-agents/`)
 
+`make test` runs pytest under `--disable-socket --allow-unix-socket`. If a
+brand-new async test errors on socket access rather than failing on an
+assertion, re-run that file without the flag before assuming your code is
+broken — the sandbox, not the test, is usually what tripped.
+
 ## Architecture
 
 ### SDK (`libs/bog-agents/`)
 
 The entry point is `create_agent()` which returns a compiled LangGraph graph. The agent ships with base tools (filesystem, shell, planning, sub-agents) and a composable **middleware stack**.
+
+**`FeatureConfig` (`feature_config.py`) is the toggle surface** — a ~150-field
+dataclass that replaces what would otherwise be a 100+ parameter `create_agent`
+call. New optional features get a field here plus a branch in `graph.py`, not a
+new keyword argument. Pass it as `create_agent(config=FeatureConfig(...))`;
+`features=` is a deprecated alias kept for backwards compatibility and is
+*silently ignored* when `config=` is also given (`_resolve_feature_config`).
 
 **Middleware** (`bog_agents/middleware/`) is the primary extension mechanism. ~90 middleware implementations handle concerns like git tools, repo mapping, cost tracking, checkpointing, plan mode, auto-quality checks, context packing, summarization, street-sweeper context pruning, memory, skills, persistent goals (`goal_tools.py`, surfaced as `/goal` + `/rubric` in the CLI), and the **Expert Mode** rule engine (`expert_rules.py` + `expert_engine/`). All middleware inherits from `AgentMiddleware`.
 
@@ -74,6 +93,51 @@ The entry point is `create_agent()` which returns a compiled LangGraph graph. Th
 **Governed-autonomy primitives (0.10):** three pure-logic SDK modules underpin the CLI's autonomous surfaces — keep them dependency-light and injectable. `bog_agents/teams.py` (`TaskLedger` atomic dependency-aware claim, `Mailbox`, `run_team` coordinator; CLI `/team run` via `libs/cli/bog_agents_cli/team_executor.py`). `bog_agents/cost_ledger.py` (`CostLedger` + `RunawayCaps` spawn/search/spend caps — every team/subagent spawn must be counted). `bog_agents/evidence.py` (`EvidenceBundle`, `collect_git_evidence`, `render_evidence_markdown`; `merge_ready` gates on checks + rubric). The `/best-of-n` (`best_of_n.py`) and `/jury` CLI features build on these with the rubric grader. When touching any, preserve the "tested core + injected `invoke`/`runner`" split so they unit-test without live models.
 
 **OS sandbox (#22):** `bog_agents/sandbox/local_sandbox.py` wraps shell commands in bubblewrap/seatbelt; `bog_agents/sandbox/egress_proxy.py` is a threaded localhost CONNECT **allowlist proxy** (`host_allowed` suffix-match on label boundaries). Wired into `LocalShellBackend(sandbox=..., require_sandbox=...)` — opt-in, fail-closed where no launcher exists (Windows today). Driven from `.bog-agents/sandbox.toml` (`local_sandbox` level + `network_allowlist`) via `SandboxConfig.build_local_sandbox`. Invariant: the allowlist is proxy-enforced (cooperating tools), NOT a kernel boundary — a hard cut needs `--unshare-net` (no allowlist). `bwrap` re-shares the net namespace (`--share-net`) only when egress is wanted.
+
+**Resilience primitives (Tier-1, grok-inspired).** Several small modules each
+own one failure mode; all follow the same shape — a *pure, dependency-light,
+unit-tested core* plus injected callables, wired into a backend or middleware at
+the edge. Preserve that split when touching them, and preserve each one's
+**declared failure direction**:
+
+- `backends/background_shell.py` — cross-platform registry for long-running
+  commands (poll / wait / kill). Backs `LocalShellBackend(background=...)` and
+  auto-background-on-timeout: a slow command is *moved to the background*, never
+  killed. Windows uses a new process group + `taskkill /T`; POSIX uses
+  `start_new_session` + `killpg`.
+- `exec_risk.py` — static analyzer for commands that look read-only but can
+  execute attacker code (`git -c core.pager=…`, `sort --compress-program`,
+  `tar --to-command`, `ssh -o ProxyCommand=`). `SafeToolsMiddleware` uses it to
+  **veto auto-approval** so the call falls through to HITL. Fails *toward*
+  prompting — imperfect shell parsing is acceptable by design.
+- `middleware/stop_gate.py` — deterministic keep-working gate: an injected check
+  can refuse the agent's natural stop, injecting its reason as a `HumanMessage`
+  and looping `jump_to="model"`. Bounded by `max_continuations` so it can't
+  wedge; checks are **fail-open** (a raising check never blocks). The
+  check-driven sibling of the LLM-graded `RubricMiddleware`.
+- `middleware/output_truncation.py` + `middleware/_context_errors.py` — heal two
+  provider-side truncations. The first re-invokes the model to continue a
+  response cut off by `max_tokens` and merges it into one `AIMessage` (text-only,
+  bounded, placed innermost of the summarization stack so a continuation never
+  re-triggers compaction or caching). The second buckets the many shapes of
+  "context too long" (`ContextOverflowError`, OpenAI/Anthropic 400 bodies,
+  litellm) into one predicate so `SummarizationMiddleware` compacts and retries
+  instead of ending the turn.
+- `middleware/deferred_tools.py` — hides large tool schemas from the model until
+  a `tool_search` / `select` metatool activates them. The tools stay bound to the
+  graph; only the schema the model sees is withheld.
+- `hybrid_memory.py` — SQLite FTS5 (BM25) + optional vector KNN with fusion,
+  temporal decay, source weighting, and MMR. The embedder is **injected**
+  (`Callable[[str], Sequence[float]]`) with a pure-Python cosine — no numpy, no
+  vector service. The index is a rebuildable cache over hand-editable Markdown.
+- `pty_harness.py` — drive interactive TUIs (`vim`, `top`, a REPL) through a real
+  pseudo-terminal. Layered so the logic is testable without a PTY: `encode_keys`
+  (vim notation → bytes), `TerminalOutput` (render, ANSI-stripped), wait
+  conditions, then the live `PtySession`. `PtySession.supported()` reports
+  platform availability and construction fails closed.
+- `tools/coercion.py` — `SemanticBool` / `SemanticNumber` annotations coerce
+  loose model output (`"yes"`, `"1k"`) at pydantic validation time. The JSON
+  schema the model sees stays `boolean` / `number`.
 
 **Middleware ordering** (Wave W): the order of middleware in `graph.py` is load-bearing for correctness (CostTracker must wrap before Summarization, Summarization must run before PromptCaching, etc.). The canonical order is locked by `tests/unit_tests/test_middleware_canonical_order.py` — when an intentional reorder is needed, audit the affected interactions and update the test assertions in the same commit. Hard ordering constraints (e.g. ResultSynthesis requires ParallelWorktree earlier in the list) are also declared via `requires: ClassVar` and enforced at build time by `_validate_middleware_ordering`.
 
@@ -102,6 +166,44 @@ Built with Textual. Key patterns:
 - **Skill trust store** (`skill_trust.py` + `skill_trust_controller.py`): the SDK refuses symlinked skill directories by default (`_filter_skill_dirs`, enforced on both the sync and async listing paths); `/skills trust <path>` records an explicit per-directory exception in a persistent trust store, wired into `SkillsMiddleware` through its pluggable symlink-trust checker hook.
 - **MCP OAuth** (`mcp_oauth.py`): remote MCP servers authenticate through the `mcp` SDK's `OAuthClientProvider` (RFC 9728 discovery, dynamic client registration, PKCE, auto-refresh — all inside the SDK). This module supplies only token storage (`~/.bog-agents/mcp-oauth/`), the browser redirect, and the loopback callback handler — don't reimplement OAuth steps by hand.
 - **`/effort`** (`reasoning_effort.py`): maps `low/medium/high/max` onto each provider's real reasoning knob (Anthropic `output_config.effort`, OpenAI `reasoning.effort`, Gemini `thinking_level`, …). Never map effort back onto `max_tokens`/`temperature` — the legacy hack truncated reasoning models.
+
+**Hook bus** (`hook_decisions.py` + `hook_middleware.py`): `hooks.py` fires
+observe-only hooks; these two add *decisions*. A `PreToolUse` / `Stop` hook can
+emit `{"decision": "deny", "reason": …}` on stdout (or exit 2 with a stderr
+reason) to block the call. Claude Code (`.claude/settings.json`) and Cursor
+(`.cursor/hooks.json`) hook files load unchanged, with their tool names (`Bash`,
+`Edit`, `Read`) aliased onto bog's (`execute`, `edit_file`, `read_file`) — treat
+that compat table as a feature, not a shim. Two directions to preserve: the
+hooks themselves are **fail-open** (a crashing/timing-out hook never blocks), and
+enforcement in the tool path is **fail-closed** (a denial means the tool body
+never runs and an error `ToolMessage` is returned). `create_cli_agent` adds
+`HookMiddleware` only when decision-capable hooks exist, so hookless agents pay
+nothing.
+
+**`git_ops.py` is the single git classifier.** `classify_git_command` answers
+read-only / mutating / destructive for every approval layer. Its regexes were
+previously fragmented across `auto_mode`'s allow/ask patterns, the SDK's
+`exec_risk.py`, and `local_shell._DANGEROUS_PATTERNS` — a force-push spelled
+`git push -ff` slipped through all of them. Do not re-fragment: add new git
+patterns here and call it. `bash_hygiene.py` is its sibling for hang-prone
+commands (missing `timeout`, blocking reads) and lives at the CLI/auto-mode
+policy layer *deliberately*, not in the SDK backend, where it would break the
+backend's timeout tests.
+
+**Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
+FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
+(`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`
+finds a thread by content; it degrades to a `LIKE` scan when FTS5 is absent and
+can be dropped and rebuilt at any time. `sidechain.py` is an append-only JSONL
+transcript per agent id (`<config_dir>/sidechains/<agent_id>.jsonl`) kept *out*
+of the main thread — it backs `/btw <note>` and background-task continuation via
+`build_continuation_prompt`. `prompt_cache.py` decides when `/compact` and
+`/clear` should warn that the provider-side cache prefix is about to break.
+
+**`widgets/vim_mode.py`** is a pure state machine with no Textual imports: it
+returns `VimCommand` dataclasses describing edits, and `ChatTextArea` applies
+them to the real document so Textual's built-in undo/redo keeps working. Never
+mutate the buffer inside the engine.
 
 **Prompt-routing family** — three composable modes that intercept a plain user prompt in `_handle_user_message` (after @-mention resolution, before the agent worker launches): (1) **Operator** (`operator_mode.py`, `/operator`) — a judge model classifies each prompt `easy/medium/hard/max` and stages a one-turn model+effort override via `app._operator_turn_model` / `_operator_turn_effort` (consumed by `_build_cli_context`, cleared in `_run_agent_task`'s finally); presets (anthropic default, bedrock, local, hybrid) + user presets live in `~/.bog-agents/operator.toml`; the judge may also escalate a prompt to butcher or jtbd. Judge failures must never block a turn — every path falls through to the user's active model. (2) **Butcher** (`butcher.py`, `/butcher`) — a strong model slices a job into self-contained instruction files under `.bog-agents/butcher/<job-id>/` (manifest.json + slice-NN.md + report.md), then weak workers (sidecar-style async model→tool loop with scoped write tools) execute slices sequentially in-place, each verified by the butcher with a retry→escalation ladder. (3) **JTBD** (`jtbd.py`, `/jtbd`) — interview → Job Spec artifact (`.bog-agents/jtbd/<id>/job-spec.md`) → outcome-driven execution brief → outcome verification (`/jtbd verify`). All three are pure-logic modules with injected `invoke` callables; chat widgets import from `bog_agents_cli.widgets.messages` (NOT `widgets.chat_messages`, which never existed).
 
@@ -169,4 +271,10 @@ Only add `detect_provider()` entry if the provider has a distinctive model name 
 - `PARITY.md` — deepagents 0.6.12 drop-in parity report. Waves 1–3 shipped;
   Wave 4 (satellites) deliberately deferred pending a value argument.
 - `AGENTS.md` — generic agent-facing dev guidelines; overlaps this file's
-  conventions (uv/make workflow, backtick and `# noqa` policy).
+  conventions (uv/make workflow, backtick and `# noqa` policy). Note it still
+  describes slash-command specs as living in `command_registry.py`; they now
+  live in `commands/*.py` (this file is correct, `AGENTS.md` is stale there).
+- `docs/competitive/grok-build-review.md` — durable review of SpaceXAI's Grok
+  Build plus the 1.0 shortlist it produced. The Tier-1/Tier-2/Tier-3 numbers
+  cited in module docstrings (`Tier-1 #1`, `Tier-2 #8`, …) index into it, so read
+  it before changing or re-proposing any of those features.
