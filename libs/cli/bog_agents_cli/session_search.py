@@ -240,4 +240,39 @@ async def search_sessions(query: str, *, limit: int = 20) -> list[SessionHit]:
         index.close()
 
 
-__all__ = ["SessionHit", "SessionSearchIndex", "default_index_path", "search_sessions"]
+def format_search_results(query: str, hits: list[SessionHit]) -> str:
+    """Render search hits as a Rich-markup message body.
+
+    Every interpolated value is escaped. Titles and snippets are arbitrary
+    session text, and the FTS snippet wraps each match in `[`...`]`, so
+    unescaped they are parsed as markup: a match naming a real style
+    (`[bold]`) is swallowed, and any other (`[deploy]`) fails the parse and
+    drops the whole message to literal, exposing the raw tags.
+
+    Args:
+        query: The user's search text.
+        hits: Matching threads, best first.
+
+    Returns:
+        The message body to mount.
+    """
+    from rich.markup import escape
+
+    if not hits:
+        return f"No threads matched '{escape(query)}'."
+    lines = [f"[bold]Threads matching '{escape(query)}':[/bold]"]
+    for hit in hits:
+        title = escape(hit.title or "(untitled)")
+        snippet = f" — {escape(hit.snippet)}" if hit.snippet else ""
+        lines.append(f"  [cyan]{hit.thread_id[:12]}[/cyan]  {title}{snippet}")
+    lines.append("\nResume one with [bold]/resume <thread-id>[/bold].")
+    return "\n".join(lines)
+
+
+__all__ = [
+    "SessionHit",
+    "SessionSearchIndex",
+    "default_index_path",
+    "format_search_results",
+    "search_sessions",
+]

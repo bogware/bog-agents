@@ -95,12 +95,10 @@ class TestSnippetRendersSafely:
             assert hits, "expected a hit"
             assert "[deploy]" in hits[0].snippet
 
-    def test_escaped_snippet_survives_markup_rendering(self, tmp_path: Path) -> None:
-        # Interpolated raw into a message containing closing tags, Rich either
-        # eats a match naming a real style or drops the whole message to
-        # literal on one that does not. Escaping keeps both readable.
-        from rich.markup import escape
-
+    def test_formatted_results_survive_markup_rendering(self, tmp_path: Path) -> None:
+        # Unescaped, Rich either eats a match naming a real style or drops the
+        # whole message to literal on one that does not.
+        from bog_agents_cli.session_search import format_search_results
         from bog_agents_cli.widgets.messages import _safe_render_markup
 
         with _index(tmp_path) as idx:
@@ -109,13 +107,22 @@ class TestSnippetRendersSafely:
             for term in ("deploy", "bold"):
                 hits = idx.search(term)
                 assert hits, term
-                rendered = str(
-                    _safe_render_markup(
-                        f"[bold]Threads matching '{escape(term)}':[/bold]\n"
-                        f"  [cyan]abc123[/cyan]  {escape(hits[0].title)}"
-                        f" — {escape(hits[0].snippet)}"
-                    )
-                )
+                rendered = str(_safe_render_markup(format_search_results(term, hits)))
                 # Styling consumed, highlight markers preserved verbatim.
                 assert "[bold]Threads" not in rendered, term
                 assert f"[{term}]" in rendered, term
+
+    def test_hostile_title_does_not_break_rendering(self, tmp_path: Path) -> None:
+        from bog_agents_cli.session_search import format_search_results
+        from bog_agents_cli.widgets.messages import _safe_render_markup
+
+        with _index(tmp_path) as idx:
+            idx.index("t1", "[red]not a tag[/red]", "deploy the service")
+            hits = idx.search("deploy")
+            rendered = str(_safe_render_markup(format_search_results("deploy", hits)))
+            assert "[red]not a tag[/red]" in rendered
+
+    def test_no_hits_message(self) -> None:
+        from bog_agents_cli.session_search import format_search_results
+
+        assert format_search_results("nope", []) == "No threads matched 'nope'."

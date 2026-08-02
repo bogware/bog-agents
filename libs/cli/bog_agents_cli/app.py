@@ -19,7 +19,6 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
-from rich.markup import escape
 from rich.text import Text
 from textual.app import App
 from textual.binding import Binding, BindingType
@@ -3229,25 +3228,13 @@ class BogAgentsApp(App):
                     )
                 )
                 return
-            from bog_agents_cli.session_search import search_sessions
+            from bog_agents_cli.session_search import (
+                format_search_results,
+                search_sessions,
+            )
 
             hits = await search_sessions(query, limit=20)
-            if not hits:
-                await self._mount_message(
-                    AppMessage(f"No threads matched '{escape(query)}'.")
-                )
-                return
-            # Titles and snippets are arbitrary session text, and the FTS
-            # snippet wraps every match in `[`...`]` — interpolated raw, Rich
-            # either eats a match that names a real style (`[bold]`) or fails
-            # the whole message to literal markup on one that doesn't.
-            lines = [f"[bold]Threads matching '{escape(query)}':[/bold]"]
-            for hit in hits:
-                title = escape(hit.title or "(untitled)")
-                snip = f" — {escape(hit.snippet)}" if hit.snippet else ""
-                lines.append(f"  [cyan]{hit.thread_id[:12]}[/cyan]  {title}{snip}")
-            lines.append("\nResume one with [bold]/resume <thread-id>[/bold].")
-            await self._mount_message(AppMessage("\n".join(lines)))
+            await self._mount_message(AppMessage(format_search_results(query, hits)))
             return
         await self._show_thread_selector()
 
