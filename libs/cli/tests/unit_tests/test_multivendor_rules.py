@@ -30,6 +30,13 @@ class TestAgentMdInDir:
         names = {p.name for p in _agent_md_in_dir(tmp_path)}
         assert {"style.md", "tests.md", "arch.md"} <= names
 
+    def test_loads_cursor_mdc_rules(self, tmp_path: Path) -> None:
+        # Cursor's real project rules are `.mdc`, not `.md`.
+        _write(
+            tmp_path / ".cursor" / "rules" / "style.mdc", "alwaysApply: true\nuse tabs"
+        )
+        assert any(p.name == "style.mdc" for p in _agent_md_in_dir(tmp_path))
+
     def test_loads_cursorrules_single_file(self, tmp_path: Path) -> None:
         _write(tmp_path / ".cursorrules", "use tabs")
         assert any(p.name == ".cursorrules" for p in _agent_md_in_dir(tmp_path))

@@ -187,8 +187,8 @@ def find_project_agent_md(project_root: Path) -> list[Path]:
     1. ``project_root/.bog-agents/AGENTS.md``
     2. Top-level files: ``AGENTS.md``, ``AGENT.md``, ``CLAUDE.md``,
        ``CLAUDE.local.md``
-    3. Every ``*.md`` under ``.bog-agents/rules/``, ``.claude/rules/``,
-       ``.cursor/rules/``, plus ``.cursorrules``
+    3. Every ``*.md`` / ``*.mdc`` under ``.bog-agents/rules/``,
+       ``.claude/rules/``, ``.cursor/rules/``, plus ``.cursorrules``
 
     Loading Claude Code (``CLAUDE.md``/``CLAUDE.local.md``) and Cursor
     (``.cursor/rules/``/``.cursorrules``) conventions alongside AGENTS.md lets a
@@ -287,6 +287,11 @@ _RULES_SUBDIRS: tuple[str, ...] = (
 )
 _SINGLE_RULE_FILES: tuple[str, ...] = (".cursorrules",)
 
+# Cursor's current project rules are `.mdc` (Markdown + frontmatter), not
+# `.md` — globbing only `*.md` silently ingested nothing from a real Cursor
+# repo, which is the case this feature exists to cover.
+_RULE_FILE_GLOBS: tuple[str, ...] = ("*.md", "*.mdc")
+
 
 def _rule_files_in_dir(directory: Path) -> list[Path]:
     """Return rule files from the vendor-neutral rules dirs inside ``directory``."""
@@ -295,7 +300,10 @@ def _rule_files_in_dir(directory: Path) -> list[Path]:
         rules_dir = directory / subdir
         try:
             if rules_dir.is_dir():
-                out.extend(sorted(p for p in rules_dir.glob("*.md") if p.is_file()))
+                found = (
+                    p for suffix in _RULE_FILE_GLOBS for p in rules_dir.glob(suffix)
+                )
+                out.extend(sorted(p for p in found if p.is_file()))
         except OSError:
             pass
     for name in _SINGLE_RULE_FILES:
