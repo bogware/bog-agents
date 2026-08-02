@@ -141,6 +141,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "NotificationsMiddleware": ("notifications", "NotificationsMiddleware"),
     "OfflineModeMiddleware": ("offline_mode", "OfflineModeMiddleware"),
     "OpenSearchRAGMiddleware": ("opensearch_rag", "OpenSearchRAGMiddleware"),
+    "OutputTruncationMiddleware": ("output_truncation", "OutputTruncationMiddleware"),
     "PRManagementMiddleware": ("pr_management", "PRManagementMiddleware"),
     "ParallelAgentsMiddleware": ("parallel_agents", "ParallelAgentsMiddleware"),
     "ParallelWorktreeMiddleware": ("worktree", "ParallelWorktreeMiddleware"),

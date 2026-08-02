@@ -58,6 +58,49 @@ from bog_agents_cli.unicode_security import (
 logger = logging.getLogger(__name__)
 
 
+def _resolve_auto_background_after(raw: str | float | None) -> float | None:
+    """Resolve the shell auto-background threshold from an env or config value.
+
+    Defaults ON at `DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S` (60s) when the
+    value is unset/empty. An explicit ``off``/``none``/``0`` (or any
+    non-positive number) disables auto-backgrounding; any other non-numeric
+    string is ignored (falls back to the default).
+
+    Args:
+        raw: The raw `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` value from the
+            env var or `runtime.shell_auto_background_after` in config.toml.
+
+    Returns:
+        Seconds to wait before auto-backgrounding, or `None` to disable.
+    """
+    from bog_agents_cli._constants import DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+
+    if raw is None:
+        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+    if not isinstance(raw, (str, int, float)):
+        # Unexpected type (e.g. an unconfigured settings mock): fall back to default.
+        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+    if isinstance(raw, (int, float)):
+        threshold = float(raw)
+        return threshold if threshold > 0 else None
+    normalized = raw.strip().lower()
+    if not normalized:
+        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+    if normalized in ("off", "none", "0"):
+        return None
+    try:
+        threshold = float(normalized)
+    except ValueError:
+        logger.debug(
+            "Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r; "
+            "using default %.1fs",
+            raw,
+            DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S,
+        )
+        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+    return threshold if threshold > 0 else None
+
+
 def _resolve_thinking_config() -> tuple[bool, int]:
     """Determine the initial state of the extended-thinking middleware.
 
@@ -1582,25 +1625,16 @@ def create_cli_agent(
             except Exception:
                 logger.debug("Could not load local sandbox config", exc_info=True)
 
-            # Auto-background-on-timeout (Tier-1 #1): when
-            # BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER is a positive number, a
-            # foreground command that overruns it is moved to the background
-            # instead of killed. Off by default (`off`/`none`/0/unset).
-            auto_background_after: float | None = None
-            raw_abg = (
-                os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER", "")
-                .strip()
-                .lower()
+            # Auto-background-on-timeout (Tier-1 #1): a foreground command
+            # that overruns `auto_background_after` seconds is moved to the
+            # background instead of killed. Defaults ON at 60s; `off`/`none`/`0`
+            # disables, and an explicit per-call timeout under the threshold
+            # still runs synchronously. Env var beats `runtime.shell_auto_background_after`
+            # in config.toml, which beats the default.
+            auto_background_after = _resolve_auto_background_after(
+                os.environ.get("BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER")
+                or settings.shell_auto_background_after
             )
-            if raw_abg and raw_abg not in ("off", "none", "0"):
-                try:
-                    abg_val = float(raw_abg)
-                    auto_background_after = abg_val if abg_val > 0 else None
-                except ValueError:
-                    logger.debug(
-                        "Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r",
-                        raw_abg,
-                    )
 
             # Use LocalShellBackend for filesystem + shell execution.
             # The SDK's FilesystemMiddleware exposes per-command timeout

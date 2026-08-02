@@ -230,6 +230,42 @@ def vim_input_mode_enabled() -> bool:
     return value if isinstance(value, bool) else False
 
 
+def shell_auto_background_after_from_config() -> str | float | None:
+    """Return the `[runtime].shell_auto_background_after` value from config.toml.
+
+    Reads `runtime.shell_auto_background_after` from the user's `config.toml`.
+    A missing file, missing key, or unreadable/invalid config returns `None`
+    (the caller falls back to the default) rather than raising.
+
+    Returns:
+        The configured threshold (number or `"off"`/`"none"`), or `None` when
+        unset or unreadable.
+    """
+    import tomllib
+
+    from bog_agents_cli.model_config import DEFAULT_CONFIG_PATH
+
+    try:
+        with DEFAULT_CONFIG_PATH.open("rb") as f:
+            data = tomllib.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, tomllib.TOMLDecodeError):
+        logger.warning(
+            "Could not read runtime.shell_auto_background_after from %s",
+            DEFAULT_CONFIG_PATH,
+        )
+        return None
+
+    runtime_section = data.get("runtime")
+    if not isinstance(runtime_section, dict):
+        return None
+    value = runtime_section.get("shell_auto_background_after")
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, (str, int, float)) else None
+
+
 def save_selected_theme(name: str, config_path: Path | None = None) -> bool:
     """Persist the UI theme name to `[ui].theme` in the config file.
 
@@ -729,6 +765,9 @@ class Settings:
         model_context_limit: Maximum input token count from the model profile.
         project_root: Current project root directory (if in a git project).
         shell_allow_list: List of shell commands that don't require approval.
+        shell_auto_background_after: Auto-background threshold for slow shell
+            commands, read from `[runtime].shell_auto_background_after` in
+            config.toml; `None` when unset.
     """
 
     # API keys
@@ -755,6 +794,12 @@ class Settings:
 
     # Shell command allow-list for auto-approval
     shell_allow_list: list[str] | None = None
+
+    # Auto-background threshold for slow shell commands, from
+    # `[runtime].shell_auto_background_after` in config.toml (raw value;
+    # `None` when unset). The `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` env
+    # var overrides this at agent-creation time.
+    shell_auto_background_after: str | float | None = None
 
     @classmethod
     def from_environment(cls, *, start_path: Path | None = None) -> Settings:
@@ -801,6 +846,10 @@ class Settings:
         shell_allow_list_str = os.environ.get("BOG_AGENTS_SHELL_ALLOW_LIST")
         shell_allow_list = parse_shell_allow_list(shell_allow_list_str)
 
+        # Auto-background threshold from config.toml; the env var overrides it
+        # at agent-creation time (see `_resolve_auto_background_after`).
+        shell_auto_background_after = shell_auto_background_after_from_config()
+
         return cls(
             openai_api_key=openai_key,
             anthropic_api_key=anthropic_key,
@@ -812,6 +861,7 @@ class Settings:
             user_langchain_project=user_langchain_project,
             project_root=project_root,
             shell_allow_list=shell_allow_list,
+            shell_auto_background_after=shell_auto_background_after,
         )
 
     def __repr__(self) -> str:

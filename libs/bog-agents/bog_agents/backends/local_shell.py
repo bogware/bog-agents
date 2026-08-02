@@ -465,7 +465,13 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
                 exit_code=0,
                 truncated=False,
             )
-        if self._auto_background_after is not None:
+        # Auto-background engages only when the caller did NOT pin a shorter
+        # per-call timeout: an explicit `timeout <= auto_background_after`
+        # means the model wants a bounded synchronous wait, so run the classic
+        # path (killed at that timeout). Otherwise a slow command is moved to
+        # the background after `auto_background_after` seconds instead of being
+        # killed at the (usually much larger) default timeout.
+        if self._auto_background_after is not None and (timeout is None or timeout > self._auto_background_after):
             return self._run_auto_background(command, popen_command, use_shell, run_env)
 
         try:

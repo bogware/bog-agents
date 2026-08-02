@@ -87,6 +87,7 @@ from langgraph.config import get_config
 from langgraph.types import Command
 from typing_extensions import TypedDict
 
+from bog_agents.middleware._context_errors import is_context_length_error
 from bog_agents.middleware._overflow_clip import _aclip_overflow_tail, _clip_overflow_tail
 from bog_agents.middleware._utils import append_to_system_message
 
@@ -1378,9 +1379,10 @@ A condensed summary follows:
 
         - If thresholds say "do not summarize", we still attempt one normal
             model call with the current effective/truncated messages.
-        - If that call raises `ContextOverflowError`, we immediately fall back to
-            the summarization path and retry the model call with
-            `summary_message + preserved_recent_messages`.
+        - If that call raises `ContextOverflowError` -- or a provider-side
+            context-length rejection such as an HTTP 400 "prompt is too long"
+            -- we immediately fall back to the summarization path and retry
+            the model call with `summary_message + preserved_recent_messages`.
 
         Unlike the legacy `before_model` approach, this does NOT modify the LangGraph state.
         Instead, it tracks summarization events in middleware state and modifies the model
@@ -1421,6 +1423,14 @@ A condensed summary follows:
             except ContextOverflowError:
                 overflow_triggered = True
                 # Fallback to summarization on context overflow
+            except Exception as exc:
+                if not is_context_length_error(exc):
+                    raise
+                # Provider-side context-length rejection (e.g. HTTP 400
+                # "prompt is too long"). Compacting + retrying heals it just
+                # like an in-framework overflow; the compacted retry below is
+                # unwrapped, so an unrelated error re-surfaces after one attempt.
+                overflow_triggered = True
 
         # Step 3: Perform summarization
         cutoff_index = self._determine_cutoff_index(truncated_messages)
@@ -1501,9 +1511,10 @@ A condensed summary follows:
 
         - If thresholds say "do not summarize", we still attempt one normal
             model call with the current effective/truncated messages.
-        - If that call raises `ContextOverflowError`, we immediately fall back
-            to the summarization path and retry the model call with
-            `summary_message + preserved_recent_messages`.
+        - If that call raises `ContextOverflowError` (or a provider-side
+            context-length rejection such as an HTTP 400 "prompt is too long"),
+            we immediately fall back to the summarization path and retry the
+            model call with `summary_message + preserved_recent_messages`.
 
         Unlike the legacy `abefore_model` approach, this does NOT modify the LangGraph state.
         Instead, it tracks summarization events in middleware state and modifies the model
@@ -1544,6 +1555,12 @@ A condensed summary follows:
             except ContextOverflowError:
                 overflow_triggered = True
                 # Fallback to summarization on context overflow
+            except Exception as exc:
+                if not is_context_length_error(exc):
+                    raise
+                # Provider-side context-length rejection; compact and retry
+                # (see the sync path for the rationale).
+                overflow_triggered = True
 
         # Step 3: Perform summarization
         cutoff_index = self._determine_cutoff_index(truncated_messages)

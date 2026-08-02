@@ -39,6 +39,7 @@ from bog_agents.middleware._tool_exclusion import _ToolExclusionMiddleware
 from bog_agents.middleware.async_subagents import AsyncSubAgent, AsyncSubAgentMiddleware
 from bog_agents.middleware.filesystem import FilesystemMiddleware
 from bog_agents.middleware.memory import MemoryMiddleware
+from bog_agents.middleware.output_truncation import OutputTruncationMiddleware
 from bog_agents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from bog_agents.middleware.permissions import (
     FilesystemPermission,
@@ -1011,9 +1012,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if f.enable_deferred_tools and f.deferred_tools:
         from bog_agents.middleware.deferred_tools import DeferredToolsMiddleware
 
-        agents_middleware.append(
-            DeferredToolsMiddleware(deferred_names=frozenset(f.deferred_tools))
-        )
+        agents_middleware.append(DeferredToolsMiddleware(deferred_names=frozenset(f.deferred_tools)))
 
     if f.enable_git_tools:
         from bog_agents.middleware.git_tools import GitToolsMiddleware
@@ -1412,6 +1411,12 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     if not user_supplied_summarization:
         defaults_to_append.append(create_summarization_middleware(model, backend))
     defaults_to_append.append(PatchToolCallsMiddleware())
+    # Auto-continue responses truncated at the output-token limit. Placed
+    # inside PatchToolCalls / Summarization so a continuation re-invokes only
+    # the raw model call (never re-running compaction or argument truncation).
+    # The tail wrappers (Memory injection, PromptCaching) still wrap it, which
+    # is harmless: the continuation presents a fresh message list.
+    defaults_to_append.append(OutputTruncationMiddleware())
 
     agents_middleware.extend(defaults_to_append)
     if async_subagents:

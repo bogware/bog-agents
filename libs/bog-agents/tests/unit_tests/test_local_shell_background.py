@@ -79,3 +79,28 @@ class TestAutoBackground:
             assert be.list_background() == []  # nothing left running
         finally:
             be.close()
+
+    def test_explicit_timeout_under_threshold_runs_synchronously(self, tmp_path: Path) -> None:
+        # An explicit per-call timeout <= auto_background_after means the caller
+        # wants a bounded synchronous wait, so the classic kill-on-timeout path
+        # is honored instead of auto-backgrounding.
+        be = LocalShellBackend(root_dir=str(tmp_path), inherit_env=True, auto_background_after=60.0)
+        try:
+            resp = be.execute(f'{PY} -c "import time; time.sleep(20)"', timeout=1)
+            assert resp.exit_code == 124  # killed at the explicit timeout
+            assert be.list_background() == []  # never moved to the background
+        finally:
+            be.close()
+
+    def test_explicit_timeout_above_threshold_still_backgrounds(self, tmp_path: Path) -> None:
+        # A per-call timeout larger than auto_background_after still engages
+        # auto-background (the wait budget stays the threshold, not the timeout).
+        be = LocalShellBackend(root_dir=str(tmp_path), inherit_env=True, auto_background_after=0.5)
+        try:
+            resp = be.execute(f'{PY} -c "import time; time.sleep(20)"', timeout=5)
+            assert "moved to the background" in resp.output
+            assert resp.exit_code == 0
+            running = [r for r in be.list_background() if r.running]
+            assert len(running) == 1
+        finally:
+            be.close()

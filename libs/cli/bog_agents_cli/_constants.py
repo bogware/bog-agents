@@ -39,6 +39,13 @@ TOOL_VERSION_PROBE_TIMEOUT_S: float = 10.0
 # `timeout_s` field for long-running tests.
 DEFAULT_SHELL_STEP_TIMEOUT_S: float = 60.0
 
+# Default for `LocalShellBackend.auto_background_after` (Tier-1 #1). A
+# foreground shell command that has not finished after this many seconds is
+# moved to the background as a pollable task instead of being killed at the
+# (much larger) tool timeout. Configurable via the `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER`
+# env var or `runtime.shell_auto_background_after`; `off`/`none`/`0` disables.
+DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S: float = 60.0
+
 
 # ---------------------------------------------------------------------------
 # Network / agent timeouts (seconds)

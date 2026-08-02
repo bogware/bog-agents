@@ -626,7 +626,7 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
     ConfigOption(
         key="runtime.shell_auto_background_after",
         group="Runtime",
-        summary="Seconds before a slow foreground shell command is moved to the background instead of killed; `off` disables (default).",
+        summary="Seconds before a slow foreground shell command is moved to the background instead of killed; defaults to 60s (on), `off`/`0` disables.",
         kind=OptionKind.FLOAT,
         env_var=_env_vars.SHELL_AUTO_BACKGROUND_AFTER,
         none_sentinels=("off", "none"),

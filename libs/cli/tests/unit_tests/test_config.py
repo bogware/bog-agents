@@ -1845,3 +1845,62 @@ class TestVimInputModeConfig:
         config_path.write_text('[ui]\nvim_mode = "yes"\n')
         with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
             assert vim_input_mode_enabled() is False
+
+
+class TestShellAutoBackgroundAfterConfig:
+    """Tests for `shell_auto_background_after_from_config` config.toml read."""
+
+    def test_numeric_value_returned(
+        self, tmp_path: Path
+    ) -> None:
+        """A numeric `[runtime].shell_auto_background_after` is returned as-is."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[runtime]\nshell_auto_background_after = 45.0\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() == 45.0
+
+    def test_off_string_returned(self, tmp_path: Path) -> None:
+        """An explicit `off` sentinel is preserved for the resolver to interpret."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text('[runtime]\nshell_auto_background_after = "off"\n')
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() == "off"
+
+    def test_missing_config_returns_none(self, tmp_path: Path) -> None:
+        """A missing config file yields `None` (caller uses the default)."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "missing.toml"
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() is None
+
+    def test_missing_key_returns_none(self, tmp_path: Path) -> None:
+        """A config without the `[runtime]` key yields `None`."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[ui]\ntheme = 'bog'\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() is None
+
+    def test_invalid_config_returns_none(self, tmp_path: Path) -> None:
+        """A corrupt config file falls back to `None` instead of raising."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("not = [valid toml\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() is None
+
+    def test_non_scalar_value_returns_none(self, tmp_path: Path) -> None:
+        """A table/bool value under the key is ignored."""
+        from bog_agents_cli.config import shell_auto_background_after_from_config
+
+        config_path = tmp_path / "config.toml"
+        config_path.write_text("[runtime]\nshell_auto_background_after = true\n")
+        with patch.object(model_config, "DEFAULT_CONFIG_PATH", config_path):
+            assert shell_auto_background_after_from_config() is None

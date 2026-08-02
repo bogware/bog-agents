@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from langchain.messages import ToolCall
     from langgraph.runtime import Runtime
 
+from bog_agents_cli._constants import DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
 from bog_agents_cli.agent import (
     DEFAULT_AGENT_NAME,
     _format_edit_file_description,
@@ -21,6 +22,7 @@ from bog_agents_cli.agent import (
     _format_task_description,
     _format_web_search_description,
     _format_write_file_description,
+    _resolve_auto_background_after,
     create_cli_agent,
     get_system_prompt,
     list_agents,
@@ -1695,3 +1697,39 @@ class TestResetAgentEncoding:
 
         written = (agents_dir / "dest" / "AGENTS.md").read_text(encoding="utf-8")
         assert written == non_ascii
+
+
+class TestResolveAutoBackgroundAfter:
+    """Tests for the shell auto-background threshold resolution."""
+
+    def test_unset_defaults_on(self) -> None:
+        assert (
+            _resolve_auto_background_after(None)
+            == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+        )
+        assert (
+            _resolve_auto_background_after("") == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+        )
+
+    def test_explicit_disable(self) -> None:
+        assert _resolve_auto_background_after("off") is None
+        assert _resolve_auto_background_after("none") is None
+        assert _resolve_auto_background_after("0") is None
+        assert _resolve_auto_background_after("0.0") is None
+        assert _resolve_auto_background_after("-5") is None
+
+    def test_numeric_value_parsed(self) -> None:
+        assert _resolve_auto_background_after("10") == 10.0
+        assert _resolve_auto_background_after("0.5") == 0.5
+        assert _resolve_auto_background_after(" 30 ") == 30.0
+
+    def test_numeric_input(self) -> None:
+        # config.toml stores the value as a float; the resolver accepts it directly.
+        assert _resolve_auto_background_after(45.0) == 45.0
+        assert _resolve_auto_background_after(0) is None
+
+    def test_garbage_falls_back_to_default(self) -> None:
+        assert (
+            _resolve_auto_background_after("soon")
+            == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+        )
