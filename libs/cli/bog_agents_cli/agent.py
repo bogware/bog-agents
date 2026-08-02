@@ -61,10 +61,12 @@ logger = logging.getLogger(__name__)
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
     """Resolve the shell auto-background threshold from an env or config value.
 
-    Defaults ON at `DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S` (60s) when the
-    value is unset/empty. An explicit ``off``/``none``/``0`` (or any
-    non-positive number) disables auto-backgrounding; any other non-numeric
-    string is ignored (falls back to the default).
+    Auto-backgrounding is **opt-in**: an unset/empty value disables it and
+    preserves the classic kill-on-timeout behaviour. Turning it on silently
+    would report `exit_code=0` for any build or test run that outlives the
+    threshold, which reads as success to an agent that does not poll. Set a
+    positive number of seconds (env var or `config.toml`) to enable it;
+    ``off``/``none``/``0`` and any non-numeric string keep it off.
 
     Args:
         raw: The raw `BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER` value from the
@@ -73,31 +75,24 @@ def _resolve_auto_background_after(raw: str | float | None) -> float | None:
     Returns:
         Seconds to wait before auto-backgrounding, or `None` to disable.
     """
-    from bog_agents_cli._constants import DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-
-    if raw is None:
-        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-    if not isinstance(raw, (str, int, float)):
-        # Unexpected type (e.g. an unconfigured settings mock): fall back to default.
-        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+    if raw is None or not isinstance(raw, (str, int, float)):
+        # Unset, or an unexpected type (e.g. an unconfigured settings mock).
+        return None
     if isinstance(raw, (int, float)):
         threshold = float(raw)
         return threshold if threshold > 0 else None
     normalized = raw.strip().lower()
-    if not normalized:
-        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-    if normalized in ("off", "none", "0"):
+    if not normalized or normalized in ("off", "none", "0"):
         return None
     try:
         threshold = float(normalized)
     except ValueError:
         logger.debug(
             "Ignoring non-numeric BOG_AGENTS_SHELL_AUTO_BACKGROUND_AFTER=%r; "
-            "using default %.1fs",
+            "auto-backgrounding stays off",
             raw,
-            DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S,
         )
-        return DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
+        return None
     return threshold if threshold > 0 else None
 
 

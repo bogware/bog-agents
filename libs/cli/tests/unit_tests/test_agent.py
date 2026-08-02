@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from langchain.messages import ToolCall
     from langgraph.runtime import Runtime
 
-from bog_agents_cli._constants import DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
 from bog_agents_cli.agent import (
     DEFAULT_AGENT_NAME,
     _format_edit_file_description,
@@ -1702,14 +1701,14 @@ class TestResetAgentEncoding:
 class TestResolveAutoBackgroundAfter:
     """Tests for the shell auto-background threshold resolution."""
 
-    def test_unset_defaults_on(self) -> None:
-        assert (
-            _resolve_auto_background_after(None)
-            == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-        )
-        assert (
-            _resolve_auto_background_after("") == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-        )
+    def test_unset_defaults_off(self) -> None:
+        # Opt-in: a backgrounded command reports exit_code=0, so it must not
+        # engage unless the user asked for it.
+        assert _resolve_auto_background_after(None) is None
+        assert _resolve_auto_background_after("") is None
+
+    def test_unexpected_type_stays_off(self) -> None:
+        assert _resolve_auto_background_after(object()) is None  # type: ignore[arg-type]
 
     def test_explicit_disable(self) -> None:
         assert _resolve_auto_background_after("off") is None
@@ -1728,8 +1727,5 @@ class TestResolveAutoBackgroundAfter:
         assert _resolve_auto_background_after(45.0) == 45.0
         assert _resolve_auto_background_after(0) is None
 
-    def test_garbage_falls_back_to_default(self) -> None:
-        assert (
-            _resolve_auto_background_after("soon")
-            == DEFAULT_SHELL_AUTO_BACKGROUND_AFTER_S
-        )
+    def test_garbage_stays_off(self) -> None:
+        assert _resolve_auto_background_after("soon") is None
