@@ -1850,9 +1850,7 @@ class TestVimInputModeConfig:
 class TestShellAutoBackgroundAfterConfig:
     """Tests for `shell_auto_background_after_from_config` config.toml read."""
 
-    def test_numeric_value_returned(
-        self, tmp_path: Path
-    ) -> None:
+    def test_numeric_value_returned(self, tmp_path: Path) -> None:
         """A numeric `[runtime].shell_auto_background_after` is returned as-is."""
         from bog_agents_cli.config import shell_auto_background_after_from_config
 

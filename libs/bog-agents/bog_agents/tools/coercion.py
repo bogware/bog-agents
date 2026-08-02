@@ -13,8 +13,7 @@ Usage with ``StructuredTool``/``create_agent``::
     from bog_agents.tools import SemanticBool, SemanticNumber
 
 
-    def deploy(*, canary: SemanticBool = False, replicas: SemanticNumber = 1) -> str:
-        ...
+    def deploy(*, canary: SemanticBool = False, replicas: SemanticNumber = 1) -> str: ...
 
 The JSON schema emitted for the model stays ``boolean`` / ``number`` —
 coercion happens at validation time via a pydantic ``BeforeValidator``, so
@@ -44,14 +43,36 @@ _FALSY_STRINGS = frozenset({"0", "false", "no", "off", "n", "f", "disabled", "di
 
 # Word-number vocabulary for `semantic_number` (bounded, deterministic).
 _ONES = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
-    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
-    "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
 }
 _TENS = {
-    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
-    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
 }
 _SCALES = {"hundred": 100, "thousand": 1000, "million": 1_000_000, "billion": 1_000_000_000}
 _NUMBER_SUFFIX_SCALE = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
