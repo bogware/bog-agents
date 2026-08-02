@@ -484,6 +484,14 @@ class TestGitClassifierWiring:
         "cmd",
         [
             "git push -ff origin main",
+            # Forms the ask-list regexes (`-f\b`, `.*--force`) do not match, so
+            # without the classifier they reach the ALLOW fallthrough and get
+            # auto-approved.
+            "git push -uf origin main",
+            "git push -qfu origin main",
+            "git push origin +main",
+            "git push --delete origin feature",
+            "git push origin :feature",
             "git branch -D stale",
             "git branch -d stale",
             "git tag -d v1.0",

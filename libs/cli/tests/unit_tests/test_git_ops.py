@@ -122,6 +122,19 @@ class TestDestructive:
             "git push -fff",
             "git push --force-with-lease origin main",
             "git push --force-if-includes origin main",
+            # Combined short-option clusters: git accepts these and they force
+            # just as hard as `-f`, but prefix matching alone missed them and
+            # the auto-mode fallthrough is ALLOW.
+            "git push -uf origin main",
+            "git push -fq origin main",
+            "git push -qfu origin main",
+            # `+refspec` forces the update with no flag at all.
+            "git push origin +main",
+            "git push origin +HEAD:main",
+            # Deleting a remote branch is destructive for everyone.
+            "git push --delete origin feature",
+            "git push -d origin feature",
+            "git push origin :feature",
             "git reset --hard HEAD~1",
             "git reset --hard origin/main",
             "git clean -fd",

@@ -160,7 +160,8 @@ def _classify_subcommand(sub: str, rest: list[str]) -> GitOpType:
             return GitOpType.READ_ONLY
         return GitOpType.MUTATING
     if sub == "checkout":
-        if rest and (rest[0] in {".", "--"} or rest[0] in {"-f", "--force"}):
+        # `--force` discards local edits wherever it appears, not just first.
+        if rest and (rest[0] in {".", "--"} or _has_flag(rest, {"-f", "--force"})):
             return GitOpType.DESTRUCTIVE
         if rest and rest[0] in {"-b", "-B", "--orphan"}:
             return GitOpType.MUTATING
@@ -192,7 +193,7 @@ def _classify_subcommand(sub: str, rest: list[str]) -> GitOpType:
             return GitOpType.READ_ONLY
         return GitOpType.DESTRUCTIVE
     if sub == "push":
-        if any(_is_force_push(token) for token in rest):
+        if any(_is_force_push(token) or _is_push_delete(token) for token in rest):
             return GitOpType.DESTRUCTIVE
         return GitOpType.MUTATING
     if sub == "filter-branch":
@@ -220,22 +221,50 @@ def _classify_subcommand(sub: str, rest: list[str]) -> GitOpType:
 
 
 def _has_flag(tokens: list[str], flags: set[str]) -> bool:
-    """True when any token equals a flag or prefixes a short dash flag.
+    """True when any token supplies one of `flags`.
 
-    Short flags prefix-match so combined forms like `-Df` and `-ab` are
-    detected; long (`--`) flags must match exactly.
+    Long (`--`) flags match exactly or as `--flag=value`. Short flags match
+    membership in a single-dash cluster, so `-D`, `-Df` and `-rD` are all
+    detected -- prefix matching alone missed the trailing forms. Matching is
+    case-sensitive because `-d` and `-D` mean different things to git.
     """
     for token in tokens:
+        if not token.startswith("-"):
+            continue
+        is_long = token.startswith("--")
         for flag in flags:
             if token == flag:
                 return True
-            if not flag.startswith("--") and token.startswith(flag):
+            if flag.startswith("--"):
+                if is_long and token.startswith(f"{flag}="):
+                    return True
+            elif not is_long and len(flag) == 2 and flag[1] in token[1:]:
                 return True
     return False
 
 
 def _is_force_push(token: str) -> bool:
-    """True when a push argument forces the update."""
-    return token in {"-f", "--force"} or token.startswith(
-        ("-ff", "--force-with-lease", "--force-if-includes")
-    )
+    """True when a push argument forces the update.
+
+    Covers the long forms, single-dash clusters (`-f`, but also `-uf` / `-fq`,
+    which git accepts and which used to slip past every approval layer), and
+    the `+refspec` syntax that forces an update without any flag at all.
+    """
+    if token.startswith("--"):
+        return token.startswith("--force")
+    if token.startswith("-"):
+        return "f" in token[1:]
+    return token.startswith("+")
+
+
+def _is_push_delete(token: str) -> bool:
+    """True when a push argument deletes a remote ref.
+
+    `git push --delete origin foo` and `git push origin :foo` both remove a
+    branch for everyone, which is as destructive as a force-push.
+    """
+    if token.startswith("--"):
+        return token == "--delete"
+    if token.startswith("-"):
+        return "d" in token[1:]
+    return token.startswith(":")
