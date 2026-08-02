@@ -315,6 +315,10 @@ def _winpty_available() -> bool:
     return True
 
 
+# Conventional "command not found / could not exec" status for the PTY child.
+_EXEC_FAILED_EXIT_CODE = 127
+
+
 class _PosixPtyBackend:
     """A PTY backed by the stdlib `pty` (fork + fd)."""
 
@@ -323,16 +327,57 @@ class _PosixPtyBackend:
         self._fd = -1
 
     def spawn(self, command: list[str], env: dict[str, str] | None, cwd: str | None) -> None:
+        """Fork a PTY and exec `command` in the child.
+
+        Args:
+            command: argv for the child process.
+            env: Environment for the child (inherits this process's when None).
+            cwd: Working directory for the child.
+
+        Raises:
+            OSError: If the child could not chdir or exec (e.g. no such binary).
+        """
         import pty as _pty  # POSIX-only stdlib module
 
         environ = dict(os.environ if env is None else env)
         environ.setdefault("TERM", "xterm-256color")
         environ.setdefault("COLORTERM", "truecolor")
+        # Report a failed exec back to the parent over a pipe. `os.pipe()` fds
+        # are close-on-exec, so a *successful* exec closes the write end and the
+        # parent's read returns EOF immediately — no polling, no added latency.
+        err_r, err_w = os.pipe()
         pid, fd = _pty.fork()
         if pid == 0:  # child
-            if cwd:
-                os.chdir(cwd)
-            os.execvpe(command[0], command, environ)  # noqa: S606 - intentional PTY child exec
+            # CRITICAL: the child must never return into the caller's Python
+            # stack. `pty.fork()` hands it a full copy of this process, so an
+            # exec failure that propagated would run the rest of the program a
+            # second time — under pytest-xdist a duplicate worker reporting
+            # duplicate results, in a live agent two processes sharing stdio.
+            # Exit unconditionally instead.
+            try:
+                os.close(err_r)
+                if cwd:
+                    os.chdir(cwd)
+                os.execvpe(command[0], command, environ)  # noqa: S606 - intentional PTY child exec
+            except BaseException as exc:  # noqa: BLE001 - must not escape the child
+                with contextlib.suppress(OSError):
+                    os.write(err_w, str(exc).encode("utf-8", "replace")[:500])
+            finally:
+                os._exit(_EXEC_FAILED_EXIT_CODE)
+        os.close(err_w)
+        try:
+            failure = os.read(err_r, 512)
+        except OSError:
+            failure = b""
+        finally:
+            os.close(err_r)
+        if failure:
+            with contextlib.suppress(OSError):
+                os.waitpid(pid, 0)
+            with contextlib.suppress(OSError):
+                os.close(fd)
+            msg = f"could not run {command[0]!r}: {failure.decode('utf-8', 'replace')}"
+            raise OSError(msg)
         self._pid = pid
         self._fd = fd
 

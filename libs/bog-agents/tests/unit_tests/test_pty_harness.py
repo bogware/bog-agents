@@ -6,8 +6,13 @@ the live `PtySession` is POSIX-only and skipped on Windows.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
+import bog_agents.pty_harness as _pty_harness_module
 from bog_agents.pty_harness import (
     KeyEncodeError,
     PtySession,
@@ -22,6 +27,9 @@ from bog_agents.pty_harness import (
     pty_supported,
     strip_ansi,
 )
+
+# Absolute path to the module under test, for the subprocess-isolated check.
+PTY_HARNESS_PATH = Path(_pty_harness_module.__file__)
 
 
 class TestEncodeKeys:
@@ -180,3 +188,51 @@ class TestPtySessionWindows:
 def test_pty_session_fails_closed_when_unsupported() -> None:
     with pytest.raises(RuntimeError, match=r"pywinpty|pty"):
         PtySession(command=["cmd"])
+
+
+@pytest.mark.skipif(not pty_supported(), reason="PtySession requires a POSIX PTY")
+class TestFailedExecDoesNotForkADuplicate:
+    """`pty.fork()` hands the child a full copy of this process.
+
+    If a failed `execvpe` propagates as a normal exception, the child unwinds
+    back into the caller's Python and keeps running the whole program a second
+    time. Under pytest-xdist that is a duplicate worker reporting duplicate
+    results (crashing the scheduler with `mark_test_complete` ValueError); in a
+    live agent it is two processes sharing stdio. The child must always exit.
+    """
+
+    def test_spawn_raises_instead_of_returning_in_the_child(self) -> None:
+        from bog_agents.pty_harness import _PosixPtyBackend
+
+        backend = _PosixPtyBackend()
+        with pytest.raises(OSError, match="could not run"):
+            backend.spawn(["this-binary-does-not-exist-zzz"], None, None)
+
+    def test_bad_cwd_also_raises(self) -> None:
+        from bog_agents.pty_harness import _PosixPtyBackend
+
+        backend = _PosixPtyBackend()
+        with pytest.raises(OSError, match="could not run"):
+            backend.spawn(["/bin/echo", "hi"], None, "/definitely/not/a/real/dir/zzz")
+
+    def test_no_second_process_survives_a_failed_exec(self, tmp_path: Path) -> None:
+        # Run in a child interpreter: if this regressed, the duplicate process
+        # would otherwise go on to corrupt *this* pytest session.
+        marker = tmp_path / "reached.txt"
+        script = (
+            "import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('ph', {str(PTY_HARNESS_PATH)!r})\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "sys.modules['ph'] = mod\n"
+            "spec.loader.exec_module(mod)\n"
+            "ctl = mod.PtyController()\n"
+            "ctl.start('x', 'this-binary-does-not-exist-zzz')\n"
+            # Every process that gets here appends one line.
+            f"open({str(marker)!r}, 'a').write('reached\n')\n"
+            "ctl.shutdown()\n"
+            "import time; time.sleep(0.3)\n"
+        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60, check=False)
+        assert result.returncode == 0, result.stderr
+        lines = [ln for ln in marker.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(lines) == 1, f"a failed exec forked a duplicate process: {lines}"
