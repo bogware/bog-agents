@@ -101,56 +101,100 @@ class OutputTruncationMiddleware(AgentMiddleware[Any, Any, Any]):
 
     def _heal(self, request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], ModelResponse[Any]]) -> ModelResponse[Any]:
         """Sync healing loop: continue up to ``max_continues`` truncated text responses."""
-        response = self._as_model_response(handler(request))
+        raw = handler(request)
+        response = self._as_model_response(raw)
         if not self._can_heal(request, response):
-            return response
-        aim = cast("AIMessage", response.result[0])
-        merged_text = _content_text(aim.content)
+            return self._passthrough(raw, response)
+        original = cast("AIMessage", response.result[0])
+        merged_text = _content_text(original.content)
         if merged_text is None:
-            return response
+            return self._passthrough(raw, response)
+        parts = [original]
         for _ in range(self._max_continues):
-            continuation = self._as_model_response(
-                handler(request.override(messages=[*request.messages, aim, HumanMessage(content=self._continue_prompt)]))
-            )
+            continuation = self._as_model_response(handler(self._continue_request(request, parts, merged_text)))
             if not self._can_heal(request, continuation):
                 if self._is_plain_text(continuation):
-                    merged_text = f"{merged_text}\n{_content_text(continuation.result[0].content)}"
-                    return self._merged_response(aim, merged_text, continuation.result[0])
-                return response
+                    tail = cast("AIMessage", continuation.result[0])
+                    parts.append(tail)
+                    merged_text = f"{merged_text}\n{_content_text(tail.content)}"
+                return self._merged_response(original, merged_text, parts[-1], parts)
             next_aim = cast("AIMessage", continuation.result[0])
             next_text = _content_text(next_aim.content)
             if next_text is None:
-                return response
+                return self._merged_response(original, merged_text, parts[-1], parts)
+            parts.append(next_aim)
             merged_text = f"{merged_text}\n{next_text}"
-            aim = next_aim
         # Exhausted the continuation budget; return whatever accumulated.
-        return self._merged_response(cast("AIMessage", response.result[0]), merged_text, aim)
+        return self._merged_response(original, merged_text, parts[-1], parts)
 
     async def _aheal(self, request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], Any]) -> ModelResponse[Any]:
         """Async healing loop; mirrors :meth:`_heal`."""
-        response = self._as_model_response(await handler(request))
+        raw = await handler(request)
+        response = self._as_model_response(raw)
         if not self._can_heal(request, response):
-            return response
-        aim = cast("AIMessage", response.result[0])
-        merged_text = _content_text(aim.content)
+            return self._passthrough(raw, response)
+        original = cast("AIMessage", response.result[0])
+        merged_text = _content_text(original.content)
         if merged_text is None:
-            return response
+            return self._passthrough(raw, response)
+        parts = [original]
         for _ in range(self._max_continues):
-            continuation = self._as_model_response(
-                await handler(request.override(messages=[*request.messages, aim, HumanMessage(content=self._continue_prompt)]))
-            )
+            continuation = self._as_model_response(await handler(self._continue_request(request, parts, merged_text)))
             if not self._can_heal(request, continuation):
                 if self._is_plain_text(continuation):
-                    merged_text = f"{merged_text}\n{_content_text(continuation.result[0].content)}"
-                    return self._merged_response(aim, merged_text, continuation.result[0])
-                return response
+                    tail = cast("AIMessage", continuation.result[0])
+                    parts.append(tail)
+                    merged_text = f"{merged_text}\n{_content_text(tail.content)}"
+                return self._merged_response(original, merged_text, parts[-1], parts)
             next_aim = cast("AIMessage", continuation.result[0])
             next_text = _content_text(next_aim.content)
             if next_text is None:
-                return response
+                return self._merged_response(original, merged_text, parts[-1], parts)
+            parts.append(next_aim)
             merged_text = f"{merged_text}\n{next_text}"
-            aim = next_aim
-        return self._merged_response(cast("AIMessage", response.result[0]), merged_text, aim)
+        return self._merged_response(original, merged_text, parts[-1], parts)
+
+    def _continue_request(self, request: ModelRequest[Any], parts: list[AIMessage], merged_text: str) -> ModelRequest[Any]:
+        """Build the continuation request.
+
+        The model must see everything it has written so far, otherwise the
+        second and later continuations resume from only the most recent chunk
+        and repeat earlier content. Providers reject consecutive assistant
+        turns, so the accumulated text is collapsed into one `AIMessage`; the
+        first continuation reuses the original message untouched.
+
+        Args:
+            request: The original model request.
+            parts: Partial responses received so far.
+            merged_text: The concatenated text of `parts`.
+
+        Returns:
+            A request whose messages end with the partial answer and the
+                continue instruction.
+        """
+        partial = parts[0] if len(parts) == 1 else AIMessage(content=merged_text)
+        return request.override(messages=[*request.messages, partial, HumanMessage(content=self._continue_prompt)])
+
+    @staticmethod
+    def _passthrough(raw: Any, normalized: ModelResponse[Any]) -> ModelResponse[Any]:
+        """Return an untouched response without discarding a wrapper.
+
+        `_as_model_response` unwraps an `ExtendedModelResponse` to inspect its
+        messages, but that wrapper may carry a state update (a middleware
+        running inside this one could contribute one). Returning the unwrapped
+        value would silently drop it, so hand back the original object when
+        nothing was healed.
+
+        Args:
+            raw: Whatever the inner handler returned.
+            normalized: The `ModelResponse` view of `raw`.
+
+        Returns:
+            `raw` when it wraps a `ModelResponse`, else the normalized value.
+        """
+        if hasattr(raw, "model_response"):
+            return cast("ModelResponse[Any]", raw)
+        return normalized
 
     @staticmethod
     def _as_model_response(response: Any) -> ModelResponse[Any]:
@@ -181,13 +225,15 @@ class OutputTruncationMiddleware(AgentMiddleware[Any, Any, Any]):
         return not aim.tool_calls and _content_text(aim.content) is not None
 
     @staticmethod
-    def _merged_response(partial: AIMessage, merged_text: str, final: AIMessage) -> ModelResponse[Any]:
+    def _merged_response(partial: AIMessage, merged_text: str, final: AIMessage, parts: list[AIMessage]) -> ModelResponse[Any]:
         """Merge partial + continuation text into a single `AIMessage`.
 
         Args:
             partial: The first (truncated) message; its `id` is preserved.
             merged_text: The combined text content.
             final: The last message; its metadata reflects the terminal state.
+            parts: Every message that contributed, whose token usage is summed
+                onto the merged message.
 
         Returns:
             A `ModelResponse` wrapping the merged message.
@@ -198,8 +244,46 @@ class OutputTruncationMiddleware(AgentMiddleware[Any, Any, Any]):
             additional_kwargs=dict(final.additional_kwargs),
             response_metadata=dict(final.response_metadata),
             tool_calls=[],
+            usage_metadata=_sum_usage(parts),
         )
         return ModelResponse(result=[merged])  # type: ignore[call-arg]
+
+
+def _sum_usage(parts: list[AIMessage]) -> dict[str, Any] | None:
+    """Sum `usage_metadata` across every message that formed a merged reply.
+
+    A healed turn costs the sum of its calls — each continuation re-sends the
+    prompt and is billed for it. Without this the merged message carries no
+    usage at all and `CostTrackerMiddleware`, which wraps this middleware,
+    records nothing for the turn, silently defeating `budget_usd` caps.
+
+    Args:
+        parts: The partial and continuation messages.
+
+    Returns:
+        The summed usage mapping, or `None` when no part reported usage.
+    """
+    total: dict[str, Any] = {}
+    details_total: dict[str, int] = {}
+    seen = False
+    for message in parts:
+        usage = getattr(message, "usage_metadata", None)
+        if not isinstance(usage, dict):
+            continue
+        seen = True
+        for key, value in usage.items():
+            if key == "input_token_details":
+                if isinstance(value, dict):
+                    for detail_key, detail_value in value.items():
+                        if isinstance(detail_value, int):
+                            details_total[detail_key] = details_total.get(detail_key, 0) + detail_value
+            elif isinstance(value, int):
+                total[key] = total.get(key, 0) + value
+    if not seen:
+        return None
+    if details_total:
+        total["input_token_details"] = details_total
+    return total
 
 
 def _content_text(content: Any) -> str | None:

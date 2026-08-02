@@ -1,5 +1,6 @@
 """Unit tests for `OutputTruncationMiddleware` auto-continuation."""
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -167,3 +168,72 @@ def test_not_truncated_after_non_truncation_reason() -> None:
     assert handler.call_count == 1
     assert isinstance(result, AnyModelResponse)
     assert result.result[0].content == "Done"
+
+
+def test_merged_message_sums_usage_across_calls() -> None:
+    # CostTracker wraps this middleware and reads usage off the returned
+    # message. A healed turn really costs every call it made, so the merged
+    # message must carry their sum -- otherwise budget caps see nothing.
+    middleware = OutputTruncationMiddleware()
+    first = _aim("Part one", truncated=True)
+    first.usage_metadata = {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_tokens": 150,
+        "input_token_details": {"cache_read": 80},
+    }
+    second = _aim("Part two")
+    second.usage_metadata = {
+        "input_tokens": 160,
+        "output_tokens": 20,
+        "total_tokens": 180,
+        "input_token_details": {"cache_read": 140},
+    }
+    handler = MagicMock(side_effect=[first, second])
+
+    result = middleware.wrap_model_call(_make_request(), handler)
+
+    usage = result.result[0].usage_metadata
+    assert usage["input_tokens"] == 260
+    assert usage["output_tokens"] == 70
+    assert usage["total_tokens"] == 330
+    assert usage["input_token_details"]["cache_read"] == 220
+
+
+def test_usage_is_none_when_no_part_reports_it() -> None:
+    middleware = OutputTruncationMiddleware()
+    handler = MagicMock(side_effect=[_aim("A", truncated=True), _aim("B")])
+
+    result = middleware.wrap_model_call(_make_request(), handler)
+
+    assert result.result[0].usage_metadata is None
+
+
+def test_later_continuation_sees_all_text_so_far() -> None:
+    # The model must resume from everything it has written, not just the most
+    # recent chunk -- otherwise it repeats or contradicts the earlier parts.
+    middleware = OutputTruncationMiddleware(max_continues=2)
+    handler = MagicMock(side_effect=[_aim("A", truncated=True), _aim("B", truncated=True), _aim("C")])
+
+    middleware.wrap_model_call(_make_request(), handler)
+
+    requests = _calls(handler)
+    assert len(requests) == 3
+    # First continuation carries the partial message untouched.
+    assert requests[1].messages[-2].content == "A"
+    # Second continuation carries the accumulated text, not just "B".
+    assert requests[2].messages[-2].content == "A\nB"
+
+
+def test_untouched_extended_response_keeps_its_wrapper() -> None:
+    # An ExtendedModelResponse may carry a state update; unwrapping it on the
+    # pass-through path would silently discard that update.
+    middleware = OutputTruncationMiddleware()
+    inner = ModelResponse(result=[_aim("Complete")])
+    extended = SimpleNamespace(model_response=inner, state_update={"_event": "kept"})
+    handler = MagicMock(return_value=extended)
+
+    result = middleware.wrap_model_call(_make_request(), handler)
+
+    assert result is extended
+    assert result.state_update == {"_event": "kept"}
