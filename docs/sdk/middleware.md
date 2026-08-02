@@ -15,17 +15,23 @@ TodoListMiddleware                ← outermost (sees request first)
   └── SkillsMiddleware
         └── CostTrackerMiddleware
               └── SummarizationMiddleware
-                    └── FilesystemMiddleware
-                          └── SubAgentMiddleware
-                                └── AnthropicPromptCachingMiddleware    ← innermost
-                                      └── (the actual model call)
+                    └── OutputTruncationMiddleware
+                          └── FilesystemMiddleware
+                                └── SubAgentMiddleware
+                                      └── AnthropicPromptCachingMiddleware    ← innermost
+                                            └── (the actual model call)
 ```
 
 The order matters. `CostTrackerMiddleware` before
 `SummarizationMiddleware` so the cost record reflects the
 pre-compression token count. `SummarizationMiddleware` before
 `AnthropicPromptCachingMiddleware` so the cache key reflects what
-actually gets sent. The full canonical order is locked by
+actually gets sent. `OutputTruncationMiddleware` sits just inside
+`SummarizationMiddleware` (and `PatchToolCallsMiddleware`): when a model
+response is cut off at the output-token limit, it re-invokes the model
+with the partial response and a short "continue" instruction, then merges
+the continuation into a single message — without re-triggering compaction
+or argument truncation. The full canonical order is locked by
 `tests/unit_tests/test_middleware_canonical_order.py` — touching it
 fails CI.
 
