@@ -1221,6 +1221,35 @@ def test_write_overwrites_existing_file(tmp_path: Path) -> None:
     assert (tmp_path / "notes.txt").read_text(encoding="utf-8") == "replaced"
 
 
+def test_write_failed_overwrite_preserves_original(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SB-3 (v5): a failure mid-overwrite must leave the original file intact.
+
+    `write` now routes through `_atomic_write` (sibling temp + `os.replace`),
+    so a crash/ENOSPC between "truncate" and "write complete" can no longer
+    exist: either the replace lands (new content) or it doesn't (old content).
+    Simulated by making `os.replace` raise.
+    """
+    import os as _os
+
+    backend = FilesystemBackend(root_dir=str(tmp_path))
+    target = tmp_path / "notes.txt"
+    target.write_text("original", encoding="utf-8")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(_os, "replace", _boom)
+
+    result = backend.write("/notes.txt", "replacement that never lands")
+
+    assert result.error is not None
+    assert "notes.txt" in result.error
+    # The original is untouched — not truncated, not partially overwritten.
+    assert target.read_text(encoding="utf-8") == "original"
+    # No temp litter left behind.
+    assert [p.name for p in tmp_path.iterdir()] == ["notes.txt"]
+
+
 def test_write_overwrite_does_not_follow_symlink(tmp_path: Path) -> None:
     """Overwriting must not write *through* a symlink (O_NOFOLLOW survives the guard removal)."""
     backend = FilesystemBackend(root_dir=str(tmp_path))

@@ -100,6 +100,52 @@ def test_real_build_emits_no_legacy_flag_deprecation() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# SDKC-4 (v5) — with_kwargs(config=...) merges with builder flags, never replaces
+# --------------------------------------------------------------------------- #
+
+
+def test_with_kwargs_config_merges_with_builder_flags(monkeypatch) -> None:
+    """A user FeatureConfig must not silently drop explicitly requested features.
+
+    Regression: `with_git(repo_map=True).with_kwargs(config=FeatureConfig(enable_dlp=True))`
+    used to forward only the user's config, discarding enable_repo_map.
+    """
+    captured = _capture_create_agent(monkeypatch)
+    (AgentBuilder("anthropic:claude-sonnet-4-6").with_git(repo_map=True).with_kwargs(config=FeatureConfig(enable_dlp=True)).build())
+    cfg = captured.get("config")
+    assert isinstance(cfg, FeatureConfig)
+    # Both sources survive the merge.
+    assert cfg.enable_repo_map is True  # builder flag kept
+    assert cfg.enable_dlp is True  # user config field kept
+    # Nothing leaks through the deprecated bare-kwarg backdoor.
+    assert "enable_repo_map" not in captured
+
+
+def test_with_kwargs_config_lets_builder_flags_win_on_overlap(monkeypatch) -> None:
+    """Explicit `with_X()` calls take precedence for the fields they set,
+    mirroring `_resolve_feature_config`'s documented kwarg-over-config layering.
+    Fields the builder never set come from the user's config unchanged.
+    """
+    captured = _capture_create_agent(monkeypatch)
+    user_cfg = FeatureConfig(enable_rbac=False, rbac_active_role="reader")
+    AgentBuilder("anthropic:claude-sonnet-4-6").with_rbac().with_kwargs(config=user_cfg).build()
+    cfg = captured.get("config")
+    assert isinstance(cfg, FeatureConfig)
+    assert cfg.enable_rbac is True  # with_rbac() wins on the overlapping field
+    assert cfg.rbac_active_role == "reader"  # unsurfaced field flows through
+    # The user's original config object is not mutated by the merge.
+    assert user_cfg.enable_rbac is False
+
+
+def test_with_kwargs_config_alone_passes_through(monkeypatch) -> None:
+    """With no builder feature flags, the user's config is forwarded as-is."""
+    captured = _capture_create_agent(monkeypatch)
+    user_cfg = FeatureConfig(enable_dlp=True)
+    AgentBuilder("anthropic:claude-sonnet-4-6").with_kwargs(config=user_cfg).build()
+    assert captured.get("config") is user_cfg
+
+
+# --------------------------------------------------------------------------- #
 # SDK-CORE-7 — mcp / sandbox no-ops made honest
 # --------------------------------------------------------------------------- #
 

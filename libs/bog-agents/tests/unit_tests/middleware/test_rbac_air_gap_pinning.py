@@ -116,3 +116,29 @@ class TestFlagPathIsPinned:
         rbac = next(m for m in mws if isinstance(m, RBACMiddleware))
         assert "set_active_role" not in {t.name for t in rbac.tools}
         assert rbac.store.strict is True
+
+
+class TestRBACWithoutPinnedRoleBuilds:
+    """SDKC-1 (v5): enable_rbac without rbac_active_role must warn, not crash.
+
+    The MW-SAFE-2 warning line used `_logging`, a function-local name bound only
+    inside the enhanced-skills branch of `create_agent`, so this configuration
+    raised `UnboundLocalError` before the graph was built.
+    """
+
+    def test_create_agent_enable_rbac_without_role_builds_and_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents.graph"):
+            agent = create_agent(model="claude-sonnet-4-20250514", config=FeatureConfig(enable_rbac=True))
+
+        assert agent is not None
+        assert any("enable_rbac=True without rbac_active_role" in rec.message for rec in caplog.records)
+
+    def test_builder_with_rbac_builds(self) -> None:
+        from bog_agents.builder import AgentBuilder
+
+        # with_rbac() cannot pin a role, so it exercises exactly the unpinned
+        # warning path — it must produce an agent, not an UnboundLocalError.
+        agent = AgentBuilder("claude-sonnet-4-20250514").with_rbac().build()
+        assert agent is not None

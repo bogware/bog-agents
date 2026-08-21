@@ -395,7 +395,12 @@ class WorktreeMiddleware(AgentMiddleware[WorktreeState, ContextT, ResponseT]):
                 target_branch = _validate_git_ref(target_branch, label="target_branch")
             except ValueError as exc:
                 return f"Error: {exc}"
-            result = _run_git(middleware._working_dir, "checkout", "--", target_branch)
+            # SB-2 (v5): switch branches with `git switch <branch>` — the old
+            # `checkout -- <branch>` form made git treat the branch as a
+            # *pathspec*, so the switch failed on every normal repo (or, worse,
+            # restored a same-named file and merged into the current branch).
+            # The ref is validated above, so it can never be parsed as a flag.
+            result = _run_git(middleware._working_dir, "switch", target_branch)
             if result.startswith("[exit code"):
                 return f"Failed to checkout {target_branch}: {result}"
             merge_result = _run_git(middleware._working_dir, "merge", "--no-ff", "--", source_branch)
@@ -547,7 +552,17 @@ def merge_with_conflict_report(
         """Best-effort restore of the caller's branch (P26)."""
         if not original_branch or original_branch == target_branch:
             return
-        restore = _run_git(repo_dir, "checkout", "--", original_branch)
+        # SB-2 (v5): `git switch` — `checkout -- <branch>` treated the branch
+        # as a pathspec, so this safety net never actually restored the branch.
+        restore = _run_git(repo_dir, "switch", original_branch)
+        if restore.startswith(("[exit code", "Error:")):
+            # A failed merge attempt leaves the tree mid-merge (MERGE_HEAD
+            # present), and git refuses to switch branches in that state.
+            # Abort the dangling merge and retry once. (A caller-owned
+            # in-progress merge can never reach here: the initial target
+            # checkout would have failed first and returned early.)
+            _run_git(repo_dir, "merge", "--abort")
+            restore = _run_git(repo_dir, "switch", original_branch)
         if restore.startswith(("[exit code", "Error:")):
             logger.warning(
                 "Could not restore branch %s after merge attempt (%s -> %s): %s",

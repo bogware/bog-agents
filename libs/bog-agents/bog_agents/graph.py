@@ -1,6 +1,7 @@
 """Bog Agents come with planning, filesystem, and subagents."""
 
 import dataclasses
+import logging
 import os
 from collections.abc import Callable, Sequence
 from importlib import import_module
@@ -415,9 +416,7 @@ def _dedup_middleware_by_name(middleware_list: list[AgentMiddleware]) -> list[Ag
         seen_names.add(name)
         deduped.append(mw)
     if dropped:
-        import logging as _logging
-
-        _logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).warning(
             "Removed duplicate middleware instance(s) with name(s) %s; the first occurrence of each was kept. "
             "This usually means the same feature was supplied both via a convenience kwarg and via middleware=.",
             sorted(set(dropped)),
@@ -1197,9 +1196,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     if f.enable_enhanced_skills:
         if not f.enhanced_skills_sources:
-            import logging as _logging
-
-            _logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).warning(
                 "enable_enhanced_skills=True but f.enhanced_skills_sources is empty — "
                 "EnhancedSkillsMiddleware will not be activated. "
                 "Pass enhanced_skills_sources=['/path/to/skills'] to enable."
@@ -1261,8 +1258,12 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         # self-administer the policy. Without a pinned role RBAC has nothing to
         # enforce (no boundary against an adversarial model) — warn so the
         # operator isn't given false assurance.
+        # SDKC-1: use the module-level `logging` import — this line used to read
+        # `_logging.getLogger(...)`, a function-local name only bound inside the
+        # enhanced-skills branch, so enable_rbac without a role crashed with
+        # UnboundLocalError before the graph was built.
         if not f.rbac_active_role:
-            _logging.getLogger(__name__).warning(
+            logging.getLogger(__name__).warning(
                 "enable_rbac=True without rbac_active_role: RBAC exposes role tools to the model but enforces no restriction until a role is pinned."
             )
         agents_middleware.append(RBACMiddleware(roles=f.rbac_roles, active_role=f.rbac_active_role))

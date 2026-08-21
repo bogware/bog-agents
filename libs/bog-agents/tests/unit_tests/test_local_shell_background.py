@@ -15,8 +15,10 @@ class TestExplicitBackground:
         be = LocalShellBackend(root_dir=str(tmp_path), inherit_env=True)
         try:
             resp = be.execute(f'{PY} -c "import time; time.sleep(20)"', background=True)
-            assert resp.exit_code == 0
+            # SB-4: a still-running command must NOT report a success exit code.
+            assert resp.exit_code is None
             assert "background as task" in resp.output
+            assert "not known" in resp.output
             running = be.list_background()
             assert len(running) == 1
             assert running[0].running is True
@@ -54,7 +56,11 @@ class TestAutoBackground:
         try:
             resp = be.execute(f'{PY} -c "import time; time.sleep(20)"')
             assert "moved to the background" in resp.output
-            assert resp.exit_code == 0
+            # SB-4: exit_code=None (still running), never 0 — the execute tool
+            # rendered 0 as "[Command succeeded with exit code 0]" for a command
+            # that had not finished.
+            assert resp.exit_code is None
+            assert "NOT finished" in resp.output
             # still alive in the registry
             running = [r for r in be.list_background() if r.running]
             assert len(running) == 1
@@ -92,6 +98,36 @@ class TestAutoBackground:
         finally:
             be.close()
 
+    def test_execute_tool_does_not_claim_success_for_backgrounded_command(self, tmp_path: Path) -> None:
+        # SB-4 end-to-end: the execute tool used to render the auto-backgrounded
+        # exit_code=0 as "[Command succeeded with exit code 0]" for a command
+        # that was still running. With exit_code=None the formatter omits the
+        # status line entirely.
+        from langchain.tools import ToolRuntime
+        from langgraph.store.memory import InMemoryStore
+
+        from bog_agents.middleware.filesystem import FilesystemMiddleware, FilesystemState
+
+        be = LocalShellBackend(root_dir=str(tmp_path), inherit_env=True, auto_background_after=0.5)
+        try:
+            middleware = FilesystemMiddleware(backend=be)
+            rt = ToolRuntime(
+                state=FilesystemState(messages=[], files={}),
+                context=None,
+                tool_call_id="test_bg_fmt",
+                store=InMemoryStore(),
+                stream_writer=lambda _: None,
+                config={},
+            )
+            tool = next(t for t in middleware.tools if t.name == "execute")
+            result = tool.invoke({"command": f'{PY} -c "import time; time.sleep(20)"', "runtime": rt})
+
+            assert "moved to the background" in result
+            assert "succeeded" not in result
+            assert "exit code 0" not in result
+        finally:
+            be.close()
+
     def test_explicit_timeout_above_threshold_still_backgrounds(self, tmp_path: Path) -> None:
         # A per-call timeout larger than auto_background_after still engages
         # auto-background (the wait budget stays the threshold, not the timeout).
@@ -99,7 +135,7 @@ class TestAutoBackground:
         try:
             resp = be.execute(f'{PY} -c "import time; time.sleep(20)"', timeout=5)
             assert "moved to the background" in resp.output
-            assert resp.exit_code == 0
+            assert resp.exit_code is None  # SB-4: still running, result unknown
             running = [r for r in be.list_background() if r.running]
             assert len(running) == 1
         finally:
