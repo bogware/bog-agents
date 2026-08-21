@@ -1893,6 +1893,7 @@ def create_cli_agent(
 
         agent_middleware.append(
             CostTrackerMiddleware(
+                model_name=model_spec_str,
                 effort_level=effort_level,
                 budget_usd=budget_usd if budget_usd > 0 else None,
             )

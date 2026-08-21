@@ -109,3 +109,19 @@ class TestCostTrackerRoutesThroughDetect:
         # hardcoded default, preserved for callers that don't have a
         # provider package installed).
         assert tracker.context_window_size == 200_000
+
+
+class TestEmptyModelNameGuard:
+    """v5 CTX-3: a blank model name must not prefix-match the first catalog entry."""
+
+    def test_empty_name_uses_default_not_first_entry(self) -> None:
+        from bog_agents.middleware.adaptive_context import detect_context_window
+
+        # Empty name previously matched claude-opus-4-7 (1M) via
+        # `known.startswith("")`; it must fall to the caller's default.
+        assert detect_context_window("", default=200_000) == 200_000
+        assert detect_context_window("   ".strip(), default=128_000) == 128_000
+
+    def test_empty_model_cost_tracker_reports_default_window(self) -> None:
+        tracker = CostTracker(model_name="")
+        assert tracker.context_window_size == 200_000
