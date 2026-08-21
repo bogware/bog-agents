@@ -138,6 +138,19 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# LangChain's `_create_summary` swallows a failed summary-model call into this
+# sentinel string instead of raising (its summarization.py:822/848). Committing
+# that string as the permanent conversation summary silently evicts all
+# pre-cutoff context on the exact failure the overflow-heal path claims to fix
+# (v5 CTX-1) — so every commit site checks for it first.
+_SUMMARY_ERROR_SENTINEL = "Error generating summary:"
+
+
+def _summary_failed(summary: str) -> bool:
+    """Whether `summary` is LangChain's swallowed-error sentinel, not a real summary."""
+    return summary.lstrip().startswith(_SUMMARY_ERROR_SENTINEL)
+
+
 SUMMARIZATION_SYSTEM_PROMPT = """## Compact conversation Tool `compact_conversation`
 
 You have access to a `compact_conversation` tool. This tool refreshes your context window to reduce context bloat and costs.
@@ -1364,6 +1377,63 @@ A condensed summary follows:
             logger.debug("Offloaded %d messages to %s", len(filtered_messages), path)
             return path
 
+    def _passthrough_on_summary_failure(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+        preserved_messages: list[AnyMessage],
+        truncated_messages: list[AnyMessage],
+        new_state_tail: list[AnyMessage],
+        *,
+        overflow: bool,
+    ) -> ModelResponse | ExtendedModelResponse:
+        """Heal a turn whose summary generation failed, committing no summary event.
+
+        On overflow the original request was too big, so send the (already
+        clipped) preserved tail and persist the tail clip. Otherwise the
+        untouched history already fit, so pass it through unchanged. Either way
+        the failed-summary sentinel is never recorded as state (v5 CTX-1).
+
+        Args:
+            request: The model request.
+            handler: The downstream handler.
+            preserved_messages: The recent tail kept after the cutoff (clipped on overflow).
+            truncated_messages: The full arg-truncated history that fit before compaction.
+            new_state_tail: Tail-clip replacements to persist (overflow path only).
+            overflow: Whether this turn was triggered by a context overflow.
+
+        Returns:
+            The handler response, wrapped to persist the tail clip when present.
+        """
+        messages = preserved_messages if overflow else truncated_messages
+        response = handler(request.override(messages=messages))
+        if overflow and new_state_tail:
+            return ExtendedModelResponse(
+                model_response=response,
+                command=Command(update={"messages": list(new_state_tail)}),
+            )
+        return response
+
+    async def _apassthrough_on_summary_failure(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+        preserved_messages: list[AnyMessage],
+        truncated_messages: list[AnyMessage],
+        new_state_tail: list[AnyMessage],
+        *,
+        overflow: bool,
+    ) -> ModelResponse | ExtendedModelResponse:
+        """Async twin of `_passthrough_on_summary_failure` (v5 CTX-1)."""
+        messages = preserved_messages if overflow else truncated_messages
+        response = await handler(request.override(messages=messages))
+        if overflow and new_state_tail:
+            return ExtendedModelResponse(
+                model_response=response,
+                command=Command(update={"messages": list(new_state_tail)}),
+            )
+        return response
+
     def wrap_model_call(
         self,
         request: ModelRequest,
@@ -1466,6 +1536,17 @@ A condensed summary follows:
 
         # Generate summary
         summary = self._create_summary(offloaded_media_messages)
+
+        # A failed summary must never become permanent state (v5 CTX-1): the
+        # error string would replace all pre-cutoff history on every future
+        # turn. Skip the event commit and heal without it — on overflow, send
+        # the (already clipped) preserved tail so the retry is strictly smaller;
+        # otherwise the untouched history already fit, so pass it through.
+        if _summary_failed(summary):
+            logger.warning("summarization: summary generation failed; skipping compaction this turn (%s)", summary)
+            return self._passthrough_on_summary_failure(
+                request, handler, preserved_messages, truncated_messages, new_state_tail, overflow=overflow_triggered
+            )
 
         # Build summary message with file path reference
         new_messages = self._build_new_messages_with_path(summary, file_path)
@@ -1597,6 +1678,14 @@ A condensed summary follows:
             self._acreate_summary(offloaded_media_messages),
         )
         self._warn_media_offload_failures(file_path, failed_media)
+
+        # See the sync path: never commit a failed summary as permanent state
+        # (v5 CTX-1).
+        if _summary_failed(summary):
+            logger.warning("summarization: summary generation failed; skipping compaction this turn (%s)", summary)
+            return await self._apassthrough_on_summary_failure(
+                request, handler, preserved_messages, truncated_messages, new_state_tail, overflow=overflow_triggered
+            )
 
         # Build summary message with file path reference
         new_messages = self._build_new_messages_with_path(summary, file_path)
@@ -2046,6 +2135,10 @@ class SummarizationToolMiddleware(AgentMiddleware):
             logger.exception("compact_conversation tool failed")
             return self._compact_error(tool_call_id, exc)
 
+        # A swallowed summary error must not be committed as the summary (v5 CTX-1).
+        if _summary_failed(summary):
+            return self._compact_error(tool_call_id, RuntimeError(summary))
+
         return self._build_compact_result(runtime, to_summarize, summary, file_path, event, cutoff)
 
     async def _arun_compact(self, runtime: ToolRuntime) -> Command:
@@ -2079,6 +2172,10 @@ class SummarizationToolMiddleware(AgentMiddleware):
         except Exception as exc:  # tool must return a ToolMessage, not raise
             logger.exception("compact_conversation tool failed")
             return self._compact_error(tool_call_id, exc)
+
+        # A swallowed summary error must not be committed as the summary (v5 CTX-1).
+        if _summary_failed(summary):
+            return self._compact_error(tool_call_id, RuntimeError(summary))
 
         return self._build_compact_result(runtime, to_summarize, summary, file_path, event, cutoff)
 
