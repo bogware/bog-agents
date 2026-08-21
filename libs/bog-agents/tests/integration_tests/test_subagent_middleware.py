@@ -50,7 +50,7 @@ class TestSubagentMiddleware:
 
     def test_general_purpose_subagent(self):
         agent = create_agent(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             system_prompt="Use the general-purpose subagent to get the weather in a city.",
             middleware=[
                 SubAgentMiddleware(
@@ -58,7 +58,7 @@ class TestSubagentMiddleware:
                     subagents=[
                         {
                             **GENERAL_PURPOSE_SUBAGENT,
-                            "model": "claude-sonnet-4-20250514",
+                            "model": "claude-sonnet-4-5",
                             "tools": [get_weather],
                         }
                     ],
@@ -72,7 +72,7 @@ class TestSubagentMiddleware:
 
     def test_defined_subagent_tool_calls(self):
         agent = create_agent(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             system_prompt="Use the task tool to call a subagent.",
             middleware=[
                 SubAgentMiddleware(
@@ -82,7 +82,7 @@ class TestSubagentMiddleware:
                             "name": "weather",
                             "description": "This subagent can get weather in cities.",
                             "system_prompt": "Use the get_weather tool to get the weather in a city.",
-                            "model": "claude-sonnet-4-20250514",
+                            "model": "claude-sonnet-4-5",
                             "tools": [get_weather],
                         }
                     ],
@@ -101,7 +101,7 @@ class TestSubagentMiddleware:
 
     def test_defined_subagent_custom_model(self):
         agent = create_agent(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             system_prompt="Use the task tool to call a subagent.",
             middleware=[
                 SubAgentMiddleware(
@@ -122,7 +122,7 @@ class TestSubagentMiddleware:
             {
                 "name": "task",
                 "args": {"subagent_type": "weather"},
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5",
             },
             {"name": "get_weather", "args": {}, "model": "gpt-4.1-2025-04-14"},
         ]
@@ -134,7 +134,7 @@ class TestSubagentMiddleware:
 
     def test_defined_subagent_custom_middleware(self):
         agent = create_agent(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             system_prompt="Use the task tool to call a subagent.",
             middleware=[
                 SubAgentMiddleware(
@@ -156,7 +156,7 @@ class TestSubagentMiddleware:
             {
                 "name": "task",
                 "args": {"subagent_type": "weather"},
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5",
             },
             {"name": "get_weather", "args": {}, "model": "gpt-4.1-2025-04-14"},
         ]
@@ -173,7 +173,7 @@ class TestSubagentMiddleware:
             tools=[get_weather],
         )
         agent = create_agent(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             system_prompt="Use the task tool to call a subagent.",
             middleware=[
                 SubAgentMiddleware(
@@ -192,7 +192,7 @@ class TestSubagentMiddleware:
             {
                 "name": "task",
                 "args": {"subagent_type": "weather"},
-                "model": "claude-sonnet-4-20250514",
+                "model": "claude-sonnet-4-5",
             },
             {"name": "get_weather", "args": {}, "model": "gpt-4.1-2025-04-14"},
         ]
@@ -206,7 +206,7 @@ class TestSubagentMiddleware:
         """Test that subagents inherit default_model when not specified."""
         with pytest.warns(DeprecationWarning, match="default_model"):
             agent = create_agent(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-5",
                 system_prompt="Use the task tool to call a subagent.",
                 middleware=[
                     SubAgentMiddleware(
@@ -225,7 +225,7 @@ class TestSubagentMiddleware:
             )
         # Verify the custom subagent uses the inherited model
         expected_tool_calls = [
-            {"name": "task", "args": {"subagent_type": "custom"}, "model": "claude-sonnet-4-20250514"},
+            {"name": "task", "args": {"subagent_type": "custom"}, "model": "claude-sonnet-4-5"},
             {"name": "get_weather", "args": {}, "model": "gpt-4.1-2025-04-14"},  # Inherited model
         ]
         assert_expected_subgraph_actions(
@@ -238,11 +238,11 @@ class TestSubagentMiddleware:
         """Test that subagents inherit default_tools when not specified."""
         with pytest.warns(DeprecationWarning, match="default_model"):
             agent = create_agent(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-5",
                 system_prompt="Use the task tool to call a subagent.",
                 middleware=[
                     SubAgentMiddleware(
-                        default_model="claude-sonnet-4-20250514",
+                        default_model="claude-sonnet-4-5",
                         default_tools=[get_weather],  # Custom subagent should inherit this
                         subagents=[
                             {

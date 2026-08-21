@@ -35,7 +35,7 @@ def build_composite_state_backend(runtime, *, routes):
 class TestFilesystem:
     def test_filesystem_system_prompt_override(self):
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=StateBackend,
@@ -51,7 +51,7 @@ class TestFilesystem:
             return build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})
 
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=backend,
@@ -85,7 +85,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=(lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})),
@@ -145,7 +145,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=(lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})),
@@ -191,7 +191,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=(lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})),
@@ -232,7 +232,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=(lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})),
@@ -282,7 +282,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=(lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)})),
@@ -312,7 +312,7 @@ class TestFilesystem:
         checkpointer = MemorySaver()
         store = InMemoryStore()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -351,7 +351,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -377,7 +377,7 @@ class TestFilesystem:
         checkpointer = MemorySaver()
         store = InMemoryStore()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -418,7 +418,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -448,7 +448,7 @@ class TestFilesystem:
         checkpointer = MemorySaver()
         store = InMemoryStore()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -477,7 +477,7 @@ class TestFilesystem:
 
     def test_tool_call_with_tokens_exceeding_limit(self):
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             tools=[get_nba_standings],
             middleware=[
                 FilesystemMiddleware(
@@ -495,7 +495,7 @@ class TestFilesystem:
 
     def test_tool_call_with_tokens_exceeding_custom_limit(self):
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             tools=[get_nfl_standings],
             middleware=[
                 FilesystemMiddleware(
@@ -514,7 +514,7 @@ class TestFilesystem:
 
     def test_command_with_tool_call(self):
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             tools=[get_la_liga_standings],
             middleware=[
                 FilesystemMiddleware(
@@ -533,7 +533,7 @@ class TestFilesystem:
 
     def test_command_with_tool_call_existing_state(self):
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             tools=[get_premier_league_standings],
             middleware=[
                 FilesystemMiddleware(
@@ -560,7 +560,7 @@ class TestFilesystem:
     def test_glob_search_shortterm_only(self):
         checkpointer = MemorySaver()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=StateBackend,
@@ -629,7 +629,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -674,7 +674,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -712,7 +712,7 @@ class TestFilesystem:
     def test_grep_search_shortterm_only(self):
         checkpointer = MemorySaver()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=StateBackend,
@@ -781,7 +781,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -826,7 +826,7 @@ class TestFilesystem:
             },
         )
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(
                     backend=lambda rt: build_composite_state_backend(rt, routes={"/memories/": (StoreBackend)}),
@@ -864,7 +864,7 @@ class TestFilesystem:
     def test_default_backend_fallback(self):
         checkpointer = MemorySaver()
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware()  # No backend specified
             ],
@@ -902,7 +902,7 @@ class TestFilesystem:
 
         # Test with StateBackend (no execution support)
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(backend=StateBackend),
                 CapturingMiddleware(),
@@ -922,7 +922,7 @@ class TestFilesystem:
                 return ExecuteResponse(output="test", exit_code=0, truncated=False)
 
         agent_with_sandbox = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(backend=MockSandboxBackend),
                 CapturingMiddleware(),
@@ -950,7 +950,7 @@ class TestFilesystem:
 
         # Test with StateBackend (no execution support)
         agent = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(backend=StateBackend),
                 CapturingMiddleware(),
@@ -970,7 +970,7 @@ class TestFilesystem:
                 return ExecuteResponse(output="test", exit_code=0, truncated=False)
 
         agent_with_sandbox = create_agent(
-            model=ChatAnthropic(model="claude-sonnet-4-20250514"),
+            model=ChatAnthropic(model="claude-sonnet-4-5"),
             middleware=[
                 FilesystemMiddleware(backend=MockSandboxBackend),
                 CapturingMiddleware(),
