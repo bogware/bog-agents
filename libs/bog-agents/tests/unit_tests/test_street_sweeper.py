@@ -176,9 +176,10 @@ def test_offload_and_recall_roundtrip(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(mw, "_get_thread_id", lambda: "t1")
 
     offloads = [("r1", mw._offload_header("r1", "read_file", "stale_read"), "ORIGINAL READ BODY")]
-    addition = mw._pending_offloads(offloads)
+    addition, markers = mw._pending_offloads(offloads)
     assert "ORIGINAL READ BODY" in addition
-    mw._offload(backend, addition)
+    assert markers == ["r1"]
+    mw._offload(backend, addition, markers)
 
     stored = backend.download_files([mw._history_path()])[0].content.decode("utf-8")
     assert mw._extract_section(stored, "r1").strip() == "ORIGINAL READ BODY"
@@ -191,10 +192,37 @@ def test_offload_and_recall_roundtrip(tmp_path: Path, monkeypatch: Any) -> None:
 def test_pending_offloads_dedupes_by_marker() -> None:
     mw = StreetSweeperMiddleware(keep_recent=0)
     offloads = [("r1", "### swept r1 | read_file | stale_read | ts", "body")]
-    first = mw._pending_offloads(offloads)
-    second = mw._pending_offloads(offloads)
-    assert "body" in first
-    assert second == ""  # already offloaded this session
+    first_addition, first_markers = mw._pending_offloads(offloads)
+    assert "body" in first_addition
+    assert first_markers == ["r1"]
+    # v5 CTX-4: _pending_offloads no longer marks markers written — that only
+    # happens after a successful _offload — so it stays pending until then.
+    still_pending, _ = mw._pending_offloads(offloads)
+    assert "body" in still_pending
+    # Once a write succeeds, the marker is recorded and no longer re-emitted.
+    mw._offloaded.add("r1")
+    after_write, after_markers = mw._pending_offloads(offloads)
+    assert after_write == ""
+    assert after_markers == []
+
+
+def test_failed_offload_leaves_marker_pending() -> None:
+    # v5 CTX-4: a backend write failure must NOT mark the marker offloaded, so
+    # the next model call retries instead of stranding an unrecoverable stub.
+    class _FailingBackend:
+        def download_files(self, _paths: list[str]) -> list[Any]:
+            return []
+
+        def write(self, _path: str, _content: str) -> None:
+            raise OSError("disk full")
+
+        def edit(self, _path: str, _old: str, _new: str) -> None:
+            raise OSError("disk full")
+
+    mw = StreetSweeperMiddleware(keep_recent=0)
+    addition, markers = mw._pending_offloads([("r1", mw._offload_header("r1", "read_file", "stale_read"), "BODY")])
+    mw._offload(_FailingBackend(), addition, markers)  # type: ignore[arg-type]
+    assert "r1" not in mw._offloaded  # still pending for retry
 
 
 # --------------------------------------------------------------------------- accounting + hooks
