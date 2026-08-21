@@ -144,7 +144,7 @@ def _resolve_turn_timeout() -> float | None:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Coroutine
 
     from bog_agents.backends import CompositeBackend
     from bog_agents.backends.protocol import BackendProtocol
@@ -163,6 +163,7 @@ if TYPE_CHECKING:
     from bog_agents_cli.pipeline import Pipeline
     from bog_agents_cli.remote_client import RemoteAgent
     from bog_agents_cli.server import ServerProcess
+    from bog_agents_cli.team_executor import TeamRunRequest
     from bog_agents_cli.update_manager import UpdatePlan
     from bog_agents_cli.widgets.pipeline_screen import PipelineRunRequest
 
@@ -2618,8 +2619,13 @@ class BogAgentsApp(App):
         self._bg_manager = BackgroundAgentManager(
             agent_factory=_make_agent,
             sidechain_store=SidechainStore(settings.user_agents_dir),
-            on_complete=lambda task: self.call_from_thread(
-                self._notify_background_complete, task
+            # The manager runs tasks on the app's own event loop, so
+            # `call_from_thread` unconditionally raises ("must run in a
+            # different thread from the app") and the completion notice was
+            # silently swallowed on every task (v5 CLIC-4). `_spawn` schedules
+            # the notification as a same-loop task instead.
+            on_complete=lambda task: self._spawn(
+                self._notify_background_complete(task)
             ),
         )
 
@@ -5983,39 +5989,18 @@ class BogAgentsApp(App):
             )
             return
 
-        from bog_agents_cli.best_of_n import run_best_of_n_session
-        from bog_agents_cli.config import create_model, settings
-
-        repo_dir = Path(settings.project_root or self._cwd)
-        model_spec = self._model_override or settings.model_name
-
-        def _resolve(spec: str) -> Any:  # noqa: ANN401 - returns a langchain chat model
-            return create_model(spec, profile_overrides=self._profile_override).model
-
-        await self._set_spinner(f"Best-of-{n}: running attempts in worktrees")
-        try:
-            report, winner_path = await run_best_of_n_session(
-                prompt,
-                n=n,
-                repo_dir=repo_dir,
-                model_spec=model_spec,
-                resolve_model=_resolve,
-            )
-        except Exception as exc:
-            await self._mount_message(ErrorMessage(f"/best-of-n failed: {exc}"))
-            return
-        finally:
-            await self._set_spinner("")
-
-        await self._mount_message(AppMessage(report.format_summary()))
-        if winner_path:
+        if self._turns.busy:
             await self._mount_message(
-                AppMessage(
-                    f"[bold green]Winner worktree kept at:[/bold green] [cyan]{winner_path}[/cyan]\n"
-                    "Inspect it, then merge its branch or copy the changes across. The other "
-                    "attempt worktrees were removed."
+                ErrorMessage(
+                    "Cannot start /best-of-n while another turn or session is in flight."
                 )
             )
+            return
+        # N full agent attempts run for minutes+; run as a tracked worker so
+        # the TUI stays responsive and Esc/Ctrl+C can stop it (v5 CLIC-2).
+        self._start_tracked_session(
+            self._run_best_of_n_task(prompt, n), name="/best-of-n"
+        )
 
     async def _handle_jury_command(self, command: str) -> None:
         """``/jury`` — multi-reviewer vote on the current diff.
@@ -6045,7 +6030,17 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._run_jury_on_diff(diff_text)
+        if self._turns.busy:
+            await self._mount_message(
+                ErrorMessage(
+                    "Cannot start /jury while another turn or session is in flight."
+                )
+            )
+            return
+        # Polling N jurors is a long model-bound session; run as a tracked
+        # worker so the TUI stays responsive and Esc/Ctrl+C can stop it
+        # (v5 CLIC-2).
+        self._start_tracked_session(self._run_jury_on_diff(diff_text), name="/jury")
 
     async def _gather_jury_diff(self, arg: str) -> str | None:
         """Gather a diff for /jury based on the user's argument.
@@ -6563,7 +6558,13 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._run_telephone_flow(body)
+        # Run off the App message pump: the flow blocks on a decision future
+        # that only TelephoneMenu key events can resolve, and those key events
+        # are dispatched by this very pump — awaiting inline deadlocks the
+        # whole TUI (v5 CLIC-1). The flow is not registered as an agent turn:
+        # it only waits on UI input, and its submit path re-enters the normal
+        # (busy-guarded) dispatch machinery.
+        self.run_worker(self._run_telephone_flow(body), exclusive=False)
 
     async def _run_telephone_flow(self, original_prompt: str) -> None:
         """Drive one rewrite → confirm → submit/redo/ditch cycle.
@@ -6621,17 +6622,30 @@ class BogAgentsApp(App):
         )
         menu.set_future(future)
         await self._mount_message(menu)
-        decision = await future
-
-        # Remove the modal so chat scroll keeps moving forward.
         try:
-            menu.remove()
-        except Exception:
-            logger.debug("Failed to remove telephone menu", exc_info=True)
+            decision = await future
+        finally:
+            # Remove the modal so chat scroll keeps moving forward — also on
+            # cancellation, so an interrupted flow never strands the menu.
+            try:
+                menu.remove()
+            except Exception:
+                logger.debug("Failed to remove telephone menu", exc_info=True)
 
         if decision == "submit":
             await self._mount_message(AppMessage("Submitting rewritten prompt…"))
-            await self._handle_user_message(rewritten)
+            # A turn may have started while the menu was up (the flow runs in
+            # a worker now, so the user can keep typing) — queue instead of
+            # colliding with it.
+            if self._turns.busy or self._connecting:
+                self._pending_messages.append(
+                    QueuedMessage(text=rewritten, mode="normal")
+                )
+                queued_widget = QueuedUserMessage(rewritten)
+                self._queued_widgets.append(queued_widget)
+                await self._mount_message(queued_widget)
+            else:
+                await self._handle_user_message(rewritten)
         elif decision == "redo":
             await self._mount_message(AppMessage("Re-running rewriter…"))
             await self._run_telephone_flow(original_prompt)
@@ -7326,29 +7340,41 @@ class BogAgentsApp(App):
         # Take the single-flight lock so we don't trample interactive
         # turns or other scheduled jobs.
         async with self._peat_run_lock:
-            # Wait for any in-flight interactive worker to finish first.
-            worker = self._agent_worker
-            if worker is not None and not worker.is_finished:
-                try:
-                    await asyncio.wait_for(worker.wait(), timeout=300)
-                except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
-                    return PeatJobRun(
-                        job_id=job.job_id,
-                        run_id=run_id,
-                        started_at=started,
-                        duration_s=_time.time() - started,
-                        status="fail",
-                        error="user turn still running after 5 min — skipping fire",
-                    )
+            from textual.worker import WorkerCancelled, WorkerFailed
+
+            def _abort(status: str, error: str) -> PeatJobRun:
+                return PeatJobRun(
+                    job_id=job.job_id,
+                    run_id=run_id,
+                    started_at=started,
+                    duration_s=_time.time() - started,
+                    status=status,
+                    error=error,
+                )
 
             await self._mount_message(
                 AppMessage(f"[Peat] Firing scheduled job `{job.name or job.job_id}`...")
             )
 
+            # Wait until no turn is in flight. Re-checked in a loop (not a
+            # one-shot wait on the current worker) because a finishing turn's
+            # queue drain can synchronously start ANOTHER turn — grabbing
+            # `_agent_worker` after a single wait can steal that turn's handle
+            # and harvest its output into this job's artifact (v5 CLIC-6).
+            wait_deadline = _time.monotonic() + 300
+            while self._turns.busy or self._connecting:
+                if _time.monotonic() > wait_deadline:
+                    return _abort(
+                        "fail", "user turn still running after 5 min — skipping fire"
+                    )
+                await asyncio.sleep(0.5)
+
             # Attach a transient recorder so we can harvest the AI text
             # the agent produces during this turn. The recorder uses the
             # same _mount_message tap as /record but isn't promoted to a
             # saved replay — we just want the final assistant message.
+            # Attached only now, with dispatch following before any yield
+            # point, so it can never record someone else's turn.
             transient = SessionRecorder(session_id=run_id, name=f"peat:{job.job_id}")
             transient.start(context={"cwd": str(self._cwd), "job_id": job.job_id})
             previous_state = self._recording_state
@@ -7361,21 +7387,21 @@ class BogAgentsApp(App):
                 recorder=transient,
             )
             try:
-                # Dispatch and wait for completion.
-                await self._send_prompt_to_agent(prompt)
-                worker = self._agent_worker
-                if worker is not None:
-                    try:
-                        await asyncio.wait_for(worker.wait(), timeout=job.timeout_s)
-                    except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
-                        return PeatJobRun(
-                            job_id=job.job_id,
-                            run_id=run_id,
-                            started_at=started,
-                            duration_s=_time.time() - started,
-                            status="timeout",
-                            error=f"agent ran past {job.timeout_s}s budget",
-                        )
+                # Dispatch and wait for completion of OUR turn — the returned
+                # handle, never a re-read of `_agent_worker`.
+                worker = await self._send_prompt_to_agent(prompt)
+                if worker is None:
+                    return _abort(
+                        "fail", "could not dispatch (agent busy or unavailable)"
+                    )
+                try:
+                    await asyncio.wait_for(worker.wait(), timeout=job.timeout_s)
+                except (TimeoutError, WorkerCancelled, WorkerFailed) as exc:
+                    if isinstance(exc, WorkerCancelled) and worker.is_cancelled:
+                        return _abort("fail", "agent turn was interrupted")
+                    if isinstance(exc, WorkerFailed):
+                        return _abort("fail", f"agent turn failed: {exc}")
+                    return _abort("timeout", f"agent ran past {job.timeout_s}s budget")
             finally:
                 # Restore prior recording state (a user-initiated /record
                 # could have been active when the scheduler fired).
@@ -11001,23 +11027,82 @@ class BogAgentsApp(App):
                 ErrorMessage("Cannot start a butcher job while the agent is busy.")
             )
             return
-        # Jobs are long-running (plan + N worker slices); run in a worker
-        # so the TUI stays responsive, mirroring normal agent turns.
-        self.run_worker(self._run_butcher_task(raw_arg), exclusive=False)
+        # Jobs are long-running (plan + N worker slices); run in a tracked
+        # worker so the TUI stays responsive AND Esc/Ctrl+C can cancel the
+        # job — an untracked worker was invisible to every interrupt gate
+        # (v5 CLIC-5).
+        self._start_tracked_session(self._run_butcher_task(raw_arg), name="/butcher")
 
     async def _run_butcher_task(self, prompt: str) -> None:
-        """Run one butcher job in a background worker."""
+        """Run one butcher job (dispatched via `_start_tracked_session`)."""
         from bog_agents_cli.butcher import start_butcher_job
 
-        self._agent_running = True
+        await start_butcher_job(self, prompt)
+
+    async def _run_team_run_task(self, req: TeamRunRequest) -> None:
+        """Run one `/team run` session (dispatched via `_start_tracked_session`)."""
+        from bog_agents.cost_ledger import RunawayCaps
+
+        from bog_agents_cli.config import create_model, settings
+        from bog_agents_cli.team_executor import run_team_session
+
+        members = req.members or ["worker-1", "worker-2"]
+        repo_dir = Path(settings.project_root or self._cwd)
+        model_spec = self._model_override or settings.model_name
+
+        def _resolve(spec: str) -> Any:  # noqa: ANN401 - langchain chat model
+            return create_model(spec, profile_overrides=self._profile_override).model
+
+        caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
+        await self._set_spinner(
+            f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
+        )
         try:
-            await start_butcher_job(self, prompt)
-        except Exception as exc:
-            logger.exception("/butcher job failed")
-            await self._mount_message(ErrorMessage(f"/butcher failed: {exc}"))
+            report = await run_team_session(
+                req.task_specs,
+                members,
+                repo_dir=repo_dir,
+                resolve_model=_resolve,
+                model_spec=model_spec,
+                caps=caps,
+            )
         finally:
-            self._agent_running = False
-            await self._drain_queue_after_inline_task()
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+
+    async def _run_best_of_n_task(self, prompt: str, n: int) -> None:
+        """Run one `/best-of-n` session (dispatched via `_start_tracked_session`)."""
+        from bog_agents_cli.best_of_n import run_best_of_n_session
+        from bog_agents_cli.config import create_model, settings
+
+        repo_dir = Path(settings.project_root or self._cwd)
+        model_spec = self._model_override or settings.model_name
+
+        def _resolve(spec: str) -> Any:  # noqa: ANN401 - returns a langchain chat model
+            return create_model(spec, profile_overrides=self._profile_override).model
+
+        await self._set_spinner(f"Best-of-{n}: running attempts in worktrees")
+        try:
+            report, winner_path = await run_best_of_n_session(
+                prompt,
+                n=n,
+                repo_dir=repo_dir,
+                model_spec=model_spec,
+                resolve_model=_resolve,
+            )
+        finally:
+            await self._set_spinner("")
+
+        await self._mount_message(AppMessage(report.format_summary()))
+        if winner_path:
+            await self._mount_message(
+                AppMessage(
+                    f"[bold green]Winner worktree kept at:[/bold green] [cyan]{winner_path}[/cyan]\n"
+                    "Inspect it, then merge its branch or copy the changes across. The other "
+                    "attempt worktrees were removed."
+                )
+            )
 
     async def _handle_jtbd_command(self, command: str) -> None:
         """``/jtbd`` — Jobs To Be Done interview → spec → outcome-driven run."""
@@ -13442,13 +13527,7 @@ class BogAgentsApp(App):
             return
 
         if action == "run":
-            from bog_agents.cost_ledger import RunawayCaps
-
-            from bog_agents_cli.config import create_model, settings
-            from bog_agents_cli.team_executor import (
-                parse_team_run_args,
-                run_team_session,
-            )
+            from bog_agents_cli.team_executor import parse_team_run_args
 
             req = parse_team_run_args(raw_arg[len("run") :].lstrip())
             if not req.task_specs:
@@ -13467,35 +13546,18 @@ class BogAgentsApp(App):
                 )
                 return
 
-            members = req.members or ["worker-1", "worker-2"]
-            repo_dir = Path(settings.project_root or self._cwd)
-            model_spec = self._model_override or settings.model_name
-
-            def _resolve(spec: str) -> Any:  # noqa: ANN401 - langchain chat model
-                return create_model(
-                    spec, profile_overrides=self._profile_override
-                ).model
-
-            caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
-            await self._set_spinner(
-                f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
-            )
-            try:
-                report = await run_team_session(
-                    req.task_specs,
-                    members,
-                    repo_dir=repo_dir,
-                    resolve_model=_resolve,
-                    model_spec=model_spec,
-                    caps=caps,
+            if self._turns.busy:
+                await self._mount_message(
+                    ErrorMessage(
+                        "Cannot start /team run while another turn or session "
+                        "is in flight."
+                    )
                 )
-            except Exception as exc:
-                await self._mount_message(ErrorMessage(f"/team run failed: {exc}"))
                 return
-            finally:
-                await self._set_spinner("")
-
-            await self._mount_message(AppMessage(report.format_summary()))
+            # A team session runs N auto-approving agents for minutes+; run it
+            # as a tracked worker so the TUI stays responsive and Esc/Ctrl+C
+            # can stop it (v5 CLIC-2).
+            self._start_tracked_session(self._run_team_run_task(req), name="/team run")
             return
 
         if action == "whoami":
@@ -14539,7 +14601,7 @@ class BogAgentsApp(App):
         logger.debug("Offloaded %d messages to %s", len(filtered), path)
         return path
 
-    async def _send_prompt_to_agent(self, prompt: str) -> None:
+    async def _send_prompt_to_agent(self, prompt: str) -> Worker[None] | None:
         """Send a prompt to the agent without displaying it as a user message.
 
         Use this for slash commands that construct long internal prompts.
@@ -14548,6 +14610,14 @@ class BogAgentsApp(App):
 
         Args:
             prompt: The full prompt to send to the agent.
+
+        Returns:
+            The worker running the dispatched turn, or `None` when the prompt
+            was deferred to the pending queue (a turn was already in flight)
+            or the agent is not configured. Callers that wait on "their" turn
+            (peat jobs, pipeline steps) must use this instead of re-reading
+            `_agent_worker`, which may belong to someone else's turn
+            (v5 CLIC-6).
         """
         # Defer instead of spawning a second concurrent turn when a turn (or a
         # shell command, or server connect) is already in flight. Scheduled
@@ -14562,7 +14632,7 @@ class BogAgentsApp(App):
             queued_widget = QueuedUserMessage(prompt)
             self._queued_widgets.append(queued_widget)
             await self._mount_message(queued_widget)
-            return
+            return None
 
         # Scroll to bottom
         try:
@@ -14575,13 +14645,11 @@ class BogAgentsApp(App):
         if self._agent and self._ui_adapter and self._session_state:
             if self._chat_input:
                 self._chat_input.set_cursor_active(active=False)
-            self._turns.begin_agent(
-                self.run_worker(self._run_agent_task(prompt), exclusive=False)
-            )
-        else:
-            await self._mount_message(
-                AppMessage("Agent not configured for this session.")
-            )
+            worker = self.run_worker(self._run_agent_task(prompt), exclusive=False)
+            self._turns.begin_agent(worker)
+            return worker
+        await self._mount_message(AppMessage("Agent not configured for this session."))
+        return None
 
     async def _handle_user_message(self, message: str) -> None:
         """Handle a user message to send to the agent.
@@ -15042,11 +15110,12 @@ class BogAgentsApp(App):
             await self._process_next_from_queue()
 
     async def _drain_queue_after_inline_task(self) -> None:
-        """Drain queued user messages after an inline (non-worker) agent task.
+        """Drain queued user messages after an inline or session agent task.
 
-        Inline tasks such as `/compact` and `/butcher` set `_agent_running` while
-        they run but, unlike `_cleanup_agent_task`/`_cleanup_shell_task`, never
-        spawn a worker whose completion fires the queue drain. Without this call
+        Tasks that set `_agent_running` outside the normal turn path — inline
+        commands like `/compact`, and tracked sessions started via
+        `_start_tracked_session` — never reach `_cleanup_agent_task`, whose
+        completion fires the queue drain for normal turns. Without this call
         any message typed during the task sits queued in the UI and only runs
         after a later normal turn completes (perceived dropped input). Failures
         here must never escape — a drain hiccup should not crash the app.
@@ -15055,6 +15124,50 @@ class BogAgentsApp(App):
             await self._process_next_from_queue()
         except Exception:
             logger.exception("Failed to drain pending queue after inline task")
+
+    def _start_tracked_session(
+        self, coro: Coroutine[Any, Any, None], *, name: str
+    ) -> Worker[None]:
+        """Run a long-lived command session in a worker tracked by TurnManager.
+
+        Session commands (`/butcher`, `/team run`, `/best-of-n`, `/jury`) must
+        never execute inline on the App message pump: every key event —
+        including Esc and Ctrl+C — queues behind the blocked pump, freezing
+        the TUI for the whole session (v5 CLIC-1/-2). Registering the worker
+        with `_turns.begin_agent` makes the session visible to every dispatch
+        guard and interrupt path: new submissions queue instead of colliding,
+        and Esc/Ctrl+C cancel it like a normal agent turn (v5 CLIC-5).
+
+        Args:
+            coro: The session body to run.
+            name: User-facing session name for error/interrupt messages
+                (e.g. `"/team run"`).
+
+        Returns:
+            The tracked worker running the session.
+        """
+
+        async def _session() -> None:
+            try:
+                await coro
+            except asyncio.CancelledError:
+                # Cancelled by Esc/Ctrl+C (`_cancel_worker`). Notify from a
+                # fresh pump callback — awaiting a mount inside a coroutine
+                # that is being cancelled risks immediate re-cancellation.
+                self.call_later(self._mount_message, AppMessage(f"{name} interrupted."))
+                raise
+            except Exception as exc:
+                logger.exception("%s failed", name)
+                await self._mount_message(ErrorMessage(f"{name} failed: {exc}"))
+            finally:
+                self._turns.end_agent()
+                # Drain on a fresh task so queued messages run even when the
+                # session itself was cancelled mid-await.
+                self._spawn(self._drain_queue_after_inline_task())
+
+        worker = self.run_worker(_session(), exclusive=False)
+        self._turns.begin_agent(worker)
+        return worker
 
     async def _cleanup_agent_task(self) -> None:
         """Clean up after agent task completes or is cancelled.
@@ -16281,7 +16394,13 @@ class BogAgentsApp(App):
 
         def handle_result(result: PipelineRunRequest | None) -> None:
             if result is not None:
-                self.call_later(self._run_pipeline_request, result)
+                # Run off the App message pump (like the scheduled and
+                # file-watch dispatch paths): `call_later` executes the
+                # pipeline inline on the pump, starving every key event —
+                # HITL approval keys included — for the pipeline's whole
+                # duration (v5 CLIC-3). Untracked on purpose: each step
+                # dispatches a normal tracked agent turn.
+                self.run_worker(self._run_pipeline_request(result), exclusive=False)
             if self._chat_input:
                 self._chat_input.focus_input()
 
@@ -16302,10 +16421,30 @@ class BogAgentsApp(App):
         )
 
         async def on_step(step_index: int, step_id: str, rendered_text: str) -> None:
+            from textual.worker import WorkerCancelled
+
             await self._mount_message(
                 AppMessage(f"Step [{step_index + 1}/{len(pipeline.steps)}]: {step_id}")
             )
-            await self._send_prompt_to_agent(rendered_text)
+            # Wait for any in-flight turn before dispatching so the step is
+            # dispatched as ITS OWN turn rather than silently queued behind
+            # someone else's (v5 CLIC-6 class). Bounded by the same 30-minute
+            # cap as the step wait below.
+            deadline = time.monotonic() + 1800.0
+            # Bounded 0.5s poll — TurnManager exposes no idle event to wait on.
+            while (  # noqa: ASYNC110
+                self._turns.busy or self._connecting
+            ) and time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+            worker = await self._send_prompt_to_agent(rendered_text)
+            if worker is None:
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Step '{step_id}' could not be dispatched (agent busy "
+                        "or unavailable) — skipping."
+                    )
+                )
+                return
             # Wait for the agent to finish before moving to the next step.
             # L2: cap the wait — without this, a hung agent (network
             # outage, model stall, runaway loop) freezes the entire
@@ -16313,18 +16452,25 @@ class BogAgentsApp(App):
             # legitimate steps run long; the goal is to escape only
             # genuinely hung calls. On timeout we surface an error
             # message and let execute_pipeline mark the step as failed.
-            if self._agent_worker is not None:
-                import asyncio as _asyncio
-
-                try:
-                    await _asyncio.wait_for(self._agent_worker.wait(), timeout=1800.0)
-                except TimeoutError:
+            # Textual's `Worker.wait` translates the `wait_for` cancellation
+            # into `WorkerCancelled`, so a bare `except TimeoutError` never
+            # fires — catch both and tell them apart via `worker.is_cancelled`.
+            try:
+                await asyncio.wait_for(worker.wait(), timeout=1800.0)
+            except (TimeoutError, WorkerCancelled):
+                if worker.is_cancelled:
                     await self._mount_message(
                         ErrorMessage(
-                            f"Step '{step_id}' exceeded 30 minutes — moving on. "
-                            "Agent worker may still be running in the background."
+                            f"Step '{step_id}' was interrupted — stopping the pipeline."
                         )
                     )
+                    raise
+                await self._mount_message(
+                    ErrorMessage(
+                        f"Step '{step_id}' exceeded 30 minutes — moving on. "
+                        "Agent worker may still be running in the background."
+                    )
+                )
 
         result = await execute_pipeline(pipeline, variable_values, on_step=on_step)
 
@@ -17323,6 +17469,19 @@ class BogAgentsApp(App):
 
         if self._thread_switching:
             await self._mount_message(AppMessage("Thread switch already in progress."))
+            return
+
+        # A turn may be in flight (queued messages drain one at a time, so a
+        # turn can start while the selector screen is up). Switching now would
+        # swap `_lc_thread_id`/`session_state` under the live worker, landing
+        # its output in the resumed thread (v5 CLIC-7).
+        if self._turns.busy:
+            await self._mount_message(
+                AppMessage(
+                    "Cannot switch threads while a turn is running — press Esc "
+                    "to interrupt it first."
+                )
+            )
             return
 
         # Save previous state for rollback on failure

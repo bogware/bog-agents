@@ -54,7 +54,16 @@ from pathlib import Path
 # logic all live in the testable `session_search.py` module (9 unit tests);
 # what lands on BogAgentsApp is only the thin subcommand branch: parse, call
 # `search_sessions`, render hits — the sanctioned split.
-APP_PY_LINE_CEILING = 17_720
+#
+# Bumped 2026-08-20 to 17,900 for the v5 Wave-A turn-lifecycle correctness
+# fixes (v5 CLIC-1..7): `_start_tracked_session` (the single choke point that
+# puts /butcher, /team run, /best-of-n, and /jury sessions in TurnManager-
+# tracked workers instead of inline on the App pump), the off-pump /telephone
+# and /pipeline dispatches, the busy-guarded thread resume, and the peat
+# dispatch-handle fix. All of it is dispatch/interrupt glue that needs
+# `self.run_worker`/`self._turns`/`self._mount_message` — the same sanctioned
+# category as the 2026-07-23 v4 Wave-0 bump. No new feature logic was added.
+APP_PY_LINE_CEILING = 17_900
 
 _APP_PY = Path(__file__).resolve().parents[2] / "bog_agents_cli" / "app.py"
 
