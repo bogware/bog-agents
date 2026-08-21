@@ -104,16 +104,14 @@ jobs:
           # restored from another job — a stale/cross-uv-version cache makes the
           # deterministic re-resolution differ from the committed lockfile.
           enable-cache: "false"
-      # DEL-7 follow-up: every committed lockfile passes `uv lock --check` with a
-      # forced full network resolve (`--no-cache --refresh`) on a clean
-      # Linux + uv 0.11.6 + PyPI container — for ALL six packages. Yet this
-      # self-hosted runner reports acp as needing an update, which only happens
-      # if `uv lock` floats to *highest* instead of honoring the locked pins.
-      # That behavior comes from the runner's uv environment (a global uv.toml,
-      # UV_UPGRADE/UV_RESOLUTION, or a private index mirror), not the repo. This
-      # step surfaces that environment so the gate can be made deterministic;
-      # until then the check is advisory (see continue-on-error below) rather
-      # than blocking merges on a runner-local quirk.
+      # v5 SAT-1: this gate was temporarily demoted to advisory
+      # (continue-on-error) over a suspected runner-local uv quirk — and the
+      # Aug 2 release then regenerated real satellite lockfile drift that the
+      # advisory gate silently masked. The drift is fixed (acp/harbor/daytona
+      # re-locked) and the check is BLOCKING again. The diagnostic step below
+      # stays so a genuine runner-environment failure (global uv.toml,
+      # UV_UPGRADE/UV_RESOLUTION, private index mirror) is distinguishable
+      # from real drift — do not re-demote this gate; fix the drift instead.
       - name: Diagnose uv resolution environment
         run: |
           echo "::group::uv version"; uv --version; echo "::endgroup::"
@@ -123,8 +121,7 @@ jobs:
             [ -f "$f" ] && { echo "--- $f ---"; cat "$f"; } || echo "(absent) $f"
           done
           echo "::endgroup::"
-      - name: Lock check (advisory — see diagnostic above)
-        continue-on-error: true
+      - name: Lock check
         run: make lock-check
 
   # SAT-3/DEL-6/v4: the satellite packages ship Makefiles, tests, and lockfiles
