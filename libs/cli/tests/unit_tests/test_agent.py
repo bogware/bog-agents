@@ -1729,3 +1729,33 @@ class TestResolveAutoBackgroundAfter:
 
     def test_garbage_stays_off(self) -> None:
         assert _resolve_auto_background_after("soon") is None
+
+
+class TestPtyToolGating:
+    """PTY tools must be behind HITL in full-approval mode (v5 SB-1).
+
+    pty_start runs an arbitrary argv via execvpe and pty_send writes arbitrary
+    bytes into it — neither passes through the shell approval / exec-risk /
+    dangerous-pattern screening, so both must be gated like `execute`.
+    """
+
+    def test_full_hitl_gates_pty_tools(self) -> None:
+        from bog_agents_cli.agent import _add_interrupt_on
+
+        interrupt_map = _add_interrupt_on()
+        assert "pty_start" in interrupt_map
+        assert "pty_send" in interrupt_map
+        assert interrupt_map["pty_start"]["allowed_decisions"] == ["approve", "reject"]
+
+    def test_pty_start_description_warns(self) -> None:
+        from langchain.messages import ToolCall
+
+        from bog_agents_cli.agent import _format_pty_start_description
+
+        call = cast(
+            "ToolCall",
+            {"name": "pty_start", "args": {"name": "x", "command": "bash"}, "id": "1"},
+        )
+        desc = _format_pty_start_description(call, None, None)  # type: ignore[arg-type]
+        assert "bash" in desc
+        assert "PTY" in desc

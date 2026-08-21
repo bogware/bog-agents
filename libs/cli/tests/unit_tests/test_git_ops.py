@@ -234,3 +234,50 @@ class TestWrapperPeelingStaysInSyncWithExecRisk:
             classify_git_command(f"{prefix} git push --force") is GitOpType.DESTRUCTIVE
         )
         assert command_has_exec_risk(f"{prefix} git -c core.pager=/tmp/evil log")
+
+
+class TestGitGlobalOptions:
+    """Global options before the subcommand must not hide the real op (T1-1).
+
+    `git -c x=y push --force`, `git --no-pager reset --hard`, etc. used to be
+    read as if the option were the subcommand, falling through to the MUTATING
+    default and getting auto-approved instead of asked.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git --no-pager push --force",
+            "git -c commit.gpgsign=false push --force",
+            "git -c foo=bar reset --hard HEAD~5",
+            "git --git-dir=/x --work-tree=/y clean -fd",
+            "git -C /repo clean -fdx",
+            "git -p push --force",
+            "git --no-pager branch -D main",
+            "git -c a=b -C /repo push --force",
+            "cd foo && git -c a=b push --force",
+        ],
+    )
+    def test_global_options_do_not_mask_destructive(self, cmd: str) -> None:
+        assert classify_git_command(cmd) is GitOpType.DESTRUCTIVE
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git -C /repo status",
+            "git -c x=y log",
+            "git --no-pager diff",
+        ],
+    )
+    def test_global_options_preserve_read_only(self, cmd: str) -> None:
+        assert classify_git_command(cmd) is GitOpType.READ_ONLY
+
+    def test_value_option_consumes_next_token(self) -> None:
+        # `-c core.pager=x` is two argv tokens: `-c` consumes the following
+        # `core.pager=x`, so the real subcommand (`reset`) is still found.
+        assert classify_git_command("git -c core.pager=x reset --hard") is (
+            GitOpType.DESTRUCTIVE
+        )
+        # `-c foo` (no `=`) consumes `foo`; the next token `status` is then the
+        # subcommand — a read-only op, not masked into the mutating default.
+        assert classify_git_command("git -c foo status") is GitOpType.READ_ONLY

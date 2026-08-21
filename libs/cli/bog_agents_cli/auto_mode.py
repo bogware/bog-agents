@@ -16,6 +16,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from bog_agents.exec_risk import command_has_exec_risk
+
 from bog_agents_cli.bash_hygiene import analyze_bash_hygiene
 from bog_agents_cli.git_ops import GitOpType, classify_git_command
 
@@ -407,6 +409,18 @@ class AutoModeRuleEngine:
             return RuleVerdict(
                 AutoDecision.ASK, "git: destructive git operation", "git_ops"
             )
+        # Exec-risk veto: commands that look read-only but can run attacker code
+        # (`git -c core.pager=…`, `sort --compress-program=…`, `tar --to-command=…`,
+        # `ssh -o ProxyCommand=…`). This is the deterministic Tier-1 #2 floor —
+        # it must run before the allow-list, whose broad patterns (`git\s+log`)
+        # would otherwise auto-approve the stealth-exec form. Fails toward
+        # prompting, never toward silent execution.
+        if command_has_exec_risk(cmd):
+            return RuleVerdict(
+                AutoDecision.ASK,
+                "exec risk: command can execute code via a helper option",
+                "exec_risk",
+            )
         # Allow-list (fast path for known-safe commands with no destructive pattern)
         for rx in self._allow_re:
             if rx.search(cmd):
@@ -466,7 +480,13 @@ async def haiku_risk_eval(
     try:
         import anthropic  # type: ignore[import-untyped]
     except ImportError:
-        return False, "anthropic not available"
+        # Fail CLOSED for gating: this evaluator only runs on the `default`
+        # (no-pattern-matched) verdict, i.e. the caller is about to auto-approve
+        # unless we say risky. If the risk classifier cannot run at all, the
+        # command must fall through to a human — never be silently approved on a
+        # non-Anthropic install (T1-4). Contrast the API-error paths below, which
+        # already fail closed by returning risky=True.
+        return True, "haiku eval: anthropic package unavailable — treating as risky"
 
     # Normalise args — callers may pass None for tool calls with no arguments.
     if not isinstance(tool_args, dict):

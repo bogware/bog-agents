@@ -125,12 +125,14 @@ def test_build_interrupt_empty_when_no_interrupt_rules() -> None:
 
 def test_build_interrupt_only_for_matching_operation() -> None:
     # Interrupt rule covers only the read operation, so write_file/edit_file
-    # (write-op tools) get no entry, while read-op tools do.
+    # (write-op tools) get no entry, while read-op tools do — including the
+    # read-op batch tool read_many_files (v5 SAFE-1).
     rules = [FilesystemPermission(operations=["read"], paths=["/secrets/**"], mode="interrupt")]
     configs = _build_interrupt_on_from_permissions(rules)
-    assert set(configs) == {"ls", "read_file", "glob", "grep"}
+    assert set(configs) == {"ls", "read_file", "glob", "grep", "read_many_files"}
     assert "write_file" not in configs
     assert "edit_file" not in configs
+    assert "multi_edit_file" not in configs  # write-op batch tool, read rule
 
 
 def test_build_interrupt_exact_predicate_fires_on_match() -> None:
@@ -275,3 +277,63 @@ def test_middleware_bulk_missing_path_denied_for_whole_tree_rule() -> None:
     assert isinstance(result, ToolMessage)
     assert result.status == "error"
     assert called is False
+
+
+# ---------------------------------------------------------------------------
+# Batch filesystem tools (multi_edit_file / read_many_files) — v5 SAFE-1
+# ---------------------------------------------------------------------------
+
+
+class TestBatchToolCoverage:
+    """multi_edit_file / read_many_files must honor deny + interrupt rules.
+
+    They take a *list* of targets, so they used to slip past the single-path
+    permission boundary entirely (v4 SB-2), which also let a model rewrite its
+    own authority files through the CLI self-modification guard.
+    """
+
+    def _deny_secrets(self) -> FilesystemPermissionsMiddleware:
+        return FilesystemPermissionsMiddleware(permissions=[FilesystemPermission(paths=["/secrets/**"], operations=["read", "write"], mode="deny")])
+
+    def _ran(self, mw: FilesystemPermissionsMiddleware, tool: str, args: dict) -> bool:
+        out = mw.wrap_tool_call(_make_request(tool, args), lambda _r: "TOOL-RAN")
+        return not isinstance(out, ToolMessage)
+
+    def test_multi_edit_denied_when_any_target_denied(self) -> None:
+        mw = self._deny_secrets()
+        assert not self._ran(
+            mw,
+            "multi_edit_file",
+            {"edits": [{"file_path": "/ok/a"}, {"file_path": "/secrets/x"}]},
+        )
+
+    def test_multi_edit_runs_when_all_targets_allowed(self) -> None:
+        mw = self._deny_secrets()
+        assert self._ran(mw, "multi_edit_file", {"edits": [{"file_path": "/ok/a"}]})
+
+    def test_read_many_denied_on_literal_target(self) -> None:
+        mw = self._deny_secrets()
+        assert not self._ran(mw, "read_many_files", {"paths": ["/ok/a", "/secrets/x"]})
+
+    def test_read_many_denied_on_broad_glob(self) -> None:
+        # A `/**` read glob overlaps the denied subtree — fail closed.
+        mw = self._deny_secrets()
+        assert not self._ran(mw, "read_many_files", {"paths": ["/**"]})
+
+    def test_read_many_runs_on_unrelated_paths(self) -> None:
+        mw = self._deny_secrets()
+        assert self._ran(mw, "read_many_files", {"paths": ["/ok/a.py", "/ok/b.py"]})
+
+    def test_interrupt_rule_gates_multi_edit(self) -> None:
+        interrupt_on = _build_interrupt_on_from_permissions([FilesystemPermission(paths=["/.bog-agents/**"], operations=["write"], mode="interrupt")])
+        assert "multi_edit_file" in interrupt_on
+        when = interrupt_on["multi_edit_file"]["when"]  # type: ignore[typeddict-item]
+        assert when(_make_request("multi_edit_file", {"edits": [{"file_path": "/.bog-agents/laws.md"}]}))
+        assert not when(_make_request("multi_edit_file", {"edits": [{"file_path": "/src/app.py"}]}))
+
+    def test_interrupt_rule_gates_read_many(self) -> None:
+        interrupt_on = _build_interrupt_on_from_permissions([FilesystemPermission(paths=["/secrets/**"], operations=["read"], mode="interrupt")])
+        assert "read_many_files" in interrupt_on
+        when = interrupt_on["read_many_files"]["when"]  # type: ignore[typeddict-item]
+        assert when(_make_request("read_many_files", {"paths": ["/ok/a", "/secrets/x"]}))
+        assert not when(_make_request("read_many_files", {"paths": ["/ok/a"]}))

@@ -49,6 +49,7 @@ from bog_agents.backends.utils import (
 )
 
 FilesystemOperation = Literal["read", "write"]
+FilesystemMode = Literal["allow", "deny", "interrupt"]
 
 _FS_WCMATCH_FLAGS = wcglob.BRACE | wcglob.GLOBSTAR
 
@@ -169,6 +170,75 @@ _FS_TOOL_PATH_ARGS: dict[str, tuple[FilesystemOperation, str, ToolScope, str | N
     "glob": ("read", "path", "bulk", "pattern"),
     "grep": ("read", "path", "bulk", None),
 }
+
+
+# Batch filesystem tools take a *list* of targets rather than a single path arg,
+# so they don't fit `_FS_TOOL_PATH_ARGS`' single-path shape. Each maps the tool
+# to (operation, extractor), where the extractor yields every path the call
+# touches. A batch call is denied/interrupted if ANY of its targets hits a
+# matching rule. Without this the two default batch tools sailed straight past
+# the permission boundary (v4 SB-2), which also let a model rewrite its own
+# authority files (`.bog-agents/laws.md`, `.mcp.json`, ...) through the CLI
+# self-modification guard in auto-approve mode.
+def _multi_edit_targets(args: dict[str, Any]) -> list[str]:
+    """Extract every `file_path` a `multi_edit_file` call would write."""
+    edits = args.get("edits")
+    if not isinstance(edits, list):
+        return []
+    return [e["file_path"] for e in edits if isinstance(e, dict) and isinstance(e.get("file_path"), str)]
+
+
+def _read_many_targets(args: dict[str, Any]) -> list[str]:
+    """Extract every path/glob a `read_many_files` call would read."""
+    paths = args.get("paths")
+    if not isinstance(paths, list):
+        return []
+    return [p for p in paths if isinstance(p, str)]
+
+
+_FS_BATCH_TOOL_ARGS: dict[str, tuple[FilesystemOperation, Callable[[dict[str, Any]], list[str]]]] = {
+    "multi_edit_file": ("write", _multi_edit_targets),
+    "read_many_files": ("read", _read_many_targets),
+}
+
+
+def _is_glob_entry(entry: str) -> bool:
+    """Whether a batch target string is a glob pattern rather than a literal path."""
+    return any(ch in entry for ch in "*?[")
+
+
+def _batch_entry_mode(rules: list[FilesystemPermission], operation: FilesystemOperation, mode: FilesystemMode, entry: str) -> bool:
+    """Whether a single batch target (literal path or glob) hits a rule of `mode`.
+
+    A literal path is checked with the same first-match precedence as any
+    single-path tool. A glob is treated like a bulk search root: it hits when
+    its anchor could overlap a rule's subtree, so a broad `/**` or an absolute
+    glob into a protected directory fails closed.
+
+    Args:
+        rules: Permission rules.
+        operation: The batch tool's operation (`read`/`write`).
+        mode: The rule mode to test for (`deny` or `interrupt`).
+        entry: One target from the batch call.
+
+    Returns:
+        True when this entry matches a rule of `mode` for `operation`.
+    """
+    if not _is_glob_entry(entry):
+        try:
+            normalized = validate_path(entry)
+        except ValueError:
+            return False
+        if normalized == "/.":
+            normalized = "/"
+        return _check_fs_permission(rules, operation, normalized) == mode
+    anchor = _glob_anchor(entry)
+    return any(
+        _paths_overlap(anchor, _glob_anchor(pattern))
+        for rule in rules
+        if rule.mode == mode and operation in rule.operations
+        for pattern in rule.paths
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +615,33 @@ def _bulk_pattern_fires(raw_pattern: str, interrupt_anchors: list[str]) -> bool:
     return ".." in PurePosixPath(posix_pattern).parts
 
 
+def _make_batch_when_predicate(
+    rules: list[FilesystemPermission],
+    operation: FilesystemOperation,
+    extractor: Callable[[dict[str, Any]], list[str]],
+) -> Callable[[ToolCallRequest], bool]:
+    """Build a `when` predicate for a batch filesystem tool.
+
+    Fires when ANY target of the batch call matches an interrupt-mode rule, so a
+    `multi_edit_file`/`read_many_files` that touches a protected path is gated
+    just like the single-path tools.
+
+    Args:
+        rules: Permission rules.
+        operation: The batch tool's operation.
+        extractor: Yields every path the call touches from its args.
+
+    Returns:
+        A predicate that fires when any target hits an interrupt-mode rule.
+    """
+
+    def when(req: ToolCallRequest) -> bool:
+        args = req.tool_call.get("args", {}) or {}
+        return any(_batch_entry_mode(rules, operation, "interrupt", entry) for entry in extractor(args))
+
+    return when
+
+
 def _build_interrupt_on_from_permissions(
     rules: list[FilesystemPermission],
 ) -> dict[str, InterruptOnConfig]:
@@ -583,6 +680,16 @@ def _build_interrupt_on_from_permissions(
         config: dict[str, Any] = {
             "allowed_decisions": allowed,
             "when": _make_fs_when_predicate(rules, op, arg, scope, pattern_arg),
+        }
+        result[tool_name] = cast("InterruptOnConfig", config)
+    # Batch tools (multi_edit_file/read_many_files) fire when any of their many
+    # targets hits an interrupt-mode rule.
+    for tool_name, (op, extractor) in _FS_BATCH_TOOL_ARGS.items():
+        if not any(r.mode == "interrupt" and op in r.operations for r in rules):
+            continue
+        config = {
+            "allowed_decisions": allowed,
+            "when": _make_batch_when_predicate(rules, op, extractor),
         }
         result[tool_name] = cast("InterruptOnConfig", config)
     return result
@@ -642,11 +749,25 @@ class FilesystemPermissionsMiddleware(AgentMiddleware):
         """
         tool_call = request.tool_call or {}
         tool_name = tool_call.get("name", "")
+        args = tool_call.get("args", {}) or {}
+
+        batch = _FS_BATCH_TOOL_ARGS.get(tool_name)
+        if batch is not None:
+            operation, extractor = batch
+            for entry in extractor(args):
+                if _batch_entry_mode(self.permissions, operation, "deny", entry):
+                    if _is_glob_entry(entry):
+                        return entry
+                    try:
+                        return validate_path(entry)
+                    except ValueError:
+                        return entry
+            return None
+
         spec = _FS_TOOL_PATH_ARGS.get(tool_name)
         if spec is None:
             return None
         operation, path_arg_name, scope, _pattern_arg = spec
-        args = tool_call.get("args", {}) or {}
         raw_path = args.get(path_arg_name)
 
         if not isinstance(raw_path, str):
@@ -703,7 +824,11 @@ class FilesystemPermissionsMiddleware(AgentMiddleware):
             The operation, defaulting to `"read"` for unknown tools.
         """
         tool_call = request.tool_call or {}
-        spec = _FS_TOOL_PATH_ARGS.get(tool_call.get("name", ""))
+        tool_name = tool_call.get("name", "")
+        batch = _FS_BATCH_TOOL_ARGS.get(tool_name)
+        if batch is not None:
+            return batch[0]
+        spec = _FS_TOOL_PATH_ARGS.get(tool_name)
         return spec[0] if spec is not None else "read"
 
     def wrap_tool_call(

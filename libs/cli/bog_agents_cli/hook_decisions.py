@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess  # noqa: S404
 from dataclasses import dataclass
 from enum import StrEnum
@@ -183,6 +184,49 @@ def alias_tool_name(name: str) -> str:
     return _TOOL_ALIASES.get(name.strip().lower(), name)
 
 
+def _matcher_matches(matcher: str, tool_name: str) -> bool:
+    """Whether a hook `matcher` selects `tool_name`, Claude-Code style.
+
+    Claude Code / Cursor matchers are *regexes* over vendor tool names, and
+    `"*"` (or an empty matcher) means "all tools". Matching only by exact
+    string equality — as the old code did — silently dropped the ubiquitous
+    `"*"` and alternations like `"Edit|Write"`, so a migrated deny hook that
+    guards every tool loaded but enforced nothing: the security gate failed
+    open (T1-3). This restores the documented "load unchanged" semantics.
+
+    Args:
+        matcher: The hook's matcher (already alias-mapped for single names at
+            load time; a wildcard/regex/alternation is preserved verbatim).
+        tool_name: The bog tool name being invoked.
+
+    Returns:
+        True when the hook applies to this tool.
+    """
+    if not matcher or not tool_name:
+        return True
+    m = matcher.strip()
+    if m in ("*", ".*"):
+        return True
+    if m == tool_name:
+        return True
+    # A regex/alternation over vendor names (e.g. "Edit|Write"): test each
+    # alternative both as an alias lookup and as an anchored regex against the
+    # bog tool name, so "Edit|Write" fires on edit_file/write_file and a
+    # pattern like "Notebook.*" still works.
+    for raw_alt in m.split("|"):
+        alt = raw_alt.strip()
+        if not alt:
+            continue
+        if alias_tool_name(alt) == tool_name:
+            return True
+        try:
+            if re.fullmatch(alt, tool_name):
+                return True
+        except re.error:
+            continue
+    return False
+
+
 @dataclass
 class HookDecision:
     """The outcome of a decision-capable hook run.
@@ -318,7 +362,8 @@ def evaluate_decision_hooks(
     """Run matching decision hooks synchronously and return the first block.
 
     A hook matches when its `events` includes `event` (or is empty) and its
-    `matcher` (if set) equals `tool_name`. Hooks run with the JSON `payload` on
+    `matcher` selects `tool_name` (see `_matcher_matches`: exact name, `"*"`,
+    or a Claude-style regex/alternation). Hooks run with the JSON `payload` on
     stdin and their stdout captured. Fail-open: a hook that errors/times out is
     ignored.
 
@@ -341,7 +386,7 @@ def evaluate_decision_hooks(
         if events and event not in events:
             continue
         matcher = hook.get("matcher")
-        if matcher and tool_name and matcher != tool_name:
+        if not _matcher_matches(str(matcher or ""), str(tool_name or "")):
             continue
         decision = _run_decision_hook(command, payload_bytes, timeout)
         if decision.blocks:
