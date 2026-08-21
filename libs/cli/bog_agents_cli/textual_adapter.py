@@ -64,6 +64,116 @@ _GIT_BRANCH_CACHE_TTL_SECONDS = 2.5
 """Max age of a cached branch before `_get_git_branch` re-runs `git rev-parse`."""
 
 
+def _scan_streamed_json(buffer: dict[str, Any], text: str) -> None:
+    """Advance the streamed-args JSON structure scanner over one fragment.
+
+    Tracks bracket depth and string/escape state across fragments so
+    completeness of a streamed JSON object/array is detected in O(len(text))
+    per fragment instead of re-parsing the whole accumulated prefix. Inside
+    strings (the common case — file content in a `write_file` call) it jumps
+    between structural characters with `str.find`, so scanning runs at
+    near-C speed.
+
+    Args:
+        buffer: The tool-call accumulation buffer holding scanner state
+            (`scan_depth` / `scan_in_string` / `scan_escape` keys).
+        text: The new fragment to scan.
+    """
+    depth: int = buffer.get("scan_depth", 0)
+    in_string: bool = buffer.get("scan_in_string", False)
+    escape: bool = buffer.get("scan_escape", False)
+    i = 0
+    n = len(text)
+    while i < n:
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if in_string:
+            quote = text.find('"', i)
+            backslash = text.find("\\", i)
+            if quote == -1 and backslash == -1:
+                i = n
+                continue
+            if backslash == -1 or (quote != -1 and quote < backslash):
+                in_string = False
+                i = quote + 1
+            else:
+                escape = True
+                i = backslash + 1
+            continue
+        ch = text[i]
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth <= 0:
+                # Top-level value closed: the args are structurally complete.
+                # Anything after this point is left for json.loads to judge.
+                buffer["args_complete"] = True
+                break
+        i += 1
+    buffer["scan_depth"] = depth
+    buffer["scan_in_string"] = in_string
+    buffer["scan_escape"] = escape
+
+
+def _append_streamed_args(buffer: dict[str, Any], chunk_args: str) -> None:
+    """Accumulate one streamed tool-call args fragment into `buffer`.
+
+    Providers stream tool args as many small `input_json_delta` fragments; the
+    historical behavior re-joined every accumulated fragment and attempted a
+    full `json.loads` per fragment — O(n^2) in args size, which froze the UI
+    for seconds on a large `write_file` (v5 PERF-2). This helper keeps the
+    fragments as a list and materializes `buffer["args"]` (the joined string
+    the parse site consumes) only when an incremental structure scanner says
+    the JSON value is complete, making the whole accumulation O(n).
+
+    Two conservative fallbacks preserve the historical behavior exactly:
+
+    - Args whose first non-whitespace character is not `{`/`[` (a bare JSON
+      scalar) can't be depth-scanned, so they revert to join-and-expose per
+      fragment. Scalar args are tiny, so the quadratic cost is irrelevant.
+    - If a structurally complete value fails to parse (malformed JSON — the
+      parse site leaves the buffer in place), any further fragment also
+      reverts to join-and-expose per fragment.
+
+    Args:
+        buffer: The tool-call accumulation buffer (from `tool_call_buffers`).
+        chunk_args: The non-empty args fragment from this chunk.
+    """
+    parts: list[str] = buffer.setdefault("args_parts", [])
+    # Some providers resend the same delta on reconnect; dropping consecutive
+    # duplicates matches the pre-existing accumulation behavior.
+    if parts and chunk_args == parts[-1]:
+        return
+    if buffer.get("args_complete") and buffer.get("scan_mode") == "structure":
+        # Extra data after a complete value means the earlier parse failed
+        # (a successful parse pops the buffer). Fall back to legacy mode.
+        buffer["scan_mode"] = "scalar"
+    parts.append(chunk_args)
+
+    mode = buffer.get("scan_mode")
+    if mode is None:
+        # Decide how to detect completeness from the first non-whitespace
+        # character. Until one arrives, the args stay unset (nothing to parse).
+        stripped = chunk_args.lstrip()
+        if not stripped:
+            return
+        mode = "structure" if stripped[0] in "{[" else "scalar"
+        buffer["scan_mode"] = mode
+
+    if mode == "structure":
+        _scan_streamed_json(buffer, chunk_args)
+        if buffer.get("args_complete"):
+            buffer["args"] = "".join(parts)
+        return
+    # Scalar/fallback mode: legacy join-and-expose per fragment.
+    buffer["args"] = "".join(parts)
+
+
 def _find_todos_payload(node: object) -> list[object] | None:
     """Find a todo list payload within a streamed update object.
 
@@ -1159,12 +1269,11 @@ async def execute_task_textual(
                                 buffer["args_parts"] = []
                             elif isinstance(chunk_args, str):
                                 if chunk_args:
-                                    parts: list[str] = buffer.setdefault(
-                                        "args_parts", []
-                                    )
-                                    if not parts or chunk_args != parts[-1]:
-                                        parts.append(chunk_args)
-                                    buffer["args"] = "".join(parts)
+                                    # O(n) accumulation: the joined string is
+                                    # materialized (and parsed, below) only
+                                    # once the fragment scanner reports the
+                                    # JSON value complete (v5 PERF-2).
+                                    _append_streamed_args(buffer, chunk_args)
                             elif chunk_args is not None:
                                 buffer["args"] = chunk_args
 
