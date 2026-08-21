@@ -153,6 +153,50 @@ Full ACP multi-session rework (SAT-4/P1-61), the VS Code webview rework (SAT-6 p
 
 ---
 
+## 5. Shipped in the 1.0-hardening cycle (2026-08-20/21)
+
+Branch `chore/1.0-hardening` (off `origin/main` @ v0.9.12). Every fix landed with
+regression tests; SDK / CLI / daemon unit suites green throughout.
+
+**Fixed (with tests):**
+- **P0** — CLIC-1 (`/telephone` pump deadlock).
+- **Wave A** (CLI event-pump) — CLIC-1..7: a single `_start_tracked_session`
+  choke point puts `/butcher`, `/team run`, `/best-of-n`, `/jury` in
+  TurnManager-tracked workers off the pump; `/telephone` and `/pipeline` run
+  off-pump; `/background` completion fires via `_spawn`; peat waits on its own
+  dispatched worker; `_resume_thread` is busy-guarded.
+- **Wave B** (approval gates) — T1-1 (git global-option skip), T1-2/SAFE-2
+  (exec-risk veto wired into `_eval_shell`), T1-3 (hook wildcard/regex/alternation
+  matchers), T1-4 (Haiku ImportError fails closed), SAFE-1 (batch tools honor
+  permissions + self-mod guard), SB-1 (PTY tools HITL-gated), CT-5 (butcher
+  `run_command` allowlist).
+- **Wave C** (SDK) — SDKC-1 (rbac-build crash), SDKC-4 (builder merge),
+  SB-2 (`git switch`), SB-3 (atomic `write_file`), SB-4 (honest background exit),
+  the `test_api_deprecation` baseline, CTX-1 (never commit a failed summary),
+  CTX-3 (real model pricing + empty-name window guard).
+- **Wave D** (perf) — PERF-1 (`/threads search` incremental + off-loop; ~3.4s→~5ms
+  at 1000 threads), PERF-2 (incremental streamed-args scan), PERF-3 (sweeper
+  memoization + O(E) reverse-pass), plus CTX-4 (offload-after-success retry).
+- **Wave E** (daemon/config) — DMN-7 (full-name branch match), DMN-8 (`***`
+  placeholder round-trip), DMN-10 (atomic run writes), CT-1 (butcher active-model),
+  CT-3 (`BOG_AGENTS_HOME` wiring), CT-4 (per-server MCP `${VAR}` isolation),
+  CT-6 (secure token writes).
+- **Wave F** (satellites/delivery) — SAT-1 (re-lock + blocking lock-check +
+  six-package relock loop), SAT-2 (VS Code provider-cred allowlist), SAT-3 (daemon
+  README + quickstart command surface), SAT-5 (daytona `SandboxConformanceSuite`).
+
+**Deferred to a follow-up (noted, not lost):**
+- **CTX-2** (sweeper spliced inner of summarization) — the fix needs fragile
+  private-class-name matching in `_apply_custom_middleware` plus canonical-order
+  test changes; it is a not-yet-realized optimization (the sweeper still trims
+  content), so it was held out of the 1.0 ordering surface rather than risked.
+- **PERF-4** (per-marker write-once offload out of CWD) — a coherent rewrite that
+  an interrupted change left half-applied; reverted cleanly, keeping PERF-3 + CTX-4.
+- **PERF-5/PERF-6, SDKC-2, and the remaining unverified P2s / quick-wins** — carried
+  forward.
+
+---
+
 # REVIEW.md v4 — Current-State Audit (2026-07-21)
 
 > **Scope:** Whole monorepo, post the resiliency-hardening (2026-06-22), deepagents-parity
