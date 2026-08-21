@@ -19,6 +19,7 @@ import dotenv
 from rich.console import Console
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli._env_vars import bog_agents_home
 from bog_agents_cli._version import __version__
 from bog_agents_cli.project_utils import (
     get_server_project_context as _get_server_project_context,
@@ -76,8 +77,9 @@ _bootstrap_start_path = (
 _load_dotenv(start_path=_bootstrap_start_path)
 
 # Also load user-level ~/.bog-agents/.env (written by the setup wizard).
-# override=False so project-level .env takes precedence.
-_user_env = Path.home() / ".bog-agents" / ".env"
+# override=False so project-level .env takes precedence. Honors
+# BOG_AGENTS_HOME (CT-3) — the process env, not this .env file, must set it.
+_user_env = bog_agents_home() / ".env"
 if _user_env.is_file():
     dotenv.load_dotenv(dotenv_path=_user_env, override=False)
 
@@ -1055,9 +1057,9 @@ class Settings:
         """Get the base user-level .bog-agents directory.
 
         Returns:
-            Path to ~/.bog-agents
+            Path to `~/.bog-agents` (or the `BOG_AGENTS_HOME` override).
         """
-        return Path.home() / ".bog-agents"
+        return bog_agents_home()
 
     @staticmethod
     def get_user_agent_md_path(agent_name: str) -> Path:
@@ -1071,7 +1073,7 @@ class Settings:
         Returns:
             Path to ~/.bog-agents/{agent_name}/AGENTS.md
         """
-        return Path.home() / ".bog-agents" / agent_name / "AGENTS.md"
+        return bog_agents_home() / agent_name / "AGENTS.md"
 
     def get_project_agent_md_path(self) -> list[Path]:
         """Get project-level AGENTS.md paths.
@@ -1122,7 +1124,7 @@ class Settings:
                 "contain letters, numbers, hyphens, underscores, and spaces."
             )
             raise ValueError(msg)
-        return Path.home() / ".bog-agents" / agent_name
+        return bog_agents_home() / agent_name
 
     def ensure_agent_dir(self, agent_name: str) -> Path:
         """Ensure the global agent directory exists and return its path.

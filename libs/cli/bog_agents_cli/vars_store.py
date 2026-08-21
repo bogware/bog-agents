@@ -38,6 +38,8 @@ import subprocess  # noqa: S404 — icacls invocation on Windows; no user-contro
 from pathlib import Path
 from typing import Any
 
+from bog_agents_cli import _env_vars
+
 logger = logging.getLogger(__name__)
 
 _SERVICE_NAME = "bog-agents"
@@ -45,7 +47,8 @@ _VARS_FILENAME = "vars.toml"
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _VAR_REF_RE = re.compile(r"\{\{vars\.([A-Za-z_][A-Za-z0-9_]*)\}\}")
 
-_DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
+# Honors BOG_AGENTS_HOME (CT-3); resolved once at import time.
+_DEFAULT_CONFIG_DIR = _env_vars.bog_agents_home()
 _VARS_PATH = _DEFAULT_CONFIG_DIR / _VARS_FILENAME
 
 _warned_fallback = False

@@ -30,9 +30,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from bog_agents_cli._env_vars import bog_agents_home
+
 logger = logging.getLogger(__name__)
 
-_USER_MCP_CONFIG = Path.home() / ".bog-agents" / ".mcp.json"
+# Honors BOG_AGENTS_HOME (CT-3); resolved once at import time.
+_USER_MCP_CONFIG = bog_agents_home() / ".mcp.json"
 
 
 # ---------------------------------------------------------------------------

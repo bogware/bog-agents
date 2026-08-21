@@ -275,10 +275,15 @@ def format_path(path: str | None) -> str:
 def get_db_path() -> Path:
     """Get path to global database.
 
+    Lives under the bog-agents home dir (`~/.bog-agents` by default; the
+    `BOG_AGENTS_HOME` env var overrides it, CT-3).
+
     Returns:
         Path to the SQLite database file.
     """
-    db_dir = Path.home() / ".bog-agents"
+    from bog_agents_cli._env_vars import bog_agents_home
+
+    db_dir = bog_agents_home()
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "sessions.db"
 

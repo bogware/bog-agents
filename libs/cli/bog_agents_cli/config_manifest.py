@@ -31,6 +31,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from bog_agents_cli import _env_vars
@@ -686,8 +687,9 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
     ConfigOption(
         key="paths.home",
         group="Paths",
-        summary="Override the base ~/.bog-agents home directory.",
+        summary="Base bog-agents home directory (config, vault, MCP OAuth tokens, state, sessions db); read at startup.",
         kind=OptionKind.STR,
+        default=str(Path.home() / ".bog-agents"),
         env_var=_env_vars.HOME,
     ),
     ConfigOption(

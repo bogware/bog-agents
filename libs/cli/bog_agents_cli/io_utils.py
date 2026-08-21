@@ -3,6 +3,7 @@
 # ruff: noqa: DOC502
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -25,19 +26,42 @@ def atomic_write_text(
         content: Text content to write.
         encoding: Text encoding. Default ``"utf-8"``.
         mode: Optional POSIX file mode (e.g. ``0o600`` for token files).
-            Applied to the temp file *before* the rename so the destination
-            never briefly exists with a wider mode. Ignored on Windows
-            (``os.chmod`` permissions don't map cleanly).
+            Marks the write as secret-bearing: the temp file is *created*
+            with this mode via ``os.open`` (never briefly umask-default
+            world-readable, CT-6), a missing parent directory is created
+            ``0o700``, and on Windows — where the numeric mode itself is
+            meaningless — the temp file is locked owner-only via ``icacls``
+            (`vars_store._secure_owner_only`) before the rename, so the
+            destination never exists with a wider ACL.
 
     Raises:
         OSError: If the write or rename fails.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if mode is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Secret-bearing parent dirs are born owner-only on POSIX (the mode
+        # applies only to newly created leaf dirs; pre-existing dirs are the
+        # caller's responsibility, e.g. via _secure_owner_only(is_dir=True)).
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp.write_text(content, encoding=encoding)
-        if mode is not None and sys.platform != "win32":
-            tmp.chmod(mode)
+        if mode is None:
+            tmp.write_text(content, encoding=encoding)
+        else:
+            # Create the temp file with the final mode from the start so the
+            # plaintext never exists at umask-default permissions (CT-6).
+            tmp.unlink(missing_ok=True)  # a stale .tmp would break O_EXCL
+            fd = os.open(str(tmp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
+            with os.fdopen(fd, "w", encoding=encoding) as fh:
+                fh.write(content)
+            if sys.platform == "win32":
+                # Numeric modes are a no-op on Windows; harden the temp file
+                # BEFORE the rename so the destination inherits the tight ACL
+                # (Path.replace keeps the source file's security descriptor).
+                from bog_agents_cli.vars_store import _secure_owner_only
+
+                _secure_owner_only(tmp)
         tmp.replace(path)
     except BaseException:
         # ``except BaseException`` is intentional: we want to clean up

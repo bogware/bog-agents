@@ -23,6 +23,16 @@ Pure-logic module: models are injected as async ``invoke`` callables
 and the worker loop takes its tool list as an argument, so unit tests
 drive everything without a live LLM. CLI wiring lives in
 :func:`handle_butcher_subcommand` / :func:`start_butcher_job`.
+
+Containment honesty (CT-5): the per-slice file allowlist is *enforced* on
+`write_file` / `edit_file`, and `run_command` is additionally screened for
+statically detectable shell write targets (redirections, `tee`, `cp` / `mv` /
+`copy` / `move`, `dd of=`) — a detectable target outside the working directory
+or the slice allowlist, or one that cannot be verified (variable expansion,
+globs, `~`), is refused. This is deny-by-default for *detectable* writes, not
+a sandbox: a command that hides its write inside an inline interpreter (e.g.
+`python -c "open(...)"`) is not caught. The real safeguard for the whole flow
+remains the up-front plan-approval gate (RD-5).
 """
 
 from __future__ import annotations
@@ -72,16 +82,18 @@ class ButcherConfig:
 
     butcher_model: str = ""
     """Model spec for planning + verification. Empty = operator ``max`` tier
-    when operator mode is configured, else the session's active model."""
+    when operator mode is active this session, else the session's active
+    model."""
 
     worker_model: str = ""
     """Model spec for slice execution. Empty = operator ``easy`` tier when
-    available, else the butcher model (workers can never be model-less)."""
+    operator mode is active, else the butcher model (workers can never be
+    model-less)."""
 
     escalation_models: list[str] = field(default_factory=list)
     """Ladder tried (in order) after the worker fails a slice twice.
-    Empty = derived: operator ``medium`` then ``hard`` tiers when available,
-    else the butcher model."""
+    Empty = derived: operator ``medium`` then ``hard`` tiers when operator
+    mode is active, else the butcher model."""
 
     max_slices: int = _MAX_SLICES
     worker_max_iterations: int = 16
@@ -460,6 +472,203 @@ def screen_dangerous_command(command: str) -> str | None:
     return None
 
 
+def _path_in_allowlist(rel_posix: str, allow: list[str]) -> bool:
+    """Return whether a root-relative POSIX path matches the slice allowlist.
+
+    Entries match either exactly or as `fnmatch` globs (e.g. `src/pkg/*.py`).
+
+    Args:
+        rel_posix: Path relative to the working dir, in POSIX form.
+        allow: Normalized (stripped, non-empty) allowlist entries.
+
+    Returns:
+        `True` when any allowlist entry matches.
+    """
+    import fnmatch
+
+    for pattern in allow:
+        pat = pattern.replace("\\", "/").lstrip("./")
+        if rel_posix == pat or fnmatch.fnmatch(rel_posix, pat):
+            return True
+    return False
+
+
+def resolve_slice_path(rel: str, *, root: Path, allow: list[str]) -> Path:
+    """Resolve a worker-supplied path against containment + allowlist rules.
+
+    Same path-escape rules as the sidecar: nothing above `root`, no symlinks.
+    When `allow` is non-empty, the resolved path must also match the slice's
+    declared file allowlist.
+
+    Args:
+        rel: The worker-supplied (usually relative) path.
+        root: Resolved working-dir root.
+        allow: Normalized slice allowlist (empty = whole-working-dir scope).
+
+    Returns:
+        The resolved absolute path, guaranteed inside `root`.
+
+    Raises:
+        PermissionError: When the path escapes the working dir, is a symlink,
+            or falls outside a non-empty allowlist.
+    """
+    candidate = (root / rel).resolve()
+    try:
+        rel_posix = candidate.relative_to(root).as_posix()
+    except ValueError as exc:
+        msg = f"path {rel!r} resolves outside the working directory"
+        raise PermissionError(msg) from exc
+    if candidate.is_symlink():
+        msg = f"refusing to follow symlink {rel!r}"
+        raise PermissionError(msg)
+    if allow and not _path_in_allowlist(rel_posix, allow):
+        msg = f"path {rel!r} is not in this slice's allowed files ({', '.join(allow)})"
+        raise PermissionError(msg)
+    return candidate
+
+
+_WRITE_REDIRECT_TOKENS = frozenset({">", ">>", "&>", "&>>"})
+"""Shell tokens that redirect output into a file target."""
+
+_COMMAND_SEPARATOR_TOKENS = frozenset({"|", "||", "&&", ";", "&"})
+"""Tokens that end one command segment and start the next."""
+
+_COPY_PROGRAMS = frozenset({"cp", "mv", "copy", "move"})
+"""Programs whose last positional argument is a write target."""
+
+_UNVERIFIABLE_TARGET_CHARS = ("$", "`", "%", "*", "?")
+"""Characters that make a write target dynamically expanded / unverifiable."""
+
+
+def _strip_outer_quotes(token: str) -> str:
+    """Remove one layer of matching outer quotes from a shell token."""
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"'", '"'}:
+        return token[1:-1]
+    return token
+
+
+def _tokenize_shell_command(command: str) -> list[str] | None:
+    """Tokenize a shell command, keeping quoting and splitting operators.
+
+    Non-POSIX mode preserves quotes (so `>` inside a quoted `python -c`
+    body is not mistaken for a redirect) and Windows backslash paths.
+
+    Args:
+        command: The raw shell command string.
+
+    Returns:
+        Token list, or `None` when the command cannot be tokenized
+        (e.g. unbalanced quotes).
+    """
+    import shlex
+
+    lex = shlex.shlex(command, posix=False, punctuation_chars=True)
+    lex.whitespace_split = True
+    lex.commenters = ""
+    try:
+        return list(lex)
+    except ValueError:
+        return None
+
+
+def screen_shell_write_targets(
+    command: str, *, root: Path, allow: list[str]
+) -> str | None:
+    """Best-effort screen of a worker shell command for out-of-scope writes.
+
+    Statically detects file write targets — output redirections (`>`, `>>`,
+    `&>`, `2> file`), `tee` file arguments, the last argument of
+    `cp`/`mv`/`copy`/`move`, and `dd of=…` — in every pipeline segment, and
+    checks each against the working-dir containment + slice-allowlist rules
+    (`resolve_slice_path`). Deny-by-default for what it can see: a detectable
+    target that is outside the scope, or that cannot be verified (variable
+    expansion, backticks, globs, `~`), refuses the command. It is NOT a
+    sandbox — writes hidden inside an inline interpreter body are not
+    detected (documented in the module docstring; the plan-approval gate is
+    the real safeguard).
+
+    Args:
+        command: The raw shell command the worker asked to run.
+        root: Resolved working-dir root.
+        allow: Normalized slice allowlist (empty = containment-only checks).
+
+    Returns:
+        A human-readable refusal reason, or `None` when no detectable write
+        target violates the rules.
+    """
+    tokens = _tokenize_shell_command(command)
+    if tokens is None:
+        # Unparseable command: refuse only when it visibly contains a write
+        # vector this screen would otherwise have checked.
+        if re.search(r">|\b(tee|cp|mv|copy|move|dd)\b", command):
+            return "command could not be parsed for write-target screening"
+        return None
+
+    segments: list[list[str]] = [[]]
+    for tok in tokens:
+        if tok in _COMMAND_SEPARATOR_TOKENS:
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+
+    targets: list[str] = []
+    for seg in segments:
+        program = ""
+        file_args: list[str] = []
+        i = 0
+        while i < len(seg):
+            tok = seg[i]
+            if tok in _WRITE_REDIRECT_TOKENS or tok == ">&":
+                # A preceding bare-digit token is the fd (`2> file`), not a file arg.
+                if (
+                    file_args
+                    and i > 0
+                    and seg[i - 1] == file_args[-1]
+                    and file_args[-1].isdigit()
+                ):
+                    file_args.pop()
+                target = seg[i + 1] if i + 1 < len(seg) else ""
+                if tok == ">&" and target.isdigit():
+                    i += 2  # fd duplication like 2>&1 — no file target
+                    continue
+                if not target:
+                    return "output redirection with no target"
+                targets.append(target)
+                i += 2
+                continue
+            if tok in {"<", "<<", "<<<"}:
+                i += 2  # input redirection — not a write
+                continue
+            if not program:
+                program = Path(_strip_outer_quotes(tok)).name.lower()
+            elif not tok.startswith("-"):
+                file_args.append(tok)
+            i += 1
+        if program == "tee":
+            targets.extend(a for a in file_args if a != "-")
+        elif program in _COPY_PROGRAMS and file_args:
+            targets.append(file_args[-1])
+        elif program == "dd":
+            targets.extend(a[len("of=") :] for a in seg if a.startswith("of="))
+
+    for raw in targets:
+        target = _strip_outer_quotes(raw).strip()
+        if not target:
+            return "output redirection with no target"
+        normalized = target.replace("\\", "/").lower()
+        if normalized in {"/dev/null", "nul", "nul:"} or normalized.startswith("/dev/"):
+            continue
+        if target.startswith("~") or any(
+            ch in target for ch in _UNVERIFIABLE_TARGET_CHARS
+        ):
+            return f"cannot verify shell write target {target!r} against this slice's allowed files"
+        try:
+            resolve_slice_path(target, root=root, allow=allow)
+        except PermissionError as exc:
+            return f"shell write target refused: {exc}"
+    return None
+
+
 def build_worker_tools(
     working_dir: Path, allowed_files: list[str] | None = None
 ) -> list[BaseTool]:
@@ -475,12 +684,17 @@ def build_worker_tools(
     root-relative paths, either exactly or as ``fnmatch`` globs (e.g.
     ``src/pkg/*.py``). An empty allowlist keeps the whole-working-dir scope.
 
+    CT-5: ``run_command`` is additionally screened by
+    :func:`screen_shell_write_targets`, so statically detectable shell writes
+    (redirects, `tee`, `cp`/`mv`, `dd of=`) cannot sidestep the allowlist or
+    the working-dir containment. Best-effort by design — see the module
+    docstring for the honest scope of that screen.
+
     Args:
         working_dir: Repo root the worker operates in.
         allowed_files: The slice's declared writable paths, or None/empty for
             no per-slice restriction.
     """
-    import fnmatch
     import subprocess  # noqa: S404 — scoped check-runner for slice verification
 
     from langchain_core.tools import StructuredTool
@@ -490,27 +704,8 @@ def build_worker_tools(
     root = working_dir.resolve()
     allow = [f.strip() for f in (allowed_files or []) if f.strip()]
 
-    def _in_allowlist(rel_posix: str) -> bool:
-        for pattern in allow:
-            pat = pattern.replace("\\", "/").lstrip("./")
-            if rel_posix == pat or fnmatch.fnmatch(rel_posix, pat):
-                return True
-        return False
-
     def _resolve_safe(rel: str) -> Path:
-        candidate = (root / rel).resolve()
-        try:
-            rel_posix = candidate.relative_to(root).as_posix()
-        except ValueError as exc:
-            msg = f"path {rel!r} resolves outside the working directory"
-            raise PermissionError(msg) from exc
-        if candidate.is_symlink():
-            msg = f"refusing to follow symlink {rel!r}"
-            raise PermissionError(msg)
-        if allow and not _in_allowlist(rel_posix):
-            msg = f"path {rel!r} is not in this slice's allowed files ({', '.join(allow)})"
-            raise PermissionError(msg)
-        return candidate
+        return resolve_slice_path(rel, root=root, allow=allow)
 
     def write_file(path: str, content: str) -> str:
         """Create or overwrite a UTF-8 text file under the working directory."""
@@ -555,6 +750,13 @@ def build_worker_tools(
         danger = screen_dangerous_command(command)
         if danger is not None:
             return f"Error: refused dangerous command ({danger}). Butcher workers cannot run this."
+        write_refusal = screen_shell_write_targets(command, root=root, allow=allow)
+        if write_refusal is not None:
+            return (
+                f"Error: refused command — {write_refusal}. Shell writes must stay inside "
+                "the working directory and this slice's allowed files; use write_file/edit_file "
+                "for file changes."
+            )
         timeout_seconds = max(1, min(int(timeout_seconds), int(_CHECK_TIMEOUT_SECONDS)))
         try:
             result = subprocess.run(  # noqa: S602 — slice-scoped check runner, local CLI context
@@ -1050,14 +1252,24 @@ def render_report(report: ButcherReport) -> str:
 
 
 def _resolve_models(app: object, cfg: ButcherConfig) -> tuple[str, str, list[str]]:
-    """Resolve (butcher_model, worker_model, ladder) from config + operator tiers."""
+    """Resolve (butcher_model, worker_model, ladder) from config + operator tiers.
+
+    Operator preset tiers are consulted only when operator mode is actually
+    active for this session (CT-1 / v4 RD-4). With the operator off and an
+    empty `butcher.toml`, both roles resolve to the session's active model —
+    previously the hardcoded default-preset (Anthropic) tiers always won,
+    which hard-broke Bedrock/Ollama-only setups and silently switched models
+    for everyone else.
+    """
     from bog_agents_cli.feature_helpers import resolve_active_model_spec
 
     tiers: dict[str, Any] = {}
     try:
         from bog_agents_cli.operator_mode import ensure_session
 
-        tiers = ensure_session(app).tiers
+        session = ensure_session(app)
+        if session.active:
+            tiers = session.tiers
     except Exception:
         logger.debug("operator tiers unavailable to butcher", exc_info=True)
     active = resolve_active_model_spec(app)
@@ -1172,7 +1384,9 @@ async def start_butcher_job(app: object, prompt: str) -> None:
     if job is None:
         await app._mount_message(
             ErrorMessage(
-                "The butcher could not produce a usable slice plan — try a more concrete prompt."
+                f"The butcher could not produce a usable slice plan with `{butcher_spec}` — "
+                "check that this model is reachable/credentialed (planning errors are logged), "
+                "or try a more concrete prompt."
             )
         )  # type: ignore[attr-defined]
         return

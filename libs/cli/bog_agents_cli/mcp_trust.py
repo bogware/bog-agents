@@ -18,9 +18,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from bog_agents_cli._env_vars import bog_agents_home
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
+# Honors BOG_AGENTS_HOME (CT-3); resolved once at import time, matching
+# model_config.DEFAULT_CONFIG_PATH so trust entries land in the same file.
+_DEFAULT_CONFIG_DIR = bog_agents_home()
 _DEFAULT_CONFIG_PATH = _DEFAULT_CONFIG_DIR / "config.toml"
 
 

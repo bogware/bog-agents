@@ -81,8 +81,10 @@ jobs:
           token: ${{ secrets.BOG_PAT }}
       - uses: astral-sh/setup-uv@v7
       - name: Update lockfiles
+        # All six uv packages — leaving one out lets its lockfile drift and
+        # regenerate stale at every release (root cause of v5 SAT-1).
         run: |
-          for dir in libs/bog-agents libs/cli libs/daemon; do
+          for dir in libs/bog-agents libs/cli libs/daemon libs/acp libs/harbor libs/partners/daytona; do
             uv lock --directory "$dir" --python 3.12
           done
       - name: Commit

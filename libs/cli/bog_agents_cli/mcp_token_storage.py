@@ -9,9 +9,11 @@ the OAuth handshake itself.
 Security notes:
 
 - The persisted file holds bearer + refresh tokens. Writes go through
-    `io_utils.atomic_write_text` (mode 0600 on POSIX) followed by
-    `vars_store._secure_owner_only` so the file is owner-only on Windows too
-    (a bare `chmod` is a no-op there).
+    `io_utils.atomic_write_text(mode=0o600)`, which creates the temp file
+    owner-only from the start (POSIX) and icacls-hardens it before the rename
+    (Windows), plus `vars_store._secure_owner_only` on the final path and on
+    the containing directory (`is_dir=True`) — so no file or directory in the
+    flow is ever briefly wider than owner-only (CT-6).
 - `mcp.shared.auth.OAuthToken` is a pydantic model whose default `repr`
     includes the access and refresh token strings verbatim. Never log one via
     `%r`, `str()`, an f-string, or `logger.exception`. This module logs only
@@ -54,11 +56,14 @@ def default_oauth_dir() -> Path:
 
     Split out as a module function so tests can monkeypatch it to redirect
     storage into a temporary directory without touching the real home dir.
+    Honors the `BOG_AGENTS_HOME` override (CT-3), re-read on every call.
 
     Returns:
         The `~/.bog-agents/mcp-oauth/` directory path.
     """
-    return Path.home() / ".bog-agents" / "mcp-oauth"
+    from bog_agents_cli._env_vars import bog_agents_home
+
+    return bog_agents_home() / "mcp-oauth"
 
 
 def is_safe_server_name(server_name: str) -> bool:
@@ -312,12 +317,25 @@ class FileTokenStorage(TokenStorage):
         return data
 
     def _write(self, data: dict[str, Any]) -> None:
-        """Atomically write the envelope with owner-only permissions."""
+        """Atomically write the envelope with owner-only permissions.
+
+        CT-6: the containing directory is created `0o700` and hardened
+        owner-only on both platforms (`_secure_owner_only(is_dir=True)` —
+        POSIX chmod / Windows icacls) before the file write, and
+        `atomic_write_text(mode=0o600)` creates the temp file owner-only from
+        the start (and icacls-hardens it pre-rename on Windows), so neither
+        the directory nor any intermediate file is ever briefly wider than
+        owner-only.
+        """
         data["version"] = _STORAGE_VERSION
         path = self.path
+        base = path.parent
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Warn-only inside; covers pre-existing dirs created by older versions
+        # at default permissions, and is the Windows ACL guarantee.
+        _secure_owner_only(base, is_dir=True)
         payload = json.dumps(data, separators=(",", ":"))
         atomic_write_text(path, payload, mode=0o600)
-        # POSIX 0600 is already applied by atomic_write_text's mode=; this call
-        # is the cross-platform guarantee (Windows icacls), where mode= is a
-        # no-op. Warn-only inside; a failure leaves the file at the default ACL.
+        # Belt-and-suspenders re-assert on the final path (atomic_write_text
+        # already secures the temp file pre-rename on both platforms).
         _secure_owner_only(path)
