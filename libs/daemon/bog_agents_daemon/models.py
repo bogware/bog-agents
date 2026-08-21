@@ -57,7 +57,10 @@ class TriggerConfig:
         debounce_seconds: Seconds to wait before firing after a file change.
         webhook_path: URL path suffix e.g. "/hooks/my-hook" (used when type=WEBHOOK).
         webhook_secret: HMAC secret for webhook payload verification.
-        git_branch_pattern: Branch filter for git_push trigger (glob pattern).
+        git_branch_pattern: Branch filter for git_push trigger (glob pattern),
+            matched against the full branch name with the `refs/heads/` (or
+            `refs/tags/`) prefix stripped — use `feature/*` to match
+            `feature/login`; a bare `main` matches only `main` itself.
     """
 
     type: TriggerType

@@ -268,6 +268,80 @@ _REDACTED_TRIGGER_FIELDS: tuple[str, ...] = ("webhook_secret",)
 _REDACTED_PLACEHOLDER = "***"
 
 
+def _restore_redacted_secrets(
+    incoming: list[Any],
+    existing: list[Any],
+    fields: tuple[str, ...],
+    *,
+    kind: str,
+) -> None:
+    """Resolve `'***'` placeholder secrets on incoming trigger/output configs.
+
+    GET/list responses redact secret-bearing fields to `_REDACTED_PLACEHOLDER`,
+    so the natural read-modify-write flow — GET a job, tweak one field, PATCH
+    the whole `triggers`/`outputs` array back — would otherwise persist the
+    literal placeholder as the real webhook HMAC secret / SMTP password /
+    GitHub token (DMN-8). A placeholder value therefore means "keep the stored
+    secret": each entry is matched to its stored counterpart by list position
+    (exactly what the GET-edit-PATCH round-trip preserves) and the stored value
+    is copied over in place.
+
+    On create — or when a placeholder lands at a position with no stored
+    secret to inherit — the request is rejected with 422: the placeholder is
+    never persisted as a literal secret.
+
+    Args:
+        incoming: Converted dataclass configs from the request body; mutated in place.
+        existing: The currently stored configs to inherit secrets from (empty on create).
+        fields: Secret attribute names to check on each entry.
+        kind: Request field name (`triggers` or `outputs`) for error messages.
+
+    Raises:
+        HTTPException: With status 422 when a placeholder cannot be resolved
+            to a stored value.
+    """
+    for i, item in enumerate(incoming):
+        for field_name in fields:
+            if getattr(item, field_name, None) != _REDACTED_PLACEHOLDER:
+                continue
+            stored = getattr(existing[i], field_name, "") if i < len(existing) else ""
+            if not stored:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{kind}[{i}].{field_name} is the redaction placeholder {_REDACTED_PLACEHOLDER!r} "
+                        "but no stored secret exists at that position to preserve; send the real secret value"
+                    ),
+                )
+            setattr(item, field_name, stored)
+
+
+_REF_PREFIXES: tuple[str, ...] = ("refs/heads/", "refs/tags/")
+
+
+def _branch_from_ref(ref: str) -> str:
+    """Extract the full branch (or tag) name from a pushed git refname.
+
+    Only the `refs/heads/` / `refs/tags/` prefix is stripped, so a slashed
+    name survives intact: `refs/heads/feature/login` becomes `feature/login`.
+    A bare name (`main`) passes through unchanged. Job branch patterns are
+    fnmatched against this FULL name — `feature/*` matches `feature/login`,
+    while a pattern of just the last segment (`login`) does NOT. (DMN-7: the
+    old last-segment split made every slashed pattern unmatchable.)
+
+    Args:
+        ref: The refname from the push payload (may be empty).
+
+    Returns:
+        The branch/tag name with the ref prefix removed, or the input
+        unchanged when it carries no known prefix.
+    """
+    for prefix in _REF_PREFIXES:
+        if ref.startswith(prefix):
+            return ref[len(prefix) :]
+    return ref
+
+
 def _job_to_response(job: AmbientJob) -> dict[str, Any]:
     """Serialize an AmbientJob to a JSON-safe dict for API responses.
 
@@ -472,8 +546,18 @@ def create_app(
 
         Returns:
             The newly created job dict.
+
+        Raises:
+            HTTPException: 422 if a secret field carries the `'***'` redaction
+                placeholder — there is no stored value to preserve on create.
         """
         _check_auth(request, token_holder["value"])
+        triggers = [_trigger_config_from_model(t) for t in body.triggers]
+        outputs = [_output_config_from_model(o) for o in body.outputs]
+        # DMN-8: a creation payload has no stored job to inherit secrets from,
+        # so the '***' redaction placeholder can never be meant literally.
+        _restore_redacted_secrets(triggers, [], _REDACTED_TRIGGER_FIELDS, kind="triggers")
+        _restore_redacted_secrets(outputs, [], _REDACTED_OUTPUT_FIELDS, kind="outputs")
         job = AmbientJob(
             name=body.name,
             description=body.description,
@@ -484,8 +568,8 @@ def create_app(
             working_dir=body.working_dir,
             max_retries=body.max_retries,
             retry_backoff_seconds=body.retry_backoff_seconds,
-            triggers=[_trigger_config_from_model(t) for t in body.triggers],
-            outputs=[_output_config_from_model(o) for o in body.outputs],
+            triggers=triggers,
+            outputs=outputs,
             enabled=body.enabled,
         )
         upsert_job(job)
@@ -527,6 +611,11 @@ def create_app(
         field on the stored record is preserved. Useful for edit-flow
         ergonomics from the CLI (``daemon jobs edit``) without forcing
         the user to round-trip the entire payload.
+
+        Secret fields (webhook_secret, smtp_password, github_token) whose
+        incoming value is the `'***'` redaction placeholder keep the stored
+        secret at the same list position, so the GET-edit-PATCH round-trip
+        never overwrites a real secret with the placeholder (DMN-8).
         """
         _check_auth(request, token_holder["value"])
         existing = get_job(job_id)
@@ -555,9 +644,14 @@ def create_app(
         if body.retry_backoff_seconds is not None:
             updates["retry_backoff_seconds"] = body.retry_backoff_seconds
         if body.triggers is not None:
-            updates["triggers"] = [_trigger_config_from_model(t) for t in body.triggers]
+            triggers = [_trigger_config_from_model(t) for t in body.triggers]
+            # DMN-8: '***' means "keep the stored secret", never a literal value.
+            _restore_redacted_secrets(triggers, existing.triggers, _REDACTED_TRIGGER_FIELDS, kind="triggers")
+            updates["triggers"] = triggers
         if body.outputs is not None:
-            updates["outputs"] = [_output_config_from_model(o) for o in body.outputs]
+            outputs = [_output_config_from_model(o) for o in body.outputs]
+            _restore_redacted_secrets(outputs, existing.outputs, _REDACTED_OUTPUT_FIELDS, kind="outputs")
+            updates["outputs"] = outputs
         if body.enabled is not None:
             updates["enabled"] = body.enabled
 
@@ -726,6 +820,13 @@ def create_app(
         `git_branch_pattern` matches the pushed refname.  The hook sends JSON
         with `ref`, `new_sha`, and `old_sha` fields.
 
+        Matching semantics (DMN-7): only the `refs/heads/` (or `refs/tags/`)
+        prefix is stripped from the pushed ref, and the pattern is fnmatched
+        against the FULL remaining name. `feature/*` matches
+        `refs/heads/feature/login`; a bare `main` matches `refs/heads/main`
+        but not `refs/heads/wip/main`; a last-segment pattern like `login`
+        does NOT match `feature/login`.
+
         Returns:
             Dict with triggered job IDs and count.
         """
@@ -741,8 +842,9 @@ def create_app(
             payload = {}
 
         ref = payload.get("ref", "")
-        # Normalise "refs/heads/main" → "main"
-        branch = ref.split("/")[-1] if ref else ""
+        # Normalise "refs/heads/feature/login" → "feature/login" (full branch
+        # name — only the ref prefix is stripped, slashes are preserved).
+        branch = _branch_from_ref(ref)
         # A missing/empty ref used to leave branch="" which fnmatch("", "*")
         # matches — firing every wildcard GIT_PUSH job on a malformed payload.
         # Reject the push instead of silently triggering on noise.
