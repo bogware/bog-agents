@@ -33,9 +33,9 @@ def _errors_containing(app: BogAgentsApp, text: str) -> list[ErrorMessage]:
     return [w for w in app.query(ErrorMessage) if text in str(w._content)]
 
 
-async def _wait_for(condition, timeout: float = 5.0) -> bool:
+async def _wait_for(condition, timeout_s: float = 5.0) -> bool:
     """Poll `condition()` until true or timeout; returns the final value."""
-    deadline = asyncio.get_running_loop().time() + timeout
+    deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
         if condition():
             return True
@@ -128,9 +128,9 @@ class TestTelephoneOffPump:
                 # is exactly what the deadlock froze before the fix.
                 await pilot.pause()
                 await pilot.press("3")
-                assert await _wait_for(
-                    lambda: not list(app.query(TelephoneMenu))
-                ), "telephone menu never resolved from its key binding"
+                assert await _wait_for(lambda: not list(app.query(TelephoneMenu))), (
+                    "telephone menu never resolved from its key binding"
+                )
                 assert await _wait_for(
                     lambda: _messages_containing(app, "Discarded rewrite.")
                 )
@@ -236,7 +236,7 @@ class TestBackgroundCompletionNotification:
                 lambda: _messages_containing(
                     app, f"Background task {task_id} completed."
                 ),
-                timeout=10,
+                timeout_s=10,
             ), "completion notification never mounted (v5 CLIC-4 regression)"
 
 

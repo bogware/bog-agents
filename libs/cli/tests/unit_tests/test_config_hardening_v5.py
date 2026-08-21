@@ -47,7 +47,9 @@ class TestBogAgentsHome:
         monkeypatch.setenv("BOG_AGENTS_HOME", "   ")
         assert bog_agents_home() == Path.home() / ".bog-agents"
 
-    def test_read_on_every_call(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_read_on_every_call(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         # The override is re-read per call, so a change within the process is
         # honored by call-time consumers.
         from bog_agents_cli._env_vars import bog_agents_home
@@ -82,7 +84,10 @@ class TestButcherModelResolution:
             "hard": _Tier("anthropic:claude-opus-4"),
         }
         monkeypatch.setattr(
-            butcher, "ensure_session", lambda _app: _FakeSession(active, tiers), raising=False
+            butcher,
+            "ensure_session",
+            lambda _app: _FakeSession(active, tiers),
+            raising=False,
         )
         monkeypatch.setattr(
             "bog_agents_cli.operator_mode.ensure_session",
@@ -95,14 +100,18 @@ class TestButcherModelResolution:
         )
         return butcher._resolve_models(object(), butcher.ButcherConfig())
 
-    def test_operator_off_uses_active_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_operator_off_uses_active_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         butcher_model, worker_model, _ladder = self._resolve(monkeypatch, active=False)
         # With operator off and an empty config, both roles must be the
         # session's active model — never the hardcoded Anthropic tiers.
         assert butcher_model == "bedrock:my-model"
         assert worker_model == "bedrock:my-model"
 
-    def test_operator_on_uses_preset_tiers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_operator_on_uses_preset_tiers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         butcher_model, worker_model, _ladder = self._resolve(monkeypatch, active=True)
         assert butcher_model == "anthropic:claude-opus-4"  # max tier
         assert worker_model == "anthropic:claude-haiku-4"  # easy tier
@@ -143,7 +152,10 @@ class TestButcherRunCommandAllowlist:
         from bog_agents_cli.butcher import screen_shell_write_targets
 
         root = tmp_path.resolve()
-        assert screen_shell_write_targets("pytest -q", root=root, allow=["src/*.py"]) is None
+        assert (
+            screen_shell_write_targets("pytest -q", root=root, allow=["src/*.py"])
+            is None
+        )
 
 
 class TestSecureAtomicWrite:
@@ -202,7 +214,5 @@ class TestMcpHeaderInterpolation:
         monkeypatch.setattr(
             "bog_agents_cli.vars_store.get_var", lambda _name: None, raising=False
         )
-        out = _interpolate_headers(
-            {"X-Env": "${MAYBE_UNSET_XYZ:-fallback}"}, "s"
-        )
+        out = _interpolate_headers({"X-Env": "${MAYBE_UNSET_XYZ:-fallback}"}, "s")
         assert out["X-Env"] == "fallback"
