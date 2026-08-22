@@ -30,8 +30,9 @@ something matters.
   inbound webhooks; tokens stored with `0o600` permissions.
 - **Durable**: `os.fsync()`-durable job persistence so a hard kill never
   loses a freshly-created job.
-- **Cross-platform**: POSIX systemd, Windows Task Scheduler, or just
-  `bog-agents-daemon run` in a shell. Same config either way.
+- **Cross-platform**: systemd (Linux) / launchd (macOS) service install via
+  `bog-agents daemon install`, or just `bog-agents-daemon run` in a shell on
+  any platform (Windows included). Same config either way.
 
 If the CLI *passes through in harmony*, the daemon is what keeps watch
 through the night.
@@ -70,11 +71,11 @@ bog-agents daemon jobs create \
   --name morning-brief \
   --cron "0 9 * * 1-5" \
   --prompt "Summarize what changed in this repo since yesterday." \
-  --output slack:#engineering
+  --output slack --output-slack "$SLACK_WEBHOOK_URL"
 ```
 
-The job persists to `~/.bog-agents/daemon/jobs/`. The scheduler picks it up
-on the next tick and fires it on the configured cadence.
+The job persists to `~/.bog-agents/daemon/jobs.json`. The scheduler picks it
+up on the next tick and fires it on the configured cadence.
 
 ---
 
@@ -89,25 +90,26 @@ triggers:
 # An interval
 triggers:
   - type: interval
-    seconds: 1800            # every 30 min
+    interval_seconds: 1800   # every 30 min
 
 # A file watcher
 triggers:
   - type: file_change
-    patterns: ["src/**/*.py"]
+    watch_dir: src
+    watch_patterns: ["**/*.py"]
     debounce_seconds: 5
 
-# An inbound webhook (HMAC-validated)
+# An inbound webhook (HMAC-validated when a secret is set)
 triggers:
   - type: webhook
-    path: /hooks/incident
-    secret_env: WEBHOOK_SECRET
+    webhook_path: /hooks/incident
+    webhook_secret: "<shared secret for X-Hub-Signature-256>"
 
-# A git push (post-receive on a remote)
+# A git push (fired by the post-receive hook that
+# `bog-agents daemon install-git-hook <repo>` installs)
 triggers:
   - type: git_push
-    repo: /srv/git/main.git
-    branch: main
+    git_branch_pattern: main
 ```
 
 A job can have multiple triggers. The agent fires on any of them.
@@ -120,23 +122,27 @@ Where the result of an agent run goes. Configure one or many:
 
 ```yaml
 outputs:
-  - type: log              # systemd journal / stderr
-  - type: file
-    path: ~/.bog-agents/runs/morning-brief.md
-  - type: slack
-    channel: "#engineering"
-    token_env: SLACK_BOT_TOKEN
-  - type: webhook
-    url: https://hooks.example.com/agent-output
-    hmac_secret_env: OUTBOUND_WEBHOOK_SECRET
-  - type: email
-    to: oncall@example.com
-    from: bog-agents@example.com
-    smtp_env_prefix: SMTP_     # SMTP_HOST, SMTP_USER, SMTP_PASSWORD
-  - type: github_comment
-    repo: example/api
-    issue: 1234
-    token_env: GITHUB_TOKEN
+  - target: log            # systemd journal / stderr
+  - target: file
+    file_path: ~/.bog-agents/runs/morning-brief.md
+    append: true
+  - target: slack
+    slack_webhook_url: https://hooks.slack.com/services/T000/B000/XXXX
+    slack_channel: "#engineering"   # optional override
+  - target: webhook
+    webhook_url: https://hooks.example.com/agent-output
+    webhook_headers: { X-Source: bog-agents }   # optional extra headers
+  - target: email
+    to_addrs: [oncall@example.com]
+    from_addr: bog-agents@example.com
+    smtp_host: smtp.example.com
+    smtp_port: 587                  # 587=STARTTLS, 465=SSL, 25=plain
+    smtp_username: bog
+    smtp_password: "<password>"     # persisted to jobs.json (owner-only)
+  - target: github_comment
+    github_repo: example/api
+    github_issue_or_pr: 1234
+    github_token: "<token>"
 ```
 
 ---
@@ -166,29 +172,46 @@ can copy it.
 
 ## Running as a service
 
-### systemd (Linux)
+The `bog-agents-daemon` binary itself only knows `start` (alias `run`),
+`stop`, and `status`. The service installer ships with the
+[`bog-agents-cli`](https://pypi.org/project/bog-agents-cli/) package
+(`pip install bog-agents-cli`):
 
 ```bash
-bog-agents-daemon install-systemd --user
-systemctl --user enable --now bog-agents-daemon
+bog-agents daemon install                     # auto-detects systemd (Linux) / launchd (macOS)
+bog-agents daemon install --platform systemd  # or force a specific init system
+```
+
+### systemd (Linux)
+
+`bog-agents daemon install` writes a user unit to
+`~/.config/systemd/user/bog-agents-daemon.service` and prints the follow-up
+commands:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable bog-agents-daemon
+systemctl --user start bog-agents-daemon
 systemctl --user status bog-agents-daemon
 ```
 
-### Windows Task Scheduler
-
-```powershell
-bog-agents-daemon install-windows-task
-```
-
-Creates a `bog-agents-daemon` task that starts at logon and restarts on
-failure. Manage it with `schtasks` or the Task Scheduler GUI.
-
 ### macOS launchd
 
+`bog-agents daemon install --platform launchd` writes
+`~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist` and prints the
+load command:
+
 ```bash
-bog-agents-daemon install-launchd --user
 launchctl load ~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist
+launchctl list com.bogware.bog-agents-daemon
 ```
+
+### Windows
+
+There is no Windows service installer yet. Run the daemon in a shell
+(`bog-agents-daemon run`) or launch it in the background from the CLI
+(`bog-agents daemon start`). If you want it to start at logon, point a Task
+Scheduler task at the `bog-agents-daemon` executable yourself.
 
 ---
 
@@ -197,14 +220,14 @@ launchctl load ~/Library/LaunchAgents/com.bogware.bog-agents-daemon.plist
 - **Token-authenticated API.** Every request needs `Authorization: Bearer`.
   Tokens generated with `secrets.token_urlsafe`, compared with
   `hmac.compare_digest`, stored at `0o600`.
-- **HMAC-validated inbound webhooks.** Each webhook trigger declares an
-  env-var holding its shared secret; the daemon verifies the HMAC-SHA256
-  signature on every request.
-- **Outbound webhook signing.** Outputs that POST to a webhook can sign
-  the body with HMAC-SHA256 so the receiver can verify it came from
-  this daemon.
-- **No secrets on disk.** Provider keys, Slack tokens, and webhook
-  secrets are all read from env vars — the daemon never persists them.
+- **HMAC-validated inbound webhooks.** A webhook trigger configured with a
+  `webhook_secret` requires a valid `X-Hub-Signature-256` header
+  (HMAC-SHA256 of the raw body) on every request.
+- **Secrets stored owner-only.** Provider API keys are read from env vars
+  and never persisted. Secrets that live inside job configs (SMTP
+  passwords, GitHub tokens, webhook HMAC secrets) are persisted to
+  `~/.bog-agents/daemon/jobs.json`, which — like the API token — is
+  restricted to owner-only permissions (POSIX `0o600` / Windows ACL).
 - **Resource limits.** Configurable per-job CPU / memory / wall-clock
   caps via the same FeatureConfig shape as the SDK.
 

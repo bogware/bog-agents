@@ -1,6 +1,7 @@
 """Tests for `bog_agents._api.deprecation`."""
 
 import inspect
+import os
 import warnings
 
 import pytest
@@ -138,7 +139,12 @@ def test_warn_deprecated_attributes_to_caller_stacklevel() -> None:
         expected_line = inspect.currentframe().f_lineno - 1
 
     assert len(caught) == 1
-    assert caught[0].filename == __file__
+    # Compare case-normalized: on Windows (case-insensitive filesystem) the
+    # warning's frame filename and the module's `__file__` can differ in
+    # drive/directory casing (e.g. `E:\Code\...` vs `E:\code\...`) depending on
+    # how pytest was invoked. `normcase` folds case only on such platforms, so
+    # the comparison stays strict on POSIX.
+    assert os.path.normcase(caught[0].filename) == os.path.normcase(__file__)
     assert caught[0].lineno == expected_line
     assert "thing" in str(caught[0].message)
 

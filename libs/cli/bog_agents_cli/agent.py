@@ -1129,15 +1129,50 @@ def _format_git_stash_description(
     return f"git stash {action}"
 
 
+def _format_pty_start_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a pty_start tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the pty_start tool call.
+    """
+    args = tool_call["args"]
+    name = strip_dangerous_unicode(str(args.get("name", "")))
+    command = strip_dangerous_unicode(str(args.get("command", "")))
+    return (
+        f"{get_glyphs().warning}  Start an interactive program in a PTY "
+        f"(session '{name}'): {command}\n"
+        "PTY programs run arbitrary commands outside the shell approval/exec-risk "
+        "checks — approve only if you trust this command."
+    )
+
+
+def _format_pty_send_description(
+    tool_call: ToolCall, _state: AgentState[Any], _runtime: Runtime[Any]
+) -> str:
+    """Format a pty_send tool call for the approval prompt.
+
+    Returns:
+        Formatted description string for the pty_send tool call.
+    """
+    args = tool_call["args"]
+    name = strip_dangerous_unicode(str(args.get("name", "")))
+    keys = strip_dangerous_unicode(str(args.get("keys", "")))
+    return f"Send keys to PTY session '{name}': {keys}"
+
+
 def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     """Configure human-in-the-loop interrupt settings for all gated tools.
 
     Every tool that can have side effects or access external resources
     (shell execution, file writes/edits, web search, URL fetch, task
-    delegation, and the mutating git tools) is gated behind an approval prompt
-    unless auto-approve is enabled. The git tools are arg-conditional via a
-    `when` predicate so read-only paths (`git_branch` listing, `git_stash
-    list`/`show`) are never gated (CLI-CORE-2 / v4).
+    delegation, the mutating git tools, and the PTY harness tools) is gated
+    behind an approval prompt unless auto-approve is enabled. The git tools are
+    arg-conditional via a `when` predicate so read-only paths (`git_branch`
+    listing, `git_stash list`/`show`) are never gated (CLI-CORE-2 / v4). The PTY
+    tools run arbitrary interactive programs outside the shell's exec-risk /
+    permission screening, so they are always gated in full-HITL mode (SB-1 / v5).
 
     Returns:
         Dictionary mapping tool names to their interrupt configuration.
@@ -1217,6 +1252,20 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
                 "written to backend storage for agent retrieval."
             ),
         }
+
+    # PTY harness (Tier-2 #6): pty_start runs an arbitrary argv via execvpe and
+    # pty_send writes arbitrary bytes into it — neither passes through the shell
+    # approval, exec-risk, or _DANGEROUS_PATTERNS screening, so both are gated
+    # here in full-HITL mode. Harmless when the PTY tools aren't wired (the SDK
+    # only enforces interrupt entries for tools that exist) (SB-1 / v5).
+    interrupt_map["pty_start"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_pty_start_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
+    interrupt_map["pty_send"] = {
+        "allowed_decisions": ["approve", "reject"],
+        "description": _format_pty_send_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+    }
 
     return interrupt_map
 
@@ -1748,7 +1797,17 @@ def create_cli_agent(
                 "when": lambda req: command_targets_authority_file(
                     str(req.tool_call["args"].get("command", ""))
                 ),
-            }
+            },
+            # pty_start bypasses the shell entirely, so the execute authority-file
+            # guard would miss `pty_start('x','vim .bog-agents/laws.md')`. Gate it
+            # with the same predicate on its own command arg (SB-1 / v5).
+            "pty_start": {
+                "allowed_decisions": ["approve", "reject"],
+                "description": _format_pty_start_description,  # type: ignore[typeddict-item]  # Callable description narrower than TypedDict expects
+                "when": lambda req: command_targets_authority_file(
+                    str(req.tool_call["args"].get("command", ""))
+                ),
+            },
         }
     else:
         # Full HITL for destructive operations
@@ -1834,6 +1893,7 @@ def create_cli_agent(
 
         agent_middleware.append(
             CostTrackerMiddleware(
+                model_name=model_spec_str,
                 effort_level=effort_level,
                 budget_usd=budget_usd if budget_usd > 0 else None,
             )

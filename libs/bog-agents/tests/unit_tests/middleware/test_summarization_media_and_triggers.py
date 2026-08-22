@@ -3,7 +3,7 @@
 import base64
 from html import unescape
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelRequest, ModelResponse
@@ -74,9 +74,13 @@ class MediaBackend(BackendProtocol):
 
 
 def make_mock_model() -> MagicMock:
-    """Create a mock chat model whose `invoke` returns a summary."""
+    """Create a mock chat model whose `invoke`/`ainvoke` return a summary."""
     model = MagicMock()
     model.invoke.return_value = MagicMock(text="A summary.")
+    # AsyncMock so `await ainvoke(...)` resolves — a plain MagicMock return is
+    # not awaitable, which would make `_acreate_summary` fall back to the
+    # "Error generating summary:" sentinel (v5 CTX-1).
+    model.ainvoke = AsyncMock(return_value=MagicMock(text="A summary."))
     model._llm_type = "test-model"
     model.profile = {"max_input_tokens": 100_000}
     model._get_ls_params.return_value = {"ls_provider": "test"}

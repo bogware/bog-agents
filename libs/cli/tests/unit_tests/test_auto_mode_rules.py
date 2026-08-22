@@ -677,10 +677,14 @@ class TestHaikuRiskEval:
             is_risky, _ = await haiku_risk_eval("some_tool", None)  # type: ignore[arg-type]
         assert isinstance(is_risky, bool)
 
-    async def test_anthropic_not_installed_returns_allow(self) -> None:
+    async def test_anthropic_not_installed_fails_closed(self) -> None:
+        # T1-4: this evaluator only runs when the caller is about to auto-approve
+        # (the `default` verdict). If the risk classifier cannot even be loaded,
+        # it must fail CLOSED (risky=True → ASK), never silently approve on a
+        # non-Anthropic install.
         import sys
 
         with patch.dict(sys.modules, {"anthropic": None}):
             is_risky, reason = await haiku_risk_eval("some_tool", {})
-        assert is_risky is False
-        assert "not available" in reason
+        assert is_risky is True
+        assert "unavailable" in reason

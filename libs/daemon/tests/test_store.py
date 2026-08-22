@@ -288,6 +288,79 @@ class TestRunDispatchErrors:
         assert loaded[0].dispatch_errors == [{"target": "slack", "error": "401 Unauthorized"}]
 
 
+class TestRunWriteAtomicity:
+    """DMN-10: run records are written via temp file + rename, and a corrupt
+    run file is logged loudly (not silently skipped) by the loaders."""
+
+    def test_corrupt_run_file_logged_and_skipped_by_list_runs(self, tmp_daemon_dir: Path, caplog: pytest.LogCaptureFixture):
+        import logging
+
+        good = JobRun(job_id="j1", job_name="j", status=JobStatus.COMPLETED, output="ok")
+        save_run(good)
+        # Simulate a crash mid-write under the OLD in-place scheme: a truncated file.
+        (tmp_daemon_dir / "runs" / "j1_truncated.json").write_text('{"run_id": "r2", "job_id": "j1", "sta', encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents_daemon.store"):
+            runs = list_runs("j1")
+
+        # The valid run still loads; the corrupt one is skipped with a WARNING.
+        assert [r.run_id for r in runs] == [good.run_id]
+        assert "Skipping unreadable run file" in caplog.text
+        assert "j1_truncated.json" in caplog.text
+
+    def test_corrupt_run_file_logged_during_reconciliation(self, tmp_daemon_dir: Path, caplog: pytest.LogCaptureFixture):
+        import logging
+
+        orphan = JobRun(job_id="j1", job_name="j", status=JobStatus.RUNNING)
+        orphan.finished_at = 0.0
+        save_run(orphan)
+        (tmp_daemon_dir / "runs" / "j1_corrupt.json").write_text("NOT JSON", encoding="utf-8")
+
+        from bog_agents_daemon.store import reconcile_orphaned_runs
+
+        with caplog.at_level(logging.WARNING, logger="bog_agents_daemon.store"):
+            count = reconcile_orphaned_runs()
+
+        # The corrupt file doesn't stop reconciliation of the healthy orphan.
+        assert count == 1
+        assert "Skipping unreadable run file" in caplog.text
+
+    def test_save_run_leaves_no_tmp_sibling(self, tmp_daemon_dir: Path):
+        save_run(JobRun(job_id="j1", job_name="j"))
+        runs_dir = tmp_daemon_dir / "runs"
+        assert not list(runs_dir.glob("*.tmp"))
+        assert len(list(runs_dir.glob("j1_*.json"))) == 1
+
+    def test_serialization_failure_touches_nothing(self, tmp_daemon_dir: Path):
+        # A failure before any I/O must leave neither a destination nor a tmp file.
+        from bog_agents_daemon.store import _write_json_durable
+
+        target = tmp_daemon_dir / "runs" / "j1_r1.json"
+        with pytest.raises(TypeError):
+            _write_json_durable(target, {"bad": object()})
+        assert not target.exists()
+        assert not list((tmp_daemon_dir / "runs").glob("*.tmp"))
+
+    def test_failed_rename_preserves_original_and_cleans_tmp(self, tmp_daemon_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        # A crash/failure at the rename step must leave the previously
+        # committed record intact — never a partial file at the final path.
+        from bog_agents_daemon.store import _write_json_durable
+
+        target = tmp_daemon_dir / "runs" / "j1_r1.json"
+        _write_json_durable(target, {"run_id": "r1", "status": "completed"})
+        original = target.read_text(encoding="utf-8")
+
+        def _boom(self: Path, other: Path) -> Path:
+            raise OSError("disk full")
+
+        monkeypatch.setattr(Path, "replace", _boom)
+        with pytest.raises(OSError):
+            _write_json_durable(target, {"run_id": "r1", "status": "clobbered"})
+
+        assert target.read_text(encoding="utf-8") == original
+        assert not list((tmp_daemon_dir / "runs").glob("*.tmp"))
+
+
 class TestConcurrentAccess:
     def test_concurrent_upserts_are_safe(self, tmp_daemon_dir: Path):
         """Multiple threads performing upserts should not corrupt the store."""

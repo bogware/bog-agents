@@ -22,6 +22,7 @@ import tomli_w
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+from bog_agents_cli import _env_vars
 from bog_agents_cli._debug import configure_debug_logging
 from bog_agents_cli.provider_catalog import (
     clear_cached_catalog,
@@ -219,8 +220,12 @@ class ProviderConfig(TypedDict, total=False):
     """
 
 
-DEFAULT_CONFIG_DIR = Path.home() / ".bog-agents"
-"""Directory for user-level Bog Agents configuration (`~/.bog-agents`)."""
+DEFAULT_CONFIG_DIR = _env_vars.bog_agents_home()
+"""Directory for user-level Bog Agents configuration.
+
+Defaults to `~/.bog-agents`; the `BOG_AGENTS_HOME` environment variable
+overrides it (resolved once at import time — i.e. process startup).
+"""
 
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 """Path to the user's model configuration file (`~/.bog-agents/config.toml`)."""

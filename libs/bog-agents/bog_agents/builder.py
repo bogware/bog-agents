@@ -535,13 +535,27 @@ class AgentBuilder:
     # ------------------------------------------------------------------
 
     def with_kwargs(self, **kwargs: Any) -> AgentBuilder:
-        """Pass arbitrary keyword arguments directly to ``create_agent()``.
+        """Pass arbitrary keyword arguments directly to `create_agent()`.
 
         Use this for parameters not yet exposed through named builder methods.
+        To reach `FeatureConfig` fields the builder does not surface (e.g.
+        `rbac_active_role`, `air_gap_policy`), pass `config=FeatureConfig(...)` —
+        not bare `enable_*` kwargs, which route through the deprecated legacy
+        backdoor and become a hard `TypeError` at 1.0.
+
+        Precedence: a `config=FeatureConfig(...)` passed here is MERGED with the
+        feature flags assembled by the builder's `with_X()` methods. Explicit
+        `with_X()` calls win for the fields they set (mirroring `create_agent`'s
+        documented kwarg-over-config layering); every other field comes from the
+        supplied config. Non-`config` kwargs override any builder-assembled
+        value for the same parameter.
 
         Example::
 
-            builder.with_kwargs(enable_voice_io=True, session_name="my-session")
+            builder.with_kwargs(
+                config=FeatureConfig(rbac_active_role="reader"),
+                session_name="my-session",
+            )
         """
         self._config.extra_kwargs.update(kwargs)
         return self
@@ -557,11 +571,15 @@ class AgentBuilder:
     def build(self) -> CompiledStateGraph:
         """Compile and return the agent state graph.
 
-        Translates the builder configuration into ``create_agent()`` keyword
-        arguments, then calls it.
+        Translates the builder configuration into `create_agent()` keyword
+        arguments, then calls it. Builder feature flags are routed through
+        `config=FeatureConfig(...)`; when the caller also supplied a
+        `with_kwargs(config=...)` the two are merged with builder `with_X()`
+        flags taking precedence for the fields they explicitly set (see
+        `with_kwargs`).
 
         Returns:
-            Compiled LangGraph ``CompiledStateGraph`` ready to invoke.
+            Compiled LangGraph `CompiledStateGraph` ready to invoke.
         """
         from bog_agents.graph import create_agent
 
@@ -693,11 +711,28 @@ class AgentBuilder:
         feature_field_names = {f.name for f in _dataclasses.fields(FeatureConfig)}
         feature_kwargs = {k: v for k, v in kwargs.items() if k in feature_field_names}
         direct_kwargs = {k: v for k, v in kwargs.items() if k not in feature_field_names}
-        if feature_kwargs:
-            direct_kwargs["config"] = FeatureConfig(**feature_kwargs)
 
-        # Extra kwargs override everything above (escape hatch).
-        direct_kwargs.update(self._config.extra_kwargs)
+        # SDKC-4: a user-supplied `with_kwargs(config=FeatureConfig(...))` must
+        # MERGE with the builder-assembled feature flags, not replace them —
+        # `.with_git(repo_map=True).with_kwargs(config=FeatureConfig(enable_dlp=True))`
+        # used to silently drop enable_repo_map. Precedence mirrors
+        # `_resolve_feature_config`'s documented kwarg-over-config layering:
+        # explicit `with_X()` calls (the builder's per-flag "kwargs") win over
+        # the config object's fields; every field the builder did not set is
+        # taken from the user's config unchanged. `feature_kwargs` only ever
+        # contains flags the caller explicitly requested, so the layering never
+        # clobbers a user field with an implicit default.
+        extra_kwargs = dict(self._config.extra_kwargs)
+        user_config = extra_kwargs.get("config")
+        if feature_kwargs:
+            if isinstance(user_config, FeatureConfig):
+                extra_kwargs["config"] = _dataclasses.replace(user_config, **feature_kwargs)
+            else:
+                direct_kwargs["config"] = FeatureConfig(**feature_kwargs)
+
+        # Extra kwargs override everything above (escape hatch) — except the
+        # `config` merge handled just above.
+        direct_kwargs.update(extra_kwargs)
 
         return create_agent(**direct_kwargs)
 

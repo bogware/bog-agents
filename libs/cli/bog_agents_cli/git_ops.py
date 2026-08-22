@@ -46,6 +46,31 @@ _ENV_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _PREFIX_WORDS = frozenset({"sudo", "nohup", "env", "command", "time", "timeout"})
 _GIT_BIN = frozenset({"git", "git.exe"})
 
+# Git's own global options that sit *before* the subcommand. They must be
+# skipped or the option itself is misread as the subcommand and falls through
+# to the conservative MUTATING default — so `git -c x=y push --force` and
+# `git --no-pager reset --hard` were classified MUTATING (auto-approvable)
+# instead of DESTRUCTIVE. Two shapes: options that consume a following value
+# (unless `=`-joined) and value-less toggles.
+_GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
+    {"-c", "-C", "--exec-path", "--git-dir", "--work-tree", "--namespace"}
+)
+_GIT_GLOBAL_OPTS_FLAG = frozenset(
+    {
+        "-p",
+        "-P",
+        "--paginate",
+        "--no-pager",
+        "--bare",
+        "--no-replace-objects",
+        "--literal-pathspecs",
+        "--no-optional-locks",
+        "--html-path",
+        "--man-path",
+        "--info-path",
+    }
+)
+
 # Subcommands that never touch the worktree or history.
 _READONLY_OPS = frozenset(
     {
@@ -109,9 +134,37 @@ def _classify_segment(segment: str) -> GitOpType | None:
         tokens = tokens[1:]
     if not tokens or tokens[0].lower() not in _GIT_BIN:
         return None
-    if len(tokens) == 1:
+    args = _skip_git_global_options(tokens[1:])
+    if not args:
         return GitOpType.MUTATING
-    return _classify_subcommand(tokens[1].lower(), tokens[2:])
+    return _classify_subcommand(args[0].lower(), args[1:])
+
+
+def _skip_git_global_options(args: list[str]) -> list[str]:
+    """Drop git's global options so the real subcommand is read.
+
+    Returns the argument list starting at the first token that is not a git
+    global option (or its consumed value). An unrecognized option is left in
+    place: it cannot be a global option git accepts, so it is either the
+    subcommand or already past it, and stopping there keeps the conservative
+    default classification for genuinely unknown invocations.
+    """
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if not token.startswith("-"):
+            break
+        if token in _GIT_GLOBAL_OPTS_FLAG:
+            i += 1
+            continue
+        # `--git-dir=/x` / `-C=/x` carry their value inline.
+        opt = token.split("=", 1)[0]
+        if opt in _GIT_GLOBAL_OPTS_WITH_VALUE:
+            # A bare `-c`/`-C`/`--git-dir` consumes the next token as its value.
+            i += 1 if "=" in token else 2
+            continue
+        break
+    return args[i:]
 
 
 def _classify_subcommand(sub: str, rest: list[str]) -> GitOpType:

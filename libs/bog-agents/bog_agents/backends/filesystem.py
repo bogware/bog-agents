@@ -647,9 +647,10 @@ class FilesystemBackend(BackendProtocol):
                 External storage sets `files_update=None`.
         """
         # _resolve_path validates the sandbox (and rejects a symlink that escapes
-        # root). The actual open targets the leaf-unresolved path so O_NOFOLLOW
-        # refuses a write THROUGH a symlink at the final component — _resolve_path
-        # would have followed it to its target, silently defeating O_NOFOLLOW.
+        # root). The actual write targets the leaf-unresolved path so the symlink
+        # guard refuses a write THROUGH a symlink at the final component —
+        # _resolve_path would have followed it to its target, silently defeating
+        # the O_NOFOLLOW-style protection.
         self._resolve_path(file_path)
         nofollow_path = self._physical_base(file_path)
 
@@ -657,13 +658,15 @@ class FilesystemBackend(BackendProtocol):
             # Create parent directories if needed
             nofollow_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Prefer O_NOFOLLOW to avoid writing through symlinks
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            if hasattr(os, "O_NOFOLLOW"):
-                flags |= os.O_NOFOLLOW
-            fd = os.open(nofollow_path, flags, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
+            # SB-3 (v5, = v4 SB-5): write crash-safely via the same sibling-temp +
+            # fsync + atomic `os.replace` path as `edit`/`upload_files`. The old
+            # in-place `O_WRONLY|O_CREAT|O_TRUNC` open truncated the destination
+            # first, so an interrupt/ENOSPC mid-write destroyed the original.
+            # `_atomic_write` preserves the O_NOFOLLOW symlink refusal: a
+            # symlinked final component raises OSError instead of being written
+            # through (same platforms as before — the guard is gated on
+            # `os.O_NOFOLLOW` availability, exactly like the old flags).
+            self._atomic_write(nofollow_path, content)
 
             return WriteResult(path=file_path, files_update=None)
         except (OSError, UnicodeEncodeError) as e:

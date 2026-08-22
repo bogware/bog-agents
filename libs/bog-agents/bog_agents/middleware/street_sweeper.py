@@ -360,6 +360,53 @@ def _truncate_head_tail(text: str, head_lines: int, tail_lines: int) -> str:
     return "\n".join([*head, marker, *tail])
 
 
+class _SweepTextMemo:
+    """Two-generation, identity-checked memo for per-text derived values.
+
+    Planning re-derives the same values (SHA-1, Tier-0 normalization, Tier-2
+    truncation) from the same canonical message texts on every model call,
+    because the sweep is by design a fresh per-call view transformation. The
+    texts themselves are immutable and long-lived (they sit in LangGraph
+    state), so this memo caches the derivations across calls (v5 PERF-3).
+
+    Entries are keyed by `id(text)` with the text object strongly referenced
+    inside the entry and verified with `is` on every hit, so a recycled id can
+    never alias a different string. Entries not touched during a planning pass
+    are dropped when the pass ends (`rotate`), so the memo only ever holds
+    references to strings in the live history — near-zero extra memory — and
+    cannot grow unboundedly.
+    """
+
+    def __init__(self) -> None:
+        self._live: dict[int, dict[str, Any]] = {}
+        self._next: dict[int, dict[str, Any]] = {}
+
+    def entry(self, text: str) -> dict[str, Any]:
+        """Return the (possibly new) memo entry for `text`, marking it live.
+
+        Args:
+            text: The exact text object to memoize derivations for.
+
+        Returns:
+            A mutable per-text dict; callers stash derived values under their
+            own keys (`sha` / `norm` / `trunc`).
+        """
+        key = id(text)
+        entry = self._next.get(key)
+        if entry is not None and entry["text"] is text:
+            return entry
+        entry = self._live.get(key)
+        if entry is None or entry["text"] is not text:
+            entry = {"text": text}
+        self._next[key] = entry
+        return entry
+
+    def rotate(self) -> None:
+        """End a planning pass: keep entries touched this pass, drop the rest."""
+        self._live = self._next
+        self._next = {}
+
+
 class StreetSweeperMiddleware(AgentMiddleware):
     """Continuously prune dead weight from each model request.
 
@@ -414,9 +461,13 @@ class StreetSweeperMiddleware(AgentMiddleware):
         self._read_tools = read_tools
         self._mutate_tools = mutate_tools
         self.sweep_log = SweepLog(usd_per_input_token=_input_usd_per_token(model_name))
-        # tool_call_ids whose original has already been offloaded this session,
-        # so we don't re-append the same content to the offload file each turn.
+        # tool_call_ids whose original has been successfully offloaded this
+        # session, so the same content is never written twice. Markers are added
+        # only after the backend write succeeds, so a failed write is retried on
+        # the next model call instead of being lost.
         self._offloaded: set[str] = set()
+        # Cross-call memo for per-text SHA-1 / normalization / truncation.
+        self._memo = _SweepTextMemo()
         self.tools: list[BaseTool] = [self._build_recall_tool()]
 
     def set_backend(self, backend: BACKEND_TYPES | None) -> None:
@@ -509,14 +560,49 @@ class StreetSweeperMiddleware(AgentMiddleware):
             elif tool_name in self._mutate_tools:
                 events.append((i, path, False))
 
+        # Single reverse pass (v5 PERF-3): a read is stale iff its path appears
+        # in any later event, so walking backwards with a seen-later set gives
+        # the same answer as the old per-event tail scan in O(E) not O(E^2).
         stale: set[int] = set()
-        for k, (idx, path, is_read) in enumerate(events):
-            if not is_read:
-                continue
-            # Stale if any later event touches the same path.
-            if any(p == path for _, p, _ in events[k + 1 :]):
+        seen_later: set[str] = set()
+        for idx, path, is_read in reversed(events):
+            if is_read and path in seen_later:
                 stale.add(idx)
+            seen_later.add(path)
         return stale
+
+    # ------------------------------------------------------------------ memoized derivations
+
+    def _sha_of(self, text: str) -> str:
+        """Return (and memoize) the SHA-1 hex digest of `text`."""
+        entry = self._memo.entry(text)
+        digest = entry.get("sha")
+        if digest is None:
+            digest = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()
+            entry["sha"] = digest
+        return digest
+
+    def _normalized_of(self, text: str) -> str:
+        """Return (and memoize) the Tier-0 normalization of `text`."""
+        entry = self._memo.entry(text)
+        normalized = entry.get("norm")
+        if normalized is None:
+            normalized = _normalize_text(text)
+            entry["norm"] = normalized
+        return normalized
+
+    def _truncated_of(self, text: str) -> str:
+        """Return (and memoize) the Tier-2 head/tail truncation of `text`.
+
+        The memoized value is keyed to the head/tail parameters it was built
+        with, so a reconfigured instance never serves a stale truncation.
+        """
+        entry = self._memo.entry(text)
+        params = (self.head_lines, self.tail_lines)
+        if entry.get("trunc_params") != params:
+            entry["trunc"] = _normalize_text(_truncate_head_tail(text, self.head_lines, self.tail_lines))
+            entry["trunc_params"] = params
+        return entry["trunc"]
 
     def _plan(self, messages: list[AnyMessage]) -> _Plan:
         """Plan a sweep over `messages` without mutating the input.
@@ -535,33 +621,40 @@ class StreetSweeperMiddleware(AgentMiddleware):
         if eligible_end <= 0:
             return _Plan(new_messages, actions, offloads)
 
-        call_index = self._tool_call_index(messages)
-        stale_indices = self._superseded_read_indices(messages, call_index)
+        try:
+            call_index = self._tool_call_index(messages)
+            stale_indices = self._superseded_read_indices(messages, call_index)
 
-        # Dedup: keep the LAST occurrence of each identical tool-output hash;
-        # stub earlier eligible duplicates. Hash over all messages so a recent
-        # copy outside the window can still "win".
-        last_seen: dict[str, int] = {}
-        for i, msg in enumerate(messages):
-            if isinstance(msg, ToolMessage):
-                text = _content_to_text(msg.content)
-                if text is not None and text.strip():
-                    last_seen[hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()] = i
+            # Dedup: keep the LAST occurrence of each identical tool-output hash;
+            # stub earlier eligible duplicates. Hash over all messages so a recent
+            # copy outside the window can still "win". The per-index hashes are
+            # kept so `_plan_one` never hashes the same text twice.
+            last_seen: dict[str, int] = {}
+            hash_by_index: dict[int, str] = {}
+            for i, msg in enumerate(messages):
+                if isinstance(msg, ToolMessage):
+                    text = _content_to_text(msg.content)
+                    if text is not None and text.strip():
+                        digest = self._sha_of(text)
+                        hash_by_index[i] = digest
+                        last_seen[digest] = i
 
-        for i in range(eligible_end):
-            msg = messages[i]
-            try:
-                planned = self._plan_one(msg, i, stale_indices, last_seen)
-            except Exception:  # never let planning break the model call
-                logger.debug("street_sweeper: planning failed for message %d", i, exc_info=True)
-                continue
-            if planned is None:
-                continue
-            new_msg, action, offload = planned
-            new_messages[i] = new_msg
-            actions.append(action)
-            if offload is not None:
-                offloads.append(offload)
+            for i in range(eligible_end):
+                msg = messages[i]
+                try:
+                    planned = self._plan_one(msg, i, stale_indices, last_seen, hash_by_index)
+                except Exception:  # never let planning break the model call
+                    logger.debug("street_sweeper: planning failed for message %d", i, exc_info=True)
+                    continue
+                if planned is None:
+                    continue
+                new_msg, action, offload = planned
+                new_messages[i] = new_msg
+                actions.append(action)
+                if offload is not None:
+                    offloads.append(offload)
+        finally:
+            self._memo.rotate()
 
         return _Plan(new_messages, actions, offloads)
 
@@ -571,6 +664,7 @@ class StreetSweeperMiddleware(AgentMiddleware):
         index: int,
         stale_indices: set[int],
         last_seen: dict[str, int],
+        hash_by_index: dict[int, str],
     ) -> tuple[AnyMessage, SweepAction, tuple[str, str, str] | None] | None:
         """Plan the sweep for a single message.
 
@@ -583,6 +677,8 @@ class StreetSweeperMiddleware(AgentMiddleware):
             index: Its index in the full list.
             stale_indices: Indices flagged as superseded reads.
             last_seen: Map from content hash to the last index it appears at.
+            hash_by_index: Map from message index to its content hash (computed
+                once in `_plan`'s dedup pass).
 
         Returns:
             A `(new_message, action, offload_or_none)` tuple, or `None` if the
@@ -600,7 +696,7 @@ class StreetSweeperMiddleware(AgentMiddleware):
 
         if isinstance(msg, ToolMessage):
             marker = msg.tool_call_id or f"idx-{index}"
-            content_hash = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()
+            content_hash = hash_by_index.get(index) or self._sha_of(text)
 
             if index in stale_indices:
                 stub = f'[stale: this file read was superseded by a later read/edit. Use recall_swept("{marker}") for the original.]'
@@ -611,7 +707,7 @@ class StreetSweeperMiddleware(AgentMiddleware):
                 return self._stub(msg, stub, "dedup", tool_name, before, marker, text)
 
             if self.aggressive and text.count("\n") + 1 >= self.truncate_min_lines:
-                truncated = _normalize_text(_truncate_head_tail(text, self.head_lines, self.tail_lines))
+                truncated = self._truncated_of(text)
                 if truncated != text:
                     new_msg = msg.model_copy(update={"content": truncated})
                     after = count_tokens_approximately([new_msg])
@@ -620,7 +716,7 @@ class StreetSweeperMiddleware(AgentMiddleware):
                     return new_msg, action, (marker, header, text)
 
         # Tier 0 lossless cleanup (tool output or AI text).
-        normalized = _normalize_text(text)
+        normalized = self._normalized_of(text)
         if normalized == text:
             return None
         new_msg = msg.model_copy(update={"content": normalized})
@@ -718,30 +814,41 @@ class StreetSweeperMiddleware(AgentMiddleware):
             return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
 
-    def _pending_offloads(self, offloads: list[tuple[str, str, str]]) -> str:
-        """Render not-yet-offloaded sections and mark their markers as written.
+    def _pending_offloads(self, offloads: list[tuple[str, str, str]]) -> tuple[str, list[str]]:
+        """Render not-yet-offloaded sections; do NOT mark them written yet.
+
+        Markers are marked offloaded only once the backend write succeeds
+        (see `_offload`/`_aoffload`), so a failed write is retried on the next
+        model call instead of leaving a stub whose original can never be
+        recalled (v5 CTX-4).
 
         Args:
             offloads: All offloads planned this turn.
 
         Returns:
-            The concatenated markdown for sections not previously offloaded
-            (empty string if there is nothing new).
+            A `(addition, markers)` pair: the concatenated markdown for sections
+            not previously offloaded (empty when there is nothing new) and the
+            markers those sections cover, in order.
         """
         sections: list[str] = []
+        markers: list[str] = []
+        seen: set[str] = set()
         for marker, header, content in offloads:
-            if marker in self._offloaded:
+            if marker in self._offloaded or marker in seen:
                 continue
-            self._offloaded.add(marker)
+            seen.add(marker)
+            markers.append(marker)
             sections.append(f"{header}\n\n{content}\n\n")
-        return "".join(sections)
+        return "".join(sections), markers
 
-    def _offload(self, backend: BackendProtocol, addition: str) -> None:
+    def _offload(self, backend: BackendProtocol, addition: str, markers: list[str]) -> None:
         """Append rendered sections to the per-thread offload file (sync, best-effort).
 
         Args:
             backend: The resolved backend.
             addition: The markdown to append.
+            markers: The markers `addition` covers; recorded as offloaded only
+                on a successful write.
         """
         path = self._history_path()
         existing = ""
@@ -759,13 +866,17 @@ class StreetSweeperMiddleware(AgentMiddleware):
                 backend.write(path, combined)
         except Exception:
             logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
+            return
+        self._offloaded.update(markers)
 
-    async def _aoffload(self, backend: BackendProtocol, addition: str) -> None:
+    async def _aoffload(self, backend: BackendProtocol, addition: str, markers: list[str]) -> None:
         """Append rendered sections to the per-thread offload file (async, best-effort).
 
         Args:
             backend: The resolved backend.
             addition: The markdown to append.
+            markers: The markers `addition` covers; recorded as offloaded only
+                on a successful write.
         """
         path = self._history_path()
         existing = ""
@@ -783,6 +894,8 @@ class StreetSweeperMiddleware(AgentMiddleware):
                 await backend.awrite(path, combined)
         except Exception:
             logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
+            return
+        self._offloaded.update(markers)
 
     def _commit_actions(self, actions: list[SweepAction]) -> None:
         """Record actions to the sweep log and emit a debug line.
@@ -840,9 +953,9 @@ class StreetSweeperMiddleware(AgentMiddleware):
 
         backend = self._resolve_backend(request.state, request.runtime)
         if backend is not None and plan.offloads:
-            addition = self._pending_offloads(plan.offloads)
+            addition, markers = self._pending_offloads(plan.offloads)
             if addition:
-                self._offload(backend, addition)
+                self._offload(backend, addition, markers)
         self._commit_actions(plan.actions)
         return handler(request.override(messages=plan.messages))
 
@@ -872,9 +985,9 @@ class StreetSweeperMiddleware(AgentMiddleware):
 
         backend = self._resolve_backend(request.state, request.runtime)
         if backend is not None and plan.offloads:
-            addition = self._pending_offloads(plan.offloads)
+            addition, markers = self._pending_offloads(plan.offloads)
             if addition:
-                await self._aoffload(backend, addition)
+                await self._aoffload(backend, addition, markers)
         self._commit_actions(plan.actions)
         return await handler(request.override(messages=plan.messages))
 

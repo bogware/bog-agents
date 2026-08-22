@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 from langchain.tools import ToolRuntime
@@ -22,6 +24,7 @@ from bog_agents.middleware import worktree as wt_mod
 from bog_agents.middleware.worktree import (
     ParallelWorktreeMiddleware,
     WorktreeInfo,
+    WorktreeMiddleware,
     WorktreeTask,
     create_worktree,
     merge_with_conflict_report,
@@ -246,8 +249,9 @@ class TestMergeRestoresBranch:
             calls.append(args)
             if args[:2] == ("rev-parse", "--abbrev-ref"):
                 return state["branch"]
-            if args[0] == "checkout":
-                # args may be ("checkout", branch) or ("checkout", "--", branch)
+            if args[0] in ("checkout", "switch"):
+                # ("checkout", branch) for the target park, ("switch", branch)
+                # for the SB-2-fixed restore path.
                 target = args[-1]
                 state["branch"] = target
                 return ""
@@ -314,6 +318,113 @@ class TestMergeRestoresBranch:
         report = merge_with_conflict_report(tmp_path, "src", "main", strategy="manual")
 
         assert report["success"] is False
-        # Only the target checkout happened; no restore checkout to "HEAD".
-        checkout_targets = [a[-1] for a in calls if a[0] == "checkout"]
+        # Only the target checkout happened; no restore switch to "HEAD".
+        checkout_targets = [a[-1] for a in calls if a[0] in ("checkout", "switch")]
         assert checkout_targets == ["main"]
+
+
+# --------------------------------------------------------------------------- #
+# SB-2 (v5, = v4 SB-3) — real-repo proof that branch switches actually switch
+# --------------------------------------------------------------------------- #
+
+
+def _git(repo: Path, *args: str) -> str:
+    """Run git in `repo`, raising on failure, and return stripped stdout."""
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return proc.stdout.strip()
+
+
+@pytest.fixture
+def real_repo(tmp_path: Path) -> Path:
+    """A real git repository on branch `main` with one committed file."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    try:
+        _git(repo, "init", "-b", "main")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip("git unavailable (or too old for `init -b`) in this environment")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Worktree Test")
+    _git(repo, "config", "commit.gpgsign", "false")
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "base")
+    return repo
+
+
+class TestMergeWorktreeRealRepo:
+    """SB-2: `checkout -- <branch>` treated the branch as a pathspec, so
+    `merge_worktree` failed on every normal repo and the P26 restore net never
+    restored. These tests drive the real tools against a real git repo.
+    """
+
+    def _merge_tool(self, repo: Path):
+        mw = WorktreeMiddleware(working_dir=repo)
+        return next(t for t in mw.tools if t.name == "merge_worktree")
+
+    def test_merge_worktree_merges_feature_into_target(self, real_repo: Path) -> None:
+        _git(real_repo, "switch", "-c", "feature")
+        (real_repo / "feat.txt").write_text("feature\n", encoding="utf-8")
+        _git(real_repo, "add", "feat.txt")
+        _git(real_repo, "commit", "-m", "feat")
+
+        result = self._merge_tool(real_repo).func(_make_runtime(), "feature", "main")
+
+        assert "Failed to checkout" not in result
+        assert result.startswith("Merge result:")
+        # The tool really switched to the target and the change really merged.
+        assert _git(real_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+        assert (real_repo / "feat.txt").read_text(encoding="utf-8") == "feature\n"
+
+    def test_merge_worktree_branch_not_shadowed_by_tracked_file(self, real_repo: Path) -> None:
+        # A tracked file literally named `main` used to satisfy the pathspec
+        # form (`checkout -- main` restored the FILE), so the merge silently
+        # landed on whatever branch the tree was parked on. `git switch` never
+        # takes pathspecs, so the branch always wins.
+        (real_repo / "main").write_text("decoy\n", encoding="utf-8")
+        _git(real_repo, "add", "main")
+        _git(real_repo, "commit", "-m", "decoy file named main")
+        _git(real_repo, "switch", "-c", "feature")
+        (real_repo / "feat.txt").write_text("feature\n", encoding="utf-8")
+        _git(real_repo, "add", "feat.txt")
+        _git(real_repo, "commit", "-m", "feat")
+        _git(real_repo, "switch", "main")
+        _git(real_repo, "switch", "-c", "other")
+
+        result = self._merge_tool(real_repo).func(_make_runtime(), "feature", "main")
+
+        assert result.startswith("Merge result:")
+        assert _git(real_repo, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+        assert (real_repo / "feat.txt").exists()
+        # The parked branch must NOT have received the merge.
+        _git(real_repo, "switch", "other")
+        assert not (real_repo / "feat.txt").exists()
+
+    def test_restore_branch_returns_to_original(self, real_repo: Path) -> None:
+        # main and feature conflict on base.txt; the caller is parked on `work`.
+        _git(real_repo, "switch", "-c", "feature")
+        (real_repo / "base.txt").write_text("feature version\n", encoding="utf-8")
+        _git(real_repo, "commit", "-am", "feature change")
+        _git(real_repo, "switch", "main")
+        (real_repo / "base.txt").write_text("main version\n", encoding="utf-8")
+        _git(real_repo, "commit", "-am", "main change")
+        _git(real_repo, "switch", "-c", "work")
+
+        report = merge_with_conflict_report(real_repo, "feature", "main", strategy="manual")
+
+        assert report["success"] is False
+        # The P26 safety net actually restores now: HEAD is back on `work`
+        # (aborting the dangling failed merge on the way), not left parked on
+        # the merge target mid-merge.
+        assert _git(real_repo, "rev-parse", "--abbrev-ref", "HEAD") == "work"
+        # No merge left in progress on the restored branch.
+        assert not (real_repo / ".git" / "MERGE_HEAD").exists()
+        # And the parked branch's file content is untouched.
+        assert (real_repo / "base.txt").read_text(encoding="utf-8") == "main version\n"

@@ -226,3 +226,50 @@ class TestHookTypes:
         assert "Stop" in GATE_EVENTS
         assert "Notification" in OBSERVE_EVENTS
         assert "shell.pre_execute" in GATE_EVENTS
+
+
+class TestMatcherWildcardAndRegex:
+    """Claude/Cursor matchers are regexes; `*` and alternations must fire (T1-3).
+
+    Exact-string equality silently dropped `"*"` (all tools) and `"Edit|Write"`,
+    so a migrated deny hook loaded but enforced nothing — the gate failed open.
+    """
+
+    def _hook(self, matcher: str) -> list[dict]:
+        return [
+            {
+                "command": ["python", "-c", "import sys;sys.exit(2)"],
+                "events": ["PreToolUse"],
+                "matcher": matcher,
+            }
+        ]
+
+    def _action(self, matcher: str, tool: str) -> str:
+        return evaluate_decision_hooks(
+            "PreToolUse", {"tool": tool}, self._hook(matcher), tool_name=tool
+        ).action
+
+    def test_wildcard_matches_every_tool(self) -> None:
+        assert self._action("*", "execute") == "deny"
+        assert self._action("*", "edit_file") == "deny"
+        assert self._action(".*", "read_file") == "deny"
+
+    def test_alternation_matches_each_alias(self) -> None:
+        assert self._action("Edit|Write", "edit_file") == "deny"
+        assert self._action("Edit|Write", "write_file") == "deny"
+
+    def test_alternation_does_not_overmatch(self) -> None:
+        # `Edit|Write` must NOT fire on execute.
+        assert self._action("Edit|Write", "execute") == "allow"
+
+    def test_exact_and_aliased_still_work(self) -> None:
+        assert self._action("execute", "execute") == "deny"
+        assert self._action("Bash", "execute") == "deny"  # Bash aliases to execute
+        assert self._action("execute", "read_file") == "allow"
+
+    def test_empty_matcher_fires_for_all(self) -> None:
+        assert self._action("", "execute") == "deny"
+
+    def test_regex_pattern_matches(self) -> None:
+        assert self._action("write_.*", "write_file") == "deny"
+        assert self._action("write_.*", "read_file") == "allow"

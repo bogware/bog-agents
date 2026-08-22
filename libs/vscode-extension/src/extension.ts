@@ -95,6 +95,13 @@ function getModel(): string {
  * Build a minimal env for the CLI subprocess, deliberately stripping
  * variables an untrusted workspace could plant via dotenv-style auto-loaders
  * in the parent VS Code process.
+ *
+ * Provider credentials are explicitly allowlisted so the documented env-var
+ * auth path (e.g. `ANTHROPIC_API_KEY`, see README "Requirements") reaches the
+ * CLI child. The list mirrors the CLI's `PROVIDER_API_KEY_ENV` registry in
+ * `libs/cli/bog_agents_cli/model_config.py` plus the AWS credential-chain and
+ * Google application-credential companions the CLI actually reads — keep the
+ * two in sync when adding a provider.
  */
 function buildChildEnv(): NodeJS.ProcessEnv {
     const allow = new Set([
@@ -113,6 +120,40 @@ function buildChildEnv(): NodeJS.ProcessEnv {
         'SystemRoot',
         'APPDATA',
         'LOCALAPPDATA',
+        // Provider API keys (values of PROVIDER_API_KEY_ENV in the CLI).
+        'ANTHROPIC_API_KEY',
+        'AZURE_OPENAI_API_KEY',
+        'BASETEN_API_KEY',
+        'COHERE_API_KEY',
+        'DEEPSEEK_API_KEY',
+        'FIREWORKS_API_KEY',
+        'GOOGLE_API_KEY',
+        'GOOGLE_CLOUD_PROJECT',
+        'GROQ_API_KEY',
+        'HUGGINGFACEHUB_API_TOKEN',
+        'LITELLM_API_KEY',
+        'MISTRAL_API_KEY',
+        'NVIDIA_API_KEY',
+        'OPENAI_API_KEY',
+        'OPENROUTER_API_KEY',
+        'PERPLEXITY_API_KEY', // alias the CLI promotes to PPLX_API_KEY
+        'PPLX_API_KEY',
+        'TOGETHER_API_KEY',
+        'WATSONX_APIKEY',
+        'XAI_API_KEY',
+        // AWS credential chain (Bedrock).
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_SESSION_TOKEN',
+        'AWS_REGION',
+        'AWS_DEFAULT_REGION',
+        'AWS_PROFILE',
+        'AWS_WEB_IDENTITY_TOKEN_FILE',
+        'AWS_BEARER_TOKEN_BEDROCK',
+        // Google ADC service-account path (Vertex AI).
+        'GOOGLE_APPLICATION_CREDENTIALS',
+        // Local-provider endpoint (Ollama).
+        'OLLAMA_HOST',
     ]);
     const env: NodeJS.ProcessEnv = {};
     for (const [k, v] of Object.entries(process.env)) {

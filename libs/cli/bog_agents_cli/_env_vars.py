@@ -26,6 +26,7 @@ to these helpers is behaviour-preserving.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants — import these instead of bare string literals.
@@ -90,7 +91,11 @@ FS_UNSANDBOXED = "BOG_AGENTS_FS_UNSANDBOXED"
 truthy. Loosens a safety boundary; intended for trusted local use."""
 
 HOME = "BOG_AGENTS_HOME"
-"""Override the base `~/.bog-agents` home directory (config, vault, state)."""
+"""Override the base `~/.bog-agents` home directory (config, vault, state).
+
+Read through `bog_agents_home()` — new code must call that helper instead of
+hardcoding `Path.home() / ".bog-agents"` so the override keeps its promise.
+"""
 
 LANGSMITH_PROJECT = "BOG_AGENTS_LANGSMITH_PROJECT"
 """Override the LangSmith project name for agent traces."""
@@ -183,6 +188,34 @@ VIM_MODE = "BOG_AGENTS_VIM_MODE"
 Parsed as a boolean: `1`/`true`/`yes`/`on` (case-insensitive) count as enabled.
 An explicit value wins over the `[ui].vim_mode` config-file entry.
 """
+
+# ---------------------------------------------------------------------------
+# Home-directory resolution.
+# ---------------------------------------------------------------------------
+
+
+def bog_agents_home() -> Path:
+    """Resolve the bog-agents home directory, honoring `BOG_AGENTS_HOME`.
+
+    The single source of truth for the base directory that holds user-level
+    config (`config.toml`, `.mcp.json`, `.env`), the secret vault, MCP OAuth
+    tokens, feature state, and the sessions database. When the
+    `BOG_AGENTS_HOME` environment variable is set to a non-blank value it is
+    used (with `~` expanded); otherwise the default `~/.bog-agents` applies.
+
+    The variable is read on every call so call-time consumers honor a change
+    within the process; module-level path constants derived from this helper
+    are captured at import time, which matches the manifest's documented
+    "read at startup" semantics (`paths.home`).
+
+    Returns:
+        The resolved bog-agents home directory (not created here).
+    """
+    raw = os.environ.get(HOME, "")
+    if raw and raw.strip():
+        return Path(raw.strip()).expanduser()
+    return Path.home() / ".bog-agents"
+
 
 # ---------------------------------------------------------------------------
 # Shared boolean parsing helpers.

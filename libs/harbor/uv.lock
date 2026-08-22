@@ -253,7 +253,7 @@ wheels = [
 
 [[package]]
 name = "bog-agents"
-version = "0.9.9"
+version = "0.9.12"
 source = { editable = "../bog-agents" }
 dependencies = [
     { name = "anyio" },
@@ -340,7 +340,7 @@ test = [
 
 [[package]]
 name = "bog-agents-cli"
-version = "0.9.9"
+version = "0.9.12"
 source = { directory = "../cli" }
 dependencies = [
     { name = "aiosqlite" },
@@ -381,7 +381,7 @@ dependencies = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0,<1.0.0" },
     { name = "bog-agents", editable = "../bog-agents" },
-    { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search"], marker = "extra == 'all'" },
+    { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search", "pty"], marker = "extra == 'all'" },
     { name = "bog-agents-cli", extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai"], marker = "extra == 'all-providers'" },
     { name = "croniter", specifier = ">=3.0.0,<4.0.0" },
     { name = "cryptography", specifier = ">=48.0.1" },
@@ -428,8 +428,10 @@ requires-dist = [
     { name = "pygments", specifier = ">=2.20.0" },
     { name = "pyjwt", specifier = ">=2.13.0" },
     { name = "pyperclip", specifier = ">=1.11.0,<2.0.0" },
+    { name = "pyte", marker = "extra == 'pty'", specifier = ">=0.8.0" },
     { name = "python-dotenv", specifier = ">=1.2.2,<2.0.0" },
     { name = "python-multipart", specifier = ">=0.0.31" },
+    { name = "pywinpty", marker = "sys_platform == 'win32' and extra == 'pty'", specifier = ">=2.0.0" },
     { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
     { name = "requests", specifier = ">=2.33.0,<3.0.0" },
     { name = "rich", specifier = ">=14.0.0,<15.0.0" },
@@ -442,7 +444,7 @@ requires-dist = [
     { name = "urllib3", specifier = ">=2.7.0" },
     { name = "uuid-utils", specifier = ">=0.10.0,<1.0.0" },
 ]
-provides-extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai", "all-providers", "sandbox", "daytona-sandbox", "modal-sandbox", "runloop-sandbox", "langsmith-sandbox", "web-search", "all"]
+provides-extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai", "all-providers", "sandbox", "daytona-sandbox", "modal-sandbox", "runloop-sandbox", "langsmith-sandbox", "web-search", "pty", "all"]
 
 [package.metadata.requires-dev]
 test = [

@@ -48,7 +48,7 @@ You'll see:
 ```
 [info] bog-agents-daemon listening on http://127.0.0.1:7878
 [info] scheduler tick interval: 30s
-[info] loaded 0 jobs from ~/.bog-agents/daemon/jobs/
+[info] loaded 0 jobs from ~/.bog-agents/daemon/jobs.json
 ```
 
 In another terminal, add a job:
@@ -58,10 +58,11 @@ bog-agents daemon jobs create \
   --name morning-brief \
   --cron "0 9 * * 1-5" \
   --prompt "Summarize what changed in this repo since yesterday." \
-  --output slack:#engineering
+  --output slack \
+  --output-slack "$SLACK_WEBHOOK_URL"
 ```
 
-The job persists to `~/.bog-agents/daemon/jobs/morning-brief.yaml`.
+The job persists to `~/.bog-agents/daemon/jobs.json` (all jobs share one file).
 The scheduler picks it up on the next tick.
 
 To run it once immediately (without waiting for the cron tick):
@@ -77,7 +78,7 @@ bog-agents daemon jobs run morning-brief
 | `cron` | Standard cron expression | `"0 9 * * 1-5"` (9 AM every weekday) |
 | `interval` | Every N seconds | `"60"` (every minute) |
 | `file_change` | Watch a path or glob | `"~/Downloads/*"` |
-| `webhook` | Inbound HTTP POST | URL: `http://localhost:7878/webhook/<job-name>` |
+| `webhook` | Inbound HTTP POST | URL: `http://localhost:7878/webhooks/<webhook-path>` (from `--webhook-path`); HMAC via `X-Hub-Signature-256` |
 | `git_push` | Receive a git push hook | Set up your remote's post-receive hook to POST to the daemon |
 
 A job can have multiple triggers. They fire independently.
@@ -195,8 +196,9 @@ smtp_port = 587
 from = "agent@example.com"
 ```
 
-Per-job config lives in the job's YAML file at
-`~/.bog-agents/daemon/jobs/<name>.yaml`. Hand-edit freely.
+All job config lives in a single JSON file at
+`~/.bog-agents/daemon/jobs.json`. Prefer `bog-agents daemon jobs edit <name>`
+over hand-editing, since the file also holds secret values.
 
 ## REST API
 
@@ -204,20 +206,20 @@ The daemon exposes a JSON API on the bind address:
 
 ```bash
 # List all jobs
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/api/jobs
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs
 
-# Get a specific job
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/api/jobs/morning-brief
+# Get a specific job (by job id)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>
 
 # Trigger a job
-curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:7878/api/jobs/morning-brief/run
+curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>/run
 
 # List recent runs
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/api/runs?job=morning-brief&limit=10
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:7878/runs?limit=10"
 
-# Inbound webhook (no auth required — uses HMAC signature)
-curl -X POST -H "X-Bog-Signature: sha256=..." -d '{...}' \
-  http://localhost:7878/webhook/morning-brief
+# Inbound webhook (no bearer token — authenticated by HMAC signature)
+curl -X POST -H "X-Hub-Signature-256: sha256=..." -d '{...}' \
+  http://localhost:7878/webhooks/<webhook-path>
 ```
 
 Full API at [`daemon/api.md`](api.md) (todo: write this).
@@ -274,8 +276,8 @@ bog-agents daemon jobs create \
   --cron "0 22 * * *" \
   --prompt "Summarize what changed in this repo today. Surface anything risky." \
   --working-dir /work/myrepo \
-  --output "slack:#engineering" \
-  --output "file:./summaries/{date}.md"
+  --output file \
+  --output-file "./summaries/{date}.md"
 ```
 
 ### Pattern: webhook investigator
@@ -283,17 +285,19 @@ bog-agents daemon jobs create \
 ```bash
 bog-agents daemon jobs create \
   --name ci-failure-investigator \
-  --webhook ci-failure-investigator \
+  --webhook-path /hooks/ci-failure-investigator \
   --prompt "A CI run failed. Context:\n{trigger_context_json}\n\nInvestigate and propose a fix." \
   --working-dir /work/myrepo \
-  --output "github_comment:bogware/bog-agents#{pr_number}"
+  --output github_comment \
+  --output-github-repo bogware/bog-agents \
+  --output-github-issue "{pr_number}"
 ```
 
 Trigger:
 
 ```bash
-curl -X POST http://daemon.internal:7878/webhook/ci-failure-investigator \
-  -H "X-Bog-Signature: $(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')" \
+curl -X POST http://daemon.internal:7878/webhooks/hooks/ci-failure-investigator \
+  -H "X-Hub-Signature-256: sha256=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')" \
   -d '{"pr_number": 42, "build_url": "..."}'
 ```
 
@@ -312,9 +316,7 @@ bog-agents daemon jobs create \
 ```
 ~/.bog-agents/daemon/
 ├── config.toml          # global daemon config
-├── jobs/                # one YAML per job
-│   ├── morning-brief.yaml
-│   └── ci-investigator.yaml
+├── jobs.json            # all job definitions (secrets stored here, owner-only)
 ├── runs/                # one JSON per invocation
 │   ├── 2026-05-17T09:00:00Z.morning-brief.json
 │   └── ...

@@ -251,7 +251,9 @@ def discover_mcp_configs(
     Returns:
         List of existing config file paths, ordered lowest-to-highest precedence.
     """
-    user_dir = Path.home() / ".bog-agents"
+    from bog_agents_cli._env_vars import bog_agents_home
+
+    user_dir = bog_agents_home()
     project_root = _resolve_project_config_base(project_context)
 
     candidates = [
@@ -284,7 +286,9 @@ def classify_discovered_configs(
     Returns:
         Tuple of `(user_configs, project_configs)`.
     """
-    user_dir = Path.home() / ".bog-agents"
+    from bog_agents_cli._env_vars import bog_agents_home
+
+    user_dir = bog_agents_home()
     user: list[Path] = []
     project: list[Path] = []
     for path in config_paths:
@@ -527,6 +531,11 @@ async def _load_tools_from_config(
     # Create connections dict for MultiServerMCPClient
     # Convert Claude Desktop format to langchain-mcp-adapters format
     connections: dict[str, Connection] = {}
+    # CT-4: per-server config failures (an undefined ${VAR} in one server's
+    # headers) must not disable every other server — record the error here and
+    # surface it on that server's MCPServerInfo instead of raising out of the
+    # whole load.
+    failed_servers: dict[str, str] = {}
     for server_name, server_config in config["mcpServers"].items():
         server_type = _resolve_server_type(server_config)
 
@@ -543,9 +552,14 @@ async def _load_tools_from_config(
                     url=server_config["url"],
                 )
             if "headers" in server_config:
-                conn["headers"] = _interpolate_headers(
-                    server_config["headers"], server_name
-                )
+                try:
+                    conn["headers"] = _interpolate_headers(
+                        server_config["headers"], server_name
+                    )
+                except RuntimeError as exc:
+                    failed_servers[server_name] = str(exc)
+                    logger.warning("MCP server %r skipped: %s", server_name, exc)
+                    continue
             # Attach a spec-compliant OAuth provider when the server opted into
             # OAuth or already has stored tokens (None for stdio, static-header,
             # or no-auth servers — those connections are unchanged).
@@ -613,8 +627,16 @@ async def _load_tools_from_config(
             # closed loop turns every later tool call into an indefinite
             # hang on a dead anyio task group, which is exactly the
             # ``/init`` symptom we just chased.
-            connection = connections[server_name]
             transport = _resolve_server_type(server_config)
+            # CT-4: a server whose connection could not be built (unresolvable
+            # ${VAR} header) reports its own error; the others still load.
+            failed = failed_servers.get(server_name)
+            if failed is not None:
+                server_infos.append(
+                    MCPServerInfo(name=server_name, transport=transport, error=failed)
+                )
+                continue
+            connection = connections[server_name]
             # An OAuth-opt-in server with no stored token cannot connect
             # non-interactively — attaching a provider would drive a browser
             # (blocking) or time out opaquely. Skip it with an actionable hint

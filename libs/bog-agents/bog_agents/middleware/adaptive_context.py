@@ -217,6 +217,13 @@ def detect_context_window(model_name: str, *, default: int = 128_000) -> int:
         name = model_name
     name_lower = name.lower()
 
+    # A blank name must not prefix-match: `known_name.startswith("")` is always
+    # True, so an empty model name would match the FIRST catalog entry (a 1M
+    # window) and falsely report a huge context for an unknown model (v5 CTX-3
+    # / v4 CTX-4). Fall straight to the caller's default.
+    if not name_lower:
+        return default
+
     # 1. Live provider profile.
     live = _lookup_provider_profile_window(name_lower, provider_hint)
     if live is not None:

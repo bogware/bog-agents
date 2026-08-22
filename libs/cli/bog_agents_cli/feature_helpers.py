@@ -422,8 +422,14 @@ def _git(args: list[str], cwd: str | None) -> str:
 
 
 def feature_state_dir() -> Path:
-    """Return ``~/.bog-agents/`` (created if missing)."""
-    path = Path.home() / ".bog-agents"
+    """Return the bog-agents home dir (created if missing).
+
+    Defaults to ``~/.bog-agents``; honors the ``BOG_AGENTS_HOME`` override
+    (CT-3) via `_env_vars.bog_agents_home`, re-read on every call.
+    """
+    from bog_agents_cli._env_vars import bog_agents_home
+
+    path = bog_agents_home()
     with contextlib.suppress(OSError):
         path.mkdir(parents=True, exist_ok=True)
     return path

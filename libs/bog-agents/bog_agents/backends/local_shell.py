@@ -388,7 +388,9 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         Returns:
             ExecuteResponse containing:
                 - output: Combined stdout and stderr (stderr lines prefixed with [stderr])
-                - exit_code: Process exit code (0 for success, non-zero for failure)
+                - exit_code: Process exit code (0 for success, non-zero for failure).
+                  `None` when the command was started in — or moved to — the
+                  background and is still running, so its result is not known yet.
                 - truncated: True if output was truncated due to size limits
 
         Raises:
@@ -455,14 +457,17 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
         # `auto_background_after` is moved to the background instead of killed.
         if background:
             task_id = self._background_manager().start(popen_command, cwd=str(self.cwd), env=run_env, shell=use_shell, display=command)
+            # SB-4 (v5): exit_code=None — the command is still running, so a 0
+            # here would be rendered as "[Command succeeded with exit code 0]".
             return ExecuteResponse(
                 output=(
                     f"Command started in the background as task {task_id}. "
+                    f"It has not finished and its result is not known yet. "
                     f"Use poll_background('{task_id}') to read output, "
                     f"wait_background(['{task_id}']) to await it, or "
                     f"kill_background('{task_id}') to stop it."
                 ),
-                exit_code=0,
+                exit_code=None,
                 truncated=False,
             )
         # Auto-background engages only when the caller did NOT pin a shorter
@@ -669,13 +674,19 @@ class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
             mgr.discard(task_id)
             return self._response_from_background(snap)
         budget = self._auto_background_after
+        # SB-4 (v5): `exit_code=None`, not 0 — the command has NOT finished, and
+        # an exit code of 0 made the execute tool print "[Command succeeded with
+        # exit code 0]" for a build/test run that was still in flight (and might
+        # yet fail). `None` is within the `ExecuteResponse` contract ("still
+        # running / unknown") and the tool formatter omits the status line for it.
         return ExecuteResponse(
             output=(
-                f"Command still running after {budget:g}s; moved to the background as "
-                f"task {task_id} (not killed). Use poll_background('{task_id}'), "
-                f"wait_background(['{task_id}']), or kill_background('{task_id}')."
+                f"Command has NOT finished: still running after {budget:g}s, moved to "
+                f"the background as task {task_id} (not killed). Its result is not known "
+                f"yet. Use poll_background('{task_id}') to check on it, "
+                f"wait_background(['{task_id}']) to await it, or kill_background('{task_id}') to stop it."
             ),
-            exit_code=0,
+            exit_code=None,
             truncated=False,
         )
 

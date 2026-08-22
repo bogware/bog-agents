@@ -9,14 +9,19 @@ helper, so `/threads search <query>` can find an old thread by what was said in
 it — not just by recency.
 
 The index is a cache: it can be dropped and rebuilt from the checkpointer at any
-time without losing history. FTS5 is used when the runtime's sqlite3 supports it
-(the common case) and the code degrades to a `LIKE` scan otherwise, so search
-always works.
+time without losing history. It is maintained *incrementally* — each search
+reconciles only the threads whose title changed since last time (in one WAL
+transaction, on a worker thread) rather than rebuilding from scratch — so search
+stays instant even at power-user thread counts (PERF-1). FTS5 is used when the
+runtime's sqlite3 supports it (the common case) and the code degrades to a
+`LIKE` scan otherwise, so search always works.
 """
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
@@ -64,6 +69,14 @@ class SessionSearchIndex:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self._path))
+        # This is a rebuildable cache, never the source of truth, so trade
+        # durability for speed: WAL keeps readers off the writer's back and
+        # synchronous=OFF drops the per-commit fsync that made a full rebuild
+        # cost seconds (PERF-1). A crash at worst loses cache rows we can
+        # re-derive from the checkpointer.
+        with suppress(sqlite3.OperationalError):
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=OFF")
         self._fts = _fts5_available(self._conn)
         self._create_schema()
 
@@ -111,6 +124,66 @@ class SessionSearchIndex:
         table = "sessions_fts" if self._fts else "sessions"
         self._conn.execute(f"DELETE FROM {table}")  # noqa: S608 - table name is a fixed literal
         self._conn.commit()
+
+    def reconcile(self, threads: list[tuple[str, str]]) -> None:
+        """Incrementally sync the index to `threads` in a single transaction.
+
+        Only the difference is written: threads whose title is unchanged are
+        left untouched, changed/new titles are re-inserted, and threads no
+        longer present are dropped. The whole diff commits once, so a rebuild
+        that used to issue one fsync-backed transaction per thread (seconds at
+        power-user thread counts) is now a handful of statements (PERF-1).
+
+        Args:
+            threads: `(thread_id, title)` pairs to index; `title` doubles as
+                the searchable body today (message-body indexing is a follow-up).
+        """
+        table = "sessions_fts" if self._fts else "sessions"
+        desired: dict[str, str] = {}
+        for thread_id, title in threads:
+            if thread_id:
+                desired[thread_id] = title or ""
+
+        existing: dict[str, str] = {
+            str(row[0]): str(row[1] or "")
+            for row in self._conn.execute(f"SELECT thread_id, title FROM {table}")  # noqa: S608 - fixed literal
+        }
+
+        to_delete = [
+            tid
+            for tid in existing
+            if tid not in desired or existing[tid] != desired[tid]
+        ]
+        to_insert = [
+            (tid, title) for tid, title in desired.items() if existing.get(tid) != title
+        ]
+
+        if not to_delete and not to_insert:
+            return
+
+        cur = self._conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            if to_delete:
+                cur.executemany(
+                    f"DELETE FROM {table} WHERE thread_id = ?",  # noqa: S608 - fixed literal
+                    [(tid,) for tid in to_delete],
+                )
+            if to_insert:
+                if self._fts:
+                    cur.executemany(
+                        "INSERT INTO sessions_fts (thread_id, title, body) VALUES (?, ?, ?)",
+                        [(tid, title, title) for tid, title in to_insert],
+                    )
+                else:
+                    cur.executemany(
+                        "INSERT OR REPLACE INTO sessions (thread_id, title, body) VALUES (?, ?, ?)",
+                        [(tid, title, title) for tid, title in to_insert],
+                    )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def count(self) -> int:
         """Number of indexed threads."""
@@ -216,13 +289,30 @@ def default_index_path() -> Path:
     return get_db_path().parent / "sessions_fts.db"
 
 
+def _reconcile_and_search(
+    pairs: list[tuple[str, str]], query: str, limit: int
+) -> list[SessionHit]:
+    """Open the index, incrementally sync it to `pairs`, and search (sync).
+
+    Runs entirely on a worker thread (see `search_sessions`) so the sqlite work
+    never blocks the event loop.
+    """
+    index = SessionSearchIndex(default_index_path())
+    try:
+        index.reconcile(pairs)
+        return index.search(query, limit=limit)
+    finally:
+        index.close()
+
+
 async def search_sessions(query: str, *, limit: int = 20) -> list[SessionHit]:
     """Search past threads for ``query`` and return the best matches.
 
-    Rebuilds the FTS index from the checkpointer's thread list (title/summary
-    text) and runs the search. Message-body indexing is a follow-up; today the
-    searchable text is each thread's title/summary. Best-effort — a store error
-    yields no results rather than raising.
+    Incrementally reconciles the FTS index against the checkpointer's thread
+    list (title/summary text) and runs the search on a worker thread, so a
+    large index never freezes the UI. Message-body indexing is a follow-up;
+    today the searchable text is each thread's title/summary. Best-effort — a
+    store error yields no results rather than raising.
 
     Args:
         query: Free-text query.
@@ -233,22 +323,21 @@ async def search_sessions(query: str, *, limit: int = 20) -> list[SessionHit]:
     """
     if not query.strip():
         return []
-    index = SessionSearchIndex(default_index_path())
     try:
-        try:
-            from bog_agents_cli.sessions import list_threads
+        from bog_agents_cli.sessions import list_threads
 
-            threads = await list_threads(limit=1000)
-        except Exception:  # search must never crash on a store hiccup
-            threads = []
-        index.clear()
-        for thread in threads:
-            thread_id = str(thread.get("thread_id") or "")
-            title = str(thread.get("summary") or thread.get("agent_name") or "")
-            index.index(thread_id, title, title)
-        return index.search(query, limit=limit)
-    finally:
-        index.close()
+        threads = await list_threads(limit=1000)
+    except Exception:  # search must never crash on a store hiccup
+        threads = []
+    pairs = [
+        (
+            str(thread.get("thread_id") or ""),
+            str(thread.get("summary") or thread.get("agent_name") or ""),
+        )
+        for thread in threads
+    ]
+    # The whole index sync + query runs off the Textual event loop (PERF-1).
+    return await asyncio.to_thread(_reconcile_and_search, pairs, query, limit)
 
 
 def format_search_results(query: str, hits: list[SessionHit]) -> str:

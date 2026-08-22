@@ -20,11 +20,14 @@ from pathlib import Path
 from typing import Any
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli._env_vars import bog_agents_home
 
 logger = logging.getLogger(__name__)
 configure_debug_logging(logger)
 
-_DEFAULT_CONFIG_PATH = Path.home() / ".bog-agents" / "config.toml"
+# Honors BOG_AGENTS_HOME (CT-3); resolved once at import time, matching
+# model_config.DEFAULT_CONFIG_PATH so both read the same config.toml.
+_DEFAULT_CONFIG_PATH = bog_agents_home() / "config.toml"
 
 
 def load_custom_prompts(config_path: Path | None = None) -> dict[str, str]:

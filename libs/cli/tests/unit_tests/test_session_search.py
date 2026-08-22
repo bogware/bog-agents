@@ -154,3 +154,40 @@ class TestMultiWordSearch:
             idx.index("t1", "Notes", "we discussed AND then OR semantics")
             # Must not raise and must still match the literal words.
             assert [h.thread_id for h in idx.search("AND OR")] == ["t1"]
+
+
+class TestIncrementalReconcile:
+    """PERF-1: reconcile syncs only the diff in one transaction."""
+
+    def test_reconcile_indexes_all_and_search_finds(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.reconcile([(f"t{i}", f"topic {i} deploy pipeline") for i in range(20)])
+            assert idx.count() == 20
+            assert len(idx.search("deploy")) > 0
+
+    def test_reconcile_is_idempotent(self, tmp_path: Path) -> None:
+        pairs = [("t1", "alpha deploy"), ("t2", "beta release")]
+        with _index(tmp_path) as idx:
+            idx.reconcile(pairs)
+            idx.reconcile(pairs)  # no-op
+            assert idx.count() == 2
+
+    def test_reconcile_updates_changed_title(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.reconcile([("t1", "original topic")])
+            idx.reconcile([("t1", "rewritten topic")])
+            assert idx.count() == 1
+            assert idx.search("rewritten")
+            assert not idx.search("original")
+
+    def test_reconcile_drops_removed_threads(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.reconcile([("t1", "keeper text"), ("t2", "goner text")])
+            idx.reconcile([("t1", "keeper text")])  # t2 removed
+            assert idx.count() == 1
+            assert not idx.search("goner")
+
+    def test_reconcile_skips_blank_thread_ids(self, tmp_path: Path) -> None:
+        with _index(tmp_path) as idx:
+            idx.reconcile([("", "no id"), ("t1", "real one")])
+            assert idx.count() == 1

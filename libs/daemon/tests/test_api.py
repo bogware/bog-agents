@@ -660,3 +660,220 @@ class TestGitHubWebhook:
         )
         assert resp.status_code == 200
         assert resp.json()["triggered"] == []
+
+
+# ---------------------------------------------------------------------------
+# Git-push branch filter — full-name matching (DMN-7)
+# ---------------------------------------------------------------------------
+
+
+class TestGitPushBranchFilter:
+    """DMN-7: `git_branch_pattern` matches the FULL branch name.
+
+    Only the `refs/heads/` (or `refs/tags/`) prefix is stripped from the
+    pushed ref, so slashed branch names survive intact and `feature/*`
+    style patterns work. The old last-segment split (`ref.split("/")[-1]`)
+    reduced `refs/heads/feature/login` to `login`, which made every
+    slash-containing pattern unmatchable by any push.
+    """
+
+    def _make_git_job(self, pattern: str) -> AmbientJob:
+        from bog_agents_daemon.models import TriggerConfig
+
+        job = AmbientJob(name=f"git-{pattern}", prompt="deploy")
+        job.triggers = [TriggerConfig(type=TriggerType.GIT_PUSH, git_branch_pattern=pattern)]
+        upsert_job(job)
+        return job
+
+    def _push(self, client: TestClient, auth: dict, ref: str) -> list[str]:
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            resp = client.post(
+                "/webhooks/git-push",
+                json={"ref": ref, "new_sha": "abc", "old_sha": "def"},
+                headers=auth,
+            )
+        assert resp.status_code == 200
+        return resp.json()["triggered"]
+
+    def test_slashed_pattern_matches_slashed_branch(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job = self._make_git_job("feature/*")
+        assert job.job_id in self._push(client, auth, "refs/heads/feature/login")
+
+    def test_release_pattern_matches_versioned_branch(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job = self._make_git_job("release/*")
+        assert job.job_id in self._push(client, auth, "refs/heads/release/1.0")
+
+    def test_bare_name_still_matches(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job = self._make_git_job("main")
+        assert job.job_id in self._push(client, auth, "refs/heads/main")
+
+    def test_last_segment_pattern_does_not_match_slashed_branch(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        # Full-name matching semantics: `login` is not `feature/login`.
+        job = self._make_git_job("login")
+        assert job.job_id not in self._push(client, auth, "refs/heads/feature/login")
+
+    def test_bare_pattern_does_not_match_prefixed_branch(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        # Regression guard for the old over-match: refs/heads/wip/main used to
+        # collapse to `main` and fire a `main`-patterned job.
+        job = self._make_git_job("main")
+        assert job.job_id not in self._push(client, auth, "refs/heads/wip/main")
+
+    def test_tag_ref_matches_against_tag_name(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job = self._make_git_job("v*")
+        assert job.job_id in self._push(client, auth, "refs/tags/v1.0")
+
+    def test_unprefixed_ref_matches_as_is(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        # A payload carrying a bare branch name (no refs/heads/ prefix) still works.
+        job = self._make_git_job("main")
+        assert job.job_id in self._push(client, auth, "main")
+
+    def test_wildcard_still_matches_slashed_branch(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        job = self._make_git_job("*")
+        assert job.job_id in self._push(client, auth, "refs/heads/feature/login")
+
+
+# ---------------------------------------------------------------------------
+# Secret redaction round-trip (DMN-8)
+# ---------------------------------------------------------------------------
+
+
+class TestSecretRedactionRoundTrip:
+    """DMN-8: the `'***'` redaction placeholder is never stored as a real secret.
+
+    GET/list redact webhook_secret / smtp_password / github_token to `'***'`;
+    the natural GET-edit-PATCH round-trip used to write that literal string
+    back as the secret — making the webhook HMAC forgeable by anyone and
+    silently breaking email/GitHub delivery auth.
+    """
+
+    _SECRET = "real-hmac-secret"
+
+    def _create_full_job(self, client: TestClient, auth: dict) -> dict:
+        payload = {
+            "name": "secret-job",
+            "prompt": "x",
+            "triggers": [
+                {"type": "webhook", "webhook_path": "/hooks/ci", "webhook_secret": self._SECRET},
+            ],
+            "outputs": [
+                {"target": "email", "smtp_host": "mail.example.com", "smtp_password": "smtp-pass", "to_addrs": ["ops@example.com"]},
+                {"target": "github_comment", "github_repo": "owner/repo", "github_issue_or_pr": 1, "github_token": "ghp_real"},
+            ],
+        }
+        resp = client.post("/jobs", json=payload, headers=auth)
+        assert resp.status_code == 201
+        return resp.json()
+
+    def test_get_redacts_all_secret_fields(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        created = self._create_full_job(client, auth)
+        fetched = client.get(f"/jobs/{created['job_id']}", headers=auth).json()
+        assert fetched["triggers"][0]["webhook_secret"] == "***"
+        assert fetched["outputs"][0]["smtp_password"] == "***"
+        assert fetched["outputs"][1]["github_token"] == "***"
+
+    def test_patch_round_trip_preserves_stored_secrets(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """The natural GET → edit → PATCH flow keeps the real stored secrets."""
+        created = self._create_full_job(client, auth)
+        job_id = created["job_id"]
+        fetched = client.get(f"/jobs/{job_id}", headers=auth).json()
+
+        # Simulate a client editing one unrelated field and sending the whole
+        # (redacted) triggers/outputs arrays back.
+        triggers = fetched["triggers"]
+        outputs = fetched["outputs"]
+        outputs[0]["smtp_host"] = "mail2.example.com"
+        resp = client.patch(f"/jobs/{job_id}", json={"triggers": triggers, "outputs": outputs}, headers=auth)
+        assert resp.status_code == 200
+
+        stored = next(j for j in load_jobs() if j.job_id == job_id)
+        assert stored.triggers[0].webhook_secret == self._SECRET
+        assert stored.outputs[0].smtp_password == "smtp-pass"
+        assert stored.outputs[0].smtp_host == "mail2.example.com"  # the actual edit landed
+        assert stored.outputs[1].github_token == "ghp_real"
+
+    def test_patch_with_new_real_value_replaces_secret(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        created = self._create_full_job(client, auth)
+        job_id = created["job_id"]
+        resp = client.patch(
+            f"/jobs/{job_id}",
+            json={"triggers": [{"type": "webhook", "webhook_path": "/hooks/ci", "webhook_secret": "rotated-secret"}]},
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        stored = next(j for j in load_jobs() if j.job_id == job_id)
+        assert stored.triggers[0].webhook_secret == "rotated-secret"
+
+    def test_patched_placeholder_secret_still_authenticates_hmac(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        """After a redacted round-trip, the ORIGINAL secret still signs webhooks
+        and the literal '***' does not — the security consequence of DMN-8."""
+        import hashlib
+        import hmac
+        import json
+
+        created = self._create_full_job(client, auth)
+        job_id = created["job_id"]
+        fetched = client.get(f"/jobs/{job_id}", headers=auth).json()
+        resp = client.patch(f"/jobs/{job_id}", json={"triggers": fetched["triggers"]}, headers=auth)
+        assert resp.status_code == 200
+
+        payload = json.dumps({"event": "x"}).encode("utf-8")
+        with patch("bog_agents_daemon.runner.run_job", new_callable=AsyncMock):
+            good_sig = "sha256=" + hmac.new(self._SECRET.encode(), payload, hashlib.sha256).hexdigest()
+            good = client.post(
+                "/webhooks/hooks/ci",
+                content=payload,
+                headers={"Content-Type": "application/json", "X-Hub-Signature-256": good_sig},
+            )
+            assert job_id in good.json()["triggered"]
+
+            forged_sig = "sha256=" + hmac.new(b"***", payload, hashlib.sha256).hexdigest()
+            forged = client.post(
+                "/webhooks/hooks/ci",
+                content=payload,
+                headers={"Content-Type": "application/json", "X-Hub-Signature-256": forged_sig},
+            )
+            assert job_id not in forged.json()["triggered"]
+
+    def test_create_with_placeholder_secret_is_rejected_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post(
+            "/jobs",
+            json={
+                "name": "bad",
+                "prompt": "x",
+                "triggers": [{"type": "webhook", "webhook_path": "/hooks/x", "webhook_secret": "***"}],
+            },
+            headers=auth,
+        )
+        assert resp.status_code == 422
+        assert "placeholder" in resp.json()["detail"]
+        assert load_jobs() == []
+
+    def test_create_with_placeholder_output_secret_is_rejected_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        resp = client.post(
+            "/jobs",
+            json={
+                "name": "bad",
+                "prompt": "x",
+                "outputs": [{"target": "email", "smtp_password": "***", "to_addrs": ["x@y.z"]}],
+            },
+            headers=auth,
+        )
+        assert resp.status_code == 422
+        assert load_jobs() == []
+
+    def test_patch_placeholder_with_nothing_to_preserve_is_rejected_422(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        # Adding a NEW trigger with '***' (no stored counterpart at that
+        # position) must fail loudly rather than store the placeholder.
+        created = self._create_full_job(client, auth)
+        job_id = created["job_id"]
+        fetched = client.get(f"/jobs/{job_id}", headers=auth).json()
+        new_triggers = [
+            *fetched["triggers"],
+            {"type": "webhook", "webhook_path": "/hooks/other", "webhook_secret": "***"},
+        ]
+        resp = client.patch(f"/jobs/{job_id}", json={"triggers": new_triggers}, headers=auth)
+        assert resp.status_code == 422
+        # The stored job is untouched.
+        stored = next(j for j in load_jobs() if j.job_id == job_id)
+        assert len(stored.triggers) == 1
+        assert stored.triggers[0].webhook_secret == self._SECRET

@@ -416,18 +416,34 @@ _MAX_RUNS_PER_JOB = int(os.environ.get("BOG_DAEMON_MAX_RUNS_PER_JOB", "100"))
 
 
 def _write_json_durable(path: Path, obj: Any) -> None:
-    """Write `obj` as pretty JSON to `path`, fsyncing before close.
+    """Atomically write `obj` as pretty JSON to `path`, fsyncing before the rename.
 
-    Shared by `save_run` and `reconcile_orphaned_runs` so a crash between the
-    write and the disk flush can't leave a half-written run record. Falls back
+    Shared by `save_run` and `reconcile_orphaned_runs`. Serialise first, write
+    into a sibling `.tmp` file, fsync, then rename over the destination — the
+    same durable-atomic pattern jobs.json uses (`_save_jobs_unlocked`). The
+    previous in-place open+write meant a crash between truncate and flush left
+    a half-written run record at its final path, which the loaders then
+    skipped forever (DMN-10). On any failure the sibling tmp file is removed,
+    so no partial file is ever left at or beside the destination. Falls back
     gracefully on the rare platform without `fsync` on regular files.
+
+    Args:
+        path: Destination file path (`.tmp` is appended for the scratch file).
+        obj: JSON-serialisable object to persist.
     """
     serialised = json.dumps(obj, indent=2)
-    with path.open("w", encoding="utf-8") as f:
-        f.write(serialised)
-        f.flush()
-        with contextlib.suppress(OSError, AttributeError):
-            os.fsync(f.fileno())
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as f:
+            f.write(serialised)
+            f.flush()
+            with contextlib.suppress(OSError, AttributeError):
+                os.fsync(f.fileno())
+        tmp_path.replace(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def save_run(run: JobRun) -> None:
@@ -478,8 +494,10 @@ def list_runs(job_id: str | None = None, *, limit: int = 20) -> list[JobRun]:
         try:
             data = json.loads(run_file.read_text(encoding="utf-8"))
             runs.append(_run_from_dict(data))
-        except Exception:
-            logger.debug("Could not read run file %s", run_file)
+        except Exception as exc:
+            # Loud, not debug: a corrupt/truncated run record silently
+            # vanishing from /runs is exactly what DMN-10 was about.
+            logger.warning("Skipping unreadable run file %s (corrupt or truncated?): %s", run_file, exc)
     runs.sort(key=lambda r: r.started_at, reverse=True)
     return runs[:limit]
 
@@ -507,8 +525,8 @@ def reconcile_orphaned_runs() -> int:
     for run_file in _RUNS_DIR.glob("*.json"):
         try:
             data = json.loads(run_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            logger.debug("Could not read run file %s during reconciliation", run_file)
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping unreadable run file %s during reconciliation (corrupt or truncated?): %s", run_file, exc)
             continue
         if not isinstance(data, dict):
             continue
