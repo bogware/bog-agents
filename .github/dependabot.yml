@@ -1,10 +1,25 @@
 # Dependabot configuration.
 #
-# Goal: keep dependencies + the hand-maintained CVE floors current WITHOUT PR
-# spam. Each package/ecosystem produces at most ONE grouped PR per run — every
-# update (major, minor, patch) for that directory is bundled together — on a
-# monthly cadence. (Security advisories may still open their own PRs
-# immediately, by design, regardless of grouping.)
+# Posture: MANUAL-ONLY. Automatic scheduled version-update PRs are disabled
+# (`open-pull-requests-limit: 0` on every ecosystem) so Dependabot never opens
+# a version-bump PR on its own and never spends CI minutes unprompted. The
+# ecosystem/grouping config is kept so updates can still be run ON DEMAND.
+#
+# To run a dependency update manually:
+#   1. Temporarily set `open-pull-requests-limit` back to 1 for the ecosystem
+#      you want, on a branch; Dependabot picks it up on the next scan (or use
+#      the repo's Insights -> Dependency graph -> Dependabot -> "Check for
+#      updates" button to force a run), opens the one grouped PR, then set the
+#      limit back to 0.
+#   OR do the bump by hand with `uv lock --upgrade` (or `npm update`) in the
+#      package dir and commit it — usually simpler for a one-off.
+#
+# The `schedule.interval` keys are retained because Dependabot's schema requires
+# them, but with the limit at 0 the schedule opens nothing.
+#
+# Dependabot ALERTS stay ON (you still get notified of advisories), and
+# Dependabot security auto-fix PRs are already disabled at the repo-settings
+# level — so nothing here re-enables automatic PRs of any kind.
 #
 # NOTE: Dependabot's parser does not support YAML anchors/merge keys, so each
 # block is written out in full.
@@ -15,7 +30,7 @@ updates:
     directory: "/libs/bog-agents"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -27,7 +42,7 @@ updates:
     directory: "/libs/cli"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -39,7 +54,7 @@ updates:
     directory: "/libs/daemon"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -51,7 +66,7 @@ updates:
     directory: "/libs/acp"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -63,7 +78,7 @@ updates:
     directory: "/libs/harbor"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -75,7 +90,7 @@ updates:
     directory: "/libs/partners/daytona"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -87,12 +102,12 @@ updates:
   # mistune, bleach, tornado) that were UNMONITORED before — the critical
   # jupyter-server XSS and ~55 other alerts live here. Not published, so they
   # are not in the CI test matrix, but they ship in the repo and must stay
-  # patched.
+  # patched. Alerts still fire; run the bump manually per the header.
   - package-ecosystem: "uv"
     directory: "/examples/deep_research"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -104,7 +119,7 @@ updates:
     directory: "/examples/nvidia_deep_agent"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -116,7 +131,7 @@ updates:
     directory: "/examples/text-to-sql-agent"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -128,7 +143,7 @@ updates:
     directory: "/libs/vscode-extension"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-dependencies:
         patterns: ["*"]
@@ -140,7 +155,7 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-    open-pull-requests-limit: 1
+    open-pull-requests-limit: 0
     groups:
       all-actions:
         patterns: ["*"]
