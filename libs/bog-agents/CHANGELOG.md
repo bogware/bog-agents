@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.9.13](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.12...bog-agents==0.9.13) (2026-08-22)
+
+
+### Bug Fixes
+
+* **cli,sdk:** price CLI sessions by real model and stop the empty-name 1M window ([51666f5](https://github.com/bogware/bog-agents/commit/51666f58480a01698c4e54f644672b3cf09ad29c))
+* **safety:** close the approval-gate bypasses (exec-risk, git flags, hooks, batch tools, PTY) ([5b36157](https://github.com/bogware/bog-agents/commit/5b36157d9f0fa014f117b3ae1952fb7ee00546e2))
+* **sdk:** never commit a failed summary as the conversation summary ([bdae179](https://github.com/bogware/bog-agents/commit/bdae1792386640f7a611bba27e799ec77d83948b))
+* **sdk:** rbac-build crash, builder merge, worktree switch, atomic write, honest background exit ([7ad4f6b](https://github.com/bogware/bog-agents/commit/7ad4f6b91fba3ad50062f27615d01773b709ffa7))
+
+
+### Performance Improvements
+
+* **sdk:** memoize street-sweeper derivations and fix offload retry ([1204c98](https://github.com/bogware/bog-agents/commit/1204c98bae8ba50b069359ad91b9e8522fef4557))
+
 ## [0.9.12](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.11...bog-agents==0.9.12) (2026-08-02)
 
 
