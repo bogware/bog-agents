@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.13](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.12...bog-agents-cli==0.9.13) (2026-08-22)
+
+
+### Bug Fixes
+
+* **cli,sdk:** price CLI sessions by real model and stop the empty-name 1M window ([51666f5](https://github.com/bogware/bog-agents/commit/51666f58480a01698c4e54f644672b3cf09ad29c))
+* **cli:** honor BOG_AGENTS_HOME, isolate MCP servers, gate butcher writes, secure tokens ([a2cebd1](https://github.com/bogware/bog-agents/commit/a2cebd113f304c33d6cc6428c1183bc9f0a289a6))
+* **cli:** run session commands off the App pump in TurnManager-tracked workers ([057c186](https://github.com/bogware/bog-agents/commit/057c186464a38846d85f12d2c5e2f9060fab7015))
+* **safety:** close the approval-gate bypasses (exec-risk, git flags, hooks, batch tools, PTY) ([5b36157](https://github.com/bogware/bog-agents/commit/5b36157d9f0fa014f117b3ae1952fb7ee00546e2))
+
+
+### Performance Improvements
+
+* **cli:** make /threads search incremental and off the event loop ([98dc349](https://github.com/bogware/bog-agents/commit/98dc34944e56b68e5c961a6544e77985cc806914))
+* **cli:** scan streamed tool-call args incrementally ([c7b7908](https://github.com/bogware/bog-agents/commit/c7b7908928c181845d466fc198fb810d96fc52f0))
+
 ## [0.9.12](https://github.com/bogware/bog-agents/compare/bog-agents-cli==0.9.11...bog-agents-cli==0.9.12) (2026-08-02)
 
 

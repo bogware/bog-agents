@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.13](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.12...bog-agents-daemon==0.9.13) (2026-08-22)
+
+
+### Bug Fixes
+
+* **daemon:** full-name branch matching, ***-placeholder round-trip, atomic run writes ([1bf8494](https://github.com/bogware/bog-agents/commit/1bf849450d357504f1f3392370ccfd2e7c4e0543))
+
 ## [0.9.12](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.11...bog-agents-daemon==0.9.12) (2026-08-02)
 
 
