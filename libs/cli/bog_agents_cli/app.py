@@ -8509,9 +8509,10 @@ class BogAgentsApp(App):
         prompt = build_explain_prompt(raw_arg, context)
         await self._send_prompt_to_agent(prompt)
 
-    async def _handle_index_command(self, command: str) -> None:
+    async def _handle_index_command(self, command: str, *, echo: bool = True) -> None:
         """Handle `/index` — build and search the codebase knowledge base."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
 
         from bog_agents_cli.cmd_index import (
             build_index,
@@ -12335,31 +12336,13 @@ class BogAgentsApp(App):
         lowered = raw_arg.lower()
 
         if lowered in {"index", "index --force"}:
+            # The semantic index is built by /index (cmd_index.build_index),
+            # not by an in-process HybridSearchMiddleware — the old lookup on
+            # `self._middleware` never matched (v6 CLI-12).
             force = "--force" in lowered
-            mw = next(
-                (
-                    m
-                    for m in getattr(self, "_middleware", [])
-                    if isinstance(m, HybridSearchMiddleware)
-                ),
-                None,
+            await self._handle_index_command(
+                "/index rebuild" if force else "/index build", echo=False
             )
-            if mw is None:
-                await self._mount_message(
-                    AppMessage(
-                        "HybridSearchMiddleware is not active.\n"
-                        "Add it to your middleware stack to use semantic indexing."
-                    )
-                )
-                return
-            await self._mount_message(
-                AppMessage("Building embedding index… this may take a minute.")
-            )
-            try:
-                result = await asyncio.to_thread(mw._rebuild_index, force=force)
-                await self._mount_message(AppMessage(f"Index built: {result}"))
-            except Exception as exc:
-                await self._mount_message(AppMessage(f"Index build failed: {exc}"))
             return
 
         try:
@@ -12526,18 +12509,12 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.intelligent_compaction import (
-            IntelligentCompactionMiddleware,
-        )
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, IntelligentCompactionMiddleware)
-            ),
-            None,
-        )
+        # v6 CLI-12: the TUI's agent runs in the LangGraph server process, so
+        # there is no in-process IntelligentCompactionMiddleware to drive; the
+        # old lookup on `self._middleware` never matched. `mw` stays None and
+        # every branch below takes its honest path (/compact, or a pointer to
+        # the config that governs server-side auto-compaction).
+        mw = None
 
         raw_arg = command.strip()[len("/compress") :].strip().lower()
 
@@ -12607,7 +12584,11 @@ class BogAgentsApp(App):
             toggle = raw_arg[5:].strip()
             if mw is None:
                 await self._mount_message(
-                    AppMessage("IntelligentCompactionMiddleware not active.")
+                    AppMessage(
+                        "Auto-compaction runs server-side and is not toggled from the TUI; "
+                        "use /compact to compact now, or adjust the summarization settings "
+                        "in ~/.bog-agents/config.toml."
+                    )
                 )
                 return
             if toggle == "on":
@@ -12623,7 +12604,10 @@ class BogAgentsApp(App):
         if raw_arg.startswith("threshold "):
             if mw is None:
                 await self._mount_message(
-                    AppMessage("IntelligentCompactionMiddleware not active.")
+                    AppMessage(
+                        "The auto-compaction threshold is a server-side setting; adjust the "
+                        "summarization settings in ~/.bog-agents/config.toml and /reload."
+                    )
                 )
                 return
             pct_str = raw_arg[10:].strip().rstrip("%")

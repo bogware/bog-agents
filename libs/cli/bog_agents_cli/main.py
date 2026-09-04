@@ -884,6 +884,15 @@ def parse_args() -> argparse.Namespace:
         help="Run diagnostics to check environment, dependencies, and configuration",
     )
     parser.add_argument(
+        "--doctor-features",
+        action="store_true",
+        help=(
+            "Audit the advertised slash-command surface: every command has a "
+            "handler, implements its documented subcommands, and depends on no "
+            "dead middleware lookup. Exit code 1 when anything drifted."
+        ),
+    )
+    parser.add_argument(
         "--doctor-deep",
         action="store_true",
         help=(
@@ -1704,6 +1713,15 @@ def cli_main() -> None:
 
         _run_doctor(_DoctorConsole())
         sys.exit(0)
+
+    # --doctor-features fast path: static audit of the slash-command surface
+    # (v6 Wave 0 — the REVIEW v4 §4.1 "advertised means reachable" gate).
+    if len(sys.argv) == 2 and sys.argv[1] == "--doctor-features":
+        from bog_agents_cli.feature_selftest import audit_command_surface, render_audit
+
+        audits = audit_command_surface()
+        print(render_audit(audits))  # noqa: T201 — CLI output
+        sys.exit(0 if all(a.ok for a in audits) else 1)
 
     # --doctor-deep fast path: like --doctor but probes external deps too.
     if len(sys.argv) == 2 and sys.argv[1] == "--doctor-deep":
