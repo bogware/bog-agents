@@ -13,7 +13,6 @@ Feature #68: Code transformation engine (AST-based).
 Feature #69: Smart imports.
 Feature #70: Cross-repo operations.
 Feature #71: Time-travel debugging (git bisect AI).
-Feature #74: Agent-to-Agent protocol (A2A).
 Feature #75: Offline mode.
 """
 

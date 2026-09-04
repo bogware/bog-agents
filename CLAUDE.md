@@ -77,10 +77,15 @@ broken — the sandbox, not the test, is usually what tripped.
 
 The entry point is `create_agent()` which returns a compiled LangGraph graph. The agent ships with base tools (filesystem, shell, planning, sub-agents) and a composable **middleware stack**.
 
-**`FeatureConfig` (`feature_config.py`) is the toggle surface** — a ~150-field
-dataclass that replaces what would otherwise be a 100+ parameter `create_agent`
-call. New optional features get a field here plus a branch in `graph.py`, not a
-new keyword argument. Pass it as `create_agent(config=FeatureConfig(...))`;
+**`FeatureConfig` (`feature_config.py`) is the toggle surface** — an 80-field
+dataclass (count it with `dataclasses.fields`, do not trust this number) that
+replaces what would otherwise be a 100+ parameter `create_agent` call. New
+optional features get a field here plus a branch in `graph.py`, not a new
+keyword argument. Known exceptions that are `middleware=`-only today (no
+FeatureConfig field): `ExpertRulesMiddleware`, `StopGateMiddleware`,
+`RubricMiddleware`, `GoalToolsMiddleware`, `EvidenceBundleMiddleware`,
+`GuardrailMiddleware`, `LangSmithMiddleware` — an SDK consumer must import and
+order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `create_agent(config=FeatureConfig(...))`;
 `features=` is a deprecated alias kept for backwards compatibility and is
 *silently ignored* when `config=` is also given (`_resolve_feature_config`).
 
