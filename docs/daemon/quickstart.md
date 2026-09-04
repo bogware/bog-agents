@@ -206,16 +206,16 @@ The daemon exposes a JSON API on the bind address:
 
 ```bash
 # List all jobs
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs
+curl -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs
 
 # Get a specific job (by job id)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>
+curl -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs/<job-id>
 
 # Trigger a job
-curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>/run
+curl -X POST -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs/<job-id>/run
 
 # List recent runs
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:7878/runs?limit=10"
+curl -H "X-Daemon-Token: $TOKEN" "http://localhost:7878/runs?limit=10"
 
 # Inbound webhook (no bearer token — authenticated by HMAC signature)
 curl -X POST -H "X-Hub-Signature-256: sha256=..." -d '{...}' \
