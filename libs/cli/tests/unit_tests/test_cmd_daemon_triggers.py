@@ -21,16 +21,16 @@ def _parse(argv: list[str]) -> argparse.Namespace:
 
 
 def _args(**overrides: object) -> SimpleNamespace:
-    base = dict(
-        cron="",
-        interval=0,
-        watch_dir="",
-        watch_pattern=None,
-        debounce=5.0,
-        webhook_path="",
-        git_branch="",
-        github=False,
-    )
+    base: dict[str, object] = {
+        "cron": "",
+        "interval": 0,
+        "watch_dir": "",
+        "watch_pattern": None,
+        "debounce": 5.0,
+        "webhook_path": "",
+        "git_branch": "",
+        "github": False,
+    }
     base.update(overrides)
     return SimpleNamespace(**base)
 
