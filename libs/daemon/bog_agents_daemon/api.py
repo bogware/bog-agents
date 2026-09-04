@@ -99,7 +99,7 @@ class OutputConfigModel(BaseModel):
     slack_webhook_url: str = ""
     slack_channel: str = ""
     github_repo: str = ""
-    github_issue_or_pr: int = 0
+    github_issue_or_pr: int | str = 0
     github_token: str = ""
     webhook_url: str = ""
     webhook_headers: dict[str, str] = {}

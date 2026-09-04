@@ -306,10 +306,27 @@ curl -X POST http://daemon.internal:7878/webhooks/hooks/ci-failure-investigator 
 ```bash
 bog-agents daemon jobs create \
   --name downloads-classifier \
-  --file-change "~/Downloads/*" \
+  --watch-dir ~/Downloads --watch-pattern "*" \
   --prompt "Classify the new file at {trigger_path} into one of: invoices/, receipts/, screenshots/, misc/. Move it." \
   --working-dir ~/
 ```
+
+### Prompt and output placeholders
+
+Prompts, `--output-file` paths and `--output-github-issue` may use
+`{placeholder}` references that the daemon renders from the run's trigger just
+before the agent is invoked (unknown names are left verbatim, so quoted JSON is
+safe):
+
+| Placeholder | Value |
+|---|---|
+| `{date}` / `{time}` / `{datetime}` | Local date, time, ISO timestamp of the run |
+| `{job_name}` / `{job_id}` / `{working_dir}` | The job's own fields |
+| `{trigger_type}` | `cron`, `interval`, `file_change`, `webhook`, `git_push`, `github`, `manual` |
+| `{trigger_context_json}` | The whole trigger context as JSON (webhook payload, git-push ref/sha, GitHub event) |
+| `{trigger_path}` | The path a file-change trigger fired on |
+| `{number}` / `{pr_number}` / `{issue_number}` | The issue or PR number from a GitHub event or a webhook payload's `number` / `pr_number` |
+| any top-level key of the trigger context | e.g. `{title}`, `{body}`, `{branch}`, `{actor}` for GitHub events; `{ref}`, `{new_sha}` for git-push |
 
 ## Where things live
 

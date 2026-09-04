@@ -6,9 +6,12 @@ import asyncio
 import json
 import logging
 import os
+import re
 import smtplib
 import time
 import urllib.request
+from collections.abc import Mapping
+from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
@@ -71,7 +74,7 @@ async def run_job(
         save_run(run)
 
     try:
-        prompt = _build_prompt(job)
+        prompt = _build_prompt(job, trigger_type=trigger_type, trigger_context=trigger_context)
     except Exception as exc:
         # Prompt/skill/pipeline resolution is deterministic — retrying it would
         # just fail identically, so mark FAILED without consuming retries.
@@ -157,34 +160,150 @@ async def run_job(
     return run
 
 
-def _build_prompt(job: AmbientJob) -> str:
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_template(template: str, values: Mapping[str, Any]) -> str:
+    """Substitute `{name}` placeholders in `template` from `values`.
+
+    Only bare identifiers in braces are placeholders (`{pr_number}`); anything
+    else — JSON literals, format specs, unknown names — is left verbatim so a
+    prompt that quotes code or a payload never blows up on an unknown key.
+
+    Args:
+        template: The text to render.
+        values: Placeholder name → replacement value (stringified).
+
+    Returns:
+        The rendered text.
+    """
+    if "{" not in template:
+        return template
+
+    def _sub(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return str(values[key]) if key in values else match.group(0)
+
+    return _PLACEHOLDER_RE.sub(_sub, template)
+
+
+def template_values(
+    *,
+    job_name: str,
+    job_id: str,
+    working_dir: str = "",
+    trigger_type: TriggerType | str = TriggerType.MANUAL,
+    trigger_context: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Build the placeholder map for a job prompt or output field.
+
+    v6 DMN-1: the daemon used to send `job.prompt` to the model verbatim, so
+    the issue number, body and branch parsed by the GitHub front door, a CI
+    webhook payload, or the path a file trigger fired on never reached the
+    agent — and the documented `{trigger_context_json}` / `{pr_number}` /
+    `{date}` / `{trigger_path}` placeholders were inert text.
+
+    Available keys: `date`, `time`, `datetime`, `job_name`, `job_id`,
+    `working_dir`, `trigger_type`, `trigger_context_json`, every top-level
+    string-keyed entry of the trigger context (non-string values as JSON),
+    plus the aliases `number` / `pr_number` / `issue_number` and
+    `trigger_path`.
+
+    Args:
+        job_name: The job's display name.
+        job_id: The job's identifier.
+        working_dir: The job's working directory ("" when unset).
+        trigger_type: How the run was initiated.
+        trigger_context: Trigger metadata (webhook payload, GitHub event, …).
+
+    Returns:
+        A name → string mapping for `render_template`.
+    """
+    ctx: dict[str, Any] = dict(trigger_context or {})
+    now = datetime.now().astimezone()
+    values: dict[str, str] = {
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "datetime": now.isoformat(timespec="seconds"),
+        "job_name": job_name,
+        "job_id": job_id,
+        "working_dir": working_dir,
+        "trigger_type": str(getattr(trigger_type, "value", trigger_type)),
+        "trigger_context_json": json.dumps(ctx, sort_keys=True, default=str),
+    }
+    for key, value in ctx.items():
+        if isinstance(key, str) and key.isidentifier():
+            values.setdefault(key, value if isinstance(value, str) else json.dumps(value, default=str))
+    number = ctx.get("number") or ctx.get("pr_number") or ctx.get("issue_number")
+    if number not in (None, "", 0):
+        for alias in ("number", "pr_number", "issue_number"):
+            values.setdefault(alias, str(number))
+    path = ctx.get("trigger_path") or ctx.get("path") or ctx.get("changed_path")
+    if path:
+        values.setdefault("trigger_path", str(path))
+    return values
+
+
+def _render_output_field(value: str, run: JobRun) -> str:
+    """Render placeholders in an output field (file path, issue number) for `run`."""
+    if not value or "{" not in value:
+        return value
+    return render_template(
+        value,
+        template_values(
+            job_name=run.job_name,
+            job_id=run.job_id,
+            trigger_type=run.trigger_type,
+            trigger_context=run.trigger_context,
+        ),
+    )
+
+
+def _build_prompt(
+    job: AmbientJob,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+    trigger_context: Mapping[str, Any] | None = None,
+) -> str:
     """Build the prompt string for a job invocation.
 
-    For raw `prompt` jobs, the prompt is returned verbatim. For
-    `skill_name` jobs, the skill's SKILL.md content is read from
-    `~/.bog-agents/{agent}/skills/{skill}/SKILL.md` and inlined as the
-    prompt body so the model has the full skill instructions, not just
-    the skill name. For `pipeline_name` jobs, the YAML definition is
-    loaded and converted to a structured request.
+    Resolves the prompt source — the raw `prompt`, the named skill's SKILL.md
+    (read from `~/.bog-agents/{agent}/skills/{skill}/SKILL.md` and inlined so
+    the model has the full instructions), or the named pipeline's YAML turned
+    into a structured request — then renders `{placeholder}` references from
+    the trigger (see `template_values`). Unknown placeholders stay verbatim.
 
     Args:
         job: The job whose prompt to resolve.
+        trigger_type: How this run was initiated.
+        trigger_context: Trigger metadata to expose as placeholders.
 
     Returns:
-        The resolved prompt string.
+        The resolved, rendered prompt string.
 
     Raises:
         ValueError: If no prompt source is configured or the named
             skill/pipeline can't be located.
     """
     if job.prompt:
-        return job.prompt
-    if job.skill_name:
-        return _resolve_skill_prompt(job.skill_name)
-    if job.pipeline_name:
-        return _resolve_pipeline_prompt(job.pipeline_name)
-    msg = f"Job '{job.name}' ({job.job_id}) has no prompt, skill, or pipeline configured"
-    raise ValueError(msg)
+        base = job.prompt
+    elif job.skill_name:
+        base = _resolve_skill_prompt(job.skill_name)
+    elif job.pipeline_name:
+        base = _resolve_pipeline_prompt(job.pipeline_name)
+    else:
+        msg = f"Job '{job.name}' ({job.job_id}) has no prompt, skill, or pipeline configured"
+        raise ValueError(msg)
+    return render_template(
+        base,
+        template_values(
+            job_name=job.name,
+            job_id=job.job_id,
+            working_dir=job.working_dir,
+            trigger_type=trigger_type,
+            trigger_context=trigger_context,
+        ),
+    )
 
 
 _SKILL_SEARCH_PATHS = (
@@ -683,7 +802,7 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
 
     import aiofiles
 
-    file_path = output.file_path
+    file_path = _render_output_field(output.file_path, run)
     if not file_path:
         logger.warning("File output for job %s has no file_path configured", run.job_id)
         return
@@ -866,7 +985,16 @@ async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
         output: The GitHub comment output configuration.
     """
     repo = output.github_repo
-    issue_number = output.github_issue_or_pr
+    raw_issue = _render_output_field(str(output.github_issue_or_pr or ""), run)
+    try:
+        issue_number = int(raw_issue) if raw_issue else 0
+    except ValueError:
+        logger.warning(
+            "GitHub comment output for job %s could not resolve issue/PR number %r (unrendered placeholder?)",
+            run.job_id,
+            raw_issue,
+        )
+        return
     token = output.github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API_KEY") or ""
 
     if not repo:

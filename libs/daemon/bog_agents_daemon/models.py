@@ -97,7 +97,8 @@ class OutputConfig:
         slack_webhook_url: Slack incoming webhook URL.
         slack_channel: Slack channel override (optional).
         github_repo: GitHub repo in "owner/repo" format.
-        github_issue_or_pr: Issue or PR number for GitHub comment output.
+        github_issue_or_pr: Issue or PR number for GitHub comment output, or a
+            `{pr_number}`-style placeholder rendered from the trigger at dispatch.
         webhook_url: URL to POST output to.
         webhook_headers: Additional HTTP headers for webhook requests.
     """
@@ -119,7 +120,7 @@ class OutputConfig:
     slack_channel: str = ""
     # github
     github_repo: str = ""
-    github_issue_or_pr: int = 0
+    github_issue_or_pr: int | str = 0
     github_token: str = ""
     # webhook
     webhook_url: str = ""

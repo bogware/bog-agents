@@ -20,6 +20,7 @@ from bog_agents_daemon.runner import (
     _dispatch_file,
     _dispatch_output,
     _invoke_agent,
+    _render_output_field,
     run_job,
 )
 from bog_agents_daemon.store import list_runs, load_jobs
@@ -471,3 +472,64 @@ class TestDispatchOutput:
         run = JobRun(job_id=job.job_id, job_name=job.name, output="x")
         cfg = OutputConfig(target=OutputTarget.STDOUT)
         await _dispatch_output(run, cfg)  # no exception
+
+
+# ---------------------------------------------------------------------------
+# v6 DMN-1: trigger context reaches the model through {placeholders}
+# ---------------------------------------------------------------------------
+
+
+class TestPromptTemplating:
+    def test_renders_documented_placeholders(self) -> None:
+        job = AmbientJob(
+            name="ci",
+            prompt="Context:\n{trigger_context_json}\nPR {pr_number} on {branch} at {trigger_path} — {unknown} {date}",
+        )
+        ctx = {"number": 42, "branch": "feature/x", "path": "src/a.py"}
+
+        out = _build_prompt(job, trigger_type=TriggerType.GITHUB, trigger_context=ctx)
+
+        assert '"number": 42' in out
+        assert "PR 42 on feature/x at src/a.py" in out
+        assert "{unknown}" in out  # unknown names stay verbatim
+        assert "{date}" not in out
+
+    def test_json_literals_and_manual_runs_survive(self) -> None:
+        job = AmbientJob(name="j", prompt='Reply with {"ok": true} for {job_name}')
+        assert _build_prompt(job) == 'Reply with {"ok": true} for j'
+
+    def test_file_trigger_path_alias(self) -> None:
+        job = AmbientJob(name="j", prompt="Classify {trigger_path}")
+        out = _build_prompt(job, trigger_type=TriggerType.FILE_CHANGE, trigger_context={"trigger_path": "/tmp/new.pdf"})
+        assert out == "Classify /tmp/new.pdf"
+
+    async def test_run_job_sends_rendered_prompt(self, tmp_daemon_dir: Path) -> None:
+        job = AmbientJob(name="gh", prompt="Fix issue #{issue_number}: {title}")
+
+        with patch("bog_agents_daemon.runner._invoke_agent", new_callable=AsyncMock, return_value="ok") as invoke:
+            await run_job(job, trigger_type=TriggerType.GITHUB, trigger_context={"number": 7, "title": "Crash on start"})
+
+        assert invoke.await_args.args[1] == "Fix issue #7: Crash on start"
+
+    async def test_file_output_path_renders_placeholders(self, tmp_path: Path) -> None:
+        from datetime import datetime
+
+        from bog_agents_daemon.models import JobRun
+
+        job = AmbientJob(name="nightly", prompt="x")
+        run = JobRun(job_id=job.job_id, job_name=job.name, output="hello")
+        cfg = OutputConfig(target=OutputTarget.FILE, file_path=str(tmp_path / "{date}-{job_name}.md"), append=False)
+
+        await _dispatch_file(run, cfg)
+
+        expected = tmp_path / f"{datetime.now().astimezone().strftime('%Y-%m-%d')}-nightly.md"
+        assert expected.exists()
+        assert "hello" in expected.read_text()
+
+    def test_github_issue_placeholder_resolves_from_trigger(self) -> None:
+        from bog_agents_daemon.models import JobRun
+
+        run = JobRun(job_id="j1", job_name="gh", trigger_type=TriggerType.GITHUB, trigger_context={"number": 42})
+        assert _render_output_field("{pr_number}", run) == "42"
+        assert _render_output_field("{number}", run) == "42"
+        assert _render_output_field("17", run) == "17"

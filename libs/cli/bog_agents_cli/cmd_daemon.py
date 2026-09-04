@@ -583,7 +583,12 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         out["smtp_password"] = getattr(args, "output_email_smtp_password", "") or ""
     elif output_target == "github_comment":
         out["github_repo"] = getattr(args, "output_github_repo", "") or ""
-        out["github_issue_or_pr"] = getattr(args, "output_github_issue", 0) or 0
+        raw_issue = str(getattr(args, "output_github_issue", "") or "").strip()
+        # Digits become an int (the historical type); anything else is a
+        # placeholder such as {pr_number} that the daemon renders at dispatch.
+        out["github_issue_or_pr"] = (
+            int(raw_issue) if raw_issue.isdigit() else (raw_issue or 0)
+        )
 
     payload: dict[str, Any] = {
         "name": args.name,
@@ -1086,10 +1091,10 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     create_p.add_argument(
         "--output-github-issue",
         dest="output_github_issue",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Issue or PR number when --output=github_comment",
+        type=str,
+        default="",
+        metavar="N|{pr_number}",
+        help="Issue or PR number when --output=github_comment, or a placeholder such as {pr_number} / {number} resolved from the trigger context at dispatch",
     )
     create_p.add_argument(
         "--disabled", action="store_true", help="Create the job in a disabled state"
