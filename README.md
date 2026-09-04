@@ -41,7 +41,7 @@ Three packages, one stack:
   (multi-reviewer vote on a diff), **`/operator`** (auto difficulty routing), and
   **`/effort`** (real per-provider reasoning knobs). Plus `/peat` personal
   scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`, an
-  in-memory secrets vault, `bog-agents drive` for scripted runs, and a full
+  in-memory secrets vault, `bog-agents --drive <script.yaml>` for scripted runs, and a full
   **headless surface** so an AI agent or CI job can drive it without a human
   at the keyboard. Matte-swamp TUI.
 - **[`bog-agents-daemon`](libs/daemon)** — the patient watcher. Runs your
@@ -197,7 +197,7 @@ hardened a different stretch of trail.
 - **0.9.1 — Bedrock, seamless.** Automatic inference-profile resolution,
   `/bedrock fix` + `/bedrock config`, and auto SSO-credential refresh. Point
   at a model id; the SDK sorts out the rest.
-- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents drive`
+- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents --drive`
   graduated to a full Pilot-backed runner; `/compliance` auditor with
   HMAC-sealed reports; a repo-wide security pass.
 
@@ -262,7 +262,7 @@ discord, kubernetes, datadog, sentry, and more.
 | Path | What |
 |---|---|
 | `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, 90+ middlewares, pluggable backends, tool bundles, deepagents compatibility. |
-| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents drive` scripted runner. |
+| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents --drive` scripted runner. |
 | `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook / git-push triggers, REST API. |
 | `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |
 | `libs/harbor/` | Evaluation / benchmark harness (Terminal Bench 2.0). |

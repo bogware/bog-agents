@@ -1,4 +1,4 @@
-# `bog-agents drive` — scripted TUI
+# `bog-agents --drive` — scripted TUI
 
 > Emulate a real user interacting with the TUI. End-to-end. From
 > CI. Without a human at the keyboard. Without mocking the TUI.
@@ -18,7 +18,7 @@ to script complex flows for QA: "open the model picker, switch to
 Claude, run `/help`, snapshot, run a real prompt, approve the file
 write, snapshot again."
 
-`bog-agents drive` is YAML for that. The runner boots a real
+`bog-agents --drive <script.yaml>` is YAML for that. The runner boots a real
 `BogAgentsApp` under Pilot, executes a script of actions, and writes
 a JSONL transcript. CI runs scripts. Humans review snapshots. The
 TUI surface stays honest.

@@ -442,7 +442,7 @@ injected as memory at the top of every agent turn. Good content:
 
 64 KiB cap. Anything past that is silently truncated.
 
-### `bog-agents drive` for any repeatable workflow
+### `bog-agents --drive` for any repeatable workflow
 
 The drive runner isn't only for testing. Any time you find yourself
 running the same TUI sequence twice, capture it as a script:
