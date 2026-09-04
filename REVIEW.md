@@ -161,6 +161,32 @@ IDs are `v6 <ID>`. Every P1 below survived an independent refutation pass with a
 ### Wave D — Delivery truth (M)
 **DEL-3** (fork-PR CI on hosted runners for lint + one test leg; re-enable 3.11 or drop the classifier; a macOS leg for launchd/seatbelt/PTY; VS Code compile leg), **SAT-4** (VS Code sidebar provider + streaming fix, then **publish to the Marketplace — decided 2026-09-04**), **SAT-3** (ACP per-session state — needed before listing in Zed's ACP registry, ROADMAP #65), **SAT-5** (harbor `als_info`).
 
+## 4. Shipped in Wave 0 (2026-09-04, branch `fix/review-v6-wave0` off `docs/review-v6`)
+
+One commit per finding, each with regression tests. Suites at the end of the
+wave: SDK 2,930 passed / 148 skipped / 2 xfailed; CLI 5,616 passed / 118 skipped;
+daemon 239; daytona 5; acp 52; `ty` clean on SDK, CLI and daemon; app.py at 17,857
+lines (under its 17,900 ratchet — the `/worktrees` logic moved to
+`worktrees_controller.py`). `bog-agents --doctor-features` reports 128 commands, 0
+problems.
+
+**All six P1s fixed:**
+- **v6 SDK-1** — `serve` `/stream` records the assistant reply from the last `on_chat_model_end` event (plain text and content blocks), so checkpointer-less multi-turn SSE conversations replay the full transcript.
+- **v6 DMN-1** — `_build_prompt` renders `{placeholder}` references from the trigger (date/time, job fields, trigger type, the context as JSON, every top-level context key, `number`/`pr_number`/`issue_number`, `trigger_path`); `--output-file` and `--output-github-issue` render too (the latter accepts a placeholder string). Quickstart documents the table and the real `--watch-dir` flag.
+- **v6 DMN-2** — `bog-agents daemon jobs create --github` creates the GitHub trigger; assembly is a pure `_triggers_from_args`; quickstart gains the "assign an issue to bog" pattern with the secret / bot-login env vars.
+- **v6 CLI-1** — root cause confirmed: the TUI's agent runs in the LangGraph server process, so `self._middleware` can never hold in-process middleware. `/think` is now per-session state carried through `CLIContext.thinking_enabled` / `thinking_budget_tokens`, honoured by `ThinkingMiddleware` from `request.runtime.context` on both paths; `/worktrees` fronts the managed worktree tasks behind `/agent spawn --worktree` (status / spawn / merge / cancel are real, cancel stops the worker).
+- **v6 CLI-2** — `/checkpoint load` switches to the saved thread via `_resume_thread` instead of prompting the model to "resume".
+- **v6 CLI-3** — `_start_model_command` routes `/orchestrate`, `/sidecar`, `/race`, `/imagine`, `/devil`, `/handoff`, `/squad review`, `/rubric draft` and `/teach` through the tracked-session choke point; Esc cancels them and submissions queue.
+
+**Wave 0 items 2–4:**
+- **`bog-agents --doctor-features`** (`feature_selftest.py`) — static audit that every registered command has a handler, implements its advertised subcommands (following same-class and module delegation) and depends on no dead `self._middleware` lookup; also a unit test, so the surface cannot drift silently again. `/search index` now delegates to `/index`; `/compress auto|threshold` say honestly that auto-compaction is server-side (**CLI-12**).
+- **deepagents CI leg** — overlays the latest `deepagents`, smoke-imports both packages, runs the compat + upstream-parity tests (**SDK-12**).
+- **Docs drift** — daemon REST auth header / phantom `/metrics` / token path (**SAT-1**); install hints name extras that exist and say `bog-agents-acp` is unpublished (**DEL-1**); SDK quickstart sandbox example and the `--drive` spelling (**DEL-2**); CLAUDE.md FeatureConfig count and the `middleware=`-only list, stale A2A label (**SDK-13**); daytona distribution renamed to `bog-agents-daytona` (**SAT-2**).
+
+**Corrections to this report from the fix work:** the inventory's claim that `libs/partners/runloop/` contains only `__pycache__` was wrong — it holds an untracked `langchain_runloop` package with its own venv and tests; it was left untouched (untracked, not ours to delete). The registry *does* have an `available` field; every spec sets it `True`, so the finding stands as "no spec was ever marked unavailable".
+
+**Not started (next):** Wave A (SDK-7/8/10/11, CLI-9), Wave B, Wave C, Wave D, and ROADMAP #47 Governed Auto Mode as the Wave 1 lead.
+
 ### Decisions taken 2026-09-04
 Commit this report on `docs/review-v6` off `origin/main` and start Wave 0 immediately; Wave 1 leads with ROADMAP #47 Governed Auto Mode; 1.0 = Wave 0 + Wave 1 + Wave 2 + a written stability contract; #60 native Windows sandbox is a committed 1.x headline; the VS Code extension is fixed and published.
 
