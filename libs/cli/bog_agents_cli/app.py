@@ -12321,7 +12321,6 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
 
         from bog_agents.middleware.hybrid_search import (
-            HybridSearchMiddleware,
             format_search_results,
             hybrid_search,
         )

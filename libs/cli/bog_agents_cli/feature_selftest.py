@@ -20,8 +20,11 @@ it only reads source text via `inspect`.
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 DEAD_MIDDLEWARE_LOOKUP = 'getattr(self, "_middleware"'
 """Source fragment that marks a handler as depending on in-process middleware."""
@@ -62,7 +65,9 @@ def _delegate_sources(handler_source: str) -> str:
         try:
             module = importlib.import_module(f"bog_agents_cli.{mod}")
             chunks.append(inspect.getsource(module))
-        except Exception:  # a delegate that cannot be imported simply adds no source
+        except Exception as exc:
+            # A delegate that cannot be imported simply adds no source.
+            logger.debug("feature self-test: could not read delegate %s: %s", mod, exc)
             continue
     return "\n".join(chunks)
 
