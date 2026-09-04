@@ -595,12 +595,12 @@ def make_graph() -> Any:  # noqa: ANN401
                 "Sandbox provider '%s' is not installed", config.sandbox_type
             )
             pip_hint = {
-                "modal": "pip install 'bog-agents-cli[modal]'",
-                "daytona": "pip install 'bog-agents-cli[daytona]'",
-                "runloop": "pip install 'bog-agents-cli[runloop]'",
+                "modal": "pip install 'bog-agents-cli[modal-sandbox]'",
+                "daytona": "pip install 'bog-agents-cli[daytona-sandbox]'",
+                "runloop": "pip install 'bog-agents-cli[runloop-sandbox]'",
             }.get(
                 config.sandbox_type,
-                f"pip install 'bog-agents-cli[{config.sandbox_type}]'",
+                f"pip install 'bog-agents-cli[{config.sandbox_type}-sandbox]'",
             )
             print(  # noqa: T201  # stderr fallback — logger may not reach parent process
                 f"Sandbox provider '{config.sandbox_type}' is not installed. "

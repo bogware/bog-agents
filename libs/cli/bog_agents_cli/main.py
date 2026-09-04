@@ -1791,8 +1791,8 @@ def cli_main() -> None:
             except ImportError as exc:
                 msg = (
                     f"ACP dependencies not available: {exc}\n"
-                    "Install with: pip install 'bog-agents-cli[acp]'\n"
-                    "  or: uv add 'bog-agents-cli[acp]'\n"
+                    "bog-agents-acp is not published yet. Install it from a source checkout:\n"
+                    "  uv pip install -e libs/acp   (from the bog-agents repository root)\n"
                 )
                 sys.stderr.write(msg)
                 sys.stderr.flush()

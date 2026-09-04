@@ -62,16 +62,17 @@ Now, open Zed's Agents Panel (e.g. with `CMD + Shift + ?`). You should see an op
 
 And that's it! You can now use the Bog Agents in Zed to interact with your project.
 
-If you need to upgrade your version of Bog Agents, run:
+`bog-agents-acp` is not published to PyPI yet. Install (or upgrade) it from a
+source checkout of the repository:
 
 ```sh
-uv upgrade bog-agents-acp
+uv pip install -e libs/acp
 ```
 
 ## Launch a custom Bog Agents with ACP
 
 ```sh
-uv add bog-agents-acp
+uv pip install -e libs/acp    # from the bog-agents repository root
 ```
 
 ```python
