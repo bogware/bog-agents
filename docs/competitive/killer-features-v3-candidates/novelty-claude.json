@@ -1,0 +1,280 @@
+{
+ "bucket": "Claude Code, Codex CLI, Gemini CLI",
+ "checked": [
+  {
+   "title": "Two-stage approval: Expert Mode deterministic rules first, local-model classifier second (\"auto mode\" without the cloud tax)",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/auto_mode.py:32-46 (AutoDecision/RuleVerdict, rule_source incl. \"haiku\"), :208-228 HaikuEvalConfig (enabled=True, model claude-haiku-4-5), :230-241 AutoModeSettings.enabled defaults False, :455-489 haiku_risk_eval hard-imports `anthropic` and fails closed (\"anthropic package unavailable — treating as risky\"), returns bool not a risk grade; libs/cli/bog_agents_cli/textual_adapter.py:757-800 _evaluate_auto_mode_batch runs rule engine then Haiku only on rule_source==\"default\"; app.py:5712-5760 `/auto` is on|off|status only; app.py:16010-16030 default permission mode is \"default\" (prompt-all), auto = \"accept-edits\"; app.py:12157-12165 `/why` routes only to expert_controller (tool_call facts, expert_rules.py:333); libs/bog-agents/bog_agents/middleware/smart_approvals.py:32-40,148-283 SDK RiskLevel policies are regex/heuristic, no model call; tests: libs/cli/tests/unit_tests/test_auto_mode_rules.py (56 tests; only :375 covers haiku config — no test found driving haiku_risk_eval or _evaluate_auto_mode_batch). No hits for circuit.?breaker|recently denied|critique|containment.",
+   "delta": "(1) Make accept-edits/auto the default permission mode (today `default` prompts for everything and AutoModeSettings.enabled=False). (2) Replace the hard-wired `import anthropic` in haiku_risk_eval with an injected `invoke` (model_config factory) so the reviewer can be Ollama/Bedrock/any provider — today non-Anthropic installs fail closed straight to HITL. (3) Return structured {risk: low|medium|high|critical, rationale} and map critical→deny, high→HITL, low→approve (today boolean risky). (4) Prose policy file (.bog-agents/auto-mode.md) with allow/soft_deny/hard_deny/environment sections + `$defaults` splice replacing the regex lists in settings.json. (5) `bog-agents auto-mode defaults|config|critique|reset` headless twins (headless_commands.py). (6) 'Recently denied' tab with retry in the TUI. (7) Per-turn denial circuit breaker (N denials → escalate to human). (8) Containment-Escape default rule (cloud metadata endpoints, proxy/egress evasion) in _DEFAULT_SHELL_ASK_PATTERNS. (9) Feed RuleVerdict + reviewer rationale into the expert engine as a fact so `/why` explains auto-mode denials with the proof trace. Add tests for haiku_risk_eval and the batch evaluator.",
+   "roadmap_ref": "#23",
+   "competitor": "Claude Code (auto mode default Aug 14; prose rules + `claude auto-mode critique`; Containment Escape Sep 1) and Codex (Guardian auto-review with policy.md, circuit breaker, `/approve`)",
+   "source_url": "https://code.claude.com/docs/en/auto-mode-config",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Users stop rubber-stamping 97% of prompts (Anthropic's own number) yet keep a deterministic, auditable floor the competitors lack: an enterprise can prove which rule fired, a solo user on a laptop runs the reviewer on a local 8B model for free and offline, and both get the classifier's long-tail coverage. ROADMAP #23 proposed risk-graded reviewer approvals; the bar moved because both leaders now ship it as the DEFAULT with a prose-rule DSL, a critique/lint CLI and a denial-retry UI — bog must match that surface, not just the concept.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Native Windows sandbox via restricted tokens + WFP firewall (Codex's design), wired into LocalShellBackend",
+   "status": "proposed-not-built",
+   "evidence": "libs/bog-agents/bog_agents/sandbox/local_sandbox.py:57-100 SandboxSupport.detect probes only `bwrap` (linux) and `sandbox-exec` (darwin); :94-97 docstring: \"Windows has no launcher yet (AppContainer wiring is tracked as ROADMAP #22)\"; libs/bog-agents/bog_agents/backends/local_shell.py:10-11,195,320,583 `require_sandbox=True` fails closed \"where no native launcher is available (e.g. Windows today)\"; libs/bog-agents/bog_agents/sandbox/egress_proxy.py:138 AllowlistEgressProxy exists (usable as the 'online' user's egress); libs/bog-agents/bog_agents/exec_risk.py: 0 matches for powershell|pwsh|EncodedCommand; tests exist only for bwrap/seatbelt paths (libs/bog-agents/tests/unit_tests/test_local_sandbox_*.py).",
+   "delta": "Implement a Windows launcher in local_sandbox.py: unelevated mode = CreateRestrictedToken (WRITE_RESTRICTED + synthetic SID) from the current user with explicit ACL grants on working_dir/temp/caches/`writable_roots` from sandbox.toml (document the Everyone-SID gap); elevated mode = provision two low-privilege local users (offline: WFP block-all rule; online: egress forced through the existing AllowlistEgressProxy) and CreateProcessAsUser; wire `SandboxSupport.detect` windows branch + `SandboxConfig.build_local_sandbox`; add a PowerShell AST inspection pass to exec_risk.py (`-EncodedCommand`, `Invoke-Expression`, dynamic script blocks → veto auto-approval); reparse-point (junction/symlink) hardening on writable roots; docs on what is kernel-enforced vs proxy-cooperative; Windows CI job running the sandbox conformance tests.",
+   "roadmap_ref": "#22",
+   "competitor": "OpenAI Codex (native Windows sandbox May 14; reparse-point hardening v0.149.0 Aug 20); Claude Code still 'Native Windows is not supported' (issue #46740 closed not-planned); Antigravity claims AppContainer",
+   "source_url": "https://codex.danielvaughan.com/2026/07/18/codex-cli-windows-sandbox-architecture-powershell-ast-safety-elevated-unelevated-appcontainer-restricted-tokens/",
+   "target_users": [
+    "solo power users / OSS",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Windows-first users get real OS isolation today (Claude Code tells them to use WSL2; bog's own sandbox fails closed on Windows), and regulated shops get an auditable boundary for auto-approved shell. ROADMAP #22 already flagged Windows as the open flank; the bar moved because Codex proved a working restricted-token + firewall design and rejected AppContainer — bog can copy a validated architecture instead of inventing one, and it remains the only LangGraph-based framework with it.",
+   "effort": "XL",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Credential masking at the egress proxy (sentinel secrets substituted only toward allow-listed hosts)",
+   "status": "absent",
+   "evidence": "libs/bog-agents/bog_agents/sandbox/egress_proxy.py:47-330 is a CONNECT-only tunnel (parse_connect_target, _tunnel, _relay/_pump) — no TLS termination, 0 matches for mask|sentinel|credential|inject beyond the `egress_env_for` docstring at :15; libs/bog-agents/bog_agents/sandbox_config.py: 0 matches for credential|mask|inject|envVars; libs/bog-agents/bog_agents/sandbox/local_sandbox.py:126-128,175 `strip_secret_env` only *removes* *SECRET*/*CREDENTIAL* env vars from the child (strip, not substitute); none found after grepping sentinel|inject_hosts|credential_mask|sigv4 outside .venv.",
+   "delta": "Add `[credentials]` env_vars/files entries with mode=mask to sandbox.toml (SandboxConfig) honored only from user/managed config, never repo-level; generate per-session sentinels and inject them into the sandboxed child's env/files; upgrade the proxy from CONNECT tunnel to a TLS-terminating MITM for `inject_hosts` (per-session CA installed only inside the sandbox env via SSL_CERT_FILE/NODE_EXTRA_CA_CERTS) that swaps sentinel→real value in headers/bodies, with `extract` substring, JWT-aware `decode`, and AWS SigV4 re-signing; startup check that every masked var has a reachable inject host; surface in `/sandbox` and `/vars`; compose with the DLP middleware so the real value never appears in transcripts/audit trail.",
+   "roadmap_ref": "#22 / #27",
+   "competitor": "Claude Code (mask mode for env vars v2.1.199; files + extract/decode/SigV4 v2.1.224, Aug 3-7)",
+   "source_url": "https://code.claude.com/docs/en/sandboxing",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "Tools like `gh`, `npm`, `aws` keep working inside the sandbox while the agent, its logs, and any exfiltration attempt never hold a real token — the one thing a plain deny list cannot give. Bog already has the proxy and the sandbox.toml; this turns them from a network fence into a secrets boundary that air-gapped/regulated teams can sign off on, and it composes with the DLP middleware.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`bog queue` + machine-level session registry + `@session` mentions (cross-session messaging primitive)",
+   "status": "absent",
+   "evidence": "libs/bog-agents/bog_agents/teams.py:162-201 Mailbox is in-process only (threading.Lock over an in-memory list; no persistence); libs/bog-agents/bog_agents/middleware/collaborative_sessions.py:78 sessions held in an in-memory dict; libs/cli/bog_agents_cli/main.py:344-520 subparsers have no `queue`/`agents` subcommand; libs/cli/bog_agents_cli/widgets/autocomplete.py:797-807 _MENTION_TYPES = @file/@folder/@repo/@search/@symbol/@url/@memory/@skill (no @session); none found after grepping session_registry|SessionRegistry|~/.bog-agents/sessions/|notify_when_idle|cross-session; only cross-process entry points are daemon `POST /jobs/{id}/run` (libs/daemon/bog_agents_daemon/api.py:681) and mcp_server.py `run_task`.",
+   "delta": "Per-machine registry `~/.bog-agents/sessions/<id>.json` (name, cwd, model, state, pid, heartbeat) written by the TUI, daemon runs and serve sessions with auto-unique names; a persistent inbox backend for Mailbox (SQLite or JSONL under the registry) so any process can enqueue; `bog-agents queue --session <name|id> [--file] [--wait]` where --wait streams the next assistant reply; TUI worker checks the inbox at turn boundaries (queue during a turn, wake when idle) and injects the message as a provenance-tagged untrusted HumanMessage that can never satisfy a HITL interrupt; SDK `list_agents`/`send_message` tools with `notify_when_idle`; `@session:` mention type in autocomplete; daemon dispatch target `session:<name>` so cron/CI results land in the session holding the branch.",
+   "roadmap_ref": "#21 / #11 / #32",
+   "competitor": "Codex `codex queue` + `codex agents` (v0.149.0 Aug 20); Claude Code cross-session messaging (v2.1.224 Aug 3-7, Windows Aug 17-21, `@` mentions v2.1.232)",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.149.0",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A CI failure, a daemon cron tick, or a teammate's session can drip context into the exact session that already has the branch checked out and the debugging context loaded, instead of a human re-explaining it; teams get loose coupling between sessions with different models/trust profiles, which `/team run` (tight coupling) does not cover. ROADMAP #21/#11 assumed in-process teams and a watch-only dashboard; the bar moved to first-class peer messaging with a CLI entry point, and bog's daemon makes it strictly more useful than either competitor's.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Tool-result interception + PermissionRequest / Interrupt / PreModelSwitch hook events, trust-by-hash",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/hook_decisions.py:36-57 CANONICAL_EVENTS already include SubagentStart/SubagentStop/PreCompact/PostCompact/PermissionDenied; DENY_EVENTS={PreToolUse}, BLOCK_EVENTS={Stop,SubagentStop}; :82-94 PostToolUse typed OBSERVE; libs/cli/bog_agents_cli/hooks.py:269-291 dispatch_tool_post_hook truncates result to 1000 chars and returns None (no replacement path); hook_middleware.py:32-85 PreToolUseHookMiddleware fail-closed deny; trust-by-hash EXISTS: project_hooks.py:96-135 hooks_fingerprint()/is_hooks_execution_allowed() via mcp_trust.compute_config_fingerprint, env _env_vars.py:179 BOG_AGENTS_TRUST_PROJECT_HOOKS; libs/bog-agents/bog_agents/middleware/lifecycle_hooks.py:48 ON_MODEL_SWITCH is defined but never fired (only the definition matched); no PermissionRequest/Interrupt/PreModelSwitch events; no managed/org hooks (0 matches managed_settings|allow_managed); no MCP-tool handler type; hooks run synchronously via asyncio.to_thread (hooks.py:196), no async/spill-to-disk mode.",
+   "delta": "Promote PostToolUse to MODIFY: pass the full result and honor `{\"tool_result\": ...}` replacement before the ToolMessage reaches the model (wrap in hook_middleware, keep fail-open); add decision-capable PermissionRequest (fires before the HITL interrupt in textual_adapter/non_interactive with allow/deny), Interrupt (Esc/Ctrl-C in the TUI worker), PreModelSwitch (deny) / PostModelSwitch wired into `/model` (app.py:17594) and fire the existing lifecycle ON_MODEL_SWITCH; MCP-tool handler type (`{\"type\":\"mcp_tool\",\"server\":..,\"tool\":..,\"args\":{\"${field}\"}}`) executed against already-connected servers in mcp_tools.py; async hook mode with output spilled to `~/.bog-agents/hook-logs/`; managed hooks directory (org config) that user/project settings cannot disable, routed through the same fingerprint gate; alias the new Claude/Cursor event names in the compat table.",
+   "roadmap_ref": "grok Tier-1 hook bus (shipped section) / #24",
+   "competitor": "Codex v0.151.0 (Aug 29) extensions inspect/replace MCP results; v0.150.0 Interrupt hooks; hooks trust-by-hash + managed hooks; Claude Code PreModelSwitch/PostModelSwitch (v2.1.251 Aug 28)",
+   "source_url": "https://learn.chatgpt.com/docs/hooks",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Teams can enforce policy where it actually bites — redact PII from tool output before it reaches a cloud model, veto a downgrade to an unapproved model, react to an interrupt — with a shell script instead of writing middleware, and their existing Claude Code/Cursor hook files keep loading unchanged. Bog's hook bus is already decision-capable on PreToolUse/Stop; matching the now-standard event set closes the gap users compare against on day one.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Portable plugin manifest (`plugin.json` + skills/ + .mcp.json + hooks.json) import/export and hardened marketplaces",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/plugin_marketplace.py:1-30,41-223 (PluginInfo, read_plugin_manifest, install_plugin_from_path — local path only; 0 matches for sha256|zip|git|command:|headers|validate); extensions.py:25-344 ExtensionManifest install/enable/disable; claude_code_compat.py:58 `_PLUGIN_MANIFEST=\"manifest.json\"`, :177-262 parse/detect/import Claude SKILL.md, :320-422 MCP config sync from .mcp.json/Claude Desktop + export_mcp_from_extensions; commands/config.py:176-178 `/plugin` \"includes Claude Code skill import and MCP sync\"; app.py:3419 `/mcp marketplace` is a curated MCP-server catalog; project_hooks.py:96-135 hooks fingerprint trust gate exists to reuse; `/migrate` is a tech-migration prompt (commands/analysis.py:61, app.py:4693), not an importer.",
+   "delta": "Adopt `plugin.json` + skills/ + .mcp.json + hooks.json + agents/ as bog's manifest (extend ExtensionManifest/read_plugin_manifest); `bog-agents plugin import codex|claude|cursor|antigravity` covering hooks, agents, rules, project memories and sessions on top of the existing skills+MCP import, plus `export`; marketplace sources beyond local path: git, zip archive with SHA-256 pin, `command:` (local command prints the plugin dir, re-resolved per session), `headersHelper` for private catalogs; plugin-bundled hooks routed through project_hooks.hooks_fingerprint before execution; `bog-agents plugin validate --json`; publish bog's own plugins into Codex- and Claude-compatible marketplace indexes.",
+   "roadmap_ref": "#34 / #35",
+   "competitor": "Codex Agent Plugins 1.0 + marketplaces for Bedrock/Claude Code (v0.146.0 Jul 29), `/import` (v0.145.0); Claude Code zip+SHA-256 (Aug 3-7), command sources (Aug 10-14), headersHelper (v2.1.238 Aug 20); Antigravity `agy plugin import gemini`",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.146.0",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A team's skills, MCP config and hooks move between Codex, Claude Code and bog without rewriting, so evaluating bog costs one command instead of a migration, and org plugin catalogs behind auth become installable. ROADMAP #34/#35 proposed an importer and registry; the bar moved because the manifest is now shared by all three competitors and hardened distribution (hash pins, minted headers, trust-gated hooks) is expected.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Spend attribution v2: per-loop/daemon-job/teammate ledger, spend-limit bar, prompt-cache miss root-causing, contracted rates",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/cost_ledger.py:26-155 CostLedger.tracker_for(label), RunawayCaps (max_subagents/web_searches/spend), format_tree; :12-13 docstring says subagent/web-search wiring 'is the next step' — only consumers are team_executor.py:220 and teams.py:277 (SubAgentMiddleware and web search do not register); libs/bog-agents/bog_agents/middleware/cost_tracker.py:183-196,266-330 tracks cache_read/cache_write tokens and prints Read/Write lines (no hit-ratio/warm-cold/causes); :200-240,338-348 budget_usd per tracker instance; :79-108 pricing from a hard-coded catalog (0 matches for model_pricing|modelPricing|pricing_override); libs/cli/bog_agents_cli/prompt_cache.py:31-61 only cache_break_note for /compact and /clear; commands/info.py:85 `/cost` is an alias of `/tokens`; libs/daemon/bog_agents_daemon/models.py + runner.py: no token/cost fields on JobRun (only github_token matched); no `/loop` command exists in bog.",
+   "delta": "Wire CostLedger into SubAgentMiddleware, the web-search tool and the daemon runner (JobRun.tokens/cost persisted in store.py) with labels for daemon job, teammate, subagent and skill; `/cost` tree view (runs, tokens/run, last run) reusing format_tree; spend-limit bar against RunawayCaps.max_cost + provider spend headers in the status bar; per-session cache line (hit ratio, re-cached tokens, warm/cold) with 'likely causes' computed by instrumenting StreetSweeper (message rewrite), SummarizationMiddleware (cutoff moved), system-prompt hash change and DeferredTools schema change to emit prefix-change events; `[pricing]` override table in config.toml merged over the catalog (config_manifest.py); `--max-budget-usd` propagated so subagents/teammates share one ledger and halt together.",
+   "roadmap_ref": "#25",
+   "competitor": "Claude Code Loops breakdown + modelPricing (v2.1.243 Aug 25), spend-limit bar + cache stats (v2.1.251 Aug 28), cache-miss causes (v2.1.260 Sep 3), budget cap on subagents (Jul 20-24); Codex `/usage` views (Jun 15); Antigravity real-time cost tracking (Aug 26)",
+   "source_url": "https://code.claude.com/docs/en/changelog",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A user can see 'this loop ran 44 times and burned X' or 'cache misses because the sweeper rewrote message 3' and fix it, instead of discovering a blown weekly quota; finance gets contracted-rate numbers they can reconcile. ROADMAP #25 shipped the ledger; the bar moved to explaining WHY tokens were spent (cache diagnostics) and to daemon/loop attribution, where bog's daemon gives it more surfaces than Claude's `/loop`.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`--restricted` hardened profile + `--permission-prompts none` + `trust_level=untrusted` repo mode for unattended runs",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/main.py:700-716 `--permission-mode {default,acceptEdits,plan,bypass,paranoid}` (plan strips mutating tools) — no `--restricted`/`--permission-prompts`; 0 matches repo-wide for trust_level|untrusted_repo|blockReads; libs/cli/bog_agents_cli/mcp_server.py:33-34 unattended modes are only bypass/acceptEdits (no deny-on-prompt mode); libs/daemon/bog_agents_daemon/runner.py:392-427 DMN-1: non-MANUAL triggers get shell-less `FilesystemBackend(virtual_mode=True)` and no inherited env (daemon-only hardened posture); libs/cli/bog_agents_cli/self_protection.py:1-18 (#24 guard survives --auto-approve); project_hooks.py:111-135 + mcp_trust.py:113-234 per-project fingerprint trust for hooks/MCP (opt-in trust prompt, not an 'ignore repo config' switch); profiles.py:19-66 profiles bundle model/prompt only ('Code review mode — read-only' at :66 is prompt-level); sidecar.py:112-117 build_readonly_tools exists; non_interactive.py:84,214-224 HITL interrupt loop still prompts/blocks in headless runs.",
+   "delta": "One `--restricted` flag (and `permission_mode=restricted` for daemon/mcp-server/serve) that composes existing parts: strip execute/shell/code-exec tools (reuse sidecar.build_readonly_tools shape), FilesystemPermission rules confining reads AND writes to working dirs (`block_reads_outside_working_dirs`), refuse bypass/auto; `trust_level=untrusted` loader flag that skips repo `.bog-agents/{hooks,expert_rules,.mcp.json,settings.json,laws.md}` and records what was skipped; `--permission-prompts none` so any HITL interrupt is auto-denied with an error ToolMessage instead of hanging (non_interactive.py, mcp_server.py, daemon runner); `/doctor`/`/status` line listing skipped managed settings and why; bind to #23 named trust profiles and #24 self-modification guard; tests per surface.",
+   "roadmap_ref": "#23 / #24",
+   "competitor": "Claude Code `--restricted` (v2.1.248 Aug 27), `--permission-prompts none` (v2.1.259 Sep 2), reads gate (v2.1.257 Sep 1); Codex `trust_level = \"untrusted\"` + `allow_managed_hooks_only`",
+   "source_url": "https://code.claude.com/docs/en/permission-modes",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Operators get a one-word answer to 'what can the daemon do on this box' that a hostile repository cannot widen, and CI runs never hang on a prompt or silently escalate. ROADMAP #23/#24 cover trust profiles and self-modification; the bar moved to a single documented hardened switch that reviewers now ask for by name.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Fork subagent that inherits the full conversation and prompt cache, and `/fork` into its own worktree",
+   "status": "absent",
+   "evidence": "libs/bog-agents/bog_agents/middleware/subagents.py:176-190 child state is built with `messages` in _EXCLUDED_STATE_KEYS — only the task description is forwarded, so every subagent starts cold; async_subagents.py:1 covers remote LangGraph-server subagents, not forks; app.py:13160-13172 `/background <prompt>` submits a fresh background task; commands/info.py:62 `/rewind` forks a *thread* from a checkpoint snapshot (same session, not a background subagent); 0 registered commands named fork/subtask; parallel_worktree.py + `create_worktree` (app.py:9156) exist for worktree isolation.",
+   "delta": "Add a `fork` subagent kind in graph.py/subagents.py that seeds the child with the parent's exact message list (the post-sweeper view) and identical system prompt/tool schemas so the first call is a prompt-cache hit, runs in the background by default and returns its final message as a ToolMessage; `/subtask <prompt>` TUI command; `/fork` copies the checkpoint thread into a new background session bound to a fresh git worktree (reuse create_worktree + the /background manager), with commit/push/draft-PR only on request; add a test asserting StreetSweeper/Summarization/PromptCaching keep the shared prefix byte-identical between parent and fork.",
+   "roadmap_ref": "none",
+   "competitor": "Claude Code fork mode default (v2.1.232 Aug 10-14), `/fork` (Jul 13-17) in own worktree (Aug 3-7); Codex fork sessions (v0.148.0 Aug 18) and ephemeral forks (v0.146.0)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w33",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Side tasks stop costing a re-explanation and a cold cache: the user says 'draft tests for what we just did' and pays cache-read prices for the context instead of re-sending it. Bog's street sweeper + prompt-caching middleware were built to keep a stable prefix — a fork that exploits that is cheaper than Claude's, and it works with local models where context re-fill is wall-clock, not dollars.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Outbound-only self-hosted runners for daemon/fleet (`bog fleet runner`)",
+   "status": "proposed-not-built",
+   "evidence": "libs/daemon/bog_agents_daemon/api.py:447-950 FastAPI surface is inbound only (jobs/runs/webhooks/admin) — no runner register/claim/heartbeat endpoints; libs/bog-agents/bog_agents/sandbox_config.py:12 references the 'fleet runner (#42)' as future work; libs/cli/bog_agents_cli/remote.py:1-17 `/remote` is a task-submission client keeping `remote-tasks.json` locally; 0 matches for fleet|self-hosted|retire-at|drain-grace|capacity|proxy-authorization outside those docstrings; serve.py exists (sessions API).",
+   "delta": "`bog-agents fleet runner` process: outbound-only long-poll/claim loop against the daemon (new `/runners/register`, `/sessions/claim`, `/sessions/{id}/events` endpoints, token-authenticated) or a hosted control plane; owner-locking (one user/agent per runner), `--capacity`, `--drain-grace-sec`, `--retire-at`, `--defer-shutdown-max-min`, `--proxy-authorization-command`; clone repo, apply sandbox.toml (#27), spawn create_agent with any provider (Bedrock/Vertex/Ollama already supported by model_config), stream events back; signed session-identity token internal services can verify; optional autoscaler hook; CI smoke test for runner images; `/dashboard` rows for runner sessions.",
+   "roadmap_ref": "#42 / #33",
+   "competitor": "Claude Code self-hosted environments (v2.1.224 Aug 3-7; runner flags Aug 20/27); Codex remote executors over Noise relay (v0.141.0 Jun 18), Remote Code Mode WebSocket (v0.146.0)",
+   "source_url": "https://code.claude.com/docs/en/self-hosted-environments",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Regulated teams run agents inside their network with no inbound ports and their own model endpoint — Claude's version forbids Bedrock/Vertex/gateways and ZDR, which is exactly the buyer bog targets. ROADMAP #42 proposed `bog fleet`; the bar moved because the reference architecture (owner-locked outbound pollers, retire-at, drain semantics) is now public and expected.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Agents dashboard control half: start/stop/rename/open, classifier-written headlines, auto titles, `@task` mentions, Markdown export",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/dashboard.py:71-370 DashboardState/DashboardScreen render+tick only (no start/stop/rename/open); app.py:9151-9300 `/agent` already has list/status/spawn/stop/switch/cleanup/watch/panel for worktree agents (control half exists there, not for daemon runs, not in /dashboard); feature_helpers.py:250 transcript_to_markdown exists but is only consumed by /handoff (handoff.py:1-14 writes a synthesized brief, not a raw transcript export) — no `session export` or `/copy` picker; session_search.py:39-45 thread title is the first prompt, 0 matches for auto_title|generate_title|headline; autocomplete.py:797-807 no @task mention; main.py:459-520 `threads list|delete` only (no rename); no per-subagent model+effort display found.",
+   "delta": "Fold `/agent`'s control verbs plus daemon `/runs` into `/dashboard` grouped by project/status with start/open/rename/stop; rename persisted in the session FTS index; per-subagent model+effort column (from CLIContext/operator overrides); one-line classifier headline per session (cheap model over the last N messages, cached and refreshed on turn end); auto titles at first turn; `@task:` mention type that pulls another task's summary/sidechain into the prompt; `bog-agents session export --markdown <thread>` (raw transcript via transcript_to_markdown) and a `/copy` picker (response/code/quote).",
+   "roadmap_ref": "#11",
+   "competitor": "Codex `codex agents` dashboard (v0.149.0 Aug 20), auto titles + `@` task mentions (v0.150.0 Aug 26), Markdown export (v0.148.0 Aug 18); Claude Code `claude agents` rows with classifier headlines (Jul 6-10), model/effort per subagent in `/tasks` (v2.1.243)",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.149.0",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Someone running five sessions plus daemon jobs sees at a glance which one is blocked on them and acts without hunting through terminals, and can hand a Markdown transcript to a teammate or PR. ROADMAP #11 scored the dashboard as 'partial (watch half)'; both competitors have now shipped the control half, so it is table stakes rather than polish.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Security-scan recipe with sandbox-validated findings, FP ledger, `--max-cost`, SARIF and CI gating",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/app.py:4264-4272 `/audit` is a single prompt (generate_audit_prompt: dependency/project risk); recipes.py:154-159 `dependency-audit` recipe (CVE + outdated majors); recommend.py:106-110 security-focus prompt; compliance/__init__.py:1-30 audit packs → HMAC-sealed PASS/FAIL reports over the trace log (controls compliance, not vuln hunting); jury.py:1-11 N-model diff vote; cmd_pr_review.py:1-6; libs/bog-agents/bog_agents/cost_ledger.py:48 and evidence.py available as building blocks; 0 matches for sarif|fail-on-severity|false-positive ledger|threat model.",
+   "delta": "Package a `security-scan` recipe + headless twin: architecture map → threat model → parallel hunter subagents on TaskLedger (injection, authz, secrets, SSRF, deserialization) → independent `/jury` review; sandbox reproduction step (LocalSandbox/daytona) that marks findings validated/unreproduced; persistent `.bog-agents/security/findings.jsonl` + false-positive ledger with dedup keys (file+sink+class); `--max-cost` enforced through CostLedger caps; `--fail-on-severity`; SARIF 2.1 + JSON emitters for GitHub Code Scanning; 'patch selected findings' flow via `/pr` with evidence bundle; local-model profile for air-gapped runs.",
+   "roadmap_ref": "#29 / #31 / #35",
+   "competitor": "OpenAI Codex Security open-sourced (Apache 2.0, Jul 28-29; HN 392 pts); Anthropic Claude Security plugin (Jul 20-24)",
+   "source_url": "https://www.developersdigest.tech/blog/codex-security-open-source-cli-sdk-hn-analysis",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Teams get the part HN said mattered (dedup, FP tracking, budget caps, CI gating) without the parts they hated: Codex's brain is Enterprise-gated and blew $13 in a minute, Claude's needs a claude.ai plan; bog's version costs what the ledger allows and runs offline. Bog already has `/audit`, `/compliance`, evidence bundles and the jury — this is assembly plus the ledger and SARIF, not new research.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`/doctor` that fixes: context-cost audit of skills/MCP/plugins, CLAUDE.md dedupe, slow-hook detection, endpoint/proxy checks",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/doctor.py:285-530 run_doctor() is read-only diagnostics (python, platform, packages, providers/Ollama :23-90, CLI tools + managed ripgrep :369-399, shadowed entrypoint :129,:400-410, sandbox :441, config dir :460, env vars :475, MCP config discovery :490-526, hooks.json presence :463-467, MCP OAuth :159, Bedrock creds :206); 0 matches for fix|repair|apply|--json|proxy|ssl|tls|slow hook; main.py:882,2051 `--doctor` flag prints and exits; app.py:4641 `/health` is a codebase-health *prompt*, unrelated; 0 matches for skill usage_count|last_used|unused in skills modules; deferred_tools.py:4-8 acknowledges schema token cost but exposes no accounting.",
+   "delta": "`bog-agents doctor --json`; measure each skill/MCP server/plugin's context cost (token-count the tool schemas per server and skill bodies) vs usage mined from session FTS/sidechains, and propose disabling unused ones; dedupe `.bog-agents/*.md` and auto-memory against checked-in AGENTS.md/CLAUDE.md and trim derivable content; time each hook script and flag > N ms; corporate proxy/TLS-inspection check (HTTPS_PROXY, cert chain to provider hosts, Windows endpoint-protection process list); a confirm-then-apply fix loop (edits .mcp.json/skill trust/hooks); `/skill-doctor` alias.",
+   "roadmap_ref": "none",
+   "competitor": "Claude Code `/doctor` fixes (v2.1.205 Jul 6-10), `/skill-doctor` (v2.1.261 Sep 4); Codex `codex doctor` endpoint-protection/proxy/desktop checks (v0.149.0 Aug 20)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w28",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Solo users on local models reclaim context (and tokens/sec) that a dozen forgotten MCP servers were eating, and Windows users behind corporate TLS proxies get a diagnosis instead of a hang; 'first-run works' is the thing OSS reviewers grade.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Rate-limit-aware auto-continue and resumable blocked goals",
+   "status": "absent",
+   "evidence": "libs/bog-agents/bog_agents/middleware/provider_retry.py:1-24 retries only timeouts/connection/5xx and explicitly does NOT retry 4xx/rate-limit; 0 matches for retry.?after|reset header parsing; libs/cli/bog_agents_cli/non_interactive.py:1526-1582 detects 429/RateLimitError and prints 'wait a minute' then exits; bedrock_resilience.py:60-75 THROTTLED → walks the fallback-model ladder (no wait-and-resume); libs/daemon/bog_agents_daemon/runner.py:539-563 per-job exponential retry (max_retries default 0), not reset-time aware; libs/bog-agents/bog_agents/middleware/goal_tools.py:369-472 GoalToolsMiddleware has no check-in scheduling/back-off; 0 matches for auto-continue|resuming at|park_turn.",
+   "delta": "Parse provider reset signals (Anthropic `retry-after`/`anthropic-ratelimit-*-reset`, OpenAI `x-ratelimit-reset-*`, Bedrock ThrottlingException, Vertex 429) into a RateLimitInfo; TUI worker 'park' path: checkpoint the turn, show 'auto-resuming at HH:MM' in the status bar, resume via timer (cancelable, CLI toggle in config_manifest); daemon: JobRun state PARKED with resume_at persisted in store.py and re-fired by the scheduler, plus Slack/email dispatch of the park; `/goal` background check-ins backing off 30m→1h→2h; skip entirely for local providers (ollama/lmstudio/vllm).",
+   "roadmap_ref": "#39",
+   "competitor": "Claude Code auto-continue on Desktop (Aug 10-14) and CLI (Aug 17-21), `/goal` back-off check-ins (v2.1.239 Aug 21); Codex iOS 'resume blocked or usage-limited goals' (Jul 20)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w34",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "A long refactor started at night finishes by morning instead of dying at the 5-hour window, and users stop babysitting quota resets — the most common subscription complaint in both ecosystems. Bog's durable runs (#39) and stop gate make this a scheduler change, not a new subsystem.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Structured human-input forms rendered in TUI, Remote/Slack and daemon email (interactive decisions, not free text)",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/ask_user.py:30-60,105-135 `ask_user` tool with question types `text` and `multiple_choice` (+ always-present 'Other'), AskUserMiddleware wired in agent.py:1507-1515, TUI AskUserMenu widget app.py:59,976,1967-1982, tests libs/cli/tests/unit_tests/test_ask_user.py + test_ask_user_middleware.py; disabled outside the TUI: non_interactive.py:1374 enable_ask_user=False, server_manager.py:201,292 default False; daemon runner.py dispatch (slack/email/webhook) is one-way — 0 matches for blocks|button|callback|action_id; 0 matches for mermaid; evidence.py records no human-decision events.",
+   "delta": "Extend Question with multi_select, confirm and file_pick types; make ask_user work outside the TUI: daemon dispatch renders Slack Block Kit / email with a signed callback link, persists the interrupt in the checkpointer and parks the run until `POST /runs/{id}/answer` arrives; `/remote` and serve API expose pending questions and accept answers; record every answer in EvidenceBundle + audit trail as an explicit human-decision event distinct from agent messages; render Mermaid plans in the TUI (text/kroki-free fallback) and as images in Slack/email.",
+   "roadmap_ref": "#32 / #29",
+   "competitor": "OpenAI Codex iOS interactive forms + Mermaid in transcripts (Jul 20); Claude Code Remote Control device cards + effort control from phone (Aug 17-21)",
+   "source_url": "https://www.developersdigest.tech/blog/codex-claude-code-july-agent-controls",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A daemon job can ask 'which of these three migrations do you want?' and get an unambiguous, auditable answer from Slack at 2am instead of stalling or guessing; enterprises get a provable record that a human made the call. ROADMAP #32 (two-way Slack) covers transport; the bar moved to structured decisions, which bog's evidence/audit stack can exploit and the competitors' mobile apps cannot.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Model-written orchestration scripts (\"dynamic workflows\") over TaskLedger with typed outcomes",
+   "status": "proposed-not-built",
+   "evidence": "libs/cli/bog_agents_cli/orchestrator.py:1-15 `/orchestrate` has the LLM decompose a goal into mode-typed subtasks run as one-shot subagents (concurrent option commands/general.py:297) — plan lives in the conversation, not in code; libs/bog-agents/bog_agents/teams.py:43-160,236 TaskLedger + run_team with injected runner (the execution substrate); pipeline.py/recipes.py are static YAML steps; 0 matches for codeact|workflow_tool|dynamic workflow|def spawn( outside pty_harness; OTel exists only as langsmith_integration.py; ROADMAP #36 (CodeAct) and #19 are listed not-started.",
+   "delta": "A `workflow` tool whose argument is a Python script against a small sandboxed API (`spawn(agent, prompt, model, effort)`, `gather`, `validate(rubric)`, `retry`) executed by a runner that maps to TaskLedger/run_team, counts every spawn in CostLedger and asserts each spawn/tool call through ExpertRulesMiddleware; typed JSON outcome schema; artifacts under `.bog-agents/workflows/<id>/{script.py,outcome.json}`; `/workflows` list/replay; workflow-size setting; OTel workflow spans (#38); save scripts as recipes.",
+   "roadmap_ref": "#36 / #19 / #21",
+   "competitor": "Claude Code dynamic workflows (research preview, May 25-29 / InfoQ Jun 1; `/workflows` outcomes Sep 2; workflow size setting + OTel attributes Jul 6-10)",
+   "source_url": "https://www.infoq.com/news/2026/06/dynamic-workflows-claude-code/",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A team gets deterministic, replayable fan-out where the control flow is inspectable code and the conversation only sees the result — and unlike Claude's, spend is capped per workflow by the ledger and it runs on any model. ROADMAP #36 (CodeAct) and #19 (butcher fan-out) point here; the bar moved because Claude made the pattern a named product with an outcomes view.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Model-switch governance: expert rules on `/model`, per-model saved effort, curated picker, subagent model force, session-only effort",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/middleware/expert_rules.py:333 asserts only `tool_call` facts (no model_switch fact anywhere); lifecycle_hooks.py:48 ON_MODEL_SWITCH defined, never fired; app.py:17594-17612 `/model` switch guarded only by `_model_switching` + credential check; app.py:7991 `/effort` is 'native, per-model' in the sense of per-model *capability* gating (reasoning_effort.py:15) — 0 matches for saving a per-model default or a session-only variant; model_config.py:31,535,711 curated profile overrides are capability metadata, not a user-curated labelled picker; 0 matches for SUBAGENT_MODEL_FORCE in _env_vars.py/feature_config.py (per-subagent model only via frontmatter, agent.py:1490-1491); tool-parameter rules exist only as FilesystemPermission path patterns (permissions.py:73-134) and ApprovalPolicy.arg_patterns (smart_approvals.py:52-57), not a generic `Tool(param:value)` syntax.",
+   "delta": "Assert a `model_switch{from,to,provider,region,scope=main|subagent|teammate}` fact through ExpertRulesMiddleware from `/model`, subagent spawn and team_executor so YAML policies can deny/confirm (and fire lifecycle ON_MODEL_SWITCH); `[effort.per_model]` table in config.toml (config_manifest) + `/effort <level> s` session-only variant; `[model_picker]` ordered, labelled list with friendly names for Bedrock/Vertex IDs consumed by the `/model` picker; `BOG_AGENTS_SUBAGENT_MODEL_FORCE` in _env_vars.py + manifest applied in create_cli_agent's subagent build; generic `Tool(param:value)` allow/ask rule syntax in auto_mode settings. Overlaps candidate 'Tool-result interception…' only on the PreModelSwitch hook — the rule-engine fact is the distinct part.",
+   "roadmap_ref": "#46 / #23",
+   "competitor": "Claude Code PreModelSwitch/PostModelSwitch hooks + per-model effort (v2.1.251 Aug 28), session-only effort + SUBAGENT_MODEL_FORCE (v2.1.257 Sep 1), modelPicker (v2.1.243), Tool(param:value) rules (v2.1.178)",
+   "source_url": "https://code.claude.com/docs/en/changelog",
+   "target_users": [
+    "enterprise / regulated",
+    "solo power users / OSS"
+   ],
+   "why_killer": "Enterprises enforce 'which model may touch which repo' as a provable rule instead of a hook script, and cost-sensitive users stop accidentally running teammates on the expensive model — bog's rule engine already does the reasoning; it just needs the fact and the knobs. Complements ROADMAP #46 (effort ladder) with the governance half.",
+   "effort": "M",
+   "duplicate_of": "none"
+  }
+ ]
+}

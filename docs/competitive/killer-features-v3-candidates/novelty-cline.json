@@ -1,0 +1,279 @@
+{
+ "bucket": "Cline, Aider, OpenCode, Goose, OpenHands, Kilo",
+ "checked": [
+  {
+   "title": "Native Agent Plugins 1.0 support (plugin.json + skills/ + mcp.json) with `~/.agents/plugins` discovery",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/plugin_marketplace.py:41-50 (plugins dir is ~/.bog-agents/plugins) and :107-110 (reads bog-specific manifest.json); libs/bog-agents/bog_agents/middleware/plugin_system.py:36-47 (PluginManifest has skills + mcp_servers) and :259 (manifest.json only); libs/cli/bog_agents_cli/config.py:1233-1248 + app.py:9711-9713 (.agents/skills and ~/.agents/skills already scanned = Agent Skills dirs); claude_code_compat.py:45-58 (.claude/plugins manifests); extensions.py:21 (third format: bog-agents-extension.json); skill_trust.py:293-322 (trust store); app.py:9742-9830 (/plugin install|enable|disable). None found after grepping plugin.json, .agents/plugins, agent-plugins, agentplugins across libs/*.py and *.md.",
+   "delta": "Add an Agent Plugins 1.0 loader: validate plugin.json, discover ~/.agents/plugins and project .agents/plugins (workspace ones disabled by default), map bundled skills/ into the SkillsMiddleware dir list via the existing .agents/skills plumbing, feed plugin mcp.json into mcp_tools.py discovery (:244-262) behind mcp_trust fingerprinting, reuse the .disabled marker for enable/disable, and route symlinked/unreviewed plugins through skill_trust. Fold the three existing manifest formats (manifest.json, bog-agents-extension.json, plugin.json) behind one loader so /plugin lists all of them.",
+   "roadmap_ref": "#34",
+   "competitor": "Cline (desktop-v0.0.23, 2026-09-03); OpenHands SDK v1.43.0 (2026-08-21); VS Code/Copilot CLI (2026-08-12); Goose Open Plugins hooks",
+   "source_url": "https://github.com/agentplugins/agent-plugins-spec",
+   "target_users": [
+    "small dev teams",
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "A team writes one plugin folder and it loads unchanged in bog, Copilot, Codex, Cursor, Cline and OpenHands, so bog stops being the tool that needs a bespoke port of every internal skill pack. ROADMAP #34 proposed an importer; the bar moved — there is now a spec with a multi-vendor TSC, so bog should be a native client, not a converter.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "One-click session import from Claude Code, Codex, opencode (and Cline) into resumable bog threads",
+   "status": "absent",
+   "evidence": "none found after grepping .claude/projects, codex.*session, opencode, .cline, SessionImport, import_session, session_import across libs/**/*.py. libs/cli/bog_agents_cli/sessions.py:1285 export_thread is export-only; app.py _handle_migrate_command is a tech-migration prompt (code_intelligence_cli.generate_migration_prompt), not session import; claude_code_compat.py:1-27 imports skills/commands/MCP configs only.",
+   "delta": "Parsers for Claude Code ~/.claude/projects/**/*.jsonl, Codex session files, opencode's SQLite store, and Cline ~/.cline/data/sessions into LangChain messages; write each as a new checkpointed thread via the existing sessions.py checkpointer, index it with session_search.py, add a picker under /threads import, and offer it as an /onboard step (app.py _dispatch_onboard_command).",
+   "roadmap_ref": "#33 (adjacent: bog-to-bog teleport only)",
+   "competitor": "Cline Desktop v0.0.22 `SessionImportService`",
+   "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.22",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A power user trying bog keeps months of Claude Code context on day one instead of starting cold, which removes the single biggest switching cost; Cline made this an onboarding step and nobody else has it in a TUI. Distinct from ROADMAP #33 (bog-to-bog teleport).",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Daemon as a session hub: multi-client attach, durable event log with replay, drain/upgrade without losing work",
+   "status": "partial",
+   "evidence": "libs/daemon/bog_agents_daemon/api.py:447-951 (endpoints are health/jobs/runs/webhooks only — no sessions or events); main.py:148-160 (SIGTERM drains in-flight tasks; POST /shutdown); libs/cli/bog_agents_cli/cmd_daemon.py:877-1181 (start/stop/status/rotate-token/jobs/install/hook — no drain/upgrade/attach); live resume exists only through LangGraph server: remote_client.py:71 and :373-396 (re-calls astream, server resumes from last checkpoint), server.py:1-5 (langgraph dev). None found after grepping event_log, EventLog, replay, attach, participant in libs/daemon (only watchdog observers).",
+   "delta": "Add a SQLite append-only session event log (event id, state-only snapshots: status/usage/checkpoint, size cap + vacuum) owned by the daemon; GET /sessions/{id}/events?after=<id> SSE with client-side dedupe by id; a sessions table with creator/participant/observer roles and per-role permissions; `bog daemon drain` / `bog daemon upgrade` that reject new mutating work, wait for idle, then exec the new binary; TUI, VS Code and ACP attach clients built on remote_client.py.",
+   "roadmap_ref": "#39, #33, #42",
+   "competitor": "Cline CLI v3.0.57 / SDK v0.0.78 Hub",
+   "source_url": "https://github.com/cline/cline/releases/tag/cli-v3.0.57",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A user can close the laptop, upgrade bog, or open the same run from VS Code and the TUI, and nothing in flight is lost — the thing ROADMAP #39 (durable crash-safe runs) promised, now with the bar raised to live multi-client attach and zero-loss upgrades, which only Cline ships today.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Published pre-prompt overhead budget + `--mini` zen profile (4 tools, tiny prompt, no skills tool)",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/app.py:3288-3306 (/tokens prints one 'System prompt + tools: ~N (fixed)' number = context minus conversation; no per-middleware breakdown); libs/bog-agents/bog_agents/feature_config.py:242-243 (enable_deferred_tools default False) + middleware/deferred_tools.py:61-99 (tool_search/select metatools) exist in the SDK but none found after grepping deferred in cli/bog_agents_cli/agent.py, config.py, config_manifest.py (not wired into the CLI agent); profiles.py:63+ built-in profiles set model/effort/plan_mode only, no tool-stripping preset; no --mini/--zen flag in main.py.",
+   "delta": "A /tokens overhead audit that tokenizes each system-prompt segment per middleware (inspect the ModelRequest in a wrap_model_call probe), tool schemas, skills index and memory; a `zen` profile / `--mini` flag that builds create_cli_agent with read/write/edit/execute only, a sub-2k prompt and enable_deferred_tools for everything else; a CI test asserting the overhead number under a ceiling and the figure published in docs.",
+   "roadmap_ref": "#46 (adjacent)",
+   "competitor": "OpenCode `--mini` (v1.17.10); Cline zen mode (cli-v3.0.56); Pi; HN Systima study (Claude Code 33k vs OpenCode 7k)",
+   "source_url": "https://news.ycombinator.com/item?id=48883275",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "Cost-sensitive local-model users get a harness whose fixed cost per turn is a known, small number instead of a surprise; the HN thread shows buyers now compare harnesses on this figure and migrate to Pi/OpenCode over it. Exploits bog's deferred-tools and street-sweeper work but turns them into a headline metric. Complements ROADMAP #46 (reasoning effort) which does not address fixed overhead.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Default-on spawn/depth caps with a fan-out preview before any subagent burst",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/cost_ledger.py:26-37 (RunawayCaps: max_subagents/max_web_searches/max_cost_usd all default None = uncapped); teams.py:270-277 is the only caller of check_cost/register_subagent_spawn (grep across libs, non-test); middleware/subagents.py:585-701 (_build_task_tool) never consults the ledger and subagents inherit default_tools at :528,:564 with no depth control (none found grepping nested/depth/subagent_depth); libs/cli/bog_agents_cli/team_executor.py:220 (caps or RunawayCaps() = uncapped); app.py:11056 (/team run sets max_subagents=tasks+2, no $ cap); widgets/butcher_approval.py:1-30 (slice-plan modal, no N/model/cost); no preview for /team, /best-of-n or agent-initiated task.",
+   "delta": "Give RunawayCaps sane defaults surfaced via config_manifest.py (e.g. 4 concurrent, depth 1, per-run USD budget); call register_subagent_spawn/check_cost inside _build_task_tool and strip `task` from subagent tool sets unless subagent_depth is raised; add a pre-spawn modal (planned N, model, projected cost from price_for_model) before /team run, /butcher, /best-of-n and above-threshold task bursts.",
+   "roadmap_ref": "#25",
+   "competitor": "OpenCode `subagent_depth` (v1.18.2); HN complaints ('launched 102 agents and blew my $120 quota in 6 minutes')",
+   "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.2",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "Nobody gets a $120 bill from one prompt; the user sees the fan-out plan and its price before it happens, which is the single most-cited fear in the July HN thread. bog already has the ledger and caps — the leapfrog is making them visible and default rather than opt-in.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Per-message usage strip: tokens, cost, TTFT, tok/s, cache-hit ratio inline in the TUI",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/middleware/cost_tracker.py:183-197 and :529-542 (cache_read/cache_write tokens tracked per request); libs/cli/bog_agents_cli/textual_adapter.py:890-891, :1170-1178, :1714-1825 (per-turn SessionStats with tokens + wall time) but app.py:15055-15056 only merges it into session totals shown as aggregates at app.py:7028-7032; widgets/status.py:387-399 shows 'ctx N' only; none found after grepping ttft, tokens_per_sec, cache_read, usage strip in widgets/messages.py and cli root — no per-message line, no TTFT/tok/s, no subscription-provider suppression.",
+   "delta": "Record first-token timestamp and usage_metadata cache fields in the stream loop, render a dim usage line under each AssistantMessage (in/out/cache-read/cache-write, $ from CostTracker, TTFT, tok/s), add session $ and cache-hit ratio to the status bar, and a config_manifest provider flag for flat-rate providers that swaps $ for plan-quota use.",
+   "roadmap_ref": "#25",
+   "competitor": "Goose v1.46.0 per-message usage UI; DeepSeek Harness (per-answer tokens + elapsed); OpenHands per-run cost (v1.11.0); Cline v4.1.16 subscription suppression",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.46.0",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A local-model user immediately sees which turns are slow or expensive and whether prompt caching is actually hitting, without opening `/cost`; three competitors made this the default view in the last 60 days so its absence now reads as a gap.",
+   "effort": "S",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Cache-safety contract: append-only request assembly with a cache-hit meter and a CI test that fails when a middleware breaks the prefix",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/graph.py:264 (langchain AnthropicPromptCachingMiddleware appended) and :1087-1090 (sweeper placed so cutoff indices and cache prefix stay aligned); tests/unit_tests/test_middleware_canonical_order.py:92-125 (order locked with cache rationale); tests/unit_tests/test_street_sweeper.py:72 (message count/order preserved); tests/unit_tests/test_bedrock_prompt_caching.py:87-212; libs/cli/bog_agents_cli/prompt_cache.py:1-60 (/compact and /clear cache-break note). Missing: no declared per-segment cache semantics, no multi-turn replay test asserting a byte-identical prefix across the whole stack, no cache-hit ratio in the UI (none found grepping cache_hit/cache_read in widgets).",
+   "delta": "A replay harness that runs the canonical middleware stack over a scripted 10-turn session against a recording fake model and asserts the serialized prefix is byte-identical turn over turn (covering sweeper, summarization, prompt caching, expert-rule and stop-gate injections); a declared stable-prefix/volatile-tail contract on injectors that touch the system message or follow-up HumanMessages; a cache-read ratio in the usage strip (shares UI with the per-message usage strip candidate).",
+   "roadmap_ref": "none",
+   "competitor": "Goose v1.46.0 'cache-safe request assembly with append-only turn context and declared cache semantics'; OpenCode v1.17.9",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.46.0",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "Users pay 10x less for the 90% of each request that is unchanged, and bog's 100-middleware stack stops silently breaking caching every time someone injects a reminder; competitors with 5 middleware never had this risk, so a locked contract is a defensible answer to 'big stack = expensive'.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Open Plugins hook compatibility + LLM-evaluated hook predicates + `on_failure` blocks",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/hook_decisions.py:35-55 (canonical events already use the SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop names) and :289-345 (load_vendor_hooks reads only .claude/settings.json and .cursor/hooks.json; _normalize_command accepts command hooks only — none found grepping \"type\", on_failure, goose, open_plugins in hook_decisions.py/hooks.py); hook_middleware.py enforces PreToolUse deny fail-closed in the tool path; hooks are fail-open on error by design (hook_decisions.py:7-10).",
+   "delta": "Add an Open Plugins hooks.json loader + payload mapping to load_vendor_hooks, a per-hook `on_failure: deny|allow|ask` override of the fail-open default enforced in HookMiddleware, and a `prompt` hook type that evaluates a natural-language policy through an injected small-model invoke and returns a decision on the same fail-closed path as Expert Mode.",
+   "roadmap_ref": "grok Tier-1 #3 (hook bus)",
+   "competitor": "Goose v1.36/1.37/1.49 (Open Plugins hooks, blocking Stop, `on_failure`); OpenHands SDK v1.42.1 prompt-based hook evaluation",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.49.0",
+   "target_users": [
+    "enterprise",
+    "small dev teams"
+   ],
+   "why_killer": "A platform team writes one policy hook and enforces it across bog, Goose and Claude Code, and can express policies in English where a YAML Expert rule would be brittle; bog already has the fail-closed tool-path enforcement that competitors lack, so adding the portable surface makes it the strictest runtime that is also the easiest to adopt.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Agent-callable `schedule`/`todo` tool that writes daemon jobs with workspace scoping and HITL approval",
+   "status": "partial",
+   "evidence": "libs/daemon/bog_agents_daemon/api.py:540-541 (POST /jobs) + libs/cli/bog_agents_cli/daemon_client.py:144 create_daemon_job / :200 add_daemon_job (client exists, no agent tool calls it); libs/bog-agents/bog_agents/middleware/scheduled_reports.py:305-311 (create_schedule tool is for report schedules, gated by feature_config.py:234 enable_scheduled_reports=False); middleware/background_jobs.py:1-20 (.bog-agents/jobs/ records; none found grepping BackgroundJobsMiddleware in graph.py/agent.py — unwired); libs/cli/bog_agents_cli/peat/jobs.py:1-30 (cron PeatJob, no StructuredTool in peat/*); AmbientJob carries no workspace/thread provenance.",
+   "delta": "A `schedule_task` bundle tool in tools/bundles.py that builds an AmbientJob (new workspace + origin thread_id fields) and posts it via daemon_client, requiring HITL approval under the trust profile; collapsible scheduled-run groups in /jobs and /threads keyed on the origin thread.",
+   "roadmap_ref": "#30 / #45 (adjacent)",
+   "competitor": "Cline SDK v0.0.76/0.0.77 `tasks` tool; Goose scheduled recipes (v1.48/1.49); OpenHands Automations with live phases",
+   "source_url": "https://github.com/cline/cline/releases/tag/sdk/sdk/v0.0.76",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "The agent can turn 'do this every Friday' into an actual daemon job from inside the conversation instead of the user hand-editing cron config, which converts bog's daemon from an admin feature into a thing every session uses. Exploits the daemon nobody else in this bucket has as a first-party TUI companion (Cline needs its Hub, OpenHands needs Canvas).",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Worktree Agent Manager: control half of `/dashboard` with PR comments piped to the agent and cross-worktree `@` references",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/dashboard.py:289-370 (DashboardScreen is a text renderer, no actions); app.py:13358-13425 (/dashboard prints a snapshot: 'Dashboard showing snapshot. Use /dashboard again to refresh'); app.py:12335-12395 (/worktrees spawn|merge|cancel exist); pr_cli.py:39 (/pr review <n> shows review comments, no send-to-worktree); none found grepping @worktree in mentions.py or answer-pending-question routing.",
+   "delta": "An interactive Textual screen with one row per worktree (launch/stop/answer pending question/diff/merge) backed by ParallelWorktreeMiddleware + TaskLedger; per-row PR state, checks and review comments from gh with a 'send to agent' action; an `@worktree:<name>` mention in mentions.py that injects path/branch/thread id; optional preview pane later.",
+   "roadmap_ref": "#11 (v1), #28, #30",
+   "competitor": "Kilo v7.5.0 / v7.5.6 / v7.5.11 Agent Manager; JetBrains Agent Manager beta (jetbrains/v7.1.0)",
+   "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.11",
+   "target_users": [
+    "small dev teams",
+    "solo power users"
+   ],
+   "why_killer": "A developer running four parallel agents can answer the one that is blocked, feed a reviewer's PR comment straight to the right worktree, and merge from one screen — Kilo made this the reason to open the IDE; bog has the worktree, team and evidence primitives but the TUI still only watches.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Quota-aware provider fallback with subscription-lane presets (OpenCode Go, ClinePass, OmniRoute, free stealth models)",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/model_config.py:140-175 (custom providers via base_url/api_key_env/class_path cover OpenAI-compatible lanes generically) and :1300 ([models].fallbacks); config.py:2632-2721 (create_model_with_fallback is creation-time only); bedrock_resilience.py:55-70 (live THROTTLED -> fallback ladder, Bedrock-only); libs/bog-agents/bog_agents/middleware/provider_retry.py:1-25 (explicitly does not retry 4xx/rate-limit); middleware/_context_errors.py:56 (429 bucketed as a context error). None found grepping ClinePass, OpenCode Go, OmniRoute, x-ratelimit, quota presets in the CLI.",
+   "delta": "Generalize bedrock_resilience into a provider-agnostic wrap_model_call fallback that reads 429/quota headers and rotates through the configured [models].fallbacks chain (including local Ollama) with window-aware cooldown; add lane presets to provider_catalog.py/PROVIDER_API_KEY_ENV; a flat_rate provider flag so CostLedger reports quota use instead of $.",
+   "roadmap_ref": "none",
+   "competitor": "OpenCode Go ($10/mo, 2026-08); ClinePass ($9.99/mo, 2026-06); OmniRoute (61k stars, quota-aware auto-fallback); Ox Alpha free 1M-ctx model (2026-08-20)",
+   "source_url": "https://opencode.ai/docs/go/",
+   "target_users": [
+    "solo power users"
+   ],
+   "why_killer": "A cost-sensitive user gets 'never stop coding' for $10 a month: when Go's window runs out bog quietly moves to Ollama or a second lane instead of erroring, and the ledger shows quota not phantom dollars. Open flank: every competitor sells a lane, none of them fails over across lanes.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Hostile-repo guard: neutralize repo-supplied git config (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `diff.external`) on every git invocation and scan `.git/config` on open",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/exec_risk.py:39 (flags -c core.(fsmonitor|sshcommand|pager|editor|hookspath) on the command line; tests/unit_tests/test_exec_risk.py:19-28) covers only the CLI-flag vector. Internal git calls pass no neutralizing config: libs/cli/bog_agents_cli/pr_output.py:58-70 (_run_git used by app.py:2660), libs/bog-agents/bog_agents/evidence.py:211-224 (scrubs GIT_DIR/GIT_WORK_TREE only), feature_helpers.py:400-408 (GIT_TERMINAL_PROMPT=0 only), cmd_pr_review.py:191-220, best_of_n.py:338-346. None found after grepping .git/config, gitattributes, gitmodules, GIT_CONFIG_NOSYSTEM, hooksPath in libs/**/*.py.",
+   "delta": "One git_ops helper returning hardened argv+env (-c core.fsmonitor= -c core.hooksPath=<null> -c core.pager=cat -c diff.external= -c core.sshCommand=, GIT_CONFIG_NOSYSTEM=1, GIT_TERMINAL_PROMPT=0) adopted at every internal call site above; a repo-open scan of .git/config, .gitattributes filters and .gitmodules that blocks /review, /diff, /self-review, /pr and evidence collection until acknowledged and lands in /doctor + Expert evidence; extend exec_risk to config-file vectors.",
+   "roadmap_ref": "grok Tier-1 #2 (exec-risk)",
+   "competitor": "Goose GHSA-r5pp-p5r8-466r (`goose review` RCE via repo `core.fsmonitor`)",
+   "source_url": "https://github.com/aaif-goose/goose/security/advisories/GHSA-r5pp-p5r8-466r",
+   "target_users": [
+    "enterprise",
+    "small dev teams",
+    "solo power users"
+   ],
+   "why_killer": "Cloning a malicious repo and asking bog to review it cannot run attacker code before the model is even called; Goose shipped exactly this hole in a release that reached its review command, and bog's `/review`, evidence bundle and `bog blame` all shell out to git. Cheap, and turns a competitor CVE class into an Expert Mode evidence line.",
+   "effort": "S",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Code-mode MCP adapter: sandboxed scripts orchestrate many MCP tool calls in one turn",
+   "status": "proposed-not-built",
+   "evidence": "none found after grepping code_mode, codeact, execute_mcp_script, mcp_script, quickjs, code_interpreter, run_script, python_repl across libs/**/*.py; ROADMAP.md killer features v2 block (lines 427-620) lists #36 CodeAct execution mode (L) and the Deferred-items note says the Wave-4 QuickJS interpreter is 'answered by #36'.",
+   "delta": "An `execute_mcp_script` tool (hidden unless enable_code_mode) that binds the connected MCP tools from mcp_tools.py as callable functions inside a confined runner (LocalShellBackend sandbox subprocess or an embedded JS engine), routes every inner call through ExpertRulesMiddleware's tool_call fact and CostLedger, and returns one ToolMessage.",
+   "roadmap_ref": "#36",
+   "competitor": "OpenCode v1.17.14 'code mode MCP adapter'",
+   "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.14",
+   "target_users": [
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A 30-call MCP workflow (list issues, filter, comment, label) costs one model turn instead of thirty, cutting latency and tokens by an order of magnitude on integration-heavy tasks; OpenCode proved the scoped version is safe to ship, and bog's per-call rule engine makes it auditable where OpenCode's is not.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "ACP client mode: run Claude Code, Codex, opencode, Goose or Pi as governed teammates inside `/team`",
+   "status": "absent",
+   "evidence": "libs/acp/bog_agents_acp/server.py:81-175 (AgentServerACP is server-side only); libs/cli/bog_agents_cli/main.py:786-788 (--acp runs bog as an ACP server); none found after grepping acp_client, AcpClient, claude-agent-acp, codex-acp, external_agent, 'claude -p', codex exec across libs (only test fakes in libs/acp/tests); libs/bog-agents/bog_agents/teams.py:232-256 (TeammateRunner is the injectable seam) and team_executor.py has no external runner.",
+   "delta": "An AcpTeammateRunner that spawns claude-agent-acp / codex-acp / opencode / goose over stdio with the agent-client-protocol client, maps ACP permission requests onto ExpertRulesMiddleware + HITL, counts each turn into CostLedger/RunawayCaps, emits LLM+TOOL OTel spans, wraps results in EvidenceBundle, and surfaces failures as resumable task ids; `/team run --worker acp:<agent>` plus model-picker forwarding.",
+   "roadmap_ref": "#21 (+ #41 adjacent)",
+   "competitor": "OpenHands SDK v1.42.0/v1.44.1 (claude-agent-acp, codex-acp providers); Goose v1.45 Claude Code/Pi adapters; Cline Kanban (Cline+Claude Code+Codex)",
+   "source_url": "https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.42.0",
+   "target_users": [
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A team keeps its Claude Max or Codex subscription and its favorite harness per task, but every worker runs under one budget, one audit trail and one policy engine — the governed-teams story (ROADMAP #21) applied to other vendors' agents, which none of them can do to each other. Leapfrog: OpenHands hosts foreign agents but has no rule engine or cost caps around them.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Context meter + cheap compaction model + 'keep complete recent turns' compaction",
+   "status": "partial",
+   "evidence": "Keep-complete-turns already holds: libs/bog-agents/bog_agents/middleware/summarization.py:659-661 delegates the cutoff to langchain's _find_safe_cutoff_point (.venv langchain/agents/middleware/summarization.py:763-782 collects tool_call_ids so AI/Tool pairs are never split) with keep=('messages',20) at :99,:525. Context meter partial: widgets/status.py:395-399 shows 'ctx N' without a percentage; app.py:3282-3287 (/tokens) shows the percentage. Cheap model absent: graph.py:911 passes the main model to create_summarization_middleware; compact_selective.py:46 has a summary_model field but none found grepping summary_model/summarization_model in app.py, agent.py, graph.py, feature_config.py; /compact (app.py:3219) triggers with no preview.",
+   "delta": "Percentage + colour thresholds in the status-bar meter; a summarization_model option in config_manifest.py threaded to create_summarization_middleware(model=...) so /compact and auto-summarization use a cheap/local model; `/compact --preview` that renders what _partition_messages would drop before running.",
+   "roadmap_ref": "none (REVIEW v5 CTX-2 adjacent)",
+   "competitor": "OpenHands v1.13.0 (usage meter, manual compaction); Kilo v7.5.6 (separate compaction model); OpenCode v1.18.17 (keep complete recent turns)",
+   "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.6",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Compaction stops costing frontier-model dollars and stops corrupting sessions by orphaning tool results; a user watching the meter knows when to compact instead of hitting a wall. Three competitors shipped pieces of this in August, making it table stakes.",
+   "effort": "S",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Signed Windows distribution (Authenticode + winget) and a PowerShell-native execute tool",
+   "status": "absent",
+   "evidence": ".github/workflows/release.yml:1-120 (uv build + PyPI publish on self-hosted Linux only; none found grepping authenticode, signtool, winget, Trusted Signing, pyinstaller across workflows and pyproject files); libs/bog-agents/bog_agents/backends/local_shell.py:351-353 and :580 (commands run via subprocess shell=True, i.e. cmd.exe on Windows); no PowerShell tool — grepping pwsh/powershell in backends hits only the dangerous-pattern regexes at local_shell.py:96-103.",
+   "delta": "A Windows release job that builds a standalone exe/installer, signs it with Azure Trusted Signing and publishes a winget manifest; an opt-in `powershell` tool in tools/bundles.py (argv pwsh -NoProfile -NonInteractive -Command with PS 5.1 fallback and a quoting helper, reusing _DANGEROUS_PATTERNS and exec_risk); a doctor.py startup guard for WindowsApps execution-alias EACCES traps.",
+   "roadmap_ref": "#22 (Windows-first flank)",
+   "competitor": "Cline Desktop v0.0.20 / CLI v3.0.61 (signed Windows builds); Pi v0.84.3 PowerShell tool; Kilo v7.5.4 Windows startup fix",
+   "source_url": "https://github.com/cline/cline/releases/tag/cli-v3.0.61",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "A Windows user under application-control policy can install bog at all, and the agent speaks PowerShell natively instead of failing on bash-isms; bog is Windows-first by charter but competitors now ship signed Windows binaries while bog's local sandbox still fails closed there — signing and PowerShell are the cheap half of closing that gap.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Remote-managed org config: MCP/skill/plugin allowlists and gateway-only routing enforced from a central policy file",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/_settings_cascade.py:14-22 (cascade is ~/.bog-agents/settings.json then project only — no managed/remote layer); libs/bog-agents/bog_agents/middleware/rbac.py:245-278 and air_gapped.py:391-408 (operator-pinned, deny-by-default policies exist in-process); mcp_trust.py:113-137 (fingerprint trust for project MCP) and skill_trust.py:293-322 (per-dir trust store); remote.py:221 load_remote_config is SSH remote execution, not policy. None found grepping allowedMCPServers, allowed_mcp_servers, managed_settings, policy_url, org_pinned, gateway lock across libs/**/*.py; /permissions and /doctor have no org-pinned display.",
+   "delta": "A `managed` layer at the top of the settings cascade sourced from a signed URL or repo path (fetched at start, cached, signature-verified) carrying allowed_mcp_servers, skill_allowlist (default deny), plugins_enabled, provider_lock (gateway-only base_url), zero_retention; enforced in mcp_tools.py discovery, the SkillsMiddleware dir filter, create_model, and plugin install; surfaced as org-pinned rows in /permissions and /doctor and recorded in Expert evidence packs.",
+   "roadmap_ref": "#23",
+   "competitor": "Cline v4.1.12 (enterprise MCP controls); OpenHands v1.16.0 (explicit skill allow-list); OpenCode Enterprise (centralized config, gateway-only)",
+   "source_url": "https://github.com/cline/cline/releases/tag/v4.1.12",
+   "target_users": [
+    "enterprise"
+   ],
+   "why_killer": "A security team can roll bog to 500 developers knowing no one can add an unvetted MCP server or route tokens outside the internal gateway, which is the gating question in every regulated procurement; ROADMAP #23 trust profiles are local — the bar moved to centrally pinned, and bog's Expert Mode can prove the pin was in force in the evidence pack.",
+   "effort": "M",
+   "duplicate_of": "none"
+  }
+ ]
+}

@@ -278,3 +278,8 @@ Only add `detect_provider()` entry if the provider has a distinctive model name 
   Build plus the 1.0 shortlist it produced. The Tier-1/Tier-2/Tier-3 numbers
   cited in module docstrings (`Tier-1 #1`, `Tier-2 #8`, …) index into it, so read
   it before changing or re-proposing any of those features.
+- `docs/competitive/killer-features-v3-candidates/` — raw per-bucket competitor
+  research + code-grounded novelty checks (JSON) behind ROADMAP § "Killer
+  features v3" (2026-09-04). Read the novelty file for a bucket before
+  re-proposing a feature from that bucket; each entry records bog's verified
+  status and the exact delta.

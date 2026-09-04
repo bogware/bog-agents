@@ -620,6 +620,500 @@ into the trust-and-distribution story the original thesis says we're losing.
 
 ---
 
+## Killer features v3 — 2026-09-04 refresh
+
+Method: five competitor buckets (30 products) researched live on 2026-09-04 by
+agents blind to the code, producing 85 candidate features; every candidate was
+then novelty-checked by a separate agent that grepped the codebase and marked it
+shipped / partial / absent / proposed-not-built with `path:line` evidence.
+The 85 were deduplicated into the 30 features below (#47–#76). Numbering
+continues from v2 (#46). Each entry names the competitor that set the bar,
+bog's verified status, the exact delta, the target users it serves
+(**S**olo/OSS, **T**eams, **E**nterprise), and effort (S/M/L/XL). Per-candidate
+detail with sources lives in `docs/competitive/killer-features-v3-candidates/`
+(one JSON per bucket).
+
+### The market, September 2026 — what moved since the July survey
+
+Research date 2026-09-04 across 30 products in four buckets (frontier CLIs, IDE/terminal agents, background/cloud agents, frameworks). Every claim below carries a source in the per-bucket research files; items the researchers could not source from a primary page are listed as unverified in those files and are not used here.
+
+#### Eight shifts that change what "killer" means
+
+1. **Classifier-graded approval replaced human approval as the default.** Claude Code made auto mode the default on Aug 14 (classifier calls free on Pro/Max/Team) with prose allow/soft-deny/hard-deny rules and a `claude auto-mode {critique,reset}` CLI; Codex ships Guardian (a reviewer agent grades boundary crossings low→critical against a tenant-replaceable `policy.md`, circuit breaker after 3 consecutive denials, `/approve` override); Antigravity offers proceed-in-sandbox. Manual HITL is now the opt-in fallback. The differentiator has moved to the *rule DSL, the denial-retry UX, and lint/critique tooling around the classifier* — exactly the substrate bog's expert engine already is.
+2. **Always-on is the new default shape.** Cursor (cloud-agent subscriptions, `/goal`, `agent persist`), Amp (event-driven orbs, self-scheduling agents), Grok Build (Workflows, timer scripts), Warp (Factories), Managed Agents (scheduled deployments + vaults + hard budgets that *pause* instead of kill), Kiro Crew (Apache-2.0 cron/webhook/script jobs), Devin (scheduled scans). A terminal agent that only runs while a human watches now reads as last-generation. bog's daemon is the right asset; its execution layer is hollow (§1).
+3. **"Orchestrate anywhere, execute on your machines" became a product line — and none of it ships a Windows worker.** Devin Outposts (atomic-claim queue to your Mac mini/K8s), Cursor Self-Hosted Machines, Claude self-hosted runners (no Bedrock/Vertex, no ZDR), Codex remote executors over a Noise relay, Managed Agents EnvironmentWorker on Modal/Daytona/E2B, Warp Factories in-VPC. The control plane stays with the vendor; execution and secrets stay with the customer. Windows is absent from every one of these stories, and Claude Code's OS sandbox is still WSL2-only (issue closed "not planned"). Codex is the only product with a native Windows restricted-token sandbox.
+4. **Cost unpredictability is the #1 user complaint everywhere, and usage attribution is now table stakes.** GitHub moved 4.7M seats to metered AI Credits on Jun 1 (10-50× bills for agentic users; discussion #198015 closed by staff); Cursor's credit billing remains its dominant grievance; Devin's ACUs are called opaque. The responses that users praise: `/usage` by skill/subagent/plugin/loop (Claude Code), spend-limit bars, prompt-cache hit ratios *with miss explanations*, per-message cost/TTFT (Goose, OpenHands, DeepSeek, Kilo), Amp's natural-language "Explain Usage", and Managed Agents' hard USD budgets that pause. Mastra and Pydantic shipped scoped monetary budgets with warn thresholds in August; ADK shipped `ADK_MAX_LLM_CALLS`.
+5. **Harness overhead became a buying criterion.** The July 13 HN thread (Claude Code 33k pre-prompt tokens vs OpenCode 7k) drove real switching; deepagents 0.7 published a 65% input-token cut (5,395 → 1,895/turn) with an eval suite; NOOA and ADK market on tokens-per-turn. A harness that cannot *show measured* prompt overhead is assumed bloated. bog has never published its number.
+6. **Packaging standards consolidated in one summer.** Agent Plugins 1.0 (spec Aug 6; TSC of Amazon, Anysphere, Microsoft, OpenAI, Vercel, Google; GA in Copilot Aug 12, Kiro Aug 7, OpenHands Aug 21, Cline Sep 3, Codex marketplaces for Bedrock *and* Claude Code), Agent Skills + AGENTS.md + MCP under the Linux Foundation's AAIF, Goose's Open Plugins hooks spec (PreToolUse denial, blocking Stop, `on_failure`). MCP 2026-07-28 went stateless and deprecated sampling/roots/logging/HTTP+SSE/DCR on a 12-month clock; langchain 1.4, Mastra 1.60 and MAF adopted it within six weeks. A harness that cannot load these formats unchanged is the odd one out.
+7. **ACP flipped from "editor protocol" to "agent interop".** OpenHands, Goose and Devin Desktop run Claude Code / Codex / Pi as ACP *providers inside their own loops*; Warp's control plane runs Claude Code, Codex and Cursor side by side with cross-harness memory; Cline's Hub brokers one live session to many clients. The emerging shape is a *governed outer harness hosting other vendors' inner agents* — a bigger opportunity than being one more inner harness.
+8. **Trust became a release feature, and the open-source map redrew itself.** Google killed consumer Gemini CLI on Jun 18 (100k stars, one month's notice, "bait-and-switch" at 406 HN points) for a closed Go binary; Grok Build was caught uploading whole repos (5.1 GiB vs 192 KB of model traffic) and source-dropped under Apache-2.0 within 72 hours with contributions closed; OpenAI disclosed on Aug 27 that its own research agents escaped a sandbox via an Artifactory zero-day; Goose's `goose review` executed attacker code from repo `.git/config`; Kiro shipped two CVEs (config rewrite from a poisoned page, workspace exfiltration). Users now ask *what leaves the machine* and expect a verifiable answer. Meanwhile DeepSeek Harness went from launch (Aug 13) to 212k stars in three weeks on "everything is a plugin", Pi (four tools, no MCP) passed 100k, OpenCode sits at 160-200k, and Aider is in maintenance (no release since Aug 2025) — a one-maintainer harness without a gateway or foundation behind it does not survive.
+
+#### What is now commodity (do not market these; ship them quietly if missing)
+
+Plan mode, `/rewind`, `/btw` side chats, fork-in-place, queued/editable messages, `/recap`, worktree-per-session subagents, nested subagent trees, "Waiting" states, MCP with OAuth, skills/plugins marketplaces, Slack integration, voice dictation, terminal image rendering, headless/CI modes, session export to Markdown/JSON, per-message cost display, context-window meter. Every one of these shipped across Devin, Factory, Copilot, Kiro, Cursor and Codex between June and September and is judged table stakes.
+
+#### Open flanks nobody owns (where a small team can still win)
+
+- **Native Windows isolation** (sandbox + egress allowlist + self-hosted worker). Only Codex has a Windows sandbox; nobody has a Windows worker for the execute-on-your-machines pattern.
+- **A policy engine you can prove things about.** Every vendor's auto-approval is a classifier plus prose rules; nobody ships deterministic, explainable, provable policy (`/why`, `/prove`) as the *primary* gate with the classifier as backstop.
+- **Governed host for other vendors' agents.** Run Claude Code / Codex / Pi / dcode as ACP providers *under* bog's expert rules, cost ledger, audit trail and sandbox — the reverse of what OpenHands/Goose/Warp do (they host but do not govern).
+- **Self-hostable execute-anywhere with compliance-grade evidence.** Claude's self-hosted runners forbid Bedrock/Vertex and ZDR; Managed Agents cloud sessions are not ZDR/HIPAA-eligible; Cursor and Warp keep the control plane. An open, local-first control plane *plus* worker with tamper-evident logs is unowned.
+- **Published harness overhead + published savings.** Nobody in the OSS field publishes tokens-per-turn and pre-run cost estimates side by side; bog has the sweeper, cost ledger and Harbor to do it honestly.
+- **A stability contract at 1.0.** Release velocity is a top complaint against deepagents (13 patches in 6 weeks with a breaking rename), Pydantic (~2/week), Mastra (weekly renames), ADK 2.0 (BaseNode migration). LangGraph 1.0 LTS and Pydantic's 3-month no-breaking window are praised. A 1.0 with a written stability contract is a selling point in itself.
+
+#### Coverage notes (completeness pass, done inline)
+
+Four products outside the five buckets were checked because they matter to the target users:
+
+- **JetBrains Junie** (GA; 6th on SWE-Rebench at 62.8% and a *published $1.14 average cost per task*; per-action allowlists for Terminal-with-regex / MCP / Build / RunTest; an interactive terminal UI). Two takeaways: publishing cost-per-task alongside a benchmark score is now normal, and capability-typed allowlists (not just command regexes) are the IDE-side expectation. Sources: jetbrains.com/help/ai-assistant/junie-agent.html, techzine.eu/blogs/applications/133356.
+- **Augment Code** — its Context Engine ships as an **MCP server any agent can mount** (Feb 2026; claims +70% agent performance across Claude Code/Cursor/Codex); Remote Agents GA in isolated cloud VMs. Takeaway: a retrieval index is a *product other harnesses consume*, not just a feature inside one's own loop. Sources: augmentcode.com/changelog/context-engine-mcp-in-ga, siliconangle.com 2026-02-06.
+- **Zed** — the **ACP Registry is live** (Claude Code, Codex, Copilot CLI, OpenCode, Gemini CLI listed); parallel agents in one window; Terminal Threads; Zed for Business. Takeaway: the registry is a free distribution channel bog's ACP package is absent from because it is unpublishable (§4 DEL-1). Sources: zed.dev/blog/acp-registry, zed.dev/docs/ai/external-agents.
+- **Continue.dev** — acquired by Cursor on 2026-06-18; final 2.0.0 release; repository read-only. Takeaway: the third OSS harness to die or go closed in one summer (Gemini CLI, Continue, Aider-in-maintenance); reinforces §2.1 (8).
+
+Not covered and deliberately out of scope: Replit, Trae, Qwen Code, Cody (Sourcegraph folded Cody into Amp), Tabnine — consumer/China-market or discontinued surfaces with no bearing on the three target users. Reddit sentiment was unavailable to every researcher (domain blocked); all sentiment derives from HN, GitHub issues/releases and blogs.
+
+### v2 scorecard — re-verified against code, 2026-09-04
+
+| # | Feature | July status | Now | Note |
+|---|---|---|---|---|
+| 21 | Governed Agent Teams | not started | **shipped** | `/team run` over `TaskLedger` + `Mailbox` under `RunawayCaps`; per-teammate cost in the TUI tree unverified |
+| 22 | Native local OS sandbox (Windows) | not started | **partial** | wired + tested on POSIX; Windows launcher has zero code; README omits the caveat |
+| 23 | Named trust profiles | not started | not started | `profiles.py` still bundles model/effort only |
+| 24 | Self-modification guard | not started | **shipped** (CLI-owned) | pure-SDK consumers get no guard; `config.toml`/trust stores only shell-screened |
+| 25 | Per-agent cost ledger + caps | not started | **partial** | ledger counts `run_team` only; `task` subagents uncounted (v6 SDK-7) |
+| 26 | deepagents 0.7 parity pack | not started | **stale** | aligned to 0.7.0b2; GA 0.7.0 (07-24) → 0.7.13 (09-02) unscouted; deepagents not in the SDK venv |
+| 27 | Wire declarative environment spec | not started | **shipped** (2 of 3) | sandbox factory + daemon consume it; GitHub Action consumer never landed |
+| 28 | Turn-end changes tray | not started | not started | `/diff` is raw monochrome text |
+| 29 | Evidence bundle on autonomous PRs | not started | **partial** | SDK primitive + middleware exist; reachable from nothing (no FeatureConfig field, flag, or dispatch) |
+| 30 | Assign-to-bog + draft-PR + CI-red repair | not started | **partial (≈20%)** | 14-test event parser + HMAC front door; `trigger_context` never reaches the model (v6 DMN-1) |
+| 31 | Best-of-N with rubric judge | not started | **shipped** | `/best-of-n` real worktree attempts; cross-model portfolio unverified |
+| 32–35, 38–46 | Slack, teleport, plugin importer, recipes v2, OTel, durable runs, AgentSpecs, A2A, fleet, /debug, blame, outcome loop, effort ladder | not started | not started | #46's dependencies are now all shipped, so it is unblocked |
+
+### The six bets (what "win" means this cycle)
+
+1. **Governed Auto Mode** — beat Claude Code and Codex on the default they just
+   shipped, by putting a deterministic, provable policy floor *under* a
+   provider-agnostic classifier (#47, #48, #49). Nobody else can say "here is the
+   rule that fired" for an auto-approved call.
+2. **Cost certainty** — answer the single loudest complaint in every ecosystem
+   with pre-flight estimates, budgets that *pause*, default-on spawn caps, and
+   routing that shows its savings (#51–#54). bog owns the ledger; the delta is
+   wiring and surfaces.
+3. **Own Windows** — the one flank no vendor holds: native Windows isolation,
+   Windows workers for execute-on-your-machines, and a signed installer
+   (#60, #61, #57).
+4. **The agent follows what it creates** — make the daemon's execution layer
+   real, then let the agent subscribe to the PR it opened, schedule its own
+   follow-ups, detach and re-attach (#55, #56, #58).
+5. **Zero switching cost, governed host** — load Agent Plugins 1.0 and every
+   vendor's hooks/sessions unchanged, then run *their* agents as teammates under
+   bog's rules, ledger and evidence (#62, #63, #64, #65).
+6. **Proof beats diff** — a turn-end tray, evidence on every PR, and a
+   self-review loop that learns from human dispositions (#66, #67, #68).
+
+Cross-cutting: **ship a written stability contract with 1.0** (no breaking
+changes within a major, deprecations before removals, a 3-month window) —
+release velocity is the top complaint against deepagents, Pydantic, Mastra and
+ADK, and a contract is itself a feature to the target users.
+
+### Tier 1 — Table stakes (users now expect these; S/M each)
+
+- **#47 Governed Auto Mode** *(Claude Code auto-mode default Aug 14; Codex
+  Guardian; Antigravity proceed-in-sandbox)* — **partial.** bog has the
+  deterministic chain (`ask_list → git_ops → exec_risk → bash_hygiene`) and a Haiku
+  backstop hard-bound to the `anthropic` package (`auto_mode.py:455-490`), off by
+  default. Delta: (1) inject the judge through the model factory so Ollama /
+  OpenAI / Bedrock users get a real reviewer (a local 8B runs it free and
+  offline); (2) one *batched* structured review per turn (all pending calls + the
+  user's stated outcome → `low|medium|high|critical` + rationale) instead of
+  per-call; (3) assert an `approval_decision` fact (rule source, classifier
+  verdict, rationale) through `ExpertRulesMiddleware` so `/why` answers "why did it
+  let that through" and YAML rules can override the classifier; (4) a
+  denial/timeout counter that drops back to the human (Codex's circuit breaker);
+  (5) make `acceptEdits`/auto the wizard-recommended default. **S/T/E, M.**
+- **#48 Trust profiles, `--restricted`, and workspace trust** *(Codex permission
+  profiles + `trust_level`; Claude `--restricted` Aug 27, `--permission-prompts
+  none` Sep 2; Kiro protected paths after CVE-2026-10591)* — **partial.** Extend
+  `profiles.py` to carry trust policy (permission mode + expert-rule pack +
+  sandbox level + egress allowlist + RBAC role) as `bog --profile audit`; one
+  `--restricted` flag composing existing parts (strip exec tools, confine reads
+  *and* writes to working dirs, refuse bypass); a first-open workspace trust record
+  (same fingerprint store as `mcp_trust.py`) that gates repo-controlled
+  instructions, hooks, expert rules and `.mcp.json` until trusted; extend
+  `_PROJECT_AUTHORITY_PATTERNS` with editor/CI self-config files and add a
+  fail-closed `deny` tier; `allowed_domains`/`blocked_domains` on `web_fetch`.
+  Completes v2 #23 + #24. **E/T/S, M.**
+- **#49 Steerable approvals + hostile-repo hardening** *(Cursor "skip and tell the
+  agent what to do", 15 s auto-reject; Grok persistent "Never allow"; Goose
+  GHSA-r5pp-p5r8-466r fsmonitor RCE; Cursor hardened git Aug 11)* — **absent.**
+  `ApprovalMenu` has exactly Approve / Auto-approve / Reject (`widgets/approval.py:67`).
+  Add a fourth option "Reject and tell the agent what to do" that lands the
+  redirect in the ToolMessage; a countdown auto-reject (fail-closed) when detached,
+  headless or `approval_timeout_seconds` is set; persistent per-project
+  never-allow. Plus one `hardened_git_env()` helper (`GIT_CONFIG_NOSYSTEM`,
+  neutralized `core.fsmonitor`/`hooksPath`/`pager`/`sshCommand`/`diff.external`)
+  adopted at every internal git call site (`git_tools.py:37`, `pr_output.py:58`,
+  worktree, evidence) and a repo-open scan of `.git/config` that blocks `/review`,
+  `/diff`, `/pr` until acknowledged. `exec_risk` covers only the command-line
+  vector today. **S/T/E, S+S.**
+- **#51 Cost certainty: pre-flight estimate, budgets that pause, caps that fire**
+  *(Managed Agents `budget_reached` pause; Copilot AI-credits backlash #198015;
+  OpenCode `subagent_depth`; Mastra TokenCostControl; ADK `ADK_MAX_LLM_CALLS`)* —
+  **partial.** Today `budget_usd` strict mode raises `RuntimeError` (turn dies),
+  `RunawayCaps` default to `None` (uncapped) and are consulted only by
+  `run_team`. Delta: replace the raise with a `budget_reached` LangGraph
+  interrupt that pauses and accepts only a raise-cap resume (`/cost budget <N>`,
+  daemon `POST /runs/{id}/resume`); count `task` and async subagent spawns and
+  web searches in `CostLedger` (v6 SDK-7); default caps surfaced in
+  `config_manifest.py` (concurrency, depth 1, per-run USD); a pre-spawn modal
+  ("N agents, model X, projected $A–$B") before `/team run`, `/butcher`,
+  `/best-of-n` and any above-threshold burst; a durable `SpendLedger` (SQLite
+  beside `sessions.db`) with user/project/daemon-job daily ceilings and
+  `warn_at_percent`. **S/T/E, M.**
+- **#52 Usage you can read: per-message strip, `/cost explain`, cache diagnostics**
+  *(Goose per-message usage; Amp "Explain Usage"; Claude Loops breakdown +
+  cache-miss explanations; Warp per-category $)* — **partial.** CostTracker already
+  records cache read/write tokens per request; the TUI shows one fixed number.
+  Add a dim usage line under each assistant message (in/out/cache-read/write, $,
+  TTFT, tok/s), session $ and cache-hit ratio in the status bar, `/cost` rendering
+  `CostLedger.format_tree` by category (main/subagent/team/worktree/web/mcp),
+  `/cost explain <question>` over the serialized ledger with an injected cheap
+  `invoke`, and an innermost `CacheBustDetectorMiddleware` that hashes the prefix
+  each call and names the middleware whose injected segment broke the cache.
+  **S/T, S+S.**
+- **#54 Published harness overhead + lean profile** *(deepagents 0.7: 5,395 →
+  1,895 tokens/turn with an eval; HN 33k-vs-7k thread; NOOA, ADK)* — **partial.**
+  `HarnessProfile` already has `base_system_prompt` / `excluded_middleware` /
+  `tool_description_overrides`. Ship a built-in `lean` profile (empty base
+  prompt, trimmed tool descriptions, plan/todo excluded, deferred tools on) and a
+  `--mini` flag; `/tokens middleware` that tokenizes each middleware's injected
+  segment and each tool schema; turn the smoke-test snapshot into a numeric
+  tokens-per-turn baseline that fails CI on regression; publish the number in the
+  README next to a Harbor pass rate. Nobody else *can* attribute tokens per
+  middleware. **S/E, M.**
+- **#61 Windows distribution and first run** *(Cline signed Windows installer;
+  Codex native Windows; Pi PowerShell tool; Kilo's WindowsApps EACCES regression)*
+  — **absent.** No installer of any kind (winget/scoop/brew/MSI/`install.ps1`),
+  `daemon install` writes a systemd unit on Windows, `command "/help"` is
+  MSYS-mangled under Git Bash, no PowerShell-native tool. Delta: a Windows
+  release job (standalone build, Azure Trusted Signing, winget manifest) plus
+  `install.ps1`/`install.sh` and a brew formula; Task Scheduler `daemon install`
+  on win32; `_recover_msys_path` applied to headless commands; an opt-in
+  `powershell` tool reusing `exec_risk`/`_DANGEROUS_PATTERNS`; a `doctor` guard
+  for the `WindowsApps\pwsh.exe` execution-alias trap. **S/E, M.**
+- **#62 Agent Plugins 1.0 native + one-command import** *(spec Aug 6, TSC of
+  Amazon/Anysphere/Microsoft/OpenAI/Vercel/Google; GA in Copilot, Kiro, OpenHands,
+  Cline; Codex marketplaces for Bedrock and Claude Code; Cline session import)* —
+  **partial.** `plugin_marketplace.py:108` reads a bog-specific `manifest.json` and
+  installs by bare `copytree`. Delta: accept the `plugin.json` root layout
+  (`skills/`, `mcp.json`, `agents/`, `commands/`, `hooks/`) mapped onto
+  `ExtensionManifest`, discover `~/.agents/plugins` and project `.agents/plugins`
+  (workspace ones disabled until trusted), install from git / `marketplace.json`
+  / zip with SHA-256 pin, route through `skill_trust` + `mcp_trust`; `bog-agents
+  plugin import codex|claude|cursor|antigravity` covering hooks, agents, rules and
+  memories on top of today's skills+MCP import; **session import** from Claude
+  Code (`~/.claude/projects/**/*.jsonl`), Codex, opencode and Cline into
+  checkpointed, FTS-indexed threads as an `/onboard` step; an exporter under a
+  `com.bogware` namespace. Supersedes v2 #34. **T/S/E, M.**
+- **#66 Turn-end changes tray with proof-ordered diffs** *(every competitor ends a
+  turn with a reviewable changeset; Amp intelligently ordered diffs Sep 1)* —
+  **absent.** `/diff` mounts raw text while `DiffMessage`/`EnhancedDiff` already
+  exist for edit widgets. Per-file stats after each turn, coloured side-by-side
+  view, per-hunk accept/reject wired to existing checkpoints/`/undo`, and a pure
+  `diff_ordering.py` that ranks files by explanatory power (entry points and
+  public signatures first; tests, snapshots, lockfiles muted last) used by the
+  tray, `/diff --ordered` and `render_evidence_markdown`. Completes v2 #28. **S/T, M.**
+- **#68 `/tasks` command center + session-UX table stakes** *(Copilot CLI `/tasks`;
+  Codex `codex agents`; Devin nested views, queued/editable messages, `/recap`,
+  "Waiting" status; Factory mark-unread/archive)* — **partial.** `/dashboard` is
+  watch-only; `/agent` already has the control verbs for worktree agents. Fold
+  team ledger, subagent registry, worktree manager, `background_shell` registry
+  and daemon `/runs` into one `TaskNode` tree with per-node state, spend from
+  `CostLedger.format_tree`, and kill / steer (peer mailbox) / pause / open-diff;
+  editable prompt queue, `/recap` on `sidechain.py`, a "Waiting on you" status
+  driven by pending HITL, `/threads --group pr`, unread/archive flags in the FTS
+  sidecar. Completes v1 #11. **S/T, M.**
+
+### Tier 2 — Differentiators (win deals; exploit the moat)
+
+- **#50 Managed governance layer** *(Cline remote MCP allowlists; Devin
+  required/optional/forbidden plugin manifests; Factory org-wide hooks/MCP
+  governance; OpenCode gateway-only routing; Claude managed settings)* — **absent.**
+  A `managed` layer at the top of `_settings_cascade.py` sourced from a signed
+  URL or repo path (fetched at start, cached, signature-verified) carrying
+  `allowed_mcp_servers`, `skill_allowlist`, `required/optional/forbidden`
+  plugins with soft-fail, `provider_lock` (gateway-only `base_url`),
+  `zero_retention`, and model-switch policy; enforced in MCP discovery,
+  `SkillsMiddleware`'s trust checker, `create_model`, plugin install and `/model`
+  (assert a `model_switch` fact so YAML rules can deny). Surfaced as org-pinned
+  rows in `/permissions` and `/doctor` and recorded in the evidence pack. **E/T, M.**
+- **#53 Cost-objective routing with a local rung and provable savings** *(Cursor
+  Router Intelligence/Balance/Cost, 60–68% cut; Amp Dial low = GLM-5.2; Factory
+  Droid Core free pool + Router failover; OpenCode Go / ClinePass $10 lanes;
+  Claude auto-continue after limits)* — **partial.** `operator_mode.py` has
+  `local`/`hybrid` presets and a judge but no objective, no persistence of
+  decisions, no failover beyond Bedrock. Delta: `objective = intelligence|balance|cost`
+  + `[operator.pool]` mapping task classes (subagent exploration, summarization,
+  `@codebase` research, judge, butcher workers) to a pool model; persist decisions
+  to `~/.bog-agents/operator-decisions.jsonl` with tier/model/cost/rubric verdict
+  and bias future choices from it; a counterfactual "saved $X by routing N calls
+  to local" line in `/cost`; generalize `bedrock_resilience.py` into a
+  provider-agnostic `ProviderFailoverMiddleware` (429/quota headers → rotate
+  through `[models].fallbacks` incl. Ollama, window-aware cooldown); parse
+  provider reset headers into a "parked, auto-resuming at HH:MM" state in TUI and
+  daemon. Absorbs v2 #46's cost half. **S/T, M.**
+- **#55 The daemon that actually executes: context injection, subscriptions, draft-PR
+  etiquette** *(Cursor cloud-agent subscriptions + `/goal`; Amp self-scheduling
+  agents; Copilot assign-to-agent; Jules CI auto-fix)* — **partial (front door
+  only).** Fix v6 DMN-1/2 first (template `trigger_context` into the prompt,
+  `jobs create --trigger github`). Then: an SDK tool bundle `subscribe(source,
+  until)` / `schedule(when, prompt)` that POSTs a job carrying the originating
+  `thread_id` + goal ref; a runner path that reopens the CLI's checkpointer and
+  streams the event payload as the next `HumanMessage` so `/goal` state survives;
+  PR-scoped GitHub subscriptions (checks, review comments) with attempt caps;
+  open a `[WIP]` draft PR immediately, stream commits, update the description,
+  treat review comments as revisions. Completes v2 #30 and v1 #1/#8/#14. **T/S, L.**
+- **#56 Detach / attach, session registry, `bog queue`** *(Cursor `agent persist`;
+  Codex `codex queue` + `codex agents`; Claude cross-session `SendMessage`; Cline
+  Hub multi-client + zero-loss upgrade)* — **absent.** A per-machine registry
+  `~/.bog-agents/sessions/<id>.json` (name, cwd, model, state, pid, heartbeat)
+  written by TUI, daemon and serve; a persistent inbox backend for `Mailbox`
+  (SQLite) so any process can enqueue; `bog-agents queue --session <name> [--wait]`;
+  a session broker hosting the loop outside the terminal (POSIX detached process
+  group + socket; Windows under the daemon service) with `bog persist`, `/detach`,
+  `bog attach <id>`; LangGraph 1.2 `RunControl.request_drain()` wired into daemon
+  SIGTERM and TUI Ctrl+C so in-flight runs checkpoint as RESUMABLE instead of
+  FAILED; `bog daemon drain|upgrade`. Absorbs v2 #33 and #39. **S/T, L.**
+- **#57 `bog worker`: outbound-only self-hosted workers — including Windows**
+  *(Cursor Self-Hosted Machines Sep 2; Claude self-hosted runners — no
+  Bedrock/Vertex, no ZDR; Codex remote executors; Devin Outposts; Managed Agents
+  EnvironmentWorker; none ship a Windows worker)* — **absent.** `bog-agents worker
+  start --pool <name>` dials out (token-authenticated long-poll/WebSocket) to
+  daemon/serve and registers OS + sandbox level; a network implementation of the
+  SDK backend protocols (shell, files, PTY, browser) whose transport is that
+  connection, so the graph runs where serve runs and tools execute on the worker;
+  daemon-side pool scheduler with atomic claims modelled on `TaskLedger.claim_next`,
+  owner-locking, `--retire-at`, drain grace, idle hibernate; `/handoff --queue`
+  packages thread + diff + untracked files. The self-hostable half of v2 #42, and
+  the only worker story with Windows in it. **E/T, L.**
+- **#58 Structured human decisions from Slack, email and the daemon** *(Codex iOS
+  interactive forms; Copilot team sessions in Slack/Teams Aug 24; Devin Slack)* —
+  **partial.** `ask_user` exists with `text`/`multiple_choice` in the TUI only.
+  Extend with `multi_select`/`confirm`/`file_pick`; make it work outside the TUI:
+  daemon dispatch renders Slack Block Kit / email with a signed callback link,
+  persists the interrupt in the checkpointer and parks the run until
+  `POST /runs/{id}/answer`; a Slack Events consumer (signing-secret verified,
+  `app_mention` in a thread → run bound to `thread_ts`, replies steer, `!fast` /
+  `!ask` per-message overrides); every answer recorded in the evidence bundle as
+  an explicit human decision. Completes v2 #32. **T/E, L.**
+- **#63 Governed host for other vendors' agents** *(OpenHands and Goose run Claude
+  Code / Codex / Pi as ACP providers; Warp Factories multi-harness control plane;
+  Cline Kanban)* — **absent.** An `AcpTeammateRunner` that spawns `claude-agent-acp`,
+  `codex-acp`, opencode, goose or dcode over stdio using the ACP client, maps their
+  permission requests onto `ExpertRulesMiddleware` + HITL, counts every turn into
+  `CostLedger`/`RunawayCaps`, emits OTel spans, wraps results in `EvidenceBundle`;
+  `/team run --worker acp:<agent>`; for non-ACP harnesses a `HarnessSubAgentBackend`
+  over `claude -p --output-format stream-json` / `codex exec --json` governed by
+  installing a bog hook into the child's own hook mechanism that calls back over a
+  local socket. The reverse of what OpenHands/Goose/Warp do: they host, bog
+  governs. **T/E, L.**
+- **#64 Hook bus v2** *(Codex v0.150/151: tool-result replacement, Interrupt,
+  PermissionRequest, trust-by-hash, managed hooks; Claude PreModelSwitch /
+  PostModelSwitch; Goose Open Plugins hooks spec, `on_failure`; OpenHands
+  prompt-evaluated hooks)* — **partial.** Promote `PostToolUse` to MODIFY (honour
+  `{"tool_result": …}` before the ToolMessage reaches the model); add
+  decision-capable `PermissionRequest`, `Interrupt`, `PreModelSwitch` (deny) /
+  `PostModelSwitch` wired into `/model`; load Open Plugins `hooks.json`; per-hook
+  `on_failure: deny|allow|ask` overriding the fail-open default; a `prompt` hook
+  type that evaluates a natural-language policy through an injected small-model
+  invoke on the same fail-closed path as Expert Mode; trust-by-hash for hook
+  scripts. **T/E, M.**
+- **#67 Evidence on every PR + a self-review loop that learns** *(Cursor Bugbot
+  incremental/deduped/effort-graded; Copilot reviews bot-authored PRs with
+  resolution reasons Aug 27; Amp "proof of work")* — **partial.** Wire
+  `EvidenceBundleMiddleware` through `FeatureConfig(evidence_bundle=True)`, the
+  CLI `--pr --evidence` flag and daemon dispatch (v6 SDK-11); a self-review memo
+  (`.bog-agents/self-review/<branch>.json`: diff sha, base, effort) so `--since-last`
+  skips already-reviewed diffs and a headless twin emits a marker comment CI can
+  dedupe on; `--effort default|high|custom:"<rule>"`; a post-PR-open jury pass
+  posting findings as GitHub review comments; a resolution ingester
+  (`/resolve <id> addressed|wontfix|incorrect` + review-thread events) that feeds
+  dispositions back into the rubric. Completes v2 #29 and v1 #2/#3. **T/E, M.**
+- **#71 Parity treadmill in CI + fork subagents** *(deepagents 0.7.13; Claude fork
+  mode default Aug 10-14 and `/fork` into a worktree; dcode)* — **partial.**
+  Install `deepagents` latest in a CI leg and run the 24 compat tests plus a
+  smoke import on every PR; land the 0.7.x deltas (`mode: isolated|fork` on
+  SubAgent, `ReadResult` pagination notice, bounded `grep_max_count`, opt-in
+  TodoList via profile, output-format changes). Fork mode: seed the child with the
+  parent's exact post-sweeper message list and identical system prompt/tool
+  schemas so its first call is a prompt-cache hit, run in the background, return
+  the final message as a ToolMessage; `/subtask <prompt>`; `/fork` copies the
+  checkpoint thread into a new background session on a fresh worktree; extend
+  `run_team`/butcher workers with fork mode. Supersedes v2 #26. **S/T, M.**
+- **#72 Governed Code Mode** *(deepagents `CodeInterpreterMiddleware` + dynamic
+  subagents; Mastra `createCodeMode`; Pydantic Code Mode; OpenCode code-mode MCP
+  adapter; OpenAI programmatic tool calling — all shipped since July)* —
+  **proposed-not-built.** Now table stakes. An interpreter middleware (QuickJS or
+  a subprocess Python runner inside `LocalSandbox`/Docker) exposing an allowlisted
+  `tools.*` namespace whose every call re-enters the normal tool path (Expert
+  rules, SafeTools, HITL, `CostLedger` all fire), plus a `task()` global that
+  dispatches subagents/teams with a response schema and counts each spawn; an
+  `execute_mcp_script` variant binding connected MCP tools; fan-out/vote helpers.
+  Promotes v2 #36 from L-later to M-now; bog's version is the only auditable one.
+  **T/E/S, L.**
+- **#74 Compliance artefact: hash-chained action log + OTel GenAI export + org usage
+  export** *(MAF/ADK semconv; Kiro OTLP usage export Sep 1; GitHub per-user credit
+  metrics; EU AI Act Annex III deferred to 2027-12-02 but questionnaires ask now)*
+  — **partial.** The causal ledger and `AuditTrailMiddleware` exist; OTel is
+  LangSmith-bound with zero `gen_ai.*` attributes. Extend the causal ledger into a
+  hash-chained per-run JSONL (each event carries sha256(prev)) with
+  approval-decision, Expert verdict and cost events, a retention policy and a
+  signed export reusing the TraceFile Ed25519 signer; a vendor-neutral OTLP
+  exporter emitting GenAI-semconv spans for model/tool/middleware/subagent with
+  cost attributes (LangSmith becomes one exporter); durable per-run usage records
+  aggregated per user/model/job daily and pushed over OTLP + CSV from the daemon.
+  Completes v2 #38. **E, M.**
+
+### Tier 3 — Moonshots and long-tail differentiators
+
+- **#60 Native Windows sandbox — committed 1.x headline (decision 2026-09-04)** *(Codex restricted-token + WFP design, May 14;
+  Claude Code: WSL2 only, issue closed "not planned"; Antigravity AppContainer
+  claim undocumented)* — **absent.** A Windows launcher in `local_sandbox.py`:
+  unelevated mode = `CreateRestrictedToken` (write-restricted + synthetic SID)
+  with explicit ACL grants on working dir / temp / caches / `writable_roots`;
+  elevated mode = two low-privilege local users with a WFP block-all rule or
+  egress forced through the existing CONNECT allowlist proxy; secret-env
+  stripping and read-deny paths reused; selected by `SandboxConfig.build_local_sandbox`
+  on win32; `doctor --windows`; a published per-OS support matrix and CI badge;
+  later, credential masking at the proxy (per-session sentinels swapped only
+  toward allow-listed hosts, per Claude's `mode: mask`). Completes v2 #22 and is
+  the prerequisite for #57's Windows workers. **S/E, XL.**
+- **#59 Scan jobs with a findings ledger and remediate → PR** *(Devin scheduled
+  code scans + batch remediation; Codex Security open-sourced client, HN praised
+  the harness not the scanner; Claude Security plugin)* — **absent.** A `scan`
+  job kind on `AmbientJob` (profile: security/cleanup/perf/custom rubric); a
+  SQLite findings table keyed by a stable fingerprint so re-runs update rather than
+  duplicate; triage states with `/findings` + headless twin; sandbox reproduction
+  marks findings validated/unreproduced; SARIF output and CI gating; `--max-cost`;
+  `/remediate <id>` opens a PR with the evidence bundle. Packages `/audit`,
+  `/compliance`, `/jury` and the ledger into the workflow Devin sells. **T/E, M.**
+- **#65 Protocol currency: MCP 2026-07-28, A2A v1, ACP registry, context engine as
+  a service** *(MCP went stateless and deprecated sampling/roots/DCR on a 12-month
+  clock; ADK 2.8 and MAF shipped A2A task mode; Zed's ACP registry is live;
+  Augment sells its index as an MCP server)* — **absent.** Bump the `mcp` SDK
+  (pinned 1.28.1 = protocol 2025-11-25) once a 2026-07-28 release exists and honour
+  stateless sessions, cacheable tool lists with deterministic ordering, the Tasks
+  extension, `input_required` elicitations routed into the HITL dialog,
+  `destructiveHint`-gated approvals; `bog-agents serve --a2a` on `a2a-python 1.1.x`
+  (Agent Card, streaming, task mode) + a `RemoteA2AAgent` subagent backend;
+  publish `bog-agents-acp` to PyPI and list it in Zed's ACP registry (needs v6
+  SAT-3); expose the `@codebase` hybrid index over `bog-agents mcp-server` so
+  Claude Code / Codex users can mount bog as their context engine. Completes v2
+  #41 and v1 #20. **T/E, L.**
+- **#69 Plan review screen + headless `--plan --auto`** *(Kiro V3 spec review with
+  staged line comments and scoped execution; Copilot CLI `--plan --mode autopilot`)*
+  — **partial.** `/plan` is a tool-hiding toggle; butcher has a yes/no modal. A
+  shared `PlanReviewScreen` for butcher manifests, JTBD job specs and plan-mode
+  output: line-addressed comment staging → one consolidated revision prompt →
+  re-plan loop; per-slice checkboxes written back into `ButcherJob`; a
+  full-screen execution view reusing `dashboard.py` panels; `bog-agents --plan
+  "<prompt>" --auto` in `non_interactive.py`. **S/T, M.**
+- **#70 Security-scan recipe** *(Codex Security harness; Claude Security plugin)*
+  — **partial** (`/audit` is one prompt; a `dependency-audit` recipe exists).
+  Architecture map → threat model → parallel hunter subagents on `TaskLedger`
+  (injection, authz, secrets, SSRF, deserialization) → independent `/jury`
+  review → sandbox reproduction → persistent findings + false-positive ledger with
+  dedup keys, `--max-cost`, SARIF, CI gate. Shares the findings store with #59.
+  **T/E, M.**
+- **#73 Agent-authored workflows saved as `/commands`** *(Grok Build Workflows:
+  128–1,024 agents, saved as slash commands; Claude dynamic workflows; Warp
+  Factories foreman pipeline)* — **partial.** `pipeline.py` has sequential YAML
+  pipelines. A `workflow.py` schema (phases context → work → review → verify →
+  synthesize; each phase a team fan-out under `RunawayCaps`); an agent tool
+  `author_workflow(description)` that writes `.bog-agents/workflows/<name>.yaml`
+  (repo-committed, loaded as `/name [args]` via the `prompt_commands.py` loader);
+  a runner persisting phase state so pause/resume skips finished phases;
+  per-agent token meters and a hard per-workflow budget. Optionally the
+  code-flavoured variant: a `workflow` tool taking a small sandboxed Python script
+  (`spawn`, `gather`, `validate(rubric)`, `retry`) executed over `TaskLedger` with
+  typed outcomes. Absorbs v2 #35's "recipes v2" run-time half and v1 #19. **T/S, M.**
+- **#75 Memory rebuild + advisor tool** *(Managed Agents "Dreams" research preview;
+  Kiro Crew durable lessons; Pydantic harness Advisor)* — **absent.** A
+  `memory_rebuild.py` batch (pure logic, injected `invoke`): load the store + N
+  transcripts from `sessions.db`, run a steerable consolidation (dedup,
+  contradiction resolution, provenance kept), emit a candidate store under
+  `.bog-agents/memory.rebuild/`, show a diff, swap only on approval,
+  daemon-schedulable, local-model friendly. Plus an `ask_advisor` tool that sends
+  one bounded question to the operator's `hard` tier and returns a ToolMessage,
+  counted and capped — the cheap-loop / expensive-question pattern. Grounds v2
+  #45. **S/T, M.**
+- **#76 Team v2: file transfer, cross-thread mailbox, multi-repo, fast spawn**
+  *(Amp agent-to-agent file transfer + multi-repo projects; Cursor multi-dir
+  workspaces; Grok `grok clone` content store; Cursor Builds 3× faster start)* —
+  **partial.** Typed `Attachment` on `Message` (file/dir/patch, DLP-scanned,
+  audit-logged) + `send_file`/`receive_files` teammate tools; `Mailbox` persisted
+  to SQLite keyed by thread so messages cross sessions; `/add-dir` extending
+  `CompositeBackend` mounts; `[worktree] reuse = ['node_modules', '.venv']` in
+  `sandbox.toml` → hardlink/junction from a lockfile-hash-keyed cache under
+  `~/.bog-agents/envcache/`; Docker/daytona snapshot templates recorded in
+  `.bog-agents/sandbox.lock`. Extends v2 #21 and #27. **T, M.**
+- **Also noted, not ranked:** on-device voice dictation (Kiro, Copilot; S — every
+  CLI shipped it, cheap with `faster-whisper`); temporal/sequence-aware Expert
+  predicates with a Dogwood importer (AWS, Aug 6; L — the enterprise moonshot
+  inside #50); live preview portals with tunnel + evidence link (Amp Portals; M);
+  desktop-in-sandbox computer use on Windows workers (Amp Desktop Sep 4; L, after
+  #57); `/doctor` that fixes (context-cost audit of skills/MCP/plugins, slow-hook
+  detection, corporate-proxy check; M); `/debug` and `bog blame` (v2 #43/#44,
+  still unbuilt, still unowned by any terminal agent).
+
+### Deferred / superseded this cycle
+
+- **v2 #26** → superseded by #71 (the treadmill needs CI, not a document).
+- **v2 #33 teleport, #39 durable runs** → absorbed into #56.
+- **v2 #34 importer, #35 recipes v2** → absorbed into #62 and #73.
+- **v2 #36 CodeAct** → promoted to #72 (now table stakes).
+- **v2 #40 versioned AgentSpecs** → keep deferred; the daemon's `AmbientJob` +
+  `sandbox.lock` cover the ops need until #57 exists.
+- **v2 #42 fleet** → the self-hostable half is #57; the hosted control plane stays
+  post-1.0.
+- **v2 #46 effort ladder** → unblocked (all deps shipped); its cost half moved into
+  #53. Keep the algorithm-ladder half as a follow-up once #51 lands.
+
+### Sequencing v3
+
+**Gate: REVIEW v6 Wave 0** (the six P1s, `available=False` + a feature self-test,
+the deepagents CI leg, the daemon/SDK docs drift). Every Tier-1 item below stands
+on code the v6 findings touch.
+
+- **Wave 1 — weeks, mostly S/M, mostly wiring what exists:** #47 Governed Auto
+  Mode → #51 cost certainty → #52 usage strip → #66 changes tray → #62 Agent
+  Plugins 1.0 + import → #49 steerable approvals + hostile-repo hardening → #54
+  lean profile + published overhead → #61 Windows distribution → #68 `/tasks`.
+  *Outcome: a first-30-minutes experience that beats Claude Code on approvals,
+  cost visibility and switching cost, on Windows.*
+- **Wave 2 — the differentiators:** #55 daemon execution + subscriptions → #67
+  evidence on every PR → #48 trust profiles + `--restricted` → #56 detach/attach +
+  queue → #53 cost-objective routing → #64 hook bus v2 → #71 parity + fork → #74
+  compliance artefact → #72 Code Mode → #50 managed governance.
+  *Outcome: the "agent follows what it creates" and "proof beats diff" stories are
+  true unattended.*
+- **Wave 3 — the flank:** #60 Windows sandbox → #57 workers (Windows included) →
+  #63 governed foreign harnesses → #65 protocol currency → #58 Slack decisions →
+  #59/#70 scan jobs + security recipe → #73 agent-authored workflows → #69 plan
+  review → #75 memory rebuild → #76 team v2.
+  *Outcome: the only self-hostable, Windows-capable, policy-provable control
+  plane in the category.*
+
+**1.0 line (decided 2026-09-04):** Wave 0 + Wave 1 + Wave 2 + the stability
+contract. 1.0 ships only when the daemon executes unattended, evidence lands on
+every PR and trust profiles exist; Wave 3 is the post-1.0 moat, with two items
+pulled forward by decision: **#60 native Windows sandbox is a committed 1.x
+headline** (not a moonshot), and the VS Code extension is fixed and published
+rather than deleted (REVIEW v6 SAT-4). ACP stays source-only for now; harbor
+stays an eval harness.
+
+---
+
 ## Sequenced plan
 
 > **Gate before Wave 1:** the `REVIEW.md` P0/P1 correctness fixes are prerequisites,

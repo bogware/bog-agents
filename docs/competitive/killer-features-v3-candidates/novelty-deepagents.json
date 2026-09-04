@@ -1,0 +1,263 @@
+{
+ "bucket": "deepagents 0.7, OpenAI Agents SDK, ADK, MAF, Pydantic AI, Mastra, smolagents",
+ "checked": [
+  {
+   "title": "deepagents 0.7.13 parity pack: name-matched middleware override, isolated/fork subagent modes, delete + allowlist filesystem, output-format and backend-shim breaks",
+   "status": "partial",
+   "evidence": "SHIPPED: name-matched override `libs/bog-agents/bog_agents/graph.py:171-196` (_apply_custom_middleware replaces built-in by .name in place; exercised in tests/unit_tests/test_graph_upstream_parity.py); `delete` tool + FsToolName allowlist `libs/bog-agents/bog_agents/middleware/filesystem.py:521-561, 899-961, 1443-1496`; ReadResult total_lines/next_offset + GrepResult.truncated shapes `libs/bog-agents/bog_agents/backends/protocol.py:213-235, 264-270`; removed-export superset (BackendFactory/FsToolName kept) `libs/bog-agents/bog_agents/deepagents.py:34-77`. TRACKED ONLY TO 0.7.0b2: `PARITY.md:20-26` (no 0.7.x column past b2). MISSING: SubAgent TypedDict has no `mode` key (`libs/bog-agents/bog_agents/middleware/subagents.py:43-108`; grep 'isolated'|'fork' across SDK -> 0 hits); pagination fields never populated (grep `total_lines=|next_offset=` in backends/*.py -> 0); grep is time-bounded not 1,000-count-capped (`backends/filesystem.py:847-855`); TodoListMiddleware always-on (`graph.py:803, 897, 989`); test_deepagents_compat.py:79 checks the 0.6.12 __all__, no 0.7.13 name smoke test.",
+   "delta": "Add `mode: NotRequired[Literal['isolated','fork']]` to SubAgent and honour it in _create_task_tool; populate ReadResult pagination in Filesystem/State/Store backends and emit the 'N lines remaining / next offset' notice from read_file; add a 1,000-match `grep_max_count` cap with `truncated=True` alongside the time bound; make TodoListMiddleware opt-in via FeatureConfig (or a lean profile) while keeping bog's default; align rubric grader hook names with 0.7.11 (unverified); add a PARITY.md 0.7.13 column and a test that imports every 0.7.13 public name.",
+   "roadmap_ref": "#26",
+   "competitor": "LangChain deepagents",
+   "source_url": "https://docs.langchain.com/oss/python/releases/changelog#jul-24-2026",
+   "target_users": [
+    "solo",
+    "teams"
+   ],
+   "why_killer": "Anyone writing against deepagents 0.7 docs today can `pip install bog-agents` and keep their code, tests and tool-output parsers working, on Windows and with local models, which dcode does not offer. ROADMAP #26 was written before 0.7.0 shipped (2026-07-24); the bar has since moved through 13 patch releases including a breaking mode rename and rubric hooks.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Token-diet profile with per-middleware prompt-token budget and CI regression gate",
+   "status": "partial",
+   "evidence": "Profile primitives for a lean harness exist: `HarnessProfile.base_system_prompt / system_prompt_suffix / tool_description_overrides / excluded_tools / excluded_middleware` at `libs/bog-agents/bog_agents/profiles/harness/harness_profiles.py:550-634`, consumed in `graph.py:740, 903` — but no built-in `lean` profile (`profiles/harness/` holds only 5 model profiles; grep 'lean' -> 0). `/tokens` reports only 'System prompt + tools (fixed)' vs 'Conversation' (`libs/cli/bog_agents_cli/app.py:3275-3305`); no per-middleware attribution anywhere (grep `per.?middleware.*token|tokens_by_middleware` -> 0). Snapshot gate is prompt-text only: `libs/bog-agents/tests/unit_tests/smoke_tests/test_system_prompt.py` + `libs/bog-agents/Makefile:23-25 update-snapshots`; `Makefile:44 benchmark` target exists but no token/reward regression assertion.",
+   "delta": "Ship a built-in `lean` HarnessProfile (empty base prompt, trimmed tool descriptions, TodoList/plan tools excluded); add a `/tokens middleware` view that tokenizes each middleware's injected system-prompt segment and each tool schema and attributes them by middleware name; extend the smoke-test snapshot into a numeric baseline (base input tokens/turn per profile) that fails CI on regression, plus an optional harbor-reward gate; publish the numbers in docs.",
+   "roadmap_ref": "none",
+   "competitor": "LangChain deepagents (65% cut, published eval); NVIDIA NOOA (half tokens); Google ADK Workflows",
+   "source_url": "https://www.langchain.com/blog/deep-agents-v0-7",
+   "target_users": [
+    "solo",
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "Local-model users on 8k-32k contexts get the room back that 100 middleware quietly consume, cost-sensitive solos pay less per turn, and teams can prove no quality regression instead of trusting a vendor blog. Nobody else can attribute tokens per middleware because nobody else has a middleware stack this deep.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Governed Code Mode: sandboxed JS/Python `eval` with programmatic tool calling and `task()` subagent dispatch, gated by Expert Mode and the cost ledger",
+   "status": "proposed-not-built",
+   "evidence": "none found after grepping `codeact|code_mode|CodeMode|quickjs|CodeInterpreter|programmatic.?tool|execute_python|run_code|python_repl` across libs/bog-agents, libs/cli, libs/partners (only .venv hits). ROADMAP.md #36 (lines ~530-536) and the 'Wave 4 satellites' note (~line 600) explicitly defer it. Governance hooks to reuse exist: Expert Mode asserts a `tool_call` fact per call at `libs/bog-agents/bog_agents/middleware/expert_rules.py:333-337`; `CostLedger`/`RunawayCaps` at `libs/bog-agents/bog_agents/cost_ledger.py:26-48`.",
+   "delta": "Build an interpreter middleware (QuickJS or a subprocess Python runner inside LocalSandbox/Docker) exposing an allowlisted `tools.*` namespace whose every call re-enters the normal tool path (so ExpertRulesMiddleware, SafeTools, HITL and CostLedger fire), plus a `task()` global that dispatches subagents/teams with a response schema and counts each spawn against RunawayCaps; add fan-out/vote helpers and a FeatureConfig toggle; tests must prove a denied rule blocks a tool call issued from code.",
+   "roadmap_ref": "#36",
+   "competitor": "LangChain deepagents CodeInterpreterMiddleware; Mastra createCodeMode; Pydantic harness Code Mode; OpenAI programmatic tool calling; NVIDIA NOOA",
+   "source_url": "https://docs.langchain.com/oss/python/deepagents/dynamic-subagents",
+   "target_users": [
+    "solo",
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "Users get N-way fan-out and vote patterns in a single round-trip instead of N tool calls, and enterprises get what nobody else has: code-mode calls that are still policy-checked and budget-counted. ROADMAP #36 predates competitor shipping; since 2026-07-21 deepagents, Mastra and Pydantic all shipped it, so it is now table stakes and the governance angle is the open flank.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Forked subagents and forked team workers (inherit parent history + continuation preamble)",
+   "status": "absent",
+   "evidence": "`libs/bog-agents/bog_agents/middleware/subagents.py:180-202` — comment and task-tool prompt state only the task description is forwarded and 'Each agent invocation is stateless'; SubAgent TypedDict (`subagents.py:43-108`) has no `mode` key; grep `\\bfork\\b|inherit.*history|parent_messages|continuation_preamble` across subagents.py, teams.py, team_executor.py, butcher.py -> 0 non-worktree hits. `libs/bog-agents/bog_agents/teams.py:236 run_team` workers receive task text only; `libs/cli/bog_agents_cli/butcher.py` workers execute self-contained slice files. `sidechain.py:15-16 build_continuation_prompt` is the only continuation primitive and is for background-task resumption, not delegation.",
+   "delta": "Add `mode: 'isolated' | 'fork'` to SubAgent and CompiledSubAgent handling in `_create_task_tool` so a fork child receives the parent's full messages + identical system prompt + a continuation preamble (respecting private_state_field_names); default the general-purpose subagent to fork behind a user/global config toggle that is ignored when set from a project `.env`; extend `run_team` and butcher worker construction with the same option; add tests for history inheritance and the privacy rule.",
+   "roadmap_ref": "#26",
+   "competitor": "LangChain deepagents 0.7.12/0.7.13 + dcode 0.1.66",
+   "source_url": "https://docs.langchain.com/oss/python/deepagents/subagents#forked-subagents",
+   "target_users": [
+    "solo",
+    "teams"
+   ],
+   "why_killer": "A worker that already knows the diagnosis writes the fix instead of re-reading the repo, cutting tokens and wall time on every delegation; teams' fan-out workers stop duplicating the coordinator's investigation.",
+   "effort": "M",
+   "duplicate_of": "deepagents 0.7.13 parity pack: name-matched middleware override, isolated/fork subagent modes, delete + allowlist filesystem, output-format and backend-shim breaks"
+  },
+  {
+   "title": "Persistent spend limits: cross-session USD/token budgets with warn thresholds and user/project/org/daemon-job scopes",
+   "status": "partial",
+   "evidence": "In-session only: `budget_usd` cap on CostTracker `libs/bog-agents/bog_agents/middleware/cost_tracker.py:200-240` (FeatureConfig.budget_usd `feature_config.py:136`); RBAC per-role `max_budget_usd` `libs/bog-agents/bog_agents/middleware/enterprise.py:63`; team-run `CostLedger(caps=RunawayCaps(max_cost_usd=...))` in memory `libs/bog-agents/bog_agents/cost_ledger.py:26-48, 133-159` wired at `libs/cli/bog_agents_cli/team_executor.py:220` and `app.py:11044-11056`. No persistence (grep save/load/sqlite in cost_ledger.py -> 0), no daily/monthly windows, no warn-at-percent, no per-request max_cost callback, no daemon job budget (`libs/daemon/bog_agents_daemon/models.py` has max_retries only), no `/cost budget` (grep budget in commands/*.py -> only thinking_budget), no headless `/cost` (`headless_commands.py` grep cost -> 0).",
+   "delta": "Add a durable `SpendLedger` (SQLite beside sessions.db) keyed by scope (user/project/org/daemon-job) with daily/monthly USD+token ceilings and `warn_at_percent`, replay-safe (dedupe on checkpoint/run id); route CostTracker + CostLedger entries into it and consult it before each model call; add `AmbientJob.budget_usd` to the daemon; expose `/cost budget [set|show]` with a headless twin and per-model/provider breakdown; audit-log every block.",
+   "roadmap_ref": "#25",
+   "competitor": "Mastra TokenCostControl; Pydantic harness Spend Limits; Google ADK ADK_MAX_LLM_CALLS; OpenAI per-checkpoint usage isolation",
+   "source_url": "https://www.paulie.dev/articles/2026/08/introducing-token-cost-control",
+   "target_users": [
+    "solo",
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "A solo user sets '$5/day' once and never sees a surprise bill from an overnight daemon job; an enterprise gets org-scoped ceilings with an audit line for every block. Competitors moved from run caps to scoped monetary budgets in August; bog already owns the ledger, so this is a short hop to leapfrog.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "MCP 2026-07-28 client: stateless transport, MRTR elicitation routed into the approval UI, Tasks extension, cacheable tool lists, destructive_hint gating, CIMD auth",
+   "status": "absent",
+   "evidence": "Pinned `mcp` SDK is 1.28.1 (`libs/cli/uv.lock:3403-3404`) whose `LATEST_PROTOCOL_VERSION = \"2025-11-25\"` (`libs/cli/.venv/Lib/site-packages/mcp/types.py:27`). none found after grepping `elicit|destructive_?hint|readOnlyHint|ttlMs|cacheScope|stateless|CIMD|client_id_metadata|server/discover|subscriptions/listen|tasks/|list_changed|sorted(` across `libs/cli/bog_agents_cli/mcp*.py` and SDK. OAuth path uses Dynamic Client Registration via `OAuthClientMetadata` (`libs/cli/bog_agents_cli/mcp_oauth.py:60-76, 188-212`). Transport is `StreamableHttpConnection` via langchain-mcp-adapters (`mcp_tools.py:527-546`). Trust is config-fingerprint based only (`mcp_trust.py:31-147`); SafeTools/ExpertRules have no annotation inputs (grep annotation|destructive in safe_tools.py, expert_rules.py -> 0).",
+   "delta": "Bump to an `mcp` SDK release that implements the 2026-07-28 revision (unverified availability), then: honour `server/discover` + stateless sessions, subscribe to `subscriptions/listen`, cache tools/list per `ttlMs`/`cacheScope` with a deterministic sort for prompt caching, poll the Tasks extension for long-running calls, map `input_required` elicitations onto bog's HITL interrupt/dialog, feed `destructiveHint`/`readOnlyHint` into SafeToolsMiddleware auto-approval and as Expert Mode `tool_call` fact fields, and switch mcp_oauth.py from DCR to Client ID Metadata Documents.",
+   "roadmap_ref": "none",
+   "competitor": "LangChain 1.4 MCPAdapter; Mastra 1.60; Microsoft Agent Framework dotnet-1.19 (Tasks)",
+   "source_url": "https://modelcontextprotocol.io/specification/2026-07-28/changelog",
+   "target_users": [
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "Servers upgraded to the stateless spec keep working, a mid-call server question lands in the same approval dialog the user already trusts, and destructive MCP tools are auto-gated by policy rather than by hoping the model reads the annotation.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Durable runs on LangGraph 1.2 primitives: graceful drain on SIGTERM, per-node timeouts, saga error handlers, DeltaChannel history, fork/resume runs",
+   "status": "partial",
+   "evidence": "SHIPPED: langgraph 1.2.9 pinned (`libs/bog-agents/uv.lock:1673-1674`, `pyproject.toml:38`); DeltaChannel on messages `libs/bog-agents/bog_agents/graph.py:21, 90` + `_messages_reducer.py:1-53`; daemon SIGTERM/SIGINT handlers + HTTP /shutdown `libs/daemon/bog_agents_daemon/main.py:152-223`; `/rewind to <checkpoint>` seeds a NEW thread from any checkpoint and resumes it `libs/cli/bog_agents_cli/app.py:7043, 7160-7212` (driven from tests/unit_tests/test_app.py). PARTIAL/MISSING: daemon drain only waits 30s then cancels in-flight tasks — no checkpoint-and-resume (`main.py:236-244`; `runner.py` grep checkpoint|resume -> 0); `session_fork.py` (create_fork/list_forks) has zero callers in the package (grep -> tests only); `RunControl.request_drain`, `TimeoutPolicy`, `error_handler -> Command` compensation: grep across SDK/CLI/daemon -> 0.",
+   "delta": "Wire LangGraph 1.2 `RunControl.request_drain()` into the daemon shutdown and TUI Ctrl+C paths so an in-flight run checkpoints at the next node boundary and is marked RESUMABLE (then resume on restart instead of stamping FAILED); apply `TimeoutPolicy` to model/tool nodes with shell timeouts delegated to background_shell; add an `error_handler` that reverts checkpoint commits on failure; expose `/session fork` (reusing the existing /rewind seeding path or session_fork.py) and a daemon `runs/{id}/resume` endpoint.",
+   "roadmap_ref": "#39",
+   "competitor": "LangGraph 1.2; Pydantic AI @durable_operation + step persistence; OpenAI RunState; Mastra durable agent execution",
+   "source_url": "https://docs.langchain.com/oss/python/releases/changelog",
+   "target_users": [
+    "solo",
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "A daemon restart or Ctrl+C mid-job resumes where it stopped instead of failing the run, and week-long threads stop growing the checkpoint DB quadratically. ROADMAP #39 predates these primitives landing in LangGraph itself; adopting them removes a chunk of bespoke code.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Tool-result prompt-injection defender and quarantine policy",
+   "status": "absent",
+   "evidence": "none found after grepping `prompt.?injection|quarantine|indirect.?injection|untrusted.?content|ToolResultGuard` (only comments, e.g. `libs/bog-agents/bog_agents/middleware/memory.py:224`). Nearest pieces are different features: DLPMiddleware scans model-call messages for PII/secrets (`libs/bog-agents/bog_agents/middleware/dlp.py:1-25, 214`); GuardrailMiddleware runs only in `wrap_model_call` over the last human text and the response (`libs/bog-agents/bog_agents/guardrails/middleware.py:48-60, 99`); Expert Mode asserts only `tool_call` facts (`middleware/expert_rules.py:333`, `expert_engine/working_memory.py:38`); web/MCP tool outputs are not wrapped as untrusted (grep untrusted in mcp_tools.py -> only server-trust messages at :873, 908).",
+   "delta": "Add a `ToolResultDefenderMiddleware` in `wrap_tool_call` that scores each ToolMessage from web/MCP/untrusted-path reads with a heuristic + optional local-model classifier, asserts a `tool_result` fact (source, score, verdict) so YAML expert rules can quarantine/redact/require-approval, rewrites quarantined content in the persisted ToolMessage, and appends a quarantine entry to EvidenceBundle/causal ledger; wire into create_cli_agent behind a FeatureConfig flag with tests for a poisoned README and a poisoned MCP response.",
+   "roadmap_ref": "none",
+   "competitor": "Pydantic AI harness PromptInjectionDefender; Mastra processToolResult guardrails; Google ADK Model Armor plugin; OpenAI v0.22.0 redaction",
+   "source_url": "https://github.com/pydantic/pydantic-ai-harness/releases",
+   "target_users": [
+    "solo",
+    "enterprise"
+   ],
+   "why_killer": "A poisoned README or MCP response cannot silently steer the run, and a regulated team gets a per-run evidence line for every quarantined result. Three competitors shipped this in a four-week span after OpenAI's sandbox-escape disclosure; bog can do it without cloud calls (local model) and with declarative policy.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Explainable Auto approval mode: deterministic allow + batched model review + human fallback, with every decision as an Expert Mode fact",
+   "status": "partial",
+   "evidence": "SHIPPED: shift+tab permission cycle default/accept-edits/plan (`libs/cli/bog_agents_cli/app.py:797-838`); deterministic AutoModeRuleEngine + consolidated git classifier (`libs/cli/bog_agents_cli/auto_mode.py:349-407`, tests/unit_tests/test_auto_mode_rules.py); Haiku risk eval with not-found fallback (`auto_mode.py:208-223, 459-554`); ASK verdict falls through to the human dialog (`auto_mode.py:486`, `textual_adapter.py:760-800`). GAPS: classifier is hard-coded to `claude-haiku-4-5*` — no per-provider default, no local model (`auto_mode.py:212-213`); the 'batch' loop evaluates each request separately, not one structured batched decision (`textual_adapter.py:783-800`); no repeated-denial/timeout escalation; decisions are not recorded as Expert Mode facts or audit entries (grep AutoDecision+audit/assert_fact -> 0; `expert_controller.py:158 assert_fact` exists but is unused for approvals).",
+   "delta": "Replace per-call haiku_risk_eval with a single structured batched review (all pending tool calls + user's stated outcome) via a per-provider default classifier resolved from the active model provider (Anthropic/OpenAI/Ollama/Bedrock), keep narrow deterministic allows as a bypass, add a denial/timeout counter that drops back to the human prompt, and assert an `approval_decision` fact (rule_source, classifier verdict, reason) into the Expert Mode engine + causal ledger so `/why` and `/prove` can explain and audit it.",
+   "roadmap_ref": "#23",
+   "competitor": "LangChain deepagents-code Auto mode; Microsoft Agent Framework Harness (standing rules + heuristic auto-approval)",
+   "source_url": "https://docs.langchain.com/oss/deepagents/code/approval-modes",
+   "target_users": [
+    "solo",
+    "enterprise"
+   ],
+   "why_killer": "Fewer interruptions without going YOLO, and, unlike dcode, every 'why did it let that through' has an answer. Bog already has permission-mode cycling, SafeTools, exec_risk and the rule engine; the missing piece is the batched model reviewer and the audit trail.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Plugin marketplaces with Claude/Codex manifests, per-plugin auto-update, and a Python ExtensionAPI that can register middleware",
+   "status": "partial",
+   "evidence": "SHIPPED: extension manifest bundling skills+hooks+mcp_servers+commands+agents (`libs/cli/bog_agents_cli/extensions.py:25-72`), install from local dir or git URL (`extensions.py:193-235`, `extensibility.py:122-136`; tests/unit_tests/test_extensions.py); `plugin_marketplace.py:151-168` local-path copy only; Claude Code skill/MCP import (`claude_code_compat.py:177-337`). MISSING: HTTPS JSON catalogues, owner/repo@tag resolution, per-plugin autoUpdate (grep auto_?update -> 0), Python ExtensionAPI / register_middleware / register_backend_route / on_shutdown (grep -> 0; the only entry-point loader is for profiles at `libs/bog-agents/bog_agents/profiles/_builtin_profiles.py:238`), trust-store gating of installs (grep trust in extensions.py/extensibility.py -> 0), headless `bog-agents plugin` twin (`headless_commands.py` grep plugin -> 0).",
+   "delta": "Add marketplace sources (GitHub owner/repo@tag via `gh`/git, HTTPS JSON catalogue with signature) and `autoUpdate` per plugin persisted in the extensions registry; define a Python `ExtensionAPI` (register_middleware/register_tool/register_backend_route/on_shutdown) loaded from a manifest `python:` entry and injected into create_cli_agent's extra middleware, gated by the existing skill-trust store (ask/always/never) and the self-modification guard; add a headless `bog-agents plugin` command.",
+   "roadmap_ref": "#34/#35",
+   "competitor": "LangChain deepagents-code plugins + Python extensions",
+   "source_url": "https://docs.langchain.com/oss/deepagents/code/plugins",
+   "target_users": [
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "A team publishes one marketplace repo and every member installs recipes, MCP servers, hooks and a custom middleware with one command, gated by trust policy. ROADMAP #34/#35 proposed an importer and registry; dcode has since shipped marketplaces plus a middleware-capable extension API, which maps directly onto bog's middleware-first architecture.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Windows-native sandbox launcher (no WSL/Docker) and a published Windows support matrix",
+   "status": "partial",
+   "evidence": "CI already runs a Linux+Windows matrix (`.github/workflows/ci.yml:49-57`, self-hosted runners). `libs/bog-agents/bog_agents/sandbox/local_sandbox.py:94-97`: 'Windows has no launcher yet (AppContainer wiring is tracked as ROADMAP #22)' — `require_sandbox` fails closed there. `libs/cli/bog_agents_cli/doctor.py:441-456` checks only bwrap/seatbelt; no `--windows` mode (grep windows|sandbox in doctor_deep.py -> 0). none found after grepping `AppContainer|JobObject|CreateRestrictedToken|restricted token` in SDK/CLI. README has a CI badge but no support matrix (`README.md:10`).",
+   "delta": "Implement a Windows launcher in local_sandbox.py (Job Object + restricted token or AppContainer, filesystem ACLs on working_dir, read-deny paths, secret-env stripping reused) selected by `SandboxConfig.build_local_sandbox` on win32, keep egress through the existing CONNECT allowlist proxy; add `bog-agents doctor --windows` checks; publish a Windows support matrix and per-OS CI badge; add Windows-only tests for confinement.",
+   "roadmap_ref": "#22",
+   "competitor": "LangChain deepagents-code (unsupported on Windows); OpenAI Agents SDK UnixLocal (macOS/Linux only); Microsoft Agent Framework shell tooling (alpha)",
+   "source_url": "https://docs.langchain.com/oss/deepagents/code/quickstart",
+   "target_users": [
+    "solo",
+    "enterprise"
+   ],
+   "why_killer": "Bog becomes the only harness a Windows developer can run sandboxed on the machine in front of them; every competitor either says 'use WSL', requires Docker, or ships shell tooling as alpha. This is an open flank that also unblocks regulated desktops that forbid WSL/Docker.",
+   "effort": "XL",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Warn-on-cache-bust for every model call plus provider cache affinity (Bedrock, Fireworks, local KV cache)",
+   "status": "partial",
+   "evidence": "SHIPPED: `/compact`/`/clear` cache-break warnings only (`libs/cli/bog_agents_cli/prompt_cache.py:31-61`; tests/unit_tests/test_prompt_cache.py); AnthropicPromptCachingMiddleware always appended (`libs/bog-agents/bog_agents/graph.py:244-250`); Bedrock prompt caching when langchain-aws present (`graph.py:219-266`); cache read/write tokens tracked and printed (`middleware/cost_tracker.py:183-196, 321-326, 529-542`). MISSING: per-call stable-prefix hash / bust detector and offending-middleware attribution (grep `cache.?bust|prefix.?hash|stable.?prefix` -> 0); prefix hit-rate in `/cost` (grep hit.?rate -> 0); Fireworks session affinity (only a model-id string at `profiles/harness/_nvidia_nemotron_3_ultra.py:50`); no explicit byte-stability guarantee for llama.cpp/vLLM.",
+   "delta": "Add an innermost `CacheBustDetectorMiddleware` that hashes the system prompt + message prefix up to the cache boundary each call, diffs against the previous turn, and warns naming the middleware whose injected segment changed; compute prefix hit-rate from cache_read/input tokens and show it in `/cost` and the status bar; add Fireworks session-affinity header support and a test asserting the sweeper/summarizer keep the prefix byte-stable for local providers.",
+   "roadmap_ref": "none",
+   "competitor": "Pydantic AI harness Warn On Cache Busts; LangChain deepagents 0.7 Bedrock/Fireworks caching; MCP deterministic tool ordering",
+   "source_url": "https://pydantic.dev/docs/ai/harness/",
+   "target_users": [
+    "solo",
+    "teams"
+   ],
+   "why_killer": "Cost drops without changing prompts, and local-model users get KV-cache reuse that turns a 30-second turn into a 5-second one. Bog's street-sweeper invariant (never change message count/order) was designed for exactly this; surfacing the hit rate makes the benefit visible.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Sandbox templates with warm repo checkouts, snapshots, run-scoped workdirs and network-off, for daemon and CI-red repair jobs",
+   "status": "partial",
+   "evidence": "A local Docker provider exists (`libs/cli/bog_agents_cli/integrations/docker.py:106-351`, factory `integrations/sandbox_factory.py:70-204`; tests/unit_tests/test_docker_sandbox_arg.py) but `docker run` passes only --name/--memory/--cpus/-v/-w/--rm (`docker.py:215-252`) — no `--network none`, no image commit/snapshot, no template cache. `sandbox_config.py:20-71` declares `snapshot`, `preinstall`, `network_allowlist`; the factory consumes preinstall + allowlist (`sandbox_factory.py:82-124`) but `.snapshot` has zero consumers (grep `\\.snapshot\\b` -> only unrelated background_shell/drive hits). Daemon runs a non-sandbox FilesystemBackend with no shell for unattended triggers (`libs/daemon/bog_agents_daemon/runner.py:405-453`) and AmbientJob has no sandbox/provider field (`models.py` grep sandbox -> 0).",
+   "delta": "Add named templates to DockerProvider (build-once image with repo checkout + deps, keyed by sandbox.toml `snapshot`), `docker commit`-based snapshot/restore, run-scoped `/workspace/<run-id>` workdirs, `--network none` or allowlist-only via the egress proxy, and persist sandbox id in the run record so a resumed daemon job reattaches; add an `AmbientJob.sandbox` field and use it for daemon triggers and the #30 CI-red repair path.",
+   "roadmap_ref": "#27/#30/#42",
+   "competitor": "Mastra 1.60/1.64 sandbox checkpoints + templates; OpenAI Agents SDK snapshots + Docker network-off; deepagents-code remote sandboxes",
+   "source_url": "https://github.com/mastra-ai/mastra/releases",
+   "target_users": [
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "Scheduled jobs start in seconds on a warm checkout instead of cloning and installing every time, and untrusted-repo runs are isolated by default, which the August OpenAI escape made a purchasing question.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "A2A v1.0 server/client with native task mode and auth, plus A2UI-rendered approvals in the TUI",
+   "status": "proposed-not-built",
+   "evidence": "none found after grepping `\\ba2a\\b|A2UI|AgentCard|agent_card|RemoteA2A` across SDK/CLI/daemon/acp — the only hit is a stale docstring line `libs/bog-agents/bog_agents/middleware/code_intelligence.py:16` ('Feature #74: Agent-to-Agent protocol'); no `a2a` dependency in libs/cli/pyproject.toml or libs/bog-agents/pyproject.toml. ROADMAP.md #41 (~line 560) proposes it; v1 scorecard line 100 records A2A as 'missing'.",
+   "delta": "Add `bog-agents serve --a2a` on a2a-python 1.1.x (Agent Card, SendMessage + streaming, tasks/list pagination, OAuth 2.0 security schemes, application/a2a+json) backed by the existing serve sessions API; a `RemoteA2AAgent` tool/subagent backend with task mode so /team can delegate to ADK/MAF agents and attach evidence bundles to results; a Textual renderer for A2UI v0.9 form/approval payloads reusing the HITL dialog.",
+   "roadmap_ref": "#41",
+   "competitor": "Google ADK v2.8.0 RemoteA2aAgent; Microsoft Agent Framework 1.15/1.18 (A2UI, task-store isolation); Linux Foundation A2A",
+   "source_url": "https://github.com/google/adk-python/releases/tag/v2.8.0",
+   "target_users": [
+    "teams",
+    "enterprise"
+   ],
+   "why_killer": "An enterprise fleet built on ADK or Foundry can delegate to a bog team and get evidence bundles back, and bog can farm subtasks out to them, without bespoke adapters. ROADMAP #41 predates ADK and MAF both shipping task-mode A2A in August.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Advisor tool and self-extension: escalate one question to a stronger model mid-run, and let the agent author and persist a new skill/capability",
+   "status": "partial",
+   "evidence": "No advisor tool: grep `ask_advisor|advisor` -> only `audit_advisor_id` (financial-advisor audit field, `libs/bog-agents/bog_agents/builder.py:97`); operator mode swaps the model for the whole turn, not one question (`libs/cli/bog_agents_cli/operator_mode.py:57-119`). Self-extension pieces exist but are user-driven: `/expert write` LLM-authored expert rules with lint, dry-run and human approve before disk write (`libs/bog-agents/bog_agents/middleware/expert_engine/authoring.py:1-30, 402`; tests/unit_tests/test_expert_authoring.py); `/teach` records a session and generates a skill file (`libs/cli/bog_agents_cli/teach.py:109`); self-modification guard #24 SHIPPED (`libs/cli/bog_agents_cli/self_protection.py:1-79`, wired `agent.py:2096`, tests/unit_tests/test_self_protection.py; batch-tool bypass SAFE-1 closed via `middleware/permissions.py:183 _multi_edit_targets`).",
+   "delta": "Add an `ask_advisor` tool that sends a bounded question (+ optional context excerpt) to the operator preset's `hard` tier model and returns the answer as a ToolMessage, counted in CostLedger/CostTracker and capped by RunawayCaps; add an agent-callable `propose_skill`/`propose_rule` path that drafts into `.bog-agents/` staging, runs the existing authoring lint/dry-run, and requires HITL + trust-store approval before activation (self_protection.py already blocks silent writes).",
+   "roadmap_ref": "#24",
+   "competitor": "Pydantic AI harness Advisor + Capability Creation",
+   "source_url": "https://pydantic.dev/docs/ai/harness/",
+   "target_users": [
+    "solo"
+   ],
+   "why_killer": "A local or cheap model runs the loop and the user pays a frontier model only for the one hard question, and repeated workflows turn into reusable skills without hand-authoring, while the self-modification guard keeps it from rewriting its own rules.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Tamper-evident action log and OTel GenAI export as a compliance artefact",
+   "status": "partial",
+   "evidence": "SHIPPED pieces: append-only per-session JSONL causal ledger recording tool calls, rule fires and final answers (`libs/cli/bog_agents_cli/causal/ledger.py:8-12, 127, 225`; `causal/middleware.py:128-145`; tests/unit_tests/test_causal.py); `AuditTrailMiddleware.export_json` with sha256 content fingerprints (`libs/bog-agents/bog_agents/middleware/audit_trail.py:248-254, 301`); HMAC-SHA-256-sealed compliance reports (`libs/cli/bog_agents_cli/compliance/__init__.py:15-26`, test_compliance.py); Ed25519-signed TraceFile export/verify (`libs/cli/bog_agents_cli/tracefile/signing.py`, `controller.py:10, 258`, test_tracefile.py). MISSING: per-entry hash chain (grep `prev_hash|hash_chain` -> 0), retention policy (grep retention -> only 'unbounded retention' note at audit_trail.py:104-113), approval decisions and cost entries in one log (causal ledger has no approval/cost events — grep -> 0), OTel: only LangSmith OTEL span exporter (`libs/bog-agents/bog_agents/middleware/langsmith_integration.py:106-107`), `_observability.py:26` states 'no OpenTelemetry'; no gen_ai semconv or traceparent (grep -> 0); no opentelemetry dependency in either pyproject.",
+   "delta": "Extend the causal ledger into a hash-chained per-run JSONL (each event carries sha256(prev)), add approval-decision, Expert Mode verdict and cost events, a retention/rotation policy (6-month default) and a signed export command reusing tracefile's Ed25519 signer; add a vendor-neutral OTLP exporter emitting GenAI semconv spans (model/tool/middleware/subagent with cost attributes) with LangSmith as one exporter, and propagate `traceparent` through MCP `_meta`.",
+   "roadmap_ref": "#38",
+   "competitor": "Microsoft Agent Framework (OTel semconv consolidation), Google ADK experimental token telemetry, Pydantic AI OTel GenAI spans",
+   "source_url": "https://www.helpnetsecurity.com/2026/04/16/eu-ai-act-logging-requirements/",
+   "target_users": [
+    "enterprise"
+   ],
+   "why_killer": "A regulated buyer can export a signed, reconstructable record of what the agent did and who approved it, which no competitor packages as a single artefact; the Digital Omnibus deferral (Annex III to 2027-12-02) buys time but procurement questionnaires already ask.",
+   "effort": "M",
+   "duplicate_of": "none"
+  }
+ ]
+}

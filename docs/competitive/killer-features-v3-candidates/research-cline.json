@@ -1,0 +1,613 @@
+{
+ "bucket": "Cline, Aider, OpenCode, Goose, OpenHands, Kilo (+ breakouts: DeepSeek Harness, Pi, OmniRoute)",
+ "competitors": [
+  {
+   "name": "Cline",
+   "snapshot": "Apache-2.0, ~67.5k stars (gh api, 2026-09-04). Now a four-surface product on one SDK: VS Code extension (v4.1.x), CLI 3.0.x, a new Electron 'Cline' Desktop app (renamed from 'Cline Code' on 2026-08-21, Windows build 2026-08-28), and a shared 'Hub' daemon (127.0.0.1:25463) that owns sessions, schedules, approvals and a durable SQLite event log; spoke workers run the agent loop and multiple clients can attach to one live session. Release cadence June-Sept 2026 was near-daily across desktop/cli/sdk tags.",
+   "notable_features": [
+    {
+     "feature": "Hub drain/upgrade + durable event-log replay (sessions survive hub restart)",
+     "description": "`cline hub drain` / `cline hub upgrade` refuse new mutating work while in-flight turns finish; reconnecting clients replay missed events deduped by id; durable runs are queued, not dropped. Event log capped at 64 MiB after a 25 GB-process incident.",
+     "source_url": "https://github.com/cline/cline/releases/tag/cli-v3.0.57",
+     "date": "2026-08-23"
+    },
+    {
+     "feature": "Agent-managed durable todos + recurring schedules (`tasks` tool)",
+     "description": "The agent can create one-time or recurring schedules and a durable todo agenda, scoped to the workspace that registered them; tool availability is resolved centrally per client type so CLI/VS Code do not register a tool they cannot service.",
+     "source_url": "https://github.com/cline/cline/releases/tag/sdk/sdk/v0.0.76",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "Import session history from Claude Code, Codex, and opencode",
+     "description": "`SessionImportService` scans the three tools' local stores and turns picked conversations into fully resumable Cline sessions (grouped per tool, dedup of already-imported, offered during onboarding). Resumes on the user's configured provider, not the source tool's.",
+     "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.22",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "Agent Plugins 1.0 discovery from `~/.agents/plugins`",
+     "description": "Packages validated from `plugin.json`; their Agent Skills become available and their stdio/Streamable-HTTP/SSE MCP servers auto-start; Hub-managed enable/disable per plugin. Workspace `.agents/plugins` deliberately ignored.",
+     "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.23",
+     "date": "2026-09-03"
+    },
+    {
+     "feature": "Cloud handoff `/handoff` with pushed-commit preflight and receipt (beta)",
+     "description": "Moves conversation, attachments and an optional follow-up command to a Cline Cloud workspace that keeps working after the app closes; preflight confirms repo/branch/commit are pushed; draft prompt survives a failed handoff.",
+     "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.15-beta.1",
+     "date": "2026-08-20"
+    },
+    {
+     "feature": "Windows desktop launch with Authenticode-signed installer and CLI binaries",
+     "description": "Code-signed x64 installer with auto-update; background processes no longer pop console windows; CLI binaries signed via Azure Trusted Signing with actionable error under application-control policy.",
+     "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.20",
+     "date": "2026-08-28"
+    },
+    {
+     "feature": "Enterprise MCP controls via remote config (`allowedMCPServers`, marketplace disable)",
+     "description": "Marketplace MCP entries hidden when remote config disables the marketplace and limited to an allowlist when configured.",
+     "source_url": "https://github.com/cline/cline/releases/tag/v4.1.12",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "Subscription-billed providers suppress per-token cost estimates",
+     "description": "ClinePass, ChatGPT-via-Codex and Claude Code marked as flat-rate so the UI stops rendering API-rate dollar figures that read as real charges.",
+     "source_url": "https://github.com/cline/cline/releases/tag/v4.1.16",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "Provider-executed web search + model-driven image generation as persisted tools",
+     "description": "Search calls/results and generated images are persisted in session history and replay on reload; off by default.",
+     "source_url": "https://github.com/cline/cline/releases/tag/sdk/sdk/v0.0.75",
+     "date": "2026-08-14"
+    }
+   ],
+   "business_shifts": "ClinePass subscription ($9.99/mo, launched June 2026, curated open-weight models GLM/Kimi/DeepSeek/MiniMax/MiMo; $4.99 first-month promo ended 2026-08-24 per cli-v3.0.58 notes) surfaced across the app on 2026-09-02 (v4.1.17). Cline Cloud sessions (preview, 2026-08-18) add a hosted execution tier. Default model switched to Claude Fable 5.1 for 57 providers (v4.1.17). Enterprise remote-config controls (MCP allowlists) tightened.",
+   "user_sentiment": "Praise: still the most-used IDE-native OSS agent; Hub multi-client sessions and Windows desktop welcomed. Complaints visible in release notes and issues: the Hub daemon ballooning to tens of GB (fixed 2026-08-26), auto-updates killing live sessions (fixed cli-v3.0.55), hub timeouts with LM Studio (issue #13104), and tool calling silently disabled for custom OpenAI-compatible models (four fixes in one week). Reddit could not be crawled (domain blocked) so r/CLine sentiment is unverified."
+  },
+  {
+   "name": "Aider",
+   "snapshot": "Apache-2.0, ~48.7k stars, 1,853 open issues (gh api 2026-09-04). Last tagged release v0.86.0 on 2025-08-09; last commits 2026-05-22 (Claude 4.5/4.6 model-list additions, bash tree-sitter tags). Effectively in maintenance: no releases in the 90-day window and no June-Sept 2026 commits.",
+   "notable_features": [
+    {
+     "feature": "No releases in window; main branch adds Claude 4.5/4.6 aliases and bash repo-map support",
+     "description": "HISTORY.html 'main branch' entry lists Claude 4.5/4.6 support and Gemini/DeepSeek updates; last commit on main is a model-list expansion PR #5173.",
+     "source_url": "https://github.com/Aider-AI/aider/commits/main",
+     "date": "2026-05-22"
+    },
+    {
+     "feature": "Community concern about project direction (issue #4751)",
+     "description": "Users ask about slowed cadence; a commenter notes it is 'essentially one man project that has slowed down' and that they moved to Claude Code; another built a skills workaround because 'aider has no plugin system'.",
+     "source_url": "https://github.com/Aider-AI/aider/issues/4751",
+     "date": "2026-01-07"
+    }
+   ],
+   "business_shifts": "None. Still free/OSS with no hosted tier. Note: 'aider.ai' product-update pages surfaced in search are an unrelated product, not Paul Gauthier's aider (unverified but the release content does not match aider.chat).",
+   "user_sentiment": "Praise: terminal-first, git-native, model-agnostic KISS design; still cited as the baseline 'harness-light' tool. Complaints: stalled releases, no plugin/skills/hook system, no subagents; long-time users report migrating to Claude Code or OpenCode. Third-party 2026 comparisons still list it as the git-first alternative to subagent runtimes."
+  },
+  {
+   "name": "OpenCode (sst / anomalyco)",
+   "snapshot": "MIT. Third-party posts cite ~160k-202k stars (not re-verified via API). Ships TUI, Desktop v2 (migration completed 2026-07-14), web UI, IDE extension, SDK, ACP; weekly v1.16.x-v1.18.28 releases June-Sept 2026 heavy on provider/MCP/desktop work. Positioned as the low-overhead harness (7k pre-prompt tokens vs Claude Code's 33k in the Systima study).",
+   "notable_features": [
+    {
+     "feature": "Session snapshots + revert (roll back to an earlier message including file changes)",
+     "description": "Core adds session snapshots and revert controls; later releases (Aug 7) made revert/fork use real chronology.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.11",
+     "date": "2026-06-25"
+    },
+    {
+     "feature": "Managed workspace cloning (keeps dirty/untracked files), move sessions between workspaces, `run --replay`, skill discovery + file-based agent loading, background subagents",
+     "description": "v1.16.0 core improvements; v1.16.2 adds sending running subagents to the background and hunk navigation in the diff viewer.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.16.0",
+     "date": "2026-06-05"
+    },
+    {
+     "feature": "`--mini` CLI mode, MCP resource read/template tools, MCP server instructions injected into session context",
+     "description": "v1.17.10 core: minimal-footprint CLI mode plus richer MCP surface.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.10",
+     "date": "2026-06-24"
+    },
+    {
+     "feature": "Code-mode MCP adapter (confined orchestration scripts over connected MCP tools)",
+     "description": "Runs scripts against MCP tools; the `execute` tool is hidden unless code mode is enabled.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.14",
+     "date": "2026-07-06"
+    },
+    {
+     "feature": "`subagent_depth` limit (nested subagents off by default)",
+     "description": "Subagents no longer launch nested subagents by default; configurable depth when needed.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.2",
+     "date": "2026-07-15"
+    },
+    {
+     "feature": "Prompt-cache hygiene: stop wrapping follow-up user messages in a steering reminder",
+     "description": "Explicitly done 'so prompt caching stays effective'; TUI 'yolo' auto-approve mode added 2026-06-30 (v1.17.12).",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.9",
+     "date": "2026-06-21"
+    },
+    {
+     "feature": "Resumable subagent failures with `task_id`; permission prompts from subagents answered during `opencode run`; capped/jittered auto-retries",
+     "description": "v1.18.20 surfaces failed subagent calls as resumable; v1.18.17 caps retries and adds jitter to avoid retry storms, and makes compaction keep complete recent turns.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.20",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "JSON export of full session transcripts; RTL + broad localization in Desktop",
+     "description": "Desktop improvements in v1.18.15/v1.18.13.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.15",
+     "date": "2026-08-07"
+    },
+    {
+     "feature": "Azure Entra ID sign-in via Azure CLI (no API key)",
+     "description": "Azure providers can authenticate with Entra ID through the Azure CLI.",
+     "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.24",
+     "date": "2026-08-28"
+    }
+   ],
+   "business_shifts": "Three-tier monetization around an MIT core: OpenCode Go ($10/mo, 30+ open models, $12 per 5-hour window / $30 weekly / $60 monthly caps, key usable from other agents; first-month discount removed 2026-08-24), OpenCode Zen (pay-as-you-go premium models), Enterprise (per-seat, SSO, centralized config, internal-gateway-only routing, zero-retention; self-hosting 'on our roadmap'). Free stealth model 'Ox Alpha' (1M context, multimodal) offered free on Zen/Go and OpenRouter from 2026-08-20 for about a week. 'Black' tier is rumored only (unverified). SST the infra framework is in maintenance mode while the company builds OpenCode.",
+   "user_sentiment": "Praise: lowest harness overhead, provider-agnostic, polished TUI, fast desktop v2; HN's July token-overhead thread (446 pts) repeatedly names OpenCode/Pi as the lock-in-free alternatives. Complaints: churn from the desktop v2 migration (many v1/v2 compatibility fixes), MCP OAuth/reconnect flakiness through July, and a historic CVE-2026-22812 (unauthenticated local HTTP server let any local process or website run shell commands; fixed 1.0.216, published 2026-01-12) still cited in security discussions."
+  },
+  {
+   "name": "Block goose (now AAIF / Linux Foundation)",
+   "snapshot": "Apache-2.0, ~53.9k stars (gh api 2026-09-04). Rust CLI + Electron desktop + `goose serve`/ACP + Python SDK bindings. Donated by Block to the Agentic AI Foundation (repo moved to aaif-goose 2026-04-07). Roughly weekly minor releases v1.38-v1.49 in window; strong on providers (declarative YAML providers), hooks, recipes, per-message cost, ACP, and local inference.",
+   "notable_features": [
+    {
+     "feature": "Unrolled agent loop + cache-safe request assembly (append-only turn context, declared cache semantics) + streaming shell output",
+     "description": "v1.46.0 rewrites the loop for cacheability, streams command output while running, and adds per-message usage/cost (tokens, cost, TTFT, tok/s, cache tokens) with derived session totals.",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.46.0",
+     "date": "2026-08-12"
+    },
+    {
+     "feature": "Open Plugins hooks spec: PreToolUse denial hooks (1.36), blocking Stop hooks (1.37), `on_failure` block for PreToolUse, stable `tool_call_id` across lifecycle",
+     "description": "Policy hooks are portable across runtimes implementing the spec; v1.48/1.49 add `on_failure` handling and a PreToolUseResult event.",
+     "source_url": "https://aaif.io/blog/goose-doubles-down-on-open-in-latest-two-releases",
+     "date": "2026-06-09"
+    },
+    {
+     "feature": "Scheduled recipes selectable from saved recipes; scheduled-job sessions collapse into an accordion",
+     "description": "Recipe scheduling UX in v1.48/1.49; recipe parameter validation and minijinja filters fixed in v1.47.",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.49.0",
+     "date": "2026-09-03"
+    },
+    {
+     "feature": "Security advisory GHSA-r5pp-p5r8-466r: `goose review` executed attacker code via repo `.git/config` `core.fsmonitor`",
+     "description": "High severity; running review inside a malicious repo ran a command before any model call or approval. Fixed in v1.44.0.",
+     "source_url": "https://github.com/aaif-goose/goose/security/advisories/GHSA-r5pp-p5r8-466r",
+     "date": "2026-07-24"
+    },
+    {
+     "feature": "`/goal` self-evaluation before finishing, `goose review` local code review, summon peek mode + delegate working_dir/context for async background tasks",
+     "description": "v1.40/1.41 orchestration primitives (subagent instructions, dynamic skill refresh, project-backed system prompts).",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.40.0",
+     "date": "2026-07-02"
+    },
+    {
+     "feature": "Provider bindings to goose-sdk with Python wheel publishing; OllamaCloud provider with dynamic model discovery; MLX local inference",
+     "description": "v1.42.0 Python SDK MVP; v1.41.0 MLX provider; June releases added Vulkan/CUDA/Alpine local-inference builds.",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.42.0",
+     "date": "2026-07-13"
+    },
+    {
+     "feature": "Air-gapped docs (`GOOSE_DOCS_ROOT`), unified OTLP logging schema for cross-tool detection, TLS for ACP serve, OAuth pre-registered clients for streamable-HTTP extensions",
+     "description": "Enterprise-leaning hardening across v1.38, v1.41, v1.45, v1.47.",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.45.0",
+     "date": "2026-07-29"
+    },
+    {
+     "feature": "Desktop auto-updater, Linux ARM64 packages, web-search + browser-use built-in skills, model-native audio transcription, git branch indicator",
+     "description": "v1.49.0 feature set.",
+     "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.49.0",
+     "date": "2026-09-03"
+    }
+   ],
+   "business_shifts": "Foundation-governed (AAIF, alongside MCP and AGENTS.md) since April 2026; no paid tier, BYOK only. Added OpenCode Zen and many router gateways as declarative providers (v1.48.0, 2026-08-27), i.e. goose is a client for other vendors' subscriptions. Roadmap items cited by third parties (Android client, adversarial AI monitoring) are unverified.",
+   "user_sentiment": "Praise: local-first, any-model, MCP-native, now vendor-neutral under the Linux Foundation; per-message cost/TTFT display and portable hooks praised. Complaints: small local models handle tool-calling unreliably; desktop reconnect after sleep needed fixes (v1.43); the fsmonitor RCE showed review paths trusted repo git config. Reddit could not be crawled; sentiment from blogs/HN only."
+  },
+  {
+   "name": "OpenHands (All Hands AI)",
+   "snapshot": "MIT, ~86.2k stars (gh api 2026-09-04). V1 architecture = `software-agent-sdk` (Python, agent-server REST, Docker/K8s sandboxes, ACP providers) + 'Agent Canvas' web workspace (introduced 2026-06-16, replaced the old GUI; v1.9.0-v1.16.0 shipped in August alone) + CLI + Cloud/Enterprise. Positioning moved from 'coding agent' to 'org-wide automation workspace'.",
+   "notable_features": [
+    {
+     "feature": "Agent Canvas Automations with live PENDING/RUNNING/FAILED phases, Git Sync page, catalog entries that ship script bundles",
+     "description": "Scheduled/event-driven automations (weekly repo summaries, stale-issue review, dependency checks) with Slack/GitHub/Linear integrations; v1.14-v1.16 added run phases, Git Sync and installable automation catalogs.",
+     "source_url": "https://www.openhands.dev/blog/new-in-agent-canvas-august-2026",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "Canvas Apps (beta): manifest-driven custom pages installed disabled for review-first trusted-code acceptance",
+     "description": "Apps add dashboards/tools to Canvas and make authenticated calls to the Agent Server; new Apps are installed disabled so source, resolved revision and manifest can be inspected before enabling.",
+     "source_url": "https://github.com/OpenHands/OpenHands/releases/tag/v1.16.0",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "Context-window usage meter, usage drawer, manual compaction; per-run LLM cost in Activity Log and exports",
+     "description": "v1.13.0 adds the meter/compaction; v1.11.0 adds per-run cost and a typed action for launching local or Cloud child conversations.",
+     "source_url": "https://github.com/OpenHands/OpenHands/releases/tag/v1.13.0",
+     "date": "2026-08-13"
+    },
+    {
+     "feature": "SDK: Agent Plugins manifest loader (root `plugin.json`, closed schema); explicit skill allow-list replaces all-on catalog",
+     "description": "SDK v1.43.0 loads Agent Plugins; Canvas v1.16.0 switches skills to an explicit allow-list.",
+     "source_url": "https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.43.0",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "SDK: ACP providers (claude-agent-acp, codex-acp) run Claude Code / Codex inside the OpenHands harness with LLM+TOOL OTel spans per ACP turn",
+     "description": "v1.42.0 emits observability spans for ACP turns; v1.44.1 adds `INSTALL_ACP_PROVIDERS` build arg for the agent-server image.",
+     "source_url": "https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.42.0",
+     "date": "2026-08-11"
+    },
+    {
+     "feature": "SDK: prompt-based hook evaluation, structured output, goal loop that does not halt on STUCK, per-conversation lifecycle locks, crash recovery on interrupted actions",
+     "description": "v1.42.0-v1.44.0 hardening; secrets kept out of workspace persistence (v1.40.0, 2026-08-01).",
+     "source_url": "https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.42.1",
+     "date": "2026-08-12"
+    },
+    {
+     "feature": "Free default models in Canvas (GLM 5.2 on 2026-08-05, then Kimi K3 tagged free on 2026-08-17); LLM pre-flight validation before saving profiles",
+     "description": "Lowers cost-to-first-run; misconfigured profiles rejected up front.",
+     "source_url": "https://github.com/OpenHands/OpenHands/releases/tag/v1.14.0",
+     "date": "2026-08-17"
+    },
+    {
+     "feature": "ready-for-dev issue readiness gate with type-specific criteria",
+     "description": "Agent checks whether an issue is actionable before starting work.",
+     "source_url": "https://github.com/OpenHands/OpenHands/releases/tag/v1.13.0",
+     "date": "2026-08-13"
+    }
+   ],
+   "business_shifts": "Pricing page: Open Source (free, local), Individual SaaS (free, 1 user, 10 conversations/day, BYOK or OpenHands models at cost with no markup, desktop+mobile), Enterprise (custom; SaaS or self-hosted VPC, SAML/SSO, audit logs, cost guardrails). A $500/mo 'Cloud Growth' team plan is reported by third parties but not on the fetched pricing page (unverified). Agent Canvas is protected behind SaaS auth in Cloud (cloud-1.47.0, 2026-07-21).",
+   "user_sentiment": "Praise: strongest OSS SWE-bench lineage, real sandboxes (Docker/K8s), model-agnostic, transparent 'run/review/automate' story; free default models lower the barrier. Complaints: Docker-in-Docker setup friction on locked-down laptops, heavier footprint than TUI-only agents, and the Canvas transition FAQ (OpenHands/docs #657) shows migration confusion. Reddit not crawlable."
+  },
+  {
+   "name": "Kilo Code (Anaconda)",
+   "snapshot": "MIT, ~27.2k stars for the monorepo (gh api 2026-09-04). VS Code + JetBrains + CLI ('Kilo Core CLI', Bun-compiled) + Cloud Agents + Gateway (500+ models, zero markup) + 'Gas Town by Kilo' multi-agent orchestrator (GA 2026-05-19). Acquired by Anaconda, announced 2026-07-15 (press release cites 3M+ developers, ~10T tokens/month). Rapid 7.4.x-7.5.14 cadence in window; headline is the worktree-based 'Agent Manager'.",
+   "notable_features": [
+    {
+     "feature": "Agent Manager: worktree-per-agent parallel sessions with PR status/CI/review badges, inline change review in the side panel, `agent_manager answer` action so an orchestrator can resolve a managed session's pending question",
+     "description": "v7.5.0 opens edit/write/patch changes inside the Agent Manager panel and adds the answer action; sessions waiting on input fail fast with the pending question named.",
+     "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.0",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "`@worktree` picker to reference other agents' worktrees; separate compaction model; review all worktree changes",
+     "description": "v7.5.6: searchable @ picker shares paths/branches/session IDs without attaching diffs; choose a distinct model for conversation compaction.",
+     "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.6",
+     "date": "2026-08-28"
+    },
+    {
+     "feature": "PR discussion comments and review submissions rendered in the Agent Manager PR view with 'send to agent' actions; embedded app preview with devtools and element-level feedback",
+     "description": "v7.5.11 shows PR comments with actions to send them to the agent or terminal; v7.5.8 previews local apps with embedded developer tools and review-style element feedback.",
+     "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.11",
+     "date": "2026-09-04"
+    },
+    {
+     "feature": "JetBrains Agent Manager beta (worktree tasks, permission-prompt diffs with approval reasons, subagent sessions in editor tabs, Retry failed turns)",
+     "description": "jetbrains/v7.1.0 brings the worktree orchestration UI to JetBrains; 7.1.4 keeps background agents running when the main agent stops.",
+     "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/jetbrains/v7.1.0",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "Windows startup regression and fix: v7.5.0 black screen from Bun 1.4 EACCES probing `WindowsApps\\pwsh.exe`; v7.5.4 reverted runtime and added Windows/macOS/Linux/Alpine smoke gates",
+     "description": "Illustrates the Windows-first packaging risk of compiled-Bun CLIs; v7.5.5 also guards inaccessible PowerShell execution aliases.",
+     "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.4",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "Gas Town by Kilo: cloud-hosted Steve Yegge orchestrator running 20-30 agents with roles, merge queues and patrol loops",
+     "description": "GA on 2026-05-19 (outside window) but the Kilo Gateway/Cloud pairing and Wasteland federation are the platform's team-scale story.",
+     "source_url": "https://sdtimes.com/softwaredev/gas-town-by-kilo-multi-agent-orchestrator-now-available/",
+     "date": "2026-05-19"
+    }
+   ],
+   "business_shifts": "Anaconda acquisition (2026-07-15; 'no changes to existing products, plans, or support'). Extension free/OSS; pay provider rates via Kilo Gateway with no markup; Teams $15/user/mo (third-party); KiloClaw managed cloud agent reported at $55/mo after beta (third-party, unverified). Legacy repo archived 2026-08-03; the old `Kilo-Org/kilo` CLI repo archived 2026-02-25 (Kilo CLI was an opencode fork; the CLI now lives in the monorepo).",
+   "user_sentiment": "Praise: 500+ models with zero markup, best-in-class worktree/parallel-agent UX in the IDE, JetBrains parity. Complaints: early-2026 reviews called it 'bloat on Cline without fixing context management' (later rebuilt); v7.5.0 shipped a black-screen startup bug on Windows/macOS requiring a same-day 7.5.4 respin; heavy background Git/GitHub polling in large repos (throttled in 7.5.3/7.5.14)."
+  },
+  {
+   "name": "DeepSeek Harness (dsh) — breakout",
+   "snapshot": "MIT, launched 2026-08-13; 212k stars by 2026-09-04 (gh api) — fastest star curve GitHub has recorded (95k in two days, 172k in a week). 'Everything is a plugin' on the Cordis kernel: models, tools, skills, sessions, sandboxes, storage, loops, scheduling and the UI are all swappable plugins; ships a local Web UI (`npx @deepseek-ai/dsh web`), headless mode, ACP, and a Python SDK. Developer preview with explicit breaking-change warning; alpha/rc tags every 1-2 days.",
+   "notable_features": [
+    {
+     "feature": "Launch: loop-as-plugin architecture, append-only session log, self-modifying toolset, approval policies, subagent delegation, Web UI + headless + Python SDK",
+     "description": "VentureBeat/The Register coverage of the 2026-08-13 developer preview; HN thread reached ~745 points / 311 comments on launch day.",
+     "source_url": "https://venturebeat.com/technology/deepseek-harness-launches-as-open-source-rival-to-claude-code-alongside-v4-pro-on-api-with-higher-prices",
+     "date": "2026-08-13"
+    },
+    {
+     "feature": "Bidirectional parent/child agent messaging (`send_message` replaces one-way `report`); `web_fetch` default in SDK/headless/ACP",
+     "description": "dsh-v0.1.2-alpha.4 release notes.",
+     "source_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.2-alpha.4",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Per-answer token usage + elapsed time, active schedules shown in session header, plugin list grouped by session/global with Agent Presets",
+     "description": "dsh-v0.1.2-alpha.2 / rc.1 release notes; process content collapsed by default before each answer.",
+     "source_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.2-rc.1",
+     "date": "2026-09-03"
+    },
+    {
+     "feature": "Outbound requests honor HTTP(S)_PROXY/ALL_PROXY/NO_PROXY; arbitrary file upload in Web UI; macOS x64 SDK wheel",
+     "description": "dsh-v0.1.3-alpha.1.",
+     "source_url": "https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.3-alpha.1",
+     "date": "2026-09-04"
+    }
+   ],
+   "business_shifts": "Harness is free/MIT but launched alongside V4-Pro API price rises with peak/off-peak pricing from 2026-08-16 (cache-miss input $0.435 -> $0.66 off-peak / $1.32 peak). Third-party ecosystem already forming: dsh-desktop (23.6k stars), open-design plugin (94k), community 'oh-my-dsh' upgrade skills.",
+   "user_sentiment": "Praise: traceable append-only execution logs, genuinely swappable loop, no model lock-in (40+ providers). Criticism (Justin3go review, 2026-08-15): over-engineering for typical use, ~10x token usage vs Pi and ~3x vs other frameworks in preliminary tests, duplicate CLAUDE.md/AGENTS.md injection bug, 5/5 third-party plugins failed, docs written for agents not humans; 'everything is a plugin may mean nothing is defensible'."
+  },
+  {
+   "name": "Pi (earendil-works/pi, formerly badlogic/pi-mono) — breakout",
+   "snapshot": "MIT, ~101.8k stars (gh api 2026-09-04; 45k in May, 98k by August). Minimal harness: four tools (read/write/edit/bash), tiny system prompt, everything else via extensions (2,143 packages as of 2026-05-06). Deliberately no MCP, no subagents, no plan mode, no background bash. Acquired by Armin Ronacher's Earendil on 2026-04-08; hosted layer 'Lefos' reserved for Fair Source/proprietary.",
+   "notable_features": [
+    {
+     "feature": "Native PowerShell tool on Windows + safer staged/atomic managed updates",
+     "description": "v0.84.3.",
+     "source_url": "https://github.com/earendil-works/pi/releases/tag/v0.84.3",
+     "date": "2026-08-24"
+    },
+    {
+     "feature": "Fullscreen transcript search; configurable default tools at startup",
+     "description": "v0.84.2.",
+     "source_url": "https://github.com/earendil-works/pi/releases/tag/v0.84.2",
+     "date": "2026-08-14"
+    },
+    {
+     "feature": "Persistent per-turn Claude thinking effort with safe recovery from signed-thinking mismatches",
+     "description": "v0.85.0.",
+     "source_url": "https://github.com/earendil-works/pi/releases/tag/v0.85.0",
+     "date": "2026-09-04"
+    }
+   ],
+   "business_shifts": "Core stays MIT; RFC 0015 reserves Fair Source/proprietary layers for hosted services (Lefos).",
+   "user_sentiment": "Praise: lowest token overhead, user controls all context, 'ask Pi to change Pi'. Criticism: extensions execute arbitrary code (supply-chain exposure); no MCP/subagents is a dealbreaker for team use."
+  }
+ ],
+ "candidates": [
+  {
+   "title": "Native Agent Plugins 1.0 support (plugin.json + skills/ + mcp.json) with `~/.agents/plugins` discovery",
+   "description": "Implement the vendor-neutral Agent Plugins 1.0.0 spec (TSC: Amazon, Cursor, Microsoft, OpenAI, Vercel; published 2026-08-06) as a first-class loader: validate `plugin.json`, expose bundled Agent Skills through SkillsMiddleware, auto-start declared MCP servers, and manage enable/disable per plugin. Route it through the existing skill trust store so symlinked or unreviewed plugins stay off by default (OpenHands installs new Apps disabled; Cline ignores workspace `.agents/plugins`).",
+   "competitor": "Cline (desktop-v0.0.23, 2026-09-03); OpenHands SDK v1.43.0 (2026-08-21); VS Code/Copilot CLI (2026-08-12); Goose Open Plugins hooks",
+   "source_url": "https://github.com/agentplugins/agent-plugins-spec",
+   "source_date": "2026-08-06",
+   "target_users": [
+    "small dev teams",
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "A team writes one plugin folder and it loads unchanged in bog, Copilot, Codex, Cursor, Cline and OpenHands, so bog stops being the tool that needs a bespoke port of every internal skill pack. ROADMAP #34 proposed an importer; the bar moved — there is now a spec with a multi-vendor TSC, so bog should be a native client, not a converter.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "One-click session import from Claude Code, Codex, opencode (and Cline) into resumable bog threads",
+   "description": "Scan the local stores of the big four (`~/.claude/projects`, Codex sessions, opencode's SQLite, Cline's `~/.cline/data/sessions`), let the user pick conversations, and materialize them as LangGraph-checkpointed threads that resume on the user's active model, indexed by the session FTS. Offer it during `/onboard`.",
+   "competitor": "Cline Desktop v0.0.22 `SessionImportService`",
+   "source_url": "https://github.com/cline/cline/releases/tag/desktop-v0.0.22",
+   "source_date": "2026-09-02",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A power user trying bog keeps months of Claude Code context on day one instead of starting cold, which removes the single biggest switching cost; Cline made this an onboarding step and nobody else has it in a TUI. Distinct from ROADMAP #33 (bog-to-bog teleport).",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Daemon as a session hub: multi-client attach, durable event log with replay, drain/upgrade without losing work",
+   "description": "Extend `libs/daemon` from one-shot job runner into a local hub that owns live sessions: an append-only event log (SQLite, size-capped, vacuumed) that reconnecting TUI/VS Code/ACP clients replay deduped by event id; `bog daemon drain` / `bog daemon upgrade` that refuse new mutating work, wait for idle and swap binaries; multiple clients attached to one session with creator/participant/observer roles. Keep event snapshots state-only (status, usage, checkpoint) — Cline's transcript-in-every-event bug grew a 25 GB process.",
+   "competitor": "Cline CLI v3.0.57 / SDK v0.0.78 Hub",
+   "source_url": "https://github.com/cline/cline/releases/tag/cli-v3.0.57",
+   "source_date": "2026-08-23",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A user can close the laptop, upgrade bog, or open the same run from VS Code and the TUI, and nothing in flight is lost — the thing ROADMAP #39 (durable crash-safe runs) promised, now with the bar raised to live multi-client attach and zero-loss upgrades, which only Cline ships today.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Published pre-prompt overhead budget + `--mini` zen profile (4 tools, tiny prompt, no skills tool)",
+   "description": "Add a `/tokens overhead` audit that reports exactly how many tokens bog sends before the user's first word (system prompt, tool schemas, skills index, memory) with a per-middleware breakdown, and a `--mini`/`/profile zen` preset that strips to read/write/edit/execute with a sub-2k prompt and deferred-tool activation for everything else. Publish the number in docs and CI-guard it against regression.",
+   "competitor": "OpenCode `--mini` (v1.17.10); Cline zen mode (cli-v3.0.56); Pi; HN Systima study (Claude Code 33k vs OpenCode 7k)",
+   "source_url": "https://news.ycombinator.com/item?id=48883275",
+   "source_date": "2026-07-13",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "Cost-sensitive local-model users get a harness whose fixed cost per turn is a known, small number instead of a surprise; the HN thread shows buyers now compare harnesses on this figure and migrate to Pi/OpenCode over it. Exploits bog's deferred-tools and street-sweeper work but turns them into a headline metric. Complements ROADMAP #46 (reasoning effort) which does not address fixed overhead.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Default-on spawn/depth caps with a fan-out preview before any subagent burst",
+   "description": "Make `RunawayCaps` (ROADMAP #25) default-on with sane numbers (e.g. max 4 concurrent, depth 1, $-budget per team run) and add a pre-spawn interstitial: before `/team`, `/butcher`, `/best-of-n` or an agent-initiated `task` fan-out, show the planned N, model, and projected cost from the cost ledger and require approval above threshold; nested subagents off unless `subagent_depth` is raised.",
+   "competitor": "OpenCode `subagent_depth` (v1.18.2); HN complaints ('launched 102 agents and blew my $120 quota in 6 minutes')",
+   "source_url": "https://github.com/sst/opencode/releases/tag/v1.18.2",
+   "source_date": "2026-07-15",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "Nobody gets a $120 bill from one prompt; the user sees the fan-out plan and its price before it happens, which is the single most-cited fear in the July HN thread. bog already has the ledger and caps — the leapfrog is making them visible and default rather than opt-in.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Per-message usage strip: tokens, cost, TTFT, tok/s, cache-hit ratio inline in the TUI",
+   "description": "Render a compact usage line under every assistant message (input/output/cache-read/cache-write tokens, $ from the cost ledger, time-to-first-token, tokens/sec) with session totals in the footer; suppress $ for subscription-billed providers (ClinePass/Go/Claude Max) and show plan-quota use instead.",
+   "competitor": "Goose v1.46.0 per-message usage UI; DeepSeek Harness (per-answer tokens + elapsed); OpenHands per-run cost (v1.11.0); Cline v4.1.16 subscription suppression",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.46.0",
+   "source_date": "2026-08-12",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A local-model user immediately sees which turns are slow or expensive and whether prompt caching is actually hitting, without opening `/cost`; three competitors made this the default view in the last 60 days so its absence now reads as a gap.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Cache-safety contract: append-only request assembly with a cache-hit meter and a CI test that fails when a middleware breaks the prefix",
+   "description": "Declare cache semantics per message segment (stable prefix vs volatile tail), forbid steering-reminder wrappers on follow-up user messages, and add an integration test that replays a 10-turn session and asserts the byte-identical prefix survives every middleware in the canonical order (street sweeper, summarization, prompt caching, expert rules injection). Surface cache-read ratio in the usage strip.",
+   "competitor": "Goose v1.46.0 'cache-safe request assembly with append-only turn context and declared cache semantics'; OpenCode v1.17.9",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.46.0",
+   "source_date": "2026-08-12",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "Users pay 10x less for the 90% of each request that is unchanged, and bog's 100-middleware stack stops silently breaking caching every time someone injects a reminder; competitors with 5 middleware never had this risk, so a locked contract is a defensible answer to 'big stack = expensive'.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Open Plugins hook compatibility + LLM-evaluated hook predicates + `on_failure` blocks",
+   "description": "Map bog's hook bus onto the Open Plugins hooks spec event names and payloads (PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop) so Goose/Claude Code hook files run unchanged, add `on_failure` handling for PreToolUse hooks, and add a prompt-based hook type where a small model evaluates a natural-language policy ('deny any command that writes outside src/') and returns a decision — wired into the same fail-closed enforcement path as Expert Mode.",
+   "competitor": "Goose v1.36/1.37/1.49 (Open Plugins hooks, blocking Stop, `on_failure`); OpenHands SDK v1.42.1 prompt-based hook evaluation",
+   "source_url": "https://github.com/aaif-goose/goose/releases/tag/v1.49.0",
+   "source_date": "2026-09-03",
+   "target_users": [
+    "enterprise",
+    "small dev teams"
+   ],
+   "why_killer": "A platform team writes one policy hook and enforces it across bog, Goose and Claude Code, and can express policies in English where a YAML Expert rule would be brittle; bog already has the fail-closed tool-path enforcement that competitors lack, so adding the portable surface makes it the strictest runtime that is also the easiest to adopt.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Agent-callable `schedule`/`todo` tool that writes daemon jobs with workspace scoping and HITL approval",
+   "description": "Expose a `tasks` tool so the agent can create durable todos and one-time/recurring schedules ('re-run the flaky test nightly and ping me'), persisted to the daemon's `jobs.json` with the workspace and thread that created them; creation requires approval under the trust profile, and scheduled runs fold into a collapsible group in `/jobs` and `/threads`.",
+   "competitor": "Cline SDK v0.0.76/0.0.77 `tasks` tool; Goose scheduled recipes (v1.48/1.49); OpenHands Automations with live phases",
+   "source_url": "https://github.com/cline/cline/releases/tag/sdk/sdk/v0.0.76",
+   "source_date": "2026-08-21",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "The agent can turn 'do this every Friday' into an actual daemon job from inside the conversation instead of the user hand-editing cron config, which converts bog's daemon from an admin feature into a thing every session uses. Exploits the daemon nobody else in this bucket has as a first-party TUI companion (Cline needs its Hub, OpenHands needs Canvas).",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Worktree Agent Manager: control half of `/dashboard` with PR comments piped to the agent and cross-worktree `@` references",
+   "description": "Complete ROADMAP #11's control half: from `/dashboard` launch/stop/answer-pending-question/diff/merge per worktree; show PR state, CI and review comments per row with 'send to agent' actions; add an `@worktree:<name>` mention that shares path/branch/session id (not diffs) with another agent; optionally embed an app-preview pane with console/diagnostics feedback.",
+   "competitor": "Kilo v7.5.0 / v7.5.6 / v7.5.11 Agent Manager; JetBrains Agent Manager beta (jetbrains/v7.1.0)",
+   "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.11",
+   "source_date": "2026-09-04",
+   "target_users": [
+    "small dev teams",
+    "solo power users"
+   ],
+   "why_killer": "A developer running four parallel agents can answer the one that is blocked, feed a reviewer's PR comment straight to the right worktree, and merge from one screen — Kilo made this the reason to open the IDE; bog has the worktree, team and evidence primitives but the TUI still only watches.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Quota-aware provider fallback with subscription-lane presets (OpenCode Go, ClinePass, OmniRoute, free stealth models)",
+   "description": "Add provider presets for the new $10/mo open-model lanes (OpenCode Go OpenAI/Anthropic-compatible endpoints, ClinePass, OmniRoute gateway) plus a fallback chain that reads rate-limit/quota headers and rotates to the next configured provider or local model when a 5-hour window is exhausted, with the cost ledger recording plan-quota use instead of $ for flat-rate providers.",
+   "competitor": "OpenCode Go ($10/mo, 2026-08); ClinePass ($9.99/mo, 2026-06); OmniRoute (61k stars, quota-aware auto-fallback); Ox Alpha free 1M-ctx model (2026-08-20)",
+   "source_url": "https://opencode.ai/docs/go/",
+   "source_date": "2026-09-04",
+   "target_users": [
+    "solo power users"
+   ],
+   "why_killer": "A cost-sensitive user gets 'never stop coding' for $10 a month: when Go's window runs out bog quietly moves to Ollama or a second lane instead of erroring, and the ledger shows quota not phantom dollars. Open flank: every competitor sells a lane, none of them fails over across lanes.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Hostile-repo guard: neutralize repo-supplied git config (`core.fsmonitor`, `core.hooksPath`, `core.pager`, `diff.external`) on every git invocation and scan `.git/config` on open",
+   "description": "Run all internal git calls with `-c core.fsmonitor= -c core.hooksPath=/dev/null -c core.pager=cat -c diff.external=` and `GIT_CONFIG_NOSYSTEM=1` (Windows too), and add a repo-open check that flags dangerous keys in `.git/config`, `.gitattributes` filters and `.gitmodules` before any `/review`, `/diff`, `/self-review`, `/pr` or evidence collection runs. Extend `exec_risk.py` to cover config-file vectors, not only command-line ones.",
+   "competitor": "Goose GHSA-r5pp-p5r8-466r (`goose review` RCE via repo `core.fsmonitor`)",
+   "source_url": "https://github.com/aaif-goose/goose/security/advisories/GHSA-r5pp-p5r8-466r",
+   "source_date": "2026-07-24",
+   "target_users": [
+    "enterprise",
+    "small dev teams",
+    "solo power users"
+   ],
+   "why_killer": "Cloning a malicious repo and asking bog to review it cannot run attacker code before the model is even called; Goose shipped exactly this hole in a release that reached its review command, and bog's `/review`, evidence bundle and `bog blame` all shell out to git. Cheap, and turns a competitor CVE class into an Expert Mode evidence line.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Code-mode MCP adapter: sandboxed scripts orchestrate many MCP tool calls in one turn",
+   "description": "Ship ROADMAP #36's CodeAct mode scoped the way OpenCode did: an `execute_mcp_script` tool that runs a confined Python/JS snippet with the connected MCP tools bound as functions, hidden unless enabled; results are one tool message instead of N round-trips. Enforce Expert Mode per inner call and count each inner call in the cost ledger.",
+   "competitor": "OpenCode v1.17.14 'code mode MCP adapter'",
+   "source_url": "https://github.com/sst/opencode/releases/tag/v1.17.14",
+   "source_date": "2026-07-06",
+   "target_users": [
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A 30-call MCP workflow (list issues, filter, comment, label) costs one model turn instead of thirty, cutting latency and tokens by an order of magnitude on integration-heavy tasks; OpenCode proved the scoped version is safe to ship, and bog's per-call rule engine makes it auditable where OpenCode's is not.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "ACP client mode: run Claude Code, Codex, opencode, Goose or Pi as governed teammates inside `/team`",
+   "description": "bog already serves ACP (libs/acp); add the client side so `TaskLedger`/`run_team` can spawn an external ACP agent as a worker with bog's cost ledger, RunawayCaps, Expert Mode denials and evidence bundle wrapped around it (LLM+TOOL OTel spans per ACP turn). Model picker forwards to the adapter; failures surface as resumable task ids.",
+   "competitor": "OpenHands SDK v1.42.0/v1.44.1 (claude-agent-acp, codex-acp providers); Goose v1.45 Claude Code/Pi adapters; Cline Kanban (Cline+Claude Code+Codex)",
+   "source_url": "https://github.com/OpenHands/software-agent-sdk/releases/tag/v1.42.0",
+   "source_date": "2026-08-11",
+   "target_users": [
+    "small dev teams",
+    "enterprise"
+   ],
+   "why_killer": "A team keeps its Claude Max or Codex subscription and its favorite harness per task, but every worker runs under one budget, one audit trail and one policy engine — the governed-teams story (ROADMAP #21) applied to other vendors' agents, which none of them can do to each other. Leapfrog: OpenHands hosts foreign agents but has no rule engine or cost caps around them.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Context meter + cheap compaction model + 'keep complete recent turns' compaction",
+   "description": "Show a live context-window meter in the footer, let users pick a separate (cheap/local) model for `/compact` and auto-summarization, and change the summarization cut so it never splits a tool call from its result and keeps the last K complete turns verbatim; add a manual 'compact now' with a preview of what will be dropped.",
+   "competitor": "OpenHands v1.13.0 (usage meter, manual compaction); Kilo v7.5.6 (separate compaction model); OpenCode v1.18.17 (keep complete recent turns)",
+   "source_url": "https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.6",
+   "source_date": "2026-08-28",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Compaction stops costing frontier-model dollars and stops corrupting sessions by orphaning tool results; a user watching the meter knows when to compact instead of hitting a wall. Three competitors shipped pieces of this in August, making it table stakes.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Signed Windows distribution (Authenticode + winget) and a PowerShell-native execute tool",
+   "description": "Ship Authenticode-signed `bog-agents` binaries/installer via Azure Trusted Signing and a winget manifest; add an opt-in `powershell` execute tool with proper PowerShell 5.1/7 quoting, and startup guards for Windows execution-alias traps (`WindowsApps\\pwsh.exe` EACCES) that broke Kilo 7.5.0.",
+   "competitor": "Cline Desktop v0.0.20 / CLI v3.0.61 (signed Windows builds); Pi v0.84.3 PowerShell tool; Kilo v7.5.4 Windows startup fix",
+   "source_url": "https://github.com/cline/cline/releases/tag/cli-v3.0.61",
+   "source_date": "2026-09-02",
+   "target_users": [
+    "solo power users",
+    "enterprise"
+   ],
+   "why_killer": "A Windows user under application-control policy can install bog at all, and the agent speaks PowerShell natively instead of failing on bash-isms; bog is Windows-first by charter but competitors now ship signed Windows binaries while bog's local sandbox still fails closed there — signing and PowerShell are the cheap half of closing that gap.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Remote-managed org config: MCP/skill/plugin allowlists and gateway-only routing enforced from a central policy file",
+   "description": "Add a `remote_config` source (URL or repo path, signed) that trust profiles consult: `allowedMCPServers`, explicit skill allow-list (default deny), plugin marketplace on/off, 'only this internal gateway' provider lock, and zero-retention flags — with `/permissions` and `/doctor` showing which settings are org-pinned.",
+   "competitor": "Cline v4.1.12 (enterprise MCP controls); OpenHands v1.16.0 (explicit skill allow-list); OpenCode Enterprise (centralized config, gateway-only)",
+   "source_url": "https://github.com/cline/cline/releases/tag/v4.1.12",
+   "source_date": "2026-08-21",
+   "target_users": [
+    "enterprise"
+   ],
+   "why_killer": "A security team can roll bog to 500 developers knowing no one can add an unvetted MCP server or route tokens outside the internal gateway, which is the gating question in every regulated procurement; ROADMAP #23 trust profiles are local — the bar moved to centrally pinned, and bog's Expert Mode can prove the pin was in force in the evidence pack.",
+   "effort_guess": "M"
+  }
+ ],
+ "market_trends": [
+  "Harness overhead became a buying criterion: the July 13 HN thread (Claude Code 33k pre-prompt tokens vs OpenCode 7k) and Pi's rise to ~100k stars show users now benchmark fixed per-turn cost and subagent spawn behavior, and switch harnesses over it.",
+  "The $10/month open-model lane is the new price floor: ClinePass ($9.99, June), OpenCode Go ($10, August, usable from any agent), OpenHands free Kimi K3/GLM defaults, and free stealth previews (Ox Alpha, 1M context, Aug 20) make 'free-to-first-run on open weights' table stakes, while frontier API prices moved up (DeepSeek V4-Pro peak/off-peak from Aug 16).",
+  "Vendor-neutral packaging standards consolidated in one summer: Agent Plugins 1.0 (Aug 6, TSC of Amazon/Cursor/Microsoft/OpenAI/Vercel; Copilot Aug 12, Cline Sep 3, OpenHands Aug 21), Agent Skills, AGENTS.md and MCP under the Linux Foundation's AAIF, and the Open Plugins hooks spec — a harness that cannot load these formats unchanged is now the odd one out.",
+  "ACP flipped from 'editor protocol' to 'agent interop': OpenHands and Goose run Claude Code/Codex/Pi as ACP providers inside their own loops, and Cline's Hub brokers capabilities across clients, so the emerging pattern is a governed outer harness hosting other vendors' inner agents.",
+  "Durable, multi-client sessions with replayable event logs (Cline Hub, OpenCode snapshots/revert, DeepSeek's append-only session log) replaced 'resume from checkpoint' as the expectation; zero-loss upgrades and attach-from-another-client are the new bar.",
+  "Worktree-per-agent orchestration moved into mainstream IDEs (Kilo Agent Manager in VS Code and JetBrains, Gas Town in the cloud), and PR comments/CI status flowing back into the agent is the differentiator, not parallelism itself.",
+  "Governance is being commoditized as hooks and allow-lists (PreToolUse denial, blocking Stop hooks, prompt-evaluated hooks, MCP/skill allowlists via remote config), while security incidents in the window (Goose fsmonitor RCE, OpenCode's earlier unauthenticated local server) show repo-supplied config and loopback servers are the active attack surfaces.",
+  "Corporate consolidation continued: Anaconda bought Kilo (Jul 15), Earendil bought Pi (Apr 8), Block handed Goose to the Linux Foundation, and SST froze its infra product to build OpenCode — every remaining independent is either foundation-owned or attached to a gateway/subscription business, and Aider shows what happens to a one-maintainer harness without one.",
+  "Per-message cost/TTFT/cache visibility and context-window meters became standard UI (Goose, OpenHands, DeepSeek, Kilo) as users treat token spend as a first-class signal rather than a monthly surprise."
+ ],
+ "unverified": [
+  "Reddit could not be crawled (domain blocks the search agent), so all Reddit sentiment for every product in this bucket is unverified; sentiment above comes from HN, GitHub issues/releases, and blogs.",
+  "OpenCode star count (~160k-202k) is from third-party blogs; the `gh api repos/sst/opencode` star field was not inspected. Also unclear whether the canonical repo is now `anomalyco/opencode` (an issue link references it) — treated as the same project.",
+  "OpenCode 'Black' tier: only a Medium post about an unannounced pricing page mentions it; not on opencode.ai/docs/enterprise.",
+  "OpenHands 'Cloud Growth $500/mo' plan appears only in third-party pricing aggregators; the fetched openhands.dev/pricing page lists Open Source, Individual (free) and Enterprise (custom) only.",
+  "KiloClaw pricing ($55/mo after beta) and Kilo Teams ($15/user/mo) come from third-party blogs, not kilo.ai.",
+  "Freedom.tech write-up of Cline Desktop 0.0.15 returned HTTP 403; its claims were substituted with the GitHub release notes for desktop-v0.0.15 and sdk v0.0.76/0.0.77.",
+  "The 'aider.ai' product-update site surfaced in search (Aug 6, 2026 update) appears to be an unrelated product, not Aider-AI/aider; treated as not applicable.",
+  "DeepSeek Harness '~10x token usage vs Pi, 3x vs other frameworks' is one reviewer's preliminary test (justin3go.com, 2026-08-15), not a controlled benchmark; the official docs site returned only a title so the feature list is from release notes and press.",
+  "Goose roadmap items cited by third parties (Android client, 'adversarial AI monitoring') were not found in official release notes.",
+  "Cline Kanban orchestrating Cline/Claude Code/Codex is mentioned in a review site, not in a Cline release note within the window.",
+  "HN comment quotes on the token-overhead thread were produced by a summarizer over the fetched page and were not individually re-read.",
+  "Pi package count (2,143) is as of 2026-05-06 (implicator.ai); no newer official count found."
+ ]
+}

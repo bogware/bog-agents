@@ -1,3 +1,175 @@
+# REVIEW.md v6 — Current-State Audit + Killer-Feature Cycle (2026-09-04)
+
+> **Scope this cycle (agreed 2026-09-04):** feature-heavy, light audit. v5's full
+> re-audit was two weeks old, so the audit half re-scored v5's deferred items and
+> every ROADMAP v1/v2 entry against code and spot-checked the 20 commits since
+> 2026-08-19; it did not hunt for new P0/P1 across every package. The feature
+> half — five competitor buckets, 30 products, 85 candidates novelty-checked
+> against the code — lives in `ROADMAP.md` § "Killer features v3". Target users
+> for 1.0, in priority order: solo power users / OSS (Windows-first, local
+> models, cost-sensitive), small dev teams, enterprise / regulated. SDK-DX-only
+> work is deliberately low priority.
+>
+> **Method:** 16 agents in one workflow — three package inventories (SDK, CLI,
+> satellites/delivery) each followed by an adversarial refuter for every claimed
+> P0/P1; five competitor researchers (blind to the code) each followed by a
+> novelty checker that grepped the tree; plus an inline completeness pass over
+> four products the buckets skipped. Every code claim below cites a `path:line`
+> an agent opened; every competitor claim in the ROADMAP carries a URL and date,
+> and each research file lists what could not be verified. Tests run during the
+> audit: SDK full unit suite (2,926 passed / 148 skipped / 2 xfailed, 70 s,
+> Windows), daemon (233 passed), targeted CLI (129 passed), acp 52, harbor 61,
+> daytona 5. Local checkout was 0.9.12 + one commit; `origin/main` is 0.9.13
+> (release 2026-08-24) with no functional diff, so line numbers are HEAD-of-checkout.
+
+## 1. Where we stand (2026-09-04, main @ 0.9.13)
+
+Three inventory agents read every package against the "wired end-to-end + tested" bar; every P0/P1 they raised went to an independent refuter. Headline: **the correctness center held — the SDK suite is fully green on Windows (2,926 passed), the daemon suite is green (233), the six risky post-v5 commits are cleanly applied with regression tests, and every v5 Wave A–F fix verified in place.** What did *not* move is the feature surface: of the 26 roadmap items re-scored, four advanced (#21 teams and #31 best-of-N shipped; #29 evidence and #30 assign-to-bog reached "partial"), two regressed to "stale" (#26 deepagents parity — GA passed five weeks ago unscouted; the drop-in badge is now unverified against what users install), and twenty are byte-for-byte where July left them, including both Tier-1 table-stakes items with CLI surfaces (#23 trust profiles, #28 changes tray).
+
+| Package | Health | One line |
+|---|---|---|
+| **SDK core** | Strong | `create_agent`/FeatureConfig/builder/deepagents-compat all green. Two honesty gaps: FeatureConfig has 80 fields (CLAUDE.md says ~150) and the headline enterprise middleware (ExpertRules, StopGate, Rubric, GoalTools, EvidenceBundle, Guardrails, LangSmith) has **no FeatureConfig field** — an SDK consumer must hand-assemble `middleware=[…]` and know the load-bearing order. |
+| **SDK context** | Strong cores, two unrealized promises | Sweeper, overflow-heal, output-truncation, deferred-tools are coherent and tested. But the sweeper's two promises do not hold on either real surface: plain `agent.invoke()` mints a fresh thread id per call so `recall_swept` never finds the offload (new SDK-D2), and the CLI still splices it inner of summarization so savings never defer compaction (CTX-2, open). |
+| **SDK safety** | Well-built, three P2s still open | Wave-B fixes verified. Expert-rules still fails *open* on a first-load parse error (SAFE-3); RBAC still enforces only at request time with no tool-call re-check (SAFE-4); LLM guardrails silently skip on the sync path (SAFE-5). The self-mod guard's authority list is CLI-only — pure-SDK consumers get none. |
+| **SDK orchestration** | Primitives real, wiring partial | `TaskLedger`/`Mailbox`/`run_team`, `CostLedger`/`RunawayCaps`, `EvidenceBundle.merge_ready` are pure, tested logic. But `CostLedger` is consulted **only** by `run_team` — the main agent's `task` subagents spawn uncounted (violates the CLAUDE.md invariant; #25 stays partial), and `EvidenceBundleMiddleware` is reachable from nothing (no FeatureConfig field, no CLI flag, no daemon dispatch). |
+| **SDK observability** | LangSmith-bound | Cost tracker + audit trail shipped. OTel exports only through LangSmith's exporter; zero `gen_ai.*` attributes; no OTLP endpoint option; no test drives an enabled OTel path (#38 not started). |
+| **SDK backends** | Mature | Atomic writes, symlink refusal, background shell, PTY (ConPTY on Windows), egress proxy, bwrap/seatbelt sandbox all verified. **No Windows sandbox launcher** — `require_sandbox=True` fails closed on the project's own primary platform, and README markets "OS-level sandbox" without the caveat. |
+| **serve** | One P1 | `/stream` still never records the assistant reply (SDKC-2, confirmed live): every multi-turn SSE conversation on the default checkpointer-less wiring replays a user-only transcript. No A2A, no SDK-side MCP transport. |
+| **CLI commands** | 118 working / 7 partial / 3 dead of 129 | The three v4 dead commands are dead for the **third consecutive cycle**: `/think` scans a `self._middleware` that is never assigned; `/checkpoint load` sends a prose "please resume" prompt and restores nothing; `/worktrees cancel` flips a status field while the worker keeps editing. `/help` still advertises all three, and the registry has no `available=False` mechanism. |
+| **CLI turn lifecycle** | Choke point holds for 4 of 13 | `_start_tracked_session` + 11 regression tests make the v5 pump class structurally impossible for `/butcher`, `/team run`, `/best-of-n`, `/jury` and operator escalation. **Nine model-calling commands still bypass it** — `/orchestrate`, `/race`, `/sidecar`, `/squad`, `/imagine`, `/devil`, `/handoff`, `/rubric draft`, `/teach` — so Esc does nothing and a typed prompt starts a concurrent turn against the same files. |
+| **CLI first-30-minutes** | Rough for the target user | Anthropic auto-default is Opus (most expensive tier) with no cost hint; the wizard has no OpenRouter/xAI/LM Studio/Azure entries; `/auto`'s risk judge is hard-bound to the `anthropic` package so Ollama/OpenAI/Bedrock-only users get rules-only auto mode while `--help` promises "Haiku eval"; `/diff` is monochrome raw text while edit widgets are coloured; the documented `bog-agents command "/help"` breaks under Git Bash on Windows (MSYS mangles the slash). |
+| **CLI god class** | 17,873 lines | 32 of 124 handlers (26%) have no controller module; six are ≥60-line inline implementations (`/diff`, `/branch`, `/undo`, `/worktree`, `/qa`, `/peat`). |
+| **daemon** | Engine solid, execution hollow | 233 tests green; cron catch-up, watchdog, retry, quarantine, orphan reconciliation, fail-closed HMAC, shell-less unattended backend all real. But `_build_prompt` returns `job.prompt` **verbatim**: `trigger_context` (issue number/body/branch from the GitHub front door, CI payload from webhooks) never reaches the model. The quickstart's three canonical patterns rely on `{trigger_context_json}`/`{pr_number}` placeholders and a `--file-change` flag that do not exist, and every REST example uses `Authorization: Bearer` while the API accepts only `X-Daemon-Token`. #30 is a 14-test parser in front of nothing. |
+| **Satellites** | Unshippable | ACP: one agent/cwd/cancel flag shared across sessions (open since v3). VS Code: sidebar view declares a provider that is never registered, each reply overwrites the last, `autoApprove` is inert, **Marketplace listing 404** while README says "search the extensions panel". Daytona: distribution named `langchain-daytona`, which on PyPI is langchain-ai's package — bog's can never be published as-is and its README installs the wrong thing. Harbor still calls the deprecated `als_info` scheduled for 1.0 removal. |
+| **Delivery** | Good release engineering, no distribution | release-please linked versions, OIDC PyPI publish, blocking lock-check, six-package relock loop — all verified. But: no installer (winget/scoop/brew/MSI/one-liner), no Dockerfile or compose, no GitHub App, fork PRs get **zero CI** (every job gated to in-repo branches on self-hosted runners), py3.11 "temporarily disabled" while every package advertises it, no macOS leg for macOS-specific code (launchd, seatbelt, PTY). `bog-agents daemon install` on Windows silently writes a systemd unit. |
+
+**Adoption signal:** public since 2026-03-16; 3 stars, 0 forks, 0 watchers, 0 issues, 0 external PRs. This is a pre-adoption codebase with a post-adoption feature count. Every choice below is weighed against that fact.
+
+### 1.1 What is genuinely world-class (verified, under-marketed)
+
+1. **Street Sweeper** — per-call, lossless-first context *view transformation* that never changes message count or order, so it composes with summarization cutoffs and prompt-cache prefixes by construction; every sweep priced in USD from the real catalog; originals recoverable. No comparator ships continuous pruning that stays cache-stable.
+2. **Expert Mode** — a forward+backward-chaining rule engine at the tool-call boundary with `/why` explanations and `/prove` proof trees. Every competitor's auto-approval is a classifier plus prose; nobody else has a policy engine you can *prove things about*.
+3. **Governed multi-agent primitives that no OSS CLI ships together** — `/team run` over an atomic dependency-aware `TaskLedger` + `Mailbox` under `RunawayCaps`; `/best-of-n` with real worktree attempts and a rubric judge; `/jury`; `/butcher` slice-and-verify on weak models — all tracked, cancellable, tested with injected invokers.
+4. **Layered deterministic approval before any LLM judge** — `ask_list → git_ops classifier → exec_risk → bash_hygiene → Haiku`, failing toward "ask"; a permission cycle that cannot reach bypass by accident.
+5. **Middleware ordering as a tested contract** — canonical-order test, `requires:` validated at build time, rendered-prompt snapshots pinned.
+6. **A family of resilience primitives with declared failure directions** — exec-risk (toward prompting), stop-gate (fail-open, bounded), background shell (never kill; Windows `taskkill /T`), output-truncation merge, deferred tools, semantic coercion — all model-free and unit-tested.
+7. **Session archaeology** — FTS5 `/threads search` (~5 ms at 1,000 threads), `/rewind` to any checkpoint, `/btw` sidechains, signed TraceFile export/verify. Stronger recall than Claude Code's `--resume`.
+8. **Backend hardening most frameworks skip** — sibling-temp + fsync + atomic replace with symlink refusal on every write; bwrap/seatbelt with `--unshare-net` hard cut or a label-boundary CONNECT allowlist proxy; `require_sandbox` fails closed.
+9. **Daemon reliability posture** — shell-less backend for every unattended trigger, fail-closed HMAC, croniter catch-up, quarantine, orphan reconciliation — further than most OSS agent daemons.
+10. **Cross-ecosystem compatibility as a feature** — Claude Code and Cursor hook files load unchanged; Claude skills/commands/MCP configs import; MCP OAuth through the SDK's `OAuthClientProvider`; managed ripgrep with per-platform SHA pins and an offline probe.
+11. **Editor-grade input** — pure vim state machine through Textual's undo stack, `ctrl+x` external editor, registered theme system, a `--drive` YAML harness that scripts the real TUI with a replay model for CI.
+12. **Hybrid memory with zero heavy deps** — FTS5 BM25 fused with an injected embedder and pure-Python cosine, decay, MMR; a rebuildable cache over hand-editable Markdown.
+
+### 1.2 The three structural findings
+
+**F1 — "Shipped" still means "has a module", not "reachable by a user."** Evidence bundle (no FeatureConfig field, no flag, no dispatch), cost ledger (counts teams, not `task` subagents), sandbox.toml's GitHub-Action consumer, `/think`, `/checkpoint load`, `/worktrees cancel`, the daemon's `trigger_context`, the VS Code sidebar. The v4 recommendation for a `/doctor --features` self-test that exercises every advertised surface was never built; three cycles later the same three commands are dead and `/help` still promises them.
+
+**F2 — The parity treadmill stalled.** deepagents 0.7.0 went GA on 2026-07-24 and is at 0.7.13; the SDK tracks 0.7.0b2 and does not even install deepagents in its own venv, so CI cannot catch a break. The "drop-in" claim on the README is currently unverified against every version a user can install.
+
+**F3 — Depth is trapped on the laptop, and now also trapped on POSIX.** The roadmap's own thesis (distribution is the unlock) is unchanged, but the market moved to execute-on-your-machines with no Windows worker anywhere — and bog, the Windows-first project, has no Windows sandbox, a daemon installer that writes systemd units on Windows, a headless surface that breaks under Git Bash, and no installer of any kind.
+
+---
+
+## 2. Findings — fix / refine / upgrade backlog (light audit, adversarially verified)
+
+IDs are `v6 <ID>`. Every P1 below survived an independent refutation pass with a live or code-traced reproduction; P2s are recorded from the inventories without a refuter (severity provisional). Prior-cycle IDs are cross-referenced so commit messages can say "fixes v6 SDK-1 (= v5 SDKC-2)".
+
+### P0 — none this cycle
+
+### P1 — confirmed (6)
+
+| ID | Package | Defect | Effort | Prior |
+|---|---|---|---|---|
+| **v6 SDK-1** | serve | `POST /stream` never records the assistant reply; on the default checkpointer-less wiring every multi-turn SSE conversation replays a user-only transcript while `/history` implies continuity (`serve.py:331`). Live-reproduced. | M | = v5 SDKC-2 |
+| **v6 DMN-1** | daemon | `_build_prompt` returns `job.prompt` verbatim (`runner.py:160-186`); `trigger_context` (GitHub issue number/body/branch, CI webhook payload, changed file path) is stored on the run record and **never reaches the model**. The quickstart's three canonical patterns depend on `{trigger_context_json}`, `{pr_number}`, `{date}`, `{trigger_path}` placeholders and a `--file-change` flag that do not exist; `--output-github-issue "{pr_number}"` is an argparse int error. | M | new (root of #30 "hollow") |
+| **v6 DMN-2** | daemon | `/webhooks/github` (assign-to-bog front door) parses the event and dispatches, but no `jobs create` flag can create a `github` trigger (REST only), README/quickstart never mention it, and — because of DMN-1 — the agent never learns which issue it was assigned. | M | new; same root as DMN-1 |
+| **v6 CLI-1** | CLI | **`self._middleware` is never assigned on `BogAgentsApp`**, so every handler that introspects it is dead: `/think` (`app.py:10561`) always prints "ThinkingMiddleware is not active", and **all of `/worktrees`** — spawn, status, merge, cancel (`app.py:12356-12369`) — prints "ParallelWorktreeMiddleware is not active". `create_cli_agent` returns only `(graph, backend)` while `agent.py:1929-1939` appends ThinkingMiddleware to a local list. `/help` advertises both. Third cycle open; the refuter found the shared root cause. | S | = v4 P1-25 + P1-32 |
+| **v6 CLI-2** | CLI | `/checkpoint load` resolves the checkpoint then sends a prose "resume from checkpoint" prompt and restores nothing (`app.py:8388-8395`); `_resume_thread` (`app.py:17443`) is the real switch path and is never called. The model confabulates a resume. Third cycle open. | M | = v4 P1-27 |
+| **v6 CLI-3** | CLI | Nine model-calling commands run inline on the App pump and never register with TurnManager (v5 Wave A covered only four): `/orchestrate` (`app.py:12218`), `/sidecar` (:12253), `/race` (:5946), `/imagine` (:10918), `/devil` (:10974), `/handoff` (:10677), `/squad` (:10966), `/rubric draft` (:11933), `/teach` (:6149). Esc does nothing; a typed prompt starts a concurrent turn against the same files. | M | = v5 CLIC-2 class, residual |
+
+### Downgraded to P2 by the refuters (real, bounded or already-decided)
+
+- **v6 SAT-1** (was P1) — daemon docs say `Authorization: Bearer`; the API accepts only `X-Daemon-Token` (`api.py:200`); README lists a nonexistent `GET /metrics` and the wrong token path. Every documented REST example returns 401. (S)
+- **v6 SAT-2** (was P1) — `libs/partners/daytona` is named `langchain-daytona`, which on PyPI is langchain-ai's deepagents package; bog's can never be published as-is and its README installs the upstream package. (S: rename to `bog-agents-daytona`)
+- **v6 SAT-3** (was P1) — ACP server shares one `_agent`/`_cwd`/`_cancelled` across sessions (`server.py:94-108,429`). Deferred by decision in v4 and v5; keep deferred or fix with a per-session dict (M). = v5 SAT-4 / P1-61
+- **v6 SAT-4** (was P1) — VS Code: `bog-agents.chatView` declared but no `WebviewViewProvider` registered; `dataset.streaming` never cleared so each reply overwrites the last; `autoApprove` inert; Marketplace listing 404 while README says "search the extensions panel". (M) = v5 SAT-6
+
+### P2 — important, not urgent (unverified by design)
+
+**SDK context / perf**
+- **v6 SDK-2** (new) — `_get_thread_id` mints `session_<uuid4>` per call when no `configurable.thread_id`, so offload write and `recall_swept` read target different files: plain `agent.invoke()` with the sweeper on can never recall (`street_sweeper.py:785`). (S)
+- **v6 SDK-3** — CLI splices the sweeper inner of summarization; sweep savings never defer compaction (`cli/agent.py:2091`, `graph.py:1430`). (M) = v5 CTX-2
+- **v6 SDK-4** — offload rewrites the entire ever-growing file each call and writes `swept_context/` into the user's CWD (`street_sweeper.py:855`). (M) = v5 PERF-4
+- **v6 SDK-5** — memory vector mode embeds N paragraphs serially with `embed_query` at agent build (`tools/bundles.py:417`); 200 round-trips before the first prompt. (S) = v5 PERF-5
+- **v6 SDK-6** — `import bog_agents` eagerly imports the graph stack: 2.76 s warm / 19.9 s cold / 2,335 modules on Windows, ~5% worse than v5 (`__init__.py:10`). (M) = v5 PERF-6
+
+**SDK safety / governance**
+- **v6 SDK-7** (new; CLAUDE.md invariant violation) — `CostLedger`/`RunawayCaps` consulted only by `teams.run_team`; `SubAgentMiddleware`'s `task` tool and `AsyncSubAgentMiddleware` register no spawns, so `max_subagent_spawns` never fires on the default fan-out path (`subagents.py:302`). (M)
+- **v6 SDK-8** — expert rules fail *open* on a first-load parse error: a tab in one YAML file silently disables the whole deny policy with a WARNING (`expert_rules.py:301`). (S) = v5 SAFE-3
+- **v6 SDK-9** — RBAC enforces pinned roles only at request time; a hallucinated/injected `execute` tool call still runs because the tool node keeps it bound (`rbac.py:423`). (M) = v5 SAFE-4
+- **v6 SDK-10** — `GuardrailMiddleware` silently skips async-only guardrails (all `LLMGuardrail`s) on the sync `.invoke()` path at DEBUG level (`guardrails/middleware.py:87`). (S) = v5 SAFE-5
+- **v6 SDK-11** — `EvidenceBundleMiddleware` is reachable from nothing: no FeatureConfig field, no CLI flag, no daemon dispatch. (S to wire) — feeds #29
+- **v6 SDK-12** — deepagents parity tracks 0.7.0b2; PyPI is 0.7.13 (13 patch releases incl. a breaking `handoff→isolated` rename); deepagents is not installed in the SDK venv so CI cannot catch a break. (M) — feeds #26
+- **v6 SDK-13** — CLAUDE.md drift: FeatureConfig is 80 fields not ~150; "new features get a FeatureConfig field" is false for ExpertRules/StopGate/Rubric/GoalTools/EvidenceBundle/Guardrails/LangSmith; untracked empty `libs/partners/runloop/`; stale "Feature #74 A2A" label in `code_intelligence.py:16`. (S)
+
+**CLI first-run / UX**
+- **v6 CLI-5** — `/diff` mounts raw `git diff` as a plain `AppMessage` (monochrome, Rich-markup risk) while edit widgets use `DiffMessage`/`EnhancedDiff` (`app.py:8098`). (S)
+- **v6 CLI-6** — Anthropic auto-default is `claude-opus-4-7` (most expensive) with no cost hint in wizard or banner (`provider_catalog.py:66`). (S)
+- **v6 CLI-7** — Bedrock wizard branch saves the catalog-preferred spec without the hittability probe the auto-detect path uses, and its hard fallback is the retired `claude-sonnet-4-20250514` id (`config.py:1932`; also `main.py:404` help text). (S)
+- **v6 CLI-8** — `bog-agents command "/help"` is MSYS-mangled under Git Bash on Windows (`/c:/program is not available…`); the bare form works but no error or `--help` says so; `cmd_daemon.py:75` already has `_recover_msys_path`. (S)
+- **v6 CLI-9** — `/auto`'s risk judge is hard-bound to the `anthropic` package + `claude-haiku-4-5` (`auto_mode.py:455-490`); OpenAI/Ollama/Bedrock-only users get rules-only auto mode while `--help` promises "Haiku eval". (M)
+- **v6 CLI-10** — `/sidecar` ships with no parent context despite its docstring (`app.py:12247`). (M)
+- **v6 CLI-11** — `/race` is a bare chat-completion fan-out (`race.py:137`) while its docstring and ROADMAP #31 describe a worktree fleet. (M)
+- **v6 CLI-12** — `/help` truth: three advertised behaviours are not real and the registry has zero `available=False` entries — no mechanism exists to mark a command not-yet-working. (S)
+- **v6 CLI-13** — wizard offers five providers; OpenRouter/xAI/LM Studio/Azure only via `-M` incantations. (S)
+
+**daemon / delivery / satellites**
+- **v6 DMN-3** — `bog-agents daemon install` on Windows writes a systemd unit under `%USERPROFILE%\.config\systemd\user\` and prints `systemctl` instructions; README says "no Windows service installer yet" (`cmd_daemon.py:459`). (S)
+- **v6 DEL-1** — optional-extra hints name extras that do not exist: `[acp]`, `[modal]`, `[daytona]`, `[runloop]` (real: `modal-sandbox`, `daytona-sandbox`, `runloop-sandbox`; no `acp` extra; `bog-agents-acp` unpublished); ACP README uses `uv upgrade` (not a verb). (S)
+- **v6 DEL-2** — SDK quickstart imports `DaytonaBackend, ModalBackend` from `bog_agents.backends` (neither exists); README calls `bog-agents drive` (only `--drive PATH` exists). (S)
+- **v6 DEL-3** — CI: py3.11 "temporarily disabled" while every package advertises it; every job gated to in-repo branches on self-hosted runners so **fork PRs get zero checks**; no macOS leg; VS Code extension has no PR compile/lint leg. (M)
+- **v6 DEL-4** — VS Code `buildChildEnv` still strips `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`; corporate-proxy users get connection errors from the child CLI while the terminal works. (S) — residual of v5 SAT-2
+- **v6 SAT-5** — harbor still calls deprecated `als_info` (scheduled for 1.0 removal) and `asyncio.get_event_loop()`; README's `cp .env.example .env` targets a file that does not exist. (S) = v5 SAT-8
+
+### Systemic themes (what the P1/P2 clusters have in common)
+
+1. **Advertised ≠ reachable.** CLI-1/2/12, SDK-11, DMN-1/2, SAT-4, DEL-1/2. Fix pattern: a **feature self-test** (`bog-agents doctor --features`) that constructs every advertised command/middleware and drives it once with a replay model; `available=False` in `SlashCommandSpec` with a drift test that every advertised subcommand has a handler branch; a docs drift test that resolves every documented command/flag/env/placeholder against argparse and the manifest.
+2. **One choke point, incomplete coverage.** CLI-3 is v5's theme 1 again: the fix (`_start_tracked_session`) exists; nine surfaces never traverse it. Fix pattern: a `runs_model=True` flag on `SlashCommandSpec` plus a test that fails when a handler body awaits a model-calling callable without the choke point.
+3. **Governance counted in one place.** SDK-7 (ledger counts teams only), SDK-8/9/10 (rules/RBAC/guardrails enforce on one path). Fix pattern: enforce at the tool-call boundary and count at the spawn site, with build-time coverage assertions.
+4. **Windows-first project, POSIX-shaped edges.** No sandbox launcher, systemd unit written on Windows, MSYS-mangled headless surface, no installer. Fix pattern: a Windows leg in every delivery decision (see §3, features #47/#57).
+5. **Parity treadmill needs CI, not a document.** SDK-12. Fix pattern: a CI leg that installs `deepagents` latest and runs the 24 compat tests plus the deepagents smoke import.
+
+---
+
+## 3. Agreed sequencing (this cycle)
+
+### Wave 0 — Land this report + make "advertised" mean "reachable" (days)
+1. Fix the six P1s: **v6 CLI-1** (assign `self._middleware` from `create_cli_agent`; resurrects `/think` *and* all of `/worktrees`), **CLI-2** (`/checkpoint load` → `_resume_thread`), **CLI-3** (route the nine inline model-calling commands through `_start_tracked_session`; add the `runs_model` guard test), **SDK-1** (`/stream` records the assistant reply), **DMN-1/DMN-2** (template `trigger_context` into the prompt; `jobs create --trigger github`; fix the quickstart placeholders and the `Authorization: Bearer` drift).
+2. `available=False` on `SlashCommandSpec` + a drift test that every advertised subcommand has a handler branch; `bog-agents doctor --features` that constructs every advertised command/middleware and drives one replay-model turn (the v4 §4.1 recommendation, third time proposed — make it a Wave 0 exit criterion).
+3. deepagents CI leg (install latest, run the 24 compat tests + smoke import) — **v6 SDK-12**.
+4. Docs drift: **SAT-1**, **DEL-1**, **DEL-2**, **SDK-13**, the daytona rename (**SAT-2**).
+
+### Wave A — Governance counted everywhere (S/M)
+**SDK-7** (count `task`/async subagent spawns and web searches in `CostLedger`), **SDK-8** (expert rules fail closed on first-load parse error), **SDK-10** (guardrails: raise, don't skip, on the sync path), **SDK-11** (wire `EvidenceBundleMiddleware` into FeatureConfig + `--pr`), **CLI-9** (provider-agnostic `/auto` judge). These are the prerequisites for ROADMAP #47/#51/#67.
+
+### Wave B — First-30-minutes polish (S each)
+**CLI-5** (coloured `/diff`), **CLI-6** (Sonnet-class default + cost line), **CLI-7** (Bedrock wizard probe + retired id), **CLI-8** (Git Bash headless), **CLI-12/13** (help truth; wizard providers), **DMN-3** (Task Scheduler on Windows), **DEL-4** (proxy env vars in VS Code child).
+
+### Wave C — Context/perf tail (M)
+**SDK-2** (stable thread id for the sweeper), **SDK-3** (= CTX-2, splice the sweeper outer of summarization), **SDK-4** (= PERF-4, write-once offload outside CWD), **SDK-5** (batch embeddings), **SDK-6** (= PERF-6, lazy `bog_agents` import).
+
+### Wave D — Delivery truth (M)
+**DEL-3** (fork-PR CI on hosted runners for lint + one test leg; re-enable 3.11 or drop the classifier; a macOS leg for launchd/seatbelt/PTY; VS Code compile leg), **SAT-4** (VS Code sidebar provider + streaming fix, then **publish to the Marketplace — decided 2026-09-04**), **SAT-3** (ACP per-session state — needed before listing in Zed's ACP registry, ROADMAP #65), **SAT-5** (harbor `als_info`).
+
+### Decisions taken 2026-09-04
+Commit this report on `docs/review-v6` off `origin/main` and start Wave 0 immediately; Wave 1 leads with ROADMAP #47 Governed Auto Mode; 1.0 = Wave 0 + Wave 1 + Wave 2 + a written stability contract; #60 native Windows sandbox is a committed 1.x headline; the VS Code extension is fixed and published.
+
+### Deferred by decision
+**SDK-9** (RBAC tool-call re-check) rides with ROADMAP #48; **CLI-10/11** (`/sidecar` context, `/race` worktree mode) ride with #68/#71; the VS Code webview rework beyond SAT-4 stays parked until the extension has a user.
+
+---
+
+
 # REVIEW.md v5 — Current-State Audit (2026-08-20)
 
 > **Scope:** Whole monorepo at v0.9.12, post the PR #165 v4-fix wave and the PR #181
