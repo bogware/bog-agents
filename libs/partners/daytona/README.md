@@ -1,22 +1,29 @@
-# langchain-daytona
+# bog-agents-daytona
 
-[![PyPI - Version](https://img.shields.io/pypi/v/langchain-daytona?label=%20)](https://pypi.org/project/langchain-daytona/#history)
-[![PyPI - License](https://img.shields.io/pypi/l/langchain-daytona)](https://opensource.org/licenses/MIT)
-[![PyPI - Downloads](https://img.shields.io/pepy/dt/langchain-daytona)](https://pypistats.org/packages/langchain-daytona)
-[![Twitter](https://img.shields.io/twitter/url/https/twitter.com/langchain.svg?style=social&label=Follow%20%40LangChain)](https://x.com/langchain)
+Daytona sandbox backend for [Bog Agents](https://github.com/bogware/bog-agents).
+The import package is `langchain_daytona` (kept for source compatibility with
+the deepagents-era integration this was forked from), but the distribution is
+**`bog-agents-daytona`** — `langchain-daytona` on PyPI is langchain-ai's
+deepagents package, whose `DaytonaSandbox` targets `deepagents.backends`, not
+bog's `BaseSandbox` protocol. Do not install both in one environment.
 
-Looking for the JS/TS version? Check out [LangChain.js](https://github.com/langchain-ai/langchainjs).
+> Not on PyPI yet. Install from a source checkout of the repository.
 
-## Quick Install
+## Install
 
 ```bash
-pip install langchain_daytona
+uv pip install -e libs/partners/daytona          # from the bog-agents repo root
+export DAYTONA_API_KEY=...
 ```
+
+## Use
 
 ```python
 from daytona import Daytona
 
 from langchain_daytona import DaytonaSandbox
+
+from bog_agents import create_agent
 
 sandbox = Daytona().create()
 backend = DaytonaSandbox(
@@ -24,20 +31,17 @@ backend = DaytonaSandbox(
     timeout=300,
     sync_polling_interval=0.25,
 )
-result = backend.execute("echo hello")
-print(result.output)
+print(backend.execute("echo hello").output)
+
+agent = create_agent(model="anthropic:claude-opus-4-7", backend=backend)
 ```
 
-## 🤔 What is this?
+The CLI reaches the same backend through `bog-agents --sandbox daytona`
+(`bog-agents-cli[daytona-sandbox]`).
 
-Daytona sandbox integration for Bog Agents.
+## Tests
 
-## 📕 Releases & Versioning
-
-See our [Releases](https://github.com/bogware/bog-agents/releases) and [Versioning](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md#versioning) policies.
-
-## 💁 Contributing
-
-As an open-source project in a rapidly developing field, we are extremely open to contributions, whether it be in the form of a new feature, improved infrastructure, or better documentation.
-
-For detailed information on how to contribute, see the [Contributing Guide](https://github.com/bogware/bog-agents/blob/main/CONTRIBUTING.md).
+```bash
+make test                 # unit tests, no network
+make integration_test     # runs the SDK's SandboxConformanceSuite against a live Daytona (needs DAYTONA_API_KEY)
+```
