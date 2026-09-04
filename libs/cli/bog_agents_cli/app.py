@@ -8388,11 +8388,16 @@ class BogAgentsApp(App):
             if thread_id is None:
                 await self._mount_message(AppMessage(f"No checkpoint named {name!r}."))
                 return
-            prompt = (
-                f"Resume conversation from checkpoint '{name}' (thread {thread_id}). "
-                "Restore context and continue from where we left off."
+            # v6 CLI-2: a checkpoint is a saved thread id, so loading it is a
+            # thread switch — `_resume_thread` re-hydrates the transcript and
+            # session state from the checkpointer. The previous implementation
+            # only sent the model a prose "resume from checkpoint" prompt in
+            # the *current* thread, so nothing was restored and the model
+            # confabulated a resume (open since v4 P1-27).
+            await self._mount_message(
+                AppMessage(f"Restoring checkpoint {name!r} (thread {thread_id})…")
             )
-            await self._send_prompt_to_agent(prompt)
+            await self._resume_thread(thread_id)
             return
 
         if action in {"delete", "rm"}:
