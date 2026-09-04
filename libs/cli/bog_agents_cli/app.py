@@ -963,6 +963,10 @@ class BogAgentsApp(App):
         self._plan_mode_enabled = plan_mode
         self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
+        # v6 CLI-1: /think is per-session state carried in the runtime
+        # context; None means "use the ThinkingMiddleware's configured default".
+        self._thinking_enabled: bool | None = None
+        self._thinking_budget_tokens: int | None = None
         self._base_auto_approve = auto_approve
         self._base_model_spec = (
             f"{settings.model_provider}:{settings.model_name}"
@@ -2573,6 +2577,8 @@ class BogAgentsApp(App):
             effort_level=self._operator_turn_effort or self._effort_level,
             plan_mode=self._plan_mode_enabled,
             system_prompt_append="\n\n".join(parts) if parts else None,
+            thinking_enabled=self._thinking_enabled,
+            thinking_budget_tokens=self._thinking_budget_tokens,
         )
 
     def _get_team_shared_context(self) -> str:
@@ -9153,9 +9159,10 @@ class BogAgentsApp(App):
 
         await self._mount_message(AppMessage(format_build_help()))
 
-    async def _handle_agent_command(self, command: str) -> None:
+    async def _handle_agent_command(self, command: str, *, echo: bool = True) -> None:
         """Handle `/agent` as a first-class supervisor over managed workers."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
         await self._ensure_background_manager()
 
         from bog_agents.middleware.worktree import create_worktree
@@ -10383,9 +10390,12 @@ class BogAgentsApp(App):
             )
         )
 
-    async def _handle_worktree_command(self, command: str) -> None:
+    async def _handle_worktree_command(
+        self, command: str, *, echo: bool = True
+    ) -> None:
         """Handle `/worktree` git worktree management."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
 
         from bog_agents.middleware.worktree import (
             create_worktree,
@@ -10558,31 +10568,27 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.thinking import ThinkingMiddleware
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, ThinkingMiddleware)
-            ),
-            None,
-        )
-        if mw is None:
-            await self._mount_message(
-                AppMessage(
-                    "ThinkingMiddleware is not active in this session.\n"
-                    "Add `ThinkingMiddleware()` to your middleware stack to enable."
-                )
-            )
-            return
+        # v6 CLI-1: the TUI's agent runs in the LangGraph server process, so
+        # there is no in-process ThinkingMiddleware to poke (the old handler
+        # scanned `self._middleware`, which was never assigned, and printed
+        # "not active" for three cycles). The toggle is per-session state that
+        # reaches the middleware through the runtime context on every turn.
+        from bog_agents_cli.provider_catalog import supports_native_thinking
 
         raw_arg = command.strip()[len("/think") :].strip().lower()
+        default_enabled, default_budget = self._thinking_defaults()
+        enabled = (
+            self._thinking_enabled
+            if self._thinking_enabled is not None
+            else default_enabled
+        )
+        budget = self._thinking_budget_tokens or default_budget
 
         if not raw_arg or raw_arg == "status":
-            from bog_agents_cli.provider_catalog import supports_native_thinking
-
-            state = "enabled" if mw.is_enabled else "disabled"
+            state = "enabled" if enabled else "disabled"
+            origin = (
+                "session" if self._thinking_enabled is not None else "config default"
+            )
             active_model = getattr(settings, "model_name", "") or ""
             native = supports_native_thinking(active_model) if active_model else False
             support_line = f"Model {active_model!r}: " + (
@@ -10593,8 +10599,8 @@ class BogAgentsApp(App):
             )
             await self._mount_message(
                 AppMessage(
-                    f"Extended thinking: {state}\n"
-                    f"Budget tokens: {mw.budget_tokens:,}\n"
+                    f"Extended thinking: {state} ({origin})\n"
+                    f"Budget tokens: {budget:,}\n"
                     f"{support_line}\n\n"
                     "Usage: /think on | /think off | /think toggle | "
                     "/think budget <N>\n"
@@ -10605,44 +10611,43 @@ class BogAgentsApp(App):
             return
 
         if raw_arg == "on":
-            mw.set_thinking(True)
+            self._thinking_enabled = True
             await self._mount_message(
-                AppMessage(
-                    f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens)."
-                )
+                AppMessage(f"Extended thinking enabled (budget: {budget:,} tokens).")
             )
             return
 
         if raw_arg == "off":
-            mw.set_thinking(False)
+            self._thinking_enabled = False
             await self._mount_message(AppMessage("Extended thinking disabled."))
             return
 
         if raw_arg == "toggle":
-            enabled = mw.toggle()
-            state = "enabled" if enabled else "disabled"
+            self._thinking_enabled = not enabled
+            state = "enabled" if self._thinking_enabled else "disabled"
             await self._mount_message(AppMessage(f"Extended thinking {state}."))
             return
 
         if raw_arg.startswith("budget "):
             budget_str = raw_arg[7:].strip()
             try:
-                budget = int(budget_str)
-                if budget < 1024:
-                    await self._mount_message(
-                        AppMessage("Budget must be at least 1024 tokens.")
-                    )
-                    return
-                mw.set_thinking(mw.is_enabled, budget_tokens=budget)
-                await self._mount_message(
-                    AppMessage(f"Thinking budget set to {budget:,} tokens.")
-                )
+                new_budget = int(budget_str)
             except ValueError:
                 await self._mount_message(
                     AppMessage(
                         f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>"
                     )
                 )
+                return
+            if new_budget < 1024:
+                await self._mount_message(
+                    AppMessage("Budget must be at least 1024 tokens.")
+                )
+                return
+            self._thinking_budget_tokens = new_budget
+            await self._mount_message(
+                AppMessage(f"Thinking budget set to {new_budget:,} tokens.")
+            )
             return
 
         await self._mount_message(
@@ -10650,6 +10655,20 @@ class BogAgentsApp(App):
                 "Usage: /think | /think on | /think off | /think toggle | /think budget <N>"
             )
         )
+
+    @staticmethod
+    def _thinking_defaults() -> tuple[bool, int]:
+        """Return the configured ThinkingMiddleware defaults (enabled, budget).
+
+        Mirrors what `create_cli_agent` passes to the middleware so `/think`
+        status reports the server-side default when no session override is set.
+        """
+        try:
+            from bog_agents_cli.agent import _resolve_thinking_config
+
+            return _resolve_thinking_config()
+        except Exception:
+            return False, 8_000
 
     # ---- New "killer-features" handlers ----------------------------------
     # The implementations live in dedicated modules in bog_agents_cli/ so
@@ -12351,153 +12370,117 @@ class BogAgentsApp(App):
             command: Full command string.
         """
         await self._mount_message(UserMessage(command))
+        await self._ensure_background_manager()
 
-        from bog_agents.middleware.worktree import (
-            ParallelWorktreeMiddleware,
-            format_worktree_status,
-        )
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, ParallelWorktreeMiddleware)
-            ),
-            None,
-        )
-        if mw is None:
-            await self._mount_message(
-                AppMessage(
-                    "ParallelWorktreeMiddleware is not active in this session.\n"
-                    "Add `ParallelWorktreeMiddleware(agent_factory=...)` to your middleware stack."
-                )
-            )
-            return
+        # v6 CLI-1: this handler used to look for a ParallelWorktreeMiddleware
+        # on `self._middleware`, which is never assigned (the agent lives in
+        # the server process), so every subcommand printed "not active" for
+        # three cycles and `cancel` — when it could run — only flipped a
+        # status field while the worker kept editing. It now fronts the
+        # machinery that actually runs worktree agents: the managed background
+        # tasks behind `/agent spawn --worktree`. Cancel stops the worker.
+        import json as _json
 
         raw_arg = command.strip()[len("/worktrees") :].strip()
         lowered = raw_arg.lower()
+        usage = (
+            "Usage: /worktrees | /worktrees status | /worktrees spawn <prompt> | "
+            '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
+            "/worktrees merge <id|branch> | /worktrees cancel <id>"
+        )
 
-        if not raw_arg or lowered == "status":
-            tasks = mw.get_tasks()
+        if not raw_arg or lowered in {"status", "list"}:
+            tasks = [t for t in self._bg_manager.get_all_tasks() if t.worktree_branch]
             if not tasks:
                 await self._mount_message(
                     AppMessage(
-                        "No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks."
+                        "No worktree tasks.\n\n"
+                        "Use /worktrees spawn <prompt> (or a JSON array of "
+                        "{label, prompt}) to start some."
                     )
                 )
                 return
-            await self._mount_message(AppMessage(format_worktree_status(tasks)))
+            lines = ["[bold]Worktree tasks[/bold]"]
+            lines.extend(
+                f"  {t.status_line()}  [dim]{t.worktree_branch}[/dim]" for t in tasks
+            )
+            await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if lowered.startswith("cancel "):
             task_id = raw_arg[7:].strip()
-            task = mw.get_task(task_id)
+            task = self._bg_manager.get_status(task_id)
             if task is None:
                 await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
                 return
-            if task.status not in ("pending", "running"):
+            if self._bg_manager.cancel(task_id):
+                await self._mount_message(
+                    AppMessage(f"Task '{task_id}' cancelled (worker stopped).")
+                )
+            else:
                 await self._mount_message(
                     AppMessage(f"Task '{task_id}' is already {task.status}.")
                 )
-                return
-            task.status = "cancelled"
-            await self._mount_message(AppMessage(f"Task '{task_id}' cancelled."))
             return
 
         if lowered.startswith("merge "):
-            import json as _json
-
-            task_id = raw_arg[6:].strip()
-            task = mw.get_task(task_id)
-            if task is None:
-                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
-                return
-            # ParallelWorktreeMiddleware sets status "completed" on success — it
-            # never sets "done", so the old check made /worktrees merge
-            # impossible to ever satisfy. (REVIEW.md v2 P1-31.)
-            if task.status != "completed":
+            ref = raw_arg[6:].strip()
+            task = self._bg_manager.get_status(ref)
+            branch = (
+                task.worktree_branch
+                if task is not None and task.worktree_branch
+                else ref
+            )
+            if task is not None and task.status not in {"completed", "done"}:
                 await self._mount_message(
                     AppMessage(
-                        f"Task '{task_id}' is {task.status}, not completed. Cannot merge yet."
+                        f"Task '{ref}' is {task.status}, not completed. Cannot merge yet."
                     )
                 )
                 return
-            from bog_agents.middleware.worktree import merge_with_conflict_report
-
-            repo_root = await self._get_repo_root()
-            if repo_root is None:
-                await self._mount_message(AppMessage("Not in a git repository."))
-                return
-            report = await asyncio.to_thread(
-                merge_with_conflict_report,
-                repo_root,
-                task.branch,
-                "main",
-                False,
-            )
-            conflicts = report.get("conflicts", [])
-            merged = report.get("merged", False)
-            status_str = (
-                "Merged successfully."
-                if merged
-                else f"Conflicts detected in: {', '.join(conflicts)}"
-            )
-            await self._mount_message(
-                AppMessage(f"Merge task '{task_id}' ({task.branch}):\n{status_str}")
-            )
+            await self._handle_worktree_command(f"/worktree merge {branch}", echo=False)
             return
 
         if lowered.startswith("spawn "):
-            import json as _json
-
-            json_str = raw_arg[6:].strip()
-            try:
-                tasks_input = _json.loads(json_str)
-            except _json.JSONDecodeError as exc:
-                await self._mount_message(
-                    AppMessage(
-                        f"Invalid JSON: {exc}\n\n"
-                        'Usage: /worktrees spawn [{"label": "task1", "prompt": "do X"}, ...]'
+            payload = raw_arg[6:].strip()
+            items: list[dict[str, str]] = []
+            if payload.startswith("["):
+                try:
+                    parsed = _json.loads(payload)
+                except _json.JSONDecodeError as exc:
+                    await self._mount_message(
+                        AppMessage(f"Invalid JSON: {exc}\n\n{usage}")
                     )
-                )
+                    return
+                if not isinstance(parsed, list):
+                    await self._mount_message(
+                        AppMessage("Input must be a JSON array of task objects.")
+                    )
+                    return
+                items = [
+                    {
+                        "label": str(i.get("label", "")),
+                        "prompt": str(i.get("prompt", "")),
+                    }
+                    for i in parsed
+                    if isinstance(i, dict)
+                ]
+            elif payload:
+                items = [{"label": "", "prompt": payload}]
+            items = [i for i in items if i["prompt"].strip()]
+            if not items:
+                await self._mount_message(AppMessage(usage))
                 return
-            if not isinstance(tasks_input, list):
-                await self._mount_message(
-                    AppMessage("Input must be a JSON array of task objects.")
+            for item in items:
+                label_flag = (
+                    f"--label {shlex.quote(item['label'])} " if item["label"] else ""
                 )
-                return
-
-            repo_root = await self._get_repo_root()
-            if repo_root is None:
-                await self._mount_message(AppMessage("Not in a git repository."))
-                return
-
-            task_ids = []
-            for item in tasks_input:
-                label = item.get("label", "task")
-                prompt = item.get("prompt", "")
-                task = await mw._create_task(
-                    label=label, prompt=prompt, repo_root=repo_root
+                await self._handle_agent_command(
+                    f"/agent spawn --worktree {label_flag}{item['prompt']}", echo=False
                 )
-                task_ids.append(task.task_id)
-                self._spawn(mw._run_task_in_worktree(task))
-
-            await self._mount_message(
-                AppMessage(
-                    f"Spawned {len(task_ids)} parallel task(s).\n"
-                    f"Task IDs: {', '.join(task_ids)}\n\n"
-                    "Use /worktrees status to monitor progress."
-                )
-            )
             return
 
-        await self._mount_message(
-            AppMessage(
-                "Usage: /worktrees | /worktrees status | "
-                '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
-                "/worktrees merge <id> | /worktrees cancel <id>"
-            )
-        )
+        await self._mount_message(AppMessage(usage))
 
     async def _handle_compress_command(self, command: str) -> None:
         """Handle `/compress` intelligent context compression.

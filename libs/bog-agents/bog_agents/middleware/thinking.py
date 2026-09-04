@@ -37,7 +37,7 @@ that the CLI can call after creation to change state mid-session.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -228,21 +228,60 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         return self._tools
 
     # ------------------------------------------------------------------
+    # Runtime-context overrides (v6 CLI-1)
+    # ------------------------------------------------------------------
+
+    def _effective_config(self, request: ModelRequest) -> tuple[bool, int]:
+        """Resolve the thinking state for this call.
+
+        The CLI's agent runs in a separate LangGraph server process, so a
+        `/think on` toggle cannot reach this instance's `set_thinking`. The
+        TUI instead carries the session's choice in the per-turn runtime
+        context (`CLIContext.thinking_enabled` / `thinking_budget_tokens`);
+        when present it outranks the constructor defaults. Any other consumer
+        that sets the same keys on `runtime.context` gets the same override.
+
+        Args:
+            request: Current model request.
+
+        Returns:
+            `(enabled, budget_tokens)` for this call.
+        """
+        enabled = self._config.enabled
+        budget = self._config.budget_tokens
+        runtime = getattr(request, "runtime", None)
+        ctx = getattr(runtime, "context", None)
+        if ctx is None:
+            return enabled, budget
+        if isinstance(ctx, Mapping):
+            ctx_enabled = ctx.get("thinking_enabled")
+            ctx_budget = ctx.get("thinking_budget_tokens")
+        else:
+            ctx_enabled = getattr(ctx, "thinking_enabled", None)
+            ctx_budget = getattr(ctx, "thinking_budget_tokens", None)
+        if ctx_enabled is not None:
+            enabled = bool(ctx_enabled)
+        if isinstance(ctx_budget, int) and not isinstance(ctx_budget, bool) and ctx_budget > 0:
+            budget = max(1_000, ctx_budget)
+        return enabled, budget
+
+    # ------------------------------------------------------------------
     # Model binding helpers
     # ------------------------------------------------------------------
 
-    def _bind_thinking_params(self, model: Any, model_name: str) -> Any:
+    def _bind_thinking_params(self, model: Any, model_name: str, budget_tokens: int | None = None) -> Any:
         """Bind thinking parameters to a LangChain chat model.
 
         Args:
             model: LangChain chat model instance.
             model_name: Model name string for provider detection.
+            budget_tokens: Budget for this call; defaults to the configured one.
 
         Returns:
             Model with thinking parameters bound, or original model.
         """
         provider = _detect_provider(model_name)
-        budget = self._config.budget_tokens
+        budget = budget_tokens or self._config.budget_tokens
 
         try:
             if provider == "anthropic":
@@ -302,7 +341,8 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        if not self._config.enabled:
+        enabled, budget = self._effective_config(request)
+        if not enabled:
             return call_next(request)
 
         model_name = self._get_model_name(request)
@@ -310,7 +350,7 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         if _model_supports_native_thinking(model_name):
             # Attempt to bind native thinking params to the model in the request
             if getattr(request, "model", None) is not None:
-                request = request.override(model=self._bind_thinking_params(request.model, model_name))
+                request = request.override(model=self._bind_thinking_params(request.model, model_name, budget))
         else:
             # Fallback: chain-of-thought system prompt injection
             request = request.override(system_message=append_to_system_message(request.system_message, self._fallback_prompt))
@@ -331,14 +371,15 @@ class ThinkingMiddleware(AgentMiddleware[ThinkingState, ContextT, ResponseT]):
         Returns:
             Model response.
         """
-        if not self._config.enabled:
+        enabled, budget = self._effective_config(request)
+        if not enabled:
             return await call_next(request)
 
         model_name = self._get_model_name(request)
 
         if _model_supports_native_thinking(model_name):
             if getattr(request, "model", None) is not None:
-                request = request.override(model=self._bind_thinking_params(request.model, model_name))
+                request = request.override(model=self._bind_thinking_params(request.model, model_name, budget))
         else:
             request = request.override(system_message=append_to_system_message(request.system_message, self._fallback_prompt))
 

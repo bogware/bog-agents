@@ -64,6 +64,15 @@ class CLIContext(TypedDict, total=False):
     system_prompt_append: str | None
     """Additional system guidance appended to the request's system prompt."""
 
+    thinking_enabled: bool | None
+    """Per-session `/think on|off` choice (v6 CLI-1); `None` keeps the
+    ThinkingMiddleware's configured default. Read by `ThinkingMiddleware`
+    from `request.runtime.context` because the agent runs in the server
+    process, out of reach of an in-process `set_thinking`."""
+
+    thinking_budget_tokens: int | None
+    """Per-session `/think budget N` override; `None` keeps the default."""
+
 
 def _is_anthropic_model(model: object) -> bool:
     """Check whether a resolved model is an Anthropic `ChatAnthropic` instance.
