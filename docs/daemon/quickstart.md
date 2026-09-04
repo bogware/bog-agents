@@ -311,6 +311,33 @@ bog-agents daemon jobs create \
   --working-dir ~/
 ```
 
+### Pattern: assign an issue to bog (GitHub trigger)
+
+Point a repository webhook (content type `application/json`, events
+`issues`, `issue_comment`, `check_run`, `workflow_run`) at
+`POST /webhooks/github` and give the daemon the same secret:
+
+```bash
+export BOG_DAEMON_GITHUB_WEBHOOK_SECRET="<webhook secret>"
+export BOG_DAEMON_GITHUB_BOT_LOGIN="bog-bot"          # assignments to this login fire the job
+export BOG_DAEMON_GITHUB_TRIGGER_LABEL="bog"          # optional: labeling with this also fires it
+```
+
+```bash
+bog-agents daemon jobs create \
+  --name assign-to-bog \
+  --github \
+  --prompt "You were assigned issue #{issue_number} in {repo}: {title}\n\n{body}\n\nWork on branch {branch} if set. Reproduce, fix, add a test, and summarize what changed." \
+  --working-dir /work/myrepo \
+  --output github_comment \
+  --output-github-repo bogware/bog-agents \
+  --output-github-issue "{issue_number}"
+```
+
+The parsed event reaches the prompt through the placeholders below;
+`{trigger_context_json}` carries the whole parsed event. Comments authored by
+the bot login itself are ignored so a reply can never re-trigger the job.
+
 ### Prompt and output placeholders
 
 Prompts, `--output-file` paths and `--output-github-issue` may use

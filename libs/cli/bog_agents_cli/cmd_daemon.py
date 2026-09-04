@@ -195,6 +195,8 @@ def _trigger_summary(t: dict[str, Any]) -> str:
         return t.get("webhook_path", "")
     if tt == "git_push":
         return f"branch: {t.get('git_branch_pattern', '*')}"
+    if tt == "github":
+        return "GitHub events (assigned / labeled / comment / CI failure)"
     return ""
 
 
@@ -524,14 +526,17 @@ def cmd_jobs_list(port: int = _DEFAULT_PORT) -> None:
         )
 
 
-def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
-    """Create a new ambient job.
+def _triggers_from_args(args: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    """Assemble the trigger dicts for `jobs create` from parsed CLI flags.
+
+    Pure so the flag → trigger mapping is unit-testable without a daemon.
 
     Args:
-        args: Parsed argparse namespace with job creation fields.
-    """
-    port: int = args.port
+        args: The parsed argparse namespace for `daemon jobs create`.
 
+    Returns:
+        Trigger dicts in the daemon API's JSON shape.
+    """
     triggers: list[dict[str, Any]] = []
     if args.cron:
         triggers.append({"type": "cron", "cron": args.cron})
@@ -556,6 +561,20 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         triggers.append({"type": "webhook", "webhook_path": webhook_path})
     if args.git_branch:
         triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
+    if getattr(args, "github", False):
+        triggers.append({"type": "github"})
+    return triggers
+
+
+def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
+    """Create a new ambient job.
+
+    Args:
+        args: Parsed argparse namespace with job creation fields.
+    """
+    port: int = args.port
+
+    triggers = _triggers_from_args(args)
 
     output_target: str = args.output
     out: dict[str, Any] = {"target": output_target}
@@ -999,6 +1018,16 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="PATTERN",
         help="Git branch glob for git-push trigger, e.g. main",
+    )
+    create_p.add_argument(
+        "--github",
+        dest="github",
+        action="store_true",
+        help=(
+            "Fire on GitHub events delivered to POST /webhooks/github: an issue assigned to the bot, "
+            "an opt-in label, an @-mention comment, or a CI failure (v6 DMN-2). Requires "
+            "BOG_DAEMON_GITHUB_WEBHOOK_SECRET on the daemon; see the quickstart."
+        ),
     )
     # output flags
     create_p.add_argument(
