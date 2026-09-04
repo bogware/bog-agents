@@ -5947,26 +5947,29 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._set_spinner(f"Racing {len(racers)} models")
-        try:
-            report = await run_race(prompt, racers)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
-            return
-        finally:
-            await self._set_spinner("")
+        async def _body() -> None:
+            await self._set_spinner(f"Racing {len(racers)} models")
+            try:
+                report = await run_race(prompt, racers)
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
+                return
+            finally:
+                await self._set_spinner("")
 
-        await self._mount_message(AppMessage(report.format_summary()))
+            await self._mount_message(AppMessage(report.format_summary()))
 
-        winner = pick_winner(report)
-        if winner is not None:
-            await self._mount_message(
-                AppMessage(
-                    f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
-                    f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+            winner = pick_winner(report)
+            if winner is not None:
+                await self._mount_message(
+                    AppMessage(
+                        f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
+                        f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+                    )
                 )
-            )
+
+        await self._start_model_command(_body(), name="/race")
 
     async def _handle_best_of_n_command(self, command: str) -> None:
         """``/best-of-n [count] <prompt>`` — run N full agent attempts, keep the rubric-judged winner.
@@ -6253,81 +6256,86 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._set_spinner("Reviewing transcript")
-        try:
-            state_values = await self._get_thread_state_values(self._lc_thread_id)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
-            return
-
-        messages = state_values.get("messages", []) if state_values else []
-        if not messages:
-            await self._set_spinner("")
-            await self._mount_message(AppMessage("Conversation is empty."))
-            return
-
-        transcript_lines = []
-        for msg in messages[-40:]:  # cap to last 40 messages
-            kind = getattr(msg, "type", "msg")
-            content = getattr(msg, "content", "")
-            if isinstance(content, str):
-                transcript_lines.append(f"[{kind}] {content}")
-        transcript = "\n".join(transcript_lines)
-
-        model_spec = self._model_override or settings.model_name
-        try:
-            resolved = create_model(
-                model_spec, profile_overrides=self._profile_override
-            )
-            proposals = await propose_skills_from_transcript(transcript, resolved.model)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
-            return
-        finally:
-            await self._set_spinner("")
-
-        if not proposals:
-            await self._mount_message(
-                AppMessage(
-                    "No durable skills surfaced from this session. Try /teach again "
-                    "after a longer or more varied conversation."
-                )
-            )
-            return
-
-        written: list[str] = []
-        for proposal in proposals:
+        async def _body() -> None:
+            await self._set_spinner("Reviewing transcript")
             try:
-                write_proposal(proposal, overwrite=True)
-                written.append(proposal.id)
-            except (ValueError, OSError) as exc:
-                logger.debug("could not write proposal %s: %s", proposal.id, exc)
+                state_values = await self._get_thread_state_values(self._lc_thread_id)
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
+                return
 
-        if not written:
+            messages = state_values.get("messages", []) if state_values else []
+            if not messages:
+                await self._set_spinner("")
+                await self._mount_message(AppMessage("Conversation is empty."))
+                return
+
+            transcript_lines = []
+            for msg in messages[-40:]:  # cap to last 40 messages
+                kind = getattr(msg, "type", "msg")
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    transcript_lines.append(f"[{kind}] {content}")
+            transcript = "\n".join(transcript_lines)
+
+            model_spec = self._model_override or settings.model_name
+            try:
+                resolved = create_model(
+                    model_spec, profile_overrides=self._profile_override
+                )
+                proposals = await propose_skills_from_transcript(
+                    transcript, resolved.model
+                )
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
+                return
+            finally:
+                await self._set_spinner("")
+
+            if not proposals:
+                await self._mount_message(
+                    AppMessage(
+                        "No durable skills surfaced from this session. Try /teach again "
+                        "after a longer or more varied conversation."
+                    )
+                )
+                return
+
+            written: list[str] = []
+            for proposal in proposals:
+                try:
+                    write_proposal(proposal, overwrite=True)
+                    written.append(proposal.id)
+                except (ValueError, OSError) as exc:
+                    logger.debug("could not write proposal %s: %s", proposal.id, exc)
+
+            if not written:
+                await self._mount_message(
+                    AppMessage(
+                        "Could not write any proposals — check ~/.bog-agents/skills/."
+                    )
+                )
+                return
+
+            bullets = "\n".join(
+                f"  [cyan]{p.id}[/cyan] — {p.description}"
+                for p in proposals
+                if p.id in written
+            )
             await self._mount_message(
                 AppMessage(
-                    "Could not write any proposals — check ~/.bog-agents/skills/."
+                    f"[bold]{len(written)}[/bold] proposal(s) written to "
+                    "~/.bog-agents/skills/proposed/:\n\n"
+                    f"{bullets}\n\n"
+                    "[dim]Review with [bold]/teach show <id>[/bold] · "
+                    "accept with [bold]/teach accept <id>[/bold] · "
+                    "reject with [bold]/teach reject <id>[/bold][/dim]"
                 )
             )
-            return
 
-        bullets = "\n".join(
-            f"  [cyan]{p.id}[/cyan] — {p.description}"
-            for p in proposals
-            if p.id in written
-        )
-        await self._mount_message(
-            AppMessage(
-                f"[bold]{len(written)}[/bold] proposal(s) written to "
-                "~/.bog-agents/skills/proposed/:\n\n"
-                f"{bullets}\n\n"
-                "[dim]Review with [bold]/teach show <id>[/bold] · "
-                "accept with [bold]/teach accept <id>[/bold] · "
-                "reject with [bold]/teach reject <id>[/bold][/dim]"
-            )
-        )
+        await self._start_model_command(_body(), name="/teach")
 
     async def _handle_recipe_command(self, command: str) -> None:
         """``/recipe`` — curated YAML recipe pipelines.
@@ -10690,29 +10698,26 @@ class BogAgentsApp(App):
         prefix = self._command_name(command)
         author = command.strip()[len(prefix) :].strip()
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /handoff while the agent is busy.")
-            )
-            return
-
-        await self._set_spinner("Compiling handoff")
-        try:
-            result = await run_handoff(self, author_voice=author)
-        except Exception as exc:
-            logger.exception("/handoff failed")
+        async def _body() -> None:
+            await self._set_spinner("Compiling handoff")
+            try:
+                result = await run_handoff(self, author_voice=author)
+            except Exception as exc:
+                logger.exception("/handoff failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
+                return
             await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
-            return
-        await self._set_spinner("")
 
-        await self._mount_message(
-            AppMessage(
-                f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
-                f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
-                f"{result.content}"
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
+                    f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                    f"{result.content}"
+                )
             )
-        )
+
+        await self._start_model_command(_body(), name="/handoff")
 
     async def _handle_release_train_command(self, command: str) -> None:
         """``/release-train [config|enable|disable|test|<tag>|<from..to>]`` — release notes + enrichment.
@@ -10931,26 +10936,23 @@ class BogAgentsApp(App):
         prefix = self._command_name(command)
         raw_arg = command.strip()[len(prefix) :].strip()
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /imagine while the agent is busy.")
-            )
-            return
+        async def _body() -> None:
+            await self._set_spinner("Imagining approaches in parallel")
+            try:
+                result = await run_imagine(self, raw_arg)
+            except ValueError as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
+                return
+            except Exception as exc:
+                logger.exception("/imagine failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(result.render()))
 
-        await self._set_spinner("Imagining approaches in parallel")
-        try:
-            result = await run_imagine(self, raw_arg)
-        except ValueError as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
-            return
-        except Exception as exc:
-            logger.exception("/imagine failed")
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
-            return
-        await self._set_spinner("")
-        await self._mount_message(AppMessage(result.render()))
+        await self._start_model_command(_body(), name="/imagine")
 
     async def _handle_devil_command(self, command: str) -> None:
         """``/devil`` — critique the last assistant message adversarially."""
@@ -10958,26 +10960,23 @@ class BogAgentsApp(App):
 
         await self._mount_message(UserMessage(command))
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /devil while the agent is busy.")
-            )
-            return
+        async def _body() -> None:
+            await self._set_spinner("Summoning devil's advocate")
+            try:
+                result = await run_devil(self)
+            except ValueError as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/devil: {exc}"))
+                return
+            except Exception as exc:
+                logger.exception("/devil failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(result.render()))
 
-        await self._set_spinner("Summoning devil's advocate")
-        try:
-            result = await run_devil(self)
-        except ValueError as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/devil: {exc}"))
-            return
-        except Exception as exc:
-            logger.exception("/devil failed")
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
-            return
-        await self._set_spinner("")
-        await self._mount_message(AppMessage(result.render()))
+        await self._start_model_command(_body(), name="/devil")
 
     async def _handle_squad_command(self, command: str) -> None:
         """``/squad`` — multi-persona dialogue review."""
@@ -10986,11 +10985,24 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         prefix = self._command_name(command)
         raw_arg = command.strip()[len(prefix) :].strip()
-        try:
-            await handle_squad_subcommand(self, raw_arg)
-        except Exception as exc:
-            logger.exception("/squad failed")
-            await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+        head = raw_arg.split(maxsplit=1)[0].lower() if raw_arg else ""
+        if head in {"list", "init"}:
+            # Listing / config paths call no model — run inline.
+            try:
+                await handle_squad_subcommand(self, raw_arg)
+            except Exception as exc:
+                logger.exception("/squad failed")
+                await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+            return
+
+        async def _body() -> None:
+            try:
+                await handle_squad_subcommand(self, raw_arg)
+            except Exception as exc:
+                logger.exception("/squad failed")
+                await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+
+        await self._start_model_command(_body(), name="/squad")
 
     async def _handle_dream_command(self, command: str) -> None:
         """``/dream`` — overnight ideation, daemon-backed."""
@@ -11954,39 +11966,48 @@ class BogAgentsApp(App):
                     ErrorMessage("No active model — run /model first.")
                 )
                 return
-            await self._set_spinner("Drafting acceptance criteria")
-            try:
-                criteria = await draft_criteria(
-                    record.objective,
-                    invoke=invoke,
-                    feedback=feedback,
-                    previous_criteria=previous,
-                )
-            except Exception as exc:
+
+            async def _body() -> None:
+                await self._set_spinner("Drafting acceptance criteria")
+                try:
+                    criteria = await draft_criteria(
+                        record.objective,
+                        invoke=invoke,
+                        feedback=feedback,
+                        previous_criteria=previous,
+                    )
+                except Exception as exc:
+                    await self._set_spinner("")
+                    await self._mount_message(
+                        ErrorMessage(f"/rubric draft failed: {exc}")
+                    )
+                    return
                 await self._set_spinner("")
-                await self._mount_message(ErrorMessage(f"/rubric draft failed: {exc}"))
-                return
-            await self._set_spinner("")
-            if not criteria:
+                if not criteria:
+                    await self._mount_message(
+                        ErrorMessage(
+                            "Could not draft criteria — try /rubric regenerate <feedback> "
+                            "or set them manually with /rubric set."
+                        )
+                    )
+                    return
+                self._goal_rubric_pending = RubricPending(
+                    objective=record.objective, criteria=criteria
+                )
+                rendered = "\n".join(
+                    f"  {i}. {c}" for i, c in enumerate(criteria, start=1)
+                )
                 await self._mount_message(
-                    ErrorMessage(
-                        "Could not draft criteria — try /rubric regenerate <feedback> "
-                        "or set them manually with /rubric set."
+                    AppMessage(
+                        "[bold]Proposed acceptance criteria[/bold]\n"
+                        f"{rendered}\n\n"
+                        "[bold]/rubric accept[/bold] to use these, or "
+                        "[bold]/rubric regenerate <feedback>[/bold] to redraft."
                     )
                 )
                 return
-            self._goal_rubric_pending = RubricPending(
-                objective=record.objective, criteria=criteria
-            )
-            rendered = "\n".join(f"  {i}. {c}" for i, c in enumerate(criteria, start=1))
-            await self._mount_message(
-                AppMessage(
-                    "[bold]Proposed acceptance criteria[/bold]\n"
-                    f"{rendered}\n\n"
-                    "[bold]/rubric accept[/bold] to use these, or "
-                    "[bold]/rubric regenerate <feedback>[/bold] to redraft."
-                )
-            )
+
+            await self._start_model_command(_body(), name="/rubric draft")
             return
         await self._mount_message(
             ErrorMessage(
@@ -12239,8 +12260,12 @@ class BogAgentsApp(App):
             model_factory=model_factory,
             parallel=parallel,
         )
-        result = await asyncio.to_thread(controller.run, goal)
-        await self._mount_message(AppMessage(render_result(result)))
+
+        async def _body() -> None:
+            result = await asyncio.to_thread(controller.run, goal)
+            await self._mount_message(AppMessage(render_result(result)))
+
+        await self._start_model_command(_body(), name="/orchestrate")
 
     async def _handle_sidecar_command(self, command: str) -> None:
         """Handle `/sidecar <question>` — isolated read-only Q&A subagent.
@@ -12268,14 +12293,18 @@ class BogAgentsApp(App):
             working_dir=Path(self._cwd),
             model_factory=model_factory,
         )
+
         # v1: no auto-summary of parent messages. The TUI stores
         # conversation as Textual widgets, not a flat LangChain message
         # list, so a clean extractor needs careful work. Users who want
         # the sidecar to know about parent state can paste relevant
         # context into the question. See REVIEW.md T-1 for the eventual
         # parent-context auto-summary plan.
-        result = await asyncio.to_thread(controller.run, question)
-        await self._mount_message(AppMessage(result.quote_for_parent()))
+        async def _body() -> None:
+            result = await asyncio.to_thread(controller.run, question)
+            await self._mount_message(AppMessage(result.quote_for_parent()))
+
+        await self._start_model_command(_body(), name="/sidecar")
 
     async def _handle_search_command(self, command: str) -> None:
         """Handle `/search` hybrid codebase search.
@@ -15156,6 +15185,37 @@ class BogAgentsApp(App):
         worker = self.run_worker(_session(), exclusive=False)
         self._turns.begin_agent(worker)
         return worker
+
+    async def _start_model_command(
+        self, coro: Coroutine[Any, Any, None], *, name: str
+    ) -> bool:
+        """Run a model-calling command body as a tracked session, or refuse.
+
+        v6 CLI-3: slash commands are dispatched inline on the App message
+        pump, so a handler that awaits a long model call freezes every key
+        event (Esc included) and is invisible to TurnManager — a prompt typed
+        meanwhile starts a concurrent turn against the same files. Every
+        command whose body calls a model goes through here: refused while a
+        turn or session is in flight, otherwise handed to
+        `_start_tracked_session` so Esc/Ctrl+C cancel it and submissions queue.
+
+        Args:
+            coro: The command body (model calls plus result rendering).
+            name: User-facing command name for guard/interrupt messages.
+
+        Returns:
+            True when the session was started, False when it was refused.
+        """
+        if self._turns.busy:
+            coro.close()
+            await self._mount_message(
+                ErrorMessage(
+                    f"Cannot start {name} while another turn or session is in flight."
+                )
+            )
+            return False
+        self._start_tracked_session(coro, name=name)
+        return True
 
     async def _cleanup_agent_task(self) -> None:
         """Clean up after agent task completes or is cancelled.
