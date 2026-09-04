@@ -323,3 +323,64 @@ def test_default_cors_does_not_allow_wildcard_origin() -> None:
     resp = client.get("/health", headers={"Origin": "https://evil.example"})
     # With the closed default, no cross-origin allowance is echoed back.
     assert resp.headers.get("access-control-allow-origin") != "*"
+
+
+# --------------------------------------------------------------------------- #
+# v6 SDK-1 — stream records the assistant reply into thread history
+# --------------------------------------------------------------------------- #
+
+
+class _ReplyingStreamAgent:
+    """Fake agent whose event stream ends with a complete assistant message."""
+
+    def __init__(self, reply: object = "I am Ada.", *, checkpointer: object | None = None) -> None:
+        self.reply = reply
+        self.checkpointer = checkpointer
+        self.inputs: list[dict] = []
+
+    async def ainvoke(self, _input_data: dict, *, config: dict) -> dict:  # pragma: no cover - not exercised
+        return {"messages": []}
+
+    async def astream_events(self, input_data: dict, *, config: dict, version: str) -> object:
+        self.inputs.append(input_data)
+        yield {"event": "on_chat_model_start", "data": {}}
+        yield {"event": "on_chat_model_stream", "data": {"chunk": {"content": "I am"}}}
+        yield {"event": "on_chat_model_end", "data": {"output": {"role": "assistant", "content": self.reply}}}
+
+
+async def test_stream_records_assistant_reply_in_thread_history() -> None:
+    agent = _ReplyingStreamAgent()
+    server = AgentServer(agent, config=ServerConfig())
+    _ = [e async for e in server.stream("My name is Ada", thread_id="t1")]
+
+    thread = server._get_or_create_thread("t1")
+    assert thread.messages == [
+        {"role": "user", "content": "My name is Ada"},
+        {"role": "assistant", "content": "I am Ada."},
+    ]
+
+
+async def test_stream_replays_prior_assistant_turn_without_checkpointer() -> None:
+    agent = _ReplyingStreamAgent()
+    server = AgentServer(agent, config=ServerConfig())
+    _ = [e async for e in server.stream("My name is Ada", thread_id="t1")]
+    _ = [e async for e in server.stream("What is my name?", thread_id="t1")]
+
+    replayed = agent.inputs[1]["messages"]
+    roles = [m["role"] for m in replayed]
+    assert roles == ["user", "assistant", "user"], roles
+    assert replayed[1]["content"] == "I am Ada."
+
+
+async def test_stream_records_content_block_replies() -> None:
+    blocks = [{"type": "text", "text": "Hello "}, {"type": "text", "text": "Ada"}, {"type": "tool_use", "id": "x"}]
+    agent = _ReplyingStreamAgent(reply=blocks)
+    server = AgentServer(agent, config=ServerConfig())
+    _ = [e async for e in server.stream("hi", thread_id="t2")]
+    assert server._get_or_create_thread("t2").messages[-1] == {"role": "assistant", "content": "Hello Ada"}
+
+
+async def test_stream_without_model_end_records_nothing() -> None:
+    server = AgentServer(_StreamingAgent(n=2), config=ServerConfig())
+    _ = [e async for e in server.stream("hi", thread_id="t3")]
+    assert [m["role"] for m in server._get_or_create_thread("t3").messages] == ["user"]

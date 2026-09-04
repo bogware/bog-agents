@@ -70,6 +70,38 @@ class ThreadState:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+def _assistant_text_from_event(event: Any) -> str:
+    """Return the assistant text carried by a streamed model-end event, or "".
+
+    v6 SDK-1: `stream()` replays `thread.messages` on the next turn when the
+    agent has no checkpointer, so the assistant reply has to be recorded from
+    the event stream the same way `invoke()` records it from the result. Only
+    `on_chat_model_end` carries a complete message; text-only content and
+    Anthropic-style content-block lists are both handled.
+
+    Args:
+        event: One item yielded by `astream_events(version="v2")`.
+
+    Returns:
+        The assistant text, or an empty string when the event carries none.
+    """
+    if not isinstance(event, dict) or event.get("event") != "on_chat_model_end":
+        return ""
+    output = (event.get("data") or {}).get("output")
+    content = output.get("content", "") if isinstance(output, dict) else getattr(output, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return ""
+
+
 class AgentServer:
     """HTTP API server wrapping a bog-agents agent.
 
@@ -351,11 +383,21 @@ class AgentServer:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(queue.put(item), timeout=timeout)
 
+        # v6 SDK-1: the last complete assistant message seen on the stream.
+        # `invoke()` records its reply into `thread.messages`; without this the
+        # checkpointer-less replay in `_build_input` sent a user-only transcript
+        # on every following `/stream` turn.
+        assistant_text = ""
+
         async def _produce() -> None:
+            nonlocal assistant_text
             async with self._get_request_semaphore():
                 try:
                     events = self.agent.astream_events(input_data, config=config, version="v2")
                     async for event in _timeboxed_aiter(events, timeout=timeout):
+                        text = _assistant_text_from_event(event)
+                        if text:
+                            assistant_text = text
                         await _bounded_put({"event": event.get("event", ""), "data": event.get("data", {})})
                 except TimeoutError:
                     logger.warning("Agent stream timed out after %ss (thread=%s)", timeout, thread.thread_id)
@@ -363,6 +405,8 @@ class AgentServer:
                 except Exception as exc:
                     await _bounded_put({"event": "error", "data": {"error": str(exc)}})
                 finally:
+                    if assistant_text:
+                        thread.messages.append({"role": "assistant", "content": assistant_text})
                     await _bounded_put(done)
 
         producer = asyncio.create_task(_produce())
