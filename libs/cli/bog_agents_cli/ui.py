@@ -144,6 +144,9 @@ def show_help() -> None:
     console.print(
         "  --doctor-deep              Doctor + probe network/git/MCP/providers"
     )
+    console.print(
+        "  --doctor-features          Audit the advertised slash-command surface"
+    )
     console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")
     console.print()

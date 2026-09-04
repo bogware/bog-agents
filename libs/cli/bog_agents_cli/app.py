@@ -12386,36 +12386,18 @@ class BogAgentsApp(App):
         # v6 CLI-1: this handler used to look for a ParallelWorktreeMiddleware
         # on `self._middleware`, which is never assigned (the agent lives in
         # the server process), so every subcommand printed "not active" for
-        # three cycles and `cancel` — when it could run — only flipped a
-        # status field while the worker kept editing. It now fronts the
-        # machinery that actually runs worktree agents: the managed background
-        # tasks behind `/agent spawn --worktree`. Cancel stops the worker.
-        import json as _json
+        # three cycles. It now fronts the managed background tasks behind
+        # `/agent spawn --worktree`; parsing/rendering live in
+        # worktrees_controller so this stays a thin dispatcher.
+        from bog_agents_cli import worktrees_controller as wt
 
         raw_arg = command.strip()[len("/worktrees") :].strip()
         lowered = raw_arg.lower()
-        usage = (
-            "Usage: /worktrees | /worktrees status | /worktrees spawn <prompt> | "
-            '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
-            "/worktrees merge <id|branch> | /worktrees cancel <id>"
-        )
 
         if not raw_arg or lowered in {"status", "list"}:
-            tasks = [t for t in self._bg_manager.get_all_tasks() if t.worktree_branch]
-            if not tasks:
-                await self._mount_message(
-                    AppMessage(
-                        "No worktree tasks.\n\n"
-                        "Use /worktrees spawn <prompt> (or a JSON array of "
-                        "{label, prompt}) to start some."
-                    )
-                )
-                return
-            lines = ["[bold]Worktree tasks[/bold]"]
-            lines.extend(
-                f"  {t.status_line()}  [dim]{t.worktree_branch}[/dim]" for t in tasks
+            await self._mount_message(
+                AppMessage(wt.render_worktree_tasks(self._bg_manager.get_all_tasks()))
             )
-            await self._mount_message(AppMessage("\n".join(lines)))
             return
 
         if lowered.startswith("cancel "):
@@ -12423,8 +12405,7 @@ class BogAgentsApp(App):
             task = self._bg_manager.get_status(task_id)
             if task is None:
                 await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
-                return
-            if self._bg_manager.cancel(task_id):
+            elif self._bg_manager.cancel(task_id):
                 await self._mount_message(
                     AppMessage(f"Task '{task_id}' cancelled (worker stopped).")
                 )
@@ -12437,11 +12418,6 @@ class BogAgentsApp(App):
         if lowered.startswith("merge "):
             ref = raw_arg[6:].strip()
             task = self._bg_manager.get_status(ref)
-            branch = (
-                task.worktree_branch
-                if task is not None and task.worktree_branch
-                else ref
-            )
             if task is not None and task.status not in {"completed", "done"}:
                 await self._mount_message(
                     AppMessage(
@@ -12449,49 +12425,26 @@ class BogAgentsApp(App):
                     )
                 )
                 return
+            branch = (
+                task.worktree_branch
+                if task is not None and task.worktree_branch
+                else ref
+            )
             await self._handle_worktree_command(f"/worktree merge {branch}", echo=False)
             return
 
         if lowered.startswith("spawn "):
-            payload = raw_arg[6:].strip()
-            items: list[dict[str, str]] = []
-            if payload.startswith("["):
-                try:
-                    parsed = _json.loads(payload)
-                except _json.JSONDecodeError as exc:
-                    await self._mount_message(
-                        AppMessage(f"Invalid JSON: {exc}\n\n{usage}")
-                    )
-                    return
-                if not isinstance(parsed, list):
-                    await self._mount_message(
-                        AppMessage("Input must be a JSON array of task objects.")
-                    )
-                    return
-                items = [
-                    {
-                        "label": str(i.get("label", "")),
-                        "prompt": str(i.get("prompt", "")),
-                    }
-                    for i in parsed
-                    if isinstance(i, dict)
-                ]
-            elif payload:
-                items = [{"label": "", "prompt": payload}]
-            items = [i for i in items if i["prompt"].strip()]
-            if not items:
-                await self._mount_message(AppMessage(usage))
+            items, error = wt.parse_spawn_payload(raw_arg[6:])
+            if error:
+                await self._mount_message(AppMessage(error))
                 return
             for item in items:
-                label_flag = (
-                    f"--label {shlex.quote(item['label'])} " if item["label"] else ""
-                )
                 await self._handle_agent_command(
-                    f"/agent spawn --worktree {label_flag}{item['prompt']}", echo=False
+                    wt.agent_spawn_command(item), echo=False
                 )
             return
 
-        await self._mount_message(AppMessage(usage))
+        await self._mount_message(AppMessage(wt.USAGE))
 
     async def _handle_compress_command(self, command: str) -> None:
         """Handle `/compress` intelligent context compression.

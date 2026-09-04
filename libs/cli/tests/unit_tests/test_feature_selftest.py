@@ -3,9 +3,16 @@
 This is the drift test behind `bog-agents --doctor-features`: every registered
 command has a handler, implements the subcommands its spec advertises, and does
 not depend on the never-assigned `self._middleware` (the v6 CLI-1 root cause).
+
+The real audit runs in a fresh interpreter so it sees the modules exactly as a
+user's `bog-agents --doctor-features` would, unaffected by whatever other tests
+in the same xdist worker patched onto `BogAgentsApp` or into `sys.modules`.
 """
 
 from __future__ import annotations
+
+import subprocess
+import sys
 
 from bog_agents_cli.feature_selftest import (
     CommandAudit,
@@ -13,12 +20,27 @@ from bog_agents_cli.feature_selftest import (
     render_audit,
 )
 
+_AUDIT_SCRIPT = (
+    "import sys\n"
+    "from bog_agents_cli.feature_selftest import audit_command_surface, render_audit\n"
+    "audits = audit_command_surface()\n"
+    "print(render_audit(audits))\n"
+    "print('COUNT', len(audits))\n"
+    "sys.exit(0 if all(a.ok for a in audits) else 1)\n"
+)
+
 
 def test_every_registered_command_is_honest() -> None:
-    audits = audit_command_surface()
-    assert len(audits) >= 120
-    bad = [a for a in audits if not a.ok]
-    assert not bad, "\n" + render_audit(audits)
+    result = subprocess.run(
+        [sys.executable, "-c", _AUDIT_SCRIPT],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    count = int(result.stdout.strip().rsplit("COUNT", 1)[1])
+    assert count >= 120
 
 
 def test_previously_dead_commands_are_covered() -> None:

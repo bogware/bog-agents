@@ -136,3 +136,43 @@ class TestWorktrees:
             app._handle_worktree_command.assert_awaited_once_with(
                 "/worktree merge agent/parser-1a2b3c", echo=False
             )
+
+
+class TestWorktreesController:
+    def test_parse_plain_prompt(self) -> None:
+        from bog_agents_cli.worktrees_controller import parse_spawn_payload
+
+        assert parse_spawn_payload("  fix the parser ") == (
+            [{"label": "", "prompt": "fix the parser"}],
+            None,
+        )
+
+    def test_parse_json_array_and_errors(self) -> None:
+        from bog_agents_cli.worktrees_controller import USAGE, parse_spawn_payload
+
+        items, error = parse_spawn_payload(
+            '[{"label": "a", "prompt": "x"}, {"prompt": ""}, 3]'
+        )
+        assert error is None and items == [{"label": "a", "prompt": "x"}]
+        assert parse_spawn_payload("[not json")[1].startswith("Invalid JSON")
+        # A JSON object (not an array) is treated as plain prompt text.
+        assert (
+            parse_spawn_payload('{"prompt": "x"}')[0][0]["prompt"] == '{"prompt": "x"}'
+        )
+        assert parse_spawn_payload("")[1] == USAGE
+
+    def test_render_tasks(self) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents_cli.worktrees_controller import NO_TASKS, render_worktree_tasks
+
+        plain = SimpleNamespace(
+            status="running", worktree_branch=None, status_line=lambda: "t1 running"
+        )
+        wt = SimpleNamespace(
+            status="running",
+            worktree_branch="agent/x-1",
+            status_line=lambda: "t2 running",
+        )
+        assert render_worktree_tasks([plain]) == NO_TASKS
+        assert "agent/x-1" in render_worktree_tasks([plain, wt])
