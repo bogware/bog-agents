@@ -506,6 +506,15 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("approvals", "timeout_seconds"),
     ),
     ConfigOption(
+        key="tools.powershell",
+        group="Tools",
+        summary="Register the opt-in `powershell` tool (pwsh / Windows PowerShell via argv, never cmd.exe). No-op when PowerShell is absent.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.POWERSHELL_TOOL,
+        toml_keys=("tools", "powershell"),
+    ),
+    ConfigOption(
         key="tools.timeout",
         group="Tools",
         summary="Default per-tool execution timeout (seconds).",

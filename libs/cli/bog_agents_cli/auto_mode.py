@@ -334,7 +334,7 @@ def never_allow_match(
 ) -> str | None:
     """Return the matching never-allow entry for a tool call, or `None`."""
     lowered = tool_name.lower()
-    shell_like = lowered in {"execute", "shell", "bash", "run_command"}
+    shell_like = lowered in {"execute", "shell", "bash", "run_command", "powershell"}
     haystack: str | None = None
     for raw, tool, rx in compiled:
         if tool not in (None, lowered) and not (
@@ -360,7 +360,7 @@ def never_allow_match(
 def never_allow_entry_for(tool_name: str, tool_args: dict[str, Any]) -> str:
     """Build the never-allow entry that would block exactly this call again."""
     lowered = tool_name.lower()
-    if lowered in {"execute", "shell", "bash", "run_command"}:
+    if lowered in {"execute", "shell", "bash", "run_command", "powershell"}:
         command = str((tool_args or {}).get("command") or "").strip()
         if command:
             return f"execute: ^{re.escape(command)}$"
@@ -550,7 +550,7 @@ class AutoModeRuleEngine:
                 AutoDecision.ASK, f"risky tool: {tool_name}", "risky_tools"
             )
 
-        if tool_name in ("execute", "run_command", "shell", "bash"):
+        if tool_name in ("execute", "run_command", "shell", "bash", "powershell"):
             cmd = str(tool_args.get("command", tool_args.get("cmd", "")))
             return self._eval_shell(cmd)
 
@@ -889,7 +889,7 @@ async def haiku_risk_eval(
 
 
 def _format_tool_repr(tool_name: str, tool_args: dict[str, Any]) -> str:
-    if tool_name in ("execute", "run_command", "shell", "bash"):
+    if tool_name in ("execute", "run_command", "shell", "bash", "powershell"):
         return f"shell: {tool_args.get('command', tool_args.get('cmd', ''))}"
     if "path" in tool_args or "file_path" in tool_args:
         path = tool_args.get("path") or tool_args.get("file_path", "")

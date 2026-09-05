@@ -456,6 +456,26 @@ def run_doctor() -> str:
             checks.append(("Sandbox: seatbelt", "OK", "Available"))
         else:
             checks.append(("Sandbox: seatbelt", "WARN", "Not available"))
+    elif system == "windows":
+        # ROADMAP #61: the Store's zero-byte pwsh.exe alias is the classic
+        # first-run trap (WinError 5); say so before the agent hits it.
+        from bog_agents.tools.powershell import find_powershell, is_windows_apps_alias
+
+        found = find_powershell()
+        if found:
+            checks.append(("PowerShell", "OK", found))
+        else:
+            alias = shutil.which("pwsh")
+            if alias and is_windows_apps_alias(alias):
+                checks.append(
+                    (
+                        "PowerShell",
+                        "WARN",
+                        f"pwsh is the Store execution alias ({alias}); install PowerShell 7 or disable the alias",
+                    )
+                )
+            else:
+                checks.append(("PowerShell", "WARN", "pwsh/powershell not on PATH"))
 
     # 7. Config directory
     config_dir = Path.home() / ".bog-agents"

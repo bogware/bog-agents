@@ -1309,10 +1309,10 @@ class SessionState:
         return self.auto_approve
 
 
-SHELL_TOOL_NAMES: frozenset[str] = frozenset({"bash", "shell", "execute"})
+SHELL_TOOL_NAMES: frozenset[str] = frozenset({"bash", "shell", "execute", "powershell"})
 """Tool names recognized as shell/command-execution tools.
 
-Only `'execute'` is registered by the SDK and CLI backends in practice.
+`'execute'` is always registered; `'powershell'` only with `tools.powershell` (#61).
 `'bash'` and `'shell'` are legacy names carried over and kept as
 backwards-compatible aliases.
 """

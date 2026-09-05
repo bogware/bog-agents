@@ -152,8 +152,51 @@ jobs:
       - name: Publish to PyPI
         run: uv publish --trusted-publishing automatic ${{ env.WORKING_DIR }}/dist/*
 
+  # ROADMAP #61: a standalone Windows bundle (no Python needed) for CLI
+  # releases, built on a hosted runner with packaging/pyinstaller/build.py
+  # (spec walks the dependency closure so lazy provider imports and the
+  # doctor's metadata checks work frozen). Unsigned until Azure Trusted
+  # Signing is wired in — see the commented step. Failure here never blocks
+  # the PyPI publish; the zip is simply absent from that release.
+  windows-standalone:
+    needs: [setup, build]
+    if: inputs.package == 'bog-agents-cli'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install the CLI with every provider extra
+        working-directory: libs/cli
+        run: uv sync --extra all-providers
+      - name: Build standalone bundle
+        working-directory: libs/cli
+        run: uv run --with pyinstaller python ../../packaging/pyinstaller/build.py --dist ../../dist/standalone --work ../../build/pyinstaller
+      # - name: Sign bog-agents.exe (Azure Trusted Signing)
+      #   uses: azure/trusted-signing-action@v0.5.0
+      #   with:
+      #     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      #     azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      #     azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      #     endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      #     trusted-signing-account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+      #     certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+      #     files-folder: dist/standalone/bog-agents
+      #     files-folder-filter: exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: standalone-windows-${{ inputs.package }}
+          path: |
+            dist/standalone/*.zip
+            dist/standalone/*.sha256
+          if-no-files-found: error
+
   github-release:
-    needs: [setup, build, publish]
+    needs: [setup, build, publish, windows-standalone]
     if: always() && needs.publish.result == 'success'
     runs-on: [self-hosted, Linux]
     permissions:
@@ -168,6 +211,15 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: dist-${{ inputs.package }}
+          path: ${{ env.WORKING_DIR }}/dist/
+
+      # ROADMAP #61: the standalone zip exists only for CLI releases (and only
+      # when its job succeeded); a missing artifact must not fail the release.
+      - uses: actions/download-artifact@v8
+        if: inputs.package == 'bog-agents-cli' && needs.windows-standalone.result == 'success'
+        continue-on-error: true
+        with:
+          name: standalone-windows-${{ inputs.package }}
           path: ${{ env.WORKING_DIR }}/dist/
 
       - name: Create GitHub Release

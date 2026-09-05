@@ -822,14 +822,25 @@ ADK, and a contract is itself a feature to the target users.
   beside the number needs a benchmark run (`libs/harbor`). **S/E, M.**
 - **#61 Windows distribution and first run** *(Cline signed Windows installer;
   Codex native Windows; Pi PowerShell tool; Kilo's WindowsApps EACCES regression)*
-  — **absent.** No installer of any kind (winget/scoop/brew/MSI/`install.ps1`),
-  `daemon install` writes a systemd unit on Windows, `command "/help"` is
-  MSYS-mangled under Git Bash, no PowerShell-native tool. Delta: a Windows
-  release job (standalone build, Azure Trusted Signing, winget manifest) plus
-  `install.ps1`/`install.sh` and a brew formula; Task Scheduler `daemon install`
-  on win32; `_recover_msys_path` applied to headless commands; an opt-in
-  `powershell` tool reusing `exec_risk`/`_DANGEROUS_PATTERNS`; a `doctor` guard
-  for the `WindowsApps\pwsh.exe` execution-alias trap. **S/E, M.**
+  — **shipped 2026-09-05** (REVIEW v6 §12): `install.ps1` / `install.sh`
+  one-liners (uv → pipx → pip, install uv + a Python when absent, Store-alias
+  warnings, PATH, doctor); `packaging/pyinstaller/` spec + `build.py` and a
+  `windows-standalone` job in `release.yml` that attaches
+  `bog-agents-<v>-windows-x64.zip` (+ sha256) to every CLI release (verified
+  locally: 248 MB onedir, `--version`, `command "/version"`, `--doctor`,
+  `command "tokens middleware"` all run frozen); `packaging/winget/
+  generate_manifest.py` (portable nested installer) and a Homebrew formula
+  skeleton; SDK `bog_agents.tools.powershell` — opt-in `powershell` tool
+  (`tools.powershell` / `BOG_AGENTS_POWERSHELL_TOOL`) that runs scripts through
+  `pwsh`/`powershell.exe` as argv, never `cmd.exe`, sharing `execute`'s
+  `_DANGEROUS_PATTERNS` gate and, in the CLI, the auto-mode / never-allow /
+  approval classification via `SHELL_TOOL_NAMES`; `find_powershell` skips the
+  zero-byte `WindowsApps\pwsh.exe` execution alias and both doctors flag it.
+  Task Scheduler `daemon install` (v6 DMN-3) and MSYS recovery for headless
+  commands (v6 CLI-8) were already in. *Was:* absent. Open: Azure Trusted
+  Signing (needs the org's certificate profile; the job has the step ready),
+  winget submission and the Homebrew tap (need the maintainer's accounts).
+  **S/E, M.**
 - **#62 Agent Plugins 1.0 native + one-command import** *(spec Aug 6, TSC of
   Amazon/Anysphere/Microsoft/OpenAI/Vercel/Google; GA in Copilot, Kiro, OpenHands,
   Cline; Codex marketplaces for Bedrock and Claude Code; Cline session import)* —

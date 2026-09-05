@@ -143,6 +143,39 @@ def _probe_git() -> Probe:
     return Probe(name="git", status="ok", detail=result.stdout.strip())
 
 
+def _probe_powershell() -> Probe:
+    """PowerShell availability and the Microsoft Store execution-alias trap (ROADMAP #61)."""
+    import platform
+
+    from bog_agents.tools.powershell import find_powershell, is_windows_apps_alias
+
+    found = find_powershell()
+    if found is not None:
+        return Probe(name="powershell", status="ok", detail=found)
+    alias = shutil.which("pwsh")
+    if alias and is_windows_apps_alias(alias):
+        return Probe(
+            name="powershell",
+            status="warn",
+            detail=(
+                f"pwsh resolves to the Microsoft Store execution alias ({alias}), which fails with "
+                "WinError 5 when spawned — install PowerShell 7 (winget install Microsoft.PowerShell) "
+                "or turn the alias off under Settings > Apps > App execution aliases"
+            ),
+        )
+    if platform.system() == "Windows":
+        return Probe(
+            name="powershell",
+            status="warn",
+            detail="no pwsh/powershell on PATH — the opt-in powershell tool (tools.powershell) is unavailable",
+        )
+    return Probe(
+        name="powershell",
+        status="skip",
+        detail="not on PATH (only needed for the opt-in powershell tool)",
+    )
+
+
 def _probe_provider_envs() -> Probe:
     """Detect which provider credentials are present (no calls)."""
     candidates = [
@@ -296,6 +329,7 @@ _PROBES: list[ProbeFn] = [
     _probe_project_dir_writable,
     _probe_settings_files,
     _probe_git,
+    _probe_powershell,
     _probe_provider_envs,
     _probe_anthropic_reachable,
     _probe_openai_reachable,

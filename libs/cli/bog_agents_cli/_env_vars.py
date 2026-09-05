@@ -152,6 +152,9 @@ OPERATOR = "BOG_AGENTS_OPERATOR"
 OPERATOR_DISABLE = "BOG_AGENTS_OPERATOR_DISABLE"
 """Emergency kill switch for Operator mode; beats every other toggle."""
 
+POWERSHELL_TOOL = "BOG_AGENTS_POWERSHELL_TOOL"
+"""Register the opt-in `powershell` tool (pwsh / Windows PowerShell via argv, never cmd.exe) when truthy (#61)."""
+
 PREFLIGHT_THRESHOLD_USD = "BOG_AGENTS_PREFLIGHT_THRESHOLD_USD"
 """Projected spend above which /team run, /butcher and /best-of-n confirm before starting (#51)."""
 

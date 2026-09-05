@@ -34,14 +34,17 @@ from bog_agents.tools.coercion import (
     semantic_bool,
     semantic_number,
 )
+from bog_agents.tools.powershell import find_powershell, powershell_tool_bundle
 
 __all__ = [
     "SemanticBool",
     "SemanticNumber",
     "background_shell_tools_bundle",
+    "find_powershell",
     "git_tools_bundle",
     "memory_search_tool_bundle",
     "multi_edit_tool",
+    "powershell_tool_bundle",
     "pty_tools_bundle",
     "read_many_files_tool",
     "semantic_bool",

@@ -220,6 +220,17 @@ credential manager still works); never set `GIT_CONFIG_NOSYSTEM` (it drops
 `scan_repo_config()` is the report side; the CLI's `repo_trust.py` gates `/diff`,
 `/review`, `/pr` on acknowledgement.
 
+**Windows first run (ROADMAP #61).** `install.ps1` / `install.sh` at the repo root
+are the supported one-liners; `packaging/` holds the PyInstaller spec + `build.py` the
+`windows-standalone` release job runs, the winget manifest generator and the Homebrew
+formula. The spec collects the whole dependency closure *with metadata* on purpose —
+a plain `pyinstaller entry.py` build starts but breaks `--doctor` and every lazy
+provider import. The opt-in `powershell` tool (`bog_agents/tools/powershell.py`,
+`tools.powershell`) must keep its argument named `command` and stay in
+`SHELL_TOOL_NAMES`, or auto-mode, never-allow and the approval menu stop treating it
+as a shell; never launch PowerShell via `shell=True`, and never trust `shutil.which("pwsh")`
+without `is_windows_apps_alias` (the Store's zero-byte alias fails with WinError 5).
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`

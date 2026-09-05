@@ -104,6 +104,19 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
+def dangerous_command_match(command: str) -> str | None:
+    """Return the description of the first `_DANGEROUS_PATTERNS` entry `command` matches, or `None`.
+
+    The same accident-catcher `execute` applies, exposed so sibling tools (the
+    opt-in `powershell` bundle, ROADMAP #61) refuse the same commands. Not a
+    security boundary — HITL and `SafeToolsMiddleware` are.
+    """
+    for pattern, description in _DANGEROUS_PATTERNS:
+        if pattern.search(command):
+            return description
+    return None
+
+
 class LocalShellBackend(FilesystemBackend, SandboxBackendProtocol):
     """Filesystem backend with unrestricted local shell command execution.
 

@@ -59,6 +59,16 @@ from bog_agents_cli.unicode_security import (
 logger = logging.getLogger(__name__)
 
 
+def _powershell_tool_enabled() -> bool:
+    """Whether the opt-in `powershell` tool is on (`tools.powershell` / BOG_AGENTS_POWERSHELL_TOOL, ROADMAP #61)."""
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        return bool(resolve_option("tools.powershell"))
+    except Exception:  # a config problem never blocks agent creation
+        return False
+
+
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
     """Resolve the shell auto-background threshold from an env or config value.
 
@@ -1774,6 +1784,15 @@ def create_cli_agent(
                     tools.extend(pty_tools_bundle(PtyController()))
             except Exception:
                 logger.debug("Could not wire PTY tools", exc_info=True)
+
+            # Opt-in PowerShell tool (ROADMAP #61): the script goes to
+            # pwsh / powershell.exe as one argv element, never through
+            # cmd.exe; it shares execute's dangerous-command gate and the
+            # CLI's shell classification (SHELL_TOOL_NAMES / auto mode).
+            if _powershell_tool_enabled():
+                from bog_agents.tools import powershell_tool_bundle
+
+                tools.extend(powershell_tool_bundle(backend))
         else:
             # No shell access - use plain FilesystemBackend with the
             # same virtual_mode policy as the shell branch.

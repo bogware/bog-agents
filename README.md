@@ -93,6 +93,22 @@ uv tool install bog-agents-cli
 pip install bog-agents-cli
 ```
 
+No Python, no package manager, or on Windows? One line picks the right path
+(uv → pipx → pip, installs uv and a Python when the machine has none, warns
+about the Microsoft Store `python`/`pwsh` aliases, fixes PATH, runs the doctor):
+
+```powershell
+irm https://raw.githubusercontent.com/bogware/bog-agents/main/install.ps1 | iex   # Windows
+```
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/bogware/bog-agents/main/install.sh | sh  # macOS / Linux
+```
+
+Every CLI release also attaches a standalone `bog-agents-<version>-windows-x64.zip`
+(no Python required; unzip and run `bog-agents\bog-agents.exe`) — see
+[`packaging/`](packaging/README.md) for the winget manifest and Homebrew formula.
+
 Provider extras:
 
 ```bash
