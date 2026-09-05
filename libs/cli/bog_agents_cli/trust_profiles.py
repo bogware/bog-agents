@@ -21,9 +21,11 @@ PERMISSION_MODES = ("default", "accept-edits", "plan", "bypass", "paranoid")
 
 RESTRICTED_TOOL_NAMES: frozenset[str] = frozenset(
     {
-        # shells
+        # shells (and the scripted tool path, which spawns an interpreter)
         "execute",
         "powershell",
+        "run_code",
+        "execute_mcp_script",
         # raw network (fetch_url is kept only with a domain allow-list)
         "http_request",
         "web_search",

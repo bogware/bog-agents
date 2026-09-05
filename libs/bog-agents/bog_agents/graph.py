@@ -1262,6 +1262,19 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
             OTelExportMiddleware(OTLPHttpSink(f.otel_endpoint, headers=f.otel_headers), agent_name=name or "agent", price=_price_tokens)
         )
 
+    # ROADMAP #72: governed code mode — bound to the assembled agent below.
+    if f.enable_code_mode:
+        from bog_agents.middleware.code_mode import CodeModeMiddleware
+
+        agents_middleware.append(
+            CodeModeMiddleware(
+                timeout=f.code_mode_timeout,
+                allowed_tools=f.code_mode_allowed_tools,
+                cost_ledger=cost_ledger,
+                max_calls=f.code_mode_max_calls,
+            )
+        )
+
     # D-5 provenance loop: composes citations + hallucination_detection
     # + fact_check so every claim the agent emits has a registered
     # source and the model is told to use the citation tools by default.
@@ -1630,6 +1643,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     # ROADMAP #54: let a running token audit see (and instrument) the final
     # stack before LangChain binds the hooks. No-op outside `capture_assembly`.
+    for _code_mode in agents_middleware:
+        if type(_code_mode).__name__ == "CodeModeMiddleware":
+            _code_mode.bind(_tools, agents_middleware)  # ROADMAP #72: learn tools + governance chain
     notify_assembly(agents_middleware, _tools, final_system_prompt)
 
     return _langchain_create_agent(

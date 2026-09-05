@@ -60,6 +60,11 @@ class FeatureConfig:
             (`None` keeps events in memory only).
         enable_fork_subagent: Register the built-in `fork` subagent, a child that
             starts from the parent's conversation (ROADMAP #71).
+        enable_code_mode: Register the `run_code` tool (ROADMAP #72): a script
+            in a child interpreter whose `tools.*` calls re-enter the tool path.
+        code_mode_timeout: Wall-clock limit per script (seconds).
+        code_mode_allowed_tools: Tool names a script may call (`None` = all).
+        code_mode_max_calls: Tool calls one script may make.
         enable_conversation_branching: Enable conversation branching.
         enable_image_input: Enable image input processing.
         enable_browser: Enable browser-agent tools.
@@ -183,6 +188,11 @@ class FeatureConfig:
     cache_diagnostics_dir: str | None = None
     # Built-in `fork` subagent (ROADMAP #71): the parent's prompt, tools and conversation.
     enable_fork_subagent: bool = True
+    # Governed Code Mode (ROADMAP #72): `run_code` scripts call tools through the tool path.
+    enable_code_mode: bool = False
+    code_mode_timeout: float = 120.0
+    code_mode_allowed_tools: list[str] | None = None
+    code_mode_max_calls: int = 200
     enable_conversation_branching: bool = False
     enable_image_input: bool = False
     enable_browser: bool = False

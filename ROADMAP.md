@@ -1093,14 +1093,24 @@ ADK, and a contract is itself a feature to the target users.
 - **#72 Governed Code Mode** *(deepagents `CodeInterpreterMiddleware` + dynamic
   subagents; Mastra `createCodeMode`; Pydantic Code Mode; OpenCode code-mode MCP
   adapter; OpenAI programmatic tool calling — all shipped since July)* —
-  **proposed-not-built.** Now table stakes. An interpreter middleware (QuickJS or
-  a subprocess Python runner inside `LocalSandbox`/Docker) exposing an allowlisted
-  `tools.*` namespace whose every call re-enters the normal tool path (Expert
-  rules, SafeTools, HITL, `CostLedger` all fire), plus a `task()` global that
-  dispatches subagents/teams with a response schema and counts each spawn; an
-  `execute_mcp_script` variant binding connected MCP tools; fan-out/vote helpers.
-  Promotes v2 #36 from L-later to M-now; bog's version is the only auditable one.
-  **T/E/S, L.**
+  **shipped 2026-09-06** (REVIEW v6 §23) as a subprocess Python runner —
+  QuickJS stays a pluggable option pending the interpreter decision. SDK
+  `middleware/code_mode.py`: the `run_code` tool executes the model's script in
+  a child `python -I` (no site packages, temp cwd, scrubbed env, wrapped in
+  `LocalSandbox` where a launcher exists) that owns nothing but a `tools`
+  proxy; every `tools.<name>(**kwargs)` is a JSON line back to the parent, which
+  runs it through the agent's own `wrap_tool_call` chain (Expert rules,
+  SafeTools, action log, cost tracking) — so a script cannot out-run governance.
+  Stricter than a direct call by design: a HITL-gated tool is refused inside a
+  script, `tools.task(...)` and `tools.web_search(...)` are counted against
+  `RunawayCaps` before they run, a per-script call budget and wall-clock
+  timeout apply. `fanout` / `vote` helpers ship in the child;
+  `execute_mcp_script` narrows the namespace to the connected MCP tools.
+  `FeatureConfig.enable_code_mode` / `code_mode_timeout` /
+  `code_mode_allowed_tools` / `code_mode_max_calls`; CLI `tools.code_mode`
+  (`BOG_AGENTS_CODE_MODE`), off under `--restricted`. *Was:* proposed. Open:
+  the QuickJS interpreter (user decision); OS sandboxing of the child on
+  Windows (#60); `task()` with a response schema. **T/E/S, L.**
 - **#74 Compliance artefact: hash-chained action log + OTel GenAI export + org usage
   export** *(MAF/ADK semconv; Kiro OTLP usage export Sep 1; GitHub per-user credit
   metrics; EU AI Act Annex III deferred to 2027-12-02 but questionnaires ask now)*

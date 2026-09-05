@@ -152,7 +152,9 @@ def _model_label(model: object) -> str:
     return type(model).__name__
 
 
-def _compliance_features(assistant_id: str) -> dict[str, Any]:
+def _compliance_features(
+    assistant_id: str, *, restricted: bool = False
+) -> dict[str, Any]:
     """`FeatureConfig` kwargs for the action log / OTLP export from `compliance.*` (ROADMAP #74)."""
     features: dict[str, Any] = {}
     try:
@@ -171,6 +173,8 @@ def _compliance_features(assistant_id: str) -> dict[str, Any]:
         endpoint = resolve_option("compliance.otel_endpoint")
         if endpoint:
             features["otel_endpoint"] = str(endpoint)
+        if resolve_option("tools.code_mode") and not restricted:
+            features["enable_code_mode"] = True  # ROADMAP #72
     except Exception:  # a config problem never blocks agent creation
         logger.debug("Could not read compliance.* options", exc_info=True)
     return features
@@ -2453,7 +2457,7 @@ def create_cli_agent(
             deferred_keep_tools=list(MINI_KEEP_TOOLS)
             if harness_profile == "lean"
             else None,
-            **_compliance_features(assistant_id),
+            **_compliance_features(assistant_id, restricted=trust_profile.restricted),
         ),
     ).with_config(config)
     return agent, composite_backend

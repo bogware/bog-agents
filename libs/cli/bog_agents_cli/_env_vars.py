@@ -54,6 +54,9 @@ BUDGET_USD = "BOG_AGENTS_BUDGET_USD"
 BUDGET_WARN_AT_PERCENT = "BOG_AGENTS_BUDGET_WARN_AT_PERCENT"
 """Percent of a budget or daily ceiling at which `/cost` and the turn gate start warning (#51)."""
 
+CODE_MODE = "BOG_AGENTS_CODE_MODE"
+"""Register the governed `run_code` tool (ROADMAP #72) when truthy; never under --restricted."""
+
 DAILY_CEILING_USD = "BOG_AGENTS_DAILY_CEILING_USD"
 """Per-day spend ceiling in USD for this user across sessions; new turns are refused once reached (#51)."""
 

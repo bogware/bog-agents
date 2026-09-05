@@ -515,6 +515,15 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("tools", "powershell"),
     ),
     ConfigOption(
+        key="tools.code_mode",
+        group="Tools",
+        summary="Register the governed `run_code` tool: the model scripts tool calls in a child interpreter; every call re-enters the tool path (ROADMAP #72). Off under --restricted.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.CODE_MODE,
+        toml_keys=("tools", "code_mode"),
+    ),
+    ConfigOption(
         key="web.allowed_domains",
         group="Tools",
         summary="Comma-separated domains the web tools may fetch (suffix-matched: example.com covers api.example.com). Empty = any public host.",

@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Governed Code Mode (ROADMAP #72).** `middleware/code_mode.py` runs the model's script
+in a child `python -I`; every `tools.*` call comes back over stdio and is executed through
+the agent's own `wrap_tool_call` chain — never call a tool directly from that module.
+HITL-gated tools are refused inside scripts (interrupts cannot cross the process), spawns
+are counted before they run, and only `call` messages wait for a reply (one-way `print` /
+`error` / `done`, or the child deadlocks). `bind()` needs the merged `interrupt_on` names
+because langchain builds HITL inside `_langchain_create_agent`.
+
 **Compliance artefact (ROADMAP #74).** `bog_agents/action_log.py` is the hash-chained
 per-run log (`ActionLog`, `ActionLogMiddleware`, `verify_chain` / `verify_export`,
 injected signer) and `bog_agents/otel_export.py` the GenAI-semconv span emitter with a
