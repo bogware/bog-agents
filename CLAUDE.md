@@ -146,6 +146,18 @@ the edge. Preserve that split when touching them, and preserve each one's
 
 **Middleware ordering** (Wave W): the order of middleware in `graph.py` is load-bearing for correctness (CostTracker must wrap before Summarization, Summarization must run before PromptCaching, etc.). The canonical order is locked by `tests/unit_tests/test_middleware_canonical_order.py` — when an intentional reorder is needed, audit the affected interactions and update the test assertions in the same commit. Hard ordering constraints (e.g. ResultSynthesis requires ParallelWorktree earlier in the list) are also declared via `requires: ClassVar` and enforced at build time by `_validate_middleware_ordering`.
 
+**Harness overhead is measured, not guessed (ROADMAP #54).** `bog_agents/token_audit.py`
+builds an agent around `RecordingChatModel`, runs one probe turn and attributes the
+fixed per-turn cost to each middleware (instrumented `wrap_model_call` deltas) and
+each tool schema; `create_agent` must keep calling `notify_assembly(...)` immediately
+before `_langchain_create_agent` for that to work. The built-in `lean` profile
+(`profiles/harness/_lean.py`, selected by `FeatureConfig(harness_profile="lean")`)
+and the CLI's `--mini` (lean + `DeferredToolsMiddleware(keep_names=MINI_KEEP_TOOLS)`)
+are the published low-overhead points; `tests/unit_tests/smoke_tests/test_harness_overhead.py`
+pins the numbers with the offline counter and fails CI on a >5% regression — refresh
+with `make update-snapshots` only for an intentional prompt or tool change, and run
+`bog-agents command "tokens middleware"` before adding a middleware that injects prompt text.
+
 **Street Sweeper (`street_sweeper.py`)** — continuous, lossless-first context pruning that runs on *every* model call (vs. `SummarizationMiddleware`'s one-shot compaction at ~85% full). It is a **view transformation**: canonical history stays untouched in LangGraph state; the sweeper reshapes only the per-call request via `request.override(messages=...)`, offloading dropped content to the backend (recoverable via the `recall_swept` tool). Invariant to preserve when touching it: the sweep **never changes message count or order** — only message text — which is what keeps it composable with `SummarizationMiddleware` (cutoff indices stay aligned) and `AnthropicPromptCachingMiddleware` (stable prefix).
 
 **Lazy loading**: Both `bog_agents/__init__.py` AND `bog_agents/middleware/__init__.py` use `_LAZY_IMPORTS` dicts and `__getattr__` so `import bog_agents.middleware` does NOT eagerly pull every submodule. Follow this pattern when adding new middleware: append to `_LAZY_IMPORTS`, do NOT add a top-level `from … import …` line.

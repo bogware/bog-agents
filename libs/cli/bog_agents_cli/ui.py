@@ -192,6 +192,9 @@ def show_help() -> None:
         "  --model-params JSON        Extra kwargs (e.g., '{\"temperature\": 0.7}')"
     )
     console.print("  --profile-override JSON    Override model profile fields")
+    console.print(
+        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)"
+    )
     console.print("  --default-model [MODEL]    Set or show the default model")
     console.print("  --clear-default-model      Clear default model")
     console.print()

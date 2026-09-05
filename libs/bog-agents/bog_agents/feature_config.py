@@ -113,6 +113,10 @@ class FeatureConfig:
         enable_deferred_tools: Hide selected tool schemas from the model until
             activated via the `tool_search`/`select` metatools.
         deferred_tools: Tool names to defer (requires ``enable_deferred_tools``).
+        deferred_keep_tools: Allowlist form: defer every tool *except* these
+            (requires ``enable_deferred_tools``; the CLI's ``--mini`` uses it).
+        harness_profile: Registry key of a HarnessProfile (e.g. ``"lean"``) merged
+            over the model's own profile.
         enable_evidence_bundle: Attach `EvidenceBundleMiddleware` so the agent
             can emit a proof-of-work bundle (diff stat, check results, rubric
             verdict) that PR and daemon surfaces attach to their output
@@ -254,6 +258,10 @@ class FeatureConfig:
     # Deferred tool schemas — keep large tool definitions out of context.
     enable_deferred_tools: bool = False
     deferred_tools: list[str] | None = None
+    deferred_keep_tools: list[str] | None = None
+    # Named harness profile layered over the model's own (ROADMAP #54).
+    # `"lean"` ships in-tree; any `register_harness_profile` key works.
+    harness_profile: str | None = None
     # Proof-of-work evidence bundle (v6 SDK-11). Off by default; the CLI's
     # `--pr --pr-evidence` and daemon dispatch turn it on.
     enable_evidence_bundle: bool = False

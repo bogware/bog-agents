@@ -69,6 +69,12 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT-licensed.
   function call embeds one in your code.
 - **Composable to the core.** ~90 middlewares snap on or off, sub-agents nest,
   backends swap. The framework gets out of the way as your needs sharpen.
+- **Overhead you can see.** The SDK's default harness costs **7,619 tokens per
+  turn** before your own words (system prompt + tool schemas, `o200k_base`);
+  the built-in `lean` profile costs **2,789**. The CLI with all 104 tools costs
+  21,088 and `bog-agents --mini` 8,565. `/tokens middleware` attributes every
+  token to the middleware or tool that added it, and a CI baseline fails the
+  build when the number creeps up.
 
 ---
 

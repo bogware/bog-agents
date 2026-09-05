@@ -1,0 +1,13 @@
+{
+  "tokenizer": "approx",
+  "default": {
+    "per_turn_overhead": 8862,
+    "system_prompt_tokens": 1787,
+    "tool_schema_tokens": 7075
+  },
+  "lean": {
+    "per_turn_overhead": 3057,
+    "system_prompt_tokens": 1042,
+    "tool_schema_tokens": 2015
+  }
+}

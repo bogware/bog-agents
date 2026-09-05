@@ -18,6 +18,7 @@ from bog_agents.profiles.harness.harness_profiles import (
     GeneralPurposeSubagentProfile,
     HarnessProfile,
     HarnessProfileConfig,
+    named_harness_profile,
     register_harness_profile,
 )
 from bog_agents.profiles.provider.provider_profiles import (
@@ -33,6 +34,7 @@ __all__ = [
     "HarnessProfile",
     "HarnessProfileConfig",
     "ProviderProfile",
+    "named_harness_profile",
     "register_harness_profile",
     "register_provider_profile",
 ]

@@ -333,6 +333,34 @@ def _cmd_help(args: str) -> HeadlessResult:
 
 
 # Registry of headless-capable commands: name -> (description, handler).
+def _cmd_tokens(args: str) -> HeadlessResult:
+    """Measure the CLI agent's fixed per-turn cost (headless twin of ``/tokens middleware``).
+
+    Builds the same middleware stack the TUI uses around a recording model (no
+    provider call) and reports tokens per turn attributed to each middleware
+    and tool. ``--mini`` measures the ``lean`` profile instead.
+    """
+    from bog_agents_cli.tokens_audit_controller import (
+        LEAN_PROFILE,
+        audit_cli_agent,
+        render_cli_audit,
+    )
+
+    words = args.split()
+    verb = words[0] if words and not words[0].startswith("-") else "middleware"
+    if verb != "middleware":
+        return HeadlessResult(
+            ok=False, text="usage: tokens middleware [--mini]", data={}
+        )
+    harness_profile = LEAN_PROFILE if "--mini" in words else None
+    audit = audit_cli_agent(harness_profile=harness_profile, cwd=Path.cwd())
+    return HeadlessResult(
+        ok=True,
+        text=render_cli_audit(audit, harness_profile=harness_profile),
+        data=audit.to_dict(),
+    )
+
+
 HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "commands": ("List all slash commands and which run headlessly", _cmd_commands),
     "help": ("Show help for all or a specific slash command", _cmd_help),
@@ -345,6 +373,10 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     ),
     "changelog": ("Show the CLI changelog", _cmd_changelog),
     "goal": ("Show the current project goal, status, and rubric", _cmd_goal),
+    "tokens": (
+        "Harness overhead per turn, attributed per middleware and tool (tokens middleware [--mini])",
+        _cmd_tokens,
+    ),
 }
 
 

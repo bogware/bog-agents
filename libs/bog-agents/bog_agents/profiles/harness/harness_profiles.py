@@ -1103,6 +1103,30 @@ def _get_harness_profile(spec: str) -> HarnessProfile | None:
     return None
 
 
+def named_harness_profile(name: str) -> HarnessProfile:
+    """Look up a harness profile by its registry key (for example the built-in `"lean"`).
+
+    Unlike `_get_harness_profile`, this does no provider-prefix fallback: the
+    key must be registered exactly.
+
+    Args:
+        name: Registry key.
+
+    Returns:
+        The registered profile.
+
+    Raises:
+        ValueError: When nothing is registered under `name`.
+    """
+    _ensure_harness_profiles_loaded()
+    profile = _HARNESS_PROFILES.get(name)
+    if profile is None:
+        known = ", ".join(sorted(_HARNESS_PROFILES)) or "none"
+        msg = f"Unknown harness profile {name!r}; registered keys: {known}"
+        raise ValueError(msg)
+    return profile
+
+
 def _resolve_middleware_seq(
     middleware: Sequence[AgentMiddleware] | Callable[[], Sequence[AgentMiddleware]],
 ) -> Sequence[AgentMiddleware]:

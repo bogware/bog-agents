@@ -804,15 +804,22 @@ ADK, and a contract is itself a feature to the target users.
   each call and names the middleware whose injected segment broke the cache.
   **S/T, S+S.**
 - **#54 Published harness overhead + lean profile** *(deepagents 0.7: 5,395 →
-  1,895 tokens/turn with an eval; HN 33k-vs-7k thread; NOOA, ADK)* — **partial.**
-  `HarnessProfile` already has `base_system_prompt` / `excluded_middleware` /
-  `tool_description_overrides`. Ship a built-in `lean` profile (empty base
-  prompt, trimmed tool descriptions, plan/todo excluded, deferred tools on) and a
-  `--mini` flag; `/tokens middleware` that tokenizes each middleware's injected
-  segment and each tool schema; turn the smoke-test snapshot into a numeric
-  tokens-per-turn baseline that fails CI on regression; publish the number in the
-  README next to a Harbor pass rate. Nobody else *can* attribute tokens per
-  middleware. **S/E, M.**
+  1,895 tokens/turn with an eval; HN 33k-vs-7k thread; NOOA, ADK)* — **shipped
+  2026-09-05** (REVIEW v6 §11): SDK `token_audit.py` builds the agent around a
+  recording model, runs one probe turn and attributes the fixed cost per
+  middleware (instrumented `wrap_model_call` deltas) and per tool schema;
+  `create_agent` hands its final stack to the audit through `notify_assembly`.
+  Built-in `lean` profile (`FeatureConfig(harness_profile="lean")`: 3-sentence
+  base prompt, one-line tool descriptions, no todo list) and `--mini` in the CLI
+  (`lean` + every non-core tool schema deferred behind `tool_search`/`select`,
+  allowlist mode of `DeferredToolsMiddleware`). `/tokens middleware` and the
+  headless `bog-agents command "tokens middleware [--mini]"` print the report;
+  `tests/unit_tests/smoke_tests/test_harness_overhead.py` pins the numbers and
+  fails CI on a >5% regression. Measured (o200k_base): SDK default 7,619
+  tokens/turn → `lean` 2,789; CLI with all 104 tools 21,088 → `--mini` 8,565
+  (14 visible tools). *Was:* partial — `HarnessProfile` had the fields but no
+  built-in lean profile, no attribution, no baseline. Open: a Harbor pass rate
+  beside the number needs a benchmark run (`libs/harbor`). **S/E, M.**
 - **#61 Windows distribution and first run** *(Cline signed Windows installer;
   Codex native Windows; Pi PowerShell tool; Kilo's WindowsApps EACCES regression)*
   — **absent.** No installer of any kind (winget/scoop/brew/MSI/`install.ps1`),

@@ -573,6 +573,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--mini",
+        action="store_true",
+        help=(
+            "Lean harness profile: a short base prompt, one-line tool "
+            "descriptions and no todo list, for roughly a third of the fixed "
+            "tokens per turn. Inspect with /tokens middleware."
+        ),
+    )
+
+    parser.add_argument(
         "--default-model",
         metavar="MODEL",
         nargs="?",
@@ -1028,6 +1038,7 @@ async def run_textual_cli_async(
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
+    mini: bool = False,
 ) -> "AppResult":
     """Run the Textual CLI interface (async version).
 
@@ -1054,6 +1065,8 @@ async def run_textual_cli_async(
 
             These override config file values.
         profile_override: Extra profile fields from `--profile-override`.
+        mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
+        mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
 
             Merged on top of config file profile overrides.
         thread_id: Thread ID to use (new or resumed)
@@ -1108,6 +1121,7 @@ async def run_textual_cli_async(
         "no_mcp": no_mcp,
         "trust_project_mcp": trust_project_mcp,
         "interactive": True,
+        "harness_profile": "lean" if mini else None,
     }
 
     mcp_preload_kwargs: dict[str, Any] | None = None
@@ -2558,6 +2572,7 @@ def cli_main() -> None:
                         mcp_config_path=getattr(args, "mcp_config", None),
                         no_mcp=getattr(args, "no_mcp", False),
                         trust_project_mcp=mcp_trust_decision,
+                        mini=getattr(args, "mini", False),
                     )
                 )
                 return_code = result.return_code

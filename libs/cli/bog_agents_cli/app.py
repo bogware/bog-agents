@@ -946,6 +946,10 @@ class BogAgentsApp(App):
         self._server_proc = server_proc
         self._build_pending: dict[str, Any] | None = None
         self._server_kwargs = server_kwargs
+        # ROADMAP #54: the harness profile the server process builds with (`--mini` → "lean").
+        self._harness_profile: str | None = (server_kwargs or {}).get(
+            "harness_profile"
+        ) or None
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None

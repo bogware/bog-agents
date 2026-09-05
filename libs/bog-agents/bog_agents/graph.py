@@ -66,7 +66,10 @@ from bog_agents.profiles.harness.harness_profiles import (
     GeneralPurposeSubagentProfile,
     _apply_profile_prompt,
     _harness_profile_for_model,
+    _merge_profiles,
+    named_harness_profile,
 )
+from bog_agents.token_audit import notify_assembly
 
 
 class DeepAgentState(AgentState):
@@ -740,6 +743,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # registered, so the prompt overlay and extra-middleware application below
     # are no-ops out of the box.
     _profile = _harness_profile_for_model(model, _model_spec)
+    if f.harness_profile:
+        # ROADMAP #54: a named profile (`lean`, or anything registered) layers
+        # over the model's own so provider guidance survives and the named
+        # profile's prompt / tool descriptions / exclusions win.
+        _profile = _merge_profiles(_profile, named_harness_profile(f.harness_profile))
 
     # Apply harness-profile tool-description overrides up front, producing a
     # copied tool list (caller-owned tools are never mutated). No-op when the
@@ -1015,10 +1023,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # tool-injecting middleware below; the registry itself is populated from
     # the fully assembled request, so tools contributed by those middleware
     # (filesystem, subagent, …) are deferrable too.
-    if f.enable_deferred_tools and f.deferred_tools:
+    if f.enable_deferred_tools and (f.deferred_tools or f.deferred_keep_tools):
         from bog_agents.middleware.deferred_tools import DeferredToolsMiddleware
 
-        agents_middleware.append(DeferredToolsMiddleware(deferred_names=frozenset(f.deferred_tools)))
+        agents_middleware.append(
+            DeferredToolsMiddleware(
+                deferred_names=frozenset(f.deferred_tools or ()),
+                keep_names=frozenset(f.deferred_keep_tools or ()),
+            )
+        )
 
     if f.enable_git_tools:
         from bog_agents.middleware.git_tools import GitToolsMiddleware
@@ -1557,6 +1570,10 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     _create_kwargs: dict[str, Any] = {}
     if state_schema is not None:
         _create_kwargs["state_schema"] = state_schema
+
+    # ROADMAP #54: let a running token audit see (and instrument) the final
+    # stack before LangChain binds the hooks. No-op outside `capture_assembly`.
+    notify_assembly(agents_middleware, _tools, final_system_prompt)
 
     return _langchain_create_agent(
         model,

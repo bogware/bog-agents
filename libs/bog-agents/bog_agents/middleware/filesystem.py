@@ -990,6 +990,15 @@ class FilesystemMiddleware(AgentMiddleware[FilesystemState, ContextT, ResponseT]
 
         all_tools.append(create_read_many_files_tool(self.backend, self._get_backend))
 
+        # The bundled tools build their own descriptions; let a harness profile's
+        # `tool_description_overrides` reach them too (ROADMAP #54 lean profile).
+        all_tools = [
+            tool.model_copy(update={"description": self._custom_tool_descriptions[tool.name]})
+            if tool.name in ("multi_edit_file", "read_many_files") and tool.name in self._custom_tool_descriptions
+            else tool
+            for tool in all_tools
+        ]
+
         self.tools = [tool for tool in all_tools if self._enabled_tools is None or tool.name in self._enabled_tools]
 
     def _get_backend(self, runtime: ToolRuntime[Any, Any]) -> BackendProtocol:

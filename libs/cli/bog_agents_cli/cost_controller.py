@@ -321,6 +321,11 @@ async def run_cost_command(app: Any, command: str) -> None:  # noqa: ANN401 - th
 
     if await maybe_run_cost_explain(app, command):
         return
+    if command.lower().split()[1:2] == ["middleware"]:
+        from bog_agents_cli.tokens_audit_controller import run_middleware_audit
+
+        await run_middleware_audit(app)
+        return
     handled = handle_cost_subcommand(app, command)
     if handled is not None:
         await app._mount_message(AppMessage(handled))

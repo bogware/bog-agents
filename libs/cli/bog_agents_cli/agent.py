@@ -1297,6 +1297,23 @@ def _memory_index_path(project_root: Path | str) -> Path:
     return bog_agents_home() / "memory_index" / f"{key}.db"
 
 
+MINI_KEEP_TOOLS: tuple[str, ...] = (
+    "read_file",
+    "read_many_files",
+    "write_file",
+    "edit_file",
+    "multi_edit_file",
+    "delete",
+    "ls",
+    "glob",
+    "grep",
+    "execute",
+    "task",
+    "ask_user",
+)
+"""Tools whose schemas stay visible under `--mini`; everything else sits behind `tool_search` / `select` (ROADMAP #54)."""
+
+
 def create_cli_agent(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -1325,6 +1342,7 @@ def create_cli_agent(
     cwd: str | Path | None = None,
     project_context: ProjectContext | None = None,
     cost_ledger: CostLedger | None = None,
+    harness_profile: str | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -1372,6 +1390,8 @@ def create_cli_agent(
         auto_lint: Auto-run linter after file edits.
         auto_test: Auto-run tests after file edits.
         profile: Configuration profile name to apply.
+        harness_profile: Registry key of an SDK `HarnessProfile` (`lean` behind
+            `--mini`) layered over the model's own profile.
         cwd: Override the working directory for the agent's filesystem backend
             and system prompt.
         project_context: Explicit project path context for project-sensitive
@@ -2190,6 +2210,14 @@ def create_cli_agent(
             # the per-thread JSONL it writes under ~/.bog-agents.
             enable_cache_diagnostics=True,
             cache_diagnostics_dir=str(_cache_diagnostics_dir()),
+            # ROADMAP #54: `--mini` selects the SDK's lean profile.
+            harness_profile=harness_profile or None,
+            # `--mini` also hides every non-core tool schema behind the
+            # `tool_search` / `select` metatools (allowlist mode).
+            enable_deferred_tools=harness_profile == "lean",
+            deferred_keep_tools=list(MINI_KEEP_TOOLS)
+            if harness_profile == "lean"
+            else None,
         ),
     ).with_config(config)
     return agent, composite_backend

@@ -120,6 +120,7 @@ class ServerConfig:
     enable_ask_user: bool = False
     enable_memory: bool = True
     enable_skills: bool = True
+    harness_profile: str | None = None
     sandbox_type: str | None = None
     sandbox_id: str | None = None
     sandbox_setup: str | None = None
@@ -162,6 +163,7 @@ class ServerConfig:
             "ENABLE_ASK_USER": str(self.enable_ask_user).lower(),
             "ENABLE_MEMORY": str(self.enable_memory).lower(),
             "ENABLE_SKILLS": str(self.enable_skills).lower(),
+            "HARNESS_PROFILE": self.harness_profile,
             "SANDBOX_TYPE": self.sandbox_type,
             "SANDBOX_ID": self.sandbox_id,
             "SANDBOX_SETUP": self.sandbox_setup,
@@ -197,6 +199,7 @@ class ServerConfig:
             enable_ask_user=_read_env_bool("ENABLE_ASK_USER"),
             enable_memory=_read_env_bool("ENABLE_MEMORY", default=True),
             enable_skills=_read_env_bool("ENABLE_SKILLS", default=True),
+            harness_profile=_read_env_str("HARNESS_PROFILE") or None,
             sandbox_type=_read_env_str("SANDBOX_TYPE"),
             sandbox_id=_read_env_str("SANDBOX_ID"),
             sandbox_setup=_read_env_str("SANDBOX_SETUP"),
@@ -225,6 +228,7 @@ class ServerConfig:
         sandbox_setup: str | None,
         enable_shell: bool,
         enable_ask_user: bool,
+        harness_profile: str | None = None,
         mcp_config_path: str | None,
         no_mcp: bool,
         trust_project_mcp: bool | None,
@@ -247,6 +251,7 @@ class ServerConfig:
             sandbox_setup: Path to setup script for the sandbox.
             enable_shell: Enable shell execution tools.
             enable_ask_user: Enable ask_user tool.
+            harness_profile: SDK harness profile key (`lean` for `--mini`), or `None`.
             mcp_config_path: Path to MCP config.
             no_mcp: Disable MCP.
             trust_project_mcp: Trust project MCP servers.
@@ -265,6 +270,7 @@ class ServerConfig:
             interactive=interactive,
             enable_shell=enable_shell,
             enable_ask_user=enable_ask_user,
+            harness_profile=harness_profile,
             sandbox_type=sandbox_type,
             sandbox_id=sandbox_id,
             sandbox_setup=_normalize_path(

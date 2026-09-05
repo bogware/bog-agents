@@ -51,6 +51,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "parse_budget_resume": ("bog_agents.middleware.cost_tracker", "parse_budget_resume"),
     # Proof-ordered diffs (ROADMAP #66).
     "rank_changes": ("bog_agents.diff_ordering", "rank_changes"),
+    # Harness overhead audit + named profiles (ROADMAP #54).
+    "audit_agent": ("bog_agents.token_audit", "audit_agent"),
+    "audit_create_agent": ("bog_agents.token_audit", "audit_create_agent"),
+    "TokenAudit": ("bog_agents.token_audit", "TokenAudit"),
+    "count_tokens": ("bog_agents.token_audit", "count_tokens"),
+    "named_harness_profile": ("bog_agents.profiles.harness.harness_profiles", "named_harness_profile"),
     # Hostile-repo hardening (ROADMAP #49).
     "hardened_git_env": ("bog_agents.git_env", "hardened_git_env"),
     "scan_repo_config": ("bog_agents.git_env", "scan_repo_config"),

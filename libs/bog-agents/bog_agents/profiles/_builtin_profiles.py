@@ -140,6 +140,7 @@ def _register_builtin_profiles() -> None:
         _anthropic_haiku_4_5,
         _anthropic_opus_4_7,
         _anthropic_sonnet_4_6,
+        _lean,
         _nvidia_nemotron_3_ultra,
         _openai_codex,
     )
@@ -152,6 +153,7 @@ def _register_builtin_profiles() -> None:
     _anthropic_haiku_4_5.register()
     _openai_codex.register()
     _nvidia_nemotron_3_ultra.register()
+    _lean.register()
     _openai.register()
     _nvidia.register()
     _openrouter.register()

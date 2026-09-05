@@ -634,6 +634,7 @@ def make_graph() -> Any:  # noqa: ANN401
         auto_approve=config.auto_approve,
         enable_memory=config.enable_memory,
         enable_skills=config.enable_skills,
+        harness_profile=config.harness_profile,
         enable_shell=config.enable_shell,
         mcp_server_info=mcp_server_info,
         cwd=project_context.user_cwd if project_context is not None else config.cwd,
