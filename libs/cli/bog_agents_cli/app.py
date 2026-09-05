@@ -51,7 +51,7 @@ from bog_agents_cli.config import (
 )
 from bog_agents_cli.configurable_model import CLIContext
 from bog_agents_cli.cost_controller import gate_turn, preflight_start, run_cost_command
-from bog_agents_cli.hooks import dispatch_hook
+from bog_agents_cli.hooks import dispatch_hook, dispatch_hook_fire_and_forget
 from bog_agents_cli.model_config import ModelSpec, save_recent_model
 from bog_agents_cli.prompt_cache import cache_break_note, thread_reset_message
 from bog_agents_cli.textual_adapter import (
@@ -1208,8 +1208,6 @@ class BogAgentsApp(App):
         self._chat_input.focus_input()
 
         # Fire session.start hook (non-blocking fire-and-forget)
-        from bog_agents_cli.hooks import dispatch_hook_fire_and_forget
-
         dispatch_hook_fire_and_forget(
             "session.start",
             {
@@ -15933,6 +15931,7 @@ class BogAgentsApp(App):
 
         # If agent is running, interrupt it and discard queued messages
         if self._agent_running and self._agent_worker:
+            dispatch_hook_fire_and_forget("Interrupt", {"reason": "escape"})
             self._cancel_worker(self._agent_worker)
             return
 
@@ -17596,6 +17595,18 @@ class BogAgentsApp(App):
         if self._model_switching:
             await self._mount_message(AppMessage("Model switch already in progress."))
             return
+        from bog_agents_cli.hook_decisions import (
+            announce_model_switch,
+            model_switch_refusal,
+        )
+
+        refusal = await asyncio.to_thread(
+            model_switch_refusal, self._cwd, self._model_override or "", model_spec
+        )
+        if refusal:
+            msg = f"Model switch blocked by a PreModelSwitch hook: {refusal}"
+            await self._mount_message(ErrorMessage(msg))
+            return
 
         from bog_agents_cli.model_config import (
             get_credential_env_var,
@@ -17677,6 +17688,7 @@ class BogAgentsApp(App):
             # middleware swaps the model per-invocation — no graph recreation.
             self._model_override = display
             self._model_params_override = extra_kwargs
+            announce_model_switch(display)
 
             if self._status_bar:
                 self._status_bar.set_model(

@@ -1034,14 +1034,23 @@ ADK, and a contract is itself a feature to the target users.
 - **#64 Hook bus v2** *(Codex v0.150/151: tool-result replacement, Interrupt,
   PermissionRequest, trust-by-hash, managed hooks; Claude PreModelSwitch /
   PostModelSwitch; Goose Open Plugins hooks spec, `on_failure`; OpenHands
-  prompt-evaluated hooks)* — **partial.** Promote `PostToolUse` to MODIFY (honour
-  `{"tool_result": …}` before the ToolMessage reaches the model); add
-  decision-capable `PermissionRequest`, `Interrupt`, `PreModelSwitch` (deny) /
-  `PostModelSwitch` wired into `/model`; load Open Plugins `hooks.json`; per-hook
-  `on_failure: deny|allow|ask` overriding the fail-open default; a `prompt` hook
-  type that evaluates a natural-language policy through an injected small-model
-  invoke on the same fail-closed path as Expert Mode; trust-by-hash for hook
-  scripts. **T/E, M.**
+  prompt-evaluated hooks)* — **shipped 2026-09-06** (REVIEW v6 §20).
+  `PostToolUse` is MODIFY: `{"tool_result": …}` replaces the result before the
+  `ToolMessage` reaches the model, `decision: block` turns it into an error.
+  New events `PermissionRequest` (deny rejects the approval without asking),
+  `Interrupt` (fired on Escape), `PreModelSwitch` (deny blocks `/model <spec>`)
+  and `PostModelSwitch`. Per-hook `on_failure: allow|deny|ask` — `deny` blocks
+  when the script crashes or times out, `ask` forces the approval prompt for
+  that batch even in auto-approve modes (the tool middleware then lets the call
+  through; a human looked). Trust-by-hash: `pin_hook_hashes` stamps `sha256`
+  on command hooks and `evaluate_decision_hooks` refuses a hook whose script
+  changed; `/plugin trust` pins every hook script of an Open Plugins
+  `hooks/*.json` in `plugin_trust.json` and `load_plugin_hooks` ignores a plugin
+  whose scripts changed until it is re-trusted. `prompt_hooks.py`: `type:
+  prompt` entries carry a sentence; a small model (the agent's own, via
+  `build_prompt_invoke`) answers `allow|deny` and every failure, timeout or
+  out-of-shape answer denies — the Expert-Mode posture. *Was:* partial.
+  **T/E, M.**
 - **#67 Evidence on every PR + a self-review loop that learns** *(Cursor Bugbot
   incremental/deduped/effort-graded; Copilot reviews bot-authored PRs with
   resolution reasons Aug 27; Amp "proof of work")* — **shipped 2026-09-06**

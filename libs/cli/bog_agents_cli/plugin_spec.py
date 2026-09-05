@@ -274,6 +274,12 @@ def trust_plugin(root: Path, *, config_dir: Path) -> None:
     data = _read_trust(store)
     trusted = data.setdefault("trusted", {})
     trusted[_key(root)] = {"name": root.name, "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    try:  # ROADMAP #64: pin the plugin's hook scripts by hash; a change untrusts its hooks
+        from bog_agents_cli.hook_decisions import hook_script_hashes
+
+        trusted[_key(root)]["hook_hashes"] = hook_script_hashes(root)
+    except Exception:  # noqa: S110 - trust must still be recorded without hooks
+        pass
     store.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(store, json.dumps(data, indent=2))
 

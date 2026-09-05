@@ -1684,6 +1684,18 @@ async def execute_task_textual(
                             new_args = decision_dict.get("args")
                             if isinstance(new_args, dict):
                                 req["args"] = new_args
+                    # ROADMAP #64: decision hooks in the approval path —
+                    # `PermissionRequest` hooks may deny outright; a `PreToolUse`
+                    # hook that failed with `on_failure: ask` forces the prompt
+                    # for this batch even in auto-approve modes.
+                    from bog_agents_cli.hook_decisions import approval_hook_verdicts
+
+                    hook_denied, hook_force_prompt = await asyncio.to_thread(
+                        approval_hook_verdicts, list(action_requests), Path.cwd()
+                    )
+                    for denied_index in hook_denied:
+                        if denied_index not in blocked_indexes:
+                            blocked_indexes.append(denied_index)
 
                     # P1-75: a hook blocking ONE call in a parallel batch must
                     # not auto-approve its siblings. If every call is blocked we
@@ -1704,14 +1716,16 @@ async def execute_task_textual(
                         decisions: list[HITLDecision],
                         _blocked: list[int] = blocked_indexes,
                         _never: dict[int, str] = never_allowed,
+                        _hooked: dict[int, str] = hook_denied,
                     ) -> list[HITLDecision]:
                         for i in _blocked:
                             if 0 <= i < len(decisions):
-                                reason = (
-                                    f"never allowed in this project (.bog-agents/settings.json auto_mode.never_allow): {_never[i]}"
-                                    if i in _never
-                                    else "blocked by .bog-agents/hooks/pre-tool"
-                                )
+                                if i in _never:
+                                    reason = f"never allowed in this project (.bog-agents/settings.json auto_mode.never_allow): {_never[i]}"
+                                elif i in _hooked:
+                                    reason = f"denied by a PermissionRequest hook: {_hooked[i]}"
+                                else:
+                                    reason = "blocked by .bog-agents/hooks/pre-tool"
                                 decisions[i] = RejectDecision(
                                     type="reject", message=reason
                                 )
@@ -1738,7 +1752,9 @@ async def execute_task_textual(
                     # Determine whether to skip the approval dialog entirely.
                     # Priority: always_ask > auto_mode > auto_approve > ask.
                     should_auto_approve = False
-                    if session_state.auto_approve and not always_ask:
+                    if hook_force_prompt:
+                        should_auto_approve = False  # a hook asked for a human
+                    elif session_state.auto_approve and not always_ask:
                         should_auto_approve = True
                     elif auto_mode and not always_ask:
                         # Smart auto-mode: rule engine + optional Haiku eval.

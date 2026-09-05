@@ -191,12 +191,17 @@ emit `{"decision": "deny", "reason": …}` on stdout (or exit 2 with a stderr
 reason) to block the call. Claude Code (`.claude/settings.json`) and Cursor
 (`.cursor/hooks.json`) hook files load unchanged, with their tool names (`Bash`,
 `Edit`, `Read`) aliased onto bog's (`execute`, `edit_file`, `read_file`) — treat
-that compat table as a feature, not a shim. Two directions to preserve: the
-hooks themselves are **fail-open** (a crashing/timing-out hook never blocks), and
+that compat table as a feature, not a shim. Two directions to preserve: command
+hooks are **fail-open by default** (a crashing/timing-out hook never blocks unless
+its `on_failure` is `deny`, or `ask` — which forces the approval prompt), and
 enforcement in the tool path is **fail-closed** (a denial means the tool body
-never runs and an error `ToolMessage` is returned). `create_cli_agent` adds
-`HookMiddleware` only when decision-capable hooks exist, so hookless agents pay
-nothing.
+never runs and an error `ToolMessage` is returned). Hook bus v2 (ROADMAP #64):
+`PostToolUse` is MODIFY (`{"tool_result": …}` replaces the result), `PermissionRequest`
+/ `PreModelSwitch` deny, `Interrupt` / `PostModelSwitch` observe, hook scripts are
+hash-pinned (`pin_hook_hashes`, plugin hooks pinned at `/plugin trust`), and
+`prompt_hooks.py` judges `type: prompt` entries with a model — **fail-closed**, like
+Expert Mode. `create_cli_agent` adds `PreToolUseHookMiddleware` only when
+decision-capable hooks exist, so hookless agents pay nothing.
 
 **`git_ops.py` is the single git classifier.** `classify_git_command` answers
 read-only / mutating / destructive for every approval layer. Its regexes were

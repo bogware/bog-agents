@@ -1971,7 +1971,6 @@ def create_cli_agent(
     # deny a tool call. Loads ingested Claude/Cursor hook files + bog hooks.json
     # PreToolUse entries; only added when such hooks exist.
     try:
-        from bog_agents_cli.hook_decisions import load_pretooluse_hooks
         from bog_agents_cli.hook_middleware import PreToolUseHookMiddleware
         from bog_agents_cli.hooks import _load_hooks
 
@@ -1979,11 +1978,45 @@ def create_cli_agent(
             project_context.project_root if project_context is not None else None
         )
         if hook_project_root is not None:
-            decision_hooks = load_pretooluse_hooks(
-                hook_project_root, config_hooks=_load_hooks()
+            from bog_agents_cli.hook_decisions import (
+                load_decision_hooks,
+                load_plugin_hooks,
             )
-            if decision_hooks:
-                agent_middleware.append(PreToolUseHookMiddleware(decision_hooks))
+            from bog_agents_cli.prompt_hooks import build_prompt_invoke, is_prompt_hook
+
+            config_hooks = _load_hooks()
+            plugin_hooks = load_plugin_hooks(
+                settings.user_agents_dir, project_root=hook_project_root
+            )
+            pre_all = load_decision_hooks(
+                hook_project_root,
+                config_hooks=config_hooks,
+                event="PreToolUse",
+                plugin_hooks=plugin_hooks,
+            )
+            decision_hooks = [h for h in pre_all if not is_prompt_hook(h)]
+            prompt_hooks = [h for h in pre_all if is_prompt_hook(h)]
+            post_hooks = [
+                h
+                for h in load_decision_hooks(
+                    hook_project_root,
+                    config_hooks=config_hooks,
+                    event="PostToolUse",
+                    plugin_hooks=plugin_hooks,
+                )
+                if not is_prompt_hook(h)
+            ]
+            if decision_hooks or prompt_hooks or post_hooks:
+                agent_middleware.append(
+                    PreToolUseHookMiddleware(
+                        decision_hooks,
+                        post_hooks=post_hooks,
+                        prompt_hooks=prompt_hooks,
+                        prompt_invoke=build_prompt_invoke(model)
+                        if prompt_hooks
+                        else None,
+                    )
+                )
     except Exception:
         logger.debug("Could not wire PreToolUse hook enforcement", exc_info=True)
 
