@@ -3284,7 +3284,12 @@ class BogAgentsApp(App):
         await self._handle_logs_command()
 
     async def _dispatch_onboard_command(self, _command: str) -> None:
-        """Forward to the onboarding helper."""
+        """Forward to the onboarding helper; `/onboard import <tool> [N]` imports sessions (#62)."""
+        if _command.lower().split()[1:2] == ["import"]:
+            from bog_agents_cli.plugin_controller import run_onboard_import
+
+            await self._mount_message(AppMessage(await run_onboard_import(_command)))
+            return
         await self._handle_onboard_command()
 
     async def _handle_tokens_command(self, command: str) -> None:
@@ -9887,112 +9892,13 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"'{name}' was not found."))
             return
 
-        if lowered in {"claude", "claude-status"}:
-            from bog_agents_cli.claude_code_compat import (
-                format_compat_status,
-                get_claude_compat_status,
-            )
+        from bog_agents_cli.plugin_controller import run_compat_or_plugin_verb
 
-            status = await asyncio.to_thread(
-                get_claude_compat_status, Path(self._cwd), config_dir
-            )
-            await self._mount_message(AppMessage(format_compat_status(status)))
-            return
-
-        if lowered == "claude-import":
-            from bog_agents_cli.claude_code_compat import (
-                detect_claude_skills,
-                import_claude_skill,
-            )
-
-            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
-            if not skills:
-                await self._mount_message(
-                    AppMessage(
-                        "No Claude Code skills found in .claude/ directories.\n\n"
-                        "Skills are SKILL.md files in .claude/skills/ or ~/.claude/skills/."
-                    )
-                )
-                return
-            skills_dir = config_dir / "skills"
-            imported: list[str] = []
-            for skill in skills:
-                dest = await asyncio.to_thread(import_claude_skill, skill, skills_dir)
-                imported.append(f"  {skill.name} → {dest}")
-            await self._mount_message(
-                AppMessage(
-                    f"Imported {len(imported)} Claude skill(s) into bog-agents:\n"
-                    + "\n".join(imported)
-                )
-            )
-            return
-
-        if lowered == "claude-list":
-            from bog_agents_cli.claude_code_compat import detect_claude_skills
-
-            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
-            if not skills:
-                await self._mount_message(AppMessage("No Claude Code skills found."))
-                return
-            lines = [f"Claude Code skills ({len(skills)} found):", ""]
-            for skill in skills:
-                lines.append(f"  {skill.name} v{skill.version} — {skill.description}")
-                lines.append(f"    {skill.source_path}")
-            await self._mount_message(AppMessage("\n".join(lines)))
-            return
-
-        if lowered == "sync-mcp" or lowered.startswith("sync-mcp "):
-            from bog_agents_cli.claude_code_compat import (
-                format_compat_status,
-                sync_mcp_configs,
-            )
-
-            parts2 = raw_arg.split()
-            direction = parts2[1] if len(parts2) > 1 else "both"
-            if direction not in {"both", "to-desktop", "from-desktop"}:
-                await self._mount_message(
-                    AppMessage("Usage: /plugin sync-mcp [both|to-desktop|from-desktop]")
-                )
-                return
-            result = await asyncio.to_thread(
-                sync_mcp_configs, Path(self._cwd), direction=direction
-            )
-            lines = ["MCP sync complete.", ""]
-            if result.added_to_mcp_json:
-                lines.append(
-                    f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}"
-                )
-            if result.added_from_desktop:
-                lines.append(
-                    f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}"
-                )
-            if not result.added_to_mcp_json and not result.added_from_desktop:
-                lines.append("Nothing to sync — configs are already in sync.")
-            if result.errors:
-                lines.append(f"Errors: {'; '.join(result.errors)}")
-            await self._mount_message(AppMessage("\n".join(lines)))
-            return
-
-        if lowered == "export-mcp":
-            from bog_agents_cli.claude_code_compat import export_mcp_from_extensions
-
-            result = await asyncio.to_thread(
-                export_mcp_from_extensions, config_dir, Path(self._cwd)
-            )
-            if result.added_to_mcp_json:
-                await self._mount_message(
-                    AppMessage(
-                        f"Exported {len(result.added_to_mcp_json)} MCP server(s) to "
-                        f"{result.output_path}:\n  "
-                        + "\n  ".join(result.added_to_mcp_json)
-                    )
-                )
-            elif result.errors:
-                await self._mount_message(
-                    AppMessage(f"Export errors: {'; '.join(result.errors)}")
-                )
-            else:
-                await self._mount_message(AppMessage("No new MCP servers to export."))
+        # Claude Code compatibility verbs + Agent Plugins 1.0 import/trust (#62)
+        # live in the controller so this handler stays a thin dispatcher.
+        text = await run_compat_or_plugin_verb(self, raw_arg, config_dir)
+        if text is not None:
+            await self._mount_message(AppMessage(text))
             return
 
         await self._mount_message(
@@ -10004,7 +9910,10 @@ class BogAgentsApp(App):
                 "  /plugin claude-list       — list detected Claude skills\n"
                 "  /plugin claude-import     — import Claude skills into bog-agents\n"
                 "  /plugin sync-mcp          — sync MCP configs with Claude Desktop\n"
-                "  /plugin export-mcp        — export extension MCP servers to .mcp.json"
+                "  /plugin export-mcp        — export extension MCP servers to .mcp.json\n"
+                "Agent Plugins 1.0 (#62):\n"
+                "  /plugin import <claude|codex|cursor> [--dry-run] — skills, agents, hooks, memories, MCP\n"
+                "  /plugin trust <name>      — enable a workspace .agents/plugins entry"
             )
         )
 

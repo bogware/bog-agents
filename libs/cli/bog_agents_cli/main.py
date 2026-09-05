@@ -390,6 +390,11 @@ def parse_args() -> argparse.Namespace:
 
     setup_call_parser(subparsers)
 
+    # ROADMAP #62: Agent Plugins 1.0 + one-command import from other tools.
+    from bog_agents_cli.cmd_plugin import setup_plugin_parser
+
+    setup_plugin_parser(subparsers)
+
     # Bedrock connection probe — credentials, region, model access,
     # tiny inference. Self-contained: doesn't load the agent.
     bedrock_parser = subparsers.add_parser(
@@ -508,6 +513,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Show timestamps as relative time (default: from config, or absolute)",
     )
+    # ROADMAP #62: session import / export.
+    from bog_agents_cli.cmd_plugin import setup_threads_transfer_parsers
+
+    setup_threads_transfer_parsers(threads_sub)
+
     threads_delete = threads_sub.add_parser(
         "delete",
         help="Delete a thread",
@@ -2224,6 +2234,10 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_verify import cmd_verify
 
             sys.exit(cmd_verify(args))
+        elif args.command == "plugin":
+            from bog_agents_cli.cmd_plugin import handle_plugin_command
+
+            sys.exit(handle_plugin_command(args))
         elif args.command == "call":
             from bog_agents_cli.cmd_call import cmd_call
 
@@ -2277,6 +2291,14 @@ def cli_main() -> None:
                 asyncio.run(
                     delete_thread_command(args.thread_id, output_format=output_format)
                 )
+            elif args.threads_command == "import":
+                from bog_agents_cli.cmd_plugin import handle_threads_import
+
+                sys.exit(handle_threads_import(args))
+            elif args.threads_command == "export":
+                from bog_agents_cli.cmd_plugin import handle_threads_export
+
+                sys.exit(handle_threads_export(args))
             else:
                 # No subcommand provided, show threads help screen
                 show_threads_help()

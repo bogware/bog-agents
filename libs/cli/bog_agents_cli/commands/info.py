@@ -49,8 +49,8 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/onboard",
-            "Start an interactive codebase onboarding guide",
-            "tour walkthrough new",
+            "Start an interactive codebase onboarding guide; `/onboard import <tool>` brings past sessions in",
+            "tour walkthrough new import sessions claude codex cline migrate",
             "info",
             available=True,
         ),

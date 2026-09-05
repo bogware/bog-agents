@@ -102,7 +102,10 @@ def show_help() -> None:
     console.print("  list                                List available agents")
     console.print("  reset --agent NAME [--target SRC]   Reset an agent's prompt")
     console.print("  skills <list|create|info|delete>     Manage agent skills")
-    console.print("  threads <list|delete>                Manage conversation threads")
+    console.print("  threads <list|delete|import|export>  Manage conversation threads")
+    console.print(
+        "  plugin <list|install|import|trust>   Agent Plugins 1.0 + import from claude/codex/cursor"
+    )
     console.print("  verify                              Run typecheck + lint + tests")
     console.print(
         "  call MESSAGE                        Talk to a running --serve instance"

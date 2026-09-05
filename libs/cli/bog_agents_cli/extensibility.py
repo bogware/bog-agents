@@ -24,7 +24,7 @@ from bog_agents_cli.plugin_marketplace import (
     uninstall_plugin,
 )
 
-ExtensibilityKind = Literal["plugin", "extension"]
+ExtensibilityKind = Literal["plugin", "extension", "agent-plugin"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,12 +102,63 @@ def _extension_to_item(ext: InstalledExtension) -> ExtensibilityItem:
     )
 
 
-def list_extensibility_items(config_dir: Path) -> list[ExtensibilityItem]:
-    """List installed plugins and extensions together."""
+def _agent_plugin_items(
+    config_dir: Path, project_root: Path | None = None
+) -> list[ExtensibilityItem]:
+    """Agent Plugins 1.0 directories (ROADMAP #62) as extensibility items."""
+    from bog_agents_cli.plugin_spec import discover_agent_plugins, to_extension_manifest
+
+    items: list[ExtensibilityItem] = []
+    for found in discover_agent_plugins(
+        config_dir=config_dir, project_root=project_root
+    ):
+        manifest = to_extension_manifest(found.spec)
+        commands = tuple(
+            name
+            for name in (
+                _normalize_command_name(c.get("name"))
+                for c in manifest.commands
+                if isinstance(c, dict)
+            )
+            if name
+        )
+        items.append(
+            ExtensibilityItem(
+                kind="agent-plugin",
+                name=found.spec.name,
+                version=found.spec.version,
+                description=(
+                    found.spec.description
+                    + (
+                        " (workspace — run `/plugin trust <name>` to enable)"
+                        if not found.enabled
+                        else ""
+                    )
+                ).strip(),
+                author=found.spec.author,
+                homepage=found.spec.homepage,
+                enabled=found.enabled,
+                install_path=found.spec.root,
+                skills=tuple(found.spec.skills),
+                commands=commands,
+            )
+        )
+    return items
+
+
+def list_extensibility_items(
+    config_dir: Path, project_root: Path | None = None
+) -> list[ExtensibilityItem]:
+    """List installed plugins, extensions and Agent Plugins 1.0 directories together."""
     plugins_dir = get_plugins_dir(config_dir, create=False)
     plugins = [_plugin_to_item(item) for item in list_installed_plugins(plugins_dir)]
     extensions = [_extension_to_item(item) for item in list_extensions(config_dir)]
-    return sorted([*plugins, *extensions], key=lambda item: (item.kind, item.name))
+    agent_plugins = _agent_plugin_items(config_dir, project_root)
+    seen = {item.install_path for item in agent_plugins if item.install_path}
+    plugins = [p for p in plugins if p.install_path not in seen]
+    return sorted(
+        [*plugins, *extensions, *agent_plugins], key=lambda item: (item.kind, item.name)
+    )
 
 
 def find_extensibility_item(config_dir: Path, name: str) -> ExtensibilityItem | None:
@@ -133,6 +184,22 @@ def install_extensibility_item(config_dir: Path, source: str) -> ExtensibilityIt
         ValueError: If the source cannot be installed or reloaded.
     """
     source_path = Path(source).expanduser()
+    # ROADMAP #62: Agent Plugins 1.0 sources (a dir with plugin.json, a zip,
+    # a zip URL) go through the pinned installer.
+    is_plugin_dir = source_path.is_dir() and (source_path / "plugin.json").is_file()
+    if (
+        is_plugin_dir
+        or (source_path.is_file() and source_path.suffix.lower() == ".zip")
+        or source.lower().endswith(".zip")
+    ):
+        from bog_agents_cli.plugin_install import install_plugin
+
+        result = install_plugin(source, dest_root=get_plugins_dir(config_dir))
+        installed_item = find_extensibility_item(config_dir, result.spec.name)
+        if installed_item is None:
+            msg = f"Installed plugin could not be reloaded: {result.spec.name}"
+            raise ValueError(msg)
+        return installed_item
     if source.startswith(("http://", "https://", "git@")):
         installed = install_extension(config_dir, source)
         return _extension_to_item(installed)
@@ -157,6 +224,15 @@ def uninstall_extensibility_item(config_dir: Path, name: str) -> bool:
         return False
     if item.kind == "extension":
         return uninstall_extension(config_dir, item.name)
+    if item.kind == "agent-plugin" and item.install_path is not None:
+        import shutil
+
+        if get_plugins_dir(config_dir, create=False) not in item.install_path.parents:
+            return (
+                False  # discovered (not installed) plugins are never deleted from here
+            )
+        shutil.rmtree(item.install_path, ignore_errors=True)
+        return True
     uninstall_plugin(item.name, plugins_dir=get_plugins_dir(config_dir, create=False))
     return True
 
@@ -222,8 +298,10 @@ def describe_extensibility_item(item: ExtensibilityItem) -> str:
     return "\n".join(lines)
 
 
-def get_extension_skill_dirs(config_dir: Path | None) -> list[Path]:
-    """Return directories that contain enabled extension-provided skills."""
+def get_extension_skill_dirs(
+    config_dir: Path | None, project_root: Path | None = None
+) -> list[Path]:
+    """Return directories that contain enabled extension- or plugin-provided skills."""
     directories: list[Path] = []
     seen: set[Path] = set()
     for ext in list_extensions(config_dir):
@@ -235,18 +313,45 @@ def get_extension_skill_dirs(config_dir: Path | None) -> list[Path]:
             if skill_dir.exists() and skill_dir not in seen:
                 seen.add(skill_dir)
                 directories.append(skill_dir)
+    if config_dir is not None:
+        from bog_agents_cli.plugin_spec import discover_agent_plugins
+
+        for found in discover_agent_plugins(
+            config_dir=config_dir, project_root=project_root
+        ):
+            if not found.enabled:
+                continue
+            for relative_path in found.spec.skills:
+                skill_dir = (found.spec.root / relative_path).resolve().parent
+                if skill_dir.exists() and skill_dir not in seen:
+                    seen.add(skill_dir)
+                    directories.append(skill_dir)
     return directories
 
 
-def get_extension_commands(config_dir: Path) -> list[ExtensionCommandSpec]:
-    """Return enabled extension-provided slash commands."""
+def get_extension_commands(
+    config_dir: Path, project_root: Path | None = None
+) -> list[ExtensionCommandSpec]:
+    """Return enabled extension- and plugin-provided slash commands."""
+    from bog_agents_cli.plugin_spec import discover_agent_plugins, to_extension_manifest
+
     commands: list[ExtensionCommandSpec] = []
     seen: set[str] = set()
-    for ext in list_extensions(config_dir):
-        if not ext.enabled:
-            continue
-        for command in ext.manifest.commands:
-            spec = _parse_extension_command(ext.manifest.name, command)
+    manifests = [
+        (ext.manifest.name, ext.manifest.commands)
+        for ext in list_extensions(config_dir)
+        if ext.enabled
+    ]
+    manifests.extend(
+        (found.spec.name, to_extension_manifest(found.spec).commands)
+        for found in discover_agent_plugins(
+            config_dir=config_dir, project_root=project_root
+        )
+        if found.enabled
+    )
+    for owner, raw_commands in manifests:
+        for command in raw_commands:
+            spec = _parse_extension_command(owner, command)
             if spec is None or spec.name in seen:
                 continue
             commands.append(spec)
