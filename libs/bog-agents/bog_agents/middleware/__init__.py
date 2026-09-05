@@ -166,6 +166,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "StopContext": ("stop_gate", "StopContext"),
     "StopDecision": ("stop_gate", "StopDecision"),
     "StopGateMiddleware": ("stop_gate", "StopGateMiddleware"),
+    "ProviderFailoverMiddleware": ("provider_failover", "ProviderFailoverMiddleware"),
     "command_stop_check": ("stop_gate", "command_stop_check"),
     "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY": ("subagents", "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY"),
     "SafeToolsConfig": ("safe_tools", "SafeToolsConfig"),

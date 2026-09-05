@@ -37,7 +37,7 @@ import re
 import time
 import tomllib
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -147,6 +147,12 @@ class OperatorConfig:
     routes: bool = True
     """Allow the judge to escalate to ``butcher`` / ``jtbd``."""
 
+    objective: str = "balance"
+    """`intelligence` | `balance` | `cost` — shift the judged tier up, not at all, or down (ROADMAP #53)."""
+
+    pool: dict[str, TierSpec] = field(default_factory=dict)
+    """`[pool.<task class>]` tables: the model a task class (judge, subagent, summarization, research, butcher_worker) uses."""
+
     custom_presets: dict[str, dict[str, TierSpec]] = field(default_factory=dict)
     """User-defined presets from ``[presets.<name>.<tier>]`` tables."""
 
@@ -193,6 +199,17 @@ def load_operator_config(path: Path | None = None) -> OperatorConfig:
         cfg.preset = data["preset"].strip()
     if isinstance(data.get("routes"), bool):
         cfg.routes = data["routes"]
+    from bog_agents_cli.operator_decisions import OBJECTIVES
+
+    objective = data.get("objective")
+    if isinstance(objective, str) and objective.strip().lower() in OBJECTIVES:
+        cfg.objective = objective.strip().lower()
+    pool_raw = data.get("pool")
+    if isinstance(pool_raw, dict):
+        for name, table in pool_raw.items():
+            spec = _parse_tier_table(table)
+            if spec is not None:
+                cfg.pool[str(name)] = spec
     presets = data.get("presets")
     if isinstance(presets, dict):
         for name, tiers in presets.items():
@@ -231,7 +248,12 @@ def write_default_config(path: Path | None = None) -> Path:
         "enabled = false\n"
         'judge_model = ""   # empty = the active preset\'s easy-tier model\n'
         f'preset = "{DEFAULT_PRESET}"  # anthropic | bedrock | local | hybrid | <your own>\n'
-        "routes = true        # judge may escalate to butcher / jtbd\n\n"
+        "routes = true        # judge may escalate to butcher / jtbd\n"
+        'objective = "balance"  # intelligence | balance | cost — shift the judged tier up / keep / down\n\n'
+        "# Pool: pin a model to a task class (judge, subagent, summarization, research, butcher_worker):\n"
+        "# [pool.judge]\n"
+        '# model = "ollama:llama3.2"\n'
+        '# effort = "low"\n\n'
         "# Define your own preset:\n"
         "# [presets.mine.easy]\n"
         '# model = "ollama:llama3.2"\n'
@@ -320,6 +342,9 @@ class OperatorDecision:
     judge_ms: int
     prompt_preview: str
     forced: bool = False
+    judged_tier: str = ""
+    objective: str = "balance"
+    decision_id: str = ""
 
 
 def parse_judge_response(text: str) -> tuple[str, str, str] | None:
@@ -354,6 +379,8 @@ async def judge_prompt(
     invoke: Callable[[str, str], Awaitable[str]],
     routes_enabled: bool = True,
     forced_tier: str | None = None,
+    objective: str = "balance",
+    blocked: frozenset[str] = frozenset(),
 ) -> OperatorDecision | None:
     """Run the judge over ``prompt`` and return a decision, or None on failure.
 
@@ -366,6 +393,9 @@ async def judge_prompt(
         routes_enabled: Whether the judge may pick butcher/jtbd.
         forced_tier: Skip the judge entirely and use this tier
             (``/operator force <tier>``).
+        objective: ROADMAP #53 — `cost` runs one tier below the judged one,
+            `intelligence` one above, `balance` as judged.
+        blocked: Tiers the decisions log says must not be downgraded.
 
     Returns:
         An :class:`OperatorDecision`, or None when judging failed — the
@@ -404,9 +434,14 @@ async def judge_prompt(
     tier, route, reason = parsed
     if not routes_enabled:
         route = "direct"
-    spec = tiers[tier]
+    from bog_agents_cli.operator_decisions import apply_objective
+
+    routed = apply_objective(tier, objective, blocked=blocked)
+    spec = tiers[routed]
     return OperatorDecision(
-        tier=tier,
+        tier=routed,
+        judged_tier=tier,
+        objective=objective,
         route=route,
         reason=reason,
         model=spec.model,
@@ -429,6 +464,8 @@ class OperatorSession:
     tiers: dict[str, TierSpec]
     active: bool
     forced_tier: str | None = None
+    objective: str = "balance"
+    turn_snapshot: tuple[int, int, float] | None = None
     decisions: deque[OperatorDecision] = field(
         default_factory=lambda: deque(maxlen=_DECISION_LOG_SIZE)
     )
@@ -441,16 +478,21 @@ def ensure_session(app: object) -> OperatorSession:
         return session
     config = load_operator_config()
     session = OperatorSession(
-        config=config, tiers=resolve_tiers(config), active=config.enabled
+        config=config,
+        tiers=resolve_tiers(config),
+        active=config.enabled,
+        objective=config.objective,
     )
     app._operator_session = session  # type: ignore[attr-defined]
     return session
 
 
 def _judge_model_spec(session: OperatorSession, app: object) -> str:
-    """The judge's model spec: explicit config, else easy tier, else active model."""
+    """The judge's model spec: explicit config, else the pool's judge, else easy tier, else active model."""
+    pool_judge = session.config.pool.get("judge")
     return (
         session.config.judge_model
+        or (pool_judge.model if pool_judge is not None else "")
         or session.tiers["easy"].model
         or resolve_active_model_spec(app)
     )
@@ -503,15 +545,111 @@ async def apply_operator_routing(app: object, message: str) -> OperatorDecision 
             )
 
         decision = await judge_prompt(
-            message, session.tiers, invoke=_invoke, routes_enabled=session.config.routes
+            message,
+            session.tiers,
+            invoke=_invoke,
+            routes_enabled=session.config.routes,
+            objective=session.objective,
+            blocked=_blocked_tiers(),
         )
     if decision is None:
         return None
     session.decisions.append(decision)
+    decision_id = _persist_decision(app, session, decision)
+    if decision_id:
+        decision = replace(decision, decision_id=decision_id)
+        session.decisions[-1] = decision
     if decision.route == "direct":
         app._operator_turn_model = decision.model  # type: ignore[attr-defined]
         app._operator_turn_effort = decision.effort  # type: ignore[attr-defined]
     return decision
+
+
+def _blocked_tiers() -> frozenset[str]:
+    """Tiers the decisions log says the `cost` objective must not downgrade."""
+    try:
+        from bog_agents_cli.operator_decisions import bias
+
+        return bias()
+    except Exception:
+        logger.debug("operator bias unavailable", exc_info=True)
+        return frozenset()
+
+
+def _stats_snapshot(app: object) -> tuple[int, int, float]:
+    """`(input_tokens, output_tokens, usd)` of the App's session stats right now."""
+    stats = getattr(app, "_session_stats", None)
+    if stats is None:
+        return (0, 0, 0.0)
+    usd = 0.0
+    if hasattr(stats, "per_model"):
+        try:
+            from bog_agents_cli.cost_controller import turn_cost_usd
+
+            usd = float(turn_cost_usd(stats))
+        except Exception:
+            usd = 0.0
+    return (
+        int(getattr(stats, "input_tokens", 0) or 0),
+        int(getattr(stats, "output_tokens", 0) or 0),
+        usd,
+    )
+
+
+def _persist_decision(
+    app: object, session: OperatorSession, decision: OperatorDecision
+) -> str:
+    """ROADMAP #53: append the decision to the log and snapshot the stats; returns the record id ("" on failure)."""
+    try:
+        from bog_agents_cli.operator_decisions import DecisionRecord, record_decision
+
+        judged = session.tiers.get(decision.judged_tier or decision.tier)
+        record = record_decision(
+            DecisionRecord(
+                judged_tier=decision.judged_tier or decision.tier,
+                tier=decision.tier,
+                objective=decision.objective,
+                model=decision.model,
+                judged_model=judged.model if judged is not None else decision.model,
+                effort=decision.effort,
+                route=decision.route,
+                prompt_preview=decision.prompt_preview,
+            )
+        )
+        session.turn_snapshot = _stats_snapshot(app)
+        return record.decision_id
+    except Exception:
+        logger.debug("operator decision not persisted", exc_info=True)
+        return ""
+
+
+def operator_turn_finished(app: object) -> None:
+    """End of a turn: record the tokens and cost of the last routed turn on its decision (ROADMAP #53)."""
+    session = getattr(app, "_operator_session", None)
+    if (
+        not isinstance(session, OperatorSession)
+        or session.turn_snapshot is None
+        or not session.decisions
+    ):
+        return
+    before, session.turn_snapshot = session.turn_snapshot, None
+    decision = session.decisions[-1]
+    if not decision.decision_id:
+        return
+    after = _stats_snapshot(app)
+    # Session stats may be cumulative (delta) or reset per turn (absolute).
+    delta = tuple(a - b if a >= b else a for a, b in zip(after, before, strict=True))
+    try:
+        from bog_agents_cli.operator_decisions import update_decision
+
+        update_decision(
+            decision.decision_id,
+            input_tokens=int(delta[0]),
+            output_tokens=int(delta[1]),
+            cost_usd=float(delta[2]),
+        )
+    except Exception:
+        logger.debug("operator outcome not recorded", exc_info=True)
 
 
 async def _noop_invoke(_system: str, _user: str) -> str:  # noqa: RUF029 — must match the async invoke contract
@@ -537,6 +675,7 @@ def render_status(session: OperatorSession) -> str:
         f"  preset:   {session.config.preset}",
         f"  judge:    {session.config.judge_model or session.tiers['easy'].model + ' (easy tier)'}",
         f"  routes:   {'butcher/jtbd allowed' if session.config.routes else 'direct only'}",
+        f"  objective: {session.objective}  (intelligence | balance | cost — /operator objective)",
         "",
         "  [bold]Tier map[/bold]",
     ]
@@ -551,11 +690,24 @@ def render_status(session: OperatorSession) -> str:
         for d in list(session.decisions)[-10:]:
             forced = " [dim](forced)[/dim]" if d.forced else ""
             reason = f" — {d.reason}" if d.reason else ""
+            shift = (
+                f" [dim](judged {d.judged_tier})[/dim]"
+                if d.judged_tier and d.judged_tier != d.tier
+                else ""
+            )
             lines.append(
-                f"    {d.tier:<7}→ {d.route:<8} {d.model}  {d.judge_ms}ms{forced}{reason}"
+                f"    {d.tier:<7}→ {d.route:<8} {d.model}  {d.judge_ms}ms{forced}{shift}{reason}"
             )
     else:
         lines.append("\n  [dim]No routing decisions yet this session.[/dim]")
+    try:
+        from bog_agents_cli.operator_decisions import counterfactual_line
+
+        saved = counterfactual_line()
+    except Exception:
+        saved = None
+    if saved:
+        lines.append(f"\n  {saved}")
     return "\n".join(lines)
 
 
@@ -578,6 +730,7 @@ async def handle_operator_subcommand(app: object, raw_arg: str) -> None:
         session.config = load_operator_config()
         session.tiers = resolve_tiers(session.config)
         session.active = True
+        session.objective = session.config.objective
         await app._mount_message(  # type: ignore[attr-defined]
             AppMessage(
                 f"Operator mode [green]on[/green] — preset [bold]{session.config.preset}[/bold]. "
@@ -637,6 +790,52 @@ async def handle_operator_subcommand(app: object, raw_arg: str) -> None:
         )  # type: ignore[attr-defined]
         return
 
+    if head == "objective":
+        from bog_agents_cli.operator_decisions import OBJECTIVES
+
+        if rest not in OBJECTIVES:
+            await app._mount_message(  # type: ignore[attr-defined]
+                ErrorMessage(
+                    f"Usage: /operator objective <{'|'.join(OBJECTIVES)}> (now: {session.objective})"
+                )
+            )
+            return
+        session.objective = rest
+        meaning = {
+            "cost": "judged tiers step down one rung (tiers whose downgrades you ruled bad stay put)",
+            "intelligence": "judged tiers step up one rung",
+            "balance": "judged tiers run as judged",
+        }[rest]
+        await app._mount_message(  # type: ignore[attr-defined]
+            AppMessage(f"Operator objective → [bold]{rest}[/bold]: {meaning}.")
+        )
+        return
+    if head == "verdict":
+        from bog_agents_cli.operator_decisions import update_decision
+
+        word, _, note = rest.partition(" ")
+        verdict = {"ok": "good", "good": "good", "bad": "bad"}.get(word.lower(), "")
+        last = session.decisions[-1] if session.decisions else None
+        if not verdict or last is None or not last.decision_id:
+            await app._mount_message(  # type: ignore[attr-defined]
+                ErrorMessage(
+                    "Usage: /operator verdict <ok|bad> [note] — rules on the last routed turn"
+                )
+            )
+            return
+        update_decision(last.decision_id, verdict=verdict, note=note.strip())
+        origin = (
+            f" (judged {last.judged_tier})"
+            if last.judged_tier and last.judged_tier != last.tier
+            else ""
+        )
+        await app._mount_message(  # type: ignore[attr-defined]
+            AppMessage(
+                f"Recorded [bold]{verdict}[/bold] for the last routed turn: {last.tier}{origin}, {last.model}. "
+                "Repeated bad rulings stop the cost objective downgrading that tier."
+            )
+        )
+        return
     if head == "test":
         if not rest:
             await app._mount_message(
@@ -706,6 +905,6 @@ async def handle_operator_subcommand(app: object, raw_arg: str) -> None:
 
     await app._mount_message(  # type: ignore[attr-defined]
         ErrorMessage(
-            "Usage: /operator [on|off|status|preset <name>|force <tier>|test <prompt>|config]"
+            "Usage: /operator [on|off|status|preset <name>|objective <name>|verdict <ok|bad>|force <tier>|test <prompt>|config]"
         )
     )

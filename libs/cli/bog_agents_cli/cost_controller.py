@@ -491,6 +491,14 @@ def _spend_lines(app: Any) -> str:  # noqa: ANN401 - the App
         lines.append(
             f"Today: ${spent_today:.2f} of ${caps.daily_ceiling_usd:.2f} daily ceiling ({status.state})"
         )
+    try:
+        from bog_agents_cli.operator_decisions import counterfactual_line
+
+        saved = counterfactual_line()
+    except Exception:
+        saved = None
+    if saved:
+        lines.append(saved)
     lines.append(
         "/cost budget <N|off> | /cost caps | /cost today | /cost tree | /cost cache | /cost explain <question>"
     )

@@ -257,6 +257,14 @@ there before it ships. `web_policy.py` gates `fetch_url` / `http_request` inside
 `assert_fetch_allowed` (before DNS); `workspace_trust.py` fingerprints the
 repo-controlled instruction files behind `/permissions trust-workspace`.
 
+**Operator objective + failover (ROADMAP #53).** `operator_decisions.py` owns the
+decisions log (`~/.bog-agents/operator-decisions.jsonl`), `apply_objective`, `bias()`
+and the `/cost` counterfactual; `operator_mode.py` only calls into it (`_persist_decision`
+at routing time, `operator_turn_finished` at turn end — `OperatorDecision` is frozen, so
+the id is set with `dataclasses.replace`). Rate-limit failover is the SDK's
+`middleware/provider_failover.py`; the CLI attaches it from `[models].fallbacks` for
+non-Bedrock models — keep Bedrock on `bedrock_resilience.py`, never both.
+
 **Sessions, queue, detach / attach (ROADMAP #56).** The SDK owns the data:
 `bog_agents/session_registry.py` (per-machine JSON records + heartbeat; never probe a
 pid with `os.kill(pid, 0)` on Windows — it terminates the process — use `pid_alive`)

@@ -121,6 +121,37 @@ def _strip_excluded_tools(
             logger.warning("Could not strip excluded tools from %s", type(mw).__name__)
 
 
+def _build_fallback_model(spec: str) -> Any:  # noqa: ANN401 - BaseChatModel or None
+    """Build one `[models].fallbacks` entry for the failover middleware (ROADMAP #53)."""
+    try:
+        from bog_agents_cli.config import create_model
+
+        return create_model(spec).model
+    except Exception:
+        logger.info("failover: could not build %s", spec, exc_info=True)
+        return None
+
+
+def _configured_fallbacks() -> list[str]:
+    """`[models].fallbacks` from config.toml, or `[]` when unset / unreadable."""
+    try:
+        from bog_agents_cli.model_config import ModelConfig
+
+        return [s for s in ModelConfig.load().fallbacks if s]
+    except Exception:
+        logger.debug("Could not read [models].fallbacks", exc_info=True)
+        return []
+
+
+def _model_label(model: object) -> str:
+    """How a resolved chat model is named in failover notes."""
+    for attr in ("model_name", "model", "model_id"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return type(model).__name__
+
+
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
     """Resolve the shell auto-background threshold from an env or config value.
 
@@ -2291,6 +2322,23 @@ def create_cli_agent(
         agent_middleware.append(
             BedrockRefreshMiddleware(interactive=bedrock_interactive)
         )
+    else:
+        # ROADMAP #53: provider-agnostic failover — a rate limit / quota
+        # failure rotates through `[models].fallbacks` (Ollama included) and
+        # parks the primary until the provider's reset header says otherwise.
+        fallback_specs = _configured_fallbacks()
+        if fallback_specs:
+            from bog_agents.middleware.provider_failover import (
+                ProviderFailoverMiddleware,
+            )
+
+            agent_middleware.append(
+                ProviderFailoverMiddleware(
+                    fallback_specs,
+                    build_model=_build_fallback_model,
+                    primary_label=_model_label(model),
+                )
+            )
 
     # Street sweeper (opt-in) — attach the per-cwd singleton instance, disabled
     # by default. `/sweep on` flips it live without a rebuild. Pointing it at the

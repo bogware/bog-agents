@@ -930,18 +930,30 @@ ADK, and a contract is itself a feature to the target users.
 - **#53 Cost-objective routing with a local rung and provable savings** *(Cursor
   Router Intelligence/Balance/Cost, 60–68% cut; Amp Dial low = GLM-5.2; Factory
   Droid Core free pool + Router failover; OpenCode Go / ClinePass $10 lanes;
-  Claude auto-continue after limits)* — **partial.** `operator_mode.py` has
-  `local`/`hybrid` presets and a judge but no objective, no persistence of
-  decisions, no failover beyond Bedrock. Delta: `objective = intelligence|balance|cost`
-  + `[operator.pool]` mapping task classes (subagent exploration, summarization,
-  `@codebase` research, judge, butcher workers) to a pool model; persist decisions
-  to `~/.bog-agents/operator-decisions.jsonl` with tier/model/cost/rubric verdict
-  and bias future choices from it; a counterfactual "saved $X by routing N calls
-  to local" line in `/cost`; generalize `bedrock_resilience.py` into a
-  provider-agnostic `ProviderFailoverMiddleware` (429/quota headers → rotate
-  through `[models].fallbacks` incl. Ollama, window-aware cooldown); parse
-  provider reset headers into a "parked, auto-resuming at HH:MM" state in TUI and
-  daemon. Absorbs v2 #46's cost half. **S/T, M.**
+  Claude auto-continue after limits)* — **shipped 2026-09-06** (REVIEW v6
+  §19). `operator.toml` gains `objective = intelligence|balance|cost` (`cost`
+  runs one tier below the judged one, `intelligence` one above; `/operator
+  objective <name>` switches live) and `[pool.<task class>]` tables (the
+  `judge` entry is applied; subagent / summarization / research /
+  butcher_worker are parsed and exposed on `OperatorConfig.pool` for their
+  callers). Every decision lands in `~/.bog-agents/operator-decisions.jsonl`
+  (`operator_decisions.py`: judged tier, routed tier, both models, tokens and
+  cost filled in at turn end); `/operator verdict ok|bad [note]` rules on the
+  last routed turn and `bias()` stops the `cost` objective downgrading a tier
+  whose downgrades keep being ruled bad; `/cost` and `/operator status` carry
+  "saved $X by routing N turn(s) below the judged tier (M to local)" priced
+  from the SDK catalog. SDK `middleware/provider_failover.py`
+  (`ProviderFailoverMiddleware`): a 429 / 529 / quota / overloaded failure
+  rotates through `[models].fallbacks` (Ollama included), sticks to the
+  alternate, parks the primary until the provider's `retry-after` /
+  `x-ratelimit-reset-*` / `anthropic-ratelimit-*-reset` header (or a cooldown)
+  and retries it after; the first answer after a hop carries "[failover]
+  <primary> parked (rate_limit) until HH:MM, answering with <spec>". The CLI
+  attaches it whenever fallbacks are configured and the model is not Bedrock
+  (which keeps its own resilience). *Was:* partial. Open: a status-bar row for
+  the parked state (the note in the answer is the surface today); applying the
+  non-judge pool entries in their callers. Absorbs v2 #46's cost half.
+  **S/T, M.**
 - **#55 The daemon that actually executes: context injection, subscriptions, draft-PR
   etiquette** *(Cursor cloud-agent subscriptions + `/goal`; Amp self-scheduling
   agents; Copilot assign-to-agent; Jules CI auto-fix)* — **shipped 2026-09-05

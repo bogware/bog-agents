@@ -15177,9 +15177,11 @@ class BogAgentsApp(App):
         # Set synchronously up front (no await in between) so the common path
         # restores immediately; the finally re-asserts this defensively.
         self._turns.end_agent()
+        from bog_agents_cli.operator_mode import operator_turn_finished
         from bog_agents_cli.session_controller import turn_finished
 
         turn_finished(self)
+        operator_turn_finished(self)
         try:
             # Remove spinner if present
             await self._set_spinner(None)
