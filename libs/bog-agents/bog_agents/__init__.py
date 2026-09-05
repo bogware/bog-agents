@@ -43,6 +43,12 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # Per-agent cost ledger + runaway caps (#25); CTX-3-fixed pricing lookup.
     "CostLedger": ("bog_agents.cost_ledger", "CostLedger"),
     "RunawayCaps": ("bog_agents.cost_ledger", "RunawayCaps"),
+    # Cost certainty (ROADMAP #51): pre-flight estimates + the durable daily spend ledger.
+    "CostEstimate": ("bog_agents.cost_ledger", "CostEstimate"),
+    "estimate_run_cost": ("bog_agents.cost_ledger", "estimate_run_cost"),
+    "SpendLedger": ("bog_agents.spend_ledger", "SpendLedger"),
+    "check_ceiling": ("bog_agents.spend_ledger", "check_ceiling"),
+    "parse_budget_resume": ("bog_agents.middleware.cost_tracker", "parse_budget_resume"),
     "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),
     # Governed agent teams (#21) — claimable task ledger + mailboxes + coordinator.
     "TaskLedger": ("bog_agents.teams", "TaskLedger"),

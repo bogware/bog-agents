@@ -30,6 +30,8 @@ class JobStatus(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     SKIPPED = "skipped"
+    PAUSED = "paused"
+    """The agent hit the job's `budget_usd` and is waiting for `POST /runs/{id}/resume` (ROADMAP #51)."""
 
 
 class OutputTarget(StrEnum):
@@ -145,6 +147,11 @@ class AmbientJob:
             behaviour; total attempts = max_retries + 1.
         retry_backoff_seconds: Base delay before the first retry; doubles each
             subsequent attempt (exponential backoff).
+        budget_usd: Per-run cost cap (ROADMAP #51). When hit, the run pauses
+            (`status=paused`) instead of failing; `POST /runs/{id}/resume`
+            with a higher `budget_usd` continues it. `None` = uncapped.
+        daily_ceiling_usd: Per-job daily spend ceiling; once today's recorded
+            spend reaches it, new runs are recorded as `skipped`. `None` = none.
         triggers: One or more trigger configurations.
         outputs: One or more output delivery configurations.
         enabled: Whether the job is active and eligible for scheduling.
@@ -167,6 +174,8 @@ class AmbientJob:
     # Retry policy (opt-in; 0 retries = prior single-shot behaviour)
     max_retries: int = 0
     retry_backoff_seconds: float = 2.0
+    budget_usd: float | None = None
+    daily_ceiling_usd: float | None = None
     # When to run
     triggers: list[TriggerConfig] = field(default_factory=list)
     # Where to send output

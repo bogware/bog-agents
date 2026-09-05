@@ -81,3 +81,31 @@ def test_output_github_issue_accepts_placeholder() -> None:
         ]
     )
     assert args.output_github_issue == "{issue_number}"
+
+
+def test_budget_flags_parse_and_reach_the_payload() -> None:
+    """ROADMAP #51: `--budget-usd` / `--daily-ceiling-usd` on create and edit, `jobs resume`."""
+    args = _parse(
+        [
+            "daemon",
+            "jobs",
+            "create",
+            "--name",
+            "b",
+            "--prompt",
+            "x",
+            "--budget-usd",
+            "2.5",
+            "--daily-ceiling-usd",
+            "9",
+        ]
+    )
+    assert (args.budget_usd, args.daily_ceiling_usd) == (2.5, 9.0)
+    edit = _parse(["daemon", "jobs", "edit", "job1", "--budget-usd", "3"])
+    assert edit.budget_usd == 3.0
+    resume = _parse(["daemon", "jobs", "resume", "run1", "--budget-usd", "4"])
+    assert (resume.jobs_command, resume.run_id, resume.budget_usd) == (
+        "resume",
+        "run1",
+        4.0,
+    )

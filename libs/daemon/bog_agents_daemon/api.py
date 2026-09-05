@@ -135,9 +135,17 @@ class CreateJobRequest(BaseModel):
     working_dir: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
     max_retries: int = Field(0, ge=0, le=_MAX_RETRIES)
     retry_backoff_seconds: float = Field(2.0, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
+    budget_usd: float | None = Field(default=None, gt=0)
+    daily_ceiling_usd: float | None = Field(default=None, gt=0)
     triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
+
+
+class ResumeRunRequest(BaseModel):
+    """Body for `POST /runs/{run_id}/resume` (ROADMAP #51): the raised budget."""
+
+    budget_usd: float = Field(..., gt=0)
 
 
 class TriggerRunRequest(BaseModel):
@@ -166,6 +174,8 @@ class UpdateJobRequest(BaseModel):
     working_dir: str | None = Field(default=None, max_length=_MAX_WORKING_DIR_LEN)
     max_retries: int | None = Field(default=None, ge=0, le=_MAX_RETRIES)
     retry_backoff_seconds: float | None = Field(default=None, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
+    budget_usd: float | None = Field(default=None, gt=0)
+    daily_ceiling_usd: float | None = Field(default=None, gt=0)
     triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
     enabled: bool | None = None
@@ -568,6 +578,8 @@ def create_app(
             working_dir=body.working_dir,
             max_retries=body.max_retries,
             retry_backoff_seconds=body.retry_backoff_seconds,
+            budget_usd=body.budget_usd,
+            daily_ceiling_usd=body.daily_ceiling_usd,
             triggers=triggers,
             outputs=outputs,
             enabled=body.enabled,
@@ -643,6 +655,10 @@ def create_app(
             updates["max_retries"] = body.max_retries
         if body.retry_backoff_seconds is not None:
             updates["retry_backoff_seconds"] = body.retry_backoff_seconds
+        if body.budget_usd is not None:
+            updates["budget_usd"] = body.budget_usd
+        if body.daily_ceiling_usd is not None:
+            updates["daily_ceiling_usd"] = body.daily_ceiling_usd
         if body.triggers is not None:
             triggers = [_trigger_config_from_model(t) for t in body.triggers]
             # DMN-8: '***' means "keep the stored secret", never a literal value.
@@ -750,6 +766,38 @@ def create_app(
         _check_auth(request, token_holder["value"])
         runs = list_runs(job_id=job_id)
         return [_run_to_response(r) for r in runs]
+
+    @app.post("/runs/{run_id}/resume", status_code=202)
+    async def resume_run_endpoint(request: Request, run_id: str, body: ResumeRunRequest) -> dict[str, Any]:
+        """Resume a budget-paused run with a raised cap (ROADMAP #51).
+
+        The run continues in the background on the same graph and thread it
+        paused on; poll `/runs` for the outcome. A pause lives in the daemon
+        process's memory, so a run paused before a restart cannot be resumed.
+
+        Args:
+            run_id: The paused run's id.
+            body: The new `budget_usd`.
+
+        Returns:
+            The run dict with `status=running`.
+
+        Raises:
+            HTTPException: 404 if the run is not paused in this process.
+        """
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon import runner
+
+        if not runner.is_paused(run_id):
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' is not paused (or the daemon restarted since it paused)")
+        paused = runner._PAUSED_RUNS[run_id]
+        task = asyncio.create_task(runner.resume_paused_run(run_id, budget_usd=body.budget_usd))
+        runner._RESUME_TASKS.add(task)
+        task.add_done_callback(runner._RESUME_TASKS.discard)
+        response = _run_to_response(paused.run)
+        response["status"] = "running"
+        response["error"] = ""
+        return response
 
     @app.get("/runs")
     async def list_all_runs_endpoint(request: Request) -> list[dict[str, Any]]:

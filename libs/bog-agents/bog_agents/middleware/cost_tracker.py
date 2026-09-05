@@ -12,9 +12,9 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -28,6 +28,42 @@ from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
 logger = logging.getLogger(__name__)
+
+BUDGET_REACHED = "budget_reached"
+"""`type` of the LangGraph interrupt payload raised when `budget_usd` is hit (ROADMAP #51)."""
+
+BudgetMode = Literal["interrupt", "raise", "warn"]
+"""What `CostTrackerMiddleware` does when the budget is exceeded before a model call."""
+
+
+def parse_budget_resume(value: object) -> float | None:
+    """Extract a new budget from a `budget_reached` interrupt resume value.
+
+    Accepts `{"budget_usd": N}` (optionally with `"type": "raise_budget"`), a
+    bare number, or a numeric string such as `"12"` / `"$3.50"`. Anything else
+    — including a non-positive number — yields `None`, which the middleware
+    treats as "not raised" and pauses again.
+
+    Args:
+        value: The raw value returned by `interrupt()`.
+
+    Returns:
+        The new budget in USD, or `None`.
+    """
+    if isinstance(value, Mapping):
+        value = value.get("budget_usd")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value > 0 else None
+    if isinstance(value, str):
+        try:
+            parsed = float(value.strip().lstrip("$").replace(",", ""))
+        except ValueError:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
 
 # Approximate cost per 1M tokens for common models (input/output). Keys are
 # *normalized base ids* (see `_normalize_model_for_pricing`) so a full spec such
@@ -407,10 +443,31 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
         budget_usd: float | None = None,
         effort_level: str = "medium",
         strict_budget: bool = True,
+        on_budget: BudgetMode | None = None,
+        interrupt_fn: Callable[[Any], Any] | None = None,
     ) -> None:
+        """Create the middleware.
+
+        Args:
+            model_name: Model id used for pricing.
+            budget_usd: Optional hard cap in USD; `None` is unlimited.
+            effort_level: Initial effort level exposed through `set_effort`.
+            strict_budget: Legacy switch: `False` means `on_budget="warn"`.
+            on_budget: What happens when the cap is hit before a model call
+                (ROADMAP #51). `"interrupt"` (default) pauses the graph with a
+                `budget_reached` interrupt that only a raise-cap resume clears
+                (see `parse_budget_resume`); outside a checkpointed graph it
+                falls back to `"raise"`. `"raise"` ends the turn with
+                `RuntimeError` (the pre-#51 behaviour); `"warn"` logs and
+                continues.
+            interrupt_fn: Injectable replacement for `langgraph.types.interrupt`
+                (tests); resolved lazily when `None`.
+        """
         self.tracker = CostTracker(model_name=model_name, budget_usd=budget_usd)
         self._effort_level = effort_level
         self._strict_budget = strict_budget
+        self._on_budget: BudgetMode = on_budget if on_budget is not None else ("interrupt" if strict_budget else "warn")
+        self._interrupt_fn = interrupt_fn
         self.tools = self._build_tools()
 
     def _build_tools(self) -> list[BaseTool]:
@@ -465,16 +522,8 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
         call_next: Callable[[ModelRequest], ModelResponse],
     ) -> ModelResponse:
         """Track token usage from model calls."""
-        # Check budget before calling
-        if self.tracker.budget_exceeded:
-            msg = (
-                f"Cost budget exceeded: ${self.tracker.estimated_cost_usd:.4f} spent "
-                f"of ${self.tracker.budget_usd:.2f} budget. "
-                f"Increase budget_usd or start a new session."
-            )
-            if self._strict_budget:
-                raise RuntimeError(msg)
-            logger.warning(msg)
+        self._apply_context_budget(request)
+        self._enforce_budget()
 
         response = call_next(request)
         self._record_usage_from_response(response)
@@ -486,19 +535,84 @@ class CostTrackerMiddleware(AgentMiddleware[CostTrackerState, ContextT, Response
         call_next: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Async version of wrap_model_call."""
-        if self.tracker.budget_exceeded:
-            msg = (
-                f"Cost budget exceeded: ${self.tracker.estimated_cost_usd:.4f} spent "
-                f"of ${self.tracker.budget_usd:.2f} budget. "
-                f"Increase budget_usd or start a new session."
-            )
-            if self._strict_budget:
-                raise RuntimeError(msg)
-            logger.warning(msg)
+        self._apply_context_budget(request)
+        self._enforce_budget()
 
         response = await call_next(request)
         self._record_usage_from_response(response)
         return response
+
+    # ------------------------------------------------------------------ budget (#51)
+
+    def _apply_context_budget(self, request: ModelRequest) -> None:
+        """Honour a per-turn `budget_usd` carried on `runtime.context`.
+
+        The CLI's agent lives in a separate server process, so `/cost budget N`
+        cannot reach `set_budget` in-process; the TUI carries the choice on the
+        per-turn context instead (the `ThinkingMiddleware` pattern). A value of
+        `0` (or less) lifts the cap; `None` / absent keeps the current one.
+
+        Args:
+            request: The current model request.
+        """
+        runtime = getattr(request, "runtime", None)
+        ctx = getattr(runtime, "context", None)
+        if ctx is None:
+            return
+        value = ctx.get("budget_usd") if isinstance(ctx, Mapping) else getattr(ctx, "budget_usd", None)
+        if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+            return
+        self.tracker.budget_usd = float(value) if value > 0 else None
+
+    def _budget_message(self) -> str:
+        """Render the budget-exceeded message."""
+        return (
+            f"Cost budget exceeded: ${self.tracker.estimated_cost_usd:.4f} spent "
+            f"of ${self.tracker.budget_usd or 0:.2f} budget. "
+            f"Increase budget_usd or start a new session."
+        )
+
+    def budget_payload(self) -> dict[str, Any]:
+        """Build the `budget_reached` interrupt payload for the current spend."""
+        return {
+            "type": BUDGET_REACHED,
+            "spent_usd": round(self.tracker.estimated_cost_usd, 6),
+            "budget_usd": self.tracker.budget_usd,
+            "model": self.tracker.model_name,
+            "message": self._budget_message(),
+            "resume": "Resume with {'budget_usd': <new cap>} to raise the budget and continue; anything else pauses again.",
+        }
+
+    def _enforce_budget(self) -> None:
+        """Gate the next model call on the budget (ROADMAP #51).
+
+        Raises:
+            RuntimeError: In `raise` mode, or in `interrupt` mode when no
+                checkpointed graph is available to hold the pause.
+        """
+        if not self.tracker.budget_exceeded:
+            return
+        if self._on_budget == "warn":
+            logger.warning(self._budget_message())
+            return
+        if self._on_budget == "raise":
+            raise RuntimeError(self._budget_message())
+        interrupt_fn = self._interrupt_fn
+        if interrupt_fn is None:
+            from langgraph.types import interrupt
+
+            interrupt_fn = interrupt
+        while self.tracker.budget_exceeded:
+            try:
+                resume = interrupt_fn(self.budget_payload())
+            except RuntimeError as exc:
+                # No checkpointer / not inside a graph: the pause has nowhere to
+                # live, so fall back to the pre-#51 hard stop.
+                raise RuntimeError(self._budget_message()) from exc
+            new_cap = parse_budget_resume(resume)
+            if new_cap is not None and new_cap > self.tracker.estimated_cost_usd:
+                self.tracker.budget_usd = new_cap
+                logger.info("Budget raised to $%.2f after a budget_reached pause", new_cap)
 
     def _record_usage_from_response(self, response: ModelResponse) -> None:
         """Record token usage from a ModelResponse.

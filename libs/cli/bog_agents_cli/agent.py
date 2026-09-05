@@ -1931,6 +1931,19 @@ def create_cli_agent(
         working_dir = effective_cwd or Path.cwd()
         agent_middleware.append(CheckpointingMiddleware(working_dir=working_dir))
 
+    # ROADMAP #51: session caps + budget from the `cost.*` manifest keys
+    # (config.toml / BOG_AGENTS_* env). Every CLI agent gets a CostLedger so
+    # subagent spawns and web searches are counted and capped.
+    from bog_agents_cli.cost_controller import build_cost_ledger, load_cost_caps
+    from bog_agents_cli.tools import set_web_search_ledger
+
+    cost_caps = load_cost_caps()
+    if cost_ledger is None:
+        cost_ledger = build_cost_ledger(cost_caps)
+    if budget_usd <= 0 and cost_caps.budget_usd:
+        budget_usd = cost_caps.budget_usd
+    set_web_search_ledger(cost_ledger)
+
     # Cost tracking middleware (#8, #34, #36, #47)
     if enable_cost_tracking:
         from bog_agents.middleware.cost_tracker import CostTrackerMiddleware
@@ -1940,6 +1953,9 @@ def create_cli_agent(
                 model_name=model_spec_str,
                 effort_level=effort_level,
                 budget_usd=budget_usd if budget_usd > 0 else None,
+                # #51: a hit budget pauses with a budget_reached prompt
+                # instead of killing the turn with RuntimeError.
+                on_budget="interrupt",
             )
         )
 

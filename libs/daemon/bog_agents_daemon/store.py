@@ -62,6 +62,11 @@ def _secure_owner_only(path: Path) -> None:
                 )
 
 
+def spend_db_path() -> Path:
+    """Path of the daemon's durable spend ledger (ROADMAP #51), beside `jobs.json`."""
+    return _DAEMON_DIR / "spend.db"
+
+
 def _ensure_dirs() -> None:
     """Create daemon directories if they do not exist."""
     _DAEMON_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,6 +151,8 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
         working_dir=d.get("working_dir", ""),
         max_retries=d.get("max_retries", 0),
         retry_backoff_seconds=d.get("retry_backoff_seconds", 2.0),
+        budget_usd=d.get("budget_usd"),
+        daily_ceiling_usd=d.get("daily_ceiling_usd"),
         triggers=triggers,
         outputs=outputs,
         enabled=d.get("enabled", True),

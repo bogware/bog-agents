@@ -43,6 +43,7 @@ from bog_agents_cli.config import (
     settings,
 )
 from bog_agents_cli.configurable_model import CLIContext
+from bog_agents_cli.cost_controller import gate_turn, preflight_start
 from bog_agents_cli.hooks import dispatch_hook
 from bog_agents_cli.model_config import ModelSpec, save_recent_model
 from bog_agents_cli.prompt_cache import cache_break_note, thread_reset_message
@@ -967,6 +968,7 @@ class BogAgentsApp(App):
         # context; None means "use the ThinkingMiddleware's configured default".
         self._thinking_enabled: bool | None = None
         self._thinking_budget_tokens: int | None = None
+        self._budget_override: float | None = None
         self._base_auto_approve = auto_approve
         self._base_model_spec = (
             f"{settings.model_provider}:{settings.model_name}"
@@ -2579,6 +2581,7 @@ class BogAgentsApp(App):
             system_prompt_append="\n\n".join(parts) if parts else None,
             thinking_enabled=self._thinking_enabled,
             thinking_budget_tokens=self._thinking_budget_tokens,
+            budget_usd=self._budget_override,
         )
 
     def _get_team_shared_context(self) -> str:
@@ -3278,52 +3281,22 @@ class BogAgentsApp(App):
         await self._handle_onboard_command()
 
     async def _handle_tokens_command(self, command: str) -> None:
-        """Show token usage and context breakdown."""
+        """Show token usage, spend and caps; `/cost budget <N|off>` sets the session cap (#51)."""
+        from bog_agents_cli.cost_controller import (
+            handle_cost_subcommand,
+            render_tokens_report,
+        )
+
         await self._mount_message(UserMessage(command))
-        if self._token_tracker and self._token_tracker.current_context > 0:
-            count = self._token_tracker.current_context
-            formatted = format_token_count(count)
-
-            model_name = settings.model_name
-            context_limit = settings.model_context_limit
-
-            if context_limit is not None:
-                limit_str = format_token_count(context_limit)
-                pct = count / context_limit * 100
-                usage = f"{formatted} / {limit_str} tokens ({pct:.0f}%)"
-            else:
-                usage = f"{formatted} tokens used"
-
-            msg = f"{usage} | {model_name}" if model_name else usage
-
-            conv_tokens = await self._get_conversation_token_count()
-            if conv_tokens is not None:
-                overhead = max(0, count - conv_tokens)
-                overhead_str = format_token_count(overhead)
-                conv_str = format_token_count(conv_tokens)
-
-                overhead_unit = " tokens" if overhead < 1000 else ""
-                conv_unit = " tokens" if conv_tokens < 1000 else ""
-
-                msg += (
-                    f"\n|- System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"
-                    f"\n`- Conversation: ~{conv_str}{conv_unit}"
-                )
-
-            await self._mount_message(AppMessage(msg))
+        handled = handle_cost_subcommand(self, command)
+        if handled is not None:
+            await self._mount_message(AppMessage(handled))
             return
-
-        model_name = settings.model_name
-        context_limit = settings.model_context_limit
-
-        parts: list[str] = ["No token usage yet"]
-        if context_limit is not None:
-            limit_str = format_token_count(context_limit)
-            parts.append(f"{limit_str} token context window")
-        if model_name:
-            parts.append(model_name)
-
-        await self._mount_message(AppMessage(" | ".join(parts)))
+        has_usage = bool(
+            self._token_tracker and self._token_tracker.current_context > 0
+        )
+        conv_tokens = await self._get_conversation_token_count() if has_usage else None
+        await self._mount_message(AppMessage(render_tokens_report(self, conv_tokens)))
 
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
@@ -6030,8 +6003,11 @@ class BogAgentsApp(App):
             return
         # N full agent attempts run for minutes+; run as a tracked worker so
         # the TUI stays responsive and Esc/Ctrl+C can stop it (v5 CLIC-2).
-        self._start_tracked_session(
-            self._run_best_of_n_task(prompt, n), name="/best-of-n"
+        preflight_start(
+            self,
+            agents=n,
+            name="/best-of-n",
+            start=lambda: self._run_best_of_n_task(prompt, n),
         )
 
     async def _handle_jury_command(self, command: str) -> None:
@@ -11102,7 +11078,13 @@ class BogAgentsApp(App):
         # worker so the TUI stays responsive AND Esc/Ctrl+C can cancel the
         # job — an untracked worker was invisible to every interrupt gate
         # (v5 CLIC-5).
-        self._start_tracked_session(self._run_butcher_task(raw_arg), name="/butcher")
+        # Planner + workers; the slice count is only known once the butcher has planned.
+        preflight_start(
+            self,
+            agents=3,
+            name="/butcher",
+            start=lambda: self._run_butcher_task(raw_arg),
+        )
 
     async def _run_butcher_task(self, prompt: str) -> None:
         """Run one butcher job (dispatched via `_start_tracked_session`)."""
@@ -13544,7 +13526,13 @@ class BogAgentsApp(App):
             # A team session runs N auto-approving agents for minutes+; run it
             # as a tracked worker so the TUI stays responsive and Esc/Ctrl+C
             # can stop it (v5 CLIC-2).
-            self._start_tracked_session(self._run_team_run_task(req), name="/team run")
+            workers = len(req.members or ("worker-1", "worker-2"))
+            preflight_start(
+                self,
+                agents=workers,
+                name="/team run",
+                start=lambda: self._run_team_run_task(req),
+            )
             return
 
         if action == "whoami":
@@ -14644,6 +14632,8 @@ class BogAgentsApp(App):
         Args:
             message: The user's message
         """
+        if await gate_turn(self):
+            return
         # Intercept daemon registration confirmation for /build pipeline
         if self._build_pending and self._build_pending.get("awaiting_daemon_confirm"):
             await self._mount_message(UserMessage(message))
@@ -15041,6 +15031,9 @@ class BogAgentsApp(App):
             # cleanup (which drains the queue last).
             if isinstance(turn_stats, SessionStats):
                 self._session_stats.merge(turn_stats)
+                from bog_agents_cli.cost_controller import record_turn_spend
+
+                record_turn_spend(turn_stats, cwd=self._cwd)
 
             if self._auto_commit and turn_stats is not None:
                 from bog_agents_cli.auto_commit import run_auto_commit

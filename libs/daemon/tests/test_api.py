@@ -877,3 +877,41 @@ class TestSecretRedactionRoundTrip:
         stored = next(j for j in load_jobs() if j.job_id == job_id)
         assert len(stored.triggers) == 1
         assert stored.triggers[0].webhook_secret == self._SECRET
+
+
+class TestResumeRun:
+    """ROADMAP #51: `POST /runs/{run_id}/resume`."""
+
+    def test_unknown_or_unpaused_run_is_404(self, client: TestClient, auth: dict) -> None:
+        resp = client.post("/runs/nope/resume", json={"budget_usd": 5}, headers=auth)
+        assert resp.status_code == 404
+
+    def test_requires_positive_budget(self, client: TestClient, auth: dict) -> None:
+        resp = client.post("/runs/abc/resume", json={"budget_usd": 0}, headers=auth)
+        assert resp.status_code == 422
+
+    def test_paused_run_is_resumed_in_the_background(self, client: TestClient, auth: dict) -> None:
+        from unittest.mock import AsyncMock, patch
+
+        from bog_agents_daemon import runner
+        from bog_agents_daemon.models import AmbientJob, JobRun, JobStatus, TriggerType
+
+        job = AmbientJob(name="capped", prompt="go", budget_usd=1.0)
+        run = JobRun(job_id=job.job_id, job_name=job.name, status=JobStatus.PAUSED, error="budget_reached: x")
+        runner._PAUSED_RUNS[run.run_id] = runner.PausedRun(job=job, run=run, agent=object(), config={}, trigger_type=TriggerType.MANUAL)
+        try:
+            with patch("bog_agents_daemon.runner.resume_paused_run", AsyncMock(return_value=run)) as resume:
+                resp = client.post(f"/runs/{run.run_id}/resume", json={"budget_usd": 7.5}, headers=auth)
+                assert resp.status_code == 202
+                body = resp.json()
+                assert body["run_id"] == run.run_id
+                assert body["status"] == "running"
+                resume.assert_awaited_once_with(run.run_id, budget_usd=7.5)
+        finally:
+            runner._PAUSED_RUNS.clear()
+
+    def test_create_and_patch_carry_budget_fields(self, client: TestClient, auth: dict, tmp_daemon_dir: Path) -> None:
+        created = client.post("/jobs", json={"name": "b", "prompt": "p", "budget_usd": 2.0, "daily_ceiling_usd": 9.0}, headers=auth).json()
+        assert (created["budget_usd"], created["daily_ceiling_usd"]) == (2.0, 9.0)
+        patched = client.patch(f"/jobs/{created['job_id']}", json={"budget_usd": 3.0}, headers=auth).json()
+        assert (patched["budget_usd"], patched["daily_ceiling_usd"]) == (3.0, 9.0)

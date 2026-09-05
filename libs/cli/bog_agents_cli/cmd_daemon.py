@@ -634,6 +634,11 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         "outputs": [out],
         "enabled": not args.disabled,
     }
+    # ROADMAP #51: per-run budget (pauses at the cap) and per-job daily ceiling.
+    if getattr(args, "budget_usd", None):
+        payload["budget_usd"] = args.budget_usd
+    if getattr(args, "daily_ceiling_usd", None):
+        payload["daily_ceiling_usd"] = args.daily_ceiling_usd
 
     try:
         job = _api_post("/jobs", payload, port=port)
@@ -730,6 +735,8 @@ def cmd_jobs_edit(args: Any, *, port: int = _DEFAULT_PORT) -> None:  # noqa: ANN
         "skill_name": "skill_name",
         "model": "model",
         "working_dir": "working_dir",
+        "budget_usd": "budget_usd",
+        "daily_ceiling_usd": "daily_ceiling_usd",
     }
     for attr, key in field_map.items():
         value = getattr(args, attr, None)
@@ -759,6 +766,30 @@ def cmd_jobs_edit(args: Any, *, port: int = _DEFAULT_PORT) -> None:  # noqa: ANN
     name = result.get("name", args.job_id) if isinstance(result, dict) else args.job_id
     fields = ", ".join(sorted(payload))
     print(f"Updated job '{name}' ({args.job_id}) — fields: {fields}")  # noqa: T201
+
+
+def cmd_jobs_resume(run_id: str, budget_usd: float, port: int = _DEFAULT_PORT) -> None:
+    """Resume a budget-paused run with a raised cap (ROADMAP #51).
+
+    Args:
+        run_id: The paused run's id.
+        budget_usd: The new per-run cap.
+        port: Port the daemon is listening on.
+    """
+    try:
+        resumed = _api_post(
+            f"/runs/{run_id}/resume", {"budget_usd": budget_usd}, port=port
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Run '{run_id}' is not paused (or the daemon restarted).")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+    rid = resumed.get("run_id", run_id)
+    print(f"Run {rid} resumed with budget ${budget_usd:.2f}; see `jobs history`.")  # noqa: T201
 
 
 def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
@@ -797,7 +828,12 @@ def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
             time.sleep(2)
             continue
         for r in runs:
-            if r.get("run_id") == run_id and r.get("status") in ("completed", "failed"):
+            if r.get("run_id") == run_id and r.get("status") in (
+                "completed",
+                "failed",
+                "paused",
+                "skipped",
+            ):
                 final_run = r
                 break
         if final_run is not None:
@@ -977,6 +1013,22 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="DIR",
         help="Working directory for the agent",
+    )
+    create_p.add_argument(
+        "--budget-usd",
+        dest="budget_usd",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Per-run cost cap; the run pauses at the cap until `jobs resume <run_id> --budget-usd N` (#51)",
+    )
+    create_p.add_argument(
+        "--daily-ceiling-usd",
+        dest="daily_ceiling_usd",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Per-job daily spend ceiling; runs are skipped once today's spend reaches it (#51)",
     )
     create_p.add_argument(
         "--pipeline",
@@ -1173,6 +1225,15 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         "--working-dir", dest="working_dir", help="New working directory"
     )
     edit_p.add_argument(
+        "--budget-usd", dest="budget_usd", type=float, help="New per-run cost cap (#51)"
+    )
+    edit_p.add_argument(
+        "--daily-ceiling-usd",
+        dest="daily_ceiling_usd",
+        type=float,
+        help="New per-job daily ceiling (#51)",
+    )
+    edit_p.add_argument(
         "--enable",
         dest="enabled",
         action="store_const",
@@ -1192,6 +1253,21 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     run_p = jobs_sub.add_parser("run", help="Trigger an immediate manual run of a job")
     run_p.add_argument("job_id", help="Job ID")
     run_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs resume <run_id> --budget-usd N  (ROADMAP #51)
+    resume_p = jobs_sub.add_parser(
+        "resume", help="Resume a budget-paused run with a raised cap"
+    )
+    resume_p.add_argument("run_id", help="Run ID (status=paused)")
+    resume_p.add_argument(
+        "--budget-usd",
+        dest="budget_usd",
+        type=float,
+        required=True,
+        metavar="USD",
+        help="New per-run cap",
+    )
+    resume_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # jobs enable <id>
     enable_p = jobs_sub.add_parser("enable", help="Enable a disabled job")
@@ -1300,6 +1376,8 @@ def _execute_jobs_command(args: Any) -> None:  # noqa: ANN401
         cmd_jobs_edit(args, port=port)
     elif jobs_cmd == "run":
         cmd_jobs_run(args.job_id, port=port)
+    elif jobs_cmd == "resume":
+        cmd_jobs_resume(args.run_id, args.budget_usd, port=port)
     elif jobs_cmd == "enable":
         cmd_jobs_enable(args.job_id, port=port)
     elif jobs_cmd == "disable":

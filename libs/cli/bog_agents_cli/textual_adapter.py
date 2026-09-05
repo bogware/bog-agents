@@ -1032,6 +1032,7 @@ async def execute_task_textual(
             suppress_resumed_output = False
             pending_interrupts: dict[str, HITLRequest] = {}
             pending_ask_user: dict[str, AskUserRequest] = {}
+            pending_budget: dict[str, dict[str, Any]] = {}
 
             async for chunk in agent.astream(
                 stream_input,
@@ -1088,6 +1089,15 @@ async def execute_task_textual(
                                             "Invalid ask_user interrupt payload"
                                         )
                                         raise
+                                elif (
+                                    isinstance(iv, dict)
+                                    and iv.get("type") == "budget_reached"
+                                ):
+                                    # ROADMAP #51: the cost tracker paused the
+                                    # graph; ask for a raise-cap resume below.
+                                    pending_budget[interrupt_obj.id] = iv
+                                    interrupt_occurred = True
+                                    await dispatch_hook("input.required", {})
                                 else:
                                     try:
                                         validated_request = (
@@ -1492,6 +1502,23 @@ async def execute_task_textual(
             if interrupt_occurred:
                 any_rejected = False
                 resume_payload: dict[str, Any] = {}
+
+                for interrupt_id, budget_payload in list(pending_budget.items()):
+                    from bog_agents_cli.cost_controller import (
+                        ask_budget_raise,
+                        budget_stop_message,
+                    )
+
+                    new_cap = await ask_budget_raise(
+                        adapter._request_ask_user, budget_payload
+                    )
+                    if new_cap is None:
+                        await adapter._mount_message(
+                            AppMessage(budget_stop_message(budget_payload))
+                        )
+                        turn_stats.wall_time_seconds = time.monotonic() - start_time
+                        return turn_stats
+                    resume_payload[interrupt_id] = {"budget_usd": new_cap}
 
                 for interrupt_id, ask_req in list(pending_ask_user.items()):
                     questions = ask_req["questions"]

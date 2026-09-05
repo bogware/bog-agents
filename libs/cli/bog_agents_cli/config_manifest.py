@@ -723,6 +723,64 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         kind=OptionKind.STR,
         env_var=_env_vars.DEBUG_FILE,
     ),
+    # --- Cost certainty (ROADMAP #51) ---
+    ConfigOption(
+        key="cost.budget_usd",
+        group="Cost",
+        summary="Session cost cap in USD; the agent pauses with a budget_reached prompt when it is hit. Unset = unlimited.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off", "unlimited"),
+        env_var=_env_vars.BUDGET_USD,
+        toml_keys=("cost", "budget_usd"),
+    ),
+    ConfigOption(
+        key="cost.warn_at_percent",
+        group="Cost",
+        summary="Percent of a budget or daily ceiling at which /cost and the turn gate start warning.",
+        kind=OptionKind.INT,
+        default=80,
+        env_var=_env_vars.BUDGET_WARN_AT_PERCENT,
+        toml_keys=("cost", "warn_at_percent"),
+    ),
+    ConfigOption(
+        key="cost.daily_ceiling_usd",
+        group="Cost",
+        summary="Per-day ceiling in USD for this user across sessions; new turns are refused once reached. Unset = unlimited.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off", "unlimited"),
+        env_var=_env_vars.DAILY_CEILING_USD,
+        toml_keys=("cost", "daily_ceiling_usd"),
+    ),
+    ConfigOption(
+        key="cost.max_subagents",
+        group="Cost",
+        summary="Subagent/teammate spawns allowed per session (CostLedger runaway cap); 'none' lifts it.",
+        kind=OptionKind.INT,
+        default=8,
+        none_sentinels=("none", "unlimited"),
+        env_var=_env_vars.MAX_SUBAGENTS,
+        toml_keys=("cost", "max_subagents"),
+    ),
+    ConfigOption(
+        key="cost.max_web_searches",
+        group="Cost",
+        summary="Web searches allowed per session (CostLedger runaway cap); 'none' lifts it.",
+        kind=OptionKind.INT,
+        default=50,
+        none_sentinels=("none", "unlimited"),
+        env_var=_env_vars.MAX_WEB_SEARCHES,
+        toml_keys=("cost", "max_web_searches"),
+    ),
+    ConfigOption(
+        key="cost.preflight_threshold_usd",
+        group="Cost",
+        summary="Projected spend (high estimate) above which /team run, /butcher and /best-of-n ask for confirmation first; 'off' disables.",
+        kind=OptionKind.FLOAT,
+        default=1.0,
+        none_sentinels=("none", "off"),
+        env_var=_env_vars.PREFLIGHT_THRESHOLD_USD,
+        toml_keys=("cost", "preflight_threshold_usd"),
+    ),
 )
 
 
@@ -746,6 +804,29 @@ def _options_by_key() -> dict[str, ConfigOption]:
 def get_option(key: str) -> ConfigOption | None:
     """Return the manifest entry for `key`, or `None` when unknown."""
     return _options_by_key().get(key)
+
+
+def resolve_option(key: str) -> Any:  # noqa: ANN401 - typed per option kind
+    """Resolve one manifest option to its effective typed value.
+
+    The consumer-side twin of the `config` command's introspection: env var,
+    then `config.toml`, then the typed default, with the same coercion and
+    the same `none_sentinels`.
+
+    Args:
+        key: A manifest key such as `cost.budget_usd`.
+
+    Returns:
+        The effective value (possibly `None`).
+
+    Raises:
+        KeyError: If `key` is not in the manifest.
+    """
+    option = get_option(key)
+    if option is None:
+        raise KeyError(key)
+    value, _source = resolve_scalar(option, toml_data=load_config_toml())
+    return value
 
 
 def option_keys() -> tuple[str, ...]:

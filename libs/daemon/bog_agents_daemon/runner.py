@@ -11,6 +11,7 @@ import smtplib
 import time
 import urllib.request
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -24,7 +25,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerType,
 )
-from bog_agents_daemon.store import record_run_result, save_run
+from bog_agents_daemon.store import record_run_result, save_run, spend_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,187 @@ fanout during a Slack outage) used to inflate the JobRun JSON to
 megabytes. Beyond this cap, additional failures are collapsed to a
 single ``(overflow)`` entry recording the truncated count.
 """
+
+
+class BudgetPausedError(Exception):
+    """The agent hit the job's `budget_usd` mid-run (ROADMAP #51).
+
+    Carries what `resume_paused_run` needs to continue the very same graph
+    run: the compiled agent (with its in-memory checkpointer) and the run
+    config that names the thread.
+    """
+
+    def __init__(self, payload: dict[str, Any], *, agent: Any, config: dict[str, Any]) -> None:
+        """Store the interrupt payload and the paused graph."""
+        super().__init__(str(payload.get("message") or "budget reached"))
+        self.payload = payload
+        self.agent = agent
+        self.config = config
+
+
+@dataclass
+class PausedRun:
+    """A run parked on a `budget_reached` interrupt, awaiting a raise-cap resume."""
+
+    job: AmbientJob
+    run: JobRun
+    agent: Any
+    config: dict[str, Any]
+    trigger_type: TriggerType
+
+
+_PAUSED_RUNS: dict[str, PausedRun] = {}
+_RESUME_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def is_paused(run_id: str) -> bool:
+    """Whether `run_id` is parked on a budget pause in this daemon process."""
+    return run_id in _PAUSED_RUNS
+
+
+def paused_run_ids() -> list[str]:
+    """Run ids currently parked on a budget pause."""
+    return sorted(_PAUSED_RUNS)
+
+
+def _budget_interrupt_payload(chunk: Any) -> dict[str, Any] | None:
+    """Return the `budget_reached` payload carried by a stream chunk, if any."""
+    if not isinstance(chunk, dict) or "__interrupt__" not in chunk:
+        return None
+    interrupts = chunk.get("__interrupt__") or ()
+    for item in interrupts:
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("type") == "budget_reached":
+            return value
+    return None
+
+
+def _spend_ledger() -> Any:
+    from bog_agents.spend_ledger import SpendLedger
+
+    return SpendLedger(spend_db_path())
+
+
+def job_spent_today_usd(job: AmbientJob) -> float:
+    """Today's recorded spend for `job` (best-effort; `0.0` when the ledger is unreadable)."""
+    from bog_agents.spend_ledger import daemon_scope
+
+    try:
+        ledger = _spend_ledger()
+        try:
+            return ledger.total_usd(daemon_scope(job.job_id))
+        finally:
+            ledger.close()
+    except Exception:
+        logger.debug("spend ledger unreadable; treating today's spend as 0", exc_info=True)
+        return 0.0
+
+
+def _record_job_spend(job: AmbientJob, *, input_tokens: int, output_tokens: int) -> float:
+    """Price a run's tokens for the job's model and record them under the job's scope."""
+    from bog_agents.middleware.cost_tracker import price_for_model
+    from bog_agents.spend_ledger import daemon_scope
+
+    if not (input_tokens or output_tokens):
+        return 0.0
+    price = price_for_model(job.model or "")
+    if price is None:
+        return 0.0
+    usd = (input_tokens * price[0] + output_tokens * price[1]) / 1_000_000
+    try:
+        ledger = _spend_ledger()
+        try:
+            ledger.record(daemon_scope(job.job_id), usd, model=job.model, input_tokens=input_tokens, output_tokens=output_tokens)
+        finally:
+            ledger.close()
+    except Exception:
+        logger.debug("could not record job spend", exc_info=True)
+    return usd
+
+
+async def _collect_stream(job: AmbientJob, agent: Any, stream_input: Any, config: dict[str, Any] | None) -> str:
+    """Drain one `astream` pass, returning the last AI text; raise `BudgetPausedError` on a budget interrupt."""
+    result_output = ""
+    tokens_in = 0
+    tokens_out = 0
+    stream = agent.astream(stream_input, config=config) if config is not None else agent.astream(stream_input)
+    async for chunk in stream:
+        payload = _budget_interrupt_payload(chunk)
+        if payload is not None:
+            _record_job_spend(job, input_tokens=tokens_in, output_tokens=tokens_out)
+            raise BudgetPausedError(payload, agent=agent, config=config or {})
+        if not isinstance(chunk, dict):
+            continue
+        for node_output in chunk.values():
+            # Some middleware writes state via langgraph reducer
+            # primitives (Overwrite, Send, Command) that aren't
+            # iterable. Only consume `messages` when it's an actual
+            # list — the add_messages reducer normalises real
+            # message updates into a list before they show up here.
+            if not isinstance(node_output, dict):
+                continue
+            messages = node_output.get("messages")
+            if not isinstance(messages, list):
+                continue
+            for msg in messages:
+                content = getattr(msg, "content", None)
+                if content and hasattr(msg, "type") and msg.type == "ai":
+                    result_output = content if isinstance(content, str) else str(content)
+                usage = getattr(msg, "usage_metadata", None)
+                if isinstance(usage, dict):
+                    tokens_in += int(usage.get("input_tokens") or 0)
+                    tokens_out += int(usage.get("output_tokens") or 0)
+    _record_job_spend(job, input_tokens=tokens_in, output_tokens=tokens_out)
+    return result_output
+
+
+async def resume_paused_run(run_id: str, *, budget_usd: float) -> JobRun:
+    """Continue a budget-paused run with a raised cap (ROADMAP #51).
+
+    Args:
+        run_id: A run parked by `run_job` (see `is_paused`).
+        budget_usd: The new cap; must exceed what the run has spent or the
+            graph pauses again immediately.
+
+    Returns:
+        The finished (or re-paused) `JobRun`.
+
+    Raises:
+        KeyError: If `run_id` is not paused in this process.
+    """
+    from langgraph.types import Command
+
+    paused = _PAUSED_RUNS.pop(run_id)
+    job, run = paused.job, paused.run
+    run.status = JobStatus.RUNNING
+    run.error = ""
+    save_run(run)
+    try:
+        output = await asyncio.wait_for(
+            _collect_stream(job, paused.agent, Command(resume={"budget_usd": budget_usd}), paused.config),
+            timeout=_AGENT_TIMEOUT_SECONDS,
+        )
+    except BudgetPausedError as exc:
+        _park_run(job, run, exc, trigger_type=paused.trigger_type)
+    except Exception as exc:
+        logger.exception("Resumed run %s (%s) failed", run.run_id, job.name)
+        run.error = str(exc)
+        run.status = JobStatus.FAILED
+        run.finished_at = time.time()
+    else:
+        run.output = output
+        run.status = JobStatus.COMPLETED
+        run.finished_at = time.time()
+    return await _finish_run(job, run)
+
+
+def _park_run(job: AmbientJob, run: JobRun, exc: BudgetPausedError, *, trigger_type: TriggerType) -> None:
+    """Mark `run` paused and keep the graph so it can be resumed."""
+    run.status = JobStatus.PAUSED
+    run.error = f"budget_reached: {exc.payload.get('message', 'budget reached')}"
+    run.finished_at = 0.0
+    _PAUSED_RUNS[run.run_id] = PausedRun(job=job, run=run, agent=exc.agent, config=exc.config, trigger_type=trigger_type)
+    logger.warning("Job %s (%s) run %s paused on budget: %s", job.job_id, job.name, run.run_id, run.error)
 
 
 async def run_job(
@@ -83,15 +265,32 @@ async def run_job(
         run.status = JobStatus.FAILED
         run.finished_at = time.time()
     else:
-        output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type)
-        if agent_exc is None:
-            run.output = output
-            run.status = JobStatus.COMPLETED
+        spent_today = job_spent_today_usd(job) if job.daily_ceiling_usd else 0.0
+        if job.daily_ceiling_usd and spent_today >= job.daily_ceiling_usd:
+            # ROADMAP #51: the job's daily ceiling is already reached — record
+            # the trigger, spend nothing.
+            run.error = f"daily ceiling reached: ${spent_today:.2f} of ${job.daily_ceiling_usd:.2f} spent today"
+            run.status = JobStatus.SKIPPED
+            run.finished_at = time.time()
         else:
-            run.error = str(agent_exc)
-            run.status = JobStatus.FAILED
-        run.finished_at = time.time()
+            try:
+                output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type, run_id=run.run_id)
+            except BudgetPausedError as exc:
+                _park_run(job, run, exc, trigger_type=trigger_type)
+            else:
+                if agent_exc is None:
+                    run.output = output
+                    run.status = JobStatus.COMPLETED
+                else:
+                    run.error = str(agent_exc)
+                    run.status = JobStatus.FAILED
+                run.finished_at = time.time()
 
+    return await _finish_run(job, run)
+
+
+async def _finish_run(job: AmbientJob, run: JobRun) -> JobRun:
+    """Persist the run outcome on the job, dispatch outputs (unless paused), return the run."""
     # Update job state. Merge ONLY run-state fields into the current on-disk
     # record (read-modify-write) so a concurrent config edit (PATCH /jobs)
     # isn't clobbered by this pre-run snapshot. (REVIEW.md v2 P1-56.) Mirror
@@ -108,6 +307,9 @@ async def run_job(
         last_output=job.last_output,
     )
     save_run(run)
+    if run.status == JobStatus.PAUSED:
+        # Nothing to deliver yet; `resume_paused_run` finishes and dispatches.
+        return run
 
     # Dispatch outputs best-effort. Capture per-target failures on the
     # run so an operator can tell from the run record that delivery
@@ -574,7 +776,13 @@ def _select_backend(root_dir: Path, job: AmbientJob, trigger_type: TriggerType) 
     return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=env, virtual_mode=False)
 
 
-async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:
+async def _invoke_agent(
+    job: AmbientJob,
+    prompt: str,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+    run_id: str = "",
+) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
     Uses a lazy import to avoid circular imports at module load time.  Enforces
@@ -597,12 +805,16 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
         prompt: The resolved prompt to run.
         trigger_type: How this run was initiated; controls the shell sandbox
             posture (MANUAL stays unrestricted, others harden by default).
+        run_id: The run's id, used as the checkpoint thread when the job has a
+            `budget_usd` (so a budget pause can be resumed).
 
     Returns:
         The last AI message content from the agent.
 
     Raises:
         TimeoutError: If the agent does not complete within the allowed time.
+        BudgetPausedError: If the job's `budget_usd` was hit (ROADMAP #51); the
+            paused graph rides on the exception for `resume_paused_run`.
     """
     from bog_agents import create_agent
     from bog_agents.feature_config import FeatureConfig
@@ -618,38 +830,30 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
     # V3-13: use the FeatureConfig path instead of the deprecated bare
     # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and
     # emits a DeprecationWarning on every job; removed at bog-agents 1.0).
+    # ROADMAP #51: a job budget turns on cost tracking; the SDK pauses the
+    # graph with a `budget_reached` interrupt at the cap, which needs a
+    # checkpointer + thread to park on. Uncapped jobs keep the old shape.
     kwargs: dict[str, Any] = {
-        "config": FeatureConfig(enable_git_tools=True),
+        "config": FeatureConfig(enable_git_tools=True, enable_cost_tracking=job.budget_usd is not None, budget_usd=job.budget_usd),
         "backend": backend,
         "working_dir": str(root_dir),
     }
     if job.model:
         kwargs["model"] = job.model
+    run_config: dict[str, Any] | None = None
+    if job.budget_usd is not None:
+        from langgraph.checkpoint.memory import MemorySaver
+
+        kwargs["checkpointer"] = MemorySaver()
+        run_config = {"configurable": {"thread_id": run_id or f"run-{int(time.time() * 1000)}"}}
 
     agent = create_agent(**kwargs)
 
-    async def _stream() -> str:
-        result_output = ""
-        async for chunk in agent.astream({"messages": [("human", prompt)]}):
-            for node_output in chunk.values():
-                # Some middleware writes state via langgraph reducer
-                # primitives (Overwrite, Send, Command) that aren't
-                # iterable. Only consume `messages` when it's an actual
-                # list — the add_messages reducer normalises real
-                # message updates into a list before they show up here.
-                if not isinstance(node_output, dict):
-                    continue
-                messages = node_output.get("messages")
-                if not isinstance(messages, list):
-                    continue
-                for msg in messages:
-                    content = getattr(msg, "content", None)
-                    if content and hasattr(msg, "type") and msg.type == "ai":
-                        result_output = content if isinstance(content, str) else str(content)
-        return result_output
-
     try:
-        return await asyncio.wait_for(_stream(), timeout=_AGENT_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(
+            _collect_stream(job, agent, {"messages": [("human", prompt)]}, run_config),
+            timeout=_AGENT_TIMEOUT_SECONDS,
+        )
     except TimeoutError:
         msg = f"Agent timed out after {_AGENT_TIMEOUT_SECONDS}s for job {job.job_id} ({job.name})"
         raise TimeoutError(msg) from None
@@ -660,6 +864,7 @@ async def _invoke_agent_with_retry(
     prompt: str,
     *,
     trigger_type: TriggerType = TriggerType.MANUAL,
+    run_id: str = "",
 ) -> tuple[str, int, Exception | None]:
     """Invoke the agent, retrying transient failures per the job's retry policy.
 
@@ -684,7 +889,11 @@ async def _invoke_agent_with_retry(
     last_exc: Exception | None = None
     for attempt in range(1, total + 1):
         try:
-            output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
+            output = await _invoke_agent(job, prompt, trigger_type=trigger_type, run_id=run_id)
+        except BudgetPausedError:
+            # Deterministic, not transient: retrying would spend the same
+            # budget again. The caller parks the run instead.
+            raise
         except Exception as exc:
             last_exc = exc
             if attempt < total:

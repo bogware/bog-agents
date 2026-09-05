@@ -73,6 +73,11 @@ class CLIContext(TypedDict, total=False):
     thinking_budget_tokens: int | None
     """Per-session `/think budget N` override; `None` keeps the default."""
 
+    budget_usd: float | None
+    """Per-session `/cost budget N` cap (ROADMAP #51). `0` lifts the cap for the
+    turn, `None` keeps the server-side default. Read by `CostTrackerMiddleware`
+    from `request.runtime.context`, for the same reason as `thinking_enabled`."""
+
 
 def _is_anthropic_model(model: object) -> bool:
     """Check whether a resolved model is an Anthropic `ChatAnthropic` instance.

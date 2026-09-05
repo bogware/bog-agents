@@ -759,7 +759,17 @@ ADK, and a contract is itself a feature to the target users.
 - **#51 Cost certainty: pre-flight estimate, budgets that pause, caps that fire**
   *(Managed Agents `budget_reached` pause; Copilot AI-credits backlash #198015;
   OpenCode `subagent_depth`; Mastra TokenCostControl; ADK `ADK_MAX_LLM_CALLS`)* —
-  **partial.** Today `budget_usd` strict mode raises `RuntimeError` (turn dies),
+  **shipped 2026-09-05** (REVIEW v6 §8): `CostTrackerMiddleware(on_budget="interrupt")`
+  pauses with a `budget_reached` interrupt that only a raise-cap resume clears (the
+  TUI asks inline through the ask-user widget; `/cost budget <N|off>` rides on the
+  per-turn context); `cost.*` manifest keys (`budget_usd`, `daily_ceiling_usd`,
+  `warn_at_percent`, `max_subagents`, `max_web_searches`, `preflight_threshold_usd`)
+  feed every CLI agent's `CostLedger`, and `web_search` finally counts; a durable
+  `SpendLedger` (`~/.bog-agents/spend.db`) gates new turns on the user's daily
+  ceiling; `/team run`, `/butcher`, `/best-of-n` confirm a projected bracket above
+  the threshold; daemon jobs take `budget_usd` (run pauses, `POST /runs/{id}/resume`
+  / `jobs resume`) and `daily_ceiling_usd` (runs skipped). Subagent depth stays 1 by
+  construction (GP subagents never receive `task`). *Was:* `budget_usd` strict mode raised `RuntimeError` (turn died),
   `RunawayCaps` default to `None` (uncapped) and are consulted only by
   `run_team`. Delta: replace the raise with a `budget_reached` LangGraph
   interrupt that pauses and accepts only a raise-cap resume (`/cost budget <N>`,

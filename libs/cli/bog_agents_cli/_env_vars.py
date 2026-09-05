@@ -42,6 +42,15 @@ BEDROCK_NO_PROBE = "BOG_AGENTS_BEDROCK_NO_PROBE"
 BEDROCK_PROFILE = "BOG_AGENTS_BEDROCK_PROFILE"
 """Named AWS profile to use for Bedrock credentials."""
 
+BUDGET_USD = "BOG_AGENTS_BUDGET_USD"
+"""Session cost cap in USD; the agent pauses with a `budget_reached` prompt when it is hit (ROADMAP #51)."""
+
+BUDGET_WARN_AT_PERCENT = "BOG_AGENTS_BUDGET_WARN_AT_PERCENT"
+"""Percent of a budget or daily ceiling at which `/cost` and the turn gate start warning (#51)."""
+
+DAILY_CEILING_USD = "BOG_AGENTS_DAILY_CEILING_USD"
+"""Per-day spend ceiling in USD for this user across sessions; new turns are refused once reached (#51)."""
+
 DEBUG = "BOG_AGENTS_DEBUG"
 """Enable verbose debug logging.
 
@@ -103,6 +112,12 @@ LANGSMITH_PROJECT = "BOG_AGENTS_LANGSMITH_PROJECT"
 LOG_LEVEL = "BOG_AGENTS_LOG_LEVEL"
 """Override the root logging level (e.g. `DEBUG`, `INFO`)."""
 
+MAX_SUBAGENTS = "BOG_AGENTS_MAX_SUBAGENTS"
+"""Subagent/teammate spawns allowed per session — the CostLedger runaway cap (#51)."""
+
+MAX_WEB_SEARCHES = "BOG_AGENTS_MAX_WEB_SEARCHES"
+"""Web searches allowed per session — the CostLedger runaway cap (#51)."""
+
 MCP_STARTUP_TIMEOUT = "BOG_AGENTS_MCP_STARTUP_TIMEOUT"
 """Seconds to wait for an MCP server to start before giving up."""
 
@@ -133,6 +148,9 @@ OPERATOR = "BOG_AGENTS_OPERATOR"
 
 OPERATOR_DISABLE = "BOG_AGENTS_OPERATOR_DISABLE"
 """Emergency kill switch for Operator mode; beats every other toggle."""
+
+PREFLIGHT_THRESHOLD_USD = "BOG_AGENTS_PREFLIGHT_THRESHOLD_USD"
+"""Projected spend above which /team run, /butcher and /best-of-n confirm before starting (#51)."""
 
 PROJECT_ROOT = "BOG_AGENTS_PROJECT_ROOT"
 """Override the detected project root directory (used by project hooks)."""
