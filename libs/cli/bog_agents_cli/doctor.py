@@ -600,6 +600,35 @@ def run_doctor() -> str:
     warn_count = sum(1 for _, s, _ in checks if s == "WARN")
     missing_count = sum(1 for _, s, _ in checks if s == "MISSING")
 
+    try:  # ROADMAP #50: managed policy status
+        from bog_agents_cli.managed_policy import active_policy, configured_source
+
+        policy_source, _key = configured_source()
+        if policy_source:
+            policy = active_policy(refresh=True)
+            if policy is None:
+                checks.append(
+                    (
+                        "Managed policy",
+                        "FAIL",
+                        f"{policy_source} configured but rejected or unreachable (see log)",
+                    )
+                )
+            else:
+                checks.append(
+                    (
+                        "Managed policy",
+                        "OK" if policy.signed else "WARN",
+                        f"{policy.org or 'org'} {policy.version} {'signed' if policy.signed else 'UNSIGNED'} from {policy_source}",
+                    )
+                )
+        else:
+            checks.append(
+                ("Managed policy", "OK", "none configured (managed.policy_source)")
+            )
+    except Exception as exc:  # doctor must always render
+        checks.append(("Managed policy", "WARN", f"check failed: {exc}"))
+
     for name, status, detail in checks:
         icon = {
             "OK": "  OK ",

@@ -918,15 +918,27 @@ ADK, and a contract is itself a feature to the target users.
 
 - **#50 Managed governance layer** *(Cline remote MCP allowlists; Devin
   required/optional/forbidden plugin manifests; Factory org-wide hooks/MCP
-  governance; OpenCode gateway-only routing; Claude managed settings)* — **absent.**
-  A `managed` layer at the top of `_settings_cascade.py` sourced from a signed
-  URL or repo path (fetched at start, cached, signature-verified) carrying
-  `allowed_mcp_servers`, `skill_allowlist`, `required/optional/forbidden`
-  plugins with soft-fail, `provider_lock` (gateway-only `base_url`),
-  `zero_retention`, and model-switch policy; enforced in MCP discovery,
-  `SkillsMiddleware`'s trust checker, `create_model`, plugin install and `/model`
-  (assert a `model_switch` fact so YAML rules can deny). Surfaced as org-pinned
-  rows in `/permissions` and `/doctor` and recorded in the evidence pack. **E/T, M.**
+  governance; OpenCode gateway-only routing; Claude managed settings)* —
+  **shipped 2026-09-06** (REVIEW v6 §24). `managed_policy.py`: one signed JSON
+  document (`{"policy": {...}, "signature", "signer"}`) at
+  `managed.policy_source` (URL or path; `BOG_AGENTS_MANAGED_POLICY`), verified
+  with the pinned Ed25519 key `managed.policy_public_key` (TraceFile key
+  format; a URL source without a key is refused, a tampered or foreign
+  signature rejects the policy), cached as the last good copy, loaded once per
+  process. Enforced: `allowed_mcp_servers` in `resolve_and_load_mcp_tools`
+  (after every source is merged), `skill_allowlist` through a new SDK
+  `set_skill_dir_filter` hook next to the symlink checker, `plugins.forbidden`
+  in `install_plugin` (the install is removed and refused; `required` is
+  reported as missing, never blocking), `provider_lock` in the provider kwargs
+  (`base_url` pinned to the gateway whatever config.toml says),
+  `model_policy.allow|deny` in `model_switch_refusal` (`/model`) with a
+  `model_switch` fact asserted into the Expert engine either way, and
+  `zero_retention` turning memory off for the build. Surfaced as org-pinned
+  rows in `/permissions` (`trust_rows`), a `/doctor` check and
+  `metadata.managed_policy` in the evidence pack. *Was:* absent. Open:
+  key distribution (user decision — today the key is a config value / env
+  var); `zero_retention` also silencing the sidechain writer; a `/policy
+  reload` verb. **E/T, M.**
 - **#53 Cost-objective routing with a local rung and provable savings** *(Cursor
   Router Intelligence/Balance/Cost, 60–68% cut; Amp Dial low = GLM-5.2; Factory
   Droid Core free pool + Router failover; OpenCode Go / ClinePass $10 lanes;

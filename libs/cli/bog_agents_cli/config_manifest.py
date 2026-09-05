@@ -565,6 +565,22 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("compliance", "otel_endpoint"),
     ),
     ConfigOption(
+        key="managed.policy_source",
+        group="Tools",
+        summary="URL or path of the org's managed policy (allowed MCP servers, skill allow-list, plugin rules, provider lock, model policy); fetched at start, verified, cached (ROADMAP #50).",
+        kind=OptionKind.STR,
+        env_var=_env_vars.MANAGED_POLICY,
+        toml_keys=("managed", "policy_source"),
+    ),
+    ConfigOption(
+        key="managed.policy_public_key",
+        group="Tools",
+        summary="Base64 Ed25519 public key the managed policy must be signed with (required for URL sources).",
+        kind=OptionKind.STR,
+        env_var=_env_vars.MANAGED_POLICY_KEY,
+        toml_keys=("managed", "policy_public_key"),
+    ),
+    ConfigOption(
         key="tools.timeout",
         group="Tools",
         summary="Default per-tool execution timeout (seconds).",

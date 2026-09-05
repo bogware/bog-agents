@@ -121,6 +121,12 @@ LANGSMITH_PROJECT = "BOG_AGENTS_LANGSMITH_PROJECT"
 LOG_LEVEL = "BOG_AGENTS_LOG_LEVEL"
 """Override the root logging level (e.g. `DEBUG`, `INFO`)."""
 
+MANAGED_POLICY = "BOG_AGENTS_MANAGED_POLICY"
+"""URL or path of the org's signed managed policy document (ROADMAP #50)."""
+
+MANAGED_POLICY_KEY = "BOG_AGENTS_MANAGED_POLICY_KEY"
+"""Base64 Ed25519 public key the managed policy must be signed with; required for URL sources."""
+
 MAX_SUBAGENTS = "BOG_AGENTS_MAX_SUBAGENTS"
 """Subagent/teammate spawns allowed per session — the CostLedger runaway cap (#51)."""
 

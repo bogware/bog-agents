@@ -265,4 +265,14 @@ def install_plugin(
     }
     (dest / LOCK_FILE).write_text(json.dumps(lock, indent=2), encoding="utf-8")
     installed = load_plugin_spec(dest) or spec
+    try:  # ROADMAP #50: the managed policy's forbidden list wins over any source
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+    except Exception:
+        policy = None
+    if policy is not None and policy.plugin_verdict(installed.name) == "forbidden":
+        shutil.rmtree(dest, ignore_errors=True)
+        msg = f"plugin {installed.name!r} is forbidden by the managed policy ({policy.org or policy.source})"
+        raise PluginInstallError(msg)
     return InstallResult(spec=installed, path=dest, source=origin, sha256=digest)

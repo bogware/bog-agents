@@ -259,9 +259,20 @@ def build_pr_evidence_markdown(
         summary=f"Automated change for: {task_description[:200]}",
         diff_stat="\n".join(files_changed),
         commands=commands,
-        metadata={"files_changed": len(files_changed)},
+        metadata={"files_changed": len(files_changed), **_managed_policy_metadata()},
     )
     return render_evidence_markdown(bundle)
+
+
+def _managed_policy_metadata() -> dict[str, Any]:
+    """`{"managed_policy": {...}}` for the evidence pack when a managed policy is active (ROADMAP #50)."""
+    try:
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+    except Exception:
+        return {}
+    return {"managed_policy": policy.to_metadata()} if policy is not None else {}
 
 
 def generate_pr_title(task_description: str) -> str:

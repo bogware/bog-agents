@@ -2218,6 +2218,15 @@ def _get_provider_kwargs(
     base_url = config.get_base_url(provider)
     if base_url:
         result["base_url"] = base_url
+    try:  # ROADMAP #50: a managed provider lock pins the gateway, whatever config.toml says
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+        locked = policy.locked_base_url(provider) if policy is not None else None
+        if locked:
+            result["base_url"] = locked
+    except Exception:
+        logger.debug("managed provider lock skipped", exc_info=True)
     api_key_env = config.get_api_key_env(provider)
     if api_key_env:
         api_key = os.environ.get(api_key_env)

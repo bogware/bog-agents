@@ -677,15 +677,23 @@ def model_switch_refusal(
         from bog_agents_cli.hooks import _load_hooks
 
         config_hooks = _load_hooks()
+    from bog_agents_cli.managed_policy import active_policy, assert_model_switch_fact
+
+    refusal: str | None = None
+    policy = active_policy()
+    if policy is not None:
+        refusal = policy.model_switch_refusal(target)  # ROADMAP #50
     hooks = load_decision_hooks(
         Path(project_root), config_hooks=config_hooks, event="PreModelSwitch"
     )
-    if not hooks:
-        return None
-    decision = evaluate_decision_hooks(
-        "PreModelSwitch", {"from": current, "to": target}, hooks, tool_name=target
-    )
-    return decision.reason or "denied" if decision.blocks else None
+    if refusal is None and hooks:
+        decision = evaluate_decision_hooks(
+            "PreModelSwitch", {"from": current, "to": target}, hooks, tool_name=target
+        )
+        if decision.blocks:
+            refusal = decision.reason or "denied"
+    assert_model_switch_fact(target, project_root, refusal=refusal)
+    return refusal
 
 
 def approval_hook_verdicts(

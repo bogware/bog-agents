@@ -1563,6 +1563,16 @@ def create_cli_agent(
     if trust_profile.strips_shell:
         enable_shell = False
         enable_git_tools = False
+    # ROADMAP #50: the managed policy's skill allow-list and zero-retention flag.
+    try:
+        from bog_agents_cli.managed_policy import active_policy, install_skill_filter
+
+        managed = active_policy()
+        install_skill_filter(managed)
+        if managed is not None and managed.zero_retention:
+            enable_memory = False
+    except Exception:
+        logger.debug("managed policy not applied to the agent build", exc_info=True)
     if trust_profile.restricted:
         auto_approve = False
     tools = [t for t in tools if not trust_profile.tool_excluded(_tool_name(t))]

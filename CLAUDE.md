@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Managed policy (ROADMAP #50).** `managed_policy.py` is the org layer above every
+setting: a signed JSON document verified with the TraceFile key format, cached, loaded
+once per process (`active_policy()`), enforced by pure `ManagedPolicy` methods at MCP
+discovery, skill loading (SDK `set_skill_dir_filter`), plugin install, provider kwargs
+and `/model`. Add a new enforcement point as one lazy `active_policy()` call inside a
+`try`; never let a policy failure break a session — log it and surface it in
+`/permissions` / `/doctor`.
+
 **Governed Code Mode (ROADMAP #72).** `middleware/code_mode.py` runs the model's script
 in a child `python -I`; every `tools.*` call comes back over stdio and is executed through
 the agent's own `wrap_tool_call` chain — never call a tool directly from that module.

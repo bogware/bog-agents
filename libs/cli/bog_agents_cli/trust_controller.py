@@ -89,6 +89,14 @@ def trust_rows(cwd: str, restricted: bool, profile_name: str | None) -> list[str
         rows.append(workspace_status(Path(cwd)))
     except Exception as exc:
         rows.append(f"Workspace trust: unavailable ({exc})")
+    try:  # ROADMAP #50: org-pinned rows
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+        if policy is not None:
+            rows.extend(policy.rows())
+    except Exception:
+        logger.debug("managed policy rows unavailable", exc_info=True)
     return rows
 
 
