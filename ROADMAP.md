@@ -782,8 +782,14 @@ ADK, and a contract is itself a feature to the target users.
   `warn_at_percent`. **S/T/E, M.**
 - **#52 Usage you can read: per-message strip, `/cost explain`, cache diagnostics**
   *(Goose per-message usage; Amp "Explain Usage"; Claude Loops breakdown +
-  cache-miss explanations; Warp per-category $)* — **partial.** CostTracker already
-  records cache read/write tokens per request; the TUI shows one fixed number.
+  cache-miss explanations; Warp per-category $)* — **shipped 2026-09-05** (REVIEW v6
+  §9): dim usage strip under every reply (in/out, cache read/write, $, TTFT, tok/s,
+  subagent tag), session $ + cache-hit ratio in the status bar, `/cost tree` by
+  category, `/cost explain <question>` over the serialized ledger with the review
+  model, and the innermost `CacheBustDetectorMiddleware` behind `/cost cache` that
+  names the system-prompt section or history rewrite that broke the prefix.
+  *Was:* partial — CostTracker already
+  recorded cache read/write tokens per request; the TUI showed one fixed number.
   Add a dim usage line under each assistant message (in/out/cache-read/write, $,
   TTFT, tok/s), session $ and cache-hit ratio in the status bar, `/cost` rendering
   `CostLedger.format_tree` by category (main/subagent/team/worktree/web/mcp),
@@ -814,8 +820,18 @@ ADK, and a contract is itself a feature to the target users.
 - **#62 Agent Plugins 1.0 native + one-command import** *(spec Aug 6, TSC of
   Amazon/Anysphere/Microsoft/OpenAI/Vercel/Google; GA in Copilot, Kiro, OpenHands,
   Cline; Codex marketplaces for Bedrock and Claude Code; Cline session import)* —
-  **partial.** `plugin_marketplace.py:108` reads a bog-specific `manifest.json` and
-  installs by bare `copytree`. Delta: accept the `plugin.json` root layout
+  **shipped 2026-09-05** (REVIEW v6 §9): `plugin.json` layout mapped onto
+  `ExtensionManifest` (`plugin_spec.py`), discovery of `~/.agents/plugins` and
+  workspace `.agents/plugins` (disabled until `/plugin trust`), installs from dir /
+  zip / zip URL / git / `marketplace.json` with a SHA-256 pin and a lock file
+  (`plugin_install.py`), `bog-agents plugin import claude|codex|cursor` covering
+  skills, agents, user-level hooks, memories and MCP on top of the native rules
+  cascade (`plugin_import.py`; antigravity reports "no documented layout"),
+  session import from Claude Code / Codex / Cline into checkpointed, searchable
+  threads (`session_import.py`, `bog-agents threads import`, `/onboard import`),
+  and a `com.bogware.thread` exporter (`threads export`). *Was:* partial —
+  `plugin_marketplace.py:108` read a bog-specific `manifest.json` and
+  installed by bare `copytree`. Delta: accept the `plugin.json` root layout
   (`skills/`, `mcp.json`, `agents/`, `commands/`, `hooks/`) mapped onto
   `ExtensionManifest`, discover `~/.agents/plugins` and project `.agents/plugins`
   (workspace ones disabled until trusted), install from git / `marketplace.json`
@@ -827,8 +843,12 @@ ADK, and a contract is itself a feature to the target users.
   `com.bogware` namespace. Supersedes v2 #34. **T/S/E, M.**
 - **#66 Turn-end changes tray with proof-ordered diffs** *(every competitor ends a
   turn with a reviewable changeset; Amp intelligently ordered diffs Sep 1)* —
-  **absent.** `/diff` mounts raw text while `DiffMessage`/`EnhancedDiff` already
-  exist for edit widgets. Per-file stats after each turn, coloured side-by-side
+  **shipped 2026-09-05** (REVIEW v6 §9): every turn that wrote files ends with a
+  tray of per-file stats in explanatory order (SDK `diff_ordering.py`, shared by
+  `/diff --ordered` and `render_evidence_markdown`), `/changes show <n>` for the
+  coloured diff, `/changes revert <n> [hunk]` for per-file or per-hunk revert
+  without git (`diff_hunks.py`), `/changes keep`. *Was:* absent — `/diff` mounted
+  raw text while `DiffMessage`/`EnhancedDiff` already existed for edit widgets. Per-file stats after each turn, coloured side-by-side
   view, per-hunk accept/reject wired to existing checkpoints/`/undo`, and a pure
   `diff_ordering.py` that ranks files by explanatory power (entry points and
   public signatures first; tests, snapshots, lockfiles muted last) used by the
