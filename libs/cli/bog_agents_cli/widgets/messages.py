@@ -1376,17 +1376,27 @@ class DiffMessage(_TimestampClickMixin, Static):
     }
     """
 
-    def __init__(self, diff_content: str, file_path: str = "", **kwargs: Any) -> None:
+    def __init__(
+        self,
+        diff_content: str,
+        file_path: str = "",
+        *,
+        max_lines: int | None = 100,
+        **kwargs: Any,
+    ) -> None:
         """Initialize a diff message.
 
         Args:
             diff_content: The unified diff content
             file_path: Path to the file being modified
+            max_lines: Cap on rendered diff lines (`None` renders everything);
+                the edit widgets keep 100, `/diff` raises it for whole-tree diffs.
             **kwargs: Additional arguments passed to parent
         """
         super().__init__(**kwargs)
         self._diff_content = diff_content
         self._file_path = file_path
+        self._max_lines = max_lines
 
     def compose(self) -> ComposeResult:
         """Compose the diff message layout.
@@ -1401,7 +1411,7 @@ class DiffMessage(_TimestampClickMixin, Static):
             )
 
         # Render the diff with enhanced formatting
-        rendered = format_diff_textual(self._diff_content, max_lines=100)
+        rendered = format_diff_textual(self._diff_content, max_lines=self._max_lines)
         yield Static(rendered)
 
     def on_mount(self) -> None:

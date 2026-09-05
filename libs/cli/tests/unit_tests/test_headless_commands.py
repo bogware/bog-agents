@@ -86,3 +86,31 @@ def test_registry_handlers_are_callable() -> None:
         assert isinstance(name, str)
         assert isinstance(description, str)
         assert callable(handler)
+
+
+class TestMsysRecovery:
+    """v6 CLI-8: Git Bash rewrites `/help` into a Git install path before Python runs."""
+
+    def test_recovers_command_from_git_bash_path(self) -> None:
+        from bog_agents_cli.headless_commands import recover_msys_command
+
+        assert recover_msys_command("C:/Program Files/Git/help") == "help"
+        assert (
+            recover_msys_command("C:\\Program Files\\Git\\config get models.default")
+            == "config get models.default"
+        )
+        assert recover_msys_command("C:/Program Files (x86)/Git/version") == "version"
+
+    def test_leaves_normal_input_alone(self) -> None:
+        from bog_agents_cli.headless_commands import recover_msys_command
+
+        assert recover_msys_command("/help") == "/help"
+        assert recover_msys_command("help") == "help"
+        assert recover_msys_command("C:/Users/me/project") == "C:/Users/me/project"
+
+    def test_mangled_help_runs(self, capsys) -> None:
+        from bog_agents_cli.headless_commands import run_headless_command
+
+        code = run_headless_command("C:/Program Files/Git/help")
+        assert code == 0
+        assert "not available" not in capsys.readouterr().out

@@ -65,9 +65,12 @@ DEFAULT_MODEL_CANDIDATES: Mapping[str, tuple[str, ...]] = MappingProxyType(
     {
         "anthropic": (
             # Live API IDs from platform.claude.com/docs/en/docs/about-claude/models
-            # (fetched 2026-04-30). Latest first.
-            "claude-opus-4-7",
+            # (fetched 2026-04-30). The first entry is the auto-picked default:
+            # Sonnet-class (v6 CLI-6) — cost-sensitive first runs should not
+            # land on the most expensive tier by accident; Opus is one
+            # `/model` away and still listed first among the opus ids.
             "claude-sonnet-4-6",
+            "claude-opus-4-7",
             "claude-haiku-4-5",
             "claude-opus-4-6",
             "claude-sonnet-4-5",

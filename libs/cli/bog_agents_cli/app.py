@@ -8110,7 +8110,18 @@ class BogAgentsApp(App):
         if not output.strip():
             await self._mount_message(AppMessage("No pending git changes."))
             return
-        await self._mount_message(AppMessage(output))
+        if args[1:2] in (["--stat"], ["--name-only"]):
+            # Summaries are plain text, not unified diffs.
+            from rich.markup import escape as _escape_markup
+
+            await self._mount_message(AppMessage(_escape_markup(output)))
+            return
+        from bog_agents_cli.widgets.messages import DiffMessage
+
+        # v6 CLI-5: render through the same coloured DiffMessage the edit
+        # widgets use — the old plain AppMessage was monochrome and treated
+        # `[...]` in diff lines as Rich markup.
+        await self._mount_message(DiffMessage(output, max_lines=600))
 
     async def _handle_branch_command(self, command: str) -> None:
         """Handle `/branch` as a lightweight local git-branch helper."""
@@ -17722,7 +17733,15 @@ class BogAgentsApp(App):
                 model_spec = f"{provider}:{model_spec}"
 
         if await asyncio.to_thread(save_default_model, model_spec):
-            await self._mount_message(AppMessage(f"Default model set to {model_spec}"))
+            from bog_agents_cli.config import price_hint_for_spec
+
+            hint = price_hint_for_spec(model_spec)
+            await self._mount_message(
+                AppMessage(
+                    f"Default model set to {model_spec}"
+                    + (f"\n  {hint}" if hint else "")
+                )
+            )
         else:
             await self._mount_message(
                 ErrorMessage(

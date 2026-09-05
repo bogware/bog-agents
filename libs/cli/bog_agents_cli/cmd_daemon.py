@@ -439,13 +439,17 @@ def cmd_daemon_rotate_token(port: int = _DEFAULT_PORT) -> None:
 
 
 def cmd_daemon_install(*, platform: str | None = None) -> None:
-    """Install the daemon as a systemd (Linux) or launchd (macOS) service.
+    """Install the daemon as a systemd (Linux), launchd (macOS) or Task Scheduler (Windows) service.
 
     Args:
-        platform: Override platform detection ('systemd' or 'launchd').
+        platform: Override platform detection ('systemd', 'launchd' or 'windows').
     """
     try:
-        from bog_agents_daemon.install import install_launchd, install_systemd
+        from bog_agents_daemon.install import (
+            install_launchd,
+            install_systemd,
+            install_windows_task,
+        )
     except ImportError:
         print(  # noqa: T201
             "bog-agents-daemon is not installed.\n"
@@ -458,12 +462,21 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         print("bog-agents-daemon not found on PATH or in the CLI's environment.")  # noqa: T201
         sys.exit(1)
 
-    resolved_platform = platform or (
-        "launchd" if sys.platform == "darwin" else "systemd"
-    )
+    if platform:
+        resolved_platform = platform
+    elif sys.platform == "darwin":
+        resolved_platform = "launchd"
+    elif sys.platform == "win32":
+        # v6 DMN-3: used to fall through to systemd and write a useless unit file.
+        resolved_platform = "windows"
+    else:
+        resolved_platform = "systemd"
 
     if resolved_platform == "launchd":
         instructions = install_launchd(exe)
+        print(instructions)  # noqa: T201
+    elif resolved_platform == "windows":
+        instructions = install_windows_task(exe)
         print(instructions)  # noqa: T201
     else:
         instructions = install_systemd(exe)
@@ -1202,11 +1215,11 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     # install
     install_p = daemon_sub.add_parser(
         "install",
-        help="Install daemon as a systemd (Linux) or launchd (macOS) service",
+        help="Install daemon as a systemd (Linux), launchd (macOS) or Task Scheduler (Windows) service",
     )
     install_p.add_argument(
         "--platform",
-        choices=["systemd", "launchd"],
+        choices=["systemd", "launchd", "windows"],
         default=None,
         help="Force a specific init system (auto-detected by default)",
     )

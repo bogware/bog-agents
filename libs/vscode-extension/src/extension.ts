@@ -154,6 +154,22 @@ function buildChildEnv(): NodeJS.ProcessEnv {
         'GOOGLE_APPLICATION_CREDENTIALS',
         // Local-provider endpoint (Ollama).
         'OLLAMA_HOST',
+        // Corporate proxy / TLS interception (v6 DEL-4): without these the
+        // child CLI cannot reach any provider from a proxied network while
+        // the same CLI works from the user's terminal.
+        'HTTP_PROXY',
+        'HTTPS_PROXY',
+        'NO_PROXY',
+        'ALL_PROXY',
+        'http_proxy',
+        'https_proxy',
+        'no_proxy',
+        'all_proxy',
+        'SSL_CERT_FILE',
+        'SSL_CERT_DIR',
+        'REQUESTS_CA_BUNDLE',
+        'CURL_CA_BUNDLE',
+        'NODE_EXTRA_CA_CERTS',
     ]);
     const env: NodeJS.ProcessEnv = {};
     for (const [k, v] of Object.entries(process.env)) {

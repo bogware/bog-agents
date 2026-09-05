@@ -1697,6 +1697,31 @@ def detect_provider(model_name: str) -> str | None:
     return None
 
 
+def price_hint_for_spec(model_spec: str) -> str:
+    """One-line $/1M-token hint for a `provider:model` spec, or "" when unpriced.
+
+    v6 CLI-6: the wizard and `/model --default` used to confirm a model with no
+    idea of what it costs; cost-sensitive solo users paid Opus rates from turn
+    one without being told.
+
+    Args:
+        model_spec: A `provider:model` spec.
+
+    Returns:
+        A short hint such as `≈ $3.00 in / $15.00 out per 1M tokens`, or "".
+    """
+    try:
+        from bog_agents.middleware.cost_tracker import price_for_model
+    except Exception:
+        return ""
+    model_name = model_spec.split(":", 1)[1] if ":" in model_spec else model_spec
+    priced = price_for_model(model_name)
+    if not priced:
+        return ""
+    price_in, price_out = priced
+    return f"≈ ${price_in:.2f} in / ${price_out:.2f} out per 1M tokens — /cost shows session spend, /model switches"
+
+
 def _pick_default_bedrock_spec() -> str | None:
     """Pick a Bedrock model the account can actually invoke (first run).
 
@@ -1929,7 +1954,7 @@ def _run_setup_wizard() -> str:
     )
     openai_spec = _get_recommended_model_spec("openai") or "openai:gpt-5.4"
     bedrock_spec = _get_recommended_model_spec("bedrock_converse") or (
-        "bedrock_converse:anthropic.claude-sonnet-4-20250514-v1:0"
+        "bedrock_converse:us.anthropic.claude-sonnet-4-6"
     )
     google_spec = _get_recommended_model_spec("google_genai") or (
         "google_genai:gemini-2.5-pro"
@@ -1939,7 +1964,7 @@ def _run_setup_wizard() -> str:
     providers = [
         (
             "1",
-            "Anthropic",
+            "Anthropic (Sonnet by default — balanced; Opus is one /model away)",
             "ANTHROPIC_API_KEY",
             anthropic_spec,
             "sk-ant-...",
@@ -1960,6 +1985,16 @@ def _run_setup_wizard() -> str:
             "AI...",
         ),
         ("5", "Ollama (local, free)", "__OLLAMA__", ollama_spec, None),
+        # v6 CLI-13: the cheap / aggregator lanes were only reachable through
+        # `-M provider:model`; first-run users never saw them.
+        (
+            "6",
+            "OpenRouter (many models, one key)",
+            "OPENROUTER_API_KEY",
+            "openrouter:openai/gpt-oss-120b",
+            "sk-or-...",
+        ),
+        ("7", "xAI (Grok)", "XAI_API_KEY", "xai:grok-4", "xai-..."),
     ]
 
     con.print()
@@ -2040,6 +2075,10 @@ def _run_setup_wizard() -> str:
     con.print()
 
     api_key = Prompt.ask(f"Paste your {name} API key").strip()
+    if env_var in {"OPENROUTER_API_KEY", "XAI_API_KEY"}:
+        provider_prefix, _, default_model = model_spec.partition(":")
+        chosen = Prompt.ask("Model id", default=default_model).strip() or default_model
+        model_spec = f"{provider_prefix}:{chosen}"
     if not api_key:
         msg = "No API key provided. Run bog-agents again to retry."
         raise ModelConfigError(msg)
@@ -2061,7 +2100,11 @@ def _run_setup_wizard() -> str:
     con.print(
         "\n[green]Saved![/green] Key stored in the secret vault (OS keyring, or an owner-only file)."
     )
-    con.print(f"Default model set to [bold]{model_spec}[/bold]\n")
+    con.print(f"Default model set to [bold]{model_spec}[/bold]")
+    hint = price_hint_for_spec(model_spec)
+    if hint:
+        con.print(f"  [dim]{hint}[/dim]")
+    con.print()
 
     return model_spec
 

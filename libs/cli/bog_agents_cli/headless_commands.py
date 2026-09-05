@@ -348,6 +348,39 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
 }
 
 
+_MSYS_GIT_PREFIXES: tuple[str, ...] = (
+    "c:/program files/git",
+    "c:\\program files\\git",
+    "c:/program files (x86)/git",
+    "c:\\program files (x86)\\git",
+    "/c/program files/git",
+)
+
+
+def recover_msys_command(raw: str) -> str:
+    """Undo Git Bash's rewrite of a leading-slash command argument.
+
+    v6 CLI-8: on Windows, MSYS path conversion turns `bog-agents command
+    "/help"` into `C:/Program Files/Git/help` before Python sees it, so the
+    documented form failed with a baffling `/c:/program is not available`.
+    When the argument starts with a Git-for-Windows install prefix, the
+    remainder is the command the user actually typed.
+
+    Args:
+        raw: The stripped command line as received.
+
+    Returns:
+        The recovered command line, or `raw` unchanged.
+    """
+    lowered = raw.replace("\\", "/").lower()
+    for prefix in _MSYS_GIT_PREFIXES:
+        norm_prefix = prefix.replace("\\", "/")
+        if lowered.startswith(norm_prefix):
+            tail = raw.replace("\\", "/")[len(norm_prefix) :]
+            return tail.lstrip("/").strip()
+    return raw
+
+
 def run_headless_command(command_line: str, *, output_format: str = "text") -> int:
     """Execute a single slash command without the interactive TUI.
 
@@ -361,7 +394,7 @@ def run_headless_command(command_line: str, *, output_format: str = "text") -> i
         Exit code: `0` on success, `1` when the command ran but reported a
         failure, `2` when the command is unknown or not available headless.
     """
-    raw = command_line.strip()
+    raw = recover_msys_command(command_line.strip())
     if not raw:
         return _emit(
             _err('No command provided. Try `bog-agents command "/help"`.'),
@@ -376,7 +409,8 @@ def run_headless_command(command_line: str, *, output_format: str = "text") -> i
         available = ", ".join(f"/{key}" for key in sorted(HEADLESS_COMMANDS))
         message = (
             f"/{name} is not available in non-interactive mode. "
-            f"Headless commands: {available}. "
+            f"Headless commands: {available} (the leading slash is optional — "
+            "on Git Bash for Windows prefer `bog-agents command help`). "
             "Run other commands inside the interactive TUI, or use a dedicated "
             "subcommand where one exists (e.g. `bog-agents threads list`)."
         )

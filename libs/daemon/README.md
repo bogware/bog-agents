@@ -207,7 +207,7 @@ launchctl list com.bogware.bog-agents-daemon
 
 ### Windows
 
-There is no Windows service installer yet. Run the daemon in a shell
+On Windows, `bog-agents daemon install` registers a Task Scheduler task (`BogAgentsDaemon`) that starts the daemon at logon; remove it with `schtasks /Delete /TN BogAgentsDaemon /F`.
 (`bog-agents-daemon run`) or launch it in the background from the CLI
 (`bog-agents daemon start`). If you want it to start at logon, point a Task
 Scheduler task at the `bog-agents-daemon` executable yourself.

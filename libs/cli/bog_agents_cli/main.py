@@ -401,7 +401,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Bedrock model id to test inference against, e.g. "
-            "anthropic.claude-sonnet-4-20250514-v1:0. When omitted, "
+            "us.anthropic.claude-sonnet-4-6. When omitted, "
             "steps 1-5 (credentials, region, list models) still run."
         ),
     )
