@@ -225,6 +225,7 @@ class StatusBar(Horizontal):
             yield Static("", classes="status-cwd", id="cwd-display")
             yield Static("", classes="status-branch", id="branch-display")
         yield Static("", classes="status-tokens", id="tokens-display")
+        yield Static("", classes="status-tokens", id="spend-display")
         yield ModelLabel(id="model-display")
 
     _BRANCH_WIDTH_THRESHOLD = 100
@@ -411,6 +412,13 @@ class StatusBar(Horizontal):
     def hide_tokens(self) -> None:
         """Hide the token display (e.g., during streaming)."""
         self.query_one("#tokens-display", Static).update("")
+
+    def set_spend(self, text: str) -> None:
+        """Show session spend / cache-hit ratio (ROADMAP #52); empty text hides it."""
+        try:
+            self.query_one("#spend-display", Static).update(text)
+        except NoMatches:
+            return
 
     def set_model(self, *, provider: str, model: str) -> None:
         """Update the model display text.

@@ -1271,6 +1271,13 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     return interrupt_map
 
 
+def _cache_diagnostics_dir() -> Path:
+    """Directory the SDK's cache-bust detector writes per-thread JSONL to (ROADMAP #52)."""
+    from bog_agents_cli.config import bog_agents_home
+
+    return bog_agents_home() / "cache_diagnostics"
+
+
 def _memory_index_path(project_root: Path | str) -> Path:
     """Return the per-project persistent `memory_search` index path (v6 SDK-5).
 
@@ -2177,6 +2184,12 @@ def create_cli_agent(
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
         cost_ledger=cost_ledger,
-        config=FeatureConfig(enable_street_sweeper=sweeper_attached),
+        config=FeatureConfig(
+            enable_street_sweeper=sweeper_attached,
+            # ROADMAP #52: innermost cache-bust detector; `/cost cache` reads
+            # the per-thread JSONL it writes under ~/.bog-agents.
+            enable_cache_diagnostics=True,
+            cache_diagnostics_dir=str(_cache_diagnostics_dir()),
+        ),
     ).with_config(config)
     return agent, composite_backend

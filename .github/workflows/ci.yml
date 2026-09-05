@@ -125,10 +125,8 @@ jobs:
     name: "Hosted test (${{ matrix.package.name }}, py${{ matrix.python }}, ${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
-    # macOS is advisory until its first green run on a PR — the seatbelt /
-    # launchd / PTY paths have never had CI, so an environment-specific red must
-    # not block unrelated work. Flip to blocking (drop this line) once green.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    # macOS went green on its first PR run (2026-09-05: sdk + daemon cells), so
+    # the seatbelt / launchd / PTY paths are now a blocking gate like the rest.
     strategy:
       fail-fast: false
       matrix:

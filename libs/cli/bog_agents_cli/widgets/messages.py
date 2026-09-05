@@ -350,6 +350,14 @@ class AssistantMessage(_TimestampClickMixin, Vertical):
         padding: 0;
         margin: 0;
     }
+
+    AssistantMessage .usage-strip {
+        color: #557a63;
+        text-style: dim;
+        padding: 0;
+        margin: 0;
+        height: auto;
+    }
     """
 
     def __init__(self, content: str = "", **kwargs: Any) -> None:
@@ -435,6 +443,21 @@ class AssistantMessage(_TimestampClickMixin, Vertical):
         self._content = content
         if self._markdown:
             await self._markdown.update(content)
+
+    async def set_usage(self, text: str) -> None:
+        """Show (or refresh) the dim usage strip under the message (ROADMAP #52).
+
+        Args:
+            text: The rendered strip (see `usage_controller.format_usage_strip`).
+        """
+        from textual.css.query import NoMatches
+
+        try:
+            strip = self.query_one("#usage-strip", Static)
+        except NoMatches:
+            await self.mount(Static(text, id="usage-strip", classes="usage-strip"))
+            return
+        strip.update(text)
 
 
 class ToolCallMessage(Vertical):

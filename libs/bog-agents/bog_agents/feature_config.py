@@ -54,6 +54,10 @@ class FeatureConfig:
         enable_street_sweeper: Continuously prune dead context each turn.
         street_sweeper_aggressive: Enable Tier 2 head/tail truncation of large old outputs.
         street_sweeper_keep_recent: Trailing messages the sweeper never touches.
+        enable_cache_diagnostics: Fingerprint the request prefix on every model
+            call and record which segment broke prompt caching (ROADMAP #52).
+        cache_diagnostics_dir: Directory for the per-thread cache-bust JSONL
+            (`None` keeps events in memory only).
         enable_conversation_branching: Enable conversation branching.
         enable_image_input: Enable image input processing.
         enable_browser: Enable browser-agent tools.
@@ -161,6 +165,9 @@ class FeatureConfig:
     enable_street_sweeper: bool = False
     street_sweeper_aggressive: bool = True
     street_sweeper_keep_recent: int = 6
+    # Cache-bust diagnostics (ROADMAP #52) — innermost observer, off by default.
+    enable_cache_diagnostics: bool = False
+    cache_diagnostics_dir: str | None = None
     enable_conversation_branching: bool = False
     enable_image_input: bool = False
     enable_browser: bool = False

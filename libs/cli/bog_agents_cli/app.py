@@ -56,6 +56,7 @@ from bog_agents_cli.textual_adapter import (
     format_token_count,
 )
 from bog_agents_cli.turn_manager import TurnManager
+from bog_agents_cli.usage_controller import install_usage_tracking
 from bog_agents_cli.widgets.approval import ApprovalMenu
 from bog_agents_cli.widgets.ask_user import AskUserMenu
 from bog_agents_cli.widgets.chat_input import ChatInput
@@ -1381,6 +1382,7 @@ class BogAgentsApp(App):
         )
         if self._token_tracker:
             self._ui_adapter.set_token_tracker(self._token_tracker)
+        install_usage_tracking(self)
 
         self.run_worker(
             self._prewarm_threads_cache,
@@ -3284,10 +3286,13 @@ class BogAgentsApp(App):
         """Show token usage, spend and caps; `/cost budget <N|off>` sets the session cap (#51)."""
         from bog_agents_cli.cost_controller import (
             handle_cost_subcommand,
+            maybe_run_cost_explain,
             render_tokens_report,
         )
 
         await self._mount_message(UserMessage(command))
+        if await maybe_run_cost_explain(self, command):
+            return
         handled = handle_cost_subcommand(self, command)
         if handled is not None:
             await self._mount_message(AppMessage(handled))

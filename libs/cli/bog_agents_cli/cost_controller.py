@@ -315,6 +315,16 @@ def budget_stop_message(payload: dict[str, Any]) -> str:
 # ------------------------------------------------------------------ /cost
 
 
+async def maybe_run_cost_explain(app: Any, command: str) -> bool:  # noqa: ANN401 - the App
+    """Run `/cost explain <question>` as a tracked model command; `False` for every other verb."""
+    if command.lower().split()[1:2] != ["explain"]:
+        return False
+    from bog_agents_cli.usage_controller import run_cost_explain
+
+    await app._start_model_command(run_cost_explain(app, command), name="/cost explain")
+    return True
+
+
 def handle_cost_subcommand(app: Any, command: str) -> str | None:  # noqa: ANN401 - the App
     """Handle `/cost budget <N|off>`, `/cost caps`, `/cost today`; `None` for the plain report."""
     from bog_agents_cli.config import settings
@@ -360,6 +370,14 @@ def handle_cost_subcommand(app: Any, command: str) -> str | None:  # noqa: ANN40
             f"  active model:            {getattr(app, '_model_override', None) or settings.model_name or '(unset)'}"
         )
         return "\n".join(lines)
+    if verb == "tree":
+        from bog_agents_cli.usage_controller import get_usage_ledger
+
+        return get_usage_ledger(app).format_tree()
+    if verb == "cache":
+        from bog_agents_cli.usage_controller import cache_report_for_app
+
+        return cache_report_for_app(app)
     if verb == "today":
         try:
             totals = get_spend_ledger().totals_by_scope()
@@ -432,6 +450,15 @@ def _spend_lines(app: Any) -> str:  # noqa: ANN401 - the App
     else:
         budget_text = "unlimited"
     lines = [f"Session spend: ${session_usd:.4f} | budget: {budget_text}"]
+    from bog_agents_cli.usage_controller import UsageLedger
+
+    ledger = getattr(app, "_usage_ledger", None)
+    if isinstance(ledger, UsageLedger) and ledger.records:
+        ratio = ledger.cache_hit_ratio
+        lines.append(
+            f"Responses: {len(ledger.records)} | priced ${ledger.usd:.4f} | cache hit "
+            f"{'n/a' if ratio is None else f'{ratio * 100:.0f}%'} (/cost tree, /cost cache, /cost explain <q>)"
+        )
     if caps.daily_ceiling_usd:
         try:
             spent_today = get_spend_ledger().total_usd(SCOPE_USER)
@@ -443,7 +470,9 @@ def _spend_lines(app: Any) -> str:  # noqa: ANN401 - the App
         lines.append(
             f"Today: ${spent_today:.2f} of ${caps.daily_ceiling_usd:.2f} daily ceiling ({status.state})"
         )
-    lines.append("/cost budget <N|off> | /cost caps | /cost today")
+    lines.append(
+        "/cost budget <N|off> | /cost caps | /cost today | /cost tree | /cost cache | /cost explain <question>"
+    )
     return "\n".join(lines)
 
 

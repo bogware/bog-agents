@@ -1482,6 +1482,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
+    # ROADMAP #52: the cache-bust detector must be the innermost model-call
+    # observer so the prefix it fingerprints is exactly what the provider sees
+    # (after summarization, memory, caching tags — every other injector).
+    if f.enable_cache_diagnostics:
+        from bog_agents.middleware.cache_diagnostics import CacheBustDetectorMiddleware
+
+        agents_middleware.append(CacheBustDetectorMiddleware(events_dir=f.cache_diagnostics_dir))
 
     # Filter `HarnessProfile.excluded_middleware` from the fully assembled main
     # stack, then verify every exclusion matched something across all stacks

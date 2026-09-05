@@ -326,6 +326,9 @@ class SessionStats:
     output_tokens: int = 0
     wall_time_seconds: float = 0.0
     per_model: dict[str, ModelStats] = field(default_factory=dict)
+    # ROADMAP #66: the turn's file operation records (live reference to the
+    # tracker's completed list), consumed by the changes tray at turn end.
+    file_records: list[Any] = field(default_factory=list)
 
     def record_request(
         self,
@@ -690,11 +693,17 @@ class TextualUIAdapter:
         # State tracking
         self._current_tool_messages: dict[str, ToolCallMessage] = {}
         self._token_tracker: Any = None
+        # ROADMAP #52: per-response usage sink (the app's UsageLedger).
+        self._usage_sink: Any = None
         # Persist todo widgets across turns so they are updated in-place rather
         # than mounting duplicate widgets.  Keyed by namespace tuple.
         self._active_todo_messages: dict[tuple, Any] = {}
         # Silent mode is opt-in; verbose ToolCallMessage widgets are the default.
         self.silent_tool_output = False
+
+    def set_usage_sink(self, sink: Any) -> None:  # noqa: ANN401  # Callable[[UsageRecord], None]
+        """Register the per-response usage sink (ROADMAP #52)."""
+        self._usage_sink = sink
 
     def set_token_tracker(self, tracker: Any) -> None:  # noqa: ANN401  # Dynamic tracker type from Textual
         """Set the token tracker for usage tracking."""
@@ -989,6 +998,10 @@ async def execute_task_textual(
         adapter._token_tracker.hide()
 
     file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=backend)
+    turn_stats.file_records = file_op_tracker.completed
+    # ROADMAP #52: per-namespace request timing for TTFT / tok/s on the usage strip.
+    request_started_at: dict[tuple, float] = {(): start_time}
+    first_text_at: dict[tuple, float] = {}
     displayed_tool_ids: set[str] = set()
     tool_call_buffers: dict[str | int, dict] = {}
 
@@ -1276,6 +1289,30 @@ async def execute_task_textual(
                                 captured_input_tokens = max(
                                     captured_input_tokens, total_toks
                                 )
+                            if input_toks or output_toks or total_toks:
+                                # ROADMAP #52: price + time this response, feed
+                                # the session ledger, and hang the strip under
+                                # the message it belongs to.
+                                from bog_agents_cli.usage_controller import (
+                                    record_stream_usage,
+                                )
+
+                                now = time.monotonic()
+                                started = request_started_at.get(ns_key, start_time)
+                                first = first_text_at.get(ns_key)
+                                await record_stream_usage(
+                                    adapter._usage_sink,
+                                    usage,
+                                    model=active_model,
+                                    category="subagent" if ns_key else "main",
+                                    ttft_s=(first - started) if first else None,
+                                    duration_s=now - started,
+                                    message_widget=assistant_message_by_namespace.get(
+                                        ns_key
+                                    ),
+                                )
+                                request_started_at[ns_key] = now
+                                first_text_at.pop(ns_key, None)
 
                     # Check if this is an AIMessageChunk with content
                     if not hasattr(message, "content_blocks"):
@@ -1302,6 +1339,7 @@ async def execute_task_textual(
                                 pending_text = pending_text_by_namespace.get(ns_key, "")
                                 pending_text += text
                                 pending_text_by_namespace[ns_key] = pending_text
+                                first_text_at.setdefault(ns_key, time.monotonic())
 
                                 # Get or create assistant message for this namespace
                                 current_msg = assistant_message_by_namespace.get(ns_key)

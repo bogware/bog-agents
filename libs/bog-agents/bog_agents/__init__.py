@@ -73,6 +73,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "AutomationsMiddleware": ("bog_agents.middleware.automations", "AutomationsMiddleware"),
     "BrowserAgentFAMiddleware": ("bog_agents.middleware.browser_agent_fa", "BrowserAgentFAMiddleware"),
     "BrowserAgentMiddleware": ("bog_agents.middleware.browser_agent", "BrowserAgentMiddleware"),
+    "CacheBustDetectorMiddleware": ("bog_agents.middleware.cache_diagnostics", "CacheBustDetectorMiddleware"),
     "CheckpointingMiddleware": ("bog_agents.middleware.checkpointing", "CheckpointingMiddleware"),
     "CitationsMiddleware": ("bog_agents.middleware.citations", "CitationsMiddleware"),
     "CloudSandboxMiddleware": ("bog_agents.middleware.cloud_sandbox", "CloudSandboxMiddleware"),
