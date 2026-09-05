@@ -33,6 +33,7 @@ def audit_cli_agent(
     profile: str = "",
     enable_plan_mode: bool = True,
     method: str = "auto",
+    restricted: bool = False,
 ) -> TokenAudit:
     """Build the CLI agent the way the TUI does and audit one turn of it.
 
@@ -45,6 +46,7 @@ def audit_cli_agent(
         profile: Configuration profile name (`create_cli_agent(profile=...)`).
         enable_plan_mode: Whether plan mode middleware is attached.
         method: Token counting method (see `bog_agents.token_audit.count_tokens`).
+        restricted: Build under the `--restricted` trust profile (ROADMAP #48).
 
     Returns:
         The audit.
@@ -61,6 +63,7 @@ def audit_cli_agent(
             profile=profile,
             cwd=cwd,
             harness_profile=harness_profile,
+            restricted=restricted,
         )
 
     return audit_agent(_build, method=method)

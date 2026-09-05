@@ -199,7 +199,8 @@ def show_help() -> None:
     )
     console.print("  --profile-override JSON    Override model profile fields")
     console.print(
-        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)"
+        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)",
+        "  --restricted               Restricted trust profile: no shell/git/HTTP/search/daemon tools, bypass refused",
     )
     console.print("  --default-model [MODEL]    Set or show the default model")
     console.print("  --clear-default-model      Clear default model")

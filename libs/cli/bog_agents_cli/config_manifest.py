@@ -515,6 +515,22 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("tools", "powershell"),
     ),
     ConfigOption(
+        key="web.allowed_domains",
+        group="Tools",
+        summary="Comma-separated domains the web tools may fetch (suffix-matched: example.com covers api.example.com). Empty = any public host.",
+        kind=OptionKind.STR,
+        env_var=_env_vars.WEB_ALLOWED_DOMAINS,
+        toml_keys=("web", "allowed_domains"),
+    ),
+    ConfigOption(
+        key="web.blocked_domains",
+        group="Tools",
+        summary="Comma-separated domains the web tools must never fetch; wins over the allow-list.",
+        kind=OptionKind.STR,
+        env_var=_env_vars.WEB_BLOCKED_DOMAINS,
+        toml_keys=("web", "blocked_domains"),
+    ),
+    ConfigOption(
         key="tools.timeout",
         group="Tools",
         summary="Default per-tool execution timeout (seconds).",

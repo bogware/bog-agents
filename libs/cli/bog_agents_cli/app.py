@@ -950,6 +950,11 @@ class BogAgentsApp(App):
         self._harness_profile: str | None = (server_kwargs or {}).get(
             "harness_profile"
         ) or None
+        # ROADMAP #48: `--restricted` locks the permission mode and refuses bypass.
+        self._restricted: bool = bool((server_kwargs or {}).get("restricted"))
+        if self._restricted:
+            self._auto_approve = False
+            self._auto_mode = False
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
@@ -7891,7 +7896,7 @@ class BogAgentsApp(App):
         self._active_profile_name = profile.name
         self._active_profile_prompt = profile.system_prompt_append
         if profile.auto_approve is not None:
-            self._auto_approve = profile.auto_approve
+            self._auto_approve = profile.auto_approve and not self._restricted
         if profile.plan_mode is not None:
             self._plan_mode_enabled = profile.plan_mode
         if profile.effort_level:
@@ -9659,23 +9664,21 @@ class BogAgentsApp(App):
         return tasks
 
     async def _handle_permissions_command(self, command: str) -> None:
-        if command.strip().lower().split()[1:2] == ["trust-git-config"]:
-            from bog_agents_cli.repo_trust import acknowledge_repo_config
-
-            fingerprint = await asyncio.to_thread(acknowledge_repo_config, self._cwd)
-            await self._mount_message(UserMessage(command))
-            await self._mount_message(
-                AppMessage(
-                    f"Acknowledged this repo's git config ({fingerprint[:19] or 'no config'}); /diff, /review and /pr are unblocked until it changes."
-                )
-            )
-            return
-        """Handle `/permissions` by showing approval posture and shell policy.
+        """Handle `/permissions`: approval posture, trust and shell policy.
 
         Args:
-            command: Full slash command text.
+            command: Full slash command text; `trust-git-config`,
+                `trust-workspace` and `revoke-workspace` are verbs (#48/#49).
         """
+        from bog_agents_cli.trust_controller import run_permissions_verb, trust_rows
+
         await self._mount_message(UserMessage(command))
+        verb = command.strip().lower().split()[1:2]
+        if verb:
+            reply = await asyncio.to_thread(run_permissions_verb, verb[0], self._cwd)
+            if reply is not None:
+                await self._mount_message(AppMessage(reply))
+                return
 
         from bog_agents_cli.config import RECOMMENDED_SAFE_SHELL_COMMANDS
 
@@ -9719,6 +9722,9 @@ class BogAgentsApp(App):
                 "covered by the current policy."
             ),
         ]
+        lines[2:2] = await asyncio.to_thread(
+            trust_rows, self._cwd, self._restricted, self._active_profile_name
+        )
         await self._mount_message(AppMessage("\n".join(lines)))
 
     async def _handle_keybindings_command(self, command: str) -> None:
@@ -16039,6 +16045,14 @@ class BogAgentsApp(App):
         Args:
             mode: One of `default`, `accept-edits`, `plan`, `bypass`, `paranoid`.
         """
+        from bog_agents_cli.trust_controller import mode_refusal
+
+        refusal = mode_refusal(
+            mode, restricted=self._restricted, profile_name=self._active_profile_name
+        )
+        if refusal:
+            self.notify(refusal, severity="warning")
+            return
         plan_was = self._plan_mode_enabled
         self._auto_approve = mode == "bypass"
         self._auto_mode = mode == "accept-edits"

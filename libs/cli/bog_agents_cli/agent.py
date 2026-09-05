@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
     from bog_agents_cli.mcp_tools import MCPServerInfo
     from bog_agents_cli.output import OutputFormat
+    from bog_agents_cli.trust_profiles import TrustProfile
+    from bog_agents_cli.web_policy import WebPolicy
 
 from bog_agents_cli.config import (
     COLORS,
@@ -67,6 +69,56 @@ def _powershell_tool_enabled() -> bool:
         return bool(resolve_option("tools.powershell"))
     except Exception:  # a config problem never blocks agent creation
         return False
+
+
+def _tool_name(tool: object) -> str:
+    """Best-effort name of a tool object, callable or dict spec."""
+    if isinstance(tool, dict):
+        return str(tool.get("name", ""))
+    return str(getattr(tool, "name", None) or getattr(tool, "__name__", "") or "")
+
+
+def _install_web_policy(trust_profile: TrustProfile) -> WebPolicy:
+    """Install and return the process-wide fetch policy: config lists plus the trust profile's (ROADMAP #48)."""
+    from bog_agents_cli.web_policy import WebPolicy, policy_from_strings, set_web_policy
+
+    allowed = blocked = None
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        allowed = resolve_option("web.allowed_domains")
+        blocked = resolve_option("web.blocked_domains")
+    except Exception:  # a config problem never blocks agent creation
+        logger.debug(
+            "Could not read web.allowed_domains / web.blocked_domains", exc_info=True
+        )
+    policy = policy_from_strings(allowed, blocked).merged(
+        WebPolicy(
+            allowed_domains=trust_profile.allowed_domains,
+            blocked_domains=trust_profile.blocked_domains,
+        )
+    )
+    set_web_policy(policy)
+    return policy
+
+
+def _strip_excluded_tools(
+    agent_middleware: list[Any], trust_profile: TrustProfile
+) -> None:
+    """Drop the trust profile's excluded tools from every middleware that carries tools (ROADMAP #48)."""
+    for mw in agent_middleware:
+        mw_tools = getattr(mw, "tools", None)
+        if not mw_tools:
+            continue
+        kept = [t for t in mw_tools if not trust_profile.tool_excluded(_tool_name(t))]
+        if len(kept) == len(mw_tools):
+            continue
+        try:
+            mw.tools = kept
+        except (
+            AttributeError
+        ):  # read-only property: leave it, the test suite flags the gap
+            logger.warning("Could not strip excluded tools from %s", type(mw).__name__)
 
 
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
@@ -1353,6 +1405,7 @@ def create_cli_agent(
     project_context: ProjectContext | None = None,
     cost_ledger: CostLedger | None = None,
     harness_profile: str | None = None,
+    restricted: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -1402,6 +1455,9 @@ def create_cli_agent(
         profile: Configuration profile name to apply.
         harness_profile: Registry key of an SDK `HarnessProfile` (`lean` behind
             `--mini`) layered over the model's own profile.
+        restricted: `--restricted` (ROADMAP #48): drop the shell, git, raw HTTP,
+            search and daemon tools, refuse auto-approval and gate fetches on
+            the trust profile's domain allow-list.
         cwd: Override the working directory for the agent's filesystem backend
             and system prompt.
         project_context: Explicit project path context for project-sensitive
@@ -1426,6 +1482,31 @@ def create_cli_agent(
         model = _create_model(model).model
 
     tools = list(tools or [])
+    # ROADMAP #48: the trust profile (`--restricted`, or the CLI profile's
+    # `custom_settings.trust`) decides which tool families exist at all and
+    # which domains the web tools may reach. It is consulted again after the
+    # profile block below so a profile cannot re-enable what the flag removed.
+    from bog_agents_cli.trust_profiles import resolve_trust_profile
+
+    trust_profile = resolve_trust_profile(
+        restricted=restricted,
+        profile_name=profile or "",
+        config_dir=settings.user_agents_dir,
+    )
+    web_policy = _install_web_policy(trust_profile)
+    if trust_profile.restricted and web_policy.allowed_domains:
+        # A config allow-list counts too: `fetch_url` stays, gated by it.
+        from dataclasses import replace as dc_replace
+
+        trust_profile = dc_replace(
+            trust_profile, allowed_domains=web_policy.allowed_domains
+        )
+    if trust_profile.strips_shell:
+        enable_shell = False
+        enable_git_tools = False
+    if trust_profile.restricted:
+        auto_approve = False
+    tools = [t for t in tools if not trust_profile.tool_excluded(_tool_name(t))]
     effective_cwd = (
         Path(cwd)
         if cwd is not None
@@ -1439,7 +1520,11 @@ def create_cli_agent(
     try:
         from bog_agents_cli.proxy_tools import build_proxy_tools
 
-        proxy_tools = build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        proxy_tools = (
+            []
+            if trust_profile.restricted
+            else build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        )
         if proxy_tools:
             tools.extend(proxy_tools)
             logger.info(
@@ -1455,7 +1540,7 @@ def create_cli_agent(
     try:
         from bog_agents_cli.daemon_client import is_daemon_running
 
-        if is_daemon_running():
+        if is_daemon_running() and not trust_profile.restricted:
             from bog_agents.tools.daemon_tools import daemon_tools_bundle
 
             daemon_cwd = Path(effective_cwd or Path.cwd())
@@ -1974,6 +2059,10 @@ def create_cli_agent(
                 auto_lint = p.auto_lint
             if p.auto_test is not None:
                 auto_test = p.auto_test
+    if trust_profile.strips_shell:
+        enable_git_tools = False
+    if trust_profile.restricted:
+        auto_approve = False
 
     # Git tools middleware (#15, #43)
     if enable_git_tools and sandbox is None:
@@ -2231,6 +2320,9 @@ def create_cli_agent(
     # singleton above then *replaces* that built-in by name instead of being
     # spliced in after the core stack, where it ran inside summarization and
     # never saw the litter summarization had already paid for.
+    if trust_profile.restricted or trust_profile.excluded_tools:
+        tools = [t for t in tools if not trust_profile.tool_excluded(_tool_name(t))]
+        _strip_excluded_tools(agent_middleware, trust_profile)
     agent = create_agent(
         model=model,
         system_prompt=system_prompt,
@@ -2238,7 +2330,7 @@ def create_cli_agent(
         backend=composite_backend,
         middleware=agent_middleware,
         interrupt_on=interrupt_on,
-        permissions=authority_file_permissions(),
+        permissions=authority_file_permissions(restricted=trust_profile.restricted),
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
         cost_ledger=cost_ledger,

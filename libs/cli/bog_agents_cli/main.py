@@ -583,6 +583,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--restricted",
+        action="store_true",
+        help=(
+            "Restricted trust profile: no shell, git, raw HTTP, search or "
+            "daemon tools; bypass and accept-edits are refused; web fetches "
+            "only reach the configured allowed domains (ROADMAP #48)."
+        ),
+    )
+
+    parser.add_argument(
         "--default-model",
         metavar="MODEL",
         nargs="?",
@@ -1050,6 +1060,7 @@ async def run_textual_cli_async(
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
     mini: bool = False,
+    restricted: bool = False,
 ) -> "AppResult":
     """Run the Textual CLI interface (async version).
 
@@ -1077,7 +1088,7 @@ async def run_textual_cli_async(
             These override config file values.
         profile_override: Extra profile fields from `--profile-override`.
         mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
-        mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
+        restricted: Run under the `--restricted` trust profile (ROADMAP #48).
 
             Merged on top of config file profile overrides.
         thread_id: Thread ID to use (new or resumed)
@@ -1119,6 +1130,11 @@ async def run_textual_cli_async(
 
     from bog_agents_cli.app import AppResult
 
+    if restricted:
+        # ROADMAP #48: a restricted session never starts in bypass / accept-edits.
+        auto_approve = False
+        auto_mode = False
+
     # Build kwargs for deferred server startup (runs inside the TUI)
     server_kwargs: dict[str, Any] = {
         "assistant_id": assistant_id,
@@ -1133,6 +1149,7 @@ async def run_textual_cli_async(
         "trust_project_mcp": trust_project_mcp,
         "interactive": True,
         "harness_profile": "lean" if mini else None,
+        "restricted": restricted,
     }
 
     mcp_preload_kwargs: dict[str, Any] | None = None
@@ -2597,6 +2614,7 @@ def cli_main() -> None:
                         no_mcp=getattr(args, "no_mcp", False),
                         trust_project_mcp=mcp_trust_decision,
                         mini=getattr(args, "mini", False),
+                        restricted=getattr(args, "restricted", False),
                     )
                 )
                 return_code = result.return_code

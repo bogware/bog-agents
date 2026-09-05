@@ -200,6 +200,7 @@ async def start_server_and_get_agent(
     enable_shell: bool = True,
     enable_ask_user: bool = False,
     harness_profile: str | None = None,
+    restricted: bool = False,
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
@@ -220,6 +221,7 @@ async def start_server_and_get_agent(
         enable_shell: Enable shell execution tools.
         enable_ask_user: Enable ask_user tool.
         harness_profile: SDK harness profile key (`lean` for `--mini`), or `None`.
+        restricted: `--restricted` trust profile (ROADMAP #48).
         mcp_config_path: Path to MCP config.
         no_mcp: Disable MCP.
         trust_project_mcp: Trust project MCP servers.
@@ -249,6 +251,7 @@ async def start_server_and_get_agent(
         enable_shell=enable_shell,
         enable_ask_user=enable_ask_user,
         harness_profile=harness_profile,
+        restricted=restricted,
         mcp_config_path=mcp_config_path,
         no_mcp=no_mcp,
         trust_project_mcp=trust_project_mcp,
@@ -294,6 +297,7 @@ async def server_session(
     enable_shell: bool = True,
     enable_ask_user: bool = False,
     harness_profile: str | None = None,
+    restricted: bool = False,
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
@@ -317,6 +321,7 @@ async def server_session(
         enable_shell: Enable shell execution tools.
         enable_ask_user: Enable ask_user tool.
         harness_profile: SDK harness profile key (`lean` for `--mini`), or `None`.
+        restricted: `--restricted` trust profile (ROADMAP #48).
         mcp_config_path: Path to MCP config.
         no_mcp: Disable MCP.
         trust_project_mcp: Trust project MCP servers.
@@ -341,6 +346,7 @@ async def server_session(
             enable_shell=enable_shell,
             enable_ask_user=enable_ask_user,
             harness_profile=harness_profile,
+            restricted=restricted,
             mcp_config_path=mcp_config_path,
             no_mcp=no_mcp,
             trust_project_mcp=trust_project_mcp,

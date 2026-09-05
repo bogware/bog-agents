@@ -247,6 +247,16 @@ marker and the `/finding` dispositions → `lessons_block`. `github_review.py` p
 verdicts as PR reviews through an injected `gh` runner; never post from a test. The
 `/resolve` name is taken by merge-conflict resolution — dispositions are `/finding`.
 
+**Trust profiles (ROADMAP #48).** `trust_profiles.py` is the policy half of a CLI
+profile (`custom_settings.trust` in `profiles.json`) and the `--restricted` preset;
+`create_cli_agent(restricted=…)` applies it and `trust_controller.mode_refusal` gates
+every permission-mode change in the App. `RESTRICTED_TOOL_NAMES` must list every tool
+that spawns a process or opens a raw socket — `test_no_surviving_restricted_tool_spawns_processes`
+rebuilds the restricted agent and fails otherwise, so list a new process-spawning tool
+there before it ships. `web_policy.py` gates `fetch_url` / `http_request` inside
+`assert_fetch_allowed` (before DNS); `workspace_trust.py` fingerprints the
+repo-controlled instruction files behind `/permissions trust-workspace`.
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`

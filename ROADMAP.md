@@ -733,16 +733,33 @@ ADK, and a contract is itself a feature to the target users.
   (5) make `acceptEdits`/auto the wizard-recommended default. **S/T/E, M.**
 - **#48 Trust profiles, `--restricted`, and workspace trust** *(Codex permission
   profiles + `trust_level`; Claude `--restricted` Aug 27, `--permission-prompts
-  none` Sep 2; Kiro protected paths after CVE-2026-10591)* — **partial.** Extend
-  `profiles.py` to carry trust policy (permission mode + expert-rule pack +
-  sandbox level + egress allowlist + RBAC role) as `bog --profile audit`; one
-  `--restricted` flag composing existing parts (strip exec tools, confine reads
-  *and* writes to working dirs, refuse bypass); a first-open workspace trust record
-  (same fingerprint store as `mcp_trust.py`) that gates repo-controlled
-  instructions, hooks, expert rules and `.mcp.json` until trusted; extend
-  `_PROJECT_AUTHORITY_PATTERNS` with editor/CI self-config files and add a
-  fail-closed `deny` tier; `allowed_domains`/`blocked_domains` on `web_fetch`.
-  Completes v2 #23 + #24. **E/T/S, M.**
+  none` Sep 2; Kiro protected paths after CVE-2026-10591)* — **shipped
+  2026-09-06** (REVIEW v6 §17). `trust_profiles.py`: a `TrustProfile`
+  (permission mode + lock, restricted flag, sandbox level + egress allowlist,
+  allowed/blocked fetch domains, excluded tools) read from `custom_settings.trust`
+  of a `profiles.json` entry — `bog-agents --profile audit` applies it in
+  `create_cli_agent`, and the App refuses the shift+tab / ctrl+t / `/profile`
+  changes the profile locks. `--restricted` is the built-in preset: no shell,
+  git/PR, raw HTTP, search, daemon, plugin, preview or other process-spawning
+  tools (`RESTRICTED_TOOL_NAMES`, stripped from the tool list *and* from every
+  middleware's tools; a drift test rebuilds the restricted agent and fails when a
+  surviving tool's module spawns processes), bypass / accept-edits refused,
+  `auto_approve` forced off, `fetch_url` kept only with a domain allow-list.
+  `web_policy.py` + `web.allowed_domains` / `web.blocked_domains` gate every hop
+  in `assert_fetch_allowed` before DNS (`DomainPolicyError`).
+  `workspace_trust.py`: one fingerprint over the repo-controlled instruction and
+  policy files (`.bog-agents/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**`,
+  `.cursor/**`, `.agents/**`, `.mcp.json`, workflows) — `/permissions
+  trust-workspace` records it and trusts hooks + MCP in the same step;
+  `/permissions` shows trusted / CHANGED since you trusted it / never
+  acknowledged. `authority_file_permissions` now carries a `deny` tier
+  (`.git/hooks/**`, `.git/config`; under `--restricted` the CI / editor / hooks /
+  `.mcp.json` files too) ahead of a wider `interrupt` tier (`.github/workflows`,
+  `.vscode`, `.idea`, `.claude`, `.cursor`, `.agents`, CLI settings + sandbox
+  config). *Was:* partial. Open: a profile's sandbox level / egress allowlist are
+  carried but not yet applied to `SandboxConfig`; workspace trust is reported,
+  not enforced, until the first-open posture decision (prompt vs. silent
+  restricted). Completes v2 #23 + #24. **E/T/S, M.**
 - **#49 Steerable approvals + hostile-repo hardening** *(Cursor "skip and tell the
   agent what to do", 15 s auto-reject; Grok persistent "Never allow"; Goose
   GHSA-r5pp-p5r8-466r fsmonitor RCE; Cursor hardened git Aug 11)* — **shipped

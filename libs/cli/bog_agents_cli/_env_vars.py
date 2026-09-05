@@ -213,6 +213,12 @@ Parsed as a boolean: `1`/`true`/`yes`/`on` (case-insensitive) count as enabled.
 An explicit value wins over the `[ui].vim_mode` config-file entry.
 """
 
+WEB_ALLOWED_DOMAINS = "BOG_AGENTS_WEB_ALLOWED_DOMAINS"
+"""Comma-separated domains `fetch_url` / `http_request` may reach (suffix-matched); empty = any public host."""
+
+WEB_BLOCKED_DOMAINS = "BOG_AGENTS_WEB_BLOCKED_DOMAINS"
+"""Comma-separated domains the web tools must never reach (wins over the allow-list)."""
+
 # ---------------------------------------------------------------------------
 # Home-directory resolution.
 # ---------------------------------------------------------------------------

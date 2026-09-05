@@ -123,6 +123,7 @@ class TestServerGraph:
             enable_memory=True,
             enable_skills=True,
             harness_profile=None,
+            restricted=False,
             enable_shell=True,
             mcp_server_info=mcp_server_info,
             cwd=None,

@@ -30,23 +30,65 @@ _PROJECT_AUTHORITY_PATTERNS: tuple[str, ...] = (
     "/.bog-agents/constitution.md",  # dreamscape soft / log-only rules
     "/.bog-agents/hooks/**",  # project lifecycle hooks (execute on events)
     "/.mcp.json",  # project MCP server manifest
+    # ROADMAP #48: the rest of what a checkout can use to steer this or the
+    # next agent — CLI policy, other agents' instruction trees, CI and editor
+    # automation that runs on open.
+    "/.bog-agents/settings.json",
+    "/.bog-agents/sandbox.toml",
+    "/.claude/**",
+    "/.cursor/**",
+    "/.agents/**",
+    "/.github/workflows/**",
+    "/.vscode/**",
+    "/.idea/**",
+)
+
+# Never written through the file tools, in any mode: git runs these without
+# asking, and no agent task legitimately edits them in place.
+_PROJECT_DENY_PATTERNS: tuple[str, ...] = (
+    "/.git/hooks/**",
+    "/.git/config",
+)
+
+# Under `--restricted` the interrupt tier for automation files becomes a deny
+# tier: a restricted session has no shell, so the only way it could run code
+# is by editing something that runs later.
+_RESTRICTED_DENY_PATTERNS: tuple[str, ...] = (
+    "/.bog-agents/expert_rules/**",
+    "/.bog-agents/hooks/**",
+    "/.bog-agents/settings.json",
+    "/.bog-agents/sandbox.toml",
+    "/.mcp.json",
+    "/.github/workflows/**",
+    "/.vscode/**",
+    "/.idea/**",
 )
 
 
-def authority_file_permissions() -> list[FilesystemPermission]:
-    """Return the interrupt-mode rules that gate writes to authority files.
+def authority_file_permissions(
+    *, restricted: bool = False
+) -> list[FilesystemPermission]:
+    """Return the rules that gate writes to authority files (deny tier first; first match wins).
+
+    Args:
+        restricted: Under `--restricted` (ROADMAP #48) the automation files move
+            from `interrupt` to `deny`.
 
     Returns:
-        A single `FilesystemPermission` whose `write` operations on the project's
-        authority paths resolve to `interrupt` (human approval), never a silent
-        write.
+        A `deny` rule for the paths no session may write, then the `interrupt`
+        rule whose `write` operations on the project's authority paths resolve
+        to human approval, never a silent write.
     """
+    deny = list(_PROJECT_DENY_PATTERNS)
+    if restricted:
+        deny.extend(_RESTRICTED_DENY_PATTERNS)
     return [
+        FilesystemPermission(operations=["write"], paths=deny, mode="deny"),
         FilesystemPermission(
             operations=["write"],
             paths=list(_PROJECT_AUTHORITY_PATTERNS),
             mode="interrupt",
-        )
+        ),
     ]
 
 
