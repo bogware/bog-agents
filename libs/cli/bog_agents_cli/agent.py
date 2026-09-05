@@ -1449,6 +1449,25 @@ def create_cli_agent(
     except Exception:
         logger.warning("Failed to build proxy tools; skipping", exc_info=True)
 
+    # ROADMAP #55: `schedule` / `subscribe` hand work to the ambient daemon
+    # carrying this thread's id, so the run resumes the same thread. Only
+    # registered while the daemon is running (four schemas otherwise wasted).
+    try:
+        from bog_agents_cli.daemon_client import is_daemon_running
+
+        if is_daemon_running():
+            from bog_agents.tools.daemon_tools import daemon_tools_bundle
+
+            daemon_cwd = Path(effective_cwd or Path.cwd())
+            tools.extend(
+                daemon_tools_bundle(
+                    working_dir=str(daemon_cwd),
+                    goal_ref=str(daemon_cwd / ".bog-agents" / "goal.json"),
+                )
+            )
+    except Exception:
+        logger.debug("Could not wire daemon tools", exc_info=True)
+
     # Agent-written auto-memories (#13): a `remember` tool so the agent can
     # proactively persist durable facts (conventions/gotchas/fix-patterns) to
     # the AGENTS.md / ~/.bog-agents/memory.md cascade, auto-recalled next

@@ -574,8 +574,13 @@ def _triggers_from_args(args: Any) -> list[dict[str, Any]]:  # noqa: ANN401
         triggers.append({"type": "webhook", "webhook_path": webhook_path})
     if args.git_branch:
         triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
-    if getattr(args, "github", False):
-        triggers.append({"type": "github"})
+    if getattr(args, "github", False) or getattr(args, "github_number", 0):
+        trigger: dict[str, Any] = {"type": "github"}
+        if getattr(args, "github_number", 0):
+            trigger["github_number"] = int(
+                args.github_number
+            )  # ROADMAP #55: PR / issue scoped
+        triggers.append(trigger)
     return triggers
 
 
@@ -637,6 +642,11 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
     # ROADMAP #51: per-run budget (pauses at the cap) and per-job daily ceiling.
     if getattr(args, "budget_usd", None):
         payload["budget_usd"] = args.budget_usd
+    # ROADMAP #55: attempt cap + the interactive thread the job continues.
+    if getattr(args, "max_runs", 0):
+        payload["max_runs"] = int(args.max_runs)
+    if getattr(args, "thread", ""):
+        payload["thread_id"] = args.thread
     if getattr(args, "daily_ceiling_usd", None):
         payload["daily_ceiling_usd"] = args.daily_ceiling_usd
 
@@ -1192,6 +1202,26 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     )
     create_p.add_argument(
         "--disabled", action="store_true", help="Create the job in a disabled state"
+    )
+    create_p.add_argument(
+        "--max-runs",
+        dest="max_runs",
+        type=int,
+        default=0,
+        help="Disable the job after this many runs (0 = unlimited; #55 attempt cap)",
+    )
+    create_p.add_argument(
+        "--thread",
+        default="",
+        metavar="THREAD_ID",
+        help="Continue this interactive thread on each run (reopens the CLI checkpointer; #55)",
+    )
+    create_p.add_argument(
+        "--github-number",
+        dest="github_number",
+        type=int,
+        default=0,
+        help="Scope a github trigger to one PR / issue number (#55)",
     )
     create_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 

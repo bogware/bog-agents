@@ -26,6 +26,9 @@ dependencies = [
     "uvicorn>=0.30.0,<1.0.0",
     "fastapi>=0.115.0,<1.0.0",
     "aiofiles>=23.0.0,<25.0.0",
+    # ROADMAP #55: thread-linked jobs reopen the CLI's SQLite checkpointer so a
+    # scheduled/subscribed run continues the interactive thread that created it.
+    "langgraph-checkpoint-sqlite>=3.0.0,<4.0.0",
     # Cron parsing + missed-slot catch-up (DMN-5). Replaces the hand-rolled
     # 5-field parser: correct ranges/steps/lists/macros and, crucially,
     # get_next()-based catch-up so a scheduled slot missed during downtime

@@ -1121,6 +1121,13 @@ def named_harness_profile(name: str) -> HarnessProfile:
     _ensure_harness_profiles_loaded()
     profile = _HARNESS_PROFILES.get(name)
     if profile is None:
+        from bog_agents.profiles._builtin_profiles import builtin_harness_registrar
+
+        registrar = builtin_harness_registrar(name)
+        if registrar is not None:
+            registrar()
+            profile = _HARNESS_PROFILES.get(name)
+    if profile is None:
         known = ", ".join(sorted(_HARNESS_PROFILES)) or "none"
         msg = f"Unknown harness profile {name!r}; registered keys: {known}"
         raise ValueError(msg)

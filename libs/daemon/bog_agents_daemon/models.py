@@ -63,6 +63,9 @@ class TriggerConfig:
             matched against the full branch name with the `refs/heads/` (or
             `refs/tags/`) prefix stripped — use `feature/*` to match
             `feature/login`; a bare `main` matches only `main` itself.
+        github_number: PR / issue number a `github` trigger is scoped to
+            (0 = any; ROADMAP #55 PR-scoped subscriptions).
+        github_kinds: Event kinds a `github` trigger accepts (empty = all).
     """
 
     type: TriggerType
@@ -79,6 +82,9 @@ class TriggerConfig:
     webhook_secret: str = ""
     # git_push: branch filter
     git_branch_pattern: str = "*"
+    # github: PR / issue scoping (ROADMAP #55)
+    github_number: int = 0
+    github_kinds: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -152,6 +158,14 @@ class AmbientJob:
             with a higher `budget_usd` continues it. `None` = uncapped.
         daily_ceiling_usd: Per-job daily spend ceiling; once today's recorded
             spend reaches it, new runs are recorded as `skipped`. `None` = none.
+        max_runs: Attempt cap (ROADMAP #55): once `run_count` reaches it the
+            job is disabled. 0 = unlimited.
+        thread_id: Interactive thread this job continues; when set, runs
+            reopen the CLI checkpointer on that thread instead of starting
+            fresh, so goal state and memory survive the hand-off.
+        checkpoint_db: SQLite checkpoint database for `thread_id`
+            (default: the CLI's `sessions.db` under the bog home).
+        goal_ref: Path of the thread's goal file, quoted into the prompt.
         triggers: One or more trigger configurations.
         outputs: One or more output delivery configurations.
         enabled: Whether the job is active and eligible for scheduling.
@@ -176,6 +190,11 @@ class AmbientJob:
     retry_backoff_seconds: float = 2.0
     budget_usd: float | None = None
     daily_ceiling_usd: float | None = None
+    # ROADMAP #55: attempt cap + originating interactive thread
+    max_runs: int = 0
+    thread_id: str = ""
+    checkpoint_db: str = ""
+    goal_ref: str = ""
     # When to run
     triggers: list[TriggerConfig] = field(default_factory=list)
     # Where to send output
@@ -231,3 +250,17 @@ class JobRun:
     forgotten which meant operators could not tell from the run record
     that delivery never happened.
     """
+
+
+def run_cap_reached(job: AmbientJob) -> bool:
+    """Whether `job.max_runs` is set and already used up (ROADMAP #55 attempt cap)."""
+    return job.max_runs > 0 and job.run_count >= job.max_runs
+
+
+def github_trigger_matches(trigger: TriggerConfig, *, kind: str, number: int) -> bool:
+    """Whether a `github` trigger accepts an event of `kind` on PR/issue `number`."""
+    if trigger.type != TriggerType.GITHUB:
+        return False
+    if trigger.github_number and trigger.github_number != int(number or 0):
+        return False
+    return not trigger.github_kinds or kind in trigger.github_kinds

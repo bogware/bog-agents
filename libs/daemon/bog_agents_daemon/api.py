@@ -25,6 +25,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerConfig,
     TriggerType,
+    github_trigger_matches,
 )
 from bog_agents_daemon.store import (
     delete_job,
@@ -69,6 +70,8 @@ class TriggerConfigModel(BaseModel):
     webhook_path: str = ""
     webhook_secret: str = ""
     git_branch_pattern: str = "*"
+    github_number: int = Field(0, ge=0)
+    github_kinds: list[str] = Field(default_factory=list, max_length=16)
 
 
 class OutputConfigModel(BaseModel):
@@ -137,6 +140,10 @@ class CreateJobRequest(BaseModel):
     retry_backoff_seconds: float = Field(2.0, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
     budget_usd: float | None = Field(default=None, gt=0)
     daily_ceiling_usd: float | None = Field(default=None, gt=0)
+    max_runs: int = Field(0, ge=0, le=10_000)
+    thread_id: str = Field("", max_length=200)
+    checkpoint_db: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    goal_ref: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
     triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
@@ -176,6 +183,8 @@ class UpdateJobRequest(BaseModel):
     retry_backoff_seconds: float | None = Field(default=None, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
     budget_usd: float | None = Field(default=None, gt=0)
     daily_ceiling_usd: float | None = Field(default=None, gt=0)
+    max_runs: int | None = Field(default=None, ge=0, le=10_000)
+    thread_id: str | None = Field(default=None, max_length=200)
     triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
     enabled: bool | None = None
@@ -236,6 +245,8 @@ def _trigger_config_from_model(m: TriggerConfigModel) -> TriggerConfig:
         webhook_path=m.webhook_path,
         webhook_secret=m.webhook_secret,
         git_branch_pattern=m.git_branch_pattern,
+        github_number=m.github_number,
+        github_kinds=list(m.github_kinds),
     )
 
 
@@ -580,6 +591,10 @@ def create_app(
             retry_backoff_seconds=body.retry_backoff_seconds,
             budget_usd=body.budget_usd,
             daily_ceiling_usd=body.daily_ceiling_usd,
+            max_runs=body.max_runs,
+            thread_id=body.thread_id,
+            checkpoint_db=body.checkpoint_db,
+            goal_ref=body.goal_ref,
             triggers=triggers,
             outputs=outputs,
             enabled=body.enabled,
@@ -670,6 +685,10 @@ def create_app(
             updates["outputs"] = outputs
         if body.enabled is not None:
             updates["enabled"] = body.enabled
+        if body.max_runs is not None:
+            updates["max_runs"] = body.max_runs
+        if body.thread_id is not None:
+            updates["thread_id"] = body.thread_id
 
         if not updates:
             return _job_to_response(existing)
@@ -989,7 +1008,8 @@ def create_app(
         for job in jobs:
             if not job.enabled:
                 continue
-            if any(t.type == TriggerType.GITHUB for t in job.triggers):
+            # ROADMAP #55: PR / issue-scoped subscriptions only fire for their number and kinds.
+            if any(github_trigger_matches(t, kind=event.kind, number=event.number) for t in job.triggers):
                 dispatched = scheduler.dispatch(job, trigger_type=TriggerType.GITHUB, trigger_context=ctx)
                 if dispatched.status != JobStatus.SKIPPED:
                     triggered.append(job.job_id)

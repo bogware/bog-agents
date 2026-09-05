@@ -841,14 +841,27 @@ async def _invoke_agent(
     if job.model:
         kwargs["model"] = job.model
     run_config: dict[str, Any] | None = None
+    if job.thread_id:
+        # ROADMAP #55: continue the interactive thread that created the job —
+        # reopen the CLI's checkpointer and make the event the next message.
+        saver_cm = open_thread_checkpointer(job)
+        if saver_cm is not None:
+            prompt = continuation_prompt(job, prompt, trigger_type=trigger_type)
+            async with saver_cm as saver:
+                kwargs["checkpointer"] = saver
+                run_config = {"configurable": {"thread_id": job.thread_id}}
+                agent = create_agent(**kwargs)
+                return await _run_with_timeout(job, agent, prompt, run_config)
     if job.budget_usd is not None:
         from langgraph.checkpoint.memory import MemorySaver
 
         kwargs["checkpointer"] = MemorySaver()
         run_config = {"configurable": {"thread_id": run_id or f"run-{int(time.time() * 1000)}"}}
-
     agent = create_agent(**kwargs)
+    return await _run_with_timeout(job, agent, prompt, run_config)
 
+
+async def _run_with_timeout(job: AmbientJob, agent: Any, prompt: str, run_config: dict[str, Any] | None) -> str:
     try:
         return await asyncio.wait_for(
             _collect_stream(job, agent, {"messages": [("human", prompt)]}, run_config),
@@ -857,6 +870,48 @@ async def _invoke_agent(
     except TimeoutError:
         msg = f"Agent timed out after {_AGENT_TIMEOUT_SECONDS}s for job {job.job_id} ({job.name})"
         raise TimeoutError(msg) from None
+
+
+def thread_checkpoint_db(job: AmbientJob) -> Path:
+    """The SQLite checkpoint database a thread-linked job resumes from (the CLI's `sessions.db` by default)."""
+    if job.checkpoint_db:
+        return Path(job.checkpoint_db).expanduser()
+    raw = os.environ.get("BOG_AGENTS_HOME", "").strip()
+    home = Path(raw).expanduser() if raw else Path.home() / ".bog-agents"
+    return home / "sessions.db"
+
+
+def open_thread_checkpointer(job: AmbientJob) -> Any:
+    """An `AsyncSqliteSaver` context manager for the job's thread, or `None` when it cannot be opened.
+
+    `None` (with a logged warning) means the run falls back to a fresh agent:
+    the sqlite checkpointer is not installed, or the database does not exist.
+    """
+    try:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    except ImportError:
+        logger.warning("Job %s wants thread %s but langgraph-checkpoint-sqlite is not installed; running fresh", job.job_id, job.thread_id)
+        return None
+    path = thread_checkpoint_db(job)
+    if not path.exists():
+        logger.warning("Job %s wants thread %s but %s does not exist; running fresh", job.job_id, job.thread_id, path)
+        return None
+    return AsyncSqliteSaver.from_conn_string(str(path))
+
+
+def continuation_prompt(job: AmbientJob, prompt: str, *, trigger_type: TriggerType) -> str:
+    """Frame a thread-linked run as a continuation: what fired, and the goal the thread was pursuing."""
+    lines = [f"[ambient: {trigger_type.value} trigger for job {job.name or job.job_id}; this continues your earlier thread]"]
+    if job.goal_ref:
+        try:
+            data = json.loads(Path(job.goal_ref).read_text(encoding="utf-8"))
+            objective = str(data.get("objective") or "").strip() if isinstance(data, dict) else ""
+        except (OSError, ValueError):
+            objective = ""
+        if objective:
+            lines.append(f"Goal: {objective}")
+    lines.append(prompt)
+    return "\n".join(lines)
 
 
 async def _invoke_agent_with_retry(

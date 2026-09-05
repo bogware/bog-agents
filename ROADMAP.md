@@ -927,15 +927,25 @@ ADK, and a contract is itself a feature to the target users.
   daemon. Absorbs v2 #46's cost half. **S/T, M.**
 - **#55 The daemon that actually executes: context injection, subscriptions, draft-PR
   etiquette** *(Cursor cloud-agent subscriptions + `/goal`; Amp self-scheduling
-  agents; Copilot assign-to-agent; Jules CI auto-fix)* — **partial (front door
-  only).** Fix v6 DMN-1/2 first (template `trigger_context` into the prompt,
-  `jobs create --trigger github`). Then: an SDK tool bundle `subscribe(source,
-  until)` / `schedule(when, prompt)` that POSTs a job carrying the originating
-  `thread_id` + goal ref; a runner path that reopens the CLI's checkpointer and
-  streams the event payload as the next `HumanMessage` so `/goal` state survives;
-  PR-scoped GitHub subscriptions (checks, review comments) with attempt caps;
-  open a `[WIP]` draft PR immediately, stream commits, update the description,
-  treat review comments as revisions. Completes v2 #30 and v1 #1/#8/#14. **T/S, L.**
+  agents; Copilot assign-to-agent; Jules CI auto-fix)* — **shipped 2026-09-05
+  except draft-PR etiquette** (REVIEW v6 §14): SDK `bog_agents.tools.daemon_tools`
+  — `schedule(prompt, when)` ("in 2 hours", "at 09:30", ISO, cron, "every 30
+  minutes") and `subscribe(source, prompt, until_runs)` (`github:pr:<n>`,
+  `github:issue:<n>`, `github`, `webhook:<path>`, `file:<dir>[:<glob>]`) plus
+  `list_subscriptions` / `unsubscribe`, POSTing daemon jobs that carry the
+  originating `thread_id` and `goal_ref`; the CLI registers the bundle while the
+  daemon runs. Daemon: `AmbientJob.max_runs` (attempt cap — `dispatch` and the
+  tick skip, `record_run_result` auto-disables), `thread_id` / `checkpoint_db` /
+  `goal_ref`, `TriggerConfig.github_number` + `github_kinds` (the GitHub webhook
+  fans out only to matching PR/issue subscriptions), and a runner path that
+  reopens the CLI's SQLite checkpointer on the thread and frames the event as
+  the next message with the goal quoted (`langgraph-checkpoint-sqlite` added to
+  the daemon; a missing DB or package falls back to a fresh run with a warning).
+  `bog-agents daemon jobs create --max-runs --thread --github-number`. DMN-1/2
+  were fixed in Wave 0. *Was:* partial (front door only). **Open:** draft-PR
+  etiquette — open a `[WIP]` draft PR at start, stream commits, update the
+  description, treat review comments as revisions — is the remaining slice
+  (plan in REVIEW v6 §14). Completes v2 #30 and v1 #1/#8/#14 except that. **T/S, L.**
 - **#56 Detach / attach, session registry, `bog queue`** *(Cursor `agent persist`;
   Codex `codex queue` + `codex agents`; Claude cross-session `SendMessage`; Cline
   Hub multi-client + zero-loss upgrade)* — **absent.** A per-machine registry

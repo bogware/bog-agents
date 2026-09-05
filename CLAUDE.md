@@ -263,6 +263,15 @@ mutate the buffer inside the engine.
 
 ### Daemon (`libs/daemon/`)
 
+**Thread-linked jobs (ROADMAP #55):** a job with `thread_id` continues an interactive
+thread — `runner.open_thread_checkpointer` reopens the CLI's `sessions.db` (or
+`checkpoint_db`) with `AsyncSqliteSaver`, and `continuation_prompt` frames the event and
+quotes the goal. `max_runs` is the attempt cap (skipped in `dispatch`/tick, auto-disabled by
+`record_run_result`); `TriggerConfig.github_number` / `github_kinds` scope GitHub triggers
+(`github_trigger_matches`). The SDK's `bog_agents.tools.daemon_tools` bundle creates these
+jobs from inside an agent (`schedule`, `subscribe`); keep its HTTP client injectable and its
+failures as `Error:` strings.
+
 A long-running FastAPI service that fires agents on cron, interval, file-change, webhook, or git-push triggers and dispatches results to log, stdout, file, Slack, webhook, email, or GitHub-comment targets. Currently the healthiest satellite — keep its tests (flat `tests/` directory, no unit/integration split) passing when touching the SDK's `create_agent` signature.
 
 **Reliability posture (Wave 3):**

@@ -15,7 +15,7 @@ from typing import Any
 from croniter import croniter
 
 from bog_agents_daemon.file_watch import FileWatchManager
-from bog_agents_daemon.models import AmbientJob, JobRun, JobStatus, TriggerConfig, TriggerType
+from bog_agents_daemon.models import AmbientJob, JobRun, JobStatus, TriggerConfig, TriggerType, run_cap_reached
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ class DaemonScheduler:
             self._file_watcher.sync(watch_dirs)
 
         for job in jobs:
-            if not job.enabled:
+            if not job.enabled or run_cap_reached(job):
                 continue
             if job.job_id in self._running_jobs:
                 logger.debug("Job %s already running, skipping", job.job_id)
@@ -264,6 +264,18 @@ class DaemonScheduler:
             launched placeholder (status unchanged) or, when skipped, a run
             marked `status=SKIPPED`.
         """
+        if run_cap_reached(job):
+            # ROADMAP #55: the attempt cap is spent; record a skipped run so the
+            # caller sees why nothing happened.
+            capped = existing_run or JobRun(
+                job_id=job.job_id,
+                job_name=job.name,
+                trigger_type=trigger_type,
+                trigger_context=trigger_context or {},
+            )
+            capped.status = JobStatus.SKIPPED
+            capped.error = f"attempt cap reached ({job.run_count}/{job.max_runs})"
+            return capped
         # Skip-if-running: a job already executing must not be double-fired by
         # an event trigger. Reserve the slot synchronously so a second dispatch
         # arriving in the same tick is rejected too.
