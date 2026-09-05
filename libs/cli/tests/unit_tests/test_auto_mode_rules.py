@@ -807,13 +807,16 @@ class TestResolveRiskJudge:
         # cached on the second call
         assert auto_mode.resolve_risk_judge(AutoModeSettings())[0] is judge
 
-    def test_anthropic_returns_none_for_the_legacy_path(self, monkeypatch) -> None:
+    def test_anthropic_gets_the_sdk_backed_judge(self, monkeypatch) -> None:
         from bog_agents_cli import auto_mode, config as cli_config
 
         monkeypatch.setattr(cli_config.settings, "model_provider", "anthropic")
         monkeypatch.setattr(cli_config.settings, "model_name", "claude-opus-4-7")
         judge, desc = auto_mode.resolve_risk_judge(AutoModeSettings())
-        assert judge is None and "Anthropic SDK" in desc
+        # v6 #47: the SDK path is wrapped as a judge so the batched review works
+        # for Anthropic users too; `None` only when the package is missing.
+        assert "Anthropic SDK" in desc
+        assert judge is not None
 
     def test_build_failure_returns_none(self, monkeypatch) -> None:
         from bog_agents_cli import auto_mode, config as cli_config

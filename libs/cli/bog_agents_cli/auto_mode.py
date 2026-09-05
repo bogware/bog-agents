@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from bog_agents.exec_risk import command_has_exec_risk
+from bog_agents.middleware.expert_engine.types import Fact
 
 from bog_agents_cli.bash_hygiene import analyze_bash_hygiene
 from bog_agents_cli.git_ops import GitOpType, classify_git_command
@@ -243,6 +245,9 @@ class AutoModeSettings:
     extra_risky_tools: list[str] = field(default_factory=list)
     haiku_eval: HaikuEvalConfig = field(default_factory=HaikuEvalConfig)
     preflight_clarification: bool = True
+    # v6 #47: consecutive risky verdicts from the review model before auto
+    # mode pauses itself and every call asks a human (Codex's circuit breaker).
+    breaker_threshold: int = 3
 
     def merge_dict(self, d: dict[str, Any]) -> AutoModeSettings:
         """Return new settings with this dict's values overlaid.
@@ -282,10 +287,15 @@ class AutoModeSettings:
             preflight_clarification=bool(
                 d.get("preflight_clarification", self.preflight_clarification)
             ),
+            breaker_threshold=max(
+                1, int(d.get("breaker_threshold", self.breaker_threshold))
+            ),
         )
 
 
-def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSettings:
+def load_auto_mode_settings(
+    project_root: Path | None = None, *, user_home: Path | None = None
+) -> AutoModeSettings:
     """Load auto-mode settings from the cascade.
 
     Cascade order (later overrides earlier):
@@ -296,6 +306,8 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
     Args:
         project_root: Project root directory. If None, only user-global
             settings are loaded.
+        user_home: Override for the home directory (tests); production callers
+            leave None to use `Path.home()`.
 
     Returns:
         Merged AutoModeSettings.
@@ -307,6 +319,7 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
         initial=AutoModeSettings(),
         merge=lambda current, override: current.merge_dict(override),
         project_root=project_root,
+        user_home=user_home,
     )
 
 
@@ -548,6 +561,37 @@ def default_judge_spec(
 _JUDGE_CACHE: dict[str, RiskJudge] = {}
 
 
+def _anthropic_sdk_judge(model: str, fallback_model: str) -> RiskJudge | None:
+    """Wrap the legacy Anthropic-SDK Haiku call as a `RiskJudge` (None when the SDK is absent)."""
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+
+    async def _judge(prompt: str) -> str:
+        client = anthropic.AsyncAnthropic()
+        models_to_try = [model] + (
+            [fallback_model] if fallback_model and fallback_model != model else []
+        )
+        last_exc: Exception | None = None
+        for attempt_model in models_to_try:
+            try:
+                msg = await client.messages.create(
+                    model=attempt_model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return str(msg.content[0].text)
+            except anthropic.NotFoundError as exc:
+                last_exc = exc
+                continue
+        raise RuntimeError(
+            f"no judge model found ({', '.join(models_to_try)})"
+        ) from last_exc
+
+    return _judge
+
+
 def resolve_risk_judge(
     settings: AutoModeSettings | None = None,
 ) -> tuple[RiskJudge | None, str]:
@@ -571,7 +615,12 @@ def resolve_risk_judge(
         provider = model_name = None
     spec = default_judge_spec(provider, model_name, cfg.model)
     if spec is None:
-        return None, f"Anthropic SDK ({cfg.model})"
+        # Anthropic (or unknown) provider: wrap the SDK path as a judge so the
+        # batched review (#47) works for every provider through one interface.
+        sdk_judge = _anthropic_sdk_judge(cfg.model, cfg.fallback_model)
+        if sdk_judge is None:
+            return None, "unavailable (anthropic package not installed)"
+        return sdk_judge, f"Anthropic SDK ({cfg.model})"
     cached = _JUDGE_CACHE.get(spec)
     if cached is not None:
         return cached, spec
@@ -792,3 +841,290 @@ async def haiku_preflight_check(
         except Exception as exc:
             logger.debug("haiku_preflight_check error: %s", exc)
     return []
+
+
+# ---------------------------------------------------------------------------
+# Governed Auto Mode (ROADMAP #47): batched review, approval ledger, breaker
+# ---------------------------------------------------------------------------
+
+RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high", "critical")
+"""Risk ladder the batched review grades with; `high`/`critical` ask a human."""
+
+
+@dataclass(frozen=True)
+class RiskAssessment:
+    """One entry of a batched review."""
+
+    index: int
+    risk: str
+    reason: str
+
+    @property
+    def risky(self) -> bool:
+        """True when the call must fall through to a human."""
+        return self.risk in ("high", "critical")
+
+
+def _batch_risk_prompt(items: list[tuple[int, str, dict[str, Any]]], goal: str) -> str:
+    """Build the one-call review prompt for every pending tool call in a turn.
+
+    The user's stated outcome is included so the reviewer grades calls in
+    context ("delete the build dir" is expected when the goal is a clean
+    rebuild, alarming when the goal is a typo fix).
+    """
+    lines = [
+        "You are a security reviewer for an AI coding assistant. Grade EVERY pending tool call.",
+        "Respond with a JSON object ONLY — no prose:",
+        '{"assessments": [{"index": <int>, "risk": "low|medium|high|critical", "reason": "one sentence"}, ...]}',
+        "",
+        "Risk ladder: low = read-only or reversible in the working tree; medium = ordinary edits, tests, builds;",
+        "high = deletes data, force-pushes, changes system/global state, touches secrets or CI/CD;",
+        "critical = destructive or irreversible outside the working tree, or clearly unrelated to the goal.",
+        "",
+        f"User's stated goal: {goal.strip()[:600] or '(not stated)'}",
+        "",
+        "Pending tool calls:",
+    ]
+    lines.extend(
+        f"  [{index}] {_format_tool_repr(name, args)}" for index, name, args in items
+    )
+    return "\n".join(lines)
+
+
+def _parse_batch_assessments(text: str, indices: list[int]) -> list[RiskAssessment]:
+    """Parse the reviewer reply; any index it failed to grade is treated as critical."""
+    graded: dict[int, RiskAssessment] = {}
+    m = re.search(r"\{.*\}", text.strip(), re.DOTALL)
+    data: Any = None
+    if m:
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            data = None
+    entries = data.get("assessments") if isinstance(data, dict) else None
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                idx = int(entry.get("index"))
+            except (TypeError, ValueError):
+                continue
+            risk = str(entry.get("risk", "")).strip().lower()
+            if risk not in RISK_LEVELS:
+                risk = "critical"
+            graded[idx] = RiskAssessment(
+                idx, risk, str(entry.get("reason", "")).strip() or "no reason given"
+            )
+    return [
+        graded.get(
+            i,
+            RiskAssessment(
+                i, "critical", "reviewer did not grade this call — treating as risky"
+            ),
+        )
+        for i in indices
+    ]
+
+
+async def batch_risk_eval(
+    items: list[tuple[int, str, dict[str, Any]]],
+    *,
+    goal: str,
+    invoke: RiskJudge,
+) -> list[RiskAssessment]:
+    """Grade every pending tool call with ONE review-model call (v6 #47).
+
+    Replaces the per-call Haiku round-trips: one structured verdict per turn,
+    graded against the user's stated goal. Fails closed — a judge error or an
+    unparseable reply grades every call `critical`.
+
+    Args:
+        items: `(index, tool_name, tool_args)` for each call the rule engine
+            left undecided.
+        goal: The user's latest prompt (their stated outcome).
+        invoke: The session's risk judge.
+
+    Returns:
+        One `RiskAssessment` per item, in input order.
+    """
+    indices = [index for index, _name, _args in items]
+    if not items:
+        return []
+    try:
+        text = await invoke(_batch_risk_prompt(items, goal))
+    except Exception as exc:
+        logger.warning(
+            "batched risk review failed (treating every call as risky): %s", exc
+        )
+        return [
+            RiskAssessment(
+                i, "critical", f"review model unavailable ({exc.__class__.__name__})"
+            )
+            for i in indices
+        ]
+    return _parse_batch_assessments(str(text), indices)
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    """One auto-mode decision, kept so `/auto why` and `/why` can explain it."""
+
+    tool: str
+    call: str
+    decision: str
+    """`auto-approved`, `ask`, or `paused` (circuit breaker open)."""
+    rule_source: str
+    """`ask_list`, `git_ops`, `exec_risk`, `bash_hygiene`, `allow_list`, `review_model`, `breaker`, …"""
+    reason: str
+    risk: str = ""
+    judge: str = ""
+
+    def render(self) -> str:
+        """One-line, human-readable form."""
+        tail = f" [{self.risk}]" if self.risk else ""
+        via = f" via {self.judge}" if self.judge else ""
+        return f"{self.decision:<13} {self.call}  ← {self.rule_source}{tail}: {self.reason}{via}"
+
+
+class ApprovalLedger:
+    """Session ring buffer of auto-mode decisions (`/auto why [n]`)."""
+
+    def __init__(self, maxlen: int = 200) -> None:
+        self._entries: deque[ApprovalDecision] = deque(maxlen=maxlen)
+
+    def record(self, decision: ApprovalDecision) -> None:
+        """Append a decision."""
+        self._entries.append(decision)
+
+    def recent(self, n: int = 5) -> list[ApprovalDecision]:
+        """Return the last `n` decisions, newest last."""
+        return list(self._entries)[-max(1, n) :]
+
+    def __len__(self) -> int:
+        """Number of decisions kept."""
+        return len(self._entries)
+
+    def clear(self) -> None:
+        """Forget everything (tests, `/clear`)."""
+        self._entries.clear()
+
+    def render(self, n: int = 5) -> str:
+        """Render the last `n` decisions for the TUI."""
+        rows = self.recent(n)
+        if not rows:
+            return "No auto-mode decisions recorded this session yet."
+        return "\n".join(
+            [
+                "[bold]Recent auto-mode decisions[/bold] (newest last)",
+                *(f"  {d.render()}" for d in rows),
+            ]
+        )
+
+
+class AutoModeBreaker:
+    """Pause auto mode after `threshold` consecutive risky verdicts (v6 #47).
+
+    A reviewer that keeps flagging calls means the plan drifted from the goal;
+    rather than nagging with dialog after dialog, auto mode hands the session
+    back to the human until `/auto on` re-arms it.
+    """
+
+    def __init__(self, threshold: int = 3) -> None:
+        self.threshold = max(1, threshold)
+        self.consecutive_risky = 0
+        self.tripped = False
+        self.notified = False
+
+    def record(self, risky: bool) -> bool:
+        """Count a verdict; return True the moment the breaker trips."""
+        if self.tripped:
+            return False
+        if not risky:
+            self.consecutive_risky = 0
+            return False
+        self.consecutive_risky += 1
+        if self.consecutive_risky >= self.threshold:
+            self.tripped = True
+            return True
+        return False
+
+    def reset(self) -> None:
+        """Re-arm (called by `/auto on`)."""
+        self.consecutive_risky = 0
+        self.tripped = False
+        self.notified = False
+
+    def status(self) -> str:
+        """Human-readable state for `/auto status`."""
+        if self.tripped:
+            return f"paused — {self.threshold} consecutive risky verdicts; /auto on re-arms"
+        return f"armed ({self.consecutive_risky}/{self.threshold} consecutive risky verdicts)"
+
+
+_APPROVAL_LEDGER = ApprovalLedger()
+_BREAKER = AutoModeBreaker()
+
+
+def get_approval_ledger() -> ApprovalLedger:
+    """Return the session-wide approval ledger."""
+    return _APPROVAL_LEDGER
+
+
+def get_auto_mode_breaker(threshold: int | None = None) -> AutoModeBreaker:
+    """Return the session-wide circuit breaker, updating its threshold when given."""
+    if threshold is not None:
+        _BREAKER.threshold = max(1, threshold)
+    return _BREAKER
+
+
+def record_approval_decisions(
+    decisions: list[ApprovalDecision], working_dir: Path | str | None = None
+) -> None:
+    """Persist decisions to the ledger and assert them as Expert Mode facts.
+
+    The fact (`approval_decision{tool, decision, rule_source, risk, reason}`)
+    lands in the client-side expert engine's working memory, so `/why
+    approval_decision tool=execute` and YAML rules that react to approvals
+    both work. Fact assertion is best-effort: a missing or failing engine
+    never blocks a turn.
+    """
+    for decision in decisions:
+        _APPROVAL_LEDGER.record(decision)
+    if working_dir is None:
+        return
+    try:
+        from bog_agents_cli.expert_controller import get_controller
+
+        engine = get_controller(working_dir).middleware.engine
+        for decision in decisions:
+            engine.assert_fact(
+                Fact(
+                    fact_type="approval_decision",
+                    data={
+                        "tool": decision.tool,
+                        "call": decision.call,
+                        "decision": decision.decision,
+                        "rule_source": decision.rule_source,
+                        "risk": decision.risk,
+                        "reason": decision.reason,
+                    },
+                )
+            )
+    except Exception as exc:  # the ledger is the source of truth; facts are a bonus
+        logger.debug("approval_decision fact not asserted: %s", exc)
+
+
+def render_auto_mode_status(
+    auto_on: bool, project_root: Path | str | None = None
+) -> str:
+    """Render `/auto status`: on/off, the review model in use, breaker state, ledger size."""
+    _judge, judge_desc = resolve_risk_judge(
+        load_auto_mode_settings(Path(project_root) if project_root else None)
+    )
+    return (
+        f"auto mode is currently {'ON' if auto_on else 'OFF'}\n"
+        f"  review model: {judge_desc}\n"
+        f"  circuit breaker: {get_auto_mode_breaker().status()}\n"
+        f"  decisions this session: {len(get_approval_ledger())} (/auto why [n])"
+    )

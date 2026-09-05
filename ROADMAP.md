@@ -719,7 +719,7 @@ ADK, and a contract is itself a feature to the target users.
 ### Tier 1 — Table stakes (users now expect these; S/M each)
 
 - **#47 Governed Auto Mode** *(Claude Code auto-mode default Aug 14; Codex
-  Guardian; Antigravity proceed-in-sandbox)* — **partial.** bog has the
+  Guardian; Antigravity proceed-in-sandbox)* — **shipped 2026-09-04** (was partial; see REVIEW v6 §6). bog has the
   deterministic chain (`ask_list → git_ops → exec_risk → bash_hygiene`) and a Haiku
   backstop hard-bound to the `anthropic` package (`auto_mode.py:455-490`), off by
   default. Delta: (1) inject the judge through the model factory so Ollama /

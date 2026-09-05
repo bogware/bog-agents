@@ -1897,6 +1897,46 @@ def _check_aws_credentials() -> bool:
         return False
 
 
+def _ask_approval_mode(con: Any) -> bool:  # noqa: ANN401 — rich Console
+    """Ask the first-run user which approval mode to default to (v6 #47).
+
+    Writes `auto_mode.enabled` to the user-level settings.json; the CLI reads
+    it when no permission flag is given. Auto is recommended: the rule engine
+    approves obviously safe calls, a review model grades the rest against the
+    stated goal, expert rules still gate every call, and `/auto why` explains
+    each decision.
+
+    Args:
+        con: Rich console for prompts.
+
+    Returns:
+        True when auto mode was chosen.
+    """
+    from rich.prompt import Prompt
+
+    from bog_agents_cli._settings_cascade import save_user_section
+
+    con.print()
+    con.print("[bold]Approval mode:[/bold]")
+    con.print(
+        "  [cyan]1[/cyan]) auto (recommended) — safe tool calls run without prompts; uncertain ones are graded by a review model; /auto why explains decisions"
+    )
+    con.print("  [cyan]2[/cyan]) ask — approve every tool call by hand")
+    choice = Prompt.ask("Enter number", choices=["1", "2"], default="1")
+    enabled = choice == "1"
+    try:
+        save_user_section("auto_mode", {"enabled": enabled})
+    except OSError as exc:
+        con.print(
+            f"[yellow]Could not save the approval mode ({exc}); use /auto in the session.[/yellow]"
+        )
+    else:
+        con.print(
+            f"[green]Approval mode: {'auto' if enabled else 'ask'}[/green] (change later with /auto or --permission-mode)"
+        )
+    return enabled
+
+
 def _run_setup_wizard() -> str:
     """Interactive wizard to help the user configure a provider.
 
@@ -2010,6 +2050,7 @@ def _run_setup_wizard() -> str:
     )
 
     _, name, env_var, model_spec, hint = next(p for p in providers if p[0] == choice)
+    _ask_approval_mode(con)
 
     # --- AWS Bedrock path ---
     if env_var == "__AWS__":

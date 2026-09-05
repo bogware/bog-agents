@@ -956,6 +956,13 @@ def _normalize_permission_mode(args: argparse.Namespace) -> None:
         mode = "bypass"
 
     if mode is None:
+        # v6 #47: honour the wizard's saved approval mode when neither a
+        # permission mode nor a legacy approval flag was given explicitly.
+        if not any(
+            bool(getattr(args, key, False))
+            for key in ("auto_approve", "auto_mode", "always_ask")
+        ):
+            args.auto_mode = _settings_default_auto_mode()
         return
 
     target = _PERMISSION_MODE_FLAGS[mode]
@@ -973,6 +980,16 @@ def _normalize_permission_mode(args: argparse.Namespace) -> None:
     args.auto_mode = target.get("auto_mode", False)
     args.always_ask = target.get("always_ask", False)
     args.plan_mode = target.get("plan_mode", False)
+
+
+def _settings_default_auto_mode() -> bool:
+    """Return `auto_mode.enabled` from the settings cascade (False on any error)."""
+    try:
+        from bog_agents_cli.auto_mode import load_auto_mode_settings
+
+        return bool(load_auto_mode_settings(Path.cwd()).enabled)
+    except Exception:
+        return False
 
 
 def _exit_permission_conflict(msg: str) -> None:

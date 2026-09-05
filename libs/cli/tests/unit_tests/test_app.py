@@ -1979,10 +1979,12 @@ class TestCommandSurfaceEnhancements:
                 await app._handle_command("/diff")
                 await pilot.pause()
 
-            app_msgs = app.query(AppMessage)
-            assert any(
-                "diff --git a/app.py b/app.py" in str(w._content) for w in app_msgs
-            )
+            # v6 CLI-5: unified diffs render through the coloured DiffMessage,
+            # not a plain AppMessage.
+            from bog_agents_cli.widgets.messages import DiffMessage
+
+            diffs = list(app.query(DiffMessage))
+            assert diffs and "diff --git a/app.py b/app.py" in diffs[0]._diff_content
 
     async def test_health_command_builds_prompt_and_sends(self) -> None:
         """`/health` should build a prompt and forward it to the agent."""

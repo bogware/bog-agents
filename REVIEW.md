@@ -185,7 +185,7 @@ problems.
 
 **Corrections to this report from the fix work:** the inventory's claim that `libs/partners/runloop/` contains only `__pycache__` was wrong — it holds an untracked `langchain_runloop` package with its own venv and tests; it was left untouched (untracked, not ours to delete). The registry *does* have an `available` field; every spec sets it `True`, so the finding stands as "no spec was ever marked unavailable".
 
-**Not started (next):** Wave B, Wave C, Wave D, and ROADMAP #47 Governed Auto Mode as the Wave 1 lead.
+**Next:** Wave C and Wave D (see §7), then ROADMAP #51 cost certainty on the #47 substrate.
 
 ## 5. Shipped in Wave A (2026-09-04, same branch, one commit)
 
@@ -196,6 +196,36 @@ Governance now counts and enforces everywhere it claimed to. Each item carries r
 - **v6 SDK-10** — guardrails enforce on the sync path: an async-only guardrail (every `LLMGuardrail`) is driven to completion with `asyncio.run` (or on a worker thread when a loop is already running) instead of being closed and skipped at DEBUG level.
 - **v6 SDK-11** — `FeatureConfig(enable_evidence_bundle=True, evidence_check_commands=…)` attaches `EvidenceBundleMiddleware`; `bog-agents -n … --pr --pr-evidence` enables it on the PR-mode agent and appends a proof-of-work section (changed files, test outcome) rendered by the SDK's `render_evidence_markdown` to the PR body. First reachable surface for ROADMAP #29/#67.
 - **v6 CLI-9** — the `/auto` risk judge is provider-agnostic: `resolve_risk_judge` builds a reviewer from the active provider (OpenAI → its cheap tier; Ollama / Bedrock / Google / … → the active model; an explicit `provider:model` in `haiku_eval.model` always wins; Anthropic keeps the SDK Haiku path) and `haiku_risk_eval(invoke=…)` uses it, failing closed on any judge error. Help and `/auto` wording no longer promise Haiku regardless of provider.
+
+## 6. Shipped: Wave B + ROADMAP #47 Governed Auto Mode (2026-09-04, same branch, two commits)
+
+**Wave B — first-30-minutes polish** (one commit): **CLI-5** `/diff` renders through the coloured `DiffMessage` (600-line cap; `--stat`/`--name-only` stay plain text with markup escaped); **CLI-6** the Anthropic auto-default is Sonnet-class and the wizard / `/model --default` confirm a model with its $/1M-token price and a `/cost` pointer; **CLI-7** the Bedrock wizard branch runs the hittability probe before saving, and the retired `claude-sonnet-4-20250514` id is gone; **CLI-8** headless commands recover from Git Bash path mangling; **CLI-13** the wizard offers OpenRouter and xAI lanes; **DMN-3** `daemon install` on Windows registers a Task Scheduler task (`--platform windows`, injectable runner); **DEL-4** the VS Code child env passes proxy / TLS variables (compiles clean).
+
+**ROADMAP #47 — Governed Auto Mode** (one commit; the Wave 1 lead, built on Wave A's judge substrate):
+- **One batched review per turn.** Everything the deterministic chain leaves `default` is graded by a single review-model call against the user's stated goal, on a `low|medium|high|critical` ladder (`batch_risk_eval`); `high`/`critical` ask a human. Fails closed: a judge error or an ungraded index is `critical`.
+- **Every decision is explainable.** `ApprovalLedger` keeps the session's decisions (rule source, verdict, reason, judge); `/auto why [n]` renders them and each one is asserted as an `approval_decision` fact into the client-side expert engine, so `/why approval_decision tool=execute` and YAML rules that react to approvals work. Expert rules still gate every call at the tool boundary, so a YAML deny overrides the reviewer by construction — the `/auto on` message now says so.
+- **Circuit breaker.** `breaker_threshold` (default 3) consecutive risky verdicts pause auto mode for the session: calls are marked `paused`, a one-time notice is mounted, `/auto status` shows the state, `/auto on` re-arms.
+- **Provider-agnostic for everyone.** `resolve_risk_judge` now also wraps the Anthropic SDK path as a judge, so the batched review has one interface across providers.
+- **Auto is the wizard-recommended default.** The first-run wizard asks "Approval mode: auto (recommended) / ask" and writes `auto_mode.enabled` to `~/.bog-agents/settings.json` (new `save_user_section` writer); the CLI honours it when no permission mode or legacy approval flag is given.
+
+Gates after both commits: CLI 5,600+ passed, daemon green, `ty` and ruff clean, app.py at 17,899 lines under its 17,900 ratchet (the `/auto status` rendering moved to `auto_mode.render_auto_mode_status`).
+
+## 7. Prepared, not started: Wave C and Wave D
+
+Grounded plans for the next two waves, each independent of the other and of #47's follow-ups, so they can run in parallel.
+
+**Wave C — context / perf tail (SDK-2/3/4/5/6)**
+- **SDK-2** `street_sweeper.py:773-786` — `_get_thread_id` mints `session_<uuid>` per call when the run has no `configurable.thread_id`. Fix: derive a stable id once per middleware instance when no thread id is configured (cache on `self`), and key `_history_path` on it; regression test: plain `agent.invoke` twice → same offload file, `recall_swept` finds the marker.
+- **SDK-3** (= CTX-2) `cli/agent.py:2085-2094` appends the sweeper via `middleware=` and `graph.py:174 _apply_custom_middleware` splices novel middleware after the core stack (inner of summarization). Fix: give `StreetSweeperMiddleware` the same `.name` as the FeatureConfig-route instance so the by-name replacement path puts it at the canonical (outer) position; update `test_middleware_canonical_order` in the same commit.
+- **SDK-4** (= PERF-4) `street_sweeper.py:844 _offload` rewrites the whole offload file each call into `swept_context/` under the backend root (the user's CWD). Fix: per-marker write-once files under `<config dir>/swept/<thread>/` with an append-only index; `recall_swept` reads by marker; nothing lands in the project tree.
+- **SDK-5** (= PERF-5) `tools/bundles.py:410-424` embeds each memory block sequentially with `embedder(block)`. Fix: accept an optional `embed_batch` callable (LangChain `embed_documents`), build the vectors lazily on first `memory_search` call, and persist them in the existing SQLite index keyed by content hash so restarts do not re-embed.
+- **SDK-6** (= PERF-6) `bog_agents/__init__.py:6-10` eagerly imports builder / feature_config / graph. Fix: move `AgentBuilder`, `AgentConfig`, `FeatureConfig`, `DeepAgentState`, `create_agent` into the existing `_LAZY_IMPORTS` map (the `__getattr__` machinery is already there); keep `__version__` eager; add a test that `import bog_agents` does not import `langgraph` (check `sys.modules`).
+
+**Wave D — delivery truth (DEL-3, SAT-4, SAT-3, SAT-5)**
+- **DEL-3** `ci.yml:26-139` gates every job to in-repo branches on self-hosted runners. Fix: add a hosted `ubuntu-latest` leg for `lint` + one `test` cell (sdk, py3.12) with no fork gate, re-enable py3.11 in the matrix (or drop the classifier from all six `pyproject.toml`), add a `macos-latest` cell for the launchd / seatbelt / PTY code, and a PR-triggered VS Code `compile` leg (`npx tsc -p ./`).
+- **SAT-4** VS Code: `package.json:49/107` declare `bog-agents.chatView` and `extension.ts` never registers a `WebviewViewProvider`; `dataset.streaming` is never cleared so each reply overwrites the last; `autoApprove` (`package.json:120`) is never read. Fix: a `ChatViewProvider` class reusing `getChatHtml`, clear `streaming` on the `done` event and append a new bubble per prompt, pass `--auto` when `autoApprove` is set, then run the manual `vscode-extension.yml` publish (decision 2026-09-04: publish, not delete).
+- **SAT-3** ACP `server.py:94-108,429` shares one `_agent` / `_cwd` / `_cancelled` across sessions. Fix: a `dict[session_id, SessionRuntime(agent, cwd, cancel_event)]`, `set_session_mode` rebuilds only its own session, `cancel` flips its own event; then publish `bog-agents-acp` and list it in Zed's ACP registry (#65).
+- **SAT-5** harbor `bog_agents_wrapper.py:158` calls the deprecated `als_info`; `backend.py:61 run_sync` uses `asyncio.get_event_loop()`. Fix: `als` + `aglob_info` replacements and `asyncio.run` on a fresh loop; add the missing `.env.example` the README references.
 
 ### Decisions taken 2026-09-04
 Commit this report on `docs/review-v6` off `origin/main` and start Wave 0 immediately; Wave 1 leads with ROADMAP #47 Governed Auto Mode; 1.0 = Wave 0 + Wave 1 + Wave 2 + a written stability contract; #60 native Windows sandbox is a committed 1.x headline; the VS Code extension is fixed and published.

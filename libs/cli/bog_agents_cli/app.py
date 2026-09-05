@@ -5724,7 +5724,7 @@ class BogAgentsApp(App):
         commands flagged as risky surface an approval dialog. ``/always-ask``
         overrides auto mode.
 
-        Usage: /auto [on|off|status]
+        Usage: /auto [on|off|status|why [n]]
         """
         await self._mount_message(UserMessage(command))
         if self._session_state is None:
@@ -5734,9 +5734,26 @@ class BogAgentsApp(App):
         arg = command.strip().split(maxsplit=1)
         verb = arg[1].strip().lower() if len(arg) > 1 else ""
 
+        from bog_agents_cli.auto_mode import (
+            get_approval_ledger,
+            get_auto_mode_breaker,
+            render_auto_mode_status,
+        )
+
+        if verb == "why" or verb.startswith("why "):
+            # v6 #47: explain the auto-mode decisions of this session.
+            try:
+                count = int(verb[3:].strip()) if verb[3:].strip() else 5
+            except ValueError:
+                count = 5
+            await self._mount_message(AppMessage(get_approval_ledger().render(count)))
+            return
         if verb == "status":
-            current = "ON" if self._session_state.auto_mode else "OFF"
-            await self._mount_message(AppMessage(f"auto mode is currently {current}"))
+            await self._mount_message(
+                AppMessage(
+                    render_auto_mode_status(self._session_state.auto_mode, self._cwd)
+                )
+            )
             return
 
         if verb == "on":
@@ -5746,19 +5763,24 @@ class BogAgentsApp(App):
         elif verb in ("", "toggle"):
             new_state = not self._session_state.auto_mode
         else:
-            await self._mount_message(AppMessage("Usage: /auto [on|off|status]"))
+            await self._mount_message(
+                AppMessage("Usage: /auto [on|off|status|why [n]]")
+            )
             return
 
         self._session_state.auto_mode = new_state
         self._auto_mode = new_state
+        if new_state:
+            get_auto_mode_breaker().reset()  # /auto on re-arms the circuit breaker (v6 #47)
         self._refresh_permission_mode_indicator()
         if new_state:
             await self._mount_message(
                 AppMessage(
                     "Auto mode ON. Tool calls are evaluated against built-in rules; "
                     "risky shell commands are reviewed by a model from your active provider before running. "
-                    "Use /auto off to return to interactive approval, or "
-                    "/always-ask to require approval for everything."
+                    "Expert rules still gate every call at the tool boundary and can deny what the reviewer allows. "
+                    "/auto why explains each decision; /auto off returns to interactive approval; "
+                    "/always-ask requires approval for everything."
                 )
             )
         else:

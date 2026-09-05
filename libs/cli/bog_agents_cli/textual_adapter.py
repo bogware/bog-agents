@@ -756,51 +756,134 @@ def _build_interrupted_ai_message(
 
 async def _evaluate_auto_mode_batch(
     action_requests: list[dict],
+    *,
+    goal: str = "",
+    notify: Callable[[Any], Awaitable[None]] | None = None,
+    working_dir: Path | str | None = None,
 ) -> bool:
-    """Evaluate a batch of tool-call requests under auto mode.
+    """Decide whether a turn's tool calls may run without a dialog (v6 #47).
 
-    Runs the rule engine over every request in the batch. Falls back to Haiku
-    for any request whose verdict has ``rule_source == "default"``. Returns
-    ``True`` when all requests are safe to auto-approve, ``False`` if any
-    should surface an approval dialog.
+    Governed Auto Mode, in order: (1) the deterministic rule engine
+    (ask-list → git classifier → exec-risk → hygiene → allow-list) decides
+    what it can; (2) everything it left `default` is graded by ONE batched
+    review-model call against the user's stated goal; (3) every decision is
+    written to the approval ledger and asserted as an `approval_decision`
+    fact so `/auto why` and `/why` can explain it; (4) `breaker_threshold`
+    consecutive risky verdicts pause auto mode for the session.
 
     Args:
-        action_requests: List of tool-call request dicts (each has ``name``
-            and ``args`` keys).
+        action_requests: Tool-call request dicts (`name`, `args`).
+        goal: The user's latest prompt.
+        notify: Async mount callable for the one-time "paused" notice.
+        working_dir: Project root for fact assertion (defaults to cwd).
 
     Returns:
-        True when the entire batch can be auto-approved, False otherwise.
+        True when every request may be auto-approved, False when any must
+        surface an approval dialog.
     """
     from bog_agents_cli.auto_mode import (
+        ApprovalDecision,
         AutoDecision,
         AutoModeRuleEngine,
-        haiku_risk_eval,
+        _format_tool_repr,
+        batch_risk_eval,
+        get_auto_mode_breaker,
         load_auto_mode_settings,
+        record_approval_decisions,
         resolve_risk_judge,
     )
 
     am_settings = load_auto_mode_settings()
     engine = AutoModeRuleEngine(am_settings)
+    breaker = get_auto_mode_breaker(am_settings.breaker_threshold)
+    decisions: list[ApprovalDecision] = []
+    pending: list[tuple[int, str, dict[str, Any]]] = []
+    approve_all = True
 
-    for req in action_requests:
+    for index, req in enumerate(action_requests):
         t_name = req.get("name", "")
         t_args = req.get("args", {}) or {}
         if not isinstance(t_args, dict):
             t_args = {}
+        call = _format_tool_repr(t_name, t_args)
         verdict = engine.evaluate(t_name, t_args)
         if verdict.decision == AutoDecision.ASK:
-            return False
-        if verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
-            # v6 CLI-9: judge with the active provider's cheap tier; `None`
-            # keeps the legacy Anthropic-SDK Haiku path.
-            judge, _judge_desc = resolve_risk_judge(am_settings)
-            is_risky, _reason = await haiku_risk_eval(
-                t_name, t_args, model=am_settings.haiku_eval.model, invoke=judge
+            approve_all = False
+            decisions.append(
+                ApprovalDecision(
+                    t_name, call, "ask", verdict.rule_source, verdict.reason
+                )
             )
-            if is_risky:
-                return False
+        elif verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
+            pending.append((index, t_name, t_args))
+        else:
+            decisions.append(
+                ApprovalDecision(
+                    t_name, call, "auto-approved", verdict.rule_source, verdict.reason
+                )
+            )
 
-    return True
+    if pending and breaker.tripped:
+        approve_all = False
+        for _index, t_name, t_args in pending:
+            decisions.append(
+                ApprovalDecision(
+                    t_name,
+                    _format_tool_repr(t_name, t_args),
+                    "paused",
+                    "breaker",
+                    breaker.status(),
+                )
+            )
+    elif pending:
+        judge, judge_desc = resolve_risk_judge(am_settings)
+        if judge is None:
+            approve_all = False
+            for _index, t_name, t_args in pending:
+                decisions.append(
+                    ApprovalDecision(
+                        t_name,
+                        _format_tool_repr(t_name, t_args),
+                        "ask",
+                        "review_model",
+                        f"no review model ({judge_desc})",
+                    )
+                )
+        else:
+            assessments = await batch_risk_eval(pending, goal=goal, invoke=judge)
+            tripped_now = False
+            for (_index, t_name, t_args), assessment in zip(
+                pending, assessments, strict=True
+            ):
+                risky = assessment.risky
+                if risky:
+                    approve_all = False
+                tripped_now = breaker.record(risky) or tripped_now
+                decisions.append(
+                    ApprovalDecision(
+                        t_name,
+                        _format_tool_repr(t_name, t_args),
+                        "ask" if risky else "auto-approved",
+                        "review_model",
+                        assessment.reason,
+                        risk=assessment.risk,
+                        judge=judge_desc,
+                    )
+                )
+            if tripped_now and notify is not None and not breaker.notified:
+                breaker.notified = True
+                from bog_agents_cli.widgets.messages import AppMessage
+
+                await notify(
+                    AppMessage(
+                        f"Auto mode paused: {breaker.threshold} consecutive tool calls were graded risky, "
+                        "so every call will ask until you re-arm with /auto on. "
+                        "See /auto why for the decisions."
+                    )
+                )
+
+    record_approval_decisions(decisions, working_dir or Path.cwd())
+    return approve_all
 
 
 async def execute_task_textual(
@@ -1577,7 +1660,9 @@ async def execute_task_textual(
                     elif auto_mode and not always_ask:
                         # Smart auto-mode: rule engine + optional Haiku eval.
                         should_auto_approve = await _evaluate_auto_mode_batch(
-                            action_requests
+                            action_requests,
+                            goal=user_input,
+                            notify=adapter._mount_message,
                         )
 
                     if should_auto_approve:
