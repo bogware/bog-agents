@@ -315,6 +315,22 @@ def budget_stop_message(payload: dict[str, Any]) -> str:
 # ------------------------------------------------------------------ /cost
 
 
+async def run_cost_command(app: Any, command: str) -> None:  # noqa: ANN401 - the App
+    """Body of `/tokens` / `/cost`: explain (tracked), subcommands, or the usage report."""
+    from bog_agents_cli.widgets.messages import AppMessage
+
+    if await maybe_run_cost_explain(app, command):
+        return
+    handled = handle_cost_subcommand(app, command)
+    if handled is not None:
+        await app._mount_message(AppMessage(handled))
+        return
+    tracker = getattr(app, "_token_tracker", None)
+    has_usage = bool(tracker and getattr(tracker, "current_context", 0) > 0)
+    conv_tokens = await app._get_conversation_token_count() if has_usage else None
+    await app._mount_message(AppMessage(render_tokens_report(app, conv_tokens)))
+
+
 async def maybe_run_cost_explain(app: Any, command: str) -> bool:  # noqa: ANN401 - the App
     """Run `/cost explain <question>` as a tracked model command; `False` for every other verb."""
     if command.lower().split()[1:2] != ["explain"]:

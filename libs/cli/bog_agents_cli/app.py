@@ -28,6 +28,11 @@ from textual.message import Message
 from textual.screen import ModalScreen
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli.changes_controller import (
+    maybe_reorder_diff,
+    mount_changes_tray,
+    run_changes_command,
+)
 from bog_agents_cli.clipboard import (
     copy_selection_to_clipboard_async,
     read_clipboard_text,
@@ -43,7 +48,7 @@ from bog_agents_cli.config import (
     settings,
 )
 from bog_agents_cli.configurable_model import CLIContext
-from bog_agents_cli.cost_controller import gate_turn, preflight_start
+from bog_agents_cli.cost_controller import gate_turn, preflight_start, run_cost_command
 from bog_agents_cli.hooks import dispatch_hook
 from bog_agents_cli.model_config import ModelSpec, save_recent_model
 from bog_agents_cli.prompt_cache import cache_break_note, thread_reset_message
@@ -3283,25 +3288,14 @@ class BogAgentsApp(App):
         await self._handle_onboard_command()
 
     async def _handle_tokens_command(self, command: str) -> None:
-        """Show token usage, spend and caps; `/cost budget <N|off>` sets the session cap (#51)."""
-        from bog_agents_cli.cost_controller import (
-            handle_cost_subcommand,
-            maybe_run_cost_explain,
-            render_tokens_report,
-        )
-
+        """`/cost` — usage report, `budget|caps|today|tree|cache` verbs and `explain <question>` (#51/#52)."""
         await self._mount_message(UserMessage(command))
-        if await maybe_run_cost_explain(self, command):
-            return
-        handled = handle_cost_subcommand(self, command)
-        if handled is not None:
-            await self._mount_message(AppMessage(handled))
-            return
-        has_usage = bool(
-            self._token_tracker and self._token_tracker.current_context > 0
-        )
-        conv_tokens = await self._get_conversation_token_count() if has_usage else None
-        await self._mount_message(AppMessage(render_tokens_report(self, conv_tokens)))
+        await run_cost_command(self, command)
+
+    async def _handle_changes_command(self, command: str) -> None:
+        """`/changes [show <n> | revert <n> [hunk] | keep]` — the turn-end changes tray (ROADMAP #66)."""
+        await self._mount_message(UserMessage(command))
+        await run_changes_command(self, command)
 
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
@@ -8084,7 +8078,7 @@ class BogAgentsApp(App):
         if raw_arg in {"help", "--help", "-h"}:
             await self._mount_message(
                 AppMessage(
-                    "Usage: /diff | /diff --cached | /diff --stat | "
+                    "Usage: /diff | /diff --cached | /diff --stat | /diff --ordered | "
                     "/diff --name-only | /diff <git-diff-args>"
                 )
             )
@@ -8096,6 +8090,8 @@ class BogAgentsApp(App):
             args = ["diff", "--stat"]
         elif raw_arg.lower() in {"names", "name-only", "--name-only"}:
             args = ["diff", "--name-only"]
+        elif raw_arg.lower() in {"ordered", "--ordered"}:
+            args = ["diff", "--minimal"]  # ROADMAP #66: blocks reordered below
         elif raw_arg:
             args = ["diff", *shlex.split(raw_arg)]
         else:
@@ -8124,7 +8120,9 @@ class BogAgentsApp(App):
         # v6 CLI-5: render through the same coloured DiffMessage the edit
         # widgets use — the old plain AppMessage was monochrome and treated
         # `[...]` in diff lines as Rich markup.
-        await self._mount_message(DiffMessage(output, max_lines=600))
+        await self._mount_message(
+            DiffMessage(maybe_reorder_diff(raw_arg, output), max_lines=600)
+        )
 
     async def _handle_branch_command(self, command: str) -> None:
         """Handle `/branch` as a lightweight local git-branch helper."""
@@ -15039,6 +15037,7 @@ class BogAgentsApp(App):
                 from bog_agents_cli.cost_controller import record_turn_spend
 
                 record_turn_spend(turn_stats, cwd=self._cwd)
+                await mount_changes_tray(self, turn_stats)
 
             if self._auto_commit and turn_stats is not None:
                 from bog_agents_cli.auto_commit import run_auto_commit

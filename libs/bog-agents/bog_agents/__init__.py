@@ -49,6 +49,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "SpendLedger": ("bog_agents.spend_ledger", "SpendLedger"),
     "check_ceiling": ("bog_agents.spend_ledger", "check_ceiling"),
     "parse_budget_resume": ("bog_agents.middleware.cost_tracker", "parse_budget_resume"),
+    # Proof-ordered diffs (ROADMAP #66).
+    "rank_changes": ("bog_agents.diff_ordering", "rank_changes"),
+    "reorder_unified_diff": ("bog_agents.diff_ordering", "reorder_unified_diff"),
+    "split_unified_diff": ("bog_agents.diff_ordering", "split_unified_diff"),
     "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),
     # Governed agent teams (#21) — claimable task ledger + mailboxes + coordinator.
     "TaskLedger": ("bog_agents.teams", "TaskLedger"),

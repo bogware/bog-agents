@@ -163,6 +163,20 @@ def render_evidence_markdown(bundle: EvidenceBundle) -> str:
     if bundle.diff_stat.strip():
         lines.append("## Changes")
         lines.append("")
+        if bundle.diff.strip():
+            # ROADMAP #66: files in explanatory order (entry points and public
+            # signatures first; tests, snapshots and lockfiles last) so a
+            # reviewer reads the proof in the order it explains itself.
+            from bog_agents.diff_ordering import render_ordered_stat, split_unified_diff
+
+            ordered = render_ordered_stat(split_unified_diff(bundle.diff))
+            if ordered:
+                lines.append("Files in explanatory order:")
+                lines.append("")
+                lines.append("```")
+                lines.append(ordered)
+                lines.append("```")
+                lines.append("")
         lines.append("```")
         lines.append(bundle.diff_stat.rstrip())
         lines.append("```")
