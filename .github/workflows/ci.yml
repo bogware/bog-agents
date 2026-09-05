@@ -1,5 +1,14 @@
 # CI: Lint and test SDK, CLI, daemon, and satellites (acp/harbor/daytona), plus
 # a lockfile-drift guard, on push to main and PRs.
+#
+# Two runner pools (v6 DEL-3):
+# - self-hosted (Linux/Windows): the full matrix, gated to in-repo branches so
+#   untrusted fork code never runs on our machines;
+# - GitHub-hosted (`hosted-*`, `vscode-extension`): ungated — the hosted
+#   sandbox is what makes fork PRs safe to build — so external contributors
+#   get lint + a Linux test cell + the two cells the self-hosted pool cannot
+#   offer (py3.11, the floor every pyproject advertises, and macOS for the
+#   launchd / seatbelt / PTY code).
 
 name: CI
 
@@ -61,7 +70,9 @@ jobs:
           - { name: sdk,    dir: libs/bog-agents }
           - { name: cli,    dir: libs/cli }
           - { name: daemon, dir: libs/daemon }
-        python: ["3.12", "3.13"]  # 3.11 temporarily disabled
+        # 3.11 re-enabled (v6 DEL-3): SDK 2,943 / CLI 5,654 / daemon 243 green on
+        # CPython 3.11.15 locally; every pyproject still advertises >=3.11.
+        python: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: "./.github/actions/uv_setup"
@@ -85,6 +96,91 @@ jobs:
         if: matrix.package.name == 'daemon'
         run: uv run --group test pytest tests/ -q --timeout=30
         working-directory: ${{ matrix.package.dir }}
+
+  # v6 DEL-3: hosted legs. No fork gate — GitHub-hosted runners are the
+  # sandbox. Keep these cheap (lint + one SDK cell per OS/version) so the
+  # self-hosted matrix stays the authoritative full run.
+  hosted-lint:
+    name: "Hosted lint (${{ matrix.package.name }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        package:
+          - { name: sdk, dir: libs/bog-agents }
+          - { name: cli, dir: libs/cli }
+          - { name: daemon, dir: libs/daemon }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/uv_setup"
+        with:
+          python-version: "3.12"
+          working-directory: ${{ matrix.package.dir }}
+      - run: uv sync --group test
+        working-directory: ${{ matrix.package.dir }}
+      - run: make lint
+        working-directory: ${{ matrix.package.dir }}
+
+  hosted-test:
+    name: "Hosted test (${{ matrix.package.name }}, py${{ matrix.python }}, ${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    # macOS is advisory until its first green run on a PR — the seatbelt /
+    # launchd / PTY paths have never had CI, so an environment-specific red must
+    # not block unrelated work. Flip to blocking (drop this line) once green.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.12", package: { name: sdk, dir: libs/bog-agents } }
+          - { os: ubuntu-latest, python: "3.11", package: { name: sdk, dir: libs/bog-agents } }
+          - { os: macos-latest, python: "3.12", package: { name: sdk, dir: libs/bog-agents } }
+          - { os: macos-latest, python: "3.12", package: { name: daemon, dir: libs/daemon } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ matrix.python }}
+          working-directory: ${{ matrix.package.dir }}
+      - run: uv sync --group test
+        working-directory: ${{ matrix.package.dir }}
+      - name: Run tests
+        if: matrix.package.name != 'daemon'
+        run: uv run --group test pytest -n auto --disable-socket --allow-unix-socket tests/unit_tests/
+        working-directory: ${{ matrix.package.dir }}
+      - name: Run tests
+        if: matrix.package.name == 'daemon'
+        run: uv run --group test pytest tests/ -q --timeout=30
+        working-directory: ${{ matrix.package.dir }}
+
+  # v6 DEL-3 / SAT-4: the extension had no PR CI at all — `vscode-extension.yml`
+  # is a manual release workflow — so a broken `tsc` or an unpublishable
+  # manifest (SVG icon, missing LICENSE, no eslint config) only surfaced at
+  # release time. Compile, lint and package on every PR; the VSIX is attached
+  # as an artifact for manual install.
+  vscode-extension:
+    name: "VS Code extension (compile + lint + package)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: libs/vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: libs/vscode-extension/package-lock.json
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run lint
+      - run: npx --yes @vscode/vsce package --out bog-agents-vscode.vsix
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension-vsix
+          path: libs/vscode-extension/bog-agents-vscode.vsix
 
   # DEL-5/v4: guard against lockfile drift (harbor + daytona locks were stale and
   # nothing caught it — the test jobs `uv sync` without --frozen, so they silently

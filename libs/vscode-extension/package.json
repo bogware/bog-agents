@@ -2,10 +2,10 @@
   "name": "bog-agents-vscode",
   "displayName": "Bog Agents",
   "description": "Bog Agents AI coding assistant for VS Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "bog-agents",
   "license": "MIT",
-  "icon": "resources/icon.svg",
+  "icon": "resources/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/bogware/bog-agents.git",
@@ -120,7 +120,7 @@
         "bog-agents.autoApprove": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-approve tool calls without confirmation"
+          "description": "Run tool calls without asking (passes --auto-approve to the CLI). Off by default; the chat runs in --print mode, which cannot answer approval prompts, so a tool call that needs approval ends the turn instead."
         },
         "bog-agents.cliPath": {
           "type": "string",
@@ -141,11 +141,14 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
     "eslint": "^8.50.0",
     "typescript": "^5.3.0"
   }

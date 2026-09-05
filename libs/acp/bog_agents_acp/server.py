@@ -78,6 +78,27 @@ class AgentSessionContext:
     mode: str
 
 
+@dataclass
+class _SessionRuntime:
+    """Per-session state (v6 SAT-3).
+
+    One ACP server serves many editor sessions. Before this, a single
+    `_agent` / `_cwd` / `_cancelled` triple was shared by all of them, so a
+    second Zed window rebuilt the first one's agent, resolved `@file`
+    mentions against the wrong tree, and `cancel` on one session aborted the
+    other's turn.
+
+    Attributes:
+        cwd: The session's working directory (from `new_session`).
+        agent: The compiled graph serving this session, built lazily.
+        cancelled: Set by `cancel`, consumed by the session's own `prompt`.
+    """
+
+    cwd: str
+    agent: CompiledStateGraph | None = None
+    cancelled: bool = False
+
+
 class AgentServerACP(ACPAgent):
     """ACP agent server that bridges Bog Agents with the Agent Client Protocol."""
 
@@ -91,9 +112,8 @@ class AgentServerACP(ACPAgent):
     ) -> None:
         """Initialize the ACP agent server with the given agent factory or compiled graph."""
         super().__init__()
-        self._cwd = ""
         self._agent_factory = agent
-        self._agent: CompiledStateGraph | None = None
+        self._sessions: dict[str, _SessionRuntime] = {}
 
         if isinstance(agent, CompiledStateGraph):
             if modes is not None:
@@ -105,9 +125,7 @@ class AgentServerACP(ACPAgent):
 
         self._session_modes: dict[str, str] = {}
         self._session_mode_states: dict[str, SessionModeState] = {}
-        self._cancelled = False
         self._session_plans: dict[str, list[dict[str, Any]]] = {}
-        self._session_cwds: dict[str, str] = {}
         self._allowed_command_types: dict[
             str, set[tuple[str, str | None]]
         ] = {}  # Track allowed command types per session
@@ -143,7 +161,7 @@ class AgentServerACP(ACPAgent):
         if mcp_servers is None:
             mcp_servers = []
         session_id = uuid4().hex
-        self._session_cwds[session_id] = cwd
+        self._sessions[session_id] = _SessionRuntime(cwd=cwd)
 
         if self._modes is not None:
             self._session_modes[session_id] = self._modes.current_mode_id
@@ -173,8 +191,25 @@ class AgentServerACP(ACPAgent):
         return SetSessionModeResponse()
 
     async def cancel(self, session_id: str, **kwargs: Any) -> None:  # noqa: ARG002  # ACP protocol interface parameters
-        """Cancel the current execution."""
-        self._cancelled = True
+        """Cancel the current execution of `session_id` only (v6 SAT-3)."""
+        runtime = self._sessions.get(session_id)
+        if runtime is not None:
+            runtime.cancelled = True
+
+    def _runtime(self, session_id: str) -> _SessionRuntime:
+        """Return the session's runtime, creating an empty one for unknown ids.
+
+        Args:
+            session_id: The ACP session id.
+
+        Returns:
+            The `_SessionRuntime` for the session.
+        """
+        runtime = self._sessions.get(session_id)
+        if runtime is None:
+            runtime = _SessionRuntime(cwd="")
+            self._sessions[session_id] = runtime
+        return runtime
 
     async def _log_text(self, session_id: str, text: str) -> None:
         """Send a text message update to the client."""
@@ -418,16 +453,17 @@ class AgentServerACP(ACPAgent):
         )
 
     def _reset_agent(self, session_id: str) -> None:
-        """Reset the agent instance, re-creating it from the factory if applicable."""
+        """(Re)build the agent for one session from the factory, if applicable."""
+        runtime = self._runtime(session_id)
         if isinstance(self._agent_factory, CompiledStateGraph):
-            self._agent = self._agent_factory
+            runtime.agent = self._agent_factory
         else:
             mode = self._session_modes.get(
                 session_id,
                 self._modes.current_mode_id if self._modes is not None else "auto",
             )
-            context = AgentSessionContext(cwd=self._cwd, mode=mode)
-            self._agent = self._agent_factory(context)
+            context = AgentSessionContext(cwd=runtime.cwd, mode=mode)
+            runtime.agent = self._agent_factory(context)
 
     async def prompt(  # noqa: C901, PLR0912, PLR0915  # Complex streaming protocol handler with many branches
         self,
@@ -442,22 +478,20 @@ class AgentServerACP(ACPAgent):
         **kwargs: Any,  # noqa: ARG002  # ACP protocol interface parameter
     ) -> PromptResponse:
         """Process a user prompt and stream the agent response."""
-        if self._agent is None:
-            cwd = self._session_cwds.get(session_id)
-            if cwd is not None:
-                self._cwd = cwd
+        runtime = self._runtime(session_id)
+        if runtime.agent is None:
             self._reset_agent(session_id)
 
-            if getattr(self._agent, "checkpointer", None) is None:
-                self._agent.checkpointer = MemorySaver()  # ty: ignore[unresolved-attribute]  # Guarded by getattr check above
+            if getattr(runtime.agent, "checkpointer", None) is None:
+                runtime.agent.checkpointer = MemorySaver()  # ty: ignore[unresolved-attribute]  # Guarded by getattr check above
 
-        if self._agent is None:
+        if runtime.agent is None:
             msg = "Agent initialization failed"
             raise RuntimeError(msg)
-        agent = self._agent
+        agent = runtime.agent
 
         # Reset cancellation flag for new prompt
-        self._cancelled = False
+        runtime.cancelled = False
 
         # Convert ACP content blocks to LangChain multimodal content format
         content_blocks = []
@@ -471,7 +505,7 @@ class AgentServerACP(ACPAgent):
                 content_blocks.extend(convert_audio_block_to_content_blocks(block))
             elif isinstance(block, ResourceContentBlock):
                 content_blocks.extend(
-                    convert_resource_block_to_content_blocks(block, root_dir=self._cwd)
+                    convert_resource_block_to_content_blocks(block, root_dir=runtime.cwd)
                 )
             elif isinstance(block, EmbeddedResourceContentBlock):
                 content_blocks.extend(convert_embedded_resource_block_to_content_blocks(block))
@@ -487,8 +521,8 @@ class AgentServerACP(ACPAgent):
 
         while current_state is None or current_state.interrupts:
             # Check for cancellation
-            if self._cancelled:
-                self._cancelled = False  # Reset for next prompt
+            if runtime.cancelled:
+                runtime.cancelled = False  # Reset for next prompt
                 return PromptResponse(stop_reason="cancelled")
 
             async for stream_chunk in agent.astream(
@@ -505,8 +539,8 @@ class AgentServerACP(ACPAgent):
 
                 _namespace, stream_mode, data = stream_chunk
                 # Check for cancellation during streaming
-                if self._cancelled:
-                    self._cancelled = False  # Reset for next prompt
+                if runtime.cancelled:
+                    runtime.cancelled = False  # Reset for next prompt
                     return PromptResponse(stop_reason="cancelled")
 
                 if stream_mode == "updates":

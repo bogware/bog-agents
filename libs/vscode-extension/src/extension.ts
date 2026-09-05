@@ -4,6 +4,12 @@
  * Feature #19: VS Code extension scaffold — integrates Bog Agents
  * into VS Code with chat panel, context menu actions, and inline
  * code assistance.
+ *
+ * v6 SAT-4: the activity-bar view (`bog-agents.chatView`) is backed by a real
+ * `WebviewViewProvider` (it was declared in package.json but never
+ * registered, so the sidebar stayed empty); replies stream into one bubble
+ * per prompt instead of overwriting the previous answer; and the
+ * `autoApprove` setting is actually passed to the CLI.
  */
 
 import * as vscode from 'vscode';
@@ -12,15 +18,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 let chatPanel: vscode.WebviewPanel | undefined;
-let cliProcess: ChildProcess | undefined;
+let chatView: vscode.WebviewView | undefined;
+let activeRun: ChildProcess | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
+let extensionContext: vscode.ExtensionContext | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+    extensionContext = context;
     outputChannel = vscode.window.createOutputChannel('Bog Agents');
     context.subscriptions.push(outputChannel);
     outputChannel.appendLine('Bog Agents extension activated');
 
     context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider('bog-agents.chatView', new ChatViewProvider(context), {
+            webviewOptions: { retainContextWhenHidden: true },
+        }),
         vscode.commands.registerCommand('bog-agents.openChat', () => openChat(context)),
         vscode.commands.registerCommand('bog-agents.reviewSelection', () => handleSelection('review')),
         vscode.commands.registerCommand('bog-agents.explainSelection', () => handleSelection('explain')),
@@ -30,14 +42,61 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-    if (cliProcess) {
-        cliProcess.kill();
-        cliProcess = undefined;
+    if (activeRun) {
+        activeRun.kill();
+        activeRun = undefined;
     }
     if (chatPanel) {
         chatPanel.dispose();
         chatPanel = undefined;
     }
+    chatView = undefined;
+    extensionContext = undefined;
+}
+
+/**
+ * Sidebar chat, i.e. the `bog-agents.chatView` contribution in package.json.
+ * Shares the HTML, the message protocol and the CLI runner with the editor
+ * panel, so a reply reaches whichever surface is open (or both).
+ */
+class ChatViewProvider implements vscode.WebviewViewProvider {
+    constructor(private readonly context: vscode.ExtensionContext) {}
+
+    resolveWebviewView(view: vscode.WebviewView): void {
+        chatView = view;
+        view.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'resources')],
+        };
+        view.webview.html = getChatHtml(view.webview);
+        view.webview.onDidReceiveMessage(handleWebviewMessage, undefined, this.context.subscriptions);
+        view.onDidDispose(() => {
+            if (chatView === view) {
+                chatView = undefined;
+            }
+        });
+    }
+}
+
+/** Messages the webviews post back to the extension host. */
+async function handleWebviewMessage(message: { type?: unknown; text?: unknown }): Promise<void> {
+    if (typeof message?.type !== 'string') {
+        return;
+    }
+    if (message.type === 'send' && typeof message.text === 'string') {
+        await sendToCli(message.text);
+    }
+}
+
+type ChatEvent =
+    | { type: 'start'; text: string }
+    | { type: 'response'; text: string }
+    | { type: 'done'; code: number | null };
+
+/** Post one event to every open chat surface. */
+function postToChat(event: ChatEvent): void {
+    chatPanel?.webview.postMessage(event);
+    chatView?.webview.postMessage(event);
 }
 
 /**
@@ -89,6 +148,16 @@ function getCliPath(): string | null {
 function getModel(): string {
     const config = vscode.workspace.getConfiguration('bog-agents');
     return config.get<string>('model', 'anthropic:claude-sonnet-4-6');
+}
+
+/**
+ * `bog-agents.autoApprove` maps onto the CLI's `--auto-approve` flag. A
+ * `--print` run cannot answer approval prompts, so without it a tool call that
+ * needs approval ends the turn; with it the CLI runs the tool.
+ */
+function getAutoApprove(): boolean {
+    const config = vscode.workspace.getConfiguration('bog-agents');
+    return config.get<boolean>('autoApprove', false);
 }
 
 /**
@@ -200,22 +269,21 @@ function openChat(context: vscode.ExtensionContext): void {
 
     chatPanel.webview.html = getChatHtml(chatPanel.webview);
 
-    chatPanel.webview.onDidReceiveMessage(
-        async (message: { type?: unknown; text?: unknown }) => {
-            if (typeof message?.type !== 'string') {
-                return;
-            }
-            if (message.type === 'send' && typeof message.text === 'string') {
-                await sendToCli(message.text);
-            }
-        },
-        undefined,
-        context.subscriptions,
-    );
+    chatPanel.webview.onDidReceiveMessage(handleWebviewMessage, undefined, context.subscriptions);
 
     chatPanel.onDidDispose(() => {
         chatPanel = undefined;
     });
+}
+
+/** Make sure a reply has somewhere to land before a context-menu action runs. */
+function ensureChatSurface(): void {
+    if (chatPanel || chatView) {
+        return;
+    }
+    if (extensionContext) {
+        openChat(extensionContext);
+    }
 }
 
 async function handleSelection(action: string): Promise<void> {
@@ -244,12 +312,18 @@ async function handleSelection(action: string): Promise<void> {
     };
 
     const prompt = prompts[action] || prompts['review'];
-    await sendToCli(prompt);
+    ensureChatSurface();
+    postToChat({ type: 'start', text: `${action}: ${path.basename(filePath)}:${startLine}-${endLine}` });
+    await sendToCli(prompt, { announced: true });
 }
 
-async function sendToCli(prompt: string): Promise<void> {
+async function sendToCli(prompt: string, options: { announced?: boolean } = {}): Promise<void> {
     const cliPath = getCliPath();
     if (cliPath === null) {
+        return;
+    }
+    if (activeRun) {
+        vscode.window.showWarningMessage('Bog Agents is still answering the previous prompt.');
         return;
     }
     const model = getModel();
@@ -257,21 +331,24 @@ async function sendToCli(prompt: string): Promise<void> {
 
     try {
         const args = ['--model', model, '--print', prompt, '--no-stream'];
+        if (getAutoApprove()) {
+            args.push('--auto-approve');
+        }
         const proc = spawn(cliPath, args, {
             cwd: workspaceFolder,
             env: buildChildEnv(),
             // shell: false (default) — never let the CLI path go through a shell.
         });
+        activeRun = proc;
+        if (!options.announced) {
+            // The webview already rendered the user's bubble; open the reply bubble.
+            postToChat({ type: 'start', text: '' });
+        }
 
         let output = '';
         proc.stdout?.on('data', (data: Buffer) => {
             output += data.toString();
-            if (chatPanel) {
-                chatPanel.webview.postMessage({
-                    type: 'response',
-                    text: output,
-                });
-            }
+            postToChat({ type: 'response', text: output });
         });
 
         proc.stderr?.on('data', (data: Buffer) => {
@@ -279,6 +356,10 @@ async function sendToCli(prompt: string): Promise<void> {
         });
 
         proc.on('error', (err: NodeJS.ErrnoException) => {
+            if (activeRun === proc) {
+                activeRun = undefined;
+            }
+            postToChat({ type: 'done', code: null });
             if (err.code === 'ENOENT') {
                 vscode.window.showErrorMessage(
                     'bog-agents CLI not found. Install with: pip install bog-agents-cli',
@@ -289,11 +370,17 @@ async function sendToCli(prompt: string): Promise<void> {
         });
 
         proc.on('close', (code: number | null) => {
+            if (activeRun === proc) {
+                activeRun = undefined;
+            }
+            postToChat({ type: 'done', code });
             if (code !== 0) {
                 vscode.window.showErrorMessage(`Bog Agents CLI exited with code ${code}`);
             }
         });
     } catch (error) {
+        activeRun = undefined;
+        postToChat({ type: 'done', code: null });
         vscode.window.showErrorMessage(`Failed to run Bog Agents CLI: ${error}`);
     }
 }
@@ -424,21 +511,42 @@ function getChatHtml(webview: vscode.Webview): string {
             if (e.key === 'Enter') send();
         });
 
+        function streamingBubble() {
+            const aiMessages = messages.querySelectorAll('.ai-message');
+            const last = aiMessages[aiMessages.length - 1];
+            return last && last.dataset.streaming === 'true' ? last : null;
+        }
+
+        function openBubble() {
+            const div = document.createElement('div');
+            div.className = 'message ai-message';
+            div.dataset.streaming = 'true';
+            div.textContent = '…';
+            messages.appendChild(div);
+            return div;
+        }
+
         window.addEventListener('message', (event) => {
             const msg = event.data;
             if (!msg || typeof msg !== 'object') return;
-            if (msg.type !== 'response') return;
-            const text = typeof msg.text === 'string' ? msg.text.slice(0, MAX_MSG_LEN) : '';
-            const aiMessages = messages.querySelectorAll('.ai-message');
-            const last = aiMessages[aiMessages.length - 1];
-            if (last && last.dataset.streaming === 'true') {
-                last.textContent = text;
+            if (msg.type === 'start') {
+                // A context-menu action carries a label for the user's side.
+                if (typeof msg.text === 'string' && msg.text) addMessage(msg.text, true);
+                openBubble();
+            } else if (msg.type === 'response') {
+                const text = typeof msg.text === 'string' ? msg.text.slice(0, MAX_MSG_LEN) : '';
+                const bubble = streamingBubble() || openBubble();
+                bubble.textContent = text;
+            } else if (msg.type === 'done') {
+                // Close the bubble so the next reply gets its own instead of
+                // overwriting this one (the pre-v6 bug).
+                const bubble = streamingBubble();
+                if (bubble) {
+                    if (bubble.textContent === '…') bubble.textContent = '(no output)';
+                    delete bubble.dataset.streaming;
+                }
             } else {
-                const div = document.createElement('div');
-                div.className = 'message ai-message';
-                div.dataset.streaming = 'true';
-                div.textContent = text;
-                messages.appendChild(div);
+                return;
             }
             messages.scrollTop = messages.scrollHeight;
         });
