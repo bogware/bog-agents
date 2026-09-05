@@ -44,6 +44,35 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/tasks",
+            "Command center: every thread, queued prompt, background/team/daemon task in one tree, with kill/steer/pause/diff",
+            "tasks tree kill steer pause resume queue waiting status center recap",
+            "agent",
+            available=True,
+            subcommands=(
+                ("list", "Show the task tree (default)"),
+                ("kill", "Stop a task (usage: /tasks kill <id>)"),
+                (
+                    "steer",
+                    "Send instructions to a task (usage: /tasks steer <id> <text>)",
+                ),
+                (
+                    "pause",
+                    "Pause a team run: no new tasks are claimed (usage: /tasks pause <id>)",
+                ),
+                ("resume", "Resume a paused team run (usage: /tasks resume <id>)"),
+                ("diff", "Show a task's worktree diff (usage: /tasks diff <id>)"),
+                (
+                    "queue",
+                    "List, edit or drop queued prompts (usage: /tasks queue [edit <n> <text>|drop <n>])",
+                ),
+                ("recap", "Same as /recap"),
+            ),
+        ),
+        handler_method="_handle_tasks_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/async",
             "Fire-and-forget agent task — submit, get a job id, "
             "get a toast on completion",

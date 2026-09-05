@@ -231,6 +231,15 @@ provider import. The opt-in `powershell` tool (`bog_agents/tools/powershell.py`,
 as a shell; never launch PowerShell via `shell=True`, and never trust `shutil.which("pwsh")`
 without `is_windows_apps_alias` (the Store's zero-byte alias fails with WinError 5).
 
+**`/tasks` is the one task registry the TUI shows (ROADMAP #68).** `tasks_controller.py`
+builds the tree from duck-typed app state (`_pending_approval_widget` for "waiting on
+you", `_pending_messages` for the queue, `_bg_manager`, `_remote_tasks`, `_team_runs`,
+`daemon_client`) and never imports widgets at module level, so it unit-tests with a
+`SimpleNamespace`. A new long-running surface must register itself there (see
+`register_team_run` / `finish_team_run` for the pattern) rather than growing another
+`/foo list` verb; steering goes through the existing channels (team `Mailbox`, task
+metadata inbox, the prompt queue) — do not invent a new one.
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`

@@ -879,14 +879,23 @@ ADK, and a contract is itself a feature to the target users.
   tray, `/diff --ordered` and `render_evidence_markdown`. Completes v2 #28. **S/T, M.**
 - **#68 `/tasks` command center + session-UX table stakes** *(Copilot CLI `/tasks`;
   Codex `codex agents`; Devin nested views, queued/editable messages, `/recap`,
-  "Waiting" status; Factory mark-unread/archive)* — **partial.** `/dashboard` is
-  watch-only; `/agent` already has the control verbs for worktree agents. Fold
-  team ledger, subagent registry, worktree manager, `background_shell` registry
-  and daemon `/runs` into one `TaskNode` tree with per-node state, spend from
-  `CostLedger.format_tree`, and kill / steer (peer mailbox) / pause / open-diff;
-  editable prompt queue, `/recap` on `sidechain.py`, a "Waiting on you" status
-  driven by pending HITL, `/threads --group pr`, unread/archive flags in the FTS
-  sidecar. Completes v1 #11. **S/T, M.**
+  "Waiting" status; Factory mark-unread/archive)* — **shipped 2026-09-05**
+  (REVIEW v6 §13): `tasks_controller.py` builds one `TaskNode` tree over the
+  interactive thread ("waiting on you" while an approval menu is open, driven
+  by the pending HITL widget), the editable prompt queue (`/tasks queue edit|drop
+  <n>`), background tasks / persistent jobs, remote tasks, `/team run` sessions
+  (live `TeamRunHandle`: ledger tasks with owners, mailbox, `CostLedger` spend,
+  pause gate) and the ambient daemon's jobs + `GET /runs`; verbs `kill`, `steer`
+  (team mailbox / task inbox / next prompt), `pause`/`resume` (the coordinator
+  stops claiming tasks — `run_team_session(pause_gate=…)`), `diff` (worktree
+  branch). `/recap` renders turns, tokens, spend, files, running work, "needs
+  you" and the thread's `/btw` notes. `/threads group pr [all]` groups by git
+  branch; `/threads archive|unarchive|unread|read <id>` store flags as thread
+  tags (no schema change, FTS sidecar untouched). *Was:* partial — `/dashboard`
+  watch-only. Not folded in: the SDK `background_shell` registry and
+  `WorktreeMiddleware` tasks live inside the server process and are not
+  reachable from the TUI (v6 CLI-12); the thread-selector modal does not yet
+  hide archived threads. Completes v1 #11. **S/T, M.**
 
 ### Tier 2 — Differentiators (win deals; exploit the moat)
 

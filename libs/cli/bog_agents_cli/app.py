@@ -1020,6 +1020,8 @@ class BogAgentsApp(App):
         self._preview_servers: dict[str, PreviewServerRecord] = {}
         self._recording_state: RecordingSessionState | None = None
         self._remote_tasks: dict[str, Any] = {}
+        # ROADMAP #68: live `/team run` handles (ledger, mailbox, spend, pause gate) for `/tasks`.
+        self._team_runs: dict[str, Any] = {}
         self._file_watchers: list = []
         # Lazily imported here to avoid pulling image dependencies into
         # argument parsing paths.
@@ -3249,9 +3251,29 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await self._handle_compact()
 
+    async def _handle_tasks_command(self, command: str) -> None:
+        """`/tasks` command center: one tree over threads, queue, background, team and daemon work (#68)."""
+        from bog_agents_cli.tasks_controller import run_tasks_command
+
+        await self._mount_message(UserMessage(command))
+        await run_tasks_command(self, command)
+
+    async def _handle_recap_command(self, command: str) -> None:
+        """`/recap` — where this session stands (#68)."""
+        from bog_agents_cli.tasks_controller import run_recap_command
+
+        await self._mount_message(UserMessage(command))
+        await run_recap_command(self, command)
+
     async def _handle_threads_command(self, command: str) -> None:
         """Open the interactive thread selector, or `/threads search <text>` (Tier-1 #4)."""
         rest = command.strip()[len("/threads") :].strip()
+        from bog_agents_cli.thread_flags import maybe_run_threads_verb
+
+        if await maybe_run_threads_verb(
+            self, command, rest
+        ):  # group / archive / unread (#68)
+            return
         if rest.lower().startswith("search"):
             query = rest[len("search") :].strip()
             await self._mount_message(UserMessage(command))
@@ -11059,6 +11081,10 @@ class BogAgentsApp(App):
             return create_model(spec, profile_overrides=self._profile_override).model
 
         caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
+        from bog_agents_cli.tasks_controller import finish_team_run, register_team_run
+
+        # ROADMAP #68: expose the ledger / mailbox / spend to `/tasks` (kill, steer, pause).
+        handle = register_team_run(self, req.task_specs, members, caps=caps)
         await self._set_spinner(
             f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
         )
@@ -11070,7 +11096,16 @@ class BogAgentsApp(App):
                 resolve_model=_resolve,
                 model_spec=model_spec,
                 caps=caps,
+                ledger=handle.ledger,
+                mailbox=handle.mailbox,
+                cost_ledger=handle.cost_ledger,
+                pause_gate=handle.pause_gate,
             )
+        except BaseException:
+            finish_team_run(handle, status="failed")
+            raise
+        else:
+            finish_team_run(handle, status="done", report=report)
         finally:
             await self._set_spinner("")
 

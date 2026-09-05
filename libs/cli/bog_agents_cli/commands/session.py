@@ -42,8 +42,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("delete", "Delete a thread (usage: /threads delete <id>)"),
                 ("resume", "Resume a specific thread (usage: /threads resume <id>)"),
                 ("search", "Search thread history (usage: /threads search <query>)"),
+                (
+                    "group",
+                    "List threads grouped by branch/PR (usage: /threads group pr [all])",
+                ),
+                ("archive", "Archive a thread (usage: /threads archive <id>)"),
+                ("unarchive", "Un-archive a thread (usage: /threads unarchive <id>)"),
+                ("unread", "Mark a thread unread (usage: /threads unread <id>)"),
+                ("read", "Mark a thread read (usage: /threads read <id>)"),
             ),
         ),
         handler_method="_handle_threads_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/recap",
+            "Where this session stands: turns, spend, files, running work, what needs you, your /btw notes",
+            "summary status catch-up waiting notes",
+            "info",
+            available=True,
+        ),
+        handler_method="_handle_recap_command",
     ),
 )
