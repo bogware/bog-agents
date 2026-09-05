@@ -14,7 +14,11 @@ controller-delegation convention (see `review_command.py`).
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
+from typing import Any
+
+from bog_agents_cli.self_review_memo import effort_rule, normalize_effort
 
 # The five review lenses, each mapped to the reviewer middleware whose concern it
 # encodes. Fanning all five over one diff is the differentiator.
@@ -64,6 +68,8 @@ class SelfReviewTarget:
     scope: str = "working"
     ref: str = ""
     fix: bool = False
+    since_last: bool = False
+    effort: str = "default"
 
 
 def parse_self_review_args(args: str) -> SelfReviewTarget:
@@ -83,31 +89,45 @@ def parse_self_review_args(args: str) -> SelfReviewTarget:
     Returns:
         A :class:`SelfReviewTarget`.
     """
-    tokens = args.split()
+    try:
+        tokens = shlex.split(args)
+    except ValueError:
+        tokens = args.split()
     fix = False
+    since_last = False
+    effort = "default"
+    branch_ref = ""
     rest: list[str] = []
     i = 0
     while i < len(tokens):
         tok = tokens[i]
         if tok == "--fix":
             fix = True
+        elif tok == "--since-last":
+            since_last = True
+        elif tok == "--effort" and i + 1 < len(tokens):
+            effort = normalize_effort(tokens[i + 1])
+            i += 1
+        elif tok.startswith("--effort="):
+            effort = normalize_effort(tok.split("=", 1)[1])
         elif tok == "--staged":
             rest.append("__staged__")
         elif tok == "--branch" and i + 1 < len(tokens):
-            return SelfReviewTarget(scope="branch", ref=tokens[i + 1], fix=fix)
+            branch_ref = tokens[i + 1]
+            i += 1
         else:
             rest.append(tok)
         i += 1
-
+    common: dict[str, Any] = {"fix": fix, "since_last": since_last, "effort": effort}
+    if branch_ref:
+        return SelfReviewTarget(scope="branch", ref=branch_ref, **common)
     if "__staged__" in rest:
-        return SelfReviewTarget(scope="staged", fix=fix)
-
+        return SelfReviewTarget(scope="staged", **common)
     concrete = [t for t in rest if t != "__staged__"]
     if concrete:
         # A bare ref like HEAD~1 / a sha -> single-commit review.
-        return SelfReviewTarget(scope="commit", ref=concrete[0], fix=fix)
-
-    return SelfReviewTarget(scope="working", fix=fix)
+        return SelfReviewTarget(scope="commit", ref=concrete[0], **common)
+    return SelfReviewTarget(scope="working", **common)
 
 
 def _diff_instruction(target: SelfReviewTarget) -> str:
@@ -126,11 +146,12 @@ def _diff_instruction(target: SelfReviewTarget) -> str:
     )
 
 
-def generate_self_review_prompt(target: SelfReviewTarget) -> str:
+def generate_self_review_prompt(target: SelfReviewTarget, *, lessons: str = "") -> str:
     """Build the multi-lens self-review prompt for the agent.
 
     Args:
         target: What to review and whether to fix.
+        lessons: Optional block of earlier rulings (`self_review_memo.lessons_block`) appended to the prompt.
 
     Returns:
         The prompt string sent to the agent.
@@ -166,6 +187,11 @@ def generate_self_review_prompt(target: SelfReviewTarget) -> str:
             "blocker count.",
         ]
     )
+    rule = effort_rule(target.effort)
+    if rule:
+        lines.extend(["", rule])
+    if lessons:
+        lines.extend(["", lessons])
     if target.fix:
         lines.extend(
             [
@@ -180,3 +206,121 @@ def generate_self_review_prompt(target: SelfReviewTarget) -> str:
             ]
         )
     return "\n".join(lines)
+
+
+async def run_self_review(app: Any, raw_arg: str) -> None:  # noqa: ANN401 - the App
+    """Body of `/self-review`: memo-aware (ROADMAP #67), then hand the prompt to the agent.
+
+    `--since-last` skips when the exact diff was already reviewed at this
+    effort; every run records a memo under `.bog-agents/self-review/` and the
+    prompt carries the rulings from `/finding` so findings marked incorrect or
+    wontfix are not repeated.
+    """
+    import asyncio
+    from pathlib import Path
+
+    from bog_agents_cli.self_review_memo import (
+        SelfReviewMemo,
+        current_branch,
+        diff_fingerprint,
+        lessons_block,
+        load_dispositions,
+        load_memo,
+        marker_comment,
+        review_diff_text,
+        save_memo,
+        should_skip,
+    )
+    from bog_agents_cli.widgets.messages import AppMessage
+
+    try:
+        target = parse_self_review_args(raw_arg)
+    except ValueError as exc:
+        await app._mount_message(
+            AppMessage(
+                f'{exc}\nUsage: /self-review [--staged | --branch <base> | <ref>] [--fix] [--since-last] [--effort default|high|custom:"<rule>"]'
+            )
+        )
+        return
+    repo = Path(getattr(app, "_cwd", None) or Path.cwd())
+    branch = await asyncio.to_thread(current_branch, repo)
+    diff_text = await asyncio.to_thread(
+        review_diff_text, repo, scope=target.scope, ref=target.ref
+    )
+    sha = diff_fingerprint(diff_text)
+    memo = load_memo(repo, branch)
+    if target.since_last and should_skip(memo, diff_sha=sha, effort=target.effort):
+        when = memo.reviewed_at if memo else 0.0
+        await app._mount_message(
+            AppMessage(
+                f"Skipped: this exact diff ({sha[:12]}) was already reviewed on `{branch}` at effort "
+                f"{memo.effort if memo else target.effort} (memo {when:.0f}). Run without --since-last to force."
+            )
+        )
+        return
+    lessons = lessons_block(load_dispositions(repo))
+    prompt = generate_self_review_prompt(target, lessons=lessons)
+    save_memo(
+        repo,
+        SelfReviewMemo(
+            branch=branch,
+            scope=target.scope,
+            base=target.ref,
+            diff_sha=sha,
+            effort=target.effort,
+        ),
+    )
+    announce = (
+        "Running self-review gate (5 lenses) and fixing blockers..."
+        if target.fix
+        else "Running self-review gate (5 lenses)..."
+    )
+    extra = f" effort={target.effort}" if target.effort != "default" else ""
+    await app._mount_message(AppMessage(f"{announce}{extra}  {marker_comment(sha)}"))
+    await app._send_prompt_to_agent(prompt)
+
+
+async def run_resolve(app: Any, raw_arg: str) -> None:  # noqa: ANN401 - the App
+    """Body of `/finding <finding-id> addressed|wontfix|incorrect [note]` (ROADMAP #67)."""
+    from pathlib import Path
+
+    from bog_agents_cli.self_review_memo import (
+        DISPOSITIONS,
+        current_branch,
+        load_dispositions,
+        record_disposition,
+    )
+    from bog_agents_cli.widgets.messages import AppMessage
+
+    words = raw_arg.split()
+    if len(words) < 2 or words[1].lower() not in DISPOSITIONS:
+        recent = load_dispositions(Path(getattr(app, "_cwd", None) or Path.cwd()))[-5:]
+        listing = (
+            "\n".join(
+                f"- {d.finding_id}: {d.disposition}{' — ' + d.note if d.note else ''}"
+                for d in recent
+            )
+            or "(no rulings yet)"
+        )
+        await app._mount_message(
+            AppMessage(
+                f"Usage: /finding <finding-id> addressed|wontfix|incorrect [note]\nRecent rulings:\n{listing}"
+            )
+        )
+        return
+    repo = Path(getattr(app, "_cwd", None) or Path.cwd())
+    record = record_disposition(
+        repo,
+        words[0],
+        words[1].lower(),
+        note=" ".join(words[2:]),
+        branch=current_branch(repo),
+    )
+    hint = (
+        " — the next review prompt will carry this ruling"
+        if record.disposition in ("incorrect", "wontfix")
+        else ""
+    )
+    await app._mount_message(
+        AppMessage(f"Recorded {record.finding_id} as {record.disposition}{hint}.")
+    )

@@ -182,6 +182,12 @@ def show_help() -> None:
     console.print("  --pr-base BRANCH           PR base branch (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
     console.print(
+        "  --pr-review                Post the jury's findings on the new PR as a review (#67)"
+    )
+    console.print(
+        "  --pr-effort LEVEL          Review effort for --pr-review: default | high | custom:rule"
+    )
+    console.print(
         "  --pr-evidence              Append a proof-of-work evidence bundle to the PR body"
     )
     console.print()

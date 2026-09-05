@@ -4182,22 +4182,18 @@ class BogAgentsApp(App):
         security, maintainability, test-coverage, and over-claims lenses and
         emits a SHIP / FIX-FIRST verdict. Pass `--fix` to also fix blockers.
         """
-        from bog_agents_cli.self_review_controller import (
-            generate_self_review_prompt,
-            parse_self_review_args,
-        )
+        from bog_agents_cli.self_review_controller import run_self_review
 
         await self._mount_message(UserMessage(command))
         raw_arg = command.strip()[len("/self-review") :].strip()
-        target = parse_self_review_args(raw_arg)
-        prompt = generate_self_review_prompt(target)
-        announce = (
-            "Running self-review gate (5 lenses) and fixing blockers..."
-            if target.fix
-            else "Running self-review gate (5 lenses)..."
-        )
-        await self._mount_message(AppMessage(announce))
-        await self._send_prompt_to_agent(prompt)
+        await run_self_review(self, raw_arg)
+
+    async def _handle_finding_command(self, command: str) -> None:
+        """`/finding <id> addressed|wontfix|incorrect [note]` — rule on a review finding (#67)."""
+        from bog_agents_cli.self_review_controller import run_resolve
+
+        await self._mount_message(UserMessage(command))
+        await run_resolve(self, command.strip()[len("/finding") :].strip())
 
     async def _handle_ci_fix_command(self, command: str) -> None:
         """`/ci-fix` — read this branch's CI result and diagnose/fix failures (#1).

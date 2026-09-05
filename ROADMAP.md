@@ -1003,15 +1003,23 @@ ADK, and a contract is itself a feature to the target users.
   scripts. **T/E, M.**
 - **#67 Evidence on every PR + a self-review loop that learns** *(Cursor Bugbot
   incremental/deduped/effort-graded; Copilot reviews bot-authored PRs with
-  resolution reasons Aug 27; Amp "proof of work")* — **partial.** Wire
-  `EvidenceBundleMiddleware` through `FeatureConfig(evidence_bundle=True)`, the
-  CLI `--pr --evidence` flag and daemon dispatch (v6 SDK-11); a self-review memo
-  (`.bog-agents/self-review/<branch>.json`: diff sha, base, effort) so `--since-last`
-  skips already-reviewed diffs and a headless twin emits a marker comment CI can
-  dedupe on; `--effort default|high|custom:"<rule>"`; a post-PR-open jury pass
-  posting findings as GitHub review comments; a resolution ingester
-  (`/resolve <id> addressed|wontfix|incorrect` + review-thread events) that feeds
-  dispositions back into the rubric. Completes v2 #29 and v1 #2/#3. **T/E, M.**
+  resolution reasons Aug 27; Amp "proof of work")* — **shipped 2026-09-06**
+  (REVIEW v6 §16). Evidence wiring (`FeatureConfig(enable_evidence_bundle=True)`,
+  `--pr --pr-evidence`, daemon dispatch) landed in Wave A. New: `self_review_memo.py`
+  — memo per branch (`.bog-agents/self-review/<branch>.json`: sha256 of the exact
+  review text, base, effort, verdict) so `/self-review --since-last` skips an
+  unchanged diff at the same-or-higher effort; `--effort default|high|custom:"<rule>"`
+  (quote-aware) threads a rule into the prompt; every run prints the
+  `<!-- bog-review:<sha12> -->` marker CI can dedupe on. `/finding <id>
+  addressed|wontfix|incorrect [note]` (the `/resolve` name belongs to merge
+  conflicts) appends to `dispositions.jsonl`, and the next review prompt carries
+  the `incorrect`/`wontfix` rulings as a do-not-repeat block. `--pr --pr-review
+  [--pr-effort]` runs the configured jury over the branch diff after the PR opens
+  and posts a GitHub review (`github_review.py`: `path:line` findings become line
+  comments, the rest go into the body, marker-deduped, anchor-free fallback when
+  GitHub rejects a stale line). *Was:* partial. Open: review-thread events feeding
+  dispositions automatically (needs the #55 `github:pr:<n>` subscription plus a
+  `pr_review_comment` handler that calls `/finding`). **T/E, M.**
 - **#71 Parity treadmill in CI + fork subagents** *(deepagents 0.7.13; Claude fork
   mode default Aug 10-14 and `/fork` into a worktree; dcode)* — **partial.**
   Install `deepagents` latest in a CI leg and run the 24 compat tests plus a

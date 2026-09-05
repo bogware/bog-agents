@@ -888,6 +888,17 @@ def parse_args() -> argparse.Namespace:
         help="Create the PR as a draft",
     )
     parser.add_argument(
+        "--pr-review",
+        action="store_true",
+        help="After the PR is opened, run the configured jury over the diff and post its findings as a GitHub review (deduped on the diff fingerprint; #67)",
+    )
+    parser.add_argument(
+        "--pr-effort",
+        default="default",
+        metavar="LEVEL",
+        help='Review effort for --pr-review: default | high | custom:"<rule>" (#67)',
+    )
+    parser.add_argument(
         "--pr-evidence",
         action="store_true",
         help="Append a proof-of-work evidence bundle (changed files, test results) to the PR body and enable the agent's evidence tools",
@@ -1991,6 +2002,19 @@ def cli_main() -> None:
                 console.print(f"Branch: {pr_result.branch_name}")
                 console.print(f"Files changed: {len(pr_result.files_changed)}")
                 console.print(f"Duration: {pr_result.duration_seconds:.1f}s")
+                if getattr(args, "pr_review", False):
+                    from bog_agents_cli.pr_review_pass import run_post_pr_review
+
+                    ok, message = asyncio.run(
+                        run_post_pr_review(
+                            pr_result,
+                            base_branch=getattr(args, "pr_base", "main"),
+                            effort=getattr(args, "pr_effort", "default"),
+                        )
+                    )
+                    console.print(
+                        f"[{'green' if ok else 'yellow'}]Jury review: {message}[/]"
+                    )
             else:
                 console.print(f"[bold red]PR failed:[/bold red] {pr_result.error}")
                 sys.exit(1)

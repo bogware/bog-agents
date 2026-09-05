@@ -240,6 +240,13 @@ you", `_pending_messages` for the queue, `_bg_manager`, `_remote_tasks`, `_team_
 `/foo list` verb; steering goes through the existing channels (team `Mailbox`, task
 metadata inbox, the prompt queue) — do not invent a new one.
 
+**Self-review memo (ROADMAP #67).** `self_review_memo.py` owns the memo under
+`.bog-agents/self-review/`, the diff fingerprint (`review_diff_text` — keep it byte-identical
+to what the `/self-review` prompt tells the agent to run), the `<!-- bog-review:<sha12> -->`
+marker and the `/finding` dispositions → `lessons_block`. `github_review.py` posts jury
+verdicts as PR reviews through an injected `gh` runner; never post from a test. The
+`/resolve` name is taken by merge-conflict resolution — dispositions are `/finding`.
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`

@@ -39,12 +39,22 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
             "/self-review",
-            "Pre-submit gate: review your own diff via 5 lenses (--fix to fix blockers)",
+            'Pre-submit gate: review your own diff via 5 lenses (--fix, --since-last, --effort high|custom:"rule")',
             "self review gate diff blockers ship verdict",
             "quality",
             available=True,
         ),
         handler_method="_handle_self_review_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/finding",
+            "Rule on a review finding so the next review learns (usage: /finding <id> addressed|wontfix|incorrect [note])",
+            "review finding disposition wontfix incorrect addressed learn",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_finding_command",
     ),
     SlashCommand(
         spec=SlashCommandSpec(
