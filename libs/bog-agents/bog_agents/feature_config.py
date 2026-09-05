@@ -109,6 +109,12 @@ class FeatureConfig:
         enable_deferred_tools: Hide selected tool schemas from the model until
             activated via the `tool_search`/`select` metatools.
         deferred_tools: Tool names to defer (requires ``enable_deferred_tools``).
+        enable_evidence_bundle: Attach `EvidenceBundleMiddleware` so the agent
+            can emit a proof-of-work bundle (diff stat, check results, rubric
+            verdict) that PR and daemon surfaces attach to their output
+            (v6 SDK-11; ROADMAP #29/#67).
+        evidence_check_commands: Argv-form verification commands the bundle
+            runs when emitted (requires ``enable_evidence_bundle``).
 
     Note (Wave V): the vertical-market middleware flags
     (portfolio_analysis, client_reports, scenario_engine,
@@ -241,3 +247,7 @@ class FeatureConfig:
     # Deferred tool schemas — keep large tool definitions out of context.
     enable_deferred_tools: bool = False
     deferred_tools: list[str] | None = None
+    # Proof-of-work evidence bundle (v6 SDK-11). Off by default; the CLI's
+    # `--pr --pr-evidence` and daemon dispatch turn it on.
+    enable_evidence_bundle: bool = False
+    evidence_check_commands: list[list[str]] | None = None

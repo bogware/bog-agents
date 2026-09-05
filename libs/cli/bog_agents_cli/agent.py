@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from bog_agents.backends.sandbox import SandboxBackendProtocol
+    from bog_agents.cost_ledger import CostLedger
     from bog_agents.middleware.subagents import CompiledSubAgent, SubAgent
     from langchain.agents.middleware import InterruptOnConfig
     from langchain.agents.middleware.types import AgentState
@@ -1297,6 +1298,7 @@ def create_cli_agent(
     mcp_server_info: list[MCPServerInfo] | None = None,
     cwd: str | Path | None = None,
     project_context: ProjectContext | None = None,
+    cost_ledger: CostLedger | None = None,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -1349,6 +1351,8 @@ def create_cli_agent(
         project_context: Explicit project path context for project-sensitive
             behavior such as project `AGENTS.md` files, skills, subagents, and
             MCP trust.
+        cost_ledger: Session ledger whose runaway caps gate subagent spawns
+            and spend (v6 SDK-7); forwarded to `create_agent`.
 
     Returns:
         2-tuple of `(agent_graph, backend)`
@@ -2109,5 +2113,6 @@ def create_cli_agent(
         permissions=authority_file_permissions(),
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
+        cost_ledger=cost_ledger,
     ).with_config(config)
     return agent, composite_backend

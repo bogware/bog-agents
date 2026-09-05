@@ -143,6 +143,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         approval_store: ApprovalStore | None = None,
         extra_rules: list[Rule] | None = None,
         max_working_facts: int = 5000,
+        fail_open: bool = False,
     ) -> None:
         self._working_dir = working_dir or Path.cwd()
         self._rules_subdir = rules_subdir
@@ -167,6 +168,10 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         self._approval_store = approval_store
         self._last_loaded: float = 0.0
         self._last_load_error: str = ""
+        # v6 SDK-8: deny tool calls while the rulebook has never parsed unless
+        # the operator opted into the pre-v6 fail-open behaviour.
+        self._fail_open = fail_open
+        self._rules_ever_loaded = False
         self._denials = 0
         self._modifications = 0
         self._approvals = 0
@@ -249,6 +254,9 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         if not self._enabled:
             return handler(request)
         self._ensure_loaded()
+        blocked = self._load_error_block(request)
+        if blocked is not None:
+            return blocked
         result = self._run_for_request(request)
         decision = self._apply_decision(request, result)
         if decision is _DENY:
@@ -268,6 +276,9 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
         if not self._enabled:
             return await handler(request)
         self._ensure_loaded()
+        blocked = self._load_error_block(request)
+        if blocked is not None:
+            return blocked
         result = self._run_for_request(request)
         decision = self._apply_decision(request, result)
         if decision is _DENY:
@@ -308,6 +319,7 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             return
         merged: list[Rule] = [*disk, *self._extra_rules]
         self._engine.set_rules(merged)
+        self._rules_ever_loaded = True
         self._last_loaded = time.monotonic()
 
     def _run_for_request(self, request: ToolCallRequest) -> FireResult:
@@ -404,6 +416,41 @@ class ExpertRulesMiddleware(AgentMiddleware[ExpertRulesState, ContextT, Response
             self._modifications += 1
             return _request_with_modified_args(request, mods)
         return _PASS
+
+    def _load_error_block(self, request: ToolCallRequest) -> ToolMessage | None:
+        """Deny the call when the rulebook never loaded and `fail_open` is False.
+
+        v6 SDK-8: previously a first-load `RuleLoadError` left the engine with
+        an empty rule set, so one YAML syntax error in `.bog-agents/expert_rules/`
+        silently disabled the whole deny policy with nothing but a WARNING log.
+        Now the operator sees the error on every tool call until it is fixed.
+        A load error *after* a successful load keeps the last good rule set live
+        (unchanged), so a bad edit mid-session narrows nothing.
+
+        Args:
+            request: The tool call being gated.
+
+        Returns:
+            An error `ToolMessage` to return instead of running the tool, or
+            `None` when the call may proceed to the rule engine.
+        """
+        if not self._last_load_error or self._rules_ever_loaded or self._fail_open:
+            return None
+        self._denials += 1
+        body = {
+            "expert_rules": "deny",
+            "reasons": [f"expert rules failed to load: {self._last_load_error}"],
+            "fired_rules": [],
+            "hint": (
+                f"Fix the YAML under {self._rules_subdir}/ and retry (or construct ExpertRulesMiddleware(fail_open=True) to run without a policy)."
+            ),
+        }
+        return ToolMessage(
+            content=json.dumps(body),
+            tool_call_id=str(request.tool_call.get("id", "")),
+            name=str(request.tool_call.get("name", "")),
+            status="error",
+        )
 
     def _make_deny_message(
         self,

@@ -3,7 +3,7 @@
 import contextlib
 import warnings
 from collections.abc import Awaitable, Callable, Generator, Sequence
-from typing import Annotated, Any, NotRequired, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict, Unpack, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
@@ -20,6 +20,9 @@ from langsmith.run_helpers import get_tracing_context, tracing_context
 from bog_agents.backends.protocol import BackendFactory, BackendProtocol
 from bog_agents.middleware._private_state import private_state_field_names
 from bog_agents.middleware._utils import append_to_system_message
+
+if TYPE_CHECKING:
+    from bog_agents.cost_ledger import CostLedger
 from bog_agents.middleware.permissions import FilesystemPermission
 
 __all__ = [
@@ -582,12 +585,39 @@ def _get_subagents_legacy(
     return specs
 
 
+def _cap_refusal(cost_ledger: "CostLedger | None", subagent_type: str) -> str | None:
+    """Return a refusal message when the session ledger forbids another spawn.
+
+    v6 SDK-7: `CostLedger`/`RunawayCaps` used to be consulted only by
+    `teams.run_team`, so `max_subagents` and `max_cost_usd` never fired on the
+    default `task` fan-out path. The cost cap is checked first (no counter),
+    then the spawn is counted against `max_subagents`.
+
+    Args:
+        cost_ledger: The session ledger, or `None` when uncapped.
+        subagent_type: The subagent the model asked for (for the message).
+
+    Returns:
+        The tool result to return instead of spawning, or `None` to proceed.
+    """
+    if cost_ledger is None:
+        return None
+    cost = cost_ledger.check_cost()
+    if not cost.allowed:
+        return f"Cannot spawn subagent `{subagent_type}`: {cost.reason}. Finish with the results you already have."
+    spawn = cost_ledger.register_subagent_spawn()
+    if not spawn.allowed:
+        return f"Cannot spawn subagent `{subagent_type}`: {spawn.reason}. Finish with the results you already have."
+    return None
+
+
 def _build_task_tool(
     subagents: list[_SubagentSpec],
     task_description: str | None = None,
     *,
     private_state_keys: frozenset[str] = frozenset(),
     state_schema: type | None = None,
+    cost_ledger: "CostLedger | None" = None,
 ) -> BaseTool:
     """Create a task tool from pre-built subagent graphs.
 
@@ -601,6 +631,8 @@ def _build_task_tool(
             the subagent boundary in either direction.
         state_schema: Base graph state schema used when a raw spec is recompiled to
             satisfy a per-call `response_format`.
+        cost_ledger: Session ledger whose `RunawayCaps` gate every spawn
+            (v6 SDK-7). `None` leaves spawns uncounted and uncapped.
 
     Returns:
         A StructuredTool that can invoke subagents by type.
@@ -673,6 +705,9 @@ def _build_task_tool(
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
             raise ValueError(value_error_msg)
+        refused = _cap_refusal(cost_ledger, subagent_type)
+        if refused is not None:
+            return refused
         subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
         with _subagent_tracing_context():
             result = subagent.invoke(subagent_state)
@@ -692,6 +727,9 @@ def _build_task_tool(
         if not runtime.tool_call_id:
             value_error_msg = "Tool call ID is required for subagent invocation"
             raise ValueError(value_error_msg)
+        refused = _cap_refusal(cost_ledger, subagent_type)
+        if refused is not None:
+            return refused
         subagent, subagent_state = _validate_and_prepare_state(subagent_type, description, runtime)
         with _subagent_tracing_context():
             result = await subagent.ainvoke(subagent_state)
@@ -794,6 +832,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
         task_description: str | None = None,
         state_schema: type | None = None,
         private_state_keys: frozenset[str] | None = None,
+        cost_ledger: "CostLedger | None" = None,
         **deprecated_kwargs: Unpack[_DeprecatedKwargs],
     ) -> None:
         """Initialize the `SubAgentMiddleware`."""
@@ -829,6 +868,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
 
         self._state_schema = state_schema
         self._private_state_keys = private_state_keys or frozenset()
+        self._cost_ledger = cost_ledger
         self._task_description = task_description
 
         # Detect which API is being used
@@ -879,6 +919,7 @@ class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
                 self._task_description,
                 private_state_keys=self._private_state_keys,
                 state_schema=self._state_schema,
+                cost_ledger=self._cost_ledger,
             )
         ]
 

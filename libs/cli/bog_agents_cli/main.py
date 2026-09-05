@@ -692,8 +692,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help=(
             "Smart auto-approve: auto-run tool calls that pass the rule engine; "
-            "ask only for risky operations. Haiku evaluates uncertain shell "
-            "commands. Overridden by --always-ask. Configure rules in "
+            "ask only for risky operations. A cheap model from your active provider "
+            "reviews uncertain shell commands. Overridden by --always-ask. Configure rules in "
             ".bog-agents/settings.json."
         ),
     )
@@ -866,6 +866,11 @@ def parse_args() -> argparse.Namespace:
         "--pr-draft",
         action="store_true",
         help="Create the PR as a draft",
+    )
+    parser.add_argument(
+        "--pr-evidence",
+        action="store_true",
+        help="Append a proof-of-work evidence bundle (changed files, test results) to the PR body and enable the agent's evidence tools",
     )
 
     parser.add_argument(
@@ -1919,10 +1924,20 @@ def cli_main() -> None:
 
             from bog_agents.graph import create_agent as _create_agent
 
-            agent = _create_agent(model=model_result.model)
+            pr_evidence = bool(getattr(args, "pr_evidence", False))
+            if pr_evidence:
+                from bog_agents.feature_config import FeatureConfig as _FeatureConfig
+
+                agent = _create_agent(
+                    model=model_result.model,
+                    config=_FeatureConfig(enable_evidence_bundle=True),
+                )
+            else:
+                agent = _create_agent(model=model_result.model)
             pr_config = PRConfig(
                 base_branch=getattr(args, "pr_base", "main"),
                 draft=getattr(args, "pr_draft", False),
+                evidence=pr_evidence,
             )
 
             console.print(f"Running PR mode: {task}")

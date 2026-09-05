@@ -776,6 +776,7 @@ async def _evaluate_auto_mode_batch(
         AutoModeRuleEngine,
         haiku_risk_eval,
         load_auto_mode_settings,
+        resolve_risk_judge,
     )
 
     am_settings = load_auto_mode_settings()
@@ -790,8 +791,11 @@ async def _evaluate_auto_mode_batch(
         if verdict.decision == AutoDecision.ASK:
             return False
         if verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
+            # v6 CLI-9: judge with the active provider's cheap tier; `None`
+            # keeps the legacy Anthropic-SDK Haiku path.
+            judge, _judge_desc = resolve_risk_judge(am_settings)
             is_risky, _reason = await haiku_risk_eval(
-                t_name, t_args, model=am_settings.haiku_eval.model
+                t_name, t_args, model=am_settings.haiku_eval.model, invoke=judge
             )
             if is_risky:
                 return False

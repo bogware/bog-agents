@@ -5716,10 +5716,11 @@ class BogAgentsApp(App):
             )
 
     async def _handle_auto_command(self, command: str) -> None:
-        """/auto — toggle smart auto-mode (rule-engine + haiku risk eval).
+        """/auto — toggle smart auto-mode (rule-engine + model risk review).
 
         In auto mode the agent auto-approves tool calls that pass the built-in
-        rule engine. Uncertain shell commands are evaluated by Haiku; only
+        rule engine. Uncertain shell commands are reviewed by a cheap model
+        from the active provider (v6 CLI-9); only
         commands flagged as risky surface an approval dialog. ``/always-ask``
         overrides auto mode.
 
@@ -5755,7 +5756,7 @@ class BogAgentsApp(App):
             await self._mount_message(
                 AppMessage(
                     "Auto mode ON. Tool calls are evaluated against built-in rules; "
-                    "risky shell commands are checked by Haiku before running. "
+                    "risky shell commands are reviewed by a model from your active provider before running. "
                     "Use /auto off to return to interactive approval, or "
                     "/always-ask to require approval for everything."
                 )

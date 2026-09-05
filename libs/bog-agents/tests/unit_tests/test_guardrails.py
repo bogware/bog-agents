@@ -119,8 +119,9 @@ class TestGuardrailMiddleware:
         resp = await mw.awrap_model_call(_request("hello"), handler)
         assert resp.result[0].content == "a perfectly clean response"
 
-    def test_sync_path_skips_async_guardrail(self) -> None:
-        # Sync wrap can't await an async-only guardrail; it must skip, not crash.
+    def test_sync_path_enforces_async_guardrail(self) -> None:
+        # v6 SDK-10: an async-only guardrail (every LLMGuardrail) used to be
+        # silently skipped on the sync path; it must trip there too.
         class _AsyncOnly:
             name = "async_only"
 
@@ -131,5 +132,29 @@ class TestGuardrailMiddleware:
             return _response("ok")
 
         mw = GuardrailMiddleware(output_guardrails=[_AsyncOnly()])
-        resp = mw.wrap_model_call(_request("hi"), handler)  # no raise
+        with pytest.raises(GuardrailTripwireError) as exc_info:
+            mw.wrap_model_call(_request("hi"), handler)
+        assert exc_info.value.stage == "output"
+
+    def test_sync_path_passes_clean_async_guardrail(self) -> None:
+        class _AsyncClean:
+            name = "async_clean"
+
+            async def check(self, _text: str) -> GuardrailResult:
+                return GuardrailResult(self.name, tripped=False)
+
+        mw = GuardrailMiddleware(input_guardrails=[_AsyncClean()], output_guardrails=[_AsyncClean()])
+        resp = mw.wrap_model_call(_request("hi"), lambda _req: _response("ok"))
         assert resp.result[0].content == "ok"
+
+    async def test_sync_path_inside_a_running_loop_still_enforces(self) -> None:
+        # A sync invoke issued from async code must not deadlock or skip.
+        class _AsyncOnly:
+            name = "async_only"
+
+            async def check(self, _text: str) -> GuardrailResult:
+                return GuardrailResult(self.name, tripped=True)
+
+        mw = GuardrailMiddleware(input_guardrails=[_AsyncOnly()])
+        with pytest.raises(GuardrailTripwireError):
+            mw.wrap_model_call(_request("hi"), lambda _req: _response("ok"))

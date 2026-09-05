@@ -6,7 +6,10 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, NotRequired
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NotRequired
+
+if TYPE_CHECKING:
+    from bog_agents.cost_ledger import CostLedger
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -296,6 +299,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
         async_subagents: list[AsyncSubAgent],
         system_prompt: str | None = ASYNC_TASK_SYSTEM_PROMPT,
         task_description: str | None = None,
+        cost_ledger: CostLedger | None = None,
     ) -> None:
         """Initialize async-subagent middleware.
 
@@ -303,6 +307,8 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             async_subagents: Remote subagent specs. Must be non-empty and uniquely named.
             system_prompt: Instructions appended to the main agent's system prompt.
             task_description: Custom description for the `start_async_task` tool.
+            cost_ledger: Session ledger whose `RunawayCaps` gate every launch
+                (v6 SDK-7). `None` leaves launches uncounted and uncapped.
 
         Raises:
             ValueError: If `async_subagents` is empty or contains duplicate names.
@@ -320,6 +326,7 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             raise ValueError(msg)
 
         self._async_subagents = {spec["name"]: spec for spec in async_subagents}
+        self._cost_ledger = cost_ledger
         self._clients = _ClientCache(self._async_subagents)
 
         available_agents = "\n".join(f"- {spec['name']}: {spec['description']}" for spec in async_subagents)
@@ -337,6 +344,19 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
         ]
         self.system_prompt = system_prompt
 
+    def _cap_refusal(self, subagent_type: str) -> str | None:
+        """Return a refusal when the session ledger forbids another launch (v6 SDK-7)."""
+        ledger = self._cost_ledger
+        if ledger is None:
+            return None
+        cost = ledger.check_cost()
+        if not cost.allowed:
+            return f"Cannot launch async subagent '{subagent_type}': {cost.reason}."
+        spawn = ledger.register_subagent_spawn()
+        if not spawn.allowed:
+            return f"Cannot launch async subagent '{subagent_type}': {spawn.reason}."
+        return None
+
     def _build_start_tool(self, tool_description: str) -> StructuredTool:
         """Build the `start_async_task` tool."""
 
@@ -348,6 +368,9 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             error = _validate_agent_type(self._async_subagents, subagent_type)
             if error is not None:
                 return error
+            refused = self._cap_refusal(subagent_type)
+            if refused is not None:
+                return refused
 
             spec = self._async_subagents[subagent_type]
             try:
@@ -384,6 +407,9 @@ class AsyncSubAgentMiddleware(AgentMiddleware[AsyncSubAgentState, ContextT, Resp
             error = _validate_agent_type(self._async_subagents, subagent_type)
             if error is not None:
                 return error
+            refused = self._cap_refusal(subagent_type)
+            if refused is not None:
+                return refused
 
             spec = self._async_subagents[subagent_type]
             try:

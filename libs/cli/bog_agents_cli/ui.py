@@ -135,7 +135,7 @@ def show_help() -> None:
         "  --always-ask               Paranoid mode: every tool call requires approval (overrides --auto-approve)"
     )
     console.print(
-        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (Haiku eval)"
+        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (model review)"
     )
     console.print(
         "  --auto-commit              Auto-commit git changes after each agent turn"
@@ -178,6 +178,9 @@ def show_help() -> None:
     )
     console.print("  --pr-base BRANCH           PR base branch (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
+    console.print(
+        "  --pr-evidence              Append a proof-of-work evidence bundle to the PR body"
+    )
     console.print()
 
     # --- Model Configuration ---

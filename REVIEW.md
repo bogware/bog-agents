@@ -185,7 +185,17 @@ problems.
 
 **Corrections to this report from the fix work:** the inventory's claim that `libs/partners/runloop/` contains only `__pycache__` was wrong — it holds an untracked `langchain_runloop` package with its own venv and tests; it was left untouched (untracked, not ours to delete). The registry *does* have an `available` field; every spec sets it `True`, so the finding stands as "no spec was ever marked unavailable".
 
-**Not started (next):** Wave A (SDK-7/8/10/11, CLI-9), Wave B, Wave C, Wave D, and ROADMAP #47 Governed Auto Mode as the Wave 1 lead.
+**Not started (next):** Wave B, Wave C, Wave D, and ROADMAP #47 Governed Auto Mode as the Wave 1 lead.
+
+## 5. Shipped in Wave A (2026-09-04, same branch, one commit)
+
+Governance now counts and enforces everywhere it claimed to. Each item carries regression tests; suites re-run green afterwards (SDK / CLI full suites, daemon, `ty` on all three).
+
+- **v6 SDK-7** — `CostLedger` / `RunawayCaps` gate the default fan-out path: `create_agent(cost_ledger=…)` threads the ledger into `SubAgentMiddleware` (the `task` tool) and `AsyncSubAgentMiddleware`; the cost cap is checked first, then each spawn is counted against `max_subagents`, and a refused spawn returns a tool result telling the model to finish with what it has. `create_cli_agent(cost_ledger=…)` forwards it. The CLAUDE.md invariant ("every team/subagent spawn must be counted") is now true; wiring a default session ledger with caps from config is ROADMAP #51.
+- **v6 SDK-8** — expert rules fail closed on a first-load parse error: until the rulebook has parsed once, every tool call returns an error `ToolMessage` naming the YAML error (and the `fail_open=True` escape hatch). A parse error *after* a good load still keeps the last good rule set live.
+- **v6 SDK-10** — guardrails enforce on the sync path: an async-only guardrail (every `LLMGuardrail`) is driven to completion with `asyncio.run` (or on a worker thread when a loop is already running) instead of being closed and skipped at DEBUG level.
+- **v6 SDK-11** — `FeatureConfig(enable_evidence_bundle=True, evidence_check_commands=…)` attaches `EvidenceBundleMiddleware`; `bog-agents -n … --pr --pr-evidence` enables it on the PR-mode agent and appends a proof-of-work section (changed files, test outcome) rendered by the SDK's `render_evidence_markdown` to the PR body. First reachable surface for ROADMAP #29/#67.
+- **v6 CLI-9** — the `/auto` risk judge is provider-agnostic: `resolve_risk_judge` builds a reviewer from the active provider (OpenAI → its cheap tier; Ollama / Bedrock / Google / … → the active model; an explicit `provider:model` in `haiku_eval.model` always wins; Anthropic keeps the SDK Haiku path) and `haiku_risk_eval(invoke=…)` uses it, failing closed on any judge error. Help and `/auto` wording no longer promise Haiku regardless of provider.
 
 ### Decisions taken 2026-09-04
 Commit this report on `docs/review-v6` off `origin/main` and start Wave 0 immediately; Wave 1 leads with ROADMAP #47 Governed Auto Mode; 1.0 = Wave 0 + Wave 1 + Wave 2 + a written stability contract; #60 native Windows sandbox is a committed 1.x headline; the VS Code extension is fixed and published.

@@ -6,7 +6,10 @@ import os
 from collections.abc import Callable, Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, Any, Required, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Required, TypedDict, cast
+
+if TYPE_CHECKING:
+    from bog_agents.cost_ledger import CostLedger
 
 from langchain.agents import AgentState, create_agent as _langchain_create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig, TodoListMiddleware
@@ -532,6 +535,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
     max_turns: int = 200,
+    cost_ledger: "CostLedger | None" = None,
     **legacy_feature_flags: Any,
 ) -> CompiledStateGraph:
     """Create a bog-agents agent.
@@ -671,6 +675,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         debug: Whether to enable debug mode. Passed through to `create_agent`.
         name: The name of the agent. Passed through to `create_agent`.
         cache: The cache to use for the agent. Passed through to `create_agent`.
+        cost_ledger: Session `CostLedger` whose `RunawayCaps` gate every
+            `task` / async subagent spawn and total spend (v6 SDK-7). `None`
+            leaves the default fan-out path uncounted and uncapped.
         config: Primary path for feature configuration via `FeatureConfig`.
 
             Pass a `FeatureConfig` instance to configure all feature flags in one
@@ -1027,6 +1034,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.checkpointing import CheckpointingMiddleware
 
         agents_middleware.append(CheckpointingMiddleware(working_dir=_wd))
+
+    if f.enable_evidence_bundle:
+        # v6 SDK-11: the middleware and its tests existed but nothing could
+        # reach it — no toggle, no CLI flag, no daemon dispatch.
+        from bog_agents.middleware.evidence_bundle import EvidenceBundleMiddleware
+
+        agents_middleware.append(
+            EvidenceBundleMiddleware(
+                working_dir=_wd,
+                check_commands=[list(c) for c in (f.evidence_check_commands or [])] or None,
+            )
+        )
 
     if f.enable_cost_tracking or f.budget_usd is not None:
         from bog_agents._models import get_model_identifier
@@ -1407,6 +1426,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
                 # `{available_agents}` placeholder; `None` (default) uses the
                 # built-in template.
                 task_description=_profile.tool_description_overrides.get("task"),
+                cost_ledger=cost_ledger,
             )
         )
     if not user_supplied_summarization:
@@ -1421,7 +1441,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     agents_middleware.extend(defaults_to_append)
     if async_subagents:
-        agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
+        agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents, cost_ledger=cost_ledger))
 
     # User-supplied middleware: a `.name` collision with a built-in REPLACES it
     # in place (parity with upstream); novel middleware splices in after the

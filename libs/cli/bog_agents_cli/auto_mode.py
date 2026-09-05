@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -202,6 +203,10 @@ _AMBIGUITY_PATTERNS: tuple[tuple[str, str], ...] = (
 # ---------------------------------------------------------------------------
 # Settings model
 # ---------------------------------------------------------------------------
+
+
+RiskJudge = Callable[[str], Awaitable[str]]
+"""An injected risk judge: takes the evaluator prompt, returns the model text (v6 CLI-9)."""
 
 
 @dataclass
@@ -452,14 +457,152 @@ class AutoModeRuleEngine:
 # ---------------------------------------------------------------------------
 
 
+def _risk_prompt(tool_name: str, tool_args: dict[str, Any]) -> str:
+    """Build the JSON-only risk prompt shared by every judge backend."""
+    cmd_repr = _format_tool_repr(tool_name, tool_args)
+    return (
+        "You are a security evaluator for an AI coding assistant. "
+        "Respond with a JSON object ONLY — no prose.\n\n"
+        f"Tool call: {cmd_repr}\n\n"
+        "Is this operation risky? Consider risky: deleting files, force-pushing git, "
+        "dropping databases, killing processes, overwriting production data, "
+        "destructive system changes. Consider safe: reading files, running tests, "
+        "type-checking, git status/log/diff, creating new files.\n\n"
+        '{"risky": true/false, "reason": "one sentence"}'
+    )
+
+
+def _parse_risk_verdict(text: str) -> tuple[bool, str]:
+    """Parse a judge reply into `(is_risky, reason)`; anything unparseable is risky.
+
+    Matches the outermost brace pair first (a reason may contain braces), then
+    falls back to a minimal leading object when the model appended prose.
+    """
+    text = text.strip()
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return True, "risk judge: inconclusive — treating as risky"
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        inner = re.search(r"\{[^{}]*\}", text)
+        if inner is None:
+            return True, "risk judge: malformed JSON — treating as risky"
+        try:
+            data = json.loads(inner.group(0))
+        except json.JSONDecodeError:
+            return True, "risk judge: malformed JSON — treating as risky"
+    if not isinstance(data, dict):
+        return True, "risk judge: malformed JSON — treating as risky"
+    return bool(data.get("risky", False)), str(data.get("reason", "risk judge"))
+
+
+def _message_text(response: Any) -> str:  # noqa: ANN401 — LangChain message or plain text
+    """Return the text of a chat-model reply (string or content blocks)."""
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return str(content)
+
+
+def default_judge_spec(
+    active_provider: str | None, active_model: str | None, configured: str | None = None
+) -> str | None:
+    """Pick the `provider:model` that reviews uncertain tool calls (v6 CLI-9).
+
+    - An explicit `provider:model` in `haiku_eval.model` always wins.
+    - Anthropic (or an unknown provider) returns `None`: keep the legacy
+      Anthropic-SDK Haiku path.
+    - OpenAI gets its cheap tier; every other provider (Ollama, Bedrock,
+      Google, …) reviews with the active model itself — a real reviewer beats
+      failing closed to a prompt on every unmatched command.
+
+    Args:
+        active_provider: The session's model provider.
+        active_model: The session's model name.
+        configured: `haiku_eval.model` from settings.
+
+    Returns:
+        A `provider:model` spec, or `None` for the legacy path.
+    """
+    if configured and ":" in configured:
+        return configured
+    provider = (active_provider or "").strip().lower()
+    if not provider or provider == "anthropic":
+        return None
+    if provider == "openai":
+        return "openai:gpt-5.4-mini"
+    if active_model:
+        return f"{provider}:{active_model}"
+    return None
+
+
+_JUDGE_CACHE: dict[str, RiskJudge] = {}
+
+
+def resolve_risk_judge(
+    settings: AutoModeSettings | None = None,
+) -> tuple[RiskJudge | None, str]:
+    """Build (and cache) the provider-agnostic risk judge for this session.
+
+    Args:
+        settings: Auto-mode settings (for the configured judge model).
+
+    Returns:
+        `(judge, description)`. A `None` judge means the caller should use the
+        legacy Anthropic-SDK path in `haiku_risk_eval`; the description names
+        the model in use for status lines.
+    """
+    cfg = (settings or AutoModeSettings()).haiku_eval
+    try:
+        from bog_agents_cli.config import settings as cli_settings
+
+        provider = getattr(cli_settings, "model_provider", None)
+        model_name = getattr(cli_settings, "model_name", None)
+    except Exception:
+        provider = model_name = None
+    spec = default_judge_spec(provider, model_name, cfg.model)
+    if spec is None:
+        return None, f"Anthropic SDK ({cfg.model})"
+    cached = _JUDGE_CACHE.get(spec)
+    if cached is not None:
+        return cached, spec
+    try:
+        from bog_agents_cli.config import create_model
+
+        chat_model = create_model(spec).model
+    except Exception as exc:
+        logger.warning(
+            "risk judge: could not build %s (%s); unmatched commands will ask",
+            spec,
+            exc,
+        )
+        return None, f"unavailable ({spec}: {exc.__class__.__name__})"
+
+    async def _judge(prompt: str) -> str:
+        return _message_text(await chat_model.ainvoke(prompt))
+
+    _JUDGE_CACHE[spec] = _judge
+    return _judge, spec
+
+
 async def haiku_risk_eval(
     tool_name: str,
     tool_args: dict[str, Any],
     *,
     model: str = "claude-haiku-4-5-20251001",
     fallback_model: str = "claude-haiku-4-5",
+    invoke: RiskJudge | None = None,
 ) -> tuple[bool, str]:
-    """Ask Haiku whether a tool call is risky.
+    """Ask a review model whether a tool call is risky.
 
     Only called when the rule engine's verdict is ``default`` (no pattern
     matched). Returns (is_risky, reason).
@@ -473,10 +616,26 @@ async def haiku_risk_eval(
         model: Model to use for evaluation.
         fallback_model: Model to retry with if ``model`` returns a not-found
             error.
+        invoke: Provider-agnostic judge built by `resolve_risk_judge` (v6
+            CLI-9). When given, it replaces the Anthropic-SDK path entirely, so
+            OpenAI / Ollama / Bedrock-only installs get a real reviewer instead
+            of failing closed to a prompt on every unmatched command.
 
     Returns:
         Tuple of (is_risky, reason_string).
     """
+    if not isinstance(tool_args, dict):
+        tool_args = {}
+    if invoke is not None:
+        try:
+            text = await invoke(_risk_prompt(tool_name, tool_args))
+        except Exception as exc:
+            logger.warning("risk judge error (treating as risky for safety): %s", exc)
+            return (
+                True,
+                f"risk judge unavailable — treating as risky ({exc.__class__.__name__})",
+            )
+        return _parse_risk_verdict(str(text))
     try:
         import anthropic  # type: ignore[import-untyped]
     except ImportError:
@@ -488,21 +647,7 @@ async def haiku_risk_eval(
         # already fail closed by returning risky=True.
         return True, "haiku eval: anthropic package unavailable — treating as risky"
 
-    # Normalise args — callers may pass None for tool calls with no arguments.
-    if not isinstance(tool_args, dict):
-        tool_args = {}
-
-    cmd_repr = _format_tool_repr(tool_name, tool_args)
-    prompt = (
-        "You are a security evaluator for an AI coding assistant. "
-        "Respond with a JSON object ONLY — no prose.\n\n"
-        f"Tool call: {cmd_repr}\n\n"
-        "Is this operation risky? Consider risky: deleting files, force-pushing git, "
-        "dropping databases, killing processes, overwriting production data, "
-        "destructive system changes. Consider safe: reading files, running tests, "
-        "type-checking, git status/log/diff, creating new files.\n\n"
-        '{"risky": true/false, "reason": "one sentence"}'
-    )
+    prompt = _risk_prompt(tool_name, tool_args)
     models_to_try = [model]
     if fallback_model and fallback_model != model:
         models_to_try.append(fallback_model)
@@ -514,29 +659,7 @@ async def haiku_risk_eval(
                 max_tokens=80,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = msg.content[0].text.strip()
-            # ``\{.*\}`` (greedy, DOTALL) — matches the outermost pair of
-            # braces. The previous ``\{[^}]+\}`` rejected nested braces in
-            # Haiku's reason field (e.g. ``"deletes {temp} files"``), which
-            # silently flipped the verdict to "risky".
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                try:
-                    data = json.loads(m.group(0))
-                except json.JSONDecodeError:
-                    # Haiku occasionally adds trailing prose after the JSON;
-                    # try to find a *minimal* leading JSON object instead.
-                    inner = re.search(r"\{[^{}]*\}", text)
-                    if inner is None:
-                        return True, "haiku eval: malformed JSON — treating as risky"
-                    try:
-                        data = json.loads(inner.group(0))
-                    except json.JSONDecodeError:
-                        return True, "haiku eval: malformed JSON — treating as risky"
-                return bool(data.get("risky", False)), str(
-                    data.get("reason", "haiku eval")
-                )
-            return True, "haiku eval: inconclusive — treating as risky"
+            return _parse_risk_verdict(msg.content[0].text)
         except anthropic.NotFoundError:
             if attempt_model != models_to_try[-1]:
                 logger.warning(

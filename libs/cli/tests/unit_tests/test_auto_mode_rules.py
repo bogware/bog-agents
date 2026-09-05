@@ -688,3 +688,142 @@ class TestHaikuRiskEval:
             is_risky, reason = await haiku_risk_eval("some_tool", {})
         assert is_risky is True
         assert "unavailable" in reason
+
+
+# ---------------------------------------------------------------------------
+# v6 CLI-9 — provider-agnostic risk judge
+# ---------------------------------------------------------------------------
+
+
+class TestInjectedRiskJudge:
+    async def test_injected_judge_replaces_the_anthropic_path(self) -> None:
+        prompts: list[str] = []
+
+        async def judge(prompt: str) -> str:
+            prompts.append(prompt)
+            return '{"risky": false, "reason": "reads a file"}'
+
+        with patch(
+            "anthropic.AsyncAnthropic",
+            side_effect=AssertionError("anthropic must not be used"),
+        ):
+            is_risky, reason = await haiku_risk_eval(
+                "read_file", {"path": "README.md"}, invoke=judge
+            )
+
+        assert (is_risky, reason) == (False, "reads a file")
+        assert "read_file" in prompts[0] and "README.md" in prompts[0]
+
+    async def test_injected_judge_failure_fails_closed(self) -> None:
+        async def judge(_prompt: str) -> str:
+            raise RuntimeError("ollama down")
+
+        is_risky, reason = await haiku_risk_eval(
+            "execute", {"command": "make"}, invoke=judge
+        )
+        assert is_risky is True
+        assert "risky" in reason.lower()
+
+    async def test_injected_judge_malformed_reply_fails_closed(self) -> None:
+        async def judge(_prompt: str) -> str:
+            return "sure, go ahead"
+
+        is_risky, _reason = await haiku_risk_eval(
+            "execute", {"command": "make"}, invoke=judge
+        )
+        assert is_risky is True
+
+    async def test_injected_judge_prose_around_json_is_parsed(self) -> None:
+        async def judge(_prompt: str) -> str:
+            return 'Assessment: {"risky": true, "reason": "rm -rf on {tmp}"} — done.'
+
+        is_risky, reason = await haiku_risk_eval(
+            "execute", {"command": "rm -rf /tmp/x"}, invoke=judge
+        )
+        assert is_risky is True and "rm -rf" in reason
+
+
+class TestDefaultJudgeSpec:
+    def test_explicit_spec_wins(self) -> None:
+        from bog_agents_cli.auto_mode import default_judge_spec
+
+        assert (
+            default_judge_spec("anthropic", "claude-opus-4-7", "ollama:qwen3")
+            == "ollama:qwen3"
+        )
+
+    def test_anthropic_keeps_legacy_path(self) -> None:
+        from bog_agents_cli.auto_mode import default_judge_spec
+
+        assert (
+            default_judge_spec(
+                "anthropic", "claude-opus-4-7", "claude-haiku-4-5-20251001"
+            )
+            is None
+        )
+        assert default_judge_spec(None, None, None) is None
+
+    def test_openai_gets_cheap_tier_and_others_use_active_model(self) -> None:
+        from bog_agents_cli.auto_mode import default_judge_spec
+
+        assert (
+            default_judge_spec("openai", "gpt-5.4", "claude-haiku-4-5-20251001")
+            == "openai:gpt-5.4-mini"
+        )
+        assert (
+            default_judge_spec("ollama", "llama3", "claude-haiku-4-5-20251001")
+            == "ollama:llama3"
+        )
+        assert (
+            default_judge_spec(
+                "bedrock_converse", "us.anthropic.claude-haiku-4-5", None
+            )
+            == "bedrock_converse:us.anthropic.claude-haiku-4-5"
+        )
+
+
+class TestResolveRiskJudge:
+    async def test_builds_a_judge_from_the_active_provider(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from bog_agents_cli import auto_mode, config as cli_config
+
+        class _Model:
+            async def ainvoke(self, prompt: str) -> object:
+                return SimpleNamespace(content='{"risky": false, "reason": "ok"}')
+
+        monkeypatch.setattr(cli_config.settings, "model_provider", "ollama")
+        monkeypatch.setattr(cli_config.settings, "model_name", "llama3")
+        monkeypatch.setattr(
+            cli_config,
+            "create_model",
+            lambda spec, **_kw: SimpleNamespace(model=_Model()),
+        )
+        auto_mode._JUDGE_CACHE.clear()
+
+        judge, desc = auto_mode.resolve_risk_judge(AutoModeSettings())
+        assert desc == "ollama:llama3" and judge is not None
+        assert await judge("p") == '{"risky": false, "reason": "ok"}'
+        # cached on the second call
+        assert auto_mode.resolve_risk_judge(AutoModeSettings())[0] is judge
+
+    def test_anthropic_returns_none_for_the_legacy_path(self, monkeypatch) -> None:
+        from bog_agents_cli import auto_mode, config as cli_config
+
+        monkeypatch.setattr(cli_config.settings, "model_provider", "anthropic")
+        monkeypatch.setattr(cli_config.settings, "model_name", "claude-opus-4-7")
+        judge, desc = auto_mode.resolve_risk_judge(AutoModeSettings())
+        assert judge is None and "Anthropic SDK" in desc
+
+    def test_build_failure_returns_none(self, monkeypatch) -> None:
+        from bog_agents_cli import auto_mode, config as cli_config
+
+        def _boom(spec: str, **_kw: object) -> object:
+            raise RuntimeError("no key")
+
+        monkeypatch.setattr(cli_config.settings, "model_provider", "openai")
+        monkeypatch.setattr(cli_config.settings, "model_name", "gpt-5.4")
+        monkeypatch.setattr(cli_config, "create_model", _boom)
+        auto_mode._JUDGE_CACHE.clear()
+        judge, desc = auto_mode.resolve_risk_judge(AutoModeSettings())
+        assert judge is None and desc.startswith("unavailable")
