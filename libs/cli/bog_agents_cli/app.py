@@ -19,6 +19,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
 from rich.text import Text
 from textual.app import App
 from textual.binding import Binding, BindingType
@@ -28,6 +29,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli.auto_mode import approval_timeout_seconds
 from bog_agents_cli.changes_controller import (
     maybe_reorder_diff,
     mount_changes_tray,
@@ -588,6 +590,7 @@ async def _get_current_git_branch() -> str | None:
             "HEAD",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=hardened_git_env(),
         )
         stdout, _ = await proc.communicate()
         if proc.returncode == 0:
@@ -1917,7 +1920,12 @@ class BogAgentsApp(App):
 
         # Create menu with unique ID to avoid conflicts
         unique_id = f"approval-menu-{uuid.uuid4().hex[:8]}"
-        menu = ApprovalMenu(action_requests, assistant_id, id=unique_id)
+        menu = ApprovalMenu(
+            action_requests,
+            assistant_id,
+            id=unique_id,
+            timeout_seconds=approval_timeout_seconds(),
+        )
         menu.set_future(result_future)
 
         # Store reference
@@ -4133,6 +4141,8 @@ class BogAgentsApp(App):
         )
 
         await self._mount_message(UserMessage(command))
+        if await self._repo_config_blocked():
+            return
         raw_arg = command.strip()[len("/review") :].strip()
         target = parse_review_args(raw_arg)
         prompt = generate_review_prompt(target)
@@ -6077,9 +6087,9 @@ class BogAgentsApp(App):
 
         cmd: list[str]
         if arg in ("", "head", "working"):
-            cmd = ["git", "diff", "HEAD"]
+            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "HEAD"]
         elif arg == "staged":
-            cmd = ["git", "diff", "--cached"]
+            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "--cached"]
         else:
             # Treat as a ref. Reject anything that smells like a flag or
             # contains shell metachars to keep argv hygiene tight.
@@ -6088,7 +6098,7 @@ class BogAgentsApp(App):
                     ErrorMessage(f"Refusing suspicious /jury argument: {arg!r}")
                 )
                 return None
-            cmd = ["git", "diff", f"{arg}..HEAD"]
+            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, f"{arg}..HEAD"]
 
         try:
             result = await asyncio.to_thread(
@@ -8075,9 +8085,20 @@ class BogAgentsApp(App):
             handle_result,
         )
 
+    async def _repo_config_blocked(self) -> bool:
+        """ROADMAP #49: block review surfaces until a hostile `.git/config` is acknowledged."""
+        from bog_agents_cli.repo_trust import repo_config_gate
+
+        message = await asyncio.to_thread(repo_config_gate, self._cwd)
+        if message:
+            await self._mount_message(AppMessage(message))
+        return message is not None
+
     async def _handle_diff_command(self, command: str) -> None:
         """Handle `/diff` for local git change inspection."""
         await self._mount_message(UserMessage(command))
+        if await self._repo_config_blocked():
+            return
 
         raw_arg = command.strip()[len("/diff") :].strip()
         if raw_arg in {"help", "--help", "-h"}:
@@ -8090,17 +8111,21 @@ class BogAgentsApp(App):
             return
 
         if raw_arg.lower() in {"cached", "staged"}:
-            args = ["diff", "--cached", "--minimal"]
+            args = ["diff", *NO_EXTERNAL_DIFF, "--cached", "--minimal"]
         elif raw_arg.lower() in {"stat", "--stat"}:
             args = ["diff", "--stat"]
         elif raw_arg.lower() in {"names", "name-only", "--name-only"}:
             args = ["diff", "--name-only"]
         elif raw_arg.lower() in {"ordered", "--ordered"}:
-            args = ["diff", "--minimal"]  # ROADMAP #66: blocks reordered below
+            args = [
+                "diff",
+                *NO_EXTERNAL_DIFF,
+                "--minimal",
+            ]  # ROADMAP #66: blocks reordered below
         elif raw_arg:
-            args = ["diff", *shlex.split(raw_arg)]
+            args = ["diff", *NO_EXTERNAL_DIFF, *shlex.split(raw_arg)]
         else:
-            args = ["diff", "--minimal"]
+            args = ["diff", *NO_EXTERNAL_DIFF, "--minimal"]
 
         success, output = await self._run_git(args)
         if not success:
@@ -9612,6 +9637,17 @@ class BogAgentsApp(App):
         return tasks
 
     async def _handle_permissions_command(self, command: str) -> None:
+        if command.strip().lower().split()[1:2] == ["trust-git-config"]:
+            from bog_agents_cli.repo_trust import acknowledge_repo_config
+
+            fingerprint = await asyncio.to_thread(acknowledge_repo_config, self._cwd)
+            await self._mount_message(UserMessage(command))
+            await self._mount_message(
+                AppMessage(
+                    f"Acknowledged this repo's git config ({fingerprint[:19] or 'no config'}); /diff, /review and /pr are unblocked until it changes."
+                )
+            )
+            return
         """Handle `/permissions` by showing approval posture and shell policy.
 
         Args:
@@ -17216,6 +17252,8 @@ class BogAgentsApp(App):
         Args:
             command: Full slash command string.
         """
+        if await self._repo_config_blocked():
+            return
         from bog_agents_cli.pr_cli import (
             PRInfo,
             generate_conflict_resolution_prompt,

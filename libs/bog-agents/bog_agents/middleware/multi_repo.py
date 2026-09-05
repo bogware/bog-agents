@@ -33,6 +33,8 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 _WORKSPACE_FILE = ".bog-agents/workspace.toml"
@@ -219,6 +221,7 @@ def get_repo_map(repo: RepoConfig, max_files: int = 50) -> str:
             capture_output=True,
             text=True,
             timeout=15,
+            env=hardened_git_env(),
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("MultiRepo: git ls-files failed for %s: %s", repo.name, exc)
@@ -272,6 +275,7 @@ def get_recent_changes(repo: RepoConfig, n_commits: int = 5) -> str:
             capture_output=True,
             text=True,
             timeout=15,
+            env=hardened_git_env(),
         )
     except (subprocess.SubprocessError, OSError) as exc:
         logger.warning("MultiRepo: git log failed for %s: %s", repo.name, exc)

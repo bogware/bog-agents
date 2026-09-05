@@ -51,6 +51,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "parse_budget_resume": ("bog_agents.middleware.cost_tracker", "parse_budget_resume"),
     # Proof-ordered diffs (ROADMAP #66).
     "rank_changes": ("bog_agents.diff_ordering", "rank_changes"),
+    # Hostile-repo hardening (ROADMAP #49).
+    "hardened_git_env": ("bog_agents.git_env", "hardened_git_env"),
+    "scan_repo_config": ("bog_agents.git_env", "scan_repo_config"),
     "reorder_unified_diff": ("bog_agents.diff_ordering", "reorder_unified_diff"),
     "split_unified_diff": ("bog_agents.diff_ordering", "split_unified_diff"),
     "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),

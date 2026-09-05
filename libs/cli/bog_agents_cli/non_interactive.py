@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from bog_agents.git_env import hardened_git_env
 from langchain.agents.middleware.human_in_the_loop import ActionRequest, HITLRequest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command, Interrupt
@@ -527,7 +528,7 @@ def _git_dirty_paths_sync(cwd: Path) -> set[str]:
     """Return the set of paths that `git status --porcelain` reports as dirty.
 
     Synchronous (subprocess.run) by design: the previous async variant used
-    `asyncio.create_subprocess_exec("git", ...)` which on Windows fails to
+    `asyncio.create_subprocess_exec("git", ..., env=hardened_git_env())` which on Windows fails to
     locate `git.exe` reliably without an absolute path, returning an empty
     set silently and breaking the `--auto-commit` scope (Fix #25). Routing
     through `shutil.which()` + `subprocess.run()` is what the rest of the
@@ -556,6 +557,7 @@ def _git_dirty_paths_sync(cwd: Path) -> set[str]:
             encoding="utf-8",
             errors="replace",
             check=False,
+            env=hardened_git_env(),
         )
     except (subprocess.SubprocessError, OSError):
         return set()

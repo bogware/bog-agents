@@ -196,6 +196,18 @@ commands (missing `timeout`, blocking reads) and lives at the CLI/auto-mode
 policy layer *deliberately*, not in the SDK backend, where it would break the
 backend's timeout tests.
 
+**Every internal git call goes through `bog_agents.git_env.hardened_git_env()`**
+(ROADMAP #49): pass `env=hardened_git_env()` (or `hardened_git_env(existing_env)`)
+to every `subprocess` call whose argv starts with `git`, and add `*NO_EXTERNAL_DIFF`
+to any `git diff`/`show` that prints a patch — a cloned `.git/config` can name
+programs in `core.fsmonitor`, `core.hooksPath`, `credential.helper`, `diff.external`
+and friends. Pinned values come from the trusted system/global scopes (so the user's
+credential manager still works); never set `GIT_CONFIG_NOSYSTEM` (it drops
+`core.autocrlf` on Windows and every CRLF checkout looks dirty), and never try to
+"unset" `diff.external` through a config override (git spawns an empty command).
+`scan_repo_config()` is the report side; the CLI's `repo_trust.py` gates `/diff`,
+`/review`, `/pr` on acknowledgement.
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`

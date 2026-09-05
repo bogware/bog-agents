@@ -33,6 +33,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 # Tools that modify files and should trigger checkpointing
@@ -138,7 +140,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
                 text=True,
                 timeout=30,
                 check=False,
-                env={**os.environ, "GIT_INDEX_FILE": self._index_file},
+                env=hardened_git_env({**os.environ, "GIT_INDEX_FILE": self._index_file}),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             # FileNotFoundError (git not installed) or TimeoutExpired (git add -A
@@ -264,11 +266,11 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
             Git diff output as a string.
         """
         if not self._checkpoints:
-            result = self._run_git("diff")
+            result = self._run_git("diff", *NO_EXTERNAL_DIFF)
             return result.stdout if result.returncode == 0 else "No changes detected."
 
         last = self._checkpoints[-1]
-        result = self._run_git("diff", last.commit_hash)
+        result = self._run_git("diff", *NO_EXTERNAL_DIFF, last.commit_hash)
         return result.stdout if result.returncode == 0 else "Could not generate diff."
 
     def get_full_diff(self) -> str:
@@ -281,7 +283,7 @@ class CheckpointingMiddleware(AgentMiddleware[CheckpointState, ContextT, Respons
             return "No checkpoints available."
 
         first = self._checkpoints[0]
-        result = self._run_git("diff", first.commit_hash)
+        result = self._run_git("diff", *NO_EXTERNAL_DIFF, first.commit_hash)
         return result.stdout if result.returncode == 0 else "Could not generate diff."
 
     def undo_last_change(self) -> str:

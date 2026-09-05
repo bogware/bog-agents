@@ -22,6 +22,8 @@ import subprocess  # noqa: S404 — controlled git/clone introspection only
 import time
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 from bog_agents_cli.dreamscape.config import (
     DreamscapeConfig,
     dreamscape_active_path,
@@ -278,11 +280,13 @@ def _git(args: list[str], cwd: str | None) -> str:
             text=True,
             timeout=5,
             check=False,
-            env={
-                **os.environ,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_OPTIONAL_LOCKS": "0",
-            },
+            env=hardened_git_env(
+                {
+                    **os.environ,
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                }
+            ),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""

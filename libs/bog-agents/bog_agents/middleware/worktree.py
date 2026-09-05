@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
+from bog_agents.git_env import hardened_git_env
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -186,6 +188,7 @@ def _run_git(working_dir: Path, *args: str, timeout: int = 30) -> str:
             text=True,
             timeout=timeout,
             check=False,
+            env=hardened_git_env(),
         )
         output = result.stdout
         if result.returncode != 0:

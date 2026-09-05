@@ -745,17 +745,23 @@ ADK, and a contract is itself a feature to the target users.
   Completes v2 #23 + #24. **E/T/S, M.**
 - **#49 Steerable approvals + hostile-repo hardening** *(Cursor "skip and tell the
   agent what to do", 15 s auto-reject; Grok persistent "Never allow"; Goose
-  GHSA-r5pp-p5r8-466r fsmonitor RCE; Cursor hardened git Aug 11)* — **absent.**
-  `ApprovalMenu` has exactly Approve / Auto-approve / Reject (`widgets/approval.py:67`).
-  Add a fourth option "Reject and tell the agent what to do" that lands the
-  redirect in the ToolMessage; a countdown auto-reject (fail-closed) when detached,
-  headless or `approval_timeout_seconds` is set; persistent per-project
-  never-allow. Plus one `hardened_git_env()` helper (`GIT_CONFIG_NOSYSTEM`,
-  neutralized `core.fsmonitor`/`hooksPath`/`pager`/`sshCommand`/`diff.external`)
-  adopted at every internal git call site (`git_tools.py:37`, `pr_output.py:58`,
-  worktree, evidence) and a repo-open scan of `.git/config` that blocks `/review`,
-  `/diff`, `/pr` until acknowledged. `exec_risk` covers only the command-line
-  vector today. **S/T/E, S+S.**
+  GHSA-r5pp-p5r8-466r fsmonitor RCE; Cursor hardened git Aug 11)* — **shipped
+  2026-09-05** (REVIEW v6 §10): `ApprovalMenu` has five options — Approve /
+  Auto-approve / Reject / "Reject and tell the agent what to do instead" (the
+  redirect lands in the rejection `ToolMessage`) / "Never allow this in this
+  project" (persisted to `.bog-agents/settings.json` `auto_mode.never_allow`,
+  a tier above `ask` that denies before the menu ever opens) — plus a countdown
+  auto-reject (`approvals.timeout_seconds` / `BOG_AGENTS_APPROVAL_TIMEOUT`,
+  fail-closed). SDK `git_env.py`: `hardened_git_env()` pins the code-executing
+  config keys through `GIT_CONFIG_COUNT` to the *trusted* (system + global)
+  value or an inert one, editors and the pager always inert, and is used at
+  every internal git call site in the SDK and CLI (34 calls); patch-producing
+  diffs pass `NO_EXTERNAL_DIFF` because `diff.external` cannot be neutralised by
+  override (verified on git 2.44); `scan_repo_config()` + `repo_trust.py` block
+  `/diff`, `/review`, `/pr` until `/permissions trust-git-config` acknowledges
+  the findings once per config fingerprint. *Was:* absent — `ApprovalMenu` had
+  exactly Approve / Auto-approve / Reject and every git call inherited the
+  repo's config. `exec_risk` still covers only the command-line vector.
 - **#51 Cost certainty: pre-flight estimate, budgets that pause, caps that fire**
   *(Managed Agents `budget_reached` pause; Copilot AI-credits backlash #198015;
   OpenCode `subagent_depth`; Mastra TokenCostControl; ADK `ADK_MAX_LLM_CALLS`)* —

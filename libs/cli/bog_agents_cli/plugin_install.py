@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bog_agents.git_env import hardened_git_env
+
 from bog_agents_cli.plugin_spec import (
     PLUGIN_JSON,
     PluginSpec,
@@ -91,6 +93,7 @@ def _default_git_clone(url: str, dest: Path) -> None:
         text=True,
         timeout=300,
         check=False,
+        env=hardened_git_env(),
     )
     if result.returncode != 0:
         msg = f"git clone failed: {result.stderr.strip()[:300]}"

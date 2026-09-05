@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from bog_agents.evidence import CommandRun, EvidenceBundle, render_evidence_markdown
+from bog_agents.git_env import hardened_git_env
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ def _run_git(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
             timeout=30,
             check=False,
             cwd=cwd,
+            env=hardened_git_env(),
         )
         return result.returncode == 0, result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:

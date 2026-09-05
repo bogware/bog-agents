@@ -66,6 +66,7 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
 from bog_agents.middleware._utils import append_to_system_message
 from bog_agents.middleware.skills import (
     SkillMetadata,
@@ -156,6 +157,7 @@ def _clone_git_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
                 capture_output=True,
                 timeout=30,
                 check=False,
+                env=hardened_git_env(),
             )
         else:
             clone_dir.mkdir(parents=True, exist_ok=True)
@@ -164,6 +166,7 @@ def _clone_git_skills(source: str, cache_dir: Path) -> list[SkillMetadata]:
                 capture_output=True,
                 timeout=60,
                 check=True,
+                env=hardened_git_env(),
             )
     except (subprocess.SubprocessError, OSError) as e:
         logger.warning("Failed to clone git skills from %s: %s", source, e)

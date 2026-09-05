@@ -37,6 +37,8 @@ class AutoDecision(Enum):
 
     ALLOW = "allow"
     ASK = "ask"
+    DENY = "deny"
+    """ROADMAP #49: matched a persistent per-project never-allow entry; rejected without asking."""
 
 
 @dataclass(frozen=True)
@@ -245,6 +247,10 @@ class AutoModeSettings:
     extra_risky_tools: list[str] = field(default_factory=list)
     haiku_eval: HaikuEvalConfig = field(default_factory=HaikuEvalConfig)
     preflight_clarification: bool = True
+    # ROADMAP #49: persistent per-project never-allow entries. Each entry is a
+    # bare tool name (`"web_fetch"`), or `"<tool>: <regex>"` matched against
+    # the shell command (execute/shell) or the JSON of the tool arguments.
+    never_allow: list[str] = field(default_factory=list)
     # v6 #47: consecutive risky verdicts from the review model before auto
     # mode pauses itself and every call asks a human (Codex's circuit breaker).
     breaker_threshold: int = 3
@@ -290,7 +296,146 @@ class AutoModeSettings:
             breaker_threshold=max(
                 1, int(d.get("breaker_threshold", self.breaker_threshold))
             ),
+            never_allow=_coerce_str_list("never_allow", self.never_allow),
         )
+
+
+# ---------------------------------------------------------------------------
+# ROADMAP #49: persistent never-allow
+# ---------------------------------------------------------------------------
+
+
+def compile_never_allow(
+    entries: list[str],
+) -> list[tuple[str, str | None, re.Pattern[str] | None]]:
+    """Parse never-allow entries into `(raw, tool, pattern)`; a bare tool name has no pattern."""
+    compiled: list[tuple[str, str | None, re.Pattern[str] | None]] = []
+    for raw in entries:
+        text = str(raw).strip()
+        if not text:
+            continue
+        tool, sep, pattern = text.partition(":")
+        if not sep:
+            compiled.append((text, text.strip().lower(), None))
+            continue
+        try:
+            rx = re.compile(pattern.strip(), re.IGNORECASE)
+        except re.error:
+            logger.warning("never_allow: invalid regex in %r; entry ignored", text)
+            continue
+        compiled.append((text, tool.strip().lower() or None, rx))
+    return compiled
+
+
+def never_allow_match(
+    compiled: list[tuple[str, str | None, re.Pattern[str] | None]],
+    tool_name: str,
+    tool_args: dict[str, Any],
+) -> str | None:
+    """Return the matching never-allow entry for a tool call, or `None`."""
+    lowered = tool_name.lower()
+    shell_like = lowered in {"execute", "shell", "bash", "run_command"}
+    haystack: str | None = None
+    for raw, tool, rx in compiled:
+        if tool not in (None, lowered) and not (
+            tool in {"execute", "shell"} and shell_like
+        ):
+            continue
+        if rx is None:
+            if tool == lowered:
+                return raw
+            continue
+        if haystack is None:
+            command = tool_args.get("command") if isinstance(tool_args, dict) else None
+            haystack = (
+                str(command)
+                if shell_like and command is not None
+                else json.dumps(tool_args, sort_keys=True, default=str)
+            )
+        if rx.search(haystack):
+            return raw
+    return None
+
+
+def never_allow_entry_for(tool_name: str, tool_args: dict[str, Any]) -> str:
+    """Build the never-allow entry that would block exactly this call again."""
+    lowered = tool_name.lower()
+    if lowered in {"execute", "shell", "bash", "run_command"}:
+        command = str((tool_args or {}).get("command") or "").strip()
+        if command:
+            return f"execute: ^{re.escape(command)}$"
+    return lowered
+
+
+def project_never_allow(project_root: Path | str | None) -> list[str]:
+    """The effective never-allow list for a project (user + project settings.json)."""
+    return list(
+        load_auto_mode_settings(
+            Path(project_root) if project_root else None
+        ).never_allow
+    )
+
+
+def record_never_allow(project_root: Path | str, entry: str) -> Path:
+    """Append `entry` to `<project>/.bog-agents/settings.json` `auto_mode.never_allow` (atomic, idempotent)."""
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    path = Path(project_root) / ".bog-agents" / "settings.json"
+    data: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "never_allow: could not parse %s; rewriting the auto_mode section only",
+                path,
+            )
+    section = data.get("auto_mode")
+    if not isinstance(section, dict):
+        section = {}
+    current = (
+        [str(e) for e in section.get("never_allow", []) if isinstance(e, str)]
+        if isinstance(section.get("never_allow"), list)
+        else []
+    )
+    if entry not in current:
+        current.append(entry)
+    section["never_allow"] = current
+    data["auto_mode"] = section
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(data, indent=2))
+    return path
+
+
+def denied_indexes(
+    action_requests: list[dict[str, Any]], project_root: Path | str | None
+) -> dict[int, str]:
+    """Map action-request indexes to the never-allow entry that denies them (any approval mode)."""
+    compiled = compile_never_allow(project_never_allow(project_root))
+    if not compiled:
+        return {}
+    out: dict[int, str] = {}
+    for index, req in enumerate(action_requests):
+        args = req.get("args", {}) if isinstance(req.get("args"), dict) else {}
+        hit = never_allow_match(compiled, str(req.get("name", "")), args)
+        if hit is not None:
+            out[index] = hit
+    return out
+
+
+def approval_timeout_seconds() -> float | None:
+    """`approvals.timeout_seconds` from the manifest (`None` = wait forever)."""
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        value = resolve_option("approvals.timeout_seconds")
+    except Exception:  # a config problem never blocks approvals
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
 
 
 def load_auto_mode_settings(
@@ -377,6 +522,7 @@ class AutoModeRuleEngine:
         self._allow_re = [re.compile(p, re.IGNORECASE) for p in all_allow]
         self._safe_tools = _SAFE_TOOL_NAMES | frozenset(settings.extra_safe_tools)
         self._risky_tools = _RISKY_TOOL_NAMES | frozenset(settings.extra_risky_tools)
+        self._never_allow = compile_never_allow(settings.never_allow)
 
     def evaluate(self, tool_name: str, tool_args: dict[str, Any]) -> RuleVerdict:
         """Return a verdict for a single tool call.
@@ -388,6 +534,12 @@ class AutoModeRuleEngine:
         Returns:
             RuleVerdict with decision, reason, and rule_source.
         """
+        denied = never_allow_match(self._never_allow, tool_name, tool_args)
+        if denied is not None:
+            return RuleVerdict(
+                AutoDecision.DENY, f"never allowed: {denied}", "never_allow"
+            )
+
         if tool_name in self._safe_tools:
             return RuleVerdict(
                 AutoDecision.ALLOW, f"safe tool: {tool_name}", "safe_tools"

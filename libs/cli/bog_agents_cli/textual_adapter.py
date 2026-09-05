@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from bog_agents.git_env import hardened_git_env
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -497,6 +499,7 @@ def _get_git_branch() -> str | None:
             text=True,
             timeout=2,
             check=False,
+            env=hardened_git_env(),
         )
         if result.returncode == 0:
             branch = result.stdout.strip() or None
@@ -1687,15 +1690,30 @@ async def execute_task_textual(
                     # can short-circuit; otherwise fall through to the normal
                     # approval flow and force the blocked indexes to reject after
                     # the user/auto decision is made (via _force_blocked below).
+                    # ROADMAP #49: persistent per-project never-allow entries reject
+                    # without asking, in every approval mode, with the entry named
+                    # so the agent (and the user) know why.
+                    from bog_agents_cli.auto_mode import denied_indexes
+
+                    never_allowed = denied_indexes(action_requests, Path.cwd())
+                    for denied_index in never_allowed:
+                        if denied_index not in blocked_indexes:
+                            blocked_indexes.append(denied_index)
+
                     def _force_blocked(
                         decisions: list[HITLDecision],
                         _blocked: list[int] = blocked_indexes,
+                        _never: dict[int, str] = never_allowed,
                     ) -> list[HITLDecision]:
                         for i in _blocked:
                             if 0 <= i < len(decisions):
+                                reason = (
+                                    f"never allowed in this project (.bog-agents/settings.json auto_mode.never_allow): {_never[i]}"
+                                    if i in _never
+                                    else "blocked by .bog-agents/hooks/pre-tool"
+                                )
                                 decisions[i] = RejectDecision(
-                                    type="reject",
-                                    message="blocked by .bog-agents/hooks/pre-tool",
+                                    type="reject", message=reason
                                 )
                         return decisions
 
@@ -1816,6 +1834,61 @@ async def execute_task_textual(
                                     tool_msg.set_rejected()
                                 adapter._current_tool_messages.clear()
                                 any_rejected = True
+                            elif decision_type in {
+                                "redirect",
+                                "never_allow",
+                                "timeout",
+                            }:
+                                # ROADMAP #49: steerable rejections. `redirect`
+                                # carries the user's instruction into the
+                                # ToolMessage and lets the agent continue;
+                                # `never_allow` persists a per-project entry
+                                # and continues; `timeout` fails closed and
+                                # ends the turn.
+                                from bog_agents_cli.auto_mode import (
+                                    never_allow_entry_for,
+                                    record_never_allow,
+                                )
+
+                                message = str(decision.get("message") or "").strip()
+                                if decision_type == "never_allow":
+                                    entries = []
+                                    for action_request in action_requests:
+                                        entry = never_allow_entry_for(
+                                            str(action_request.get("name", "")),
+                                            action_request.get("args", {}) or {},
+                                        )
+                                        try:
+                                            record_never_allow(Path.cwd(), entry)
+                                        except OSError:
+                                            logger.warning(
+                                                "could not persist never-allow entry",
+                                                exc_info=True,
+                                            )
+                                        entries.append(entry)
+                                    message = (
+                                        "never allowed in this project from now on: "
+                                        + "; ".join(entries)
+                                        + ". Do not try this again; choose a different approach."
+                                    )
+                                elif decision_type == "redirect":
+                                    message = f"The user rejected this call and says: {message}"
+                                decisions = [
+                                    RejectDecision(type="reject", message=message)
+                                    for _ in action_requests
+                                ]
+                                for tool_msg in list(
+                                    adapter._current_tool_messages.values()
+                                ):
+                                    tool_msg.set_rejected()
+                                adapter._current_tool_messages.clear()
+                                if decision_type == "timeout":
+                                    any_rejected = True
+                                    await adapter._mount_message(
+                                        AppMessage(
+                                            f"[dim]{message}. The turn was stopped (fail-closed).[/dim]"
+                                        )
+                                    )
                             else:
                                 logger.warning(
                                     "Unexpected HITL decision type: %s",

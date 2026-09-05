@@ -33,6 +33,9 @@ from pathlib import Path
 # Keep alphabetically sorted by constant name.
 # ---------------------------------------------------------------------------
 
+APPROVAL_TIMEOUT = "BOG_AGENTS_APPROVAL_TIMEOUT"
+"""Seconds an approval prompt waits before auto-rejecting (fail-closed); unset = wait forever (#49)."""
+
 BEDROCK_AUTH_MODE = "BOG_AGENTS_BEDROCK_AUTH_MODE"
 """Select the AWS Bedrock authentication mode (e.g. `profile` vs. default chain)."""
 

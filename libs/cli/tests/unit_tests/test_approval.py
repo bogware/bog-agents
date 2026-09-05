@@ -297,7 +297,7 @@ class TestOptionOrdering:
     ) -> None:
         """Each action_select_* method must update _selected to the correct index."""
         menu = ApprovalMenu({"name": "write", "args": {"path": "f.py", "content": ""}})
-        menu._option_widgets = [MagicMock(), MagicMock(), MagicMock()]
+        menu._option_widgets = [MagicMock() for _ in range(ApprovalMenu.OPTION_COUNT)]
         getattr(menu, action)()
         assert menu._selected == expected_index
 

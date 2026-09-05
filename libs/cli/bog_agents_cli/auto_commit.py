@@ -23,6 +23,8 @@ import logging
 import subprocess  # noqa: S404
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,7 @@ async def _git_async(*args: str, cwd: Path) -> tuple[int, str]:
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=hardened_git_env(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         output = (stdout + stderr).decode(errors="replace").strip()

@@ -82,6 +82,7 @@ def git_tools_bundle(
     """
     from pathlib import Path as _Path
 
+    from bog_agents.git_env import NO_EXTERNAL_DIFF
     from bog_agents.middleware.git_tools import _run_git
 
     wd = working_dir or _Path.cwd()
@@ -110,7 +111,7 @@ def git_tools_bundle(
     ) -> str:
         """Show changes in the working directory. Use staged=True for staged changes only."""
         del runtime
-        args: list[str] = ["diff"]
+        args: list[str] = ["diff", *NO_EXTERNAL_DIFF]
         if staged:
             args.append("--cached")
         if path:

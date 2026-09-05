@@ -497,6 +497,15 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         env_var=_env_vars.FS_UNSANDBOXED,
     ),
     ConfigOption(
+        key="approvals.timeout_seconds",
+        group="Tools",
+        summary="Seconds an approval prompt waits before auto-rejecting (fail-closed). Unset = wait forever.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off"),
+        env_var=_env_vars.APPROVAL_TIMEOUT,
+        toml_keys=("approvals", "timeout_seconds"),
+    ),
+    ConfigOption(
         key="tools.timeout",
         group="Tools",
         summary="Default per-tool execution timeout (seconds).",

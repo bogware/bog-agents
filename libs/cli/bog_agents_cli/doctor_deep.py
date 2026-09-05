@@ -32,6 +32,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,6 +134,7 @@ def _probe_git() -> Probe:
             text=True,
             check=False,
             timeout=GIT_PROBE_TIMEOUT_S,
+            env=hardened_git_env(),
         )
     except subprocess.TimeoutExpired:
         return Probe(name="git", status="fail", detail="git --version timed out")

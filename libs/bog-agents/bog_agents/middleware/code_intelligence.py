@@ -35,6 +35,8 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 # Directories that hold vendored dependencies, build artifacts, or VCS metadata.
@@ -88,6 +90,7 @@ def _run_cmd(working_dir: Path, *args: str, timeout: int = 60) -> str:
             text=True,
             timeout=timeout,
             check=False,
+            env=hardened_git_env() if args and str(next(iter(args))).endswith("git") else None,
         )
         if result.returncode != 0:
             return f"[exit code {result.returncode}]\n{result.stderr}\n{result.stdout}".strip()

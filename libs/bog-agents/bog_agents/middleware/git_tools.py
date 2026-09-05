@@ -27,6 +27,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.tools import BaseTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +55,7 @@ def _run_git(working_dir: Path, *args: str, timeout: int = 30) -> str:
             text=True,
             timeout=timeout,
             check=False,
+            env=hardened_git_env(),
         )
         output = result.stdout
         if result.returncode != 0:

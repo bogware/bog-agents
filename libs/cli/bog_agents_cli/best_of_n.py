@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -341,14 +343,16 @@ def _worktree_diff(worktree_path: Path) -> str:
             text=True,
             timeout=30,
             check=False,
+            env=hardened_git_env(),
         )
-        result = subprocess.run(
-            ["git", "diff", "--cached"],
+        result = subprocess.run(  # noqa: S603
+            ["git", "diff", *NO_EXTERNAL_DIFF, "--cached"],
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
+            env=hardened_git_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""

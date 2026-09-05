@@ -15,6 +15,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Protocol
 
+from bog_agents.git_env import hardened_git_env
+
 from bog_agents_cli.command_registry import get_slash_commands
 from bog_agents_cli.project_utils import find_project_root
 
@@ -632,6 +634,7 @@ def _get_project_files(root: Path) -> list[str]:
                 text=True,
                 timeout=5,
                 check=False,
+                env=hardened_git_env(),
             )
             if result.returncode == 0:
                 files = result.stdout.strip().split("\n")

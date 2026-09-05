@@ -12,6 +12,8 @@ import logging
 import subprocess  # noqa: S404
 from pathlib import Path
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +36,7 @@ def detect_pr_platform(cwd: Path) -> str | None:
             check=False,
             cwd=cwd,
             timeout=10,
+            env=hardened_git_env(),
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
@@ -188,11 +191,17 @@ def get_azure_pr_diff(pr_number: str | None = None, *, cwd: Path) -> dict[str, s
             else:
                 # Fallback: git diff against target branch
                 git_diff = subprocess.run(  # noqa: S603
-                    ["git", "diff", f"origin/{target_branch}...HEAD"],
+                    [
+                        "git",
+                        "diff",
+                        *NO_EXTERNAL_DIFF,
+                        f"origin/{target_branch}...HEAD",
+                    ],
                     capture_output=True,
                     text=True,
                     check=False,
                     cwd=cwd,
+                    env=hardened_git_env(),
                 )
                 diff_text = git_diff.stdout if git_diff.returncode == 0 else ""
 
@@ -217,11 +226,12 @@ def get_azure_pr_diff(pr_number: str | None = None, *, cwd: Path) -> dict[str, s
     logger.warning("az CLI unavailable or PR lookup failed; falling back to git diff")
     for base in ("origin/main", "origin/master"):
         git_diff = subprocess.run(  # noqa: S603
-            ["git", "diff", f"{base}...HEAD"],
+            ["git", "diff", *NO_EXTERNAL_DIFF, f"{base}...HEAD"],
             capture_output=True,
             text=True,
             check=False,
             cwd=cwd,
+            env=hardened_git_env(),
         )
         if git_diff.returncode == 0 and git_diff.stdout.strip():
             diff_text = git_diff.stdout
