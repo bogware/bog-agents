@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bog_agents import create_agent
+from bog_agents import FeatureConfig, create_agent
 from bog_agents.backends import CompositeBackend, LocalShellBackend
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.middleware import MemoryMiddleware, SkillsMiddleware
@@ -1271,6 +1271,25 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     return interrupt_map
 
 
+def _memory_index_path(project_root: Path | str) -> Path:
+    """Return the per-project persistent `memory_search` index path (v6 SDK-5).
+
+    Args:
+        project_root: The working directory the memory cascade was built for.
+
+    Returns:
+        `~/.bog-agents/memory_index/<sha256(project)[:12]>.db`.
+    """
+    import hashlib
+
+    from bog_agents_cli.config import bog_agents_home
+
+    key = hashlib.sha256(str(Path(project_root).resolve()).encode("utf-8")).hexdigest()[
+        :12
+    ]
+    return bog_agents_home() / "memory_index" / f"{key}.db"
+
+
 def create_cli_agent(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -1547,6 +1566,8 @@ def create_cli_agent(
             from bog_agents.tools import memory_search_tool_bundle
 
             memory_embedder = None
+            memory_embed_batch = None
+            memory_db_path = None
             if os.environ.get("BOG_AGENTS_MEMORY_VECTOR", "").strip().lower() in (
                 "1",
                 "true",
@@ -1562,6 +1583,11 @@ def create_cli_agent(
                     model = _get_embedding_model()
                     if model is not None:
                         memory_embedder = embedder_from_langchain(model)
+                        # v6 SDK-5: embed lazily, in one batch, and persist the
+                        # vectors per project so a restart re-embeds only
+                        # changed text instead of every memory block.
+                        memory_embed_batch = getattr(model, "embed_documents", None)
+                        memory_db_path = _memory_index_path(effective_cwd or Path.cwd())
                 except Exception:
                     logger.debug(
                         "Could not resolve a memory embedder; keyword-only",
@@ -1569,7 +1595,12 @@ def create_cli_agent(
                     )
 
             tools.extend(
-                memory_search_tool_bundle(memory_sources, embedder=memory_embedder)
+                memory_search_tool_bundle(
+                    memory_sources,
+                    embedder=memory_embedder,
+                    embed_batch=memory_embed_batch,
+                    db_path=memory_db_path,
+                )
             )
         except Exception:
             logger.debug("Could not build memory_search tool", exc_info=True)
@@ -1830,11 +1861,20 @@ def create_cli_agent(
             root_dir=tempfile.mkdtemp(prefix="bog_agents_conversation_history_"),
             virtual_mode=True,
         )
+        # v6 SDK-4: the street sweeper's offloaded originals live under
+        # ~/.bog-agents/swept/<thread>/<marker>.md, never in the project tree.
+        from bog_agents_cli.config import bog_agents_home
+
+        swept_backend = FilesystemBackend(
+            root_dir=str(bog_agents_home() / "swept"),
+            virtual_mode=True,
+        )
         composite_backend = CompositeBackend(
             default=backend,
             routes={
                 "/large_tool_results/": large_results_backend,
                 "/conversation_history/": conversation_history_backend,
+                "/swept_context/": swept_backend,
             },
         )
     else:
@@ -2086,6 +2126,7 @@ def create_cli_agent(
     # by default. `/sweep on` flips it live without a rebuild. Pointing it at the
     # live composite backend enables offload + the recall_swept tool. Wrapped so
     # an attach failure can never block agent creation.
+    sweeper_attached = False
     try:
         from bog_agents_cli.sweep_controller import get_sweep_controller
 
@@ -2093,6 +2134,7 @@ def create_cli_agent(
         sweeper.set_backend(composite_backend)
         sweeper.set_pricing(model_spec_str)
         agent_middleware.append(sweeper)
+        sweeper_attached = True
     except Exception:
         logger.debug("street sweeper attach failed; skipping", exc_info=True)
 
@@ -2103,6 +2145,11 @@ def create_cli_agent(
     # create_agent even under --auto-approve, so the guard can't be bypassed.
     from bog_agents_cli.self_protection import authority_file_permissions
 
+    # v6 SDK-3: declaring the sweeper feature makes `create_agent` reserve its
+    # canonical slot (inside CostTracker, outside Summarization); the CLI's
+    # singleton above then *replaces* that built-in by name instead of being
+    # spliced in after the core stack, where it ran inside summarization and
+    # never saw the litter summarization had already paid for.
     agent = create_agent(
         model=model,
         system_prompt=system_prompt,
@@ -2114,5 +2161,6 @@ def create_cli_agent(
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
         cost_ledger=cost_ledger,
+        config=FeatureConfig(enable_street_sweeper=sweeper_attached),
     ).with_config(config)
     return agent, composite_backend

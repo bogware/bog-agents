@@ -425,7 +425,11 @@ class StreetSweeperMiddleware(AgentMiddleware):
         backend: Backend (instance or factory) used to offload dropped content
             for `recall_swept`. When `None`, offload is disabled and dropped
             content is recoverable only from raw LangGraph state.
-        history_path_prefix: Path prefix for the per-thread offload file.
+        history_path_prefix: Backend path under which offloaded originals are
+            stored, one write-once file per marker at
+            `<prefix>/<thread_id>/<marker>.md` (v6 SDK-4). Route this prefix
+            to an out-of-tree backend (the CLI maps it to
+            `~/.bog-agents/swept/`) so nothing lands in the project.
         read_tools: Tool names whose results are file reads (for stale-read detection).
         mutate_tools: Tool names that invalidate earlier reads of the same path.
     """
@@ -466,6 +470,11 @@ class StreetSweeperMiddleware(AgentMiddleware):
         # only after the backend write succeeds, so a failed write is retried on
         # the next model call instead of being lost.
         self._offloaded: set[str] = set()
+        # v6 SDK-2: when the run has no `configurable.thread_id`, one id is
+        # minted per middleware instance (not per call) so every model call of a
+        # plain `agent.invoke` session offloads to, and recalls from, the same
+        # place.
+        self._fallback_thread_id: str | None = None
         # Cross-call memo for per-text SHA-1 / normalization / truncation.
         self._memo = _SweepTextMemo()
         self.tools: list[BaseTool] = [self._build_recall_tool()]
@@ -771,7 +780,12 @@ class StreetSweeperMiddleware(AgentMiddleware):
     # ------------------------------------------------------------------ offload
 
     def _get_thread_id(self) -> str:
-        """Return the current langgraph `thread_id`, or a generated session id.
+        """Return the current langgraph `thread_id`, or a per-instance session id.
+
+        Outside a configured thread the id is minted once and cached on the
+        instance (v6 SDK-2); previously every call minted a fresh
+        `session_<uuid>`, so consecutive model calls offloaded to different
+        files and `recall_swept` could never find an earlier marker.
 
         Returns:
             The thread id string.
@@ -783,11 +797,24 @@ class StreetSweeperMiddleware(AgentMiddleware):
                 return str(thread_id)
         except RuntimeError:
             pass
-        return f"session_{uuid.uuid4().hex[:8]}"
+        if self._fallback_thread_id is None:
+            self._fallback_thread_id = f"session_{uuid.uuid4().hex[:8]}"
+        return self._fallback_thread_id
 
-    def _history_path(self) -> str:
-        """Return the per-thread offload file path."""
-        return f"{self._history_path_prefix}/{self._get_thread_id()}.md"
+    def _history_dir(self) -> str:
+        """Return the per-thread offload directory (`<prefix>/<thread_id>`)."""
+        return f"{self._history_path_prefix}/{_safe_path_component(self._get_thread_id())}"
+
+    def _marker_path(self, marker: str) -> str:
+        """Return the write-once offload file for `marker` (v6 SDK-4).
+
+        Args:
+            marker: The recall marker (a tool_call_id).
+
+        Returns:
+            `<prefix>/<thread_id>/<marker>.md`.
+        """
+        return f"{self._history_dir()}/{_safe_path_component(marker)}.md"
 
     def _resolve_backend(self, state: Any, runtime: Runtime) -> BackendProtocol | None:
         """Resolve the backend from an instance or factory, mirroring summarization.
@@ -814,7 +841,7 @@ class StreetSweeperMiddleware(AgentMiddleware):
             return self._backend(tool_runtime)  # ty: ignore[call-top-callable]
         return self._backend
 
-    def _pending_offloads(self, offloads: list[tuple[str, str, str]]) -> tuple[str, list[str]]:
+    def _pending_offloads(self, offloads: list[tuple[str, str, str]]) -> list[tuple[str, str]]:
         """Render not-yet-offloaded sections; do NOT mark them written yet.
 
         Markers are marked offloaded only once the backend write succeeds
@@ -826,76 +853,63 @@ class StreetSweeperMiddleware(AgentMiddleware):
             offloads: All offloads planned this turn.
 
         Returns:
-            A `(addition, markers)` pair: the concatenated markdown for sections
-            not previously offloaded (empty when there is nothing new) and the
-            markers those sections cover, in order.
+            `(marker, markdown)` pairs for the sections not previously
+            offloaded, in order; empty when there is nothing new. Each section
+            becomes its own write-once file (v6 SDK-4).
         """
-        sections: list[str] = []
-        markers: list[str] = []
+        sections: list[tuple[str, str]] = []
         seen: set[str] = set()
         for marker, header, content in offloads:
             if marker in self._offloaded or marker in seen:
                 continue
             seen.add(marker)
-            markers.append(marker)
-            sections.append(f"{header}\n\n{content}\n\n")
-        return "".join(sections), markers
+            sections.append((marker, f"{header}\n\n{content}\n"))
+        return sections
 
-    def _offload(self, backend: BackendProtocol, addition: str, markers: list[str]) -> None:
-        """Append rendered sections to the per-thread offload file (sync, best-effort).
+    def _offload(self, backend: BackendProtocol, sections: list[tuple[str, str]]) -> None:
+        """Write each pending section to its own marker file (sync, best-effort).
 
-        Args:
-            backend: The resolved backend.
-            addition: The markdown to append.
-            markers: The markers `addition` covers; recorded as offloaded only
-                on a successful write.
-        """
-        path = self._history_path()
-        existing = ""
-        try:
-            responses = backend.download_files([path])
-            if responses and responses[0].content is not None and responses[0].error is None:
-                existing = responses[0].content.decode("utf-8")
-        except Exception:
-            logger.debug("street_sweeper: no existing offload file at %s", path, exc_info=True)
-        try:
-            combined = existing + addition
-            if existing:
-                backend.edit(path, existing, combined)
-            else:
-                backend.write(path, combined)
-        except Exception:
-            logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
-            return
-        self._offloaded.update(markers)
-
-    async def _aoffload(self, backend: BackendProtocol, addition: str, markers: list[str]) -> None:
-        """Append rendered sections to the per-thread offload file (async, best-effort).
+        v6 SDK-4: one write-once file per marker replaces the old single
+        per-thread file that was downloaded and rewritten in full on every
+        model call (quadratic in session length, and landing in the project
+        tree when the backend was the working directory).
 
         Args:
             backend: The resolved backend.
-            addition: The markdown to append.
-            markers: The markers `addition` covers; recorded as offloaded only
-                on a successful write.
+            sections: `(marker, markdown)` pairs from `_pending_offloads`; a
+                marker is recorded as offloaded only on a successful write.
         """
-        path = self._history_path()
-        existing = ""
-        try:
-            responses = await backend.adownload_files([path])
-            if responses and responses[0].content is not None and responses[0].error is None:
-                existing = responses[0].content.decode("utf-8")
-        except Exception:
-            logger.debug("street_sweeper: no existing offload file at %s", path, exc_info=True)
-        try:
-            combined = existing + addition
-            if existing:
-                await backend.aedit(path, existing, combined)
-            else:
-                await backend.awrite(path, combined)
-        except Exception:
-            logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
-            return
-        self._offloaded.update(markers)
+        for marker, markdown in sections:
+            path = self._marker_path(marker)
+            try:
+                result = backend.write(path, markdown)
+            except Exception:
+                logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
+                continue
+            if getattr(result, "error", None):
+                logger.warning("street_sweeper: failed to offload swept content to %s: %s", path, result.error)
+                continue
+            self._offloaded.add(marker)
+
+    async def _aoffload(self, backend: BackendProtocol, sections: list[tuple[str, str]]) -> None:
+        """Write each pending section to its own marker file (async, best-effort).
+
+        Args:
+            backend: The resolved backend.
+            sections: `(marker, markdown)` pairs from `_pending_offloads`; a
+                marker is recorded as offloaded only on a successful write.
+        """
+        for marker, markdown in sections:
+            path = self._marker_path(marker)
+            try:
+                result = await backend.awrite(path, markdown)
+            except Exception:
+                logger.warning("street_sweeper: failed to offload swept content to %s", path, exc_info=True)
+                continue
+            if getattr(result, "error", None):
+                logger.warning("street_sweeper: failed to offload swept content to %s: %s", path, result.error)
+                continue
+            self._offloaded.add(marker)
 
     def _commit_actions(self, actions: list[SweepAction]) -> None:
         """Record actions to the sweep log and emit a debug line.
@@ -953,9 +967,9 @@ class StreetSweeperMiddleware(AgentMiddleware):
 
         backend = self._resolve_backend(request.state, request.runtime)
         if backend is not None and plan.offloads:
-            addition, markers = self._pending_offloads(plan.offloads)
-            if addition:
-                self._offload(backend, addition, markers)
+            sections = self._pending_offloads(plan.offloads)
+            if sections:
+                self._offload(backend, sections)
         self._commit_actions(plan.actions)
         return handler(request.override(messages=plan.messages))
 
@@ -985,9 +999,9 @@ class StreetSweeperMiddleware(AgentMiddleware):
 
         backend = self._resolve_backend(request.state, request.runtime)
         if backend is not None and plan.offloads:
-            addition, markers = self._pending_offloads(plan.offloads)
-            if addition:
-                await self._aoffload(backend, addition, markers)
+            sections = self._pending_offloads(plan.offloads)
+            if sections:
+                await self._aoffload(backend, sections)
         self._commit_actions(plan.actions)
         return await handler(request.override(messages=plan.messages))
 
@@ -1007,16 +1021,22 @@ class StreetSweeperMiddleware(AgentMiddleware):
             backend = mw._resolve_backend(runtime.state, runtime)
             if backend is None:
                 return "Street sweeper offload is disabled; no swept content is available to recall."
-            path = mw._history_path()
+            if not marker:
+                try:
+                    listing = backend.ls(mw._history_dir())
+                except Exception:
+                    logger.debug("recall_swept: ls failed for %s", mw._history_dir(), exc_info=True)
+                    listing = None
+                return mw._render_marker_index(listing)
+            path = mw._marker_path(marker)
             try:
                 responses = backend.download_files([path])
             except Exception:
                 logger.debug("recall_swept: download failed for %s", path, exc_info=True)
                 responses = None
             if not responses or responses[0].content is None or responses[0].error is not None:
-                return "No swept context has been offloaded yet."
-            content = responses[0].content.decode("utf-8", "ignore")
-            return mw._extract_section(content, marker)
+                return f"No swept content found for marker '{marker}'."
+            return mw._extract_section(responses[0].content.decode("utf-8", "ignore"), marker)
 
         def sync_recall(runtime: ToolRuntime, marker: str = "") -> str:
             return _read(runtime, marker)
@@ -1025,16 +1045,22 @@ class StreetSweeperMiddleware(AgentMiddleware):
             backend = mw._resolve_backend(runtime.state, runtime)
             if backend is None:
                 return "Street sweeper offload is disabled; no swept content is available to recall."
-            path = mw._history_path()
+            if not marker:
+                try:
+                    listing = await backend.als(mw._history_dir())
+                except Exception:
+                    logger.debug("recall_swept: async ls failed for %s", mw._history_dir(), exc_info=True)
+                    listing = None
+                return mw._render_marker_index(listing)
+            path = mw._marker_path(marker)
             try:
                 responses = await backend.adownload_files([path])
             except Exception:
                 logger.debug("recall_swept: async download failed for %s", path, exc_info=True)
                 responses = None
             if not responses or responses[0].content is None or responses[0].error is not None:
-                return "No swept context has been offloaded yet."
-            content = responses[0].content.decode("utf-8", "ignore")
-            return mw._extract_section(content, marker)
+                return f"No swept content found for marker '{marker}'."
+            return mw._extract_section(responses[0].content.decode("utf-8", "ignore"), marker)
 
         return StructuredTool.from_function(
             name="recall_swept",
@@ -1048,30 +1074,62 @@ class StreetSweeperMiddleware(AgentMiddleware):
         )
 
     @staticmethod
-    def _extract_section(content: str, marker: str) -> str:
-        """Return one offloaded section by marker, or an index of all markers.
+    def _render_marker_index(listing: Any) -> str:
+        """Render the markers available in the thread's offload directory.
 
         Args:
-            content: The full offload file content.
-            marker: The marker to extract, or `""` to list available markers.
+            listing: The backend `ls` result for `_history_dir()` (or `None`
+                when the listing failed).
 
         Returns:
-            The requested section, a marker index, or a not-found message.
+            A bullet list of markers, or a not-yet message when there are none.
+        """
+        entries = getattr(listing, "entries", None) or []
+        markers: list[str] = []
+        for entry in entries:
+            if entry.get("is_dir"):
+                continue
+            name = str(entry.get("path", "")).replace("\\", "/").rsplit("/", 1)[-1]
+            if name.endswith(".md"):
+                markers.append(name[: -len(".md")])
+        if not markers:
+            return "No swept context has been offloaded yet."
+        listed = "\n".join(f"  - {m}" for m in sorted(markers))
+        return f"Available swept markers (pass one to recall_swept):\n{listed}"
+
+    @staticmethod
+    def _extract_section(content: str, marker: str) -> str:
+        """Return the body of one offloaded marker file.
+
+        Args:
+            content: The marker file content (a `### swept …` header, then the
+                original tool output).
+            marker: The marker the file was requested for (used in the
+                not-found message when the file carries no section).
+
+        Returns:
+            The original output, or a not-found message.
         """
         sections = content.split("### swept ")
-        entries: list[tuple[str, str]] = []
         for raw in sections[1:]:
-            header, _, body = raw.partition("\n")
-            entry_marker = header.split(" | ", 1)[0].strip()
-            entries.append((entry_marker, body.strip()))
-
-        if not marker:
-            if not entries:
-                return "No swept context has been offloaded yet."
-            listed = "\n".join(f"  - {m}" for m, _ in entries)
-            return f"Available swept markers (pass one to recall_swept):\n{listed}"
-
-        for entry_marker, body in entries:
-            if entry_marker == marker:
-                return body
+            _header, _, body = raw.partition("\n")
+            return body.strip()
         return f"No swept content found for marker '{marker}'."
+
+
+def _safe_path_component(value: str) -> str:
+    """Return `value` restricted to path-safe characters (else a short hash).
+
+    Markers are tool_call_ids and thread ids are caller-chosen, so anything
+    outside `[A-Za-z0-9._-]` is replaced by a stable SHA-1 prefix rather than
+    written into a backend path.
+
+    Args:
+        value: The marker or thread id.
+
+    Returns:
+        A single path component.
+    """
+    if value and re.fullmatch(r"[A-Za-z0-9._-]{1,120}", value) and value not in {".", ".."}:
+        return value
+    return "h_" + hashlib.sha1(value.encode("utf-8", "replace")).hexdigest()[:16]

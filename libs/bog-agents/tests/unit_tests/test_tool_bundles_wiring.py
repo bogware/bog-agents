@@ -105,3 +105,101 @@ class TestEmbedderAdapter:
 
         embed = embedder_from_langchain(_FakeEmbeddings())
         assert embed("abc") == [3.0, 1.0]
+
+
+class TestMemoryEmbeddingLazyBatchPersist:
+    """v6 SDK-5: embeddings are lazy, batched, persisted, and pruned with the sources."""
+
+    @staticmethod
+    def _embed_one(text: str) -> list[float]:
+        """Query-side embedder (the CLI passes both this and `embed_batch`)."""
+        return [float(len(text)), float(text.count("alpha"))]
+
+    @staticmethod
+    def _batch(calls: list[list[str]]):  # noqa: ANN205 - test helper
+        def embed_batch(texts: list[str]) -> list[list[float]]:
+            calls.append(list(texts))
+            return [[float(len(t)), float(t.count("alpha"))] for t in texts]
+
+        return embed_batch
+
+    def test_embed_batch_is_lazy_and_called_once(self, tmp_path: Path) -> None:
+        calls: list[list[str]] = []
+        a = tmp_path / "AGENTS.md"
+        a.write_text("alpha notes here\n\nbeta notes there", encoding="utf-8")
+        tools = memory_search_tool_bundle([a], embedder=self._embed_one, embed_batch=self._batch(calls))
+        assert calls == []  # nothing embedded at build time
+        assert "alpha" in tools[0].func(None, "alpha")
+        assert len(calls) == 1
+        assert sorted(calls[0]) == ["alpha notes here", "beta notes there"]
+        tools[0].func(None, "beta")
+        assert len(calls) == 1  # vectors are stored, never recomputed
+
+    def test_vectors_persist_across_rebuilds(self, tmp_path: Path) -> None:
+        calls: list[list[str]] = []
+        db = tmp_path / "memory.db"
+        a = tmp_path / "AGENTS.md"
+        a.write_text("alpha notes here\n\nbeta notes there", encoding="utf-8")
+        first = memory_search_tool_bundle([a], embedder=self._embed_one, embed_batch=self._batch(calls), db_path=db)
+        first[0].func(None, "alpha")
+        assert len(calls) == 1
+        # A "restart": rebuild from the same sources against the same file.
+        second = memory_search_tool_bundle([a], embedder=self._embed_one, embed_batch=self._batch(calls), db_path=db)
+        assert "alpha" in second[0].func(None, "alpha")
+        assert len(calls) == 1  # nothing re-embedded
+        # New text is the only thing embedded after an edit.
+        a.write_text("alpha notes here\n\nbeta notes there\n\ngamma is new", encoding="utf-8")
+        third = memory_search_tool_bundle([a], embedder=self._embed_one, embed_batch=self._batch(calls), db_path=db)
+        third[0].func(None, "gamma")
+        assert len(calls) == 2
+        assert calls[1] == ["gamma is new"]
+
+    def test_stale_chunks_are_pruned_on_rebuild(self, tmp_path: Path) -> None:
+        db = tmp_path / "memory.db"
+        a = tmp_path / "AGENTS.md"
+        a.write_text("obsolete guidance about kubernetes", encoding="utf-8")
+        memory_search_tool_bundle([a], db_path=db)[0].func(None, "kubernetes")
+        a.write_text("current guidance about docker", encoding="utf-8")
+        tools = memory_search_tool_bundle([a], db_path=db)
+        assert "No memory matched" in tools[0].func(None, "kubernetes")
+        assert "docker" in tools[0].func(None, "docker")
+
+    def test_embed_batch_failure_degrades_to_keyword(self, tmp_path: Path) -> None:
+        attempts = 0
+
+        def broken(_texts: list[str]) -> list[list[float]]:
+            nonlocal attempts
+            attempts += 1
+            raise RuntimeError("embedding service down")
+
+        a = tmp_path / "AGENTS.md"
+        a.write_text("run the migration with --dry-run", encoding="utf-8")
+        tools = memory_search_tool_bundle([a], embedder=lambda _t: [1.0], embed_batch=broken)
+        assert "dry-run" in tools[0].func(None, "migration")
+        assert "dry-run" in tools[0].func(None, "migration")
+        assert attempts == 1  # one attempt per process, not one per search
+
+
+class TestHybridMemoryIndexPersistence:
+    def test_add_without_vector_keeps_stored_embedding(self) -> None:
+        from bog_agents.hybrid_memory import HybridMemoryIndex, MemoryChunk
+
+        index = HybridMemoryIndex()
+        index.add(MemoryChunk(text="alpha", chunk_id="c1", embedding=[1.0, 0.0]))
+        index.add(MemoryChunk(text="alpha (edited)", chunk_id="c1"))
+        assert index.chunks_missing_embeddings() == []
+        assert index._load_chunk("c1").text == "alpha (edited)"
+        assert list(index._load_chunk("c1").embedding) == [1.0, 0.0]
+
+    def test_set_and_prune(self) -> None:
+        from bog_agents.hybrid_memory import HybridMemoryIndex, MemoryChunk
+
+        index = HybridMemoryIndex()
+        index.add(MemoryChunk(text="alpha", chunk_id="c1"))
+        index.add(MemoryChunk(text="beta", chunk_id="c2"))
+        assert [cid for cid, _ in index.chunks_missing_embeddings()] == ["c1", "c2"]
+        assert index.set_embeddings({"c1": [0.5, 0.5]}) == 1
+        assert [cid for cid, _ in index.chunks_missing_embeddings()] == ["c2"]
+        assert index.prune_except({"c1"}) == 1
+        assert index._load_chunk("c2") is None
+        assert index.search("beta") == []

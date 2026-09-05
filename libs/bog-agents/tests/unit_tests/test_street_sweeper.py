@@ -176,53 +176,108 @@ def test_offload_and_recall_roundtrip(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(mw, "_get_thread_id", lambda: "t1")
 
     offloads = [("r1", mw._offload_header("r1", "read_file", "stale_read"), "ORIGINAL READ BODY")]
-    addition, markers = mw._pending_offloads(offloads)
-    assert "ORIGINAL READ BODY" in addition
-    assert markers == ["r1"]
-    mw._offload(backend, addition, markers)
+    sections = mw._pending_offloads(offloads)
+    assert [m for m, _ in sections] == ["r1"]
+    assert "ORIGINAL READ BODY" in sections[0][1]
+    mw._offload(backend, sections)
+    assert "r1" in mw._offloaded
 
-    stored = backend.download_files([mw._history_path()])[0].content.decode("utf-8")
+    # v6 SDK-4: one write-once file per marker under <prefix>/<thread>/.
+    assert mw._marker_path("r1") == "/swept_context/t1/r1.md"
+    stored = backend.download_files([mw._marker_path("r1")])[0].content.decode("utf-8")
     assert mw._extract_section(stored, "r1").strip() == "ORIGINAL READ BODY"
-    # No marker -> listing of available markers.
-    assert "r1" in mw._extract_section(stored, "")
-    # Unknown marker -> not-found.
-    assert "No swept content" in mw._extract_section(stored, "nope")
+    # No marker -> listing of available markers from the thread directory.
+    assert "r1" in mw._render_marker_index(backend.ls(mw._history_dir()))
+    # Unknown marker -> not-found (a file without a section header).
+    assert "No swept content" in mw._extract_section("", "nope")
+
+
+def test_offload_writes_each_marker_once_and_never_rewrites(tmp_path: Path, monkeypatch: Any) -> None:
+    """v6 SDK-4: a second turn writes only the new marker; earlier files are untouched."""
+    backend = FilesystemBackend(root_dir=tmp_path)
+    mw = StreetSweeperMiddleware(backend=backend, keep_recent=0)
+    monkeypatch.setattr(mw, "_get_thread_id", lambda: "t1")
+    writes: list[str] = []
+    real_write = backend.write
+
+    def _spy(path: str, content: str, *args: Any, **kwargs: Any) -> Any:
+        writes.append(path)
+        return real_write(path, content, *args, **kwargs)
+
+    monkeypatch.setattr(backend, "write", _spy)
+
+    mw._offload(backend, mw._pending_offloads([("r1", mw._offload_header("r1", "read_file", "stale_read"), "ONE")]))
+    both = [
+        ("r1", mw._offload_header("r1", "read_file", "stale_read"), "ONE"),
+        ("r2", mw._offload_header("r2", "read_file", "duplicate"), "TWO"),
+    ]
+    mw._offload(backend, mw._pending_offloads(both))
+    assert writes == ["/swept_context/t1/r1.md", "/swept_context/t1/r2.md"]
+    listing = mw._render_marker_index(backend.ls(mw._history_dir()))
+    assert "r1" in listing
+    assert "r2" in listing
+    # Nothing lands at the project root itself: only the routed prefix directory exists.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["swept_context"]
+
+
+def test_fallback_thread_id_is_stable_per_instance() -> None:
+    """v6 SDK-2: outside a configured thread, the session id is minted once, not per call."""
+    mw = StreetSweeperMiddleware(keep_recent=0)
+    first = mw._get_thread_id()
+    assert first.startswith("session_")
+    assert mw._get_thread_id() == first
+    assert mw._history_dir() == f"/swept_context/{first}"
+    # A different instance gets its own id (no process-global leakage).
+    assert StreetSweeperMiddleware(keep_recent=0)._get_thread_id() != first
+
+
+def test_marker_and_thread_ids_are_path_safe(monkeypatch: Any) -> None:
+    mw = StreetSweeperMiddleware(keep_recent=0)
+    monkeypatch.setattr(mw, "_get_thread_id", lambda: "../evil")
+    assert "/../" not in mw._history_dir()
+    assert mw._history_dir().startswith("/swept_context/h_")
+    assert mw._marker_path("call/with slash").startswith(mw._history_dir() + "/h_")
+    assert mw._marker_path("toolu_01AbC-d.e") == mw._history_dir() + "/toolu_01AbC-d.e.md"
 
 
 def test_pending_offloads_dedupes_by_marker() -> None:
     mw = StreetSweeperMiddleware(keep_recent=0)
     offloads = [("r1", "### swept r1 | read_file | stale_read | ts", "body")]
-    first_addition, first_markers = mw._pending_offloads(offloads)
-    assert "body" in first_addition
-    assert first_markers == ["r1"]
+    first = mw._pending_offloads(offloads)
+    assert [m for m, _ in first] == ["r1"]
+    assert "body" in first[0][1]
     # v5 CTX-4: _pending_offloads no longer marks markers written — that only
     # happens after a successful _offload — so it stays pending until then.
-    still_pending, _ = mw._pending_offloads(offloads)
-    assert "body" in still_pending
+    still_pending = mw._pending_offloads(offloads)
+    assert [m for m, _ in still_pending] == ["r1"]
     # Once a write succeeds, the marker is recorded and no longer re-emitted.
     mw._offloaded.add("r1")
-    after_write, after_markers = mw._pending_offloads(offloads)
-    assert after_write == ""
-    assert after_markers == []
+    assert mw._pending_offloads(offloads) == []
 
 
 def test_failed_offload_leaves_marker_pending() -> None:
     # v5 CTX-4: a backend write failure must NOT mark the marker offloaded, so
     # the next model call retries instead of stranding an unrecoverable stub.
     class _FailingBackend:
-        def download_files(self, _paths: list[str]) -> list[Any]:
-            return []
-
         def write(self, _path: str, _content: str) -> None:
             raise OSError("disk full")
 
-        def edit(self, _path: str, _old: str, _new: str) -> None:
-            raise OSError("disk full")
+    class _ErrorResultBackend:
+        def write(self, _path: str, _content: str) -> Any:
+            @dataclass
+            class _R:
+                error: str | None = "Error writing file"
+
+            return _R()
 
     mw = StreetSweeperMiddleware(keep_recent=0)
-    addition, markers = mw._pending_offloads([("r1", mw._offload_header("r1", "read_file", "stale_read"), "BODY")])
-    mw._offload(_FailingBackend(), addition, markers)  # type: ignore[arg-type]
+    sections = mw._pending_offloads([("r1", mw._offload_header("r1", "read_file", "stale_read"), "BODY")])
+    mw._offload(_FailingBackend(), sections)  # type: ignore[arg-type]
     assert "r1" not in mw._offloaded  # still pending for retry
+    # A backend that reports failure via `WriteResult.error` (the deepagents
+    # contract) instead of raising must not be treated as a success either.
+    mw._offload(_ErrorResultBackend(), sections)  # type: ignore[arg-type]
+    assert "r1" not in mw._offloaded
 
 
 # --------------------------------------------------------------------------- accounting + hooks

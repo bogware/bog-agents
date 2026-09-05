@@ -34,7 +34,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from bog_agents.backends.protocol import BACKEND_TYPES  # noqa: TC001  # exposed in public function signatures, kept at runtime for IDE introspection
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -377,7 +377,13 @@ def background_shell_tools_bundle(backend: Any) -> list[BaseTool]:  # noqa: ANN4
     ]
 
 
-def memory_search_tool_bundle(sources: list[str | Path], *, embedder: Any = None) -> list[BaseTool]:  # noqa: ANN401 - an Embedder
+def memory_search_tool_bundle(
+    sources: list[str | Path],
+    *,
+    embedder: Any = None,  # noqa: ANN401 - an Embedder
+    embed_batch: Any = None,  # noqa: ANN401 - a batch embedder (list[str] -> list[vector])
+    db_path: str | Path | None = None,
+) -> list[BaseTool]:
     """Return a `memory_search` tool over the given memory files (Tier-2 #8).
 
     Builds a `HybridMemoryIndex` from the memory source files (AGENTS.md /
@@ -385,24 +391,36 @@ def memory_search_tool_bundle(sources: list[str | Path], *, embedder: Any = None
     its memory for relevant notes instead of relying only on the whole cascade
     being in context.
 
-    Keyword mode (FTS5/LIKE) by default. When an `embedder` is supplied, each
-    chunk is embedded at index time and the query is embedded at search time, so
-    ranking becomes the full **hybrid** BM25 + vector fusion. Embedding failures
-    degrade gracefully to keyword-only.
+    Keyword mode (FTS5/LIKE) by default. When an `embedder` or `embed_batch`
+    is supplied, ranking becomes the full **hybrid** BM25 + vector fusion.
+    Embedding is **lazy and batched** (v6 SDK-5): nothing is embedded at build
+    time; the first `memory_search` call embeds every chunk that has no stored
+    vector — in one `embed_batch` call when available, else one `embedder`
+    call per chunk — and stores the vectors in the index. Chunk ids are
+    content hashes, so with a persistent `db_path` a restart re-embeds only
+    text that changed. Embedding failures degrade gracefully to keyword-only.
 
     Args:
         sources: Memory file paths (unreadable ones are skipped).
         embedder: Optional `text -> vector` callable (see
-            `bog_agents.hybrid_memory.embedder_from_langchain`).
+            `bog_agents.hybrid_memory.embedder_from_langchain`); used for
+            queries and, when `embed_batch` is absent, for chunks.
+        embed_batch: Optional `list[str] -> list[vector]` callable (a LangChain
+            `Embeddings.embed_documents`) used to embed all pending chunks in
+            one round trip.
+        db_path: Optional SQLite path for a persistent index. Chunks whose text
+            no longer appears in any source are pruned on rebuild, so the file
+            stays a cache over the Markdown, never a second source of truth.
 
     Returns:
         A single-tool list, or empty if no source had readable content.
     """
+    import hashlib
     from pathlib import Path as _Path
 
     from bog_agents.hybrid_memory import SOURCE_WORKSPACE, HybridMemoryIndex, MemoryChunk
 
-    index = HybridMemoryIndex()
+    index = HybridMemoryIndex(db_path if db_path is not None else ":memory:")
     origin: dict[str, str] = {}
     for src in sources:
         path = _Path(src)
@@ -413,21 +431,54 @@ def memory_search_tool_bundle(sources: list[str | Path], *, embedder: Any = None
         for block in (b.strip() for b in text.split("\n\n")):
             if not block:
                 continue
-            embedding = None
-            if embedder is not None:
-                try:
-                    embedding = list(embedder(block))
-                except Exception:  # noqa: BLE001 - embedding is best-effort; fall back to keyword
-                    embedding = None
-            cid = index.add(MemoryChunk(text=block, source=SOURCE_WORKSPACE, embedding=embedding))
+            # Content-hash ids: identical text maps to one row, and a persisted
+            # index recognises unchanged chunks across restarts.
+            cid = hashlib.sha1(block.encode("utf-8")).hexdigest()[:16]  # noqa: S324 - cache key, not a security hash
+            index.add(MemoryChunk(text=block, source=SOURCE_WORKSPACE, chunk_id=cid))
             origin[cid] = path.name
     if not origin:
+        index.close()
         return []
+    index.prune_except(origin)
+
+    query_embedder = embedder
+    if query_embedder is None and embed_batch is not None:
+
+        def _query_via_batch(text: str) -> Sequence[float]:
+            return list(embed_batch([text])[0])
+
+        query_embedder = _query_via_batch
+
+    # One embedding attempt per process: success or failure, we never retry on
+    # every search (a down Ollama would otherwise add a timeout to each call).
+    embeddings_settled = embedder is None and embed_batch is None
+
+    def _ensure_embeddings() -> None:
+        nonlocal embeddings_settled
+        if embeddings_settled:
+            return
+        embeddings_settled = True
+        pending = index.chunks_missing_embeddings()
+        if not pending:
+            return
+        vectors: dict[str, Sequence[float]] = {}
+        try:
+            if embed_batch is not None:
+                for (cid, _text), vec in zip(pending, embed_batch([text for _, text in pending]), strict=True):
+                    vectors[cid] = list(vec)
+            else:
+                for cid, text in pending:
+                    vectors[cid] = list(embedder(text))
+        except Exception:  # noqa: BLE001 - embedding is best-effort; keyword search still works
+            logger.debug("memory_search: embedding failed; continuing keyword-only", exc_info=True)
+        if vectors:
+            index.set_embeddings(vectors)
 
     def memory_search(runtime: ToolRuntime[None, Any], query: str, limit: int = 5) -> str:
         """Search your project/user memory (AGENTS.md, CLAUDE.md, rules) for notes relevant to a query."""
         del runtime
-        hits = index.search(query, embedder=embedder, k=limit)
+        _ensure_embeddings()
+        hits = index.search(query, embedder=query_embedder, k=limit)
         if not hits:
             return f"No memory matched '{query}'."
         return "\n\n".join(f"[{origin.get(h.chunk.chunk_id, 'memory')}] {h.chunk.text[:300]}" for h in hits)
