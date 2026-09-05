@@ -220,6 +220,36 @@ def _park_run(job: AmbientJob, run: JobRun, exc: BudgetPausedError, *, trigger_t
     logger.warning("Job %s (%s) run %s paused on budget: %s", job.job_id, job.name, run.run_id, run.error)
 
 
+def _register_run_session(job: AmbientJob, run: JobRun) -> None:
+    """ROADMAP #56: list this run in the per-machine session registry (best effort)."""
+    try:
+        from bog_agents.session_registry import SessionRecord, register
+
+        register(
+            SessionRecord(
+                session_id=f"run-{run.run_id}",
+                name=job.name,
+                kind="daemon",
+                cwd=str(job.working_dir or ""),
+                model=str(job.model or ""),
+                state="busy",
+                thread_id=str(job.thread_id or ""),
+                detail=run.run_id,
+            )
+        )
+    except Exception:
+        logger.debug("Could not register the run session", exc_info=True)
+
+
+def _unregister_run_session(run: JobRun) -> None:
+    try:
+        from bog_agents.session_registry import unregister
+
+        unregister(f"run-{run.run_id}")
+    except Exception:
+        logger.debug("Could not remove the run session", exc_info=True)
+
+
 async def run_job(
     job: AmbientJob,
     *,
@@ -254,6 +284,7 @@ async def run_job(
             trigger_context=trigger_context or {},
         )
         save_run(run)
+    _register_run_session(job, run)
 
     try:
         prompt = _build_prompt(job, trigger_type=trigger_type, trigger_context=trigger_context)
@@ -275,6 +306,16 @@ async def run_job(
         else:
             try:
                 output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type, run_id=run.run_id)
+            except asyncio.CancelledError:
+                # ROADMAP #56: a drain / shutdown cancelled the run mid-flight.
+                # Record it honestly; a thread-linked job picks its checkpoint
+                # up on the next run.
+                run.status = JobStatus.CANCELLED
+                run.error = "cancelled by daemon drain" + ("; the thread checkpoint resumes on the next run" if job.thread_id else "")
+                run.finished_at = time.time()
+                save_run(run)
+                _unregister_run_session(run)
+                raise
             except BudgetPausedError as exc:
                 _park_run(job, run, exc, trigger_type=trigger_type)
             else:
@@ -291,6 +332,7 @@ async def run_job(
 
 async def _finish_run(job: AmbientJob, run: JobRun) -> JobRun:
     """Persist the run outcome on the job, dispatch outputs (unless paused), return the run."""
+    _unregister_run_session(run)
     # Update job state. Merge ONLY run-state fields into the current on-disk
     # record (read-modify-write) so a concurrent config edit (PATCH /jobs)
     # isn't clobbered by this pre-run snapshot. (REVIEW.md v2 P1-56.) Mirror

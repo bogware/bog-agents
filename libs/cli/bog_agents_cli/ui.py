@@ -104,6 +104,15 @@ def show_help() -> None:
     console.print("  skills <list|create|info|delete>     Manage agent skills")
     console.print("  threads <list|delete|import|export>  Manage conversation threads")
     console.print(
+        "  sessions [--all] [--prune]          List live sessions on this machine"
+    )
+    console.print(
+        "  queue --session NAME [--wait] MSG   Queue a prompt for a running session"
+    )
+    console.print(
+        "  attach NAME                         Reconnect to a session left with /detach"
+    )
+    console.print(
         "  plugin <list|install|import|trust>   Agent Plugins 1.0 + import from claude/codex/cursor"
     )
     console.print("  verify                              Run typecheck + lint + tests")
@@ -199,8 +208,13 @@ def show_help() -> None:
     )
     console.print("  --profile-override JSON    Override model profile fields")
     console.print(
-        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)",
-        "  --restricted               Restricted trust profile: no shell/git/HTTP/search/daemon tools, bypass refused",
+        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)"
+    )
+    console.print(
+        "  --restricted               Restricted trust profile: no shell/git/HTTP/search/daemon tools, bypass refused"
+    )
+    console.print(
+        "  --name NAME                Name this session for `sessions`, `queue --session` and `attach`"
     )
     console.print("  --default-model [MODEL]    Set or show the default model")
     console.print("  --clear-default-model      Clear default model")

@@ -184,6 +184,7 @@ async def _run_daemon(port: int, token: str) -> None:
 
     def _request_shutdown() -> None:
         logger.info("Graceful shutdown requested via API")
+        scheduler.begin_drain()
         server.should_exit = True
         if scheduler_task is not None and not scheduler_task.done():
             scheduler_task.cancel()
@@ -195,6 +196,7 @@ async def _run_daemon(port: int, token: str) -> None:
 
     def _shutdown_signal(signum: int, _frame: object) -> None:
         logger.info("Received signal %d, shutting down", signum)
+        scheduler.begin_drain()
         server.should_exit = True
 
     def _reload_signal(signum: int, _frame: object) -> None:

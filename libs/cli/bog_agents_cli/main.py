@@ -461,6 +461,46 @@ def parse_args() -> argparse.Namespace:
         help="Workspace root the agent operates in (default: current directory).",
     )
 
+    # ROADMAP #56: sessions on this machine, cross-process queue, attach.
+    sessions_parser = subparsers.add_parser(
+        "sessions",
+        help="List live bog-agents sessions on this machine (TUI, daemon runs, detached servers)",
+    )
+    sessions_parser.add_argument(
+        "--all", action="store_true", help="Include stale records"
+    )
+    sessions_parser.add_argument(
+        "--prune", action="store_true", help="Delete records whose host is gone"
+    )
+
+    queue_parser = subparsers.add_parser(
+        "queue",
+        help="Queue a prompt for a running session; it runs when that session is idle",
+    )
+    queue_parser.add_argument(
+        "--session",
+        required=True,
+        help="Session name or id (see `bog-agents sessions`)",
+    )
+    queue_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for the session's answer and print it",
+    )
+    queue_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds --wait waits before giving up (default 600)",
+    )
+    queue_parser.add_argument("prompt", help="The prompt to queue")
+
+    attach_parser = subparsers.add_parser(
+        "attach",
+        help="Reconnect the TUI to a session left running with /detach",
+    )
+    attach_parser.add_argument("session", help="Session name or id")
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -589,6 +629,15 @@ def parse_args() -> argparse.Namespace:
             "Restricted trust profile: no shell, git, raw HTTP, search or "
             "daemon tools; bypass and accept-edits are refused; web fetches "
             "only reach the configured allowed domains (ROADMAP #48)."
+        ),
+    )
+
+    parser.add_argument(
+        "--name",
+        default=None,
+        help=(
+            "Name this session so `bog-agents sessions`, `bog-agents queue "
+            "--session NAME` and `bog-agents attach NAME` can address it."
         ),
     )
 
@@ -1061,6 +1110,7 @@ async def run_textual_cli_async(
     trust_project_mcp: bool | None = None,
     mini: bool = False,
     restricted: bool = False,
+    session_name: str | None = None,
 ) -> "AppResult":
     """Run the Textual CLI interface (async version).
 
@@ -1087,10 +1137,11 @@ async def run_textual_cli_async(
 
             These override config file values.
         profile_override: Extra profile fields from `--profile-override`.
+            Merged on top of config file profile overrides.
         mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
         restricted: Run under the `--restricted` trust profile (ROADMAP #48).
-
-            Merged on top of config file profile overrides.
+        session_name: `--name` — how `bog-agents sessions` / `queue` / `attach`
+            address this session (ROADMAP #56).
         thread_id: Thread ID to use (new or resumed)
         initial_prompt: Optional prompt to auto-submit when session starts
         mcp_config_path: Optional path to MCP servers JSON configuration file.
@@ -1151,6 +1202,16 @@ async def run_textual_cli_async(
         "harness_profile": "lean" if mini else None,
         "restricted": restricted,
     }
+    # ROADMAP #56: an `attach` reuses the detached session's server; otherwise
+    # record the `--name` so the App registers itself under it.
+    from bog_agents_cli.session_controller import configure_launch, launch_config
+
+    attached = launch_config().attach
+    if attached is not None:
+        server_kwargs["attach_url"] = attached.server_url
+        server_kwargs["attach_pid"] = attached.server_pid
+    else:
+        configure_launch(name=session_name)
 
     mcp_preload_kwargs: dict[str, Any] | None = None
     if not no_mcp:
@@ -2265,6 +2326,24 @@ def cli_main() -> None:
 
         output_format = getattr(args, "output_format", "text")
 
+        if args.command == "attach":
+            # ROADMAP #56: resolve the detached session, then take the normal
+            # interactive path with its thread and server.
+            from bog_agents_cli.session_controller import (
+                attach_target,
+                configure_launch,
+            )
+
+            try:
+                record = attach_target(args.session)
+            except LookupError as exc:
+                console.print(f"[bold red]Error:[/bold red] {exc}")
+                sys.exit(1)
+            configure_launch(name=record.name, attach=record)
+            args.command = None
+            if record.thread_id:
+                args.resume_thread = record.thread_id
+
         if args.command == "help":
             from bog_agents_cli.ui import show_help
 
@@ -2321,6 +2400,19 @@ def cli_main() -> None:
             print(render_probe_report(steps))  # noqa: T201  # CLI subcommand output
             # Exit non-zero if any step failed so CI / scripts can branch.
             sys.exit(0 if all(s.ok for s in steps) else 1)
+        elif args.command == "sessions":
+            from bog_agents_cli.session_controller import sessions_report
+
+            print(sessions_report(include_stale=args.all, prune=args.prune))  # noqa: T201  # CLI subcommand output
+            sys.exit(0)
+        elif args.command == "queue":
+            from bog_agents_cli.session_controller import enqueue_prompt
+
+            code, text = enqueue_prompt(
+                args.session, args.prompt, wait=args.timeout if args.wait else None
+            )
+            print(text)  # noqa: T201  # CLI subcommand output
+            sys.exit(code)
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,
@@ -2615,6 +2707,7 @@ def cli_main() -> None:
                         trust_project_mcp=mcp_trust_decision,
                         mini=getattr(args, "mini", False),
                         restricted=getattr(args, "restricted", False),
+                        session_name=getattr(args, "name", None),
                     )
                 )
                 return_code = result.return_code

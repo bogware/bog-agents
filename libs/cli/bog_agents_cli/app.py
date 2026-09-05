@@ -955,6 +955,9 @@ class BogAgentsApp(App):
         if self._restricted:
             self._auto_approve = False
             self._auto_mode = False
+        # ROADMAP #56: registry record + cross-process queue, bound on mount.
+        self._session_queue: Any = None
+        self._detached = False
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
@@ -1135,6 +1138,10 @@ class BogAgentsApp(App):
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._chat_input = self.query_one("#input-area", ChatInput)
         self._install_termination_signal_handlers()
+        from bog_agents_cli.session_controller import POLL_SECONDS, start_session_queue
+
+        self._session_queue = start_session_queue(self)
+        self.set_interval(POLL_SECONDS, self._poll_session_queue)
 
         # Reflect the initial permission mode (bypass / accept-edits / plan /
         # paranoid seeded from --permission-mode / --auto-approve / --auto /
@@ -3262,6 +3269,21 @@ class BogAgentsApp(App):
 
         await self._mount_message(UserMessage(command))
         await run_tasks_command(self, command)
+
+    async def _poll_session_queue(self) -> None:
+        """ROADMAP #56: heartbeat, then pull `bog-agents queue` prompts when idle."""
+        from bog_agents_cli.session_controller import poll_session_queue
+
+        await poll_session_queue(self)
+
+    async def _handle_detach_command(self, command: str) -> None:
+        """Handle `/detach` — leave the agent server running and quit (ROADMAP #56)."""
+        from bog_agents_cli.session_controller import detach
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage(detach(self)))
+        if self._detached:
+            self.exit()
 
     async def _handle_recap_command(self, command: str) -> None:
         """`/recap` — where this session stands (#68)."""
@@ -9670,7 +9692,10 @@ class BogAgentsApp(App):
             command: Full slash command text; `trust-git-config`,
                 `trust-workspace` and `revoke-workspace` are verbs (#48/#49).
         """
-        from bog_agents_cli.trust_controller import run_permissions_verb, trust_rows
+        from bog_agents_cli.trust_controller import (
+            permissions_report,
+            run_permissions_verb,
+        )
 
         await self._mount_message(UserMessage(command))
         verb = command.strip().lower().split()[1:2]
@@ -9680,52 +9705,14 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(reply))
                 return
 
-        from bog_agents_cli.config import RECOMMENDED_SAFE_SHELL_COMMANDS
-
-        allow_list = settings.shell_allow_list
-        if allow_list is None:
-            shell_summary = "disabled"
-            shell_detail = (
-                "Start the CLI with `--shell-allow-list recommended` or "
-                "`--shell-allow-list all` to enable shell access."
-            )
-        elif list(allow_list) == ["__ALL__"]:
-            shell_summary = "all commands auto-approved"
-            shell_detail = "Any shell command can run without an approval prompt."
-        elif list(allow_list) == list(RECOMMENDED_SAFE_SHELL_COMMANDS):
-            shell_summary = "recommended safe list"
-            shell_detail = ", ".join(list(allow_list)[:10])
-        else:
-            shell_summary = f"{len(allow_list)} auto-approved commands"
-            preview = ", ".join(list(allow_list)[:10])
-            remainder = len(allow_list) - 10
-            suffix = f", +{remainder} more" if remainder > 0 else ""
-            shell_detail = preview + suffix
-
-        mode_descriptions = {
-            "default": "default (prompt for every tool call)",
-            "accept-edits": "accept-edits (auto-approve edits + safe tools; "
-            "ask for risky shell)",
-            "plan": "plan (read-only; mutating tools stripped)",
-            "bypass": "bypass (approve everything — no prompts)",
-            "paranoid": "paranoid (force approval for every call)",
-        }
-        mode = self._current_permission_mode()
-        lines = [
-            "Permissions",
-            f"Permission mode: {mode_descriptions.get(mode, mode)}",
-            f"Shell allow-list: {shell_summary}",
-            f"Shell detail: {shell_detail}",
-            "Shift+Tab cycles default -> accept-edits -> plan; Ctrl+T toggles bypass.",
-            (
-                "Tool approvals still appear when a command or tool is not "
-                "covered by the current policy."
-            ),
-        ]
-        lines[2:2] = await asyncio.to_thread(
-            trust_rows, self._cwd, self._restricted, self._active_profile_name
+        report = await asyncio.to_thread(
+            permissions_report,
+            self._current_permission_mode(),
+            self._cwd,
+            self._restricted,
+            self._active_profile_name,
         )
-        await self._mount_message(AppMessage("\n".join(lines)))
+        await self._mount_message(AppMessage(report))
 
     async def _handle_keybindings_command(self, command: str) -> None:
         """Handle `/keybindings` by showing current keybinding configuration.
@@ -15190,7 +15177,9 @@ class BogAgentsApp(App):
         # Set synchronously up front (no await in between) so the common path
         # restores immediately; the finally re-asserts this defensively.
         self._turns.end_agent()
+        from bog_agents_cli.session_controller import turn_finished
 
+        turn_finished(self)
         try:
             # Remove spinner if present
             await self._set_spinner(None)
@@ -17882,6 +17871,8 @@ async def run_textual_app(
         # Guarantee server cleanup regardless of how the app exits.
         # Covers both the pre-started server_proc path and the deferred
         # server_kwargs path (where the background worker sets _server_proc).
+        if app._session_queue is not None:
+            app._session_queue.close(detached=app._detached)
         if app._server_proc is not None:
             app._server_proc.stop()
 

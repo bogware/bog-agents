@@ -66,6 +66,9 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # Governed agent teams (#21) — claimable task ledger + mailboxes + coordinator.
     "TaskLedger": ("bog_agents.teams", "TaskLedger"),
     "Mailbox": ("bog_agents.teams", "Mailbox"),
+    # Detach / attach + cross-process queue (ROADMAP #56).
+    "MailboxStore": ("bog_agents.mailbox_store", "MailboxStore"),
+    "SessionRecord": ("bog_agents.session_registry", "SessionRecord"),
     "run_team": ("bog_agents.teams", "run_team"),
     "TeamReport": ("bog_agents.teams", "TeamReport"),
     "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),

@@ -92,6 +92,56 @@ def trust_rows(cwd: str, restricted: bool, profile_name: str | None) -> list[str
     return rows
 
 
+_MODE_DESCRIPTIONS = {
+    "default": "default (prompt for every tool call)",
+    "accept-edits": "accept-edits (auto-approve edits + safe tools; ask for risky shell)",
+    "plan": "plan (read-only; mutating tools stripped)",
+    "bypass": "bypass (approve everything — no prompts)",
+    "paranoid": "paranoid (force approval for every call)",
+}
+
+
+def shell_policy_summary() -> tuple[str, str]:
+    """`(summary, detail)` of the shell allow-list for `/permissions`."""
+    from bog_agents_cli.config import RECOMMENDED_SAFE_SHELL_COMMANDS, settings
+
+    allow_list = settings.shell_allow_list
+    if allow_list is None:
+        return (
+            "disabled",
+            "Start the CLI with `--shell-allow-list recommended` or `--shell-allow-list all` to enable shell access.",
+        )
+    if list(allow_list) == ["__ALL__"]:
+        return (
+            "all commands auto-approved",
+            "Any shell command can run without an approval prompt.",
+        )
+    if list(allow_list) == list(RECOMMENDED_SAFE_SHELL_COMMANDS):
+        return "recommended safe list", ", ".join(list(allow_list)[:10])
+    remainder = len(allow_list) - 10
+    suffix = f", +{remainder} more" if remainder > 0 else ""
+    return f"{len(allow_list)} auto-approved commands", ", ".join(
+        list(allow_list)[:10]
+    ) + suffix
+
+
+def permissions_report(
+    mode: str, cwd: str, restricted: bool, profile_name: str | None
+) -> str:
+    """The full `/permissions` text: mode, trust rows, shell policy, key hints."""
+    shell_summary, shell_detail = shell_policy_summary()
+    lines = [
+        "Permissions",
+        f"Permission mode: {_MODE_DESCRIPTIONS.get(mode, mode)}",
+        *trust_rows(cwd, restricted, profile_name),
+        f"Shell allow-list: {shell_summary}",
+        f"Shell detail: {shell_detail}",
+        "Shift+Tab cycles default -> accept-edits -> plan; Ctrl+T toggles bypass.",
+        "Tool approvals still appear when a command or tool is not covered by the current policy.",
+    ]
+    return "\n".join(lines)
+
+
 def mode_refusal(
     mode: str, *, restricted: bool, profile_name: str | None
 ) -> str | None:
@@ -114,4 +164,10 @@ def mode_refusal(
     return refusal[0].upper() + refusal[1:] if refusal else None
 
 
-__all__ = ["mode_refusal", "run_permissions_verb", "trust_rows"]
+__all__ = [
+    "mode_refusal",
+    "permissions_report",
+    "run_permissions_verb",
+    "shell_policy_summary",
+    "trust_rows",
+]

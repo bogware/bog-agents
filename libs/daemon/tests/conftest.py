@@ -7,6 +7,12 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolated_session_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the per-machine session registry (ROADMAP #56) out of the real home directory."""
+    monkeypatch.setenv("BOG_AGENTS_SESSIONS_DIR", str(tmp_path / "sessions"))
+
+
 @pytest.fixture()
 def tmp_daemon_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect all daemon file-system paths to a temporary directory."""

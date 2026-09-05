@@ -64,4 +64,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_recap_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/detach",
+            "Leave the agent server running and quit; come back with `bog-agents attach <session>`",
+            "detach background persist attach session",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_detach_command",
+    ),
 )

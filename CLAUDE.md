@@ -257,6 +257,15 @@ there before it ships. `web_policy.py` gates `fetch_url` / `http_request` inside
 `assert_fetch_allowed` (before DNS); `workspace_trust.py` fingerprints the
 repo-controlled instruction files behind `/permissions trust-workspace`.
 
+**Sessions, queue, detach / attach (ROADMAP #56).** The SDK owns the data:
+`bog_agents/session_registry.py` (per-machine JSON records + heartbeat; never probe a
+pid with `os.kill(pid, 0)` on Windows — it terminates the process — use `pid_alive`)
+and `bog_agents/mailbox_store.py` (SQLite `Mailbox`, exactly-once `drain` across
+processes). `session_controller.py` is the CLI glue: `start_session_queue` /
+`poll_session_queue` / `turn_finished` take the App duck-typed so they test against a
+fake; `ServerProcess.detach()` / `adopt()` are the only server-lifecycle changes.
+Every daemon run registers itself while it runs; tests set `BOG_AGENTS_SESSIONS_DIR`.
+
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
 (`~/.bog-agents/sessions.db`, the source of truth) so `/threads search <text>`
@@ -298,6 +307,7 @@ A long-running FastAPI service that fires agents on cron, interval, file-change,
 - **Startup reconciles orphaned runs** (`store.py:reconcile_orphaned_runs`, wired in `main.py:_run_daemon`): a run left `RUNNING` by a crash is stamped `FAILED` so `/runs` is honest.
 - **Corrupt `jobs.json` is quarantined, never overwritten** (`store.py:_quarantine_corrupt_jobs`): unparseable content is renamed to `jobs.json.corrupt-<ts>` before the next save, so a bad file can't silently destroy every job. A transient `OSError` on read is NOT quarantined.
 - **Network dispatch failures are recorded**: the webhook/slack/email/github dispatchers now raise on failure so `run_job` captures them in `run.dispatch_errors` (they used to swallow `URLError` and vanish into the log).
+- **Drain before stop (ROADMAP #56)**: `DaemonScheduler.begin_drain()` refuses new dispatches; `POST /drain`, SIGTERM and `/shutdown` all call it, `/health` reports `running` / `draining`, and `bog-agents daemon drain|upgrade` poll it. A run cancelled by the shutdown wait is persisted `CANCELLED` (never left `RUNNING`).
 
 ## Code Conventions
 

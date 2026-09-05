@@ -965,15 +965,27 @@ ADK, and a contract is itself a feature to the target users.
   (plan in REVIEW v6 §14). Completes v2 #30 and v1 #1/#8/#14 except that. **T/S, L.**
 - **#56 Detach / attach, session registry, `bog queue`** *(Cursor `agent persist`;
   Codex `codex queue` + `codex agents`; Claude cross-session `SendMessage`; Cline
-  Hub multi-client + zero-loss upgrade)* — **absent.** A per-machine registry
-  `~/.bog-agents/sessions/<id>.json` (name, cwd, model, state, pid, heartbeat)
-  written by TUI, daemon and serve; a persistent inbox backend for `Mailbox`
-  (SQLite) so any process can enqueue; `bog-agents queue --session <name> [--wait]`;
-  a session broker hosting the loop outside the terminal (POSIX detached process
-  group + socket; Windows under the daemon service) with `bog persist`, `/detach`,
-  `bog attach <id>`; LangGraph 1.2 `RunControl.request_drain()` wired into daemon
-  SIGTERM and TUI Ctrl+C so in-flight runs checkpoint as RESUMABLE instead of
-  FAILED; `bog daemon drain|upgrade`. Absorbs v2 #33 and #39. **S/T, L.**
+  Hub multi-client + zero-loss upgrade)* — **shipped 2026-09-06** (REVIEW v6
+  §18). SDK `session_registry.py` (`~/.bog-agents/sessions/<id>.json`: name,
+  kind, cwd, model, state, pid, heartbeat, thread, server URL + pid; liveness =
+  fresh heartbeat or live pid) and `mailbox_store.py` (SQLite `Mailbox` with the
+  same API, WAL + `BEGIN IMMEDIATE` so `drain` is exactly-once across
+  processes). CLI: `--name` names a session; `bog-agents sessions [--all|--prune]`
+  lists TUI sessions, daemon runs and detached servers; `bog-agents queue
+  --session <name> [--wait [--timeout S]] "<prompt>"` drops a prompt the TUI
+  drains on its next idle tick (2 s poller, heartbeat included) and answers with
+  the turn's last assistant text; `/detach` hands the LangGraph server off
+  (`ServerProcess.detach`: atexit hook, log handle and config-dir ownership
+  dropped) and `bog-agents attach <name>` reconnects the TUI to it on the same
+  thread (`ServerProcess.adopt`; quitting an attached session stops the server,
+  `/detach` again keeps it). Daemon: `POST /drain` + `bog-agents daemon drain
+  [--stop]` / `daemon upgrade` (drain → stop → `uv tool upgrade` → start),
+  SIGTERM and `/shutdown` drain first, a run cancelled mid-flight is recorded
+  CANCELLED (a thread-linked job resumes from its checkpoint on the next run),
+  every run is listed in the registry while it runs. *Was:* absent. Open: the
+  Windows broker question is moot for now — the detached server is the TUI's
+  own `langgraph dev` child and dies with the console window; hosting it under
+  the daemon service is the follow-up. Absorbs v2 #33 and #39. **S/T, L.**
 - **#57 `bog worker`: outbound-only self-hosted workers — including Windows**
   *(Cursor Self-Hosted Machines Sep 2; Claude self-hosted runners — no
   Bedrock/Vertex, no ZDR; Codex remote executors; Devin Outposts; Managed Agents

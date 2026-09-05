@@ -386,6 +386,67 @@ def cmd_daemon_stop() -> None:
         print(f"Daemon (PID {pid}) stopped.")  # noqa: T201
 
 
+def cmd_daemon_drain(
+    port: int = _DEFAULT_PORT, *, timeout: float = 600.0, stop: bool = False
+) -> int:
+    """Ask the daemon to stop taking runs, wait for in-flight ones, optionally stop it (ROADMAP #56).
+
+    Returns:
+        0 drained, 1 unreachable, 2 timed out (the daemon stays drained; runs finish on their own).
+    """
+    import time as _time
+
+    try:
+        first = _api_post("/drain", {}, port=port)
+    except Exception as exc:
+        print(f"Could not reach the daemon: {exc}")  # noqa: T201
+        return 1
+    running = int(first.get("running", 0) or 0)
+    print(f"Draining: {running} run(s) in flight; no new runs will start.")  # noqa: T201
+    deadline = _time.monotonic() + timeout
+    while running and _time.monotonic() < deadline:
+        _time.sleep(2.0)
+        try:
+            running = int(_api_get("/health", port=port).get("running", 0) or 0)
+        except Exception:
+            break
+    if running:
+        print(  # noqa: T201
+            f"Timed out after {timeout:.0f}s with {running} run(s) still in flight; the daemon stays drained."
+        )
+        return 2
+    print("Drained: no runs in flight.")  # noqa: T201
+    if stop:
+        cmd_daemon_stop()
+    return 0
+
+
+def cmd_daemon_upgrade(port: int = _DEFAULT_PORT, *, timeout: float = 600.0) -> int:
+    """Drain, stop, upgrade `bog-agents-daemon` with the tool that installed it, start again (ROADMAP #56)."""
+    import shutil
+    import subprocess  # noqa: S404
+    import sys as _sys
+
+    code = cmd_daemon_drain(port, timeout=timeout, stop=True)
+    if code:
+        return code
+    uv = shutil.which("uv")
+    cmd = (
+        [uv, "tool", "upgrade", "bog-agents-daemon"]
+        if uv
+        else [_sys.executable, "-m", "pip", "install", "--upgrade", "bog-agents-daemon"]
+    )
+    print("Upgrading: " + " ".join(cmd))  # noqa: T201
+    result = subprocess.run(cmd, check=False)  # noqa: S603
+    if result.returncode:
+        print(  # noqa: T201
+            "Upgrade failed; the daemon is stopped — start it again with `bog-agents daemon start`."
+        )
+        return int(result.returncode)
+    cmd_daemon_start(port=port)
+    return 0
+
+
 def cmd_daemon_status(port: int = _DEFAULT_PORT) -> None:
     """Print daemon running status and job count.
 
@@ -978,6 +1039,32 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     # stop
     daemon_sub.add_parser("stop", help="Stop the running daemon")
 
+    # ROADMAP #56: drain before stop / upgrade so in-flight runs finish.
+    drain_p = daemon_sub.add_parser(
+        "drain",
+        help="Stop taking new runs, wait for in-flight ones (then optionally stop)",
+    )
+    drain_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    drain_p.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait for in-flight runs (default 600)",
+    )
+    drain_p.add_argument(
+        "--stop", action="store_true", help="Stop the daemon once drained"
+    )
+    upgrade_p = daemon_sub.add_parser(
+        "upgrade", help="Drain, stop, upgrade the daemon package, start it again"
+    )
+    upgrade_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    upgrade_p.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait for in-flight runs (default 600)",
+    )
+
     # status
     status_p = daemon_sub.add_parser("status", help="Show daemon status and job count")
     status_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
@@ -1356,6 +1443,12 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
         cmd_daemon_start(port=args.port, log_level=args.log_level)
     elif cmd == "stop":
         cmd_daemon_stop()
+    elif cmd == "drain":
+        raise SystemExit(
+            cmd_daemon_drain(port=args.port, timeout=args.timeout, stop=args.stop)
+        )
+    elif cmd == "upgrade":
+        raise SystemExit(cmd_daemon_upgrade(port=args.port, timeout=args.timeout))
     elif cmd == "status":
         cmd_daemon_status(port=args.port)
     elif cmd == "rotate-token":

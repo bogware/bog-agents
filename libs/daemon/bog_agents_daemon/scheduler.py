@@ -129,6 +129,8 @@ class DaemonScheduler:
         self._runner = runner
         self._running_jobs: set[str] = set()
         self._bg_tasks: set[asyncio.Task[None]] = set()
+        # ROADMAP #56: once draining, no new runs start; in-flight ones finish.
+        self.draining = False
         self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         # Maps job_id -> unix timestamp when a file-change was first detected,
         # used to implement per-trigger debounce_seconds.
@@ -138,6 +140,18 @@ class DaemonScheduler:
         # keeping unit tests on the polling path with no thread leak.
         self._file_watcher = FileWatchManager()
         self._file_watching_active = False
+
+    @property
+    def running_count(self) -> int:
+        """Runs in flight right now."""
+        return len([t for t in self._bg_tasks if not t.done()])
+
+    def begin_drain(self) -> int:
+        """Stop starting runs (ROADMAP #56); returns how many are still in flight."""
+        if not self.draining:
+            logger.info("Scheduler draining: %d run(s) in flight", self.running_count)
+        self.draining = True
+        return self.running_count
 
     async def run_forever(self, *, tick_seconds: float = 30) -> None:
         """Run the scheduling loop indefinitely.
@@ -187,6 +201,8 @@ class DaemonScheduler:
 
     async def _tick(self) -> None:
         """Process one scheduling tick: load jobs and fire any that are due."""
+        if self.draining:
+            return
         jobs = self._store_loader()
 
         # Garbage-collect debounce entries for jobs that have been deleted.
@@ -264,6 +280,16 @@ class DaemonScheduler:
             launched placeholder (status unchanged) or, when skipped, a run
             marked `status=SKIPPED`.
         """
+        if self.draining:
+            drained = existing_run or JobRun(
+                job_id=job.job_id,
+                job_name=job.name,
+                trigger_type=trigger_type,
+                trigger_context=trigger_context or {},
+            )
+            drained.status = JobStatus.SKIPPED
+            drained.error = "daemon draining; no new runs start"
+            return drained
         if run_cap_reached(job):
             # ROADMAP #55: the attempt cap is spent; record a skipped run so the
             # caller sees why nothing happened.

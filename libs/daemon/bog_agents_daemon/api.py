@@ -474,7 +474,13 @@ def create_app(
         """
         _check_auth(request, token_holder["value"])
         jobs = load_jobs()
-        return {"status": "ok", "version": __version__, "job_count": len(jobs)}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "job_count": len(jobs),
+            "running": scheduler.running_count,
+            "draining": scheduler.draining,
+        }
 
     # ------------------------------------------------------------------
     # Shutdown
@@ -498,6 +504,20 @@ def create_app(
             raise HTTPException(status_code=503, detail="Shutdown callback not configured")
         request_shutdown()
         return {"status": "shutting down"}
+
+    @app.post("/drain", status_code=202)
+    async def drain_endpoint(request: Request) -> dict[str, Any]:
+        """Stop starting new runs; in-flight ones finish (ROADMAP #56).
+
+        `bog-agents daemon drain` polls `/health` until `running` is 0, then
+        optionally stops the daemon. Draining is one-way for this process:
+        restart the daemon to take work again.
+
+        Returns:
+            `{"status": "draining", "running": <in-flight count>}`.
+        """
+        _check_auth(request, token_holder["value"])
+        return {"status": "draining", "running": scheduler.begin_drain()}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:

@@ -207,6 +207,8 @@ async def start_server_and_get_agent(
     interactive: bool = True,
     host: str = "127.0.0.1",
     port: int = 2024,
+    attach_url: str | None = None,
+    attach_pid: int = 0,
 ) -> tuple[RemoteAgent, ServerProcess, MCPSessionManager | None]:
     """Start a LangGraph server and return a connected remote agent client.
 
@@ -228,6 +230,9 @@ async def start_server_and_get_agent(
         interactive: Whether the agent is interactive.
         host: Server host.
         port: Server port.
+        attach_url: ROADMAP #56 — reconnect to a detached session's server at this
+            URL instead of starting one.
+        attach_pid: The detached server's pid (so quitting can stop it).
 
     Returns:
         Tuple of `(remote_agent, server_process, mcp_session_manager)`.
@@ -236,6 +241,13 @@ async def start_server_and_get_agent(
     """
     from bog_agents_cli.remote_client import RemoteAgent
     from bog_agents_cli.server import ServerProcess
+
+    if attach_url:
+        return (
+            RemoteAgent(url=attach_url, graph_name="agent"),
+            ServerProcess.adopt(attach_url, attach_pid),
+            None,
+        )
 
     project_context = _capture_project_context()
 

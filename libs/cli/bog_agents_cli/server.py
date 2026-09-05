@@ -373,6 +373,8 @@ class ServerProcess:
         # closed in ``stop()``. Path resolved by ``_resolve_server_log_path``.
         self._log_file: Any = None
         self._env_overrides: dict[str, str] = {}
+        # ROADMAP #56: a server another session started and this one adopted.
+        self._adopted_pid: int = 0
 
     @property
     def url(self) -> str:
@@ -557,6 +559,14 @@ class ServerProcess:
         directory, so the server can be restarted with the same config.
         """
         if self._process is None:
+            if self._adopted_pid:
+                from bog_agents_cli._proc import terminate
+
+                logger.info(
+                    "Stopping adopted langgraph dev server (pid=%d)", self._adopted_pid
+                )
+                terminate(self._adopted_pid, force=True)
+                self._adopted_pid = 0
             return
 
         if self._process.poll() is None:
@@ -594,6 +604,56 @@ class ServerProcess:
             except OSError:
                 logger.debug("Failed to close server log handle", exc_info=True)
             self._log_file = None
+
+    @classmethod
+    def adopt(cls, url: str, pid: int) -> ServerProcess:
+        """A handle for a server another session started (ROADMAP #56 attach).
+
+        `stop()` terminates it by pid; `detach()` hands it on again.
+
+        Args:
+            url: The running server's base URL.
+            pid: Its process id (0 when unknown — then `stop()` leaves it alone).
+
+        Returns:
+            A `ServerProcess` that owns no child and no config directory.
+        """
+        import urllib.parse
+
+        parsed = urllib.parse.urlsplit(url)
+        server = cls(
+            host=parsed.hostname or _DEFAULT_HOST, port=parsed.port or _DEFAULT_PORT
+        )
+        server._adopted_pid = int(pid or 0)
+        return server
+
+    def detach(self) -> tuple[int, str]:
+        """Let the server outlive this process (ROADMAP #56 `/detach`).
+
+        Drops the atexit crash hook, this side's log handle and ownership of
+        the config directory, so neither `stop()` nor interpreter exit touches
+        the child. The child keeps its own copy of the log file descriptor.
+
+        Returns:
+            `(pid, url)` of the server left running.
+
+        Raises:
+            RuntimeError: When no server is running.
+        """
+        pid = self._process.pid if self._process is not None else self._adopted_pid
+        if not pid:
+            msg = "no running server to detach"
+            raise RuntimeError(msg)
+        atexit.unregister(self.stop)
+        self._process = None
+        self._adopted_pid = 0
+        self._owns_config_dir = False
+        self._temp_dir = None
+        if self._log_file is not None:
+            with contextlib.suppress(OSError):
+                self._log_file.close()
+            self._log_file = None
+        return pid, self.url
 
     def stop(self) -> None:
         """Stop the server process and clean up all resources."""
