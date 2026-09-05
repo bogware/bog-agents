@@ -95,6 +95,21 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Compliance artefact (ROADMAP #74).** `bog_agents/action_log.py` is the hash-chained
+per-run log (`ActionLog`, `ActionLogMiddleware`, `verify_chain` / `verify_export`,
+injected signer) and `bog_agents/otel_export.py` the GenAI-semconv span emitter with a
+dependency-free OTLP/HTTP sink — keep both free of provider SDKs. The CLI's
+`action_log_controller.py` owns the approvals / verdicts chain and `/actionlog`; never
+let two processes append to one chain file. The daemon's `usage_export.py` aggregates
+`SpendLedger.records()`; its tests pin CSV totals to `totals_by_scope`.
+
+**Fork subagents (ROADMAP #71).** `SubAgent.mode = "fork"` seeds a child with the
+parent's conversation through `middleware/subagents.py:seed_fork_messages` — keep that
+function the only place the seeding rule lives (system messages out, pending `task`
+call out, task appended). The built-in `fork` subagent is assembled in `graph.py` with
+`_fork_system_prompt`, which must mirror the parent's prompt parts. CLI `/subtask` and
+`/fork` live in `fork_controller.py` and only ever hand work to `BackgroundAgentManager`.
+
 **Governed-autonomy primitives (0.10):** three pure-logic SDK modules underpin the CLI's autonomous surfaces — keep them dependency-light and injectable. `bog_agents/teams.py` (`TaskLedger` atomic dependency-aware claim, `Mailbox`, `run_team` coordinator; CLI `/team run` via `libs/cli/bog_agents_cli/team_executor.py`). `bog_agents/cost_ledger.py` (`CostLedger` + `RunawayCaps` spawn/search/spend caps — every team/subagent spawn must be counted; `estimate_run_cost` brackets a burst for the CLI's pre-flight confirm). ROADMAP #51 adds `bog_agents/spend_ledger.py` (`SpendLedger`, the durable daily $ ledger the CLI keeps at `~/.bog-agents/spend.db` and the daemon beside `jobs.json`; scopes `user` / `project:<key>` / `daemon:<job>`) and makes `CostTrackerMiddleware` pause with a `budget_reached` interrupt at the cap (`on_budget="interrupt"`; only a raise-cap resume continues, see `parse_budget_resume`) — the CLI's `cost_controller.py` and the daemon's `resume_paused_run` are the two consumers; keep the `cost.*` manifest keys as the single source of the caps. `bog_agents/evidence.py` (`EvidenceBundle`, `collect_git_evidence`, `render_evidence_markdown`; `merge_ready` gates on checks + rubric). The `/best-of-n` (`best_of_n.py`) and `/jury` CLI features build on these with the rubric grader. When touching any, preserve the "tested core + injected `invoke`/`runner`" split so they unit-test without live models.
 
 **OS sandbox (#22):** `bog_agents/sandbox/local_sandbox.py` wraps shell commands in bubblewrap/seatbelt; `bog_agents/sandbox/egress_proxy.py` is a threaded localhost CONNECT **allowlist proxy** (`host_allowed` suffix-match on label boundaries). Wired into `LocalShellBackend(sandbox=..., require_sandbox=...)` — opt-in, fail-closed where no launcher exists (Windows today). Driven from `.bog-agents/sandbox.toml` (`local_sandbox` level + `network_allowlist`) via `SandboxConfig.build_local_sandbox`. Invariant: the allowlist is proxy-enforced (cooperating tools), NOT a kernel boundary — a hard cut needs `--unshare-net` (no allowlist). `bwrap` re-shares the net namespace (`--share-net`) only when egress is wanted.

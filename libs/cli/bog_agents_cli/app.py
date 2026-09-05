@@ -3283,6 +3283,22 @@ class BogAgentsApp(App):
         if self._detached:
             self.exit()
 
+    async def _handle_fork_command(self, command: str) -> None:
+        """`/fork` and `/subtask` — background forks of this conversation (ROADMAP #71)."""
+        from bog_agents_cli.fork_controller import run_fork_command
+
+        await self._mount_message(UserMessage(command))
+        await run_fork_command(self, command)
+
+    async def _handle_actionlog_command(self, command: str) -> None:
+        """`/actionlog` — verify, export or prune the hash-chained action log (ROADMAP #74)."""
+        from bog_agents_cli.action_log_controller import run_actionlog_command
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(await asyncio.to_thread(run_actionlog_command, command))
+        )
+
     async def _handle_recap_command(self, command: str) -> None:
         """`/recap` — where this session stands (#68)."""
         from bog_agents_cli.tasks_controller import run_recap_command
@@ -3297,25 +3313,7 @@ class BogAgentsApp(App):
 
         if await maybe_run_threads_verb(
             self, command, rest
-        ):  # group / archive / unread (#68)
-            return
-        if rest.lower().startswith("search"):
-            query = rest[len("search") :].strip()
-            await self._mount_message(UserMessage(command))
-            if not query:
-                await self._mount_message(
-                    AppMessage(
-                        "Usage: [bold]/threads search <text>[/bold] — full-text search past threads."
-                    )
-                )
-                return
-            from bog_agents_cli.session_search import (
-                format_search_results,
-                search_sessions,
-            )
-
-            hits = await search_sessions(query, limit=20)
-            await self._mount_message(AppMessage(format_search_results(query, hits)))
+        ):  # search / group / archive / unread (#68)
             return
         await self._show_thread_selector()
 

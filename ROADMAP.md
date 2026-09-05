@@ -1071,16 +1071,25 @@ ADK, and a contract is itself a feature to the target users.
   dispositions automatically (needs the #55 `github:pr:<n>` subscription plus a
   `pr_review_comment` handler that calls `/finding`). **T/E, M.**
 - **#71 Parity treadmill in CI + fork subagents** *(deepagents 0.7.13; Claude fork
-  mode default Aug 10-14 and `/fork` into a worktree; dcode)* — **partial.**
-  Install `deepagents` latest in a CI leg and run the 24 compat tests plus a
-  smoke import on every PR; land the 0.7.x deltas (`mode: isolated|fork` on
-  SubAgent, `ReadResult` pagination notice, bounded `grep_max_count`, opt-in
-  TodoList via profile, output-format changes). Fork mode: seed the child with the
-  parent's exact post-sweeper message list and identical system prompt/tool
-  schemas so its first call is a prompt-cache hit, run in the background, return
-  the final message as a ToolMessage; `/subtask <prompt>`; `/fork` copies the
-  checkpoint thread into a new background session on a fresh worktree; extend
-  `run_team`/butcher workers with fork mode. Supersedes v2 #26. **S/T, M.**
+  mode default Aug 10-14 and `/fork` into a worktree; dcode)* — **shipped
+  2026-09-06** (REVIEW v6 §21). The CI `deepagents-parity` leg already
+  co-installs the *latest* deepagents and runs the compat + upstream-parity
+  tests on every PR (it was in place; nothing to pin). SDK: `SubAgent.mode =
+  isolated|fork` — a fork child starts from the parent's canonical
+  conversation (system messages dropped, the pending `task` call dropped so
+  the history stays balanced) plus the task; a built-in `fork` subagent
+  (`FeatureConfig.enable_fork_subagent`, on by default) carries the parent's
+  assembled system prompt and tools so its first call rides the parent's
+  prefix. `ReadResult` pagination and the profile-driven TodoList opt-out were
+  already in. CLI: `/subtask <prompt>` runs a prompt in the background with a
+  brief of this conversation in front of it; `/fork [--worktree] [name]`
+  records a `session_fork` entry and continues the work in a background agent
+  (`/agent spawn --worktree` for a fresh worktree). *Was:* partial. Open:
+  bounded `grep_max_count` on the backend protocol; fork mode for
+  `run_team` / butcher workers; a fork child's middleware-appended prompt
+  sections (todo, filesystem) still differ from the parent's, so the cache hit
+  covers the base prompt and tool schemas, not the whole system message.
+  Supersedes v2 #26. **S/T, M.**
 - **#72 Governed Code Mode** *(deepagents `CodeInterpreterMiddleware` + dynamic
   subagents; Mastra `createCodeMode`; Pydantic Code Mode; OpenCode code-mode MCP
   adapter; OpenAI programmatic tool calling — all shipped since July)* —
@@ -1095,15 +1104,30 @@ ADK, and a contract is itself a feature to the target users.
 - **#74 Compliance artefact: hash-chained action log + OTel GenAI export + org usage
   export** *(MAF/ADK semconv; Kiro OTLP usage export Sep 1; GitHub per-user credit
   metrics; EU AI Act Annex III deferred to 2027-12-02 but questionnaires ask now)*
-  — **partial.** The causal ledger and `AuditTrailMiddleware` exist; OTel is
-  LangSmith-bound with zero `gen_ai.*` attributes. Extend the causal ledger into a
-  hash-chained per-run JSONL (each event carries sha256(prev)) with
-  approval-decision, Expert verdict and cost events, a retention policy and a
-  signed export reusing the TraceFile Ed25519 signer; a vendor-neutral OTLP
-  exporter emitting GenAI-semconv spans for model/tool/middleware/subagent with
-  cost attributes (LangSmith becomes one exporter); durable per-run usage records
-  aggregated per user/model/job daily and pushed over OTLP + CSV from the daemon.
-  Completes v2 #38. **E, M.**
+  — **shipped 2026-09-06** (REVIEW v6 §22). SDK `action_log.py`: one
+  hash-chained JSONL per run (`hash = sha256(prev ‖ canonical(event))`),
+  `verify_chain` names the first edited, removed or reordered line;
+  `ActionLogMiddleware` records model calls (tokens + priced cost) and tool
+  calls; the CLI adds `approval` events (every approval decision) and
+  `expert_verdict` events (Expert Mode's audit sink) on a per-process chain;
+  `/actionlog status|verify|export|prune` — `export` signs the bundle with the
+  TraceFile Ed25519 key (`verify_export` checks chain + signature),
+  `compliance.retention_days` drives `prune`. SDK `otel_export.py`:
+  `OTelExportMiddleware` emits GenAI-semconv spans (`gen_ai.operation.name`,
+  `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.tool.name`, subagent
+  spawns as `invoke_agent`, `bog.cost_usd`) to a `SpanSink`; `OTLPHttpSink`
+  posts OTLP/HTTP JSON with the standard library only, so no OpenTelemetry SDK
+  is needed and LangSmith's exporter is just another sink. Daemon
+  `usage_export.py` rolls the spend ledger up per day / scope / model
+  (`GET /usage`, `POST /usage/export` → CSV and OTLP metrics
+  `bog.usage.usd|input_tokens|output_tokens|records`; `bog-agents daemon
+  usage-export [--csv] [--otlp]`); the CSV totals are asserted equal to
+  `SpendLedger.totals_by_scope`. Config: `compliance.action_log`,
+  `compliance.otel_endpoint`, `compliance.retention_days` (`BOG_AGENTS_ACTION_LOG`,
+  `BOG_AGENTS_OTEL_ENDPOINT`). *Was:* partial. Open: OTLP collector auth
+  conventions beyond a headers dict; per-user attribution in the daemon export
+  (scopes carry job ids, the user is the daemon's owner); a LangSmith
+  `SpanSink` adapter. Completes v2 #38. **E, M.**
 
 ### Tier 3 — Moonshots and long-tail differentiators
 

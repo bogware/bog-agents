@@ -152,6 +152,30 @@ def _model_label(model: object) -> str:
     return type(model).__name__
 
 
+def _compliance_features(assistant_id: str) -> dict[str, Any]:
+    """`FeatureConfig` kwargs for the action log / OTLP export from `compliance.*` (ROADMAP #74)."""
+    features: dict[str, Any] = {}
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        if resolve_option("compliance.action_log"):
+            import time as _time
+
+            features["enable_action_log"] = True
+            features["action_log_dir"] = str(
+                Path(settings.user_agents_dir) / "action-log"
+            )
+            features["action_log_run_id"] = (
+                f"{assistant_id}-{_time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            )
+        endpoint = resolve_option("compliance.otel_endpoint")
+        if endpoint:
+            features["otel_endpoint"] = str(endpoint)
+    except Exception:  # a config problem never blocks agent creation
+        logger.debug("Could not read compliance.* options", exc_info=True)
+    return features
+
+
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
     """Resolve the shell auto-background threshold from an env or config value.
 
@@ -2429,6 +2453,7 @@ def create_cli_agent(
             deferred_keep_tools=list(MINI_KEEP_TOOLS)
             if harness_profile == "lean"
             else None,
+            **_compliance_features(assistant_id),
         ),
     ).with_config(config)
     return agent, composite_backend

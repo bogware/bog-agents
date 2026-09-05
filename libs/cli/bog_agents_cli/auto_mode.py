@@ -1243,6 +1243,12 @@ def record_approval_decisions(
     """
     for decision in decisions:
         _APPROVAL_LEDGER.record(decision)
+    try:  # ROADMAP #74: the hash-chained action log gets the same decisions
+        from bog_agents_cli.action_log_controller import record_approval_events
+
+        record_approval_events(decisions)
+    except Exception:
+        logger.debug("approval decisions not mirrored to the action log", exc_info=True)
     if working_dir is None:
         return
     try:

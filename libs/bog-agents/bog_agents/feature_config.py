@@ -58,6 +58,8 @@ class FeatureConfig:
             call and record which segment broke prompt caching (ROADMAP #52).
         cache_diagnostics_dir: Directory for the per-thread cache-bust JSONL
             (`None` keeps events in memory only).
+        enable_fork_subagent: Register the built-in `fork` subagent, a child that
+            starts from the parent's conversation (ROADMAP #71).
         enable_conversation_branching: Enable conversation branching.
         enable_image_input: Enable image input processing.
         enable_browser: Enable browser-agent tools.
@@ -78,6 +80,13 @@ class FeatureConfig:
         enable_audit_trail: Enable audit trail logging.
         audit_session_id: Session ID for audit trail.
         audit_advisor_id: Advisor ID for audit trail.
+        enable_action_log: Write every model call and tool call into a
+            hash-chained per-run JSONL (`bog_agents.action_log`, ROADMAP #74).
+        action_log_dir: Directory for the run logs (default `~/.bog-agents/action-log`).
+        action_log_run_id: The run's file stem (default: a fresh uuid).
+        otel_endpoint: OTLP/HTTP collector base URL; when set, GenAI-semconv
+            spans are posted for model / tool / subagent calls (`bog_agents.otel_export`).
+        otel_headers: Extra headers for the OTLP collector (auth).
         enable_citations: Enable citation tracking.
         enable_reasoning_chain: Enable reasoning chain middleware.
         enable_hallucination_detection: Enable hallucination detection.
@@ -172,6 +181,8 @@ class FeatureConfig:
     # Cache-bust diagnostics (ROADMAP #52) — innermost observer, off by default.
     enable_cache_diagnostics: bool = False
     cache_diagnostics_dir: str | None = None
+    # Built-in `fork` subagent (ROADMAP #71): the parent's prompt, tools and conversation.
+    enable_fork_subagent: bool = True
     enable_conversation_branching: bool = False
     enable_image_input: bool = False
     enable_browser: bool = False
@@ -192,6 +203,12 @@ class FeatureConfig:
     enable_audit_trail: bool = False
     audit_session_id: str = ""
     audit_advisor_id: str = ""
+    # Compliance artefact (ROADMAP #74): hash-chained action log + OTLP GenAI spans.
+    enable_action_log: bool = False
+    action_log_dir: str | None = None
+    action_log_run_id: str = ""
+    otel_endpoint: str | None = None
+    otel_headers: dict[str, str] | None = None
     enable_citations: bool = False
     enable_reasoning_chain: bool = False
     enable_hallucination_detection: bool = False

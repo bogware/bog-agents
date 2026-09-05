@@ -33,6 +33,9 @@ from pathlib import Path
 # Keep alphabetically sorted by constant name.
 # ---------------------------------------------------------------------------
 
+ACTION_LOG = "BOG_AGENTS_ACTION_LOG"
+"""Write the hash-chained action log (`~/.bog-agents/action-log`, ROADMAP #74) when truthy."""
+
 APPROVAL_TIMEOUT = "BOG_AGENTS_APPROVAL_TIMEOUT"
 """Seconds an approval prompt waits before auto-rejecting (fail-closed); unset = wait forever (#49)."""
 
@@ -151,6 +154,9 @@ OPERATOR = "BOG_AGENTS_OPERATOR"
 
 OPERATOR_DISABLE = "BOG_AGENTS_OPERATOR_DISABLE"
 """Emergency kill switch for Operator mode; beats every other toggle."""
+
+OTEL_ENDPOINT = "BOG_AGENTS_OTEL_ENDPOINT"
+"""OTLP/HTTP collector base URL for GenAI-semconv spans (ROADMAP #74); unset = no export."""
 
 POWERSHELL_TOOL = "BOG_AGENTS_POWERSHELL_TOOL"
 """Register the opt-in `powershell` tool (pwsh / Windows PowerShell via argv, never cmd.exe) when truthy (#61)."""

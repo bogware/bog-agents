@@ -3,7 +3,7 @@
 import contextlib
 import warnings
 from collections.abc import Awaitable, Callable, Generator, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, NotRequired, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NotRequired, TypedDict, Unpack, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig
@@ -11,7 +11,7 @@ from langchain.agents.middleware.types import AgentMiddleware, AgentState, Conte
 from langchain.agents.structured_output import ResponseFormat
 from langchain.tools import BaseTool, ToolRuntime
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
@@ -26,11 +26,13 @@ if TYPE_CHECKING:
 from bog_agents.middleware.permissions import FilesystemPermission
 
 __all__ = [
+    "FORK_SUBAGENT_DESCRIPTION",
     "SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY",
     "CompiledSubAgent",
     "SubAgent",
     "SubAgentMiddleware",
     "create_sub_agent",
+    "seed_fork_messages",
     "subagent_private_state_keys",
 ]
 
@@ -100,6 +102,10 @@ class SubAgent(TypedDict):
 
     skills: NotRequired[list[str]]
     """Skill source paths for SkillsMiddleware."""
+    mode: NotRequired[Literal["isolated", "fork"]]
+    """`isolated` (default) starts the child with only the task; `fork` (ROADMAP #71)
+    seeds it with the parent's conversation so far — same tools, same base prompt —
+    so its first model call rides the parent's prefix."""
 
     permissions: NotRequired[list[FilesystemPermission]]
     """Filesystem permission rules for this subagent.
@@ -344,6 +350,13 @@ GENERAL_PURPOSE_SUBAGENT: SubAgent = {
     "system_prompt": DEFAULT_SUBAGENT_PROMPT,
 }
 
+FORK_SUBAGENT_DESCRIPTION = (
+    "A fork of this agent: the same instructions, tools and the conversation so far. "
+    "Use it for a side task that needs everything you already know (a second opinion, "
+    "a parallel investigation, a follow-up that must not lose context) rather than a fresh start."
+)
+"""Description of the built-in `fork` subagent (ROADMAP #71)."""
+
 
 class _SubagentSpec(TypedDict):
     """Internal spec for building the task tool."""
@@ -351,6 +364,7 @@ class _SubagentSpec(TypedDict):
     name: str
     description: str
     runnable: Runnable
+    mode: NotRequired[str]
     raw: NotRequired[SubAgent]
     """The fully-resolved raw spec this runnable was compiled from.
 
@@ -572,6 +586,8 @@ def _get_subagents_legacy(
             resolved["interrupt_on"] = interrupt_on
         if "response_format" in agent_:
             resolved["response_format"] = agent_["response_format"]
+        if "mode" in agent_:
+            resolved["mode"] = agent_["mode"]
 
         specs.append(
             {
@@ -611,6 +627,27 @@ def _cap_refusal(cost_ledger: "CostLedger | None", subagent_type: str) -> str | 
     return None
 
 
+def seed_fork_messages(parent_messages: Sequence[BaseMessage], description: str) -> list[BaseMessage]:
+    """The messages a fork-mode child starts from (ROADMAP #71).
+
+    The parent's conversation minus its system messages (the child has its own)
+    and minus the trailing `AIMessage` whose `task` tool call is the one being
+    served — it has no `ToolMessage` yet and would leave the child's history
+    unbalanced — followed by the task as a `HumanMessage`.
+
+    Args:
+        parent_messages: The parent graph's canonical message list.
+        description: The task for the child.
+
+    Returns:
+        A well-formed message list ending with the task.
+    """
+    seed: list[BaseMessage] = [m for m in parent_messages if not isinstance(m, SystemMessage)]
+    if seed and isinstance(seed[-1], AIMessage) and seed[-1].tool_calls:
+        seed.pop()
+    return [*seed, HumanMessage(content=description)]
+
+
 def _build_task_tool(
     subagents: list[_SubagentSpec],
     task_description: str | None = None,
@@ -640,6 +677,7 @@ def _build_task_tool(
     # Build the graphs dict and descriptions from the unified spec list
     subagent_graphs: dict[str, Runnable] = {spec["name"]: spec["runnable"] for spec in subagents}
     raw_specs: dict[str, SubAgent] = {spec["name"]: spec["raw"] for spec in subagents if "raw" in spec}
+    fork_modes = {name: str(raw.get("mode", "isolated")) == "fork" for name, raw in raw_specs.items()}
     subagent_description_str = "\n".join(f"- {s['name']}: {s['description']}" for s in subagents)
 
     # Use custom description if provided, otherwise use default template
@@ -688,7 +726,10 @@ def _build_task_tool(
         # parent -> child crossing: build a new state dict (never mutate the
         # parent's) with the always-excluded and private keys withheld.
         subagent_state = {k: v for k, v in runtime.state.items() if k not in _EXCLUDED_STATE_KEYS and k not in private_state_keys}
-        subagent_state["messages"] = [HumanMessage(content=description)]
+        if fork_modes.get(subagent_type):
+            subagent_state["messages"] = seed_fork_messages(runtime.state.get("messages", []), description)
+        else:
+            subagent_state["messages"] = [HumanMessage(content=description)]
         return subagent, subagent_state
 
     def task(

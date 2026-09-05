@@ -44,6 +44,16 @@ _CONTROLLERS: dict[Path, ExpertController] = {}
 _CONTROLLERS_LOCK = threading.Lock()
 
 
+def _expert_audit_sink() -> Any:  # noqa: ANN401 - AuditSink | None
+    """The action-log sink for Expert verdicts, or `None` when the log is off (ROADMAP #74)."""
+    try:
+        from bog_agents_cli.action_log_controller import expert_audit_sink
+
+        return expert_audit_sink()
+    except Exception:
+        return None
+
+
 def get_controller(
     working_dir: Path | str,
     *,
@@ -110,6 +120,7 @@ class ExpertController:
         self._middleware = middleware or ExpertRulesMiddleware(
             working_dir=working_dir,
             enabled=False,  # start disabled — explicit opt-in via /expert on
+            audit=_expert_audit_sink(),  # ROADMAP #74: verdicts into the action log
         )
         self._model_factory = model_factory
         # ``/expert write`` stashes the most recent proposal here so

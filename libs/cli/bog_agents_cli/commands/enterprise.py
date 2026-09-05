@@ -36,4 +36,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
         ),
         handler_method="_handle_worktrees_command",
     ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/actionlog",
+            "Hash-chained action log: verify a chain, export it signed with the TraceFile key, prune old chains",
+            "compliance audit chain hash export sign retention",
+            "enterprise",
+            available=True,
+            subcommands=(
+                ("status", "List chains and whether each verifies (default)"),
+                ("verify", "Verify one chain (usage: /actionlog verify [file])"),
+                (
+                    "export",
+                    "Write a signed export (usage: /actionlog export [file] [--unsigned])",
+                ),
+                (
+                    "prune",
+                    "Delete chains past the retention policy (usage: /actionlog prune [--days N])",
+                ),
+            ),
+        ),
+        handler_method="_handle_actionlog_command",
+    ),
 )

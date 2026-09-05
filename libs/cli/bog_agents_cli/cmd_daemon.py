@@ -544,6 +544,42 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         print(instructions)  # noqa: T201
 
 
+def cmd_daemon_usage_export(
+    port: int = _DEFAULT_PORT,
+    *,
+    days: int = 30,
+    csv_path: str | None = None,
+    otlp: str | None = None,
+) -> int:
+    """Ask the daemon to export its usage aggregates; prints the rows when nothing else was asked (ROADMAP #74)."""
+    try:
+        if csv_path or otlp:
+            result = _api_post(
+                "/usage/export",
+                {"days": days, "csv_path": csv_path, "otlp_endpoint": otlp},
+                port=port,
+            )
+            for note in result.get("notes", []):
+                print(note)  # noqa: T201
+            print(f"{result.get('rows', 0)} aggregate row(s).")  # noqa: T201
+            return 0
+        rows = _api_get(f"/usage?days={days}", port=port)
+    except Exception as exc:
+        print(f"Could not reach the daemon: {exc}")  # noqa: T201
+        return 1
+    if not rows:
+        print("No usage recorded in that window.")  # noqa: T201
+        return 0
+    print(  # noqa: T201
+        "day         scope                      model                       records   in_tok   out_tok      usd"
+    )
+    for r in rows:
+        print(  # noqa: T201
+            f"{r['day']:<11} {r['scope'][:26]:<26} {r['model'][:27]:<27} {r['records']:>7} {r['input_tokens']:>8} {r['output_tokens']:>9} {r['usd']:>8.4f}"
+        )
+    return 0
+
+
 def cmd_daemon_install_git_hook(repo: str, port: int = _DEFAULT_PORT) -> None:
     """Install a git post-receive hook that fires daemon git-push triggers.
 
@@ -1070,6 +1106,24 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     status_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # rotate-token
+    # ROADMAP #74: usage export (CSV / OTLP metrics) from the daemon's spend ledger.
+    usage_p = daemon_sub.add_parser(
+        "usage-export",
+        help="Export daily spend per job / model as CSV and/or OTLP metrics",
+    )
+    usage_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    usage_p.add_argument(
+        "--days", type=int, default=30, help="How many days back (default 30)"
+    )
+    usage_p.add_argument(
+        "--csv",
+        default=None,
+        help="Write the aggregates to this CSV path (on the daemon's machine)",
+    )
+    usage_p.add_argument(
+        "--otlp", default=None, help="OTLP/HTTP collector base URL to post metrics to"
+    )
+
     rotate_p = daemon_sub.add_parser(
         "rotate-token",
         help="Rotate the daemon API token (invalidates the current token immediately)",
@@ -1459,6 +1513,12 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
         cmd_daemon_install(platform=getattr(args, "platform", None))
     elif cmd == "install-git-hook":
         cmd_daemon_install_git_hook(repo=args.repo, port=args.port)
+    elif cmd == "usage-export":
+        raise SystemExit(
+            cmd_daemon_usage_export(
+                port=args.port, days=args.days, csv_path=args.csv, otlp=args.otlp
+            )
+        )
     else:
         print(  # noqa: T201
             "bog-agents daemon — ambient agent daemon management\n\n"

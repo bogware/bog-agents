@@ -98,7 +98,50 @@ async def test_threads_verbs_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "## feat/x  (2)" in mounted[-1]
     assert await thread_flags.maybe_run_threads_verb(app, "/threads archive", "archive")
     assert "Usage: /threads archive" in mounted[-1]
-    assert not await thread_flags.maybe_run_threads_verb(
+    # ROADMAP #71: `search` moved here from the App handler.
+    from bog_agents_cli import session_search
+
+    async def _search(query: str, limit: int = 20) -> list:
+        return []
+
+    monkeypatch.setattr(session_search, "search_sessions", _search)
+    monkeypatch.setattr(
+        session_search,
+        "format_search_results",
+        lambda q, hits: f"hits for {q}: {len(hits)}",
+    )
+    assert await thread_flags.maybe_run_threads_verb(
         app, "/threads search x", "search x"
     )
+    assert "hits for x: 0" in mounted[-1]
+    assert await thread_flags.maybe_run_threads_verb(app, "/threads search", "search")
+    assert "Usage" in mounted[-1]
+
+    deleted: list[str] = []
+
+    async def _delete(thread_id: str) -> bool:
+        deleted.append(thread_id)
+        return thread_id == "t-1"
+
+    monkeypatch.setattr(sessions, "delete_thread", _delete)
+    resumed: list[str] = []
+
+    async def _resume(thread_id: str) -> None:
+        resumed.append(thread_id)
+
+    app._resume_thread = _resume  # type: ignore[attr-defined]
+    assert await thread_flags.maybe_run_threads_verb(
+        app, "/threads delete t-1", "delete t-1"
+    )
+    assert "Deleted thread t-1" in mounted[-1] and deleted == ["t-1"]
+    assert await thread_flags.maybe_run_threads_verb(
+        app, "/threads delete zz", "delete zz"
+    )
+    assert "No thread" in mounted[-1]
+    assert await thread_flags.maybe_run_threads_verb(
+        app, "/threads resume t-9", "resume t-9"
+    )
+    assert resumed == ["t-9"]
+    assert await thread_flags.maybe_run_threads_verb(app, "/threads delete", "delete")
+    assert "Usage: /threads delete" in mounted[-1]
     assert not await thread_flags.maybe_run_threads_verb(app, "/threads", "")

@@ -73,6 +73,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/subtask",
+            "Run a prompt in the background with this conversation as context (a fork of this agent)",
+            "subtask fork background side task context",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_fork_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/fork",
+            "Record a fork of this session and continue the work in a background agent (--worktree for a fresh worktree)",
+            "fork branch worktree background continue",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_fork_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/async",
             "Fire-and-forget agent task — submit, get a job id, "
             "get a toast on completion",

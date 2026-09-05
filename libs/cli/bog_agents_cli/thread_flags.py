@@ -122,13 +122,49 @@ def render_grouped(groups: dict[str, list[Any]], *, archived_hidden: int = 0) ->
 
 
 async def maybe_run_threads_verb(app: Any, command: str, rest: str) -> bool:  # noqa: ANN401 - the App
-    """Handle `/threads group|archive|unarchive|unread|read …`; `False` when the verb is not ours."""
+    """Handle `/threads search|delete|resume|group|archive|unarchive|unread|read …`; `False` when the verb is not ours."""
     from bog_agents_cli.widgets.messages import AppMessage, UserMessage
 
     words = rest.split()
     if not words:
         return False
     verb = words[0].lower()
+    if verb == "search":
+        from bog_agents_cli.session_search import format_search_results, search_sessions
+
+        query = " ".join(words[1:]).strip()
+        await app._mount_message(UserMessage(command))
+        if not query:
+            await app._mount_message(
+                AppMessage(
+                    "Usage: [bold]/threads search <text>[/bold] — full-text search past threads."
+                )
+            )
+            return True
+        hits = await search_sessions(query, limit=20)
+        await app._mount_message(AppMessage(format_search_results(query, hits)))
+        return True
+    if verb in ("delete", "resume"):
+        # ROADMAP #71: the typed forms of what the selector screen offers.
+        await app._mount_message(UserMessage(command))
+        if len(words) < 2:
+            await app._mount_message(AppMessage(f"Usage: /threads {verb} <thread-id>"))
+            return True
+        thread_id = words[1]
+        if verb == "delete":
+            from bog_agents_cli.sessions import delete_thread
+
+            removed = await delete_thread(thread_id)
+            await app._mount_message(
+                AppMessage(
+                    f"Deleted thread {thread_id}."
+                    if removed
+                    else f"No thread {thread_id!r}."
+                )
+            )
+            return True
+        await app._resume_thread(thread_id)
+        return True
     if verb == "list" and len(words) >= 2 and words[1].lower() in ("--group", "group"):
         words = ["group", *words[2:]]
         verb = "group"

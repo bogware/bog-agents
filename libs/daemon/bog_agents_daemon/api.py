@@ -149,6 +149,16 @@ class CreateJobRequest(BaseModel):
     enabled: bool = True
 
 
+class UsageExportRequest(BaseModel):
+    """Body of `POST /usage/export` (ROADMAP #74)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: int = Field(default=30, ge=1, le=3650)
+    csv_path: str | None = None
+    otlp_endpoint: str | None = None
+
+
 class ResumeRunRequest(BaseModel):
     """Body for `POST /runs/{run_id}/resume` (ROADMAP #51): the raised budget."""
 
@@ -848,6 +858,45 @@ def create_app(
         _check_auth(request, token_holder["value"])
         runs = list_runs(limit=20)
         return [_run_to_response(r) for r in runs]
+
+    # ------------------------------------------------------------------
+    # Usage export (ROADMAP #74)
+    # ------------------------------------------------------------------
+
+    @app.get("/usage")
+    async def usage_endpoint(request: Request, days: int = 30) -> list[dict[str, Any]]:
+        """Daily spend aggregates per job / model from the daemon's spend ledger."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon.store import spend_db_path
+        from bog_agents_daemon.usage_export import aggregate_usage
+
+        rows = aggregate_usage(spend_db_path(), since_days=float(days))
+        return [
+            {
+                "day": r.day,
+                "scope": r.scope,
+                "kind": r.kind,
+                "owner": r.owner,
+                "model": r.model,
+                "records": r.records,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "usd": r.usd,
+            }
+            for r in rows
+        ]
+
+    @app.post("/usage/export", status_code=202)
+    async def usage_export_endpoint(request: Request, body: UsageExportRequest) -> dict[str, Any]:
+        """Write the aggregates as CSV and / or post them as OTLP metrics."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon.store import spend_db_path
+        from bog_agents_daemon.usage_export import export_usage
+
+        rows, notes = await asyncio.to_thread(
+            export_usage, spend_db_path(), since_days=float(body.days), csv_path=body.csv_path, otlp_endpoint=body.otlp_endpoint
+        )
+        return {"rows": len(rows), "notes": notes}
 
     # ------------------------------------------------------------------
     # Enable / Disable

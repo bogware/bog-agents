@@ -53,6 +53,7 @@ from bog_agents.middleware.permissions import (
 from bog_agents.middleware.skills import SkillsMiddleware
 from bog_agents.middleware.subagents import (
     DEFAULT_SUBAGENT_PROMPT,
+    FORK_SUBAGENT_DESCRIPTION,
     GENERAL_PURPOSE_SUBAGENT,
     CompiledSubAgent,
     SubAgent,
@@ -121,6 +122,35 @@ class SystemPromptConfig(TypedDict, total=False):
 
 
 _PROMPT_SEPARATOR = "\n\n"
+
+
+def _price_tokens(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """USD for a call from the cost catalog, or `None` when the model is unpriced (ROADMAP #74)."""
+    from bog_agents.middleware.cost_tracker import price_for_model
+
+    prices = price_for_model(model.split(":", 1)[1] if ":" in model else model)
+    if prices is None:
+        return None
+    return (input_tokens / 1_000_000) * prices[0] + (output_tokens / 1_000_000) * prices[1]
+
+
+def _fork_system_prompt(system_prompt: Any, profile: Any) -> str | SystemMessage:
+    """The parent's assembled prompt (prefix, base, suffix, profile suffix) for the built-in `fork` subagent (ROADMAP #71)."""
+    cfg = _normalize_system_prompt(system_prompt)
+    parts: list[str | SystemMessage] = []
+    prefix = cfg.get("prefix")
+    if prefix is not None:
+        parts.append(prefix)
+    profile_base = profile.base_system_prompt if profile.base_system_prompt is not None else BASE_AGENT_PROMPT
+    base = cfg.get("base", profile_base)
+    if base is not None:
+        parts.append(base)
+    suffix = cfg.get("suffix")
+    if suffix is not None:
+        parts.append(suffix)
+    if profile.system_prompt_suffix is not None:
+        parts.append(profile.system_prompt_suffix)
+    return _assemble_prompt_parts(parts)
 
 
 def _assemble_prompt_parts(parts: list[str | SystemMessage]) -> str | SystemMessage:
@@ -976,6 +1006,17 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         if gp_interrupt_on is not None:
             general_purpose_spec["interrupt_on"] = gp_interrupt_on
         all_subagents = [general_purpose_spec, *processed_subagents]
+        if f.enable_fork_subagent and not any(spec["name"] == "fork" for spec in processed_subagents):
+            # ROADMAP #71: a fork shares the parent's base prompt, tools and
+            # conversation, so its first call rides the parent's prefix.
+            fork_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
+                **general_purpose_spec,
+                "name": "fork",
+                "description": FORK_SUBAGENT_DESCRIPTION,
+                "mode": "fork",
+                "system_prompt": _fork_system_prompt(system_prompt, _profile),
+            }
+            all_subagents.append(fork_spec)
     else:
         # GP stack not assembled: seed the coverage sets with this profile's
         # exclusions so an entry that would only have matched the (now-omitted)
@@ -1204,6 +1245,22 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.audit_trail import AuditTrailMiddleware
 
         agents_middleware.append(AuditTrailMiddleware(session_id=f.audit_session_id, advisor_id=f.audit_advisor_id))
+
+    # ROADMAP #74: compliance artefact — hash-chained action log and OTLP export.
+    if f.enable_action_log:
+        import uuid as _uuid
+
+        from bog_agents.action_log import ActionLog, ActionLogMiddleware
+
+        _log_dir = Path(f.action_log_dir) if f.action_log_dir else Path.home() / ".bog-agents" / "action-log"
+        _run_id = f.action_log_run_id or _uuid.uuid4().hex[:12]
+        agents_middleware.append(ActionLogMiddleware(ActionLog(_log_dir / f"{_run_id}.jsonl", run_id=_run_id), price=_price_tokens))
+    if f.otel_endpoint:
+        from bog_agents.otel_export import OTelExportMiddleware, OTLPHttpSink
+
+        agents_middleware.append(
+            OTelExportMiddleware(OTLPHttpSink(f.otel_endpoint, headers=f.otel_headers), agent_name=name or "agent", price=_price_tokens)
+        )
 
     # D-5 provenance loop: composes citations + hallucination_detection
     # + fact_check so every claim the agent emits has a registered

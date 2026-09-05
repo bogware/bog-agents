@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 SCOPE_USER = "user"
 """Scope for everything the current OS user spends, across projects."""
@@ -153,6 +153,19 @@ class SpendLedger:
         with self._lock:
             rows = self._conn.execute("SELECT scope, SUM(usd) FROM spend WHERE day = ? GROUP BY scope", (self.day_key(ts),)).fetchall()
         return {str(scope): float(total) for scope, total in rows}
+
+    def records(self, *, since: float | None = None) -> list[dict[str, Any]]:
+        """Every row (oldest first) as dicts, optionally only those at or after `since` (ROADMAP #74 usage export)."""
+        query = "SELECT ts, day, scope, model, input_tokens, output_tokens, usd FROM spend"
+        params: tuple[Any, ...] = ()
+        if since is not None:
+            query += " WHERE ts >= ?"
+            params = (since,)
+        query += " ORDER BY id"
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        keys = ("ts", "day", "scope", "model", "input_tokens", "output_tokens", "usd")
+        return [dict(zip(keys, row, strict=True)) for row in rows]
 
     def close(self) -> None:
         """Close the underlying connection."""
