@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.9.14](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.13...bog-agents==0.9.14) (2026-09-06)
+
+
+### Features
+
+* **cli:** cost-objective routing, decisions log and provider failover (ROADMAP [#53](https://github.com/bogware/bog-agents/issues/53)) ([b54310c](https://github.com/bogware/bog-agents/commit/b54310c82726b4427a08841fa3806f4a1ef98dd5))
+* **cli:** managed governance layer (ROADMAP [#50](https://github.com/bogware/bog-agents/issues/50)) ([7e8fb63](https://github.com/bogware/bog-agents/commit/7e8fb63cfca7b22a0e1c0eaf49cf39d5952a480a))
+* **cli:** plan review screen and headless plan-then-execute (ROADMAP [#69](https://github.com/bogware/bog-agents/issues/69)) ([5aae696](https://github.com/bogware/bog-agents/commit/5aae696aa7b1c5bfa609bc2057248c35db0e6819))
+* **cli:** session registry, cross-process queue, detach/attach and daemon drain (ROADMAP [#56](https://github.com/bogware/bog-agents/issues/56)) ([f0fdbf0](https://github.com/bogware/bog-agents/commit/f0fdbf08d0e9725278d31cbd0db442d9b28f0638))
+* **cli:** steerable approvals and hostile-repo git hardening (ROADMAP [#49](https://github.com/bogware/bog-agents/issues/49)) ([0a325eb](https://github.com/bogware/bog-agents/commit/0a325eb5dfb1d4c0f9eeed0382d992eb707d2e08))
+* **cli:** Windows distribution and first run (ROADMAP [#61](https://github.com/bogware/bog-agents/issues/61)) ([a0be5f9](https://github.com/bogware/bog-agents/commit/a0be5f92b073beb766ce1b5627e90d241d29a7cb))
+* **daemon,sdk,cli:** thread-linked jobs, subscriptions and attempt caps (ROADMAP [#55](https://github.com/bogware/bog-agents/issues/55)) ([d629b8c](https://github.com/bogware/bog-agents/commit/d629b8c6823b45ad9db09bbd78537f2337a7977f))
+* fork subagents (ROADMAP [#71](https://github.com/bogware/bog-agents/issues/71)) and the compliance artefact (ROADMAP [#74](https://github.com/bogware/bog-agents/issues/74)) ([677bb98](https://github.com/bogware/bog-agents/commit/677bb9850a3aee6db7ad4dd73defc335c511f024))
+* **sdk,cli,daemon:** cost certainty — ROADMAP [#51](https://github.com/bogware/bog-agents/issues/51) ([732f76f](https://github.com/bogware/bog-agents/commit/732f76f6a81994bd70f8c98f4c1a1eac694649a0))
+* **sdk,cli:** measured harness overhead, lean profile and --mini (ROADMAP [#54](https://github.com/bogware/bog-agents/issues/54)) ([9caa573](https://github.com/bogware/bog-agents/commit/9caa573c4da3b1caeaa14d1377d760505ac00aad))
+* **sdk,cli:** turn-end changes tray with proof-ordered diffs — ROADMAP [#66](https://github.com/bogware/bog-agents/issues/66) ([53e1162](https://github.com/bogware/bog-agents/commit/53e1162ef64bb4ce2a0ceb60d6f346073d19b905))
+* **sdk,cli:** usage you can read — ROADMAP [#52](https://github.com/bogware/bog-agents/issues/52) ([3804a22](https://github.com/bogware/bog-agents/commit/3804a227c189b304a9208270bf18f7402c35973c))
+* **sdk:** findings ledger, scan jobs and the security-scan recipe (ROADMAP [#59](https://github.com/bogware/bog-agents/issues/59), [#70](https://github.com/bogware/bog-agents/issues/70)) ([3d83d6c](https://github.com/bogware/bog-agents/commit/3d83d6cdff5a09f5eef609ff0454ffe356f5f39b))
+* **sdk:** governed code mode (ROADMAP [#72](https://github.com/bogware/bog-agents/issues/72)) ([31b00a1](https://github.com/bogware/bog-agents/commit/31b00a1b496ad21f5f1361290b1e666d40486d94))
+* **sdk:** team v2 — attachments, file exchange, env reuse, mounts (ROADMAP [#76](https://github.com/bogware/bog-agents/issues/76)) ([eaddd7b](https://github.com/bogware/bog-agents/commit/eaddd7bc14f4757ab533cebbbf0dbd042ca2ff79))
+
+
+### Bug Fixes
+
+* **cli,sdk:** resurrect /think and /worktrees for the server-hosted agent ([06e704f](https://github.com/bogware/bog-agents/commit/06e704f5bf89f1f02a643553cc5eac53ee78bc36))
+* **sdk,cli:** Wave A — make governance count and enforce where it claimed to ([3c41fde](https://github.com/bogware/bog-agents/commit/3c41fde662081a8aa50d1405a27087f1df418ce1))
+* **sdk,cli:** Wave C — context and perf tail (SDK-2/3/4/5/6) ([6ae78be](https://github.com/bogware/bog-agents/commit/6ae78be3ec70615d75dc9daab451e33887c67518))
+* **sdk:** record the assistant reply on serve /stream turns ([fb329d0](https://github.com/bogware/bog-agents/commit/fb329d0f1635f01039148542218fd5ad3fe3cb71))
+
 ## [0.9.13](https://github.com/bogware/bog-agents/compare/bog-agents==0.9.12...bog-agents==0.9.13) (2026-08-22)
 
 

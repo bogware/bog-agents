@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.9.14](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.13...bog-agents-daemon==0.9.14) (2026-09-06)
+
+
+### Features
+
+* **cli:** session registry, cross-process queue, detach/attach and daemon drain (ROADMAP [#56](https://github.com/bogware/bog-agents/issues/56)) ([f0fdbf0](https://github.com/bogware/bog-agents/commit/f0fdbf08d0e9725278d31cbd0db442d9b28f0638))
+* **daemon,sdk,cli:** thread-linked jobs, subscriptions and attempt caps (ROADMAP [#55](https://github.com/bogware/bog-agents/issues/55)) ([d629b8c](https://github.com/bogware/bog-agents/commit/d629b8c6823b45ad9db09bbd78537f2337a7977f))
+* fork subagents (ROADMAP [#71](https://github.com/bogware/bog-agents/issues/71)) and the compliance artefact (ROADMAP [#74](https://github.com/bogware/bog-agents/issues/74)) ([677bb98](https://github.com/bogware/bog-agents/commit/677bb9850a3aee6db7ad4dd73defc335c511f024))
+* **sdk,cli,daemon:** cost certainty — ROADMAP [#51](https://github.com/bogware/bog-agents/issues/51) ([732f76f](https://github.com/bogware/bog-agents/commit/732f76f6a81994bd70f8c98f4c1a1eac694649a0))
+* **sdk:** findings ledger, scan jobs and the security-scan recipe (ROADMAP [#59](https://github.com/bogware/bog-agents/issues/59), [#70](https://github.com/bogware/bog-agents/issues/70)) ([3d83d6c](https://github.com/bogware/bog-agents/commit/3d83d6cdff5a09f5eef609ff0454ffe356f5f39b))
+
+
+### Bug Fixes
+
+* **cli,daemon,vscode:** Wave B — first-30-minutes polish ([5821cf5](https://github.com/bogware/bog-agents/commit/5821cf50469a48c3208078eac3cbc650051905b9))
+* **daemon:** render trigger context into job prompts and output fields ([d3ef41b](https://github.com/bogware/bog-agents/commit/d3ef41bb62def95d3053a9936b9c085d0f1a9723))
+
 ## [0.9.13](https://github.com/bogware/bog-agents/compare/bog-agents-daemon==0.9.12...bog-agents-daemon==0.9.13) (2026-08-22)
 
 
