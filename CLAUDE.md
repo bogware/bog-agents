@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Team v2 (ROADMAP #76).** `teams.Attachment` rides on `Message` in both `Mailbox` and
+`MailboxStore` (same `send(..., attachments=)` signature — keep them interchangeable);
+`bog_agents/tools/team_files.py` stages content-addressed, DLP-redacted copies under
+`.bog-agents/team/exchange/` and is bound per teammate through
+`create_cli_agent(extra_tools=...)`. `envcache.py` keys shared `node_modules` / `.venv` on the
+lockfile hash — never link across differing lockfiles. `/add-dir` mounts come from
+`.bog-agents/mounts.json` and are built into the `CompositeBackend` at agent start.
+
 **Memory rebuild + advisor (ROADMAP #75).** `memory_rebuild.py` rewrites only the
 `## Agent-Recorded Memories` section (the one `auto_memory.append_memory` manages) and only
 into a candidate under `.bog-agents/memory.rebuild/`; `/memory apply` swaps it in with a

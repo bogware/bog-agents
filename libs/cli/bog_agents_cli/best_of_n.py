@@ -312,6 +312,14 @@ async def run_worktree_attempt(
         )
 
     wt_path = Path(info.path)
+    try:  # ROADMAP #76: share node_modules / .venv through the env cache
+        from bog_agents_cli.envcache import configured_reuse, reuse_into_worktree
+
+        await asyncio.to_thread(
+            reuse_into_worktree, repo_dir, wt_path, configured_reuse()
+        )
+    except Exception:
+        logger.debug("worktree env reuse skipped", exc_info=True)
     try:
         output = await run_agent(spec, wt_path, prompt)
     except Exception as exc:

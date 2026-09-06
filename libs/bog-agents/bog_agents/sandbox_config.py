@@ -63,6 +63,9 @@ class SandboxConfig:
         require_sandbox: When True and `local_sandbox` is set, fail closed if no
             native launcher is available (e.g. Windows) rather than running
             unsandboxed.
+        worktree_reuse: `[worktree] reuse = [...]` — directories (`node_modules`,
+            `.venv`) shared across worktrees through the lockfile-keyed env cache
+            (ROADMAP #76; applied by the CLI's `envcache`).
         source: Path the config was loaded from.
     """
 
@@ -73,6 +76,7 @@ class SandboxConfig:
     network_allowlist: list[str] = field(default_factory=list)
     local_sandbox: str = ""
     require_sandbox: bool = False
+    worktree_reuse: list[str] = field(default_factory=list)
     source: str = ""
 
     def materialize_setup_script(self, dest: str | Path) -> Path:
@@ -160,6 +164,7 @@ def load_sandbox_config(cwd: str | Path | None = None) -> SandboxConfig | None:
         logger.warning("Ignoring malformed %s: %s", path, exc)
         return None
 
+    worktree = raw.get("worktree", {})
     section = raw.get("sandbox", raw)
     if not isinstance(section, dict):
         section = {}
@@ -180,6 +185,7 @@ def load_sandbox_config(cwd: str | Path | None = None) -> SandboxConfig | None:
         network_allowlist=_coerce_str_list(section.get("network_allowlist")),
         local_sandbox=local_level,
         require_sandbox=bool(section.get("require_sandbox", False)),
+        worktree_reuse=_coerce_str_list(worktree.get("reuse") if isinstance(worktree, dict) else None),
         source=str(path),
     )
 

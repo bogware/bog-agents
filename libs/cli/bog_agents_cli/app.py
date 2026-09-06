@@ -3408,6 +3408,16 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await self._mount_message(AppMessage(await run_memory_from_app(self, command)))
 
+    async def _handle_add_dir_command(self, command: str) -> None:
+        """`/add-dir <path> | list | remove <name>` — mount extra directories at /mnt/<name>/ (ROADMAP #76)."""
+        from bog_agents_cli.findings_controller import project_root
+        from bog_agents_cli.mounts import run_add_dir_command
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(run_add_dir_command(command, project_root(self)))
+        )
+
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
         cmd = command.lower().strip()
@@ -10377,11 +10387,7 @@ class BogAgentsApp(App):
         if echo:
             await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.worktree import (
-            create_worktree,
-            list_worktrees,
-            remove_worktree,
-        )
+        from bog_agents.middleware.worktree import list_worktrees, remove_worktree
 
         repo_root = await self._get_repo_root()
         if repo_root is None:
@@ -10418,26 +10424,10 @@ class BogAgentsApp(App):
             return
 
         if lowered.startswith("create "):
-            branch = raw_arg[7:].strip()
-            if not branch:
-                await self._mount_message(
-                    AppMessage("Usage: /worktree create <branch>")
-                )
-                return
-            # create_worktree validates the ref and raises ValueError on an
-            # invalid name (e.g. one with a space); surface it instead of
-            # crashing the TUI with an uncaught traceback. (REVIEW.md v2 P1-29.)
-            try:
-                worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
-            except (ValueError, OSError) as exc:
-                await self._mount_message(ErrorMessage(f"Invalid branch name: {exc}"))
-                return
-            await self._mount_message(
-                AppMessage(
-                    f"Created worktree on branch {worktree.branch}\n"
-                    f"Path: {worktree.path}"
-                )
-            )
+            from bog_agents_cli.worktrees_controller import create_worktree_report
+
+            text, ok = await create_worktree_report(repo_root, raw_arg[7:].strip())
+            await self._mount_message((AppMessage if ok else ErrorMessage)(text))
             return
 
         if lowered.startswith("status "):

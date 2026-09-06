@@ -11,13 +11,15 @@ is read at most once per member.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from bog_agents.teams import Message
+from bog_agents.teams import Attachment, Message
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -25,10 +27,27 @@ if TYPE_CHECKING:
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS messages ("
     " id INTEGER PRIMARY KEY AUTOINCREMENT, sender TEXT NOT NULL, recipient TEXT NOT NULL,"
-    " body TEXT NOT NULL, ts REAL NOT NULL)",
+    " body TEXT NOT NULL, ts REAL NOT NULL, attachments TEXT NOT NULL DEFAULT '[]')",
     "CREATE TABLE IF NOT EXISTS reads (message_id INTEGER NOT NULL, member TEXT NOT NULL, PRIMARY KEY (message_id, member))",
     "CREATE INDEX IF NOT EXISTS messages_recipient ON messages (recipient, id)",
 )
+
+
+_ATTACHMENTS_COL = 5  # index of the attachments JSON column in `_visible_sql`
+
+
+def _rows_to_messages(rows: list[tuple[object, ...]]) -> list[Message]:
+    """Rows from `_visible_sql` (with the attachments JSON column) → `Message`s."""
+    out: list[Message] = []
+    for r in rows:
+        raw = r[_ATTACHMENTS_COL] if len(r) > _ATTACHMENTS_COL else "[]"
+        try:
+            items = json.loads(str(raw)) if raw else []
+        except ValueError:
+            items = []
+        attachments = tuple(Attachment.from_dict(item) for item in items if isinstance(item, dict))
+        out.append(Message(sender=str(r[1]), recipient=str(r[2]), body=str(r[3]), ts=float(r[4]), attachments=attachments))  # type: ignore[arg-type]
+    return out
 
 
 class MailboxStore:
@@ -45,6 +64,8 @@ class MailboxStore:
             conn.execute("PRAGMA journal_mode=WAL")
             for statement in _SCHEMA:
                 conn.execute(statement)
+            with contextlib.suppress(sqlite3.OperationalError):  # ROADMAP #76: stores created before attachments existed
+                conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -54,19 +75,19 @@ class MailboxStore:
         finally:
             conn.close()
 
-    def send(self, sender: str, recipient: str, body: str) -> Message:
-        """Post a message; returns the stored `Message`."""
-        msg = Message(sender=sender, recipient=recipient, body=body)
+    def send(self, sender: str, recipient: str, body: str, *, attachments: tuple[Attachment, ...] = ()) -> Message:
+        """Post a message (optionally carrying attachments); returns the stored `Message`."""
+        msg = Message(sender=sender, recipient=recipient, body=body, attachments=tuple(attachments))
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO messages (sender, recipient, body, ts) VALUES (?, ?, ?, ?)",
-                (msg.sender, msg.recipient, msg.body, msg.ts),
+                "INSERT INTO messages (sender, recipient, body, ts, attachments) VALUES (?, ?, ?, ?, ?)",
+                (msg.sender, msg.recipient, msg.body, msg.ts, json.dumps([a.to_dict() for a in msg.attachments])),
             )
         return msg
 
     @staticmethod
     def _visible_sql(unread_for: str | None) -> tuple[str, tuple[str, ...]]:
-        sql = "SELECT id, sender, recipient, body, ts FROM messages WHERE recipient IN (?, ?) AND sender != ?"
+        sql = "SELECT id, sender, recipient, body, ts, attachments FROM messages WHERE recipient IN (?, ?) AND sender != ?"
         if unread_for is not None:
             sql += " AND id NOT IN (SELECT message_id FROM reads WHERE member = ?)"
         sql += " ORDER BY id"
@@ -77,7 +98,7 @@ class MailboxStore:
         sql, _ = self._visible_sql(None)
         with self._connect() as conn:
             rows = conn.execute(sql, (member, self.ALL, member)).fetchall()
-        return [Message(sender=r[1], recipient=r[2], body=r[3], ts=r[4]) for r in rows]
+        return _rows_to_messages(rows)
 
     def pending(self, member: str) -> int:
         """How many unread messages wait for `member`."""
@@ -99,7 +120,7 @@ class MailboxStore:
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
-        return [Message(sender=r[1], recipient=r[2], body=r[3], ts=r[4]) for r in rows]
+        return _rows_to_messages(rows)
 
     def wait(self, member: str, *, timeout: float, poll: float = 0.5) -> list[Message]:
         """Block until `member` has unread messages (drained) or `timeout` seconds pass."""

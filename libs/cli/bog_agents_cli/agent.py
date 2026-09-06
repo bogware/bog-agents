@@ -1525,6 +1525,7 @@ def create_cli_agent(
     cwd: str | Path | None = None,
     project_context: ProjectContext | None = None,
     cost_ledger: CostLedger | None = None,
+    extra_tools: list[Any] | None = None,
     harness_profile: str | None = None,
     restricted: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
@@ -1584,6 +1585,8 @@ def create_cli_agent(
         project_context: Explicit project path context for project-sensitive
             behavior such as project `AGENTS.md` files, skills, subagents, and
             MCP trust.
+        extra_tools: Caller-supplied tools appended to the built-ins (ROADMAP #76:
+            a teammate's `send_file` / `receive_files`).
         cost_ledger: Session ledger whose runaway caps gate subagent spawns
             and spend (v6 SDK-7); forwarded to `create_agent`.
 
@@ -1683,6 +1686,7 @@ def create_cli_agent(
             )
     except Exception:
         logger.debug("Could not wire daemon tools", exc_info=True)
+    tools.extend(extra_tools or [])
     tools.extend(
         _workflow_tools(
             Path(effective_cwd or Path.cwd()), restricted=trust_profile.restricted
@@ -2188,14 +2192,21 @@ def create_cli_agent(
             root_dir=str(bog_agents_home() / "swept"),
             virtual_mode=True,
         )
-        composite_backend = CompositeBackend(
-            default=backend,
-            routes={
-                "/large_tool_results/": large_results_backend,
-                "/conversation_history/": conversation_history_backend,
-                "/swept_context/": swept_backend,
-            },
-        )
+        routes: dict[str, Any] = {
+            "/large_tool_results/": large_results_backend,
+            "/conversation_history/": conversation_history_backend,
+            "/swept_context/": swept_backend,
+        }
+        try:  # ROADMAP #76: /add-dir mounts as /mnt/<name>/
+            from bog_agents_cli.mounts import mount_routes
+
+            for route, directory in mount_routes(effective_cwd or Path.cwd()).items():
+                routes[route] = FilesystemBackend(
+                    root_dir=str(directory), virtual_mode=True
+                )
+        except Exception:
+            logger.debug("Could not wire /add-dir mounts", exc_info=True)
+        composite_backend = CompositeBackend(default=backend, routes=routes)
     else:
         # Sandbox mode: No special routing needed
         composite_backend = CompositeBackend(

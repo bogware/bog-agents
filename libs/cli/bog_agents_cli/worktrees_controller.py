@@ -8,9 +8,11 @@ without Textual.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Protocol
 
 USAGE = (
@@ -88,3 +90,24 @@ __all__ = [
     "parse_spawn_payload",
     "render_worktree_tasks",
 ]
+
+
+async def create_worktree_report(repo_root: Path, branch: str) -> tuple[str, bool]:
+    """`/worktree create <branch>`: create it, apply `[worktree] reuse`, return `(message, ok)` (ROADMAP #76)."""
+    if not branch:
+        return "Usage: /worktree create <branch>", False
+    from bog_agents.middleware.worktree import create_worktree
+
+    try:
+        info = await asyncio.to_thread(create_worktree, repo_root, branch)
+    except (ValueError, OSError) as exc:
+        return f"Invalid branch name: {exc}", False
+    from bog_agents_cli.envcache import configured_reuse, reuse_into_worktree
+
+    notes = await asyncio.to_thread(
+        reuse_into_worktree, repo_root, info.path, configured_reuse()
+    )
+    text = f"Created worktree on branch {info.branch}\nPath: {info.path}"
+    if notes:
+        text += "\nEnvironment reuse:\n" + "\n".join(f"  {n}" for n in notes)
+    return text, True

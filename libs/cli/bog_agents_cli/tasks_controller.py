@@ -22,10 +22,13 @@ App-facing dispatchers.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -467,6 +470,28 @@ def render_task_tree(root: TaskNode) -> str:
 # ---------------------------------------------------------------- team run registry
 
 
+def _team_mailbox(app: Any) -> Any:  # noqa: ANN401 - the App / Mailbox or MailboxStore
+    """ROADMAP #76: a SQLite mailbox keyed by the interactive thread so teammate messages outlive the session."""
+    from bog_agents.teams import Mailbox
+
+    getter = getattr(app, "_current_thread_id", None)
+    thread = getter() if callable(getter) else None
+    if not thread:
+        return Mailbox()
+    try:
+        from bog_agents.mailbox_store import MailboxStore
+
+        from bog_agents_cli._env_vars import bog_agents_home
+
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(thread))[:80]
+        return MailboxStore(bog_agents_home() / "mailboxes" / f"{safe}.db")
+    except Exception:
+        logger.debug(
+            "persistent team mailbox unavailable; using in-memory", exc_info=True
+        )
+        return Mailbox()
+
+
 def register_team_run(
     app: Any,  # noqa: ANN401 - the App
     task_specs: Sequence[Any],
@@ -476,7 +501,6 @@ def register_team_run(
 ) -> TeamRunHandle:
     """Create the ledger / mailbox / cost ledger for a `/team run` and expose them to `/tasks`."""
     from bog_agents.cost_ledger import CostLedger, RunawayCaps
-    from bog_agents.teams import Mailbox
 
     from bog_agents_cli.team_executor import build_ledger
 
@@ -492,7 +516,7 @@ def register_team_run(
         run_id=run_id,
         title=f"{len(task_specs)} task(s), {len(members)} worker(s)",
         ledger=build_ledger(task_specs),
-        mailbox=Mailbox(),
+        mailbox=_team_mailbox(app),
         cost_ledger=CostLedger(caps=caps or RunawayCaps()),
         members=list(members),
         pause_gate=gate,

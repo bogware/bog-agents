@@ -15,6 +15,7 @@ without real models; the CLI wires the real `create_cli_agent`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -31,6 +32,8 @@ from bog_agents.teams import (
     TeamReport,
     run_team,
 )
+
+logger = logging.getLogger(__name__)
 
 # A task spec is either a bare title or a (title, [dependency-title, ...]) pair.
 TaskSpec = str | tuple[str, Sequence[str]]
@@ -125,6 +128,23 @@ def build_ledger(task_specs: Sequence[TaskSpec]) -> TaskLedger:
     return ledger
 
 
+def _team_file_tools(mailbox: Any, member: str, repo_dir: Path) -> list[Any]:  # noqa: ANN401 - Mailbox or MailboxStore
+    """ROADMAP #76: `send_file` / `send_patch` / `receive_files` bound to this teammate, audit-logged when the action log is on."""
+    try:
+        from bog_agents.tools.team_files import team_file_tools
+
+        from bog_agents_cli.action_log_controller import approvals_log
+
+        log = approvals_log()
+        audit = (
+            (lambda kind, data: log.append(kind, **data)) if log is not None else None
+        )
+        return list(team_file_tools(mailbox, member, root=repo_dir, audit=audit))
+    except Exception:
+        logger.debug("team file tools unavailable", exc_info=True)
+        return []
+
+
 def build_worktree_teammate_runner(
     *,
     repo_dir: Path,
@@ -164,6 +184,7 @@ def build_worktree_teammate_runner(
             enable_checkpointing=False,
             enable_memory=False,
             enable_plan_mode=False,
+            extra_tools=_team_file_tools(mailbox, member, repo_dir),
         )
         # Fold in any peer messages addressed to this member so it has context.
         inbox = mailbox.drain(member)

@@ -1255,13 +1255,28 @@ ADK, and a contract is itself a feature to the target users.
 - **#76 Team v2: file transfer, cross-thread mailbox, multi-repo, fast spawn**
   *(Amp agent-to-agent file transfer + multi-repo projects; Cursor multi-dir
   workspaces; Grok `grok clone` content store; Cursor Builds 3× faster start)* —
-  **partial.** Typed `Attachment` on `Message` (file/dir/patch, DLP-scanned,
-  audit-logged) + `send_file`/`receive_files` teammate tools; `Mailbox` persisted
-  to SQLite keyed by thread so messages cross sessions; `/add-dir` extending
-  `CompositeBackend` mounts; `[worktree] reuse = ['node_modules', '.venv']` in
-  `sandbox.toml` → hardlink/junction from a lockfile-hash-keyed cache under
-  `~/.bog-agents/envcache/`; Docker/daytona snapshot templates recorded in
-  `.bog-agents/sandbox.lock`. Extends v2 #21 and #27. **T, M.**
+  **shipped 2026-09-06** (REVIEW v6 §28). Typed `Attachment` on
+  `teams.Message` (file / dir-as-zip / patch; content-addressed, DLP-redacted
+  text, `redactions` count) carried by both `Mailbox` and the SQLite
+  `MailboxStore` (`attachments` column, migrated in place); teammate tools
+  `send_file` / `send_patch` / `receive_files` (`bog_agents/tools/team_files.py`)
+  staged under `.bog-agents/team/exchange/`, audit-logged into the action log
+  when it is on, bound per teammate by `team_executor` through the new
+  `create_cli_agent(extra_tools=...)`. `/team run` mailboxes persist per
+  interactive thread (`~/.bog-agents/mailboxes/<thread>.db`) so `/tasks steer`
+  messages outlive the session. `/add-dir <path> [--name n] | list | remove`
+  records mounts in `.bog-agents/mounts.json`; `create_cli_agent` routes each
+  as `/mnt/<name>/` on the `CompositeBackend` (next agent start).
+  `[worktree] reuse = ["node_modules", ".venv"]` in `sandbox.toml`
+  (`SandboxConfig.worktree_reuse`) → `envcache.py` links a
+  lockfile-hash-keyed copy under `~/.bog-agents/envcache/` (junction on
+  Windows, symlink elsewhere; seeded from the main checkout once) into every
+  `/worktree create` and `/best-of-n` worktree. `sandbox_lock.py` records
+  provider snapshot ids with the lockfile hashes they were built from and
+  reports them stale when a lockfile changes. *Was:* partial. Open: no
+  provider consumes `sandbox.lock` yet (recorded, validated, not applied);
+  `/add-dir` needs a restart to take effect; `send_file` does not stream
+  large binaries (8 MB / 64 MB caps). **T, M.**
 - **Also noted, not ranked:** on-device voice dictation (Kiro, Copilot; S — every
   CLI shipped it, cheap with `faster-whisper`); temporal/sequence-aware Expert
   predicates with a Dogwood importer (AWS, Aug 6; L — the enterprise moonshot

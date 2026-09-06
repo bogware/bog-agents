@@ -210,6 +210,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/add-dir",
+            "Mount another directory into the agent's filesystem at /mnt/<name>/",
+            "multi-repo mount directory workspace add dir",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_add_dir_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/replay",
             "Replay agent actions for debugging",
             "debug trace",
