@@ -3299,6 +3299,31 @@ class BogAgentsApp(App):
             AppMessage(await asyncio.to_thread(run_actionlog_command, command))
         )
 
+    async def _handle_findings_command(self, command: str) -> None:
+        """`/findings` — the project's findings ledger (ROADMAP #59 / #70)."""
+        from bog_agents_cli.findings_controller import (
+            project_root,
+            run_findings_command,
+        )
+
+        await self._mount_message(UserMessage(command))
+        text = await asyncio.to_thread(
+            run_findings_command, command, project_root(self)
+        )
+        await self._mount_message(AppMessage(text))
+
+    async def _handle_remediate_command(self, command: str) -> None:
+        """`/remediate <fingerprint>` — fix one ledger finding with its evidence in hand (ROADMAP #59)."""
+        from bog_agents_cli.findings_controller import project_root, remediation_prompt
+
+        await self._mount_message(UserMessage(command))
+        prompt, note = await asyncio.to_thread(
+            remediation_prompt, command, project_root(self)
+        )
+        await self._mount_message(AppMessage(note))
+        if prompt:
+            await self._send_prompt_to_agent(prompt)
+
     async def _handle_recap_command(self, command: str) -> None:
         """`/recap` — where this session stands (#68)."""
         from bog_agents_cli.tasks_controller import run_recap_command
@@ -6110,64 +6135,17 @@ class BogAgentsApp(App):
         self._start_tracked_session(self._run_jury_on_diff(diff_text), name="/jury")
 
     async def _gather_jury_diff(self, arg: str) -> str | None:
-        """Gather a diff for /jury based on the user's argument.
-
-        Returns the diff string, or ``None`` if the command was rejected
-        and the caller has already mounted an error.
-        """
-        import subprocess  # noqa: S404  # bounded git invocation
-
+        """Gather a diff for /jury; `None` when rejected (the message is already mounted)."""
         from bog_agents_cli.config import settings
+        from bog_agents_cli.jury import gather_diff
 
-        cwd = settings.project_root or Path(self._cwd)
-        if arg in ("--paste", "paste"):
-            await self._mount_message(
-                AppMessage(
-                    "Paste support is not yet wired up — pipe a diff to /jury via "
-                    "[bold]git diff | bog-agents -m '/jury <ref>'[/bold] or commit and use "
-                    "[bold]/jury <ref>[/bold]."
-                )
-            )
-            return None
-
-        cmd: list[str]
-        if arg in ("", "head", "working"):
-            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "HEAD"]
-        elif arg == "staged":
-            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "--cached"]
-        else:
-            # Treat as a ref. Reject anything that smells like a flag or
-            # contains shell metachars to keep argv hygiene tight.
-            if arg.startswith("-") or any(c in arg for c in " ;|&`$"):
-                await self._mount_message(
-                    ErrorMessage(f"Refusing suspicious /jury argument: {arg!r}")
-                )
-                return None
-            cmd = ["git", "diff", *NO_EXTERNAL_DIFF, f"{arg}..HEAD"]
-
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,  # argv-form, no shell
-                cmd,
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            await self._mount_message(ErrorMessage(f"git diff failed: {exc}"))
-            return None
-        if result.returncode != 0:
-            await self._mount_message(
-                ErrorMessage(
-                    f"git diff returned {result.returncode}: {result.stderr.strip()}"
-                )
-            )
-            return None
-        # ``capture_output=True, text=True`` always returns str; tighten the type
-        # so ty doesn't flag the bytes branch from subprocess.run's overload.
-        return str(result.stdout)
+        gathered = await asyncio.to_thread(
+            gather_diff, arg, settings.project_root or Path(self._cwd)
+        )
+        if gathered.message:
+            kind = ErrorMessage if gathered.error else AppMessage
+            await self._mount_message(kind(gathered.message))
+        return gathered.diff
 
     async def _run_jury_on_diff(self, diff_text: str) -> None:
         """Build the juror list and run the jury, then mount the report."""

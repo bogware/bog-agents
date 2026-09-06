@@ -332,6 +332,14 @@ def _cmd_help(args: str) -> HeadlessResult:
     return _err(f"Unknown command: /{target}", {"name": target, "found": False})
 
 
+def _cmd_findings(args: str) -> HeadlessResult:
+    """The project's findings ledger (ROADMAP #59); `findings gate --max high` exits 1 when the gate fails."""
+    from bog_agents_cli.findings_controller import run_findings_headless
+
+    ok, text, data = run_findings_headless(args, Path.cwd())
+    return HeadlessResult(ok=ok, text=text, data=data)
+
+
 # Registry of headless-capable commands: name -> (description, handler).
 def _cmd_tokens(args: str) -> HeadlessResult:
     """Measure the CLI agent's fixed per-turn cost (headless twin of ``/tokens middleware``).
@@ -376,6 +384,10 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "tokens": (
         "Harness overhead per turn, attributed per middleware and tool (tokens middleware [--mini])",
         _cmd_tokens,
+    ),
+    "findings": (
+        "Findings ledger: list | show | triage | gate | sarif | record (gate exits 1 on failure)",
+        _cmd_findings,
     ),
 }
 

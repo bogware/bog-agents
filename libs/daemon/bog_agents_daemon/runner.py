@@ -322,12 +322,29 @@ async def run_job(
                 if agent_exc is None:
                     run.output = output
                     run.status = JobStatus.COMPLETED
+                    if job.scan_profile:
+                        _record_scan(job, run)
                 else:
                     run.error = str(agent_exc)
                     run.status = JobStatus.FAILED
                 run.finished_at = time.time()
 
     return await _finish_run(job, run)
+
+
+def _record_scan(job: AmbientJob, run: JobRun) -> None:
+    """ROADMAP #59: fold a scan run's `## Findings` into the job's ledger; a failed gate lands in `run.error`."""
+    from bog_agents_daemon.scan import record_scan_output
+
+    try:
+        summary = record_scan_output(job, run)
+    except Exception as exc:
+        logger.exception("Job %s (%s) findings ledger update failed", job.job_id, job.name)
+        run.error = f"findings ledger update failed: {exc}"
+        return
+    run.output = f"{run.output.rstrip()}\n\n{summary.describe()}"
+    if summary.gate is not None and not summary.gate.passed:
+        run.error = summary.gate.describe()
 
 
 async def _finish_run(job: AmbientJob, run: JobRun) -> JobRun:
@@ -529,7 +546,11 @@ def _build_prompt(
         ValueError: If no prompt source is configured or the named
             skill/pipeline can't be located.
     """
-    if job.prompt:
+    if job.scan_profile:
+        from bog_agents_daemon.scan import scan_prompt
+
+        base = scan_prompt(job)  # ROADMAP #59
+    elif job.prompt:
         base = job.prompt
     elif job.skill_name:
         base = _resolve_skill_prompt(job.skill_name)

@@ -1167,13 +1167,22 @@ ADK, and a contract is itself a feature to the target users.
   the prerequisite for #57's Windows workers. **S/E, XL.**
 - **#59 Scan jobs with a findings ledger and remediate → PR** *(Devin scheduled
   code scans + batch remediation; Codex Security open-sourced client, HN praised
-  the harness not the scanner; Claude Security plugin)* — **absent.** A `scan`
-  job kind on `AmbientJob` (profile: security/cleanup/perf/custom rubric); a
-  SQLite findings table keyed by a stable fingerprint so re-runs update rather than
-  duplicate; triage states with `/findings` + headless twin; sandbox reproduction
-  marks findings validated/unreproduced; SARIF output and CI gating; `--max-cost`;
-  `/remediate <id>` opens a PR with the evidence bundle. Packages `/audit`,
-  `/compliance`, `/jury` and the ledger into the workflow Devin sells. **T/E, M.**
+  the harness not the scanner; Claude Security plugin)* — **shipped 2026-09-06**
+  (REVIEW v6 §25). SDK `findings_store.py`: SQLite ledger keyed by a fingerprint
+  over rule + path + normalised message (never the line number) so a re-scan
+  updates `last_seen`/`occurrences`, findings that stop appearing auto-close as
+  `fixed`, triage states (`triaged`/`wontfix`/`false_positive`) stick, SARIF
+  2.1.0 export and a `gate()` for CI. Daemon: `scan_profile`
+  (security/cleanup/perf/custom rubric) + `findings_db` + `scan_gate` on
+  `AmbientJob` (`daemon jobs create --scan security --scan-gate high`), the
+  run's `## Findings` parsed into `<working_dir>/.bog-agents/findings.db`, a
+  failed gate in `run.error`; `GET /findings`, `/findings/gate`,
+  `/findings/sarif`, `POST /findings/{fp}/triage`. CLI: `/findings [list|show|
+  triage|gate|sarif|record]` with a headless twin whose `gate` exits 1 for CI,
+  `/remediate <fp>` turning one finding into a fix turn with its evidence in
+  the prompt (then `/pr --evidence`). `--max-cost` is the job's `budget_usd`.
+  *Was:* absent. Open: `/remediate` does not open the PR itself; sandbox
+  reproduction is a recipe step, not a ledger state. **T/E, M.**
 - **#65 Protocol currency: MCP 2026-07-28, A2A v1, ACP registry, context engine as
   a service** *(MCP went stateless and deprecated sampling/roots/DCR on a 12-month
   clock; ADK 2.8 and MAF shipped A2A task mode; Zed's ACP registry is live;
@@ -1196,12 +1205,16 @@ ADK, and a contract is itself a feature to the target users.
   full-screen execution view reusing `dashboard.py` panels; `bog-agents --plan
   "<prompt>" --auto` in `non_interactive.py`. **S/T, M.**
 - **#70 Security-scan recipe** *(Codex Security harness; Claude Security plugin)*
-  — **partial** (`/audit` is one prompt; a `dependency-audit` recipe exists).
-  Architecture map → threat model → parallel hunter subagents on `TaskLedger`
-  (injection, authz, secrets, SSRF, deserialization) → independent `/jury`
-  review → sandbox reproduction → persistent findings + false-positive ledger with
-  dedup keys, `--max-cost`, SARIF, CI gate. Shares the findings store with #59.
-  **T/E, M.**
+  — **shipped 2026-09-06** (REVIEW v6 §25) as the `security-scan` recipe:
+  architecture map → threat model → hunter subagents per attack class (via
+  `task`, under the run's budget) → sceptical second review → sandbox
+  reproduction → `.bog-agents/scan/findings.md` in the ledger's line format →
+  `/findings record` as the last pipeline step, so dedup keys, triage states,
+  SARIF and the CI gate come from #59's store. The format instructions are one
+  SDK constant (`FINDINGS_FORMAT_INSTRUCTIONS`) shared with the daemon scan
+  prompt. *Was:* partial. Open: the hunters are sequential-in-one-turn today
+  (no `TaskLedger` fan-out); `--max-cost` is the session budget or a daemon
+  scan job's `budget_usd`. **T/E, M.**
 - **#73 Agent-authored workflows saved as `/commands`** *(Grok Build Workflows:
   128–1,024 agents, saved as slash commands; Claude dynamic workflows; Warp
   Factories foreman pipeline)* — **partial.** `pipeline.py` has sequential YAML

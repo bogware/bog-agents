@@ -746,6 +746,11 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         payload["thread_id"] = args.thread
     if getattr(args, "daily_ceiling_usd", None):
         payload["daily_ceiling_usd"] = args.daily_ceiling_usd
+    # ROADMAP #59: scan jobs feed the findings ledger.
+    if getattr(args, "scan_profile", ""):
+        payload["scan_profile"] = args.scan_profile
+    if getattr(args, "scan_gate", ""):
+        payload["scan_gate"] = args.scan_gate
 
     try:
         job = _api_post("/jobs", payload, port=port)
@@ -1180,6 +1185,21 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default=None,
         metavar="USD",
         help="Per-job daily spend ceiling; runs are skipped once today's spend reaches it (#51)",
+    )
+    create_p.add_argument(
+        "--scan",
+        dest="scan_profile",
+        choices=("security", "cleanup", "perf", "custom"),
+        default="",
+        help="Make this a scan job: the run's findings land in <working_dir>/.bog-agents/findings.db (#59); custom uses --prompt as the rubric",
+    )
+    create_p.add_argument(
+        "--scan-gate",
+        dest="scan_gate",
+        choices=("info", "low", "medium", "high", "critical"),
+        default="",
+        metavar="SEVERITY",
+        help="Mark a scan run failed when open findings sit at or above this severity (#59)",
     )
     create_p.add_argument(
         "--pipeline",

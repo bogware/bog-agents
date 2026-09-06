@@ -68,6 +68,11 @@ def spend_db_path() -> Path:
     return _DAEMON_DIR / "spend.db"
 
 
+def daemon_findings_db_path() -> Path:
+    """Path of the daemon-level findings ledger (ROADMAP #59) used when a request names no job."""
+    return _DAEMON_DIR / "findings.db"
+
+
 def _ensure_dirs() -> None:
     """Create daemon directories if they do not exist."""
     _DAEMON_DIR.mkdir(parents=True, exist_ok=True)
@@ -160,6 +165,9 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
         thread_id=str(d.get("thread_id", "") or ""),
         checkpoint_db=str(d.get("checkpoint_db", "") or ""),
         goal_ref=str(d.get("goal_ref", "") or ""),
+        scan_profile=str(d.get("scan_profile", "") or ""),
+        findings_db=str(d.get("findings_db", "") or ""),
+        scan_gate=str(d.get("scan_gate", "") or ""),
         triggers=triggers,
         outputs=outputs,
         enabled=d.get("enabled", True),

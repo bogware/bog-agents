@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Findings ledger (ROADMAP #59 / #70).** `bog_agents/findings_store.py` is the one
+store behind daemon scan jobs (`scan_profile` on `AmbientJob`, `bog_agents_daemon/scan.py`),
+the `security-scan` recipe and the CLI's `/findings` + `/remediate` (`findings_controller.py`,
+headless `findings gate` exits 1). Rows are keyed by `fingerprint(rule, path, message)` —
+never the line number — so keep messages stable across re-scans and ask any new producer
+for the `FINDINGS_FORMAT_INSTRUCTIONS` line format rather than inventing another one. The
+ledger lives at `<repo>/.bog-agents/findings.db`, beside the code it describes.
+
 **Managed policy (ROADMAP #50).** `managed_policy.py` is the org layer above every
 setting: a signed JSON document verified with the TraceFile key format, cached, loaded
 once per process (`active_policy()`), enforced by pure `ManagedPolicy` methods at MCP

@@ -166,6 +166,10 @@ class AmbientJob:
         checkpoint_db: SQLite checkpoint database for `thread_id`
             (default: the CLI's `sessions.db` under the bog home).
         goal_ref: Path of the thread's goal file, quoted into the prompt.
+        scan_profile: ROADMAP #59 — `security` / `cleanup` / `perf` / `custom`
+            (rubric in `prompt`); the run's `## Findings` feed the ledger.
+        findings_db: Ledger path (default `<working_dir>/.bog-agents/findings.db`).
+        scan_gate: Severity at or above which open findings mark the run red.
         triggers: One or more trigger configurations.
         outputs: One or more output delivery configurations.
         enabled: Whether the job is active and eligible for scheduling.
@@ -195,6 +199,10 @@ class AmbientJob:
     thread_id: str = ""
     checkpoint_db: str = ""
     goal_ref: str = ""
+    # ROADMAP #59: scan jobs feed the findings ledger
+    scan_profile: str = ""
+    findings_db: str = ""
+    scan_gate: str = ""
     # When to run
     triggers: list[TriggerConfig] = field(default_factory=list)
     # Where to send output

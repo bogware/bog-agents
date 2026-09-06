@@ -144,9 +144,22 @@ class CreateJobRequest(BaseModel):
     thread_id: str = Field("", max_length=200)
     checkpoint_db: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
     goal_ref: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    scan_profile: str = Field("", max_length=40)
+    findings_db: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    scan_gate: str = Field("", max_length=20)
     triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
+
+
+class FindingsTriageRequest(BaseModel):
+    """Body of `POST /findings/{fingerprint}/triage` (ROADMAP #59)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str | None = Field(default=None, max_length=64)
+    state: str = Field(..., max_length=20)
+    note: str = Field("", max_length=2000)
 
 
 class UsageExportRequest(BaseModel):
@@ -195,6 +208,8 @@ class UpdateJobRequest(BaseModel):
     daily_ceiling_usd: float | None = Field(default=None, gt=0)
     max_runs: int | None = Field(default=None, ge=0, le=10_000)
     thread_id: str | None = Field(default=None, max_length=200)
+    scan_profile: str | None = Field(default=None, max_length=40)
+    scan_gate: str | None = Field(default=None, max_length=20)
     triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
     enabled: bool | None = None
@@ -625,6 +640,9 @@ def create_app(
             thread_id=body.thread_id,
             checkpoint_db=body.checkpoint_db,
             goal_ref=body.goal_ref,
+            scan_profile=body.scan_profile,
+            findings_db=body.findings_db,
+            scan_gate=body.scan_gate,
             triggers=triggers,
             outputs=outputs,
             enabled=body.enabled,
@@ -719,6 +737,10 @@ def create_app(
             updates["max_runs"] = body.max_runs
         if body.thread_id is not None:
             updates["thread_id"] = body.thread_id
+        if body.scan_profile is not None:
+            updates["scan_profile"] = body.scan_profile
+        if body.scan_gate is not None:
+            updates["scan_gate"] = body.scan_gate
 
         if not updates:
             return _job_to_response(existing)
@@ -897,6 +919,85 @@ def create_app(
             export_usage, spend_db_path(), since_days=float(body.days), csv_path=body.csv_path, otlp_endpoint=body.otlp_endpoint
         )
         return {"rows": len(rows), "notes": notes}
+
+    # ------------------------------------------------------------------
+    # Findings ledger (ROADMAP #59)
+    # ------------------------------------------------------------------
+
+    def _findings_store_for(job_id: str | None) -> Any:
+        from bog_agents.findings_store import FindingsStore
+
+        if job_id:
+            from bog_agents_daemon.scan import findings_db_path
+
+            job = get_job(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+            return FindingsStore(findings_db_path(job))
+        from bog_agents_daemon.store import daemon_findings_db_path
+
+        return FindingsStore(daemon_findings_db_path())
+
+    @app.get("/findings")
+    async def findings_endpoint(
+        request: Request, job_id: str | None = None, state: str = "open,triaged", min_severity: str = "info"
+    ) -> list[dict[str, Any]]:
+        """Ledger rows for a scan job's repo (or the daemon-level ledger), worst first."""
+        _check_auth(request, token_holder["value"])
+        store = _findings_store_for(job_id)
+        try:
+            states = tuple(s.strip() for s in state.split(",") if s.strip()) or None
+            return [f.to_dict() for f in store.list(states=states, min_severity=min_severity)]
+        finally:
+            store.close()
+
+    @app.get("/findings/gate")
+    async def findings_gate_endpoint(request: Request, job_id: str | None = None, max_severity: str = "high") -> dict[str, Any]:
+        """The CI gate: `passed` is false when open findings sit at or above `max_severity`."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents.findings_store import SEVERITIES
+
+        if max_severity not in SEVERITIES:
+            raise HTTPException(status_code=400, detail=f"max_severity must be one of {', '.join(SEVERITIES)}")
+        store = _findings_store_for(job_id)
+        try:
+            result = store.gate(max_severity=max_severity)
+        finally:
+            store.close()
+        return {
+            "passed": result.passed,
+            "threshold": result.threshold,
+            "blocking": len(result.blocking),
+            "message": result.describe(),
+            "findings": [f.to_dict() for f in result.blocking],
+        }
+
+    @app.get("/findings/sarif")
+    async def findings_sarif_endpoint(request: Request, job_id: str | None = None) -> dict[str, Any]:
+        """SARIF 2.1.0 of the open findings for a code-scanning upload."""
+        _check_auth(request, token_holder["value"])
+        store = _findings_store_for(job_id)
+        try:
+            return store.to_sarif(tool_name="bog-agents-daemon", tool_version=__version__)
+        finally:
+            store.close()
+
+    @app.post("/findings/{fingerprint}/triage")
+    async def findings_triage_endpoint(request: Request, fingerprint: str, body: FindingsTriageRequest) -> dict[str, Any]:
+        """Set a triage state (open / triaged / fixed / wontfix / false_positive) on one finding."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents.findings_store import STATES
+
+        if body.state not in STATES:
+            raise HTTPException(status_code=400, detail=f"state must be one of {', '.join(STATES)}")
+        store = _findings_store_for(body.job_id)
+        try:
+            updated = store.triage(fingerprint, body.state, note=body.note)
+        finally:
+            store.close()
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"Finding '{fingerprint}' not found")
+        return updated.to_dict()
 
     # ------------------------------------------------------------------
     # Enable / Disable

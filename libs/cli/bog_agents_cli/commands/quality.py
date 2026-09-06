@@ -18,6 +18,26 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/findings",
+            "Findings ledger: list, triage, gate, SARIF, record a scan report",
+            "scan security ledger triage sarif gate fingerprint",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_findings_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/remediate",
+            "Fix one finding from the ledger with its evidence in the prompt",
+            "findings fix scan security pr",
+            "quality",
+            available=True,
+        ),
+        handler_method="_handle_remediate_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/recommend",
             "Run AI-powered code review and recommendation flows",
             "review audit advise persona focus",

@@ -17,8 +17,11 @@ The CLI entry point ``bog-agents recipe install <id>`` and the
 from __future__ import annotations
 
 import logging
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from bog_agents.findings_store import FINDINGS_FORMAT_INSTRUCTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +106,58 @@ steps:
 """
 
 
+_SECURITY_SCAN_YAML = """\
+name: security-scan
+description: Architecture map -> threat model -> hunters -> jury -> reproduction -> findings ledger.
+steps:
+  - id: map
+    type: message
+    text: |
+      Map this repository's architecture for a security review: entry points (HTTP routes, CLI
+      commands, message consumers, cron), trust boundaries, where untrusted input enters, how
+      auth and authorization are enforced, secrets handling, and outbound network calls. Read the
+      code; cite file paths. Do NOT modify files.
+  - id: threat-model
+    type: message
+    text: |
+      From that map, write a threat model: assets, actors, and for each entry point the attack
+      classes that apply (injection, broken authz, secrets exposure, SSRF, unsafe deserialization,
+      path traversal, unsafe subprocess). Rank by likelihood x impact. Keep it to one screen.
+  - id: hunt
+    type: message
+    text: |
+      Hunt. Spawn one subagent per attack class from the threat model (use the `task` tool; stay
+      within the run's budget) and have each read the relevant code and report only findings it
+      confirmed from the source, as `path:line - what and why`. Collect their reports verbatim.
+  - id: jury
+    type: message
+    text: |
+      Review every candidate finding independently, as a sceptical second reviewer: re-read the
+      code at each location and mark it CONFIRMED, UNCONFIRMED (drop it) or DUPLICATE (merge it).
+  - id: reproduce
+    type: message
+    text: |
+      For each CONFIRMED finding, try to reproduce it safely in this sandbox (a unit test, a local
+      request, a crafted input) without touching external systems. Note VALIDATED or UNREPRODUCED
+      with one line of evidence. Do NOT modify tracked files; scratch files go under .bog-agents/scan/.
+  - id: report
+    type: message
+    text: |
+      Write the final report to .bog-agents/scan/findings.md (create the directory if needed) with
+      the threat model summary, then the confirmed findings. Requirements for the findings section:
+{format}
+      Then reply with the same report.
+  - id: record
+    type: slash
+    command: /findings record .bog-agents/scan/findings.md --source security-scan
+"""
+
+
+_SECURITY_SCAN_YAML = _SECURITY_SCAN_YAML.replace(
+    "{format}", textwrap.indent(FINDINGS_FORMAT_INSTRUCTIONS, "      ")
+)
+
+
 _INCIDENT_TRIAGE_YAML = """\
 name: incident-triage
 description: Triage a production incident from a stack trace + recent diff.
@@ -155,6 +210,14 @@ CATALOG: tuple[Recipe, ...] = (
         summary="CVE + outdated-major sweep across language ecosystems.",
         yaml=_DEPENDENCY_AUDIT_YAML,
         tags=("security", "dependencies"),
+    ),
+    Recipe(
+        id="security-scan",
+        title="Security Scan",
+        summary="Architecture map, threat model, hunter subagents, jury, sandbox reproduction, ledger.",
+        yaml=_SECURITY_SCAN_YAML,
+        tags=("security", "scan", "findings"),
+        notes="Findings land in .bog-agents/findings.db (`/findings`, `/remediate <fp>`, `/findings gate` in CI); cap spend with the session budget or a daemon `--scan security --budget-usd N` job.",
     ),
     Recipe(
         id="incident-triage",
