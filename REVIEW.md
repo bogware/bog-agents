@@ -429,6 +429,22 @@ VS Code Marketplace publish; ACP PyPI + Zed registry; Azure Trusted Signing secr
 - **Headless planning cannot act.** `--plan` builds the planning agent with `plan_only=True`: the shell and git tool bundles are not registered, every CLI-registered tool in the plan-mode mutating set is dropped through the trust profile's `excluded_tools`, and the SDK built-ins (`write_file`, `edit_file`, `multi_edit_file`, `execute`) are withheld from every model request by the same `_ToolExclusionMiddleware` harness profiles use — unconditionally, with no state flag a prompt could flip (the TUI's plan mode is a toggle on the same mechanism). The plan comes back through a `sink`, and the execution pass is an ordinary `--auto` / `--auto-approve` run of the brief.
 - **Open:** full-screen execution view on `dashboard.py`; resuming a butcher job from a reviewed manifest; `--plan` has no `--review` stop to edit the plan in an editor between the passes.
 
+## 30. Wave 3 remainder (status 2026-09-06)
+
+Shipped on `fix/review-v6-wave0` since the v6 report: Wave 0, Wave 1 (#47 #49 #54 #61 #68), Wave 2 (#55 #67 #48 #56 #53 #64 #71 #74 #72 #50) and, from Wave 3, #59/#70 (§25), #73 (§26), #75 (§27), #76 (§28), #69 (§29). Every commit is local to the branch; nothing after 9d572f0 has been pushed (the user asked for that). Gates at the last full run: SDK 3,097 / CLI 5,860+ / daemon 274, ruff + ty clean, `app.py` under its 17,900-line ratchet.
+
+What remains, in the recommended order, with the file-level plan pointer (§15) and what each needs before it can start:
+
+| Item | Status | Plan | Blocked on |
+|---|---|---|---|
+| **#60 Native Windows sandbox** | not started; committed 1.x headline | §15 (`local_sandbox.py` Windows launcher, `doctor --windows`, CI leg) | the **pywin32 vs ctypes** decision (optional dep or hand-rolled `CreateRestrictedToken` bindings); a `windows-latest` CI job that can create restricted tokens; the elevated-mode design (two local users + WFP) needs an admin test box |
+| **#63 Governed host for other vendors' agents** | not started | §15 (`acp_teammate.py`, `HarnessSubAgentBackend`, `/team run --worker acp:<agent>`) | vendor binaries on the test machine (`claude-agent-acp`, `codex-acp`, opencode, goose); the ACP client lives in `libs/acp` which stays source-only until #65 |
+| **#58 Structured decisions from Slack / email / daemon** | not started | §15 (`ask_user` options, Block Kit / email renderers with signed callbacks, `POST /runs/{id}/answer`, Slack Events consumer) | a Slack app + signing secret and an SMTP sandbox; the daemon's `#55` thread-resume path is in place, so the daemon half can start without them |
+| **#57 `bog worker`** | not started | §15 (`cmd_worker.py`, `remote_backend.py`, daemon `pool_scheduler.py`, `/handoff --queue`) | #60 for Windows workers; a second machine (or container) to exercise the outbound WebSocket; the token / TLS story for the worker registration |
+| **#65 Protocol currency** | not started | §15 (`mcp` bump once a 2026-07-28 release ships, `serve --a2a`, `bog-agents-acp` on PyPI + Zed registry, `mcp-server` exposing the hybrid index) | the upstream `mcp` release; the user's PyPI account and Zed registry listing; `a2a-python 1.1.x` compatibility check |
+
+Pieces of those already in the tree that the remaining work builds on: the egress allowlist proxy and `SandboxConfig.build_local_sandbox` (#60), `TaskLedger` / `Mailbox` / `MailboxStore` and the teammate file tools (#57, #63), the daemon's checkpointer-linked runs and `POST /runs/{id}/resume` (#58), the trust profiles and hook bus a hosted agent would be governed by (#63).
+
 ### Decisions taken 2026-09-04
 Commit this report on `docs/review-v6` off `origin/main` and start Wave 0 immediately; Wave 1 leads with ROADMAP #47 Governed Auto Mode; 1.0 = Wave 0 + Wave 1 + Wave 2 + a written stability contract; #60 native Windows sandbox is a committed 1.x headline; the VS Code extension is fixed and published.
 
