@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from langchain.agents.middleware.types import ModelResponse
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -31,10 +32,8 @@ def test_middleware_emits_semconv_spans() -> None:
     def boom(_r: ToolCallRequest) -> ToolMessage:
         raise ValueError("bad")
 
-    try:
+    with pytest.raises(ValueError, match="bad"):
         mw.wrap_tool_call(ToolCallRequest(tool_call={"name": "execute", "args": {}, "id": "c2"}, tool=None, state={}, runtime=None), boom)  # type: ignore[arg-type]
-    except ValueError:
-        pass
 
     names = [s.name for s in sink.spans]
     assert names == ["chat claude-x", "invoke_agent task", "execute_tool execute"]

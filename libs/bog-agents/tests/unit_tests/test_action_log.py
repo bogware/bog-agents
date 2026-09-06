@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -103,10 +104,8 @@ def test_middleware_records_model_and_tool_calls(tmp_path: Path) -> None:
     def boom(_r: ToolCallRequest) -> ToolMessage:
         raise RuntimeError("nope")
 
-    try:
+    with contextlib.suppress(RuntimeError):
         mw.wrap_tool_call(request, boom)
-    except RuntimeError:
-        pass
     events = list(log.events())
     assert [e.kind for e in events] == ["model_call", "tool_call", "tool_call"]
     assert events[0].data == {"model": "claude-x", "input_tokens": 100, "output_tokens": 20, "cost_usd": 0.12}
