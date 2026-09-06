@@ -524,6 +524,15 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         toml_keys=("tools", "code_mode"),
     ),
     ConfigOption(
+        key="tools.workflows",
+        group="Tools",
+        summary="Always register the `author_workflow` / `list_workflows` tools (ROADMAP #73). Off, they appear once the project has a .bog-agents/workflows/ directory. Off under --restricted.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.WORKFLOW_TOOLS,
+        toml_keys=("tools", "workflows"),
+    ),
+    ConfigOption(
         key="web.allowed_domains",
         group="Tools",
         summary="Comma-separated domains the web tools may fetch (suffix-matched: example.com covers api.example.com). Empty = any public host.",

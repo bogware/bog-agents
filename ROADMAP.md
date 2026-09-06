@@ -1217,16 +1217,22 @@ ADK, and a contract is itself a feature to the target users.
   scan job's `budget_usd`. **T/E, M.**
 - **#73 Agent-authored workflows saved as `/commands`** *(Grok Build Workflows:
   128–1,024 agents, saved as slash commands; Claude dynamic workflows; Warp
-  Factories foreman pipeline)* — **partial.** `pipeline.py` has sequential YAML
-  pipelines. A `workflow.py` schema (phases context → work → review → verify →
-  synthesize; each phase a team fan-out under `RunawayCaps`); an agent tool
-  `author_workflow(description)` that writes `.bog-agents/workflows/<name>.yaml`
-  (repo-committed, loaded as `/name [args]` via the `prompt_commands.py` loader);
-  a runner persisting phase state so pause/resume skips finished phases;
-  per-agent token meters and a hard per-workflow budget. Optionally the
-  code-flavoured variant: a `workflow` tool taking a small sandboxed Python script
-  (`spawn`, `gather`, `validate(rubric)`, `retry`) executed over `TaskLedger` with
-  typed outcomes. Absorbs v2 #35's "recipes v2" run-time half and v1 #19. **T/S, M.**
+  Factories foreman pipeline)* — **shipped 2026-09-06** (REVIEW v6 §26).
+  `workflow.py`: YAML schema (phases of kind context / work / review / verify /
+  synthesize, each a task fan-out over `workers` teammates run through
+  `bog_agents.teams.run_team` under `RunawayCaps`; review/verify phases are
+  gates whose tasks must end `VERDICT: PASS`; `{arg}` / `{context}`
+  placeholders), `author_workflow(description, invoke=…)` (validate → retry
+  with the error → save), and `run_workflow` persisting per-phase / per-task
+  state (tokens, cost, seconds) under `.bog-agents/workflows/runs/` so a paused
+  or failed run resumes at the first unfinished phase; a hard `budget_usd`
+  pauses the run and `resume --budget` raises it. Files load as `/<name>
+  [args]` through `prompt_commands` discovery (`scope="workflow"`);
+  `/workflow list|show|author|run|resume|status`; agent tools
+  `author_workflow(yaml_text)` / `list_workflows` registered once the project
+  has a workflows directory (or `tools.workflows`). *Was:* partial. Open: the
+  code-flavoured `workflow` tool variant; workflow runs are not yet in the
+  `/tasks` tree. **T/S, M.**
 - **#75 Memory rebuild + advisor tool** *(Managed Agents "Dreams" research preview;
   Kiro Crew durable lessons; Pydantic harness Advisor)* — **absent.** A
   `memory_rebuild.py` batch (pure logic, injected `invoke`): load the store + N

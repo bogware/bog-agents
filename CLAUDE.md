@@ -95,6 +95,13 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Workflows (ROADMAP #73).** `workflow.py` (pure: schema, `run_workflow` with an injected
+task runner, persisted `WorkflowRun`) + `workflow_controller.py` (the App binding and the real
+per-task agent runner) + `workflow_tools.py` (`author_workflow` / `list_workflows`). Files in
+`.bog-agents/workflows/*.yaml` load as `/<name>` through `prompt_commands` discovery with
+`scope="workflow"` — keep that scope check in `_maybe_run_prompt_command`, and keep phases
+running through `bog_agents.teams.run_team` so caps and claims stay shared with `/team run`.
+
 **Findings ledger (ROADMAP #59 / #70).** `bog_agents/findings_store.py` is the one
 store behind daemon scan jobs (`scan_profile` on `AmbientJob`, `bog_agents_daemon/scan.py`),
 the `security-scan` recipe and the CLI's `/findings` + `/remediate` (`findings_controller.py`,

@@ -2514,6 +2514,12 @@ class BogAgentsApp(App):
         cmd = self._prompt_commands.get(name)
         if cmd is None:
             return False
+        if cmd.scope == "workflow":  # ROADMAP #73
+            from bog_agents_cli.workflow_controller import run_workflow_slash
+
+            raw = command.strip()
+            rest = raw[len(name) :].strip() if raw.startswith(name) else ""
+            return await run_workflow_slash(self, cmd, rest)
         from bog_agents_cli.prompt_commands import render_prompt_command
 
         raw = command.strip()
@@ -2541,7 +2547,11 @@ class BogAgentsApp(App):
         for cmd in self._prompt_commands.values():
             hint = f" {cmd.argument_hint}" if cmd.argument_hint else ""
             commands.append(
-                (cmd.name, f"{cmd.description}{hint}", "custom prompt command")
+                (
+                    cmd.name,
+                    f"{cmd.description}{hint}",
+                    "workflow" if cmd.scope == "workflow" else "custom prompt command",
+                )
             )
         autocomplete.SLASH_COMMANDS[:] = commands
 
@@ -3323,6 +3333,13 @@ class BogAgentsApp(App):
         await self._mount_message(AppMessage(note))
         if prompt:
             await self._send_prompt_to_agent(prompt)
+
+    async def _handle_workflow_command(self, command: str) -> None:
+        """`/workflow` — list, show, author, run, resume, status (ROADMAP #73)."""
+        from bog_agents_cli.workflow_controller import run_workflow_command
+
+        await self._mount_message(UserMessage(command))
+        await run_workflow_command(self, command)
 
     async def _handle_recap_command(self, command: str) -> None:
         """`/recap` — where this session stands (#68)."""

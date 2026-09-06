@@ -18,6 +18,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/workflow",
+            "Agent-authored workflows saved as /commands: author, list, run, resume, status",
+            "workflow phases fan-out team budget author yaml command",
+            "enterprise",
+            available=True,
+        ),
+        handler_method="_handle_workflow_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/workspace",
             "Multi-repository context — define repos in .bog-agents/workspace.toml",
             "multi-repo cross-repo microservices monorepo symbol resolution",

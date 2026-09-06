@@ -1435,6 +1435,22 @@ MINI_KEEP_TOOLS: tuple[str, ...] = (
 """Tools whose schemas stay visible under `--mini`; everything else sits behind `tool_search` / `select` (ROADMAP #54)."""
 
 
+def _workflow_tools(cwd: Path, *, restricted: bool) -> list[Any]:
+    """ROADMAP #73: `author_workflow` / `list_workflows`, only when the project uses workflows (or `tools.workflows` is on)."""
+    if restricted:
+        return []
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+        from bog_agents_cli.workflow import workflows_dir
+        from bog_agents_cli.workflow_tools import workflow_tools_bundle
+
+        if workflows_dir(cwd).is_dir() or bool(resolve_option("tools.workflows")):
+            return list(workflow_tools_bundle(cwd))
+    except Exception:
+        logger.debug("Could not wire workflow tools", exc_info=True)
+    return []
+
+
 def create_cli_agent(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -1621,6 +1637,11 @@ def create_cli_agent(
             )
     except Exception:
         logger.debug("Could not wire daemon tools", exc_info=True)
+    tools.extend(
+        _workflow_tools(
+            Path(effective_cwd or Path.cwd()), restricted=trust_profile.restricted
+        )
+    )
 
     # Agent-written auto-memories (#13): a `remember` tool so the agent can
     # proactively persist durable facts (conventions/gotchas/fix-patterns) to

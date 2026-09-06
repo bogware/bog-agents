@@ -232,6 +232,8 @@ WEB_ALLOWED_DOMAINS = "BOG_AGENTS_WEB_ALLOWED_DOMAINS"
 """Comma-separated domains `fetch_url` / `http_request` may reach (suffix-matched); empty = any public host."""
 
 WEB_BLOCKED_DOMAINS = "BOG_AGENTS_WEB_BLOCKED_DOMAINS"
+# ROADMAP #73: register author_workflow / list_workflows even before the first workflow exists
+WORKFLOW_TOOLS = "BOG_AGENTS_WORKFLOW_TOOLS"
 """Comma-separated domains the web tools must never reach (wins over the allow-list)."""
 
 # ---------------------------------------------------------------------------
