@@ -28,13 +28,38 @@ Releases are fully automated via [release-please](https://github.com/googleapis/
 
 ## Version Bumping
 
-| Commit Type | Version Bump | Example |
-|-------------|-------------|---------|
-| `fix:` | Patch (0.0.x) | `fix(cli): resolve config loading issue` |
-| `feat:` | Minor (0.x.0) | `feat(sdk): add new middleware` |
-| `feat!:` / `BREAKING CHANGE:` | Major (x.0.0) | `feat(sdk)!: redesign API` |
+The packages are pre-1.0, and release-please is configured
+(`bump-minor-pre-major` + `bump-patch-for-minor-pre-major` in
+`release-please-config.json`) to keep pre-1.0 releases conservative. While the
+version is `< 1.0.0`:
 
-> While version < 1.0.0, breaking changes bump minor and features bump patch.
+| Commit Type | Version Bump (pre-1.0) | Example |
+|-------------|------------------------|---------|
+| `fix:` | Patch (`0.9.x`) | `fix(cli): resolve config loading issue` |
+| `feat:` | **Patch** (`0.9.x`) | `feat(sdk): add new middleware` |
+| `feat!:` / `BREAKING CHANGE:` | **Minor** (`0.x.0`) | `feat(sdk)!: redesign API` |
+
+So a batch of plain `feat` commits releases as a patch (e.g. `0.9.13 → 0.9.14`),
+and a breaking change releases as a minor (`0.9.13 → 0.10.0`). No commit type
+auto-bumps to a new *major* while pre-1.0.
+
+Once a package reaches `1.0.0`, normal SemVer applies (`feat` → minor,
+`feat!`/`BREAKING CHANGE` → major).
+
+### Forcing a specific version
+
+To cut a version release-please wouldn't pick on its own — a deliberate `0.10.0`,
+or the first `1.0.0` — add a `Release-As:` footer to a commit on `main`:
+
+```
+chore: cut 1.0.0
+
+Release-As: 1.0.0
+```
+
+The `linked-versions` plugin groups the three packages, so they release together
+at the same number. To make features bump the *minor* from now on, set
+`bump-patch-for-minor-pre-major` to `false` in `release-please-config.json`.
 
 ## Release Pipeline
 

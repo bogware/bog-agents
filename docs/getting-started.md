@@ -94,7 +94,7 @@ with their arguments — nothing's hidden.
 | `/compact` | Summarize and prune the current thread (free up context) |
 | `/quit` | Leave (or Ctrl+D) |
 
-Type `/` and a fuzzy menu shows you everything else. There are 120+
+Type `/` and a fuzzy menu shows you everything else. There are 140+
 commands but you'll learn the ones that matter through normal use —
 no need to memorize them up front.
 
