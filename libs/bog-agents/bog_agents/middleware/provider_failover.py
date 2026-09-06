@@ -119,7 +119,7 @@ def _parse_reset(value: str, *, now: float) -> float | None:
         hours, minutes, seconds = (float(g) if g else 0.0 for g in match.groups())
         return hours * 3600 + minutes * 60 + seconds
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)  # Python 3.11+ accepts a trailing Z
         return parsed.timestamp() - now
     except ValueError:
         pass
@@ -136,7 +136,7 @@ def retry_after_seconds(exc: BaseException, *, now: float | None = None) -> floa
     delays = [d for name in _RESET_HEADERS if (value := headers.get(name)) is not None and (d := _parse_reset(value, now=now)) is not None]
     if not delays:
         return None
-    return min(max(0.0, max(delays)), _MAX_PARK_SECONDS)
+    return min(max(0.0, *delays), _MAX_PARK_SECONDS)
 
 
 @dataclass
