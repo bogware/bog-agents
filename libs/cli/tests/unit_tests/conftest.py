@@ -2,6 +2,7 @@
 
 import contextlib
 from collections.abc import Iterator
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -69,3 +70,15 @@ def _clear_langsmith_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BOG_AGENTS_LANGSMITH_PROJECT",
     ):
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_bog_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point `bog_agents_home()` at a per-test directory.
+
+    Sessions, the spend ledger, team mailboxes and the vault otherwise land in
+    the developer's real `~/.bog-agents` during a test run (CI runners start
+    with an empty home, so this only makes local runs match them). A test that
+    needs a specific home still wins by setting `BOG_AGENTS_HOME` itself.
+    """
+    monkeypatch.setenv("BOG_AGENTS_HOME", str(tmp_path / "bog-home"))
