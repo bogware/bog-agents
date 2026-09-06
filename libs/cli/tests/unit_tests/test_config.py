@@ -383,8 +383,9 @@ class TestAgentsAliasDirectories:
         expected = Path.home() / ".agents"
         assert settings.generic_agents_dir == expected
 
-    def test_user_agents_dir(self) -> None:
-        """Test user_agents_dir returns ~/.bog-agents."""
+    def test_user_agents_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test user_agents_dir returns ~/.bog-agents when BOG_AGENTS_HOME is unset."""
+        monkeypatch.delenv("BOG_AGENTS_HOME", raising=False)
         settings = Settings.from_environment()
         expected = Path.home() / ".bog-agents"
         assert settings.user_agents_dir == expected

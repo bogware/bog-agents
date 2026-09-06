@@ -183,7 +183,14 @@ COMMANDS: tuple[SlashCommand, ...] = (
                 ("install", "Install a plugin (usage: /plugin install <name>)"),
                 ("remove", "Remove a plugin (usage: /plugin remove <name>)"),
                 ("sync", "Sync MCP configs between .mcp.json and Claude Desktop"),
-                ("import", "Import Claude Code-compatible skills from .claude/"),
+                (
+                    "import",
+                    "Import skills, agents, hooks, memories and MCP from claude | codex | cursor",
+                ),
+                (
+                    "trust",
+                    "Enable a workspace Agent Plugin (usage: /plugin trust <name>)",
+                ),
             ),
         ),
         handler_method="_handle_plugin_command",

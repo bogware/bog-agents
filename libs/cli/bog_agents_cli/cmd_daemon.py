@@ -195,6 +195,8 @@ def _trigger_summary(t: dict[str, Any]) -> str:
         return t.get("webhook_path", "")
     if tt == "git_push":
         return f"branch: {t.get('git_branch_pattern', '*')}"
+    if tt == "github":
+        return "GitHub events (assigned / labeled / comment / CI failure)"
     return ""
 
 
@@ -384,6 +386,67 @@ def cmd_daemon_stop() -> None:
         print(f"Daemon (PID {pid}) stopped.")  # noqa: T201
 
 
+def cmd_daemon_drain(
+    port: int = _DEFAULT_PORT, *, timeout: float = 600.0, stop: bool = False
+) -> int:
+    """Ask the daemon to stop taking runs, wait for in-flight ones, optionally stop it (ROADMAP #56).
+
+    Returns:
+        0 drained, 1 unreachable, 2 timed out (the daemon stays drained; runs finish on their own).
+    """
+    import time as _time
+
+    try:
+        first = _api_post("/drain", {}, port=port)
+    except Exception as exc:
+        print(f"Could not reach the daemon: {exc}")  # noqa: T201
+        return 1
+    running = int(first.get("running", 0) or 0)
+    print(f"Draining: {running} run(s) in flight; no new runs will start.")  # noqa: T201
+    deadline = _time.monotonic() + timeout
+    while running and _time.monotonic() < deadline:
+        _time.sleep(2.0)
+        try:
+            running = int(_api_get("/health", port=port).get("running", 0) or 0)
+        except Exception:
+            break
+    if running:
+        print(  # noqa: T201
+            f"Timed out after {timeout:.0f}s with {running} run(s) still in flight; the daemon stays drained."
+        )
+        return 2
+    print("Drained: no runs in flight.")  # noqa: T201
+    if stop:
+        cmd_daemon_stop()
+    return 0
+
+
+def cmd_daemon_upgrade(port: int = _DEFAULT_PORT, *, timeout: float = 600.0) -> int:
+    """Drain, stop, upgrade `bog-agents-daemon` with the tool that installed it, start again (ROADMAP #56)."""
+    import shutil
+    import subprocess  # noqa: S404
+    import sys as _sys
+
+    code = cmd_daemon_drain(port, timeout=timeout, stop=True)
+    if code:
+        return code
+    uv = shutil.which("uv")
+    cmd = (
+        [uv, "tool", "upgrade", "bog-agents-daemon"]
+        if uv
+        else [_sys.executable, "-m", "pip", "install", "--upgrade", "bog-agents-daemon"]
+    )
+    print("Upgrading: " + " ".join(cmd))  # noqa: T201
+    result = subprocess.run(cmd, check=False)  # noqa: S603
+    if result.returncode:
+        print(  # noqa: T201
+            "Upgrade failed; the daemon is stopped — start it again with `bog-agents daemon start`."
+        )
+        return int(result.returncode)
+    cmd_daemon_start(port=port)
+    return 0
+
+
 def cmd_daemon_status(port: int = _DEFAULT_PORT) -> None:
     """Print daemon running status and job count.
 
@@ -437,13 +500,17 @@ def cmd_daemon_rotate_token(port: int = _DEFAULT_PORT) -> None:
 
 
 def cmd_daemon_install(*, platform: str | None = None) -> None:
-    """Install the daemon as a systemd (Linux) or launchd (macOS) service.
+    """Install the daemon as a systemd (Linux), launchd (macOS) or Task Scheduler (Windows) service.
 
     Args:
-        platform: Override platform detection ('systemd' or 'launchd').
+        platform: Override platform detection ('systemd', 'launchd' or 'windows').
     """
     try:
-        from bog_agents_daemon.install import install_launchd, install_systemd
+        from bog_agents_daemon.install import (
+            install_launchd,
+            install_systemd,
+            install_windows_task,
+        )
     except ImportError:
         print(  # noqa: T201
             "bog-agents-daemon is not installed.\n"
@@ -456,16 +523,61 @@ def cmd_daemon_install(*, platform: str | None = None) -> None:
         print("bog-agents-daemon not found on PATH or in the CLI's environment.")  # noqa: T201
         sys.exit(1)
 
-    resolved_platform = platform or (
-        "launchd" if sys.platform == "darwin" else "systemd"
-    )
+    if platform:
+        resolved_platform = platform
+    elif sys.platform == "darwin":
+        resolved_platform = "launchd"
+    elif sys.platform == "win32":
+        # v6 DMN-3: used to fall through to systemd and write a useless unit file.
+        resolved_platform = "windows"
+    else:
+        resolved_platform = "systemd"
 
     if resolved_platform == "launchd":
         instructions = install_launchd(exe)
         print(instructions)  # noqa: T201
+    elif resolved_platform == "windows":
+        instructions = install_windows_task(exe)
+        print(instructions)  # noqa: T201
     else:
         instructions = install_systemd(exe)
         print(instructions)  # noqa: T201
+
+
+def cmd_daemon_usage_export(
+    port: int = _DEFAULT_PORT,
+    *,
+    days: int = 30,
+    csv_path: str | None = None,
+    otlp: str | None = None,
+) -> int:
+    """Ask the daemon to export its usage aggregates; prints the rows when nothing else was asked (ROADMAP #74)."""
+    try:
+        if csv_path or otlp:
+            result = _api_post(
+                "/usage/export",
+                {"days": days, "csv_path": csv_path, "otlp_endpoint": otlp},
+                port=port,
+            )
+            for note in result.get("notes", []):
+                print(note)  # noqa: T201
+            print(f"{result.get('rows', 0)} aggregate row(s).")  # noqa: T201
+            return 0
+        rows = _api_get(f"/usage?days={days}", port=port)
+    except Exception as exc:
+        print(f"Could not reach the daemon: {exc}")  # noqa: T201
+        return 1
+    if not rows:
+        print("No usage recorded in that window.")  # noqa: T201
+        return 0
+    print(  # noqa: T201
+        "day         scope                      model                       records   in_tok   out_tok      usd"
+    )
+    for r in rows:
+        print(  # noqa: T201
+            f"{r['day']:<11} {r['scope'][:26]:<26} {r['model'][:27]:<27} {r['records']:>7} {r['input_tokens']:>8} {r['output_tokens']:>9} {r['usd']:>8.4f}"
+        )
+    return 0
 
 
 def cmd_daemon_install_git_hook(repo: str, port: int = _DEFAULT_PORT) -> None:
@@ -524,14 +636,17 @@ def cmd_jobs_list(port: int = _DEFAULT_PORT) -> None:
         )
 
 
-def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
-    """Create a new ambient job.
+def _triggers_from_args(args: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    """Assemble the trigger dicts for `jobs create` from parsed CLI flags.
+
+    Pure so the flag → trigger mapping is unit-testable without a daemon.
 
     Args:
-        args: Parsed argparse namespace with job creation fields.
-    """
-    port: int = args.port
+        args: The parsed argparse namespace for `daemon jobs create`.
 
+    Returns:
+        Trigger dicts in the daemon API's JSON shape.
+    """
     triggers: list[dict[str, Any]] = []
     if args.cron:
         triggers.append({"type": "cron", "cron": args.cron})
@@ -556,6 +671,25 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         triggers.append({"type": "webhook", "webhook_path": webhook_path})
     if args.git_branch:
         triggers.append({"type": "git_push", "git_branch_pattern": args.git_branch})
+    if getattr(args, "github", False) or getattr(args, "github_number", 0):
+        trigger: dict[str, Any] = {"type": "github"}
+        if getattr(args, "github_number", 0):
+            trigger["github_number"] = int(
+                args.github_number
+            )  # ROADMAP #55: PR / issue scoped
+        triggers.append(trigger)
+    return triggers
+
+
+def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
+    """Create a new ambient job.
+
+    Args:
+        args: Parsed argparse namespace with job creation fields.
+    """
+    port: int = args.port
+
+    triggers = _triggers_from_args(args)
 
     output_target: str = args.output
     out: dict[str, Any] = {"target": output_target}
@@ -583,7 +717,12 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         out["smtp_password"] = getattr(args, "output_email_smtp_password", "") or ""
     elif output_target == "github_comment":
         out["github_repo"] = getattr(args, "output_github_repo", "") or ""
-        out["github_issue_or_pr"] = getattr(args, "output_github_issue", 0) or 0
+        raw_issue = str(getattr(args, "output_github_issue", "") or "").strip()
+        # Digits become an int (the historical type); anything else is a
+        # placeholder such as {pr_number} that the daemon renders at dispatch.
+        out["github_issue_or_pr"] = (
+            int(raw_issue) if raw_issue.isdigit() else (raw_issue or 0)
+        )
 
     payload: dict[str, Any] = {
         "name": args.name,
@@ -597,6 +736,21 @@ def cmd_jobs_create(args: Any) -> None:  # noqa: ANN401
         "outputs": [out],
         "enabled": not args.disabled,
     }
+    # ROADMAP #51: per-run budget (pauses at the cap) and per-job daily ceiling.
+    if getattr(args, "budget_usd", None):
+        payload["budget_usd"] = args.budget_usd
+    # ROADMAP #55: attempt cap + the interactive thread the job continues.
+    if getattr(args, "max_runs", 0):
+        payload["max_runs"] = int(args.max_runs)
+    if getattr(args, "thread", ""):
+        payload["thread_id"] = args.thread
+    if getattr(args, "daily_ceiling_usd", None):
+        payload["daily_ceiling_usd"] = args.daily_ceiling_usd
+    # ROADMAP #59: scan jobs feed the findings ledger.
+    if getattr(args, "scan_profile", ""):
+        payload["scan_profile"] = args.scan_profile
+    if getattr(args, "scan_gate", ""):
+        payload["scan_gate"] = args.scan_gate
 
     try:
         job = _api_post("/jobs", payload, port=port)
@@ -693,6 +847,8 @@ def cmd_jobs_edit(args: Any, *, port: int = _DEFAULT_PORT) -> None:  # noqa: ANN
         "skill_name": "skill_name",
         "model": "model",
         "working_dir": "working_dir",
+        "budget_usd": "budget_usd",
+        "daily_ceiling_usd": "daily_ceiling_usd",
     }
     for attr, key in field_map.items():
         value = getattr(args, attr, None)
@@ -722,6 +878,30 @@ def cmd_jobs_edit(args: Any, *, port: int = _DEFAULT_PORT) -> None:  # noqa: ANN
     name = result.get("name", args.job_id) if isinstance(result, dict) else args.job_id
     fields = ", ".join(sorted(payload))
     print(f"Updated job '{name}' ({args.job_id}) — fields: {fields}")  # noqa: T201
+
+
+def cmd_jobs_resume(run_id: str, budget_usd: float, port: int = _DEFAULT_PORT) -> None:
+    """Resume a budget-paused run with a raised cap (ROADMAP #51).
+
+    Args:
+        run_id: The paused run's id.
+        budget_usd: The new per-run cap.
+        port: Port the daemon is listening on.
+    """
+    try:
+        resumed = _api_post(
+            f"/runs/{run_id}/resume", {"budget_usd": budget_usd}, port=port
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(f"Run '{run_id}' is not paused (or the daemon restarted).")  # noqa: T201
+        else:
+            print(f"Error {exc.code}: {exc.reason}")  # noqa: T201
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        _unreachable(port)
+    rid = resumed.get("run_id", run_id)
+    print(f"Run {rid} resumed with budget ${budget_usd:.2f}; see `jobs history`.")  # noqa: T201
 
 
 def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
@@ -760,7 +940,12 @@ def cmd_jobs_run(job_id: str, port: int = _DEFAULT_PORT) -> None:
             time.sleep(2)
             continue
         for r in runs:
-            if r.get("run_id") == run_id and r.get("status") in ("completed", "failed"):
+            if r.get("run_id") == run_id and r.get("status") in (
+                "completed",
+                "failed",
+                "paused",
+                "skipped",
+            ):
                 final_run = r
                 break
         if final_run is not None:
@@ -895,11 +1080,55 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     # stop
     daemon_sub.add_parser("stop", help="Stop the running daemon")
 
+    # ROADMAP #56: drain before stop / upgrade so in-flight runs finish.
+    drain_p = daemon_sub.add_parser(
+        "drain",
+        help="Stop taking new runs, wait for in-flight ones (then optionally stop)",
+    )
+    drain_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    drain_p.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait for in-flight runs (default 600)",
+    )
+    drain_p.add_argument(
+        "--stop", action="store_true", help="Stop the daemon once drained"
+    )
+    upgrade_p = daemon_sub.add_parser(
+        "upgrade", help="Drain, stop, upgrade the daemon package, start it again"
+    )
+    upgrade_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    upgrade_p.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds to wait for in-flight runs (default 600)",
+    )
+
     # status
     status_p = daemon_sub.add_parser("status", help="Show daemon status and job count")
     status_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # rotate-token
+    # ROADMAP #74: usage export (CSV / OTLP metrics) from the daemon's spend ledger.
+    usage_p = daemon_sub.add_parser(
+        "usage-export",
+        help="Export daily spend per job / model as CSV and/or OTLP metrics",
+    )
+    usage_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+    usage_p.add_argument(
+        "--days", type=int, default=30, help="How many days back (default 30)"
+    )
+    usage_p.add_argument(
+        "--csv",
+        default=None,
+        help="Write the aggregates to this CSV path (on the daemon's machine)",
+    )
+    usage_p.add_argument(
+        "--otlp", default=None, help="OTLP/HTTP collector base URL to post metrics to"
+    )
+
     rotate_p = daemon_sub.add_parser(
         "rotate-token",
         help="Rotate the daemon API token (invalidates the current token immediately)",
@@ -940,6 +1169,37 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="DIR",
         help="Working directory for the agent",
+    )
+    create_p.add_argument(
+        "--budget-usd",
+        dest="budget_usd",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Per-run cost cap; the run pauses at the cap until `jobs resume <run_id> --budget-usd N` (#51)",
+    )
+    create_p.add_argument(
+        "--daily-ceiling-usd",
+        dest="daily_ceiling_usd",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Per-job daily spend ceiling; runs are skipped once today's spend reaches it (#51)",
+    )
+    create_p.add_argument(
+        "--scan",
+        dest="scan_profile",
+        choices=("security", "cleanup", "perf", "custom"),
+        default="",
+        help="Make this a scan job: the run's findings land in <working_dir>/.bog-agents/findings.db (#59); custom uses --prompt as the rubric",
+    )
+    create_p.add_argument(
+        "--scan-gate",
+        dest="scan_gate",
+        choices=("info", "low", "medium", "high", "critical"),
+        default="",
+        metavar="SEVERITY",
+        help="Mark a scan run failed when open findings sit at or above this severity (#59)",
     )
     create_p.add_argument(
         "--pipeline",
@@ -994,6 +1254,16 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         default="",
         metavar="PATTERN",
         help="Git branch glob for git-push trigger, e.g. main",
+    )
+    create_p.add_argument(
+        "--github",
+        dest="github",
+        action="store_true",
+        help=(
+            "Fire on GitHub events delivered to POST /webhooks/github: an issue assigned to the bot, "
+            "an opt-in label, an @-mention comment, or a CI failure (v6 DMN-2). Requires "
+            "BOG_DAEMON_GITHUB_WEBHOOK_SECRET on the daemon; see the quickstart."
+        ),
     )
     # output flags
     create_p.add_argument(
@@ -1086,13 +1356,33 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     create_p.add_argument(
         "--output-github-issue",
         dest="output_github_issue",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Issue or PR number when --output=github_comment",
+        type=str,
+        default="",
+        metavar="N|{pr_number}",
+        help="Issue or PR number when --output=github_comment, or a placeholder such as {pr_number} / {number} resolved from the trigger context at dispatch",
     )
     create_p.add_argument(
         "--disabled", action="store_true", help="Create the job in a disabled state"
+    )
+    create_p.add_argument(
+        "--max-runs",
+        dest="max_runs",
+        type=int,
+        default=0,
+        help="Disable the job after this many runs (0 = unlimited; #55 attempt cap)",
+    )
+    create_p.add_argument(
+        "--thread",
+        default="",
+        metavar="THREAD_ID",
+        help="Continue this interactive thread on each run (reopens the CLI checkpointer; #55)",
+    )
+    create_p.add_argument(
+        "--github-number",
+        dest="github_number",
+        type=int,
+        default=0,
+        help="Scope a github trigger to one PR / issue number (#55)",
     )
     create_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
@@ -1126,6 +1416,15 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
         "--working-dir", dest="working_dir", help="New working directory"
     )
     edit_p.add_argument(
+        "--budget-usd", dest="budget_usd", type=float, help="New per-run cost cap (#51)"
+    )
+    edit_p.add_argument(
+        "--daily-ceiling-usd",
+        dest="daily_ceiling_usd",
+        type=float,
+        help="New per-job daily ceiling (#51)",
+    )
+    edit_p.add_argument(
         "--enable",
         dest="enabled",
         action="store_const",
@@ -1145,6 +1444,21 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     run_p = jobs_sub.add_parser("run", help="Trigger an immediate manual run of a job")
     run_p.add_argument("job_id", help="Job ID")
     run_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
+
+    # jobs resume <run_id> --budget-usd N  (ROADMAP #51)
+    resume_p = jobs_sub.add_parser(
+        "resume", help="Resume a budget-paused run with a raised cap"
+    )
+    resume_p.add_argument("run_id", help="Run ID (status=paused)")
+    resume_p.add_argument(
+        "--budget-usd",
+        dest="budget_usd",
+        type=float,
+        required=True,
+        metavar="USD",
+        help="New per-run cap",
+    )
+    resume_p.add_argument("--port", type=int, default=_DEFAULT_PORT, help="API port")
 
     # jobs enable <id>
     enable_p = jobs_sub.add_parser("enable", help="Enable a disabled job")
@@ -1168,11 +1482,11 @@ def setup_daemon_parser(subparsers: Any) -> None:  # noqa: ANN401
     # install
     install_p = daemon_sub.add_parser(
         "install",
-        help="Install daemon as a systemd (Linux) or launchd (macOS) service",
+        help="Install daemon as a systemd (Linux), launchd (macOS) or Task Scheduler (Windows) service",
     )
     install_p.add_argument(
         "--platform",
-        choices=["systemd", "launchd"],
+        choices=["systemd", "launchd", "windows"],
         default=None,
         help="Force a specific init system (auto-detected by default)",
     )
@@ -1203,6 +1517,12 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
         cmd_daemon_start(port=args.port, log_level=args.log_level)
     elif cmd == "stop":
         cmd_daemon_stop()
+    elif cmd == "drain":
+        raise SystemExit(
+            cmd_daemon_drain(port=args.port, timeout=args.timeout, stop=args.stop)
+        )
+    elif cmd == "upgrade":
+        raise SystemExit(cmd_daemon_upgrade(port=args.port, timeout=args.timeout))
     elif cmd == "status":
         cmd_daemon_status(port=args.port)
     elif cmd == "rotate-token":
@@ -1213,6 +1533,12 @@ def execute_daemon_command(args: Any) -> None:  # noqa: ANN401
         cmd_daemon_install(platform=getattr(args, "platform", None))
     elif cmd == "install-git-hook":
         cmd_daemon_install_git_hook(repo=args.repo, port=args.port)
+    elif cmd == "usage-export":
+        raise SystemExit(
+            cmd_daemon_usage_export(
+                port=args.port, days=args.days, csv_path=args.csv, otlp=args.otlp
+            )
+        )
     else:
         print(  # noqa: T201
             "bog-agents daemon — ambient agent daemon management\n\n"
@@ -1253,6 +1579,8 @@ def _execute_jobs_command(args: Any) -> None:  # noqa: ANN401
         cmd_jobs_edit(args, port=port)
     elif jobs_cmd == "run":
         cmd_jobs_run(args.job_id, port=port)
+    elif jobs_cmd == "resume":
+        cmd_jobs_resume(args.run_id, args.budget_usd, port=port)
     elif jobs_cmd == "enable":
         cmd_jobs_enable(args.job_id, port=port)
     elif jobs_cmd == "disable":

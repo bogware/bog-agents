@@ -60,6 +60,8 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
+
 if TYPE_CHECKING:
     pass
 
@@ -387,6 +389,7 @@ def _get_project_files(root: Path) -> list[str]:
                 text=True,
                 timeout=5,
                 check=False,
+                env=hardened_git_env(),
             )
             if result.returncode == 0:
                 return [f for f in result.stdout.strip().split("\n") if f]

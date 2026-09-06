@@ -206,16 +206,16 @@ The daemon exposes a JSON API on the bind address:
 
 ```bash
 # List all jobs
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs
+curl -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs
 
 # Get a specific job (by job id)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>
+curl -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs/<job-id>
 
 # Trigger a job
-curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:7878/jobs/<job-id>/run
+curl -X POST -H "X-Daemon-Token: $TOKEN" http://localhost:7878/jobs/<job-id>/run
 
 # List recent runs
-curl -H "Authorization: Bearer $TOKEN" "http://localhost:7878/runs?limit=10"
+curl -H "X-Daemon-Token: $TOKEN" "http://localhost:7878/runs?limit=10"
 
 # Inbound webhook (no bearer token — authenticated by HMAC signature)
 curl -X POST -H "X-Hub-Signature-256: sha256=..." -d '{...}' \
@@ -306,10 +306,54 @@ curl -X POST http://daemon.internal:7878/webhooks/hooks/ci-failure-investigator 
 ```bash
 bog-agents daemon jobs create \
   --name downloads-classifier \
-  --file-change "~/Downloads/*" \
+  --watch-dir ~/Downloads --watch-pattern "*" \
   --prompt "Classify the new file at {trigger_path} into one of: invoices/, receipts/, screenshots/, misc/. Move it." \
   --working-dir ~/
 ```
+
+### Pattern: assign an issue to bog (GitHub trigger)
+
+Point a repository webhook (content type `application/json`, events
+`issues`, `issue_comment`, `check_run`, `workflow_run`) at
+`POST /webhooks/github` and give the daemon the same secret:
+
+```bash
+export BOG_DAEMON_GITHUB_WEBHOOK_SECRET="<webhook secret>"
+export BOG_DAEMON_GITHUB_BOT_LOGIN="bog-bot"          # assignments to this login fire the job
+export BOG_DAEMON_GITHUB_TRIGGER_LABEL="bog"          # optional: labeling with this also fires it
+```
+
+```bash
+bog-agents daemon jobs create \
+  --name assign-to-bog \
+  --github \
+  --prompt "You were assigned issue #{issue_number} in {repo}: {title}\n\n{body}\n\nWork on branch {branch} if set. Reproduce, fix, add a test, and summarize what changed." \
+  --working-dir /work/myrepo \
+  --output github_comment \
+  --output-github-repo bogware/bog-agents \
+  --output-github-issue "{issue_number}"
+```
+
+The parsed event reaches the prompt through the placeholders below;
+`{trigger_context_json}` carries the whole parsed event. Comments authored by
+the bot login itself are ignored so a reply can never re-trigger the job.
+
+### Prompt and output placeholders
+
+Prompts, `--output-file` paths and `--output-github-issue` may use
+`{placeholder}` references that the daemon renders from the run's trigger just
+before the agent is invoked (unknown names are left verbatim, so quoted JSON is
+safe):
+
+| Placeholder | Value |
+|---|---|
+| `{date}` / `{time}` / `{datetime}` | Local date, time, ISO timestamp of the run |
+| `{job_name}` / `{job_id}` / `{working_dir}` | The job's own fields |
+| `{trigger_type}` | `cron`, `interval`, `file_change`, `webhook`, `git_push`, `github`, `manual` |
+| `{trigger_context_json}` | The whole trigger context as JSON (webhook payload, git-push ref/sha, GitHub event) |
+| `{trigger_path}` | The path a file-change trigger fired on |
+| `{number}` / `{pr_number}` / `{issue_number}` | The issue or PR number from a GitHub event or a webhook payload's `number` / `pr_number` |
+| any top-level key of the trigger context | e.g. `{title}`, `{body}`, `{branch}`, `{actor}` for GitHub events; `{ref}`, `{new_sha}` for git-push |
 
 ## Where things live
 

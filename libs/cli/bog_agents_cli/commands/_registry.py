@@ -104,6 +104,7 @@ _FEATURED_FIRST_ORDER: tuple[str, ...] = (
     "/diff",
     "/worktree",
     "/agent",
+    "/tasks",
     "/mcp",
     "/trace",
     "/tokens",

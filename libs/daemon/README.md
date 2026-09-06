@@ -161,10 +161,9 @@ managing jobs:
 | `/jobs/{id}/runs` | GET | Run history |
 | `/jobs/{id}/run` | POST | Fire the job manually |
 | `/health` | GET | Liveness probe |
-| `/metrics` | GET | Counter snapshot |
 
-Every endpoint requires `Authorization: Bearer <daemon_token>`. The token
-is generated on first start, stored at `~/.bog-agents/daemon/.token`
+Every endpoint requires an `X-Daemon-Token: <daemon_token>` header. The token
+is generated on first start, stored at `~/.bog-agents/daemon/token`
 with `0o600` permissions, and printed once to the foreground log so you
 can copy it.
 
@@ -208,7 +207,7 @@ launchctl list com.bogware.bog-agents-daemon
 
 ### Windows
 
-There is no Windows service installer yet. Run the daemon in a shell
+On Windows, `bog-agents daemon install` registers a Task Scheduler task (`BogAgentsDaemon`) that starts the daemon at logon; remove it with `schtasks /Delete /TN BogAgentsDaemon /F`.
 (`bog-agents-daemon run`) or launch it in the background from the CLI
 (`bog-agents daemon start`). If you want it to start at logon, point a Task
 Scheduler task at the `bog-agents-daemon` executable yourself.
@@ -217,7 +216,7 @@ Scheduler task at the `bog-agents-daemon` executable yourself.
 
 ## Security model
 
-- **Token-authenticated API.** Every request needs `Authorization: Bearer`.
+- **Token-authenticated API.** Every request needs an `X-Daemon-Token` header.
   Tokens generated with `secrets.token_urlsafe`, compared with
   `hmac.compare_digest`, stored at `0o600`.
 - **HMAC-validated inbound webhooks.** A webhook trigger configured with a

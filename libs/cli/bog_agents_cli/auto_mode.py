@@ -11,12 +11,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from bog_agents.exec_risk import command_has_exec_risk
+from bog_agents.middleware.expert_engine.types import Fact
 
 from bog_agents_cli.bash_hygiene import analyze_bash_hygiene
 from bog_agents_cli.git_ops import GitOpType, classify_git_command
@@ -34,6 +37,8 @@ class AutoDecision(Enum):
 
     ALLOW = "allow"
     ASK = "ask"
+    DENY = "deny"
+    """ROADMAP #49: matched a persistent per-project never-allow entry; rejected without asking."""
 
 
 @dataclass(frozen=True)
@@ -204,6 +209,10 @@ _AMBIGUITY_PATTERNS: tuple[tuple[str, str], ...] = (
 # ---------------------------------------------------------------------------
 
 
+RiskJudge = Callable[[str], Awaitable[str]]
+"""An injected risk judge: takes the evaluator prompt, returns the model text (v6 CLI-9)."""
+
+
 @dataclass
 class HaikuEvalConfig:
     """Configuration for the Haiku risk evaluator."""
@@ -238,6 +247,13 @@ class AutoModeSettings:
     extra_risky_tools: list[str] = field(default_factory=list)
     haiku_eval: HaikuEvalConfig = field(default_factory=HaikuEvalConfig)
     preflight_clarification: bool = True
+    # ROADMAP #49: persistent per-project never-allow entries. Each entry is a
+    # bare tool name (`"web_fetch"`), or `"<tool>: <regex>"` matched against
+    # the shell command (execute/shell) or the JSON of the tool arguments.
+    never_allow: list[str] = field(default_factory=list)
+    # v6 #47: consecutive risky verdicts from the review model before auto
+    # mode pauses itself and every call asks a human (Codex's circuit breaker).
+    breaker_threshold: int = 3
 
     def merge_dict(self, d: dict[str, Any]) -> AutoModeSettings:
         """Return new settings with this dict's values overlaid.
@@ -277,10 +293,154 @@ class AutoModeSettings:
             preflight_clarification=bool(
                 d.get("preflight_clarification", self.preflight_clarification)
             ),
+            breaker_threshold=max(
+                1, int(d.get("breaker_threshold", self.breaker_threshold))
+            ),
+            never_allow=_coerce_str_list("never_allow", self.never_allow),
         )
 
 
-def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSettings:
+# ---------------------------------------------------------------------------
+# ROADMAP #49: persistent never-allow
+# ---------------------------------------------------------------------------
+
+
+def compile_never_allow(
+    entries: list[str],
+) -> list[tuple[str, str | None, re.Pattern[str] | None]]:
+    """Parse never-allow entries into `(raw, tool, pattern)`; a bare tool name has no pattern."""
+    compiled: list[tuple[str, str | None, re.Pattern[str] | None]] = []
+    for raw in entries:
+        text = str(raw).strip()
+        if not text:
+            continue
+        tool, sep, pattern = text.partition(":")
+        if not sep:
+            compiled.append((text, text.strip().lower(), None))
+            continue
+        try:
+            rx = re.compile(pattern.strip(), re.IGNORECASE)
+        except re.error:
+            logger.warning("never_allow: invalid regex in %r; entry ignored", text)
+            continue
+        compiled.append((text, tool.strip().lower() or None, rx))
+    return compiled
+
+
+def never_allow_match(
+    compiled: list[tuple[str, str | None, re.Pattern[str] | None]],
+    tool_name: str,
+    tool_args: dict[str, Any],
+) -> str | None:
+    """Return the matching never-allow entry for a tool call, or `None`."""
+    lowered = tool_name.lower()
+    shell_like = lowered in {"execute", "shell", "bash", "run_command", "powershell"}
+    haystack: str | None = None
+    for raw, tool, rx in compiled:
+        if tool not in (None, lowered) and not (
+            tool in {"execute", "shell"} and shell_like
+        ):
+            continue
+        if rx is None:
+            if tool == lowered:
+                return raw
+            continue
+        if haystack is None:
+            command = tool_args.get("command") if isinstance(tool_args, dict) else None
+            haystack = (
+                str(command)
+                if shell_like and command is not None
+                else json.dumps(tool_args, sort_keys=True, default=str)
+            )
+        if rx.search(haystack):
+            return raw
+    return None
+
+
+def never_allow_entry_for(tool_name: str, tool_args: dict[str, Any]) -> str:
+    """Build the never-allow entry that would block exactly this call again."""
+    lowered = tool_name.lower()
+    if lowered in {"execute", "shell", "bash", "run_command", "powershell"}:
+        command = str((tool_args or {}).get("command") or "").strip()
+        if command:
+            return f"execute: ^{re.escape(command)}$"
+    return lowered
+
+
+def project_never_allow(project_root: Path | str | None) -> list[str]:
+    """The effective never-allow list for a project (user + project settings.json)."""
+    return list(
+        load_auto_mode_settings(
+            Path(project_root) if project_root else None
+        ).never_allow
+    )
+
+
+def record_never_allow(project_root: Path | str, entry: str) -> Path:
+    """Append `entry` to `<project>/.bog-agents/settings.json` `auto_mode.never_allow` (atomic, idempotent)."""
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    path = Path(project_root) / ".bog-agents" / "settings.json"
+    data: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError):
+            logger.warning(
+                "never_allow: could not parse %s; rewriting the auto_mode section only",
+                path,
+            )
+    section = data.get("auto_mode")
+    if not isinstance(section, dict):
+        section = {}
+    current = (
+        [str(e) for e in section.get("never_allow", []) if isinstance(e, str)]
+        if isinstance(section.get("never_allow"), list)
+        else []
+    )
+    if entry not in current:
+        current.append(entry)
+    section["never_allow"] = current
+    data["auto_mode"] = section
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(data, indent=2))
+    return path
+
+
+def denied_indexes(
+    action_requests: list[dict[str, Any]], project_root: Path | str | None
+) -> dict[int, str]:
+    """Map action-request indexes to the never-allow entry that denies them (any approval mode)."""
+    compiled = compile_never_allow(project_never_allow(project_root))
+    if not compiled:
+        return {}
+    out: dict[int, str] = {}
+    for index, req in enumerate(action_requests):
+        args = req.get("args", {}) if isinstance(req.get("args"), dict) else {}
+        hit = never_allow_match(compiled, str(req.get("name", "")), args)
+        if hit is not None:
+            out[index] = hit
+    return out
+
+
+def approval_timeout_seconds() -> float | None:
+    """`approvals.timeout_seconds` from the manifest (`None` = wait forever)."""
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        value = resolve_option("approvals.timeout_seconds")
+    except Exception:  # a config problem never blocks approvals
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return None
+
+
+def load_auto_mode_settings(
+    project_root: Path | None = None, *, user_home: Path | None = None
+) -> AutoModeSettings:
     """Load auto-mode settings from the cascade.
 
     Cascade order (later overrides earlier):
@@ -291,6 +451,8 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
     Args:
         project_root: Project root directory. If None, only user-global
             settings are loaded.
+        user_home: Override for the home directory (tests); production callers
+            leave None to use `Path.home()`.
 
     Returns:
         Merged AutoModeSettings.
@@ -302,6 +464,7 @@ def load_auto_mode_settings(project_root: Path | None = None) -> AutoModeSetting
         initial=AutoModeSettings(),
         merge=lambda current, override: current.merge_dict(override),
         project_root=project_root,
+        user_home=user_home,
     )
 
 
@@ -359,6 +522,7 @@ class AutoModeRuleEngine:
         self._allow_re = [re.compile(p, re.IGNORECASE) for p in all_allow]
         self._safe_tools = _SAFE_TOOL_NAMES | frozenset(settings.extra_safe_tools)
         self._risky_tools = _RISKY_TOOL_NAMES | frozenset(settings.extra_risky_tools)
+        self._never_allow = compile_never_allow(settings.never_allow)
 
     def evaluate(self, tool_name: str, tool_args: dict[str, Any]) -> RuleVerdict:
         """Return a verdict for a single tool call.
@@ -370,6 +534,12 @@ class AutoModeRuleEngine:
         Returns:
             RuleVerdict with decision, reason, and rule_source.
         """
+        denied = never_allow_match(self._never_allow, tool_name, tool_args)
+        if denied is not None:
+            return RuleVerdict(
+                AutoDecision.DENY, f"never allowed: {denied}", "never_allow"
+            )
+
         if tool_name in self._safe_tools:
             return RuleVerdict(
                 AutoDecision.ALLOW, f"safe tool: {tool_name}", "safe_tools"
@@ -380,7 +550,7 @@ class AutoModeRuleEngine:
                 AutoDecision.ASK, f"risky tool: {tool_name}", "risky_tools"
             )
 
-        if tool_name in ("execute", "run_command", "shell", "bash"):
+        if tool_name in ("execute", "run_command", "shell", "bash", "powershell"):
             cmd = str(tool_args.get("command", tool_args.get("cmd", "")))
             return self._eval_shell(cmd)
 
@@ -452,14 +622,188 @@ class AutoModeRuleEngine:
 # ---------------------------------------------------------------------------
 
 
+def _risk_prompt(tool_name: str, tool_args: dict[str, Any]) -> str:
+    """Build the JSON-only risk prompt shared by every judge backend."""
+    cmd_repr = _format_tool_repr(tool_name, tool_args)
+    return (
+        "You are a security evaluator for an AI coding assistant. "
+        "Respond with a JSON object ONLY — no prose.\n\n"
+        f"Tool call: {cmd_repr}\n\n"
+        "Is this operation risky? Consider risky: deleting files, force-pushing git, "
+        "dropping databases, killing processes, overwriting production data, "
+        "destructive system changes. Consider safe: reading files, running tests, "
+        "type-checking, git status/log/diff, creating new files.\n\n"
+        '{"risky": true/false, "reason": "one sentence"}'
+    )
+
+
+def _parse_risk_verdict(text: str) -> tuple[bool, str]:
+    """Parse a judge reply into `(is_risky, reason)`; anything unparseable is risky.
+
+    Matches the outermost brace pair first (a reason may contain braces), then
+    falls back to a minimal leading object when the model appended prose.
+    """
+    text = text.strip()
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return True, "risk judge: inconclusive — treating as risky"
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        inner = re.search(r"\{[^{}]*\}", text)
+        if inner is None:
+            return True, "risk judge: malformed JSON — treating as risky"
+        try:
+            data = json.loads(inner.group(0))
+        except json.JSONDecodeError:
+            return True, "risk judge: malformed JSON — treating as risky"
+    if not isinstance(data, dict):
+        return True, "risk judge: malformed JSON — treating as risky"
+    return bool(data.get("risky", False)), str(data.get("reason", "risk judge"))
+
+
+def _message_text(response: Any) -> str:  # noqa: ANN401 — LangChain message or plain text
+    """Return the text of a chat-model reply (string or content blocks)."""
+    content = getattr(response, "content", response)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+        return "".join(parts)
+    return str(content)
+
+
+def default_judge_spec(
+    active_provider: str | None, active_model: str | None, configured: str | None = None
+) -> str | None:
+    """Pick the `provider:model` that reviews uncertain tool calls (v6 CLI-9).
+
+    - An explicit `provider:model` in `haiku_eval.model` always wins.
+    - Anthropic (or an unknown provider) returns `None`: keep the legacy
+      Anthropic-SDK Haiku path.
+    - OpenAI gets its cheap tier; every other provider (Ollama, Bedrock,
+      Google, …) reviews with the active model itself — a real reviewer beats
+      failing closed to a prompt on every unmatched command.
+
+    Args:
+        active_provider: The session's model provider.
+        active_model: The session's model name.
+        configured: `haiku_eval.model` from settings.
+
+    Returns:
+        A `provider:model` spec, or `None` for the legacy path.
+    """
+    if configured and ":" in configured:
+        return configured
+    provider = (active_provider or "").strip().lower()
+    if not provider or provider == "anthropic":
+        return None
+    if provider == "openai":
+        return "openai:gpt-5.4-mini"
+    if active_model:
+        return f"{provider}:{active_model}"
+    return None
+
+
+_JUDGE_CACHE: dict[str, RiskJudge] = {}
+
+
+def _anthropic_sdk_judge(model: str, fallback_model: str) -> RiskJudge | None:
+    """Wrap the legacy Anthropic-SDK Haiku call as a `RiskJudge` (None when the SDK is absent)."""
+    try:
+        import anthropic  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+
+    async def _judge(prompt: str) -> str:
+        client = anthropic.AsyncAnthropic()
+        models_to_try = [model] + (
+            [fallback_model] if fallback_model and fallback_model != model else []
+        )
+        last_exc: Exception | None = None
+        for attempt_model in models_to_try:
+            try:
+                msg = await client.messages.create(
+                    model=attempt_model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return str(msg.content[0].text)
+            except anthropic.NotFoundError as exc:
+                last_exc = exc
+                continue
+        raise RuntimeError(
+            f"no judge model found ({', '.join(models_to_try)})"
+        ) from last_exc
+
+    return _judge
+
+
+def resolve_risk_judge(
+    settings: AutoModeSettings | None = None,
+) -> tuple[RiskJudge | None, str]:
+    """Build (and cache) the provider-agnostic risk judge for this session.
+
+    Args:
+        settings: Auto-mode settings (for the configured judge model).
+
+    Returns:
+        `(judge, description)`. A `None` judge means the caller should use the
+        legacy Anthropic-SDK path in `haiku_risk_eval`; the description names
+        the model in use for status lines.
+    """
+    cfg = (settings or AutoModeSettings()).haiku_eval
+    try:
+        from bog_agents_cli.config import settings as cli_settings
+
+        provider = getattr(cli_settings, "model_provider", None)
+        model_name = getattr(cli_settings, "model_name", None)
+    except Exception:
+        provider = model_name = None
+    spec = default_judge_spec(provider, model_name, cfg.model)
+    if spec is None:
+        # Anthropic (or unknown) provider: wrap the SDK path as a judge so the
+        # batched review (#47) works for every provider through one interface.
+        sdk_judge = _anthropic_sdk_judge(cfg.model, cfg.fallback_model)
+        if sdk_judge is None:
+            return None, "unavailable (anthropic package not installed)"
+        return sdk_judge, f"Anthropic SDK ({cfg.model})"
+    cached = _JUDGE_CACHE.get(spec)
+    if cached is not None:
+        return cached, spec
+    try:
+        from bog_agents_cli.config import create_model
+
+        chat_model = create_model(spec).model
+    except Exception as exc:
+        logger.warning(
+            "risk judge: could not build %s (%s); unmatched commands will ask",
+            spec,
+            exc,
+        )
+        return None, f"unavailable ({spec}: {exc.__class__.__name__})"
+
+    async def _judge(prompt: str) -> str:
+        return _message_text(await chat_model.ainvoke(prompt))
+
+    _JUDGE_CACHE[spec] = _judge
+    return _judge, spec
+
+
 async def haiku_risk_eval(
     tool_name: str,
     tool_args: dict[str, Any],
     *,
     model: str = "claude-haiku-4-5-20251001",
     fallback_model: str = "claude-haiku-4-5",
+    invoke: RiskJudge | None = None,
 ) -> tuple[bool, str]:
-    """Ask Haiku whether a tool call is risky.
+    """Ask a review model whether a tool call is risky.
 
     Only called when the rule engine's verdict is ``default`` (no pattern
     matched). Returns (is_risky, reason).
@@ -473,10 +817,26 @@ async def haiku_risk_eval(
         model: Model to use for evaluation.
         fallback_model: Model to retry with if ``model`` returns a not-found
             error.
+        invoke: Provider-agnostic judge built by `resolve_risk_judge` (v6
+            CLI-9). When given, it replaces the Anthropic-SDK path entirely, so
+            OpenAI / Ollama / Bedrock-only installs get a real reviewer instead
+            of failing closed to a prompt on every unmatched command.
 
     Returns:
         Tuple of (is_risky, reason_string).
     """
+    if not isinstance(tool_args, dict):
+        tool_args = {}
+    if invoke is not None:
+        try:
+            text = await invoke(_risk_prompt(tool_name, tool_args))
+        except Exception as exc:
+            logger.warning("risk judge error (treating as risky for safety): %s", exc)
+            return (
+                True,
+                f"risk judge unavailable — treating as risky ({exc.__class__.__name__})",
+            )
+        return _parse_risk_verdict(str(text))
     try:
         import anthropic  # type: ignore[import-untyped]
     except ImportError:
@@ -488,21 +848,7 @@ async def haiku_risk_eval(
         # already fail closed by returning risky=True.
         return True, "haiku eval: anthropic package unavailable — treating as risky"
 
-    # Normalise args — callers may pass None for tool calls with no arguments.
-    if not isinstance(tool_args, dict):
-        tool_args = {}
-
-    cmd_repr = _format_tool_repr(tool_name, tool_args)
-    prompt = (
-        "You are a security evaluator for an AI coding assistant. "
-        "Respond with a JSON object ONLY — no prose.\n\n"
-        f"Tool call: {cmd_repr}\n\n"
-        "Is this operation risky? Consider risky: deleting files, force-pushing git, "
-        "dropping databases, killing processes, overwriting production data, "
-        "destructive system changes. Consider safe: reading files, running tests, "
-        "type-checking, git status/log/diff, creating new files.\n\n"
-        '{"risky": true/false, "reason": "one sentence"}'
-    )
+    prompt = _risk_prompt(tool_name, tool_args)
     models_to_try = [model]
     if fallback_model and fallback_model != model:
         models_to_try.append(fallback_model)
@@ -514,29 +860,7 @@ async def haiku_risk_eval(
                 max_tokens=80,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = msg.content[0].text.strip()
-            # ``\{.*\}`` (greedy, DOTALL) — matches the outermost pair of
-            # braces. The previous ``\{[^}]+\}`` rejected nested braces in
-            # Haiku's reason field (e.g. ``"deletes {temp} files"``), which
-            # silently flipped the verdict to "risky".
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                try:
-                    data = json.loads(m.group(0))
-                except json.JSONDecodeError:
-                    # Haiku occasionally adds trailing prose after the JSON;
-                    # try to find a *minimal* leading JSON object instead.
-                    inner = re.search(r"\{[^{}]*\}", text)
-                    if inner is None:
-                        return True, "haiku eval: malformed JSON — treating as risky"
-                    try:
-                        data = json.loads(inner.group(0))
-                    except json.JSONDecodeError:
-                        return True, "haiku eval: malformed JSON — treating as risky"
-                return bool(data.get("risky", False)), str(
-                    data.get("reason", "haiku eval")
-                )
-            return True, "haiku eval: inconclusive — treating as risky"
+            return _parse_risk_verdict(msg.content[0].text)
         except anthropic.NotFoundError:
             if attempt_model != models_to_try[-1]:
                 logger.warning(
@@ -565,7 +889,7 @@ async def haiku_risk_eval(
 
 
 def _format_tool_repr(tool_name: str, tool_args: dict[str, Any]) -> str:
-    if tool_name in ("execute", "run_command", "shell", "bash"):
+    if tool_name in ("execute", "run_command", "shell", "bash", "powershell"):
         return f"shell: {tool_args.get('command', tool_args.get('cmd', ''))}"
     if "path" in tool_args or "file_path" in tool_args:
         path = tool_args.get("path") or tool_args.get("file_path", "")
@@ -669,3 +993,296 @@ async def haiku_preflight_check(
         except Exception as exc:
             logger.debug("haiku_preflight_check error: %s", exc)
     return []
+
+
+# ---------------------------------------------------------------------------
+# Governed Auto Mode (ROADMAP #47): batched review, approval ledger, breaker
+# ---------------------------------------------------------------------------
+
+RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high", "critical")
+"""Risk ladder the batched review grades with; `high`/`critical` ask a human."""
+
+
+@dataclass(frozen=True)
+class RiskAssessment:
+    """One entry of a batched review."""
+
+    index: int
+    risk: str
+    reason: str
+
+    @property
+    def risky(self) -> bool:
+        """True when the call must fall through to a human."""
+        return self.risk in ("high", "critical")
+
+
+def _batch_risk_prompt(items: list[tuple[int, str, dict[str, Any]]], goal: str) -> str:
+    """Build the one-call review prompt for every pending tool call in a turn.
+
+    The user's stated outcome is included so the reviewer grades calls in
+    context ("delete the build dir" is expected when the goal is a clean
+    rebuild, alarming when the goal is a typo fix).
+    """
+    lines = [
+        "You are a security reviewer for an AI coding assistant. Grade EVERY pending tool call.",
+        "Respond with a JSON object ONLY — no prose:",
+        '{"assessments": [{"index": <int>, "risk": "low|medium|high|critical", "reason": "one sentence"}, ...]}',
+        "",
+        "Risk ladder: low = read-only or reversible in the working tree; medium = ordinary edits, tests, builds;",
+        "high = deletes data, force-pushes, changes system/global state, touches secrets or CI/CD;",
+        "critical = destructive or irreversible outside the working tree, or clearly unrelated to the goal.",
+        "",
+        f"User's stated goal: {goal.strip()[:600] or '(not stated)'}",
+        "",
+        "Pending tool calls:",
+    ]
+    lines.extend(
+        f"  [{index}] {_format_tool_repr(name, args)}" for index, name, args in items
+    )
+    return "\n".join(lines)
+
+
+def _parse_batch_assessments(text: str, indices: list[int]) -> list[RiskAssessment]:
+    """Parse the reviewer reply; any index it failed to grade is treated as critical."""
+    graded: dict[int, RiskAssessment] = {}
+    m = re.search(r"\{.*\}", text.strip(), re.DOTALL)
+    data: Any = None
+    if m:
+        try:
+            data = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            data = None
+    entries = data.get("assessments") if isinstance(data, dict) else None
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                idx = int(entry.get("index"))
+            except (TypeError, ValueError):
+                continue
+            risk = str(entry.get("risk", "")).strip().lower()
+            if risk not in RISK_LEVELS:
+                risk = "critical"
+            graded[idx] = RiskAssessment(
+                idx, risk, str(entry.get("reason", "")).strip() or "no reason given"
+            )
+    return [
+        graded.get(
+            i,
+            RiskAssessment(
+                i, "critical", "reviewer did not grade this call — treating as risky"
+            ),
+        )
+        for i in indices
+    ]
+
+
+async def batch_risk_eval(
+    items: list[tuple[int, str, dict[str, Any]]],
+    *,
+    goal: str,
+    invoke: RiskJudge,
+) -> list[RiskAssessment]:
+    """Grade every pending tool call with ONE review-model call (v6 #47).
+
+    Replaces the per-call Haiku round-trips: one structured verdict per turn,
+    graded against the user's stated goal. Fails closed — a judge error or an
+    unparseable reply grades every call `critical`.
+
+    Args:
+        items: `(index, tool_name, tool_args)` for each call the rule engine
+            left undecided.
+        goal: The user's latest prompt (their stated outcome).
+        invoke: The session's risk judge.
+
+    Returns:
+        One `RiskAssessment` per item, in input order.
+    """
+    indices = [index for index, _name, _args in items]
+    if not items:
+        return []
+    try:
+        text = await invoke(_batch_risk_prompt(items, goal))
+    except Exception as exc:
+        logger.warning(
+            "batched risk review failed (treating every call as risky): %s", exc
+        )
+        return [
+            RiskAssessment(
+                i, "critical", f"review model unavailable ({exc.__class__.__name__})"
+            )
+            for i in indices
+        ]
+    return _parse_batch_assessments(str(text), indices)
+
+
+@dataclass(frozen=True)
+class ApprovalDecision:
+    """One auto-mode decision, kept so `/auto why` and `/why` can explain it."""
+
+    tool: str
+    call: str
+    decision: str
+    """`auto-approved`, `ask`, or `paused` (circuit breaker open)."""
+    rule_source: str
+    """`ask_list`, `git_ops`, `exec_risk`, `bash_hygiene`, `allow_list`, `review_model`, `breaker`, …"""
+    reason: str
+    risk: str = ""
+    judge: str = ""
+
+    def render(self) -> str:
+        """One-line, human-readable form."""
+        tail = f" [{self.risk}]" if self.risk else ""
+        via = f" via {self.judge}" if self.judge else ""
+        return f"{self.decision:<13} {self.call}  ← {self.rule_source}{tail}: {self.reason}{via}"
+
+
+class ApprovalLedger:
+    """Session ring buffer of auto-mode decisions (`/auto why [n]`)."""
+
+    def __init__(self, maxlen: int = 200) -> None:
+        self._entries: deque[ApprovalDecision] = deque(maxlen=maxlen)
+
+    def record(self, decision: ApprovalDecision) -> None:
+        """Append a decision."""
+        self._entries.append(decision)
+
+    def recent(self, n: int = 5) -> list[ApprovalDecision]:
+        """Return the last `n` decisions, newest last."""
+        return list(self._entries)[-max(1, n) :]
+
+    def __len__(self) -> int:
+        """Number of decisions kept."""
+        return len(self._entries)
+
+    def clear(self) -> None:
+        """Forget everything (tests, `/clear`)."""
+        self._entries.clear()
+
+    def render(self, n: int = 5) -> str:
+        """Render the last `n` decisions for the TUI."""
+        rows = self.recent(n)
+        if not rows:
+            return "No auto-mode decisions recorded this session yet."
+        return "\n".join(
+            [
+                "[bold]Recent auto-mode decisions[/bold] (newest last)",
+                *(f"  {d.render()}" for d in rows),
+            ]
+        )
+
+
+class AutoModeBreaker:
+    """Pause auto mode after `threshold` consecutive risky verdicts (v6 #47).
+
+    A reviewer that keeps flagging calls means the plan drifted from the goal;
+    rather than nagging with dialog after dialog, auto mode hands the session
+    back to the human until `/auto on` re-arms it.
+    """
+
+    def __init__(self, threshold: int = 3) -> None:
+        self.threshold = max(1, threshold)
+        self.consecutive_risky = 0
+        self.tripped = False
+        self.notified = False
+
+    def record(self, risky: bool) -> bool:
+        """Count a verdict; return True the moment the breaker trips."""
+        if self.tripped:
+            return False
+        if not risky:
+            self.consecutive_risky = 0
+            return False
+        self.consecutive_risky += 1
+        if self.consecutive_risky >= self.threshold:
+            self.tripped = True
+            return True
+        return False
+
+    def reset(self) -> None:
+        """Re-arm (called by `/auto on`)."""
+        self.consecutive_risky = 0
+        self.tripped = False
+        self.notified = False
+
+    def status(self) -> str:
+        """Human-readable state for `/auto status`."""
+        if self.tripped:
+            return f"paused — {self.threshold} consecutive risky verdicts; /auto on re-arms"
+        return f"armed ({self.consecutive_risky}/{self.threshold} consecutive risky verdicts)"
+
+
+_APPROVAL_LEDGER = ApprovalLedger()
+_BREAKER = AutoModeBreaker()
+
+
+def get_approval_ledger() -> ApprovalLedger:
+    """Return the session-wide approval ledger."""
+    return _APPROVAL_LEDGER
+
+
+def get_auto_mode_breaker(threshold: int | None = None) -> AutoModeBreaker:
+    """Return the session-wide circuit breaker, updating its threshold when given."""
+    if threshold is not None:
+        _BREAKER.threshold = max(1, threshold)
+    return _BREAKER
+
+
+def record_approval_decisions(
+    decisions: list[ApprovalDecision], working_dir: Path | str | None = None
+) -> None:
+    """Persist decisions to the ledger and assert them as Expert Mode facts.
+
+    The fact (`approval_decision{tool, decision, rule_source, risk, reason}`)
+    lands in the client-side expert engine's working memory, so `/why
+    approval_decision tool=execute` and YAML rules that react to approvals
+    both work. Fact assertion is best-effort: a missing or failing engine
+    never blocks a turn.
+    """
+    for decision in decisions:
+        _APPROVAL_LEDGER.record(decision)
+    try:  # ROADMAP #74: the hash-chained action log gets the same decisions
+        from bog_agents_cli.action_log_controller import record_approval_events
+
+        record_approval_events(decisions)
+    except Exception:
+        logger.debug("approval decisions not mirrored to the action log", exc_info=True)
+    if working_dir is None:
+        return
+    try:
+        from bog_agents_cli.expert_controller import get_controller
+
+        engine = get_controller(working_dir).middleware.engine
+        for decision in decisions:
+            engine.assert_fact(
+                Fact(
+                    fact_type="approval_decision",
+                    data={
+                        "tool": decision.tool,
+                        "call": decision.call,
+                        "decision": decision.decision,
+                        "rule_source": decision.rule_source,
+                        "risk": decision.risk,
+                        "reason": decision.reason,
+                    },
+                )
+            )
+    except Exception as exc:  # the ledger is the source of truth; facts are a bonus
+        logger.debug("approval_decision fact not asserted: %s", exc)
+
+
+def render_auto_mode_status(
+    auto_on: bool, project_root: Path | str | None = None
+) -> str:
+    """Render `/auto status`: on/off, the review model in use, breaker state, ledger size."""
+    _judge, judge_desc = resolve_risk_judge(
+        load_auto_mode_settings(Path(project_root) if project_root else None)
+    )
+    return (
+        f"auto mode is currently {'ON' if auto_on else 'OFF'}\n"
+        f"  review model: {judge_desc}\n"
+        f"  circuit breaker: {get_auto_mode_breaker().status()}\n"
+        f"  decisions this session: {len(get_approval_ledger())} (/auto why [n])"
+    )

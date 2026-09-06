@@ -299,8 +299,58 @@ async def run_jury(
     )
 
 
+@dataclass(frozen=True)
+class DiffGather:
+    """Outcome of `gather_diff`: the diff, or a message for the user (an error or a hint)."""
+
+    diff: str | None
+    message: str = ""
+    error: bool = False
+
+
+def gather_diff(arg: str, cwd: Path) -> DiffGather:
+    """Run the `git diff` behind `/jury <arg>` (argv form, no shell, 15 s cap)."""
+    import subprocess  # noqa: S404  # bounded git invocation
+
+    from bog_agents.git_env import NO_EXTERNAL_DIFF
+
+    arg = arg.strip()
+    if arg in ("--paste", "paste"):
+        return DiffGather(
+            None,
+            "Paste support is not yet wired up — pipe a diff to /jury via "
+            "[bold]git diff | bog-agents -m '/jury <ref>'[/bold] or commit and use "
+            "[bold]/jury <ref>[/bold].",
+        )
+    if arg in ("", "head", "working"):
+        cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "HEAD"]
+    elif arg == "staged":
+        cmd = ["git", "diff", *NO_EXTERNAL_DIFF, "--cached"]
+    elif arg.startswith("-") or any(c in arg for c in " ;|&`$"):
+        # Reject anything that smells like a flag or contains shell metachars.
+        return DiffGather(
+            None, f"Refusing suspicious /jury argument: {arg!r}", error=True
+        )
+    else:
+        cmd = ["git", "diff", *NO_EXTERNAL_DIFF, f"{arg}..HEAD"]
+    try:
+        result = subprocess.run(  # noqa: S603  # argv form, no shell
+            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=15, check=False
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return DiffGather(None, f"git diff failed: {exc}", error=True)
+    if result.returncode != 0:
+        return DiffGather(
+            None,
+            f"git diff returned {result.returncode}: {result.stderr.strip()}",
+            error=True,
+        )
+    return DiffGather(str(result.stdout))
+
+
 __all__ = [
     "JURY_SYSTEM_PROMPT",
+    "DiffGather",
     "JurorVerdict",
     "JuryReport",
     "load_jury_model_specs",

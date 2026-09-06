@@ -1,0 +1,518 @@
+{
+ "bucket": "Claude Code, Codex CLI, Gemini CLI (→ Antigravity CLI)",
+ "competitors": [
+  {
+   "name": "Anthropic Claude Code (CLI + Desktop + web/cloud + Remote Control + Agent SDK)",
+   "snapshot": "Ships 3-6 CLI releases a week (v2.1.158 on Jun 1 → v2.1.261 on Sep 4, 2026). Headline capabilities today: auto mode (LLM classifier replaces permission prompts, default since Aug 14 on Pro/Max/Team, classifier calls free on those plans) with prose allow/soft_deny/hard_deny/environment rules and a `claude auto-mode {defaults,config,critique,reset}` CLI; experimental agent teams (shared task list + mailbox), fork-mode subagents that inherit the full conversation and prompt cache, background subagents by default, 20 concurrent, 5 levels deep; cross-session SendMessage/ListAgents (macOS/Linux Aug 3-7, native Windows Aug 17-21); dynamic workflows (model-written orchestration scripts); artifacts (live shareable pages, MCP-connector aware); Desktop in-app browser + iOS Simulator pane; /design artboards; /doctor that fixes; self-hosted runners for cloud sessions; Remote Control GA with device cards; PreModelSwitch/PostModelSwitch hooks; `--restricted`, `--permission-prompts none`, Containment Escape classifier rule; OS sandbox (Seatbelt/bubblewrap/WSL2 only, credential masking via the sandbox proxy) — still no native Windows sandbox. Default models: Sonnet 5 (Pro), Opus 5 (Max, Jul 20-24), Fable 5.1 (Sep 1, 1M ctx, $10/$50).",
+   "notable_features": [
+    {
+     "feature": "Auto mode becomes default permission mode (Pro/Max/Team)",
+     "description": "Classifier reviews each action instead of the user; Anthropic's 1,053-tester study: humans blocked 13.6% of injected dangerous commands vs 89% for the classifier; 97% of prompts were being rubber-stamped. Classifier calls no longer count toward usage limits on those plans; existing user defaults only change via a one-time prompt; managed org defaults untouched. Opt-in still on Enterprise/API/Bedrock/Vertex/Foundry.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w32",
+     "date": "2026-08-14"
+    },
+    {
+     "feature": "Prose classifier rules + auto-mode CLI + Auto tab in /permissions",
+     "description": "`autoMode.environment` trust/context/sensitivity slots (Trusted repo, Source control, buckets, internal registry, Host containment...), `allow`/`soft_deny`/`hard_deny` arrays with `$defaults` splice; four-tier precedence (hard_deny > soft_deny > allow > explicit user intent); `claude auto-mode defaults|config|critique|reset`; `/auto-mode-setup` drafts entries from shell history and sessions (v2.1.228); `/permissions` Auto mode tab (v2.1.246) and Recently-denied tab with `r` to retry; `autoMode.classifyAllShell`; classifier ignores project-level settings to stop repo-injected allow rules.",
+     "source_url": "https://code.claude.com/docs/en/auto-mode-config",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "Containment Escape rule + reads-outside-workdir gate + `--restricted` + `--permission-prompts none`",
+     "description": "v2.1.257 (Sep 1): auto mode no longer auto-approves cloud-metadata credential fetches (169.254.169.254), egress evasion or cross-tenant reach unless a Host containment entry declares them; one-time prompt on first read outside working dirs with `permissions.blockReadsOutsideWorkingDirectories`. v2.1.248 (Aug 27): `--restricted` strips Bash/code-exec, confines file tools to the working dir, refuses bypassPermissions and ignores user/project settings. v2.1.259 (Sep 2): `--permission-prompts none` for unattended hosts.",
+     "source_url": "https://code.claude.com/docs/en/changelog",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Cross-session messaging (SendMessage/ListAgents) + `@session` mentions",
+     "description": "Sessions on one machine discover each other and pass text messages (never history/files); `/list-agents`; `@name` in the prompt targets a live session; `notify_when_idle`; unique auto-suffixed session names; incoming messages are labelled as from another Claude, cannot carry approvals, and are classifier-reviewed in auto mode. Native Windows support added week 34.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w33",
+     "date": "2026-08-14"
+    },
+    {
+     "feature": "Self-hosted environments (`claude self-hosted-runner`)",
+     "description": "Public beta on Team/Enterprise: your hosts poll api.anthropic.com (outbound-only), claim queued cloud sessions started from claude.ai/mobile/desktop/`claude --cloud`/routines, clone the repo and spawn a Claude Code child; runner locks to one owner, `--capacity`, `--drain-grace-sec`, `--retire-at`, `--defer-shutdown-max-min`, `--proxy-authorization-command`; autoscaling orchestrator; inference cannot route through Bedrock/Vertex/gateways; no ZDR.",
+     "source_url": "https://code.claude.com/docs/en/self-hosted-environments",
+     "date": "2026-08-07"
+    },
+    {
+     "feature": "Fork mode on by default + `/fork` + background subagents + nesting",
+     "description": "`fork` subagent type inherits the full conversation and prompt cache (v2.1.232); `/fork` copies a conversation into a background session that now works in its own worktree; subagents run in the background by default (w27), can spawn sub-subagents 5 deep (w24), 20 concurrent by default, 200-per-session cap removed; `--max-budget-usd` now stops subagents when the cap is hit.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w33",
+     "date": "2026-08-14"
+    },
+    {
+     "feature": "Agent teams (experimental) with shared task list, mailbox, TeammateIdle/TaskCreated/TaskCompleted hooks",
+     "description": "`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` gives every session an implicit team (v2.1.178, Jun 15-19); teammates self-claim dependency-aware tasks with file locking; plan-mode teammates; permission prompts bubble to the lead; limitations: no resume of in-process teammates, one team per session, no nested teams, split panes need tmux/iTerm2 (not Windows Terminal).",
+     "source_url": "https://code.claude.com/docs/en/agent-teams",
+     "date": "2026-06-19"
+    },
+    {
+     "feature": "Dynamic workflows (research preview) and `/workflows` outcome view",
+     "description": "Claude writes an orchestration script that fans work out to dozens-hundreds of subagents, validates and iterates; Max/Team/Enterprise + API/Bedrock/Vertex/Foundry; Anthropic warns of much higher token use. Sep 2: `/workflows` agent detail shows pretty-printed JSON outcomes; Jul 6-10: dynamic workflow size setting + OTel workflow attributes.",
+     "source_url": "https://www.infoq.com/news/2026/06/dynamic-workflows-claude-code/",
+     "date": "2026-06-01"
+    },
+    {
+     "feature": "Cost & usage attribution: Loops breakdown, spend-limit bar, prompt-cache diagnostics, contracted rates",
+     "description": "v2.1.243 (Aug 25): `/usage` Loops breakdown (per-loop runs, tokens, tokens/run, last run), `modelPricing` managed setting so org-contracted rates replace list prices, `promptCacheTtl`/`subagentPromptCacheTtl`; v2.1.251 (Aug 28): spend-limit bar in `/usage`, per-session prompt-cache line (hit ratio, misses, re-cached tokens, warm/cold); v2.1.260 (Sep 3): likely causes of cache misses in `/cost`; v2.1.239: 1.1x data-residency premium in estimates.",
+     "source_url": "https://code.claude.com/docs/en/changelog",
+     "date": "2026-08-28"
+    },
+    {
+     "feature": "PreModelSwitch / PostModelSwitch hooks; per-model effort memory; subagent model force",
+     "description": "v2.1.251: hooks can block, confirm or annotate a model switch; `/effort` saves a default per model and `s` applies for session only (v2.1.257); `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` overrides every subagent; `modelPicker` curates the picker; SessionStart resume hooks receive staleness + re-cache cost estimates.",
+     "source_url": "https://code.claude.com/docs/en/changelog",
+     "date": "2026-08-28"
+    },
+    {
+     "feature": "Sandbox credential masking via the sandbox proxy (`mode: \"mask\"`)",
+     "description": "Sandboxed commands see a per-session sentinel; the egress proxy substitutes the real secret only on requests to `injectHosts`/allowed domains; `extract`, JWT-aware `decode`, AWS SigV4 re-signing (v2.1.224); honored only from user/managed settings; `sandbox.filesystem.disabled` keeps network isolation alone (v2.1.216). Sandbox itself remains macOS/Linux/WSL2 only — 'Native Windows is not supported'.",
+     "source_url": "https://code.claude.com/docs/en/sandboxing",
+     "date": "2026-08-07"
+    },
+    {
+     "feature": "Artifacts (live pages), public share links, MCP-connector-aware, `/design` artboards",
+     "description": "Artifacts beta Jun 15-19 (Team/Enterprise): session publishes a live page that updates in place; Jul 13-17: public sharing links, editor roles, artifacts call each viewer's MCP connectors; Aug 17: `/design` research preview drafts editable UI artboards from a brief/screenshot (Pro+; v2.1.234).",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w34",
+     "date": "2026-08-17"
+    },
+    {
+     "feature": "Desktop in-app sandboxed browser, iOS Simulator pane, `/doctor` that fixes, `/skill-doctor`",
+     "description": "Jul 6-10: Desktop browser with classifier-reviewed actions on external sites; `/doctor` (v2.1.205) diagnoses and repairs: unused skills/MCP/plugins vs context cost, CLAUDE.md dedupe/trim, slow hooks. Jul 20-24: iOS Simulator pane streams the device screen while Claude taps through the app. Sep 4 (v2.1.261): `/skill-doctor` lists unused skills and their context cost.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w28",
+     "date": "2026-07-10"
+    },
+    {
+     "feature": "Claude Security plugin + background `/code-review`",
+     "description": "Multi-agent scan (architecture map → threat model → hunt → independent review) writing to `CLAUDE-SECURITY-<ts>/`, whole repo/branch diff/PR/commit scope, findings become patches you apply; `/code-review` runs as a background subagent at every effort level; `/verify`, `/code-review`, `/deep-research` no longer auto-launch.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w30",
+     "date": "2026-07-24"
+    },
+    {
+     "feature": "Managed enterprise controls: managedMcpServers, managed-settings diagnostics, plugin marketplace hardening, worktree isolation for Bash",
+     "description": "Sep 2: `managedMcpServers` pushes HTTP/SSE MCP servers to all users; Aug 27: server-managed settings diagnostics in `/doctor`/`/status`; Aug 20: marketplace `headersHelper` mints short-lived headers; Aug 3-7: zip archives with SHA-256 pin, worktree isolation now blocks Bash/git reaching the main checkout, Bash can no longer hide parts of itself from permission checks, repo settings cannot enable Remote Control auto-connect; Jun 15-19: `Tool(param:value)` deny/ask rules e.g. `Agent(model:opus)`.",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w32",
+     "date": "2026-08-07"
+    },
+    {
+     "feature": "Auto-continue after usage limit; Remote Control GA with device cards; Concise output style",
+     "description": "Aug 10-14: Desktop retries the interrupted turn when the session limit resets; Aug 17-21: CLI continues automatically at limit reset (toggle in /config), any `claude remote-control` machine appears as a device card in the mobile Code tab, effort changes from phone apply locally; `outputStyle: \"Concise\"` (v2.1.237).",
+     "source_url": "https://code.claude.com/docs/en/whats-new/2026-w34",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "Model churn: Sonnet 5 → Opus 5 → Fable 5.1 defaults",
+     "description": "Jun 29-Jul 3: Sonnet 5 default for Pro/Team Standard (1M ctx, adaptive thinking); Jul 20-24: Opus 5 default on Max/Enterprise ($5/$25 per report; fast mode $10/$50); Sep 1 (v2.1.257): Fable 5.1 default Fable model, 1M context, $10/$50 per Mtok; task-tracking tools (TaskCreate/TodoWrite) removed on Opus 4.8+/Sonnet 5+/Fable 5 unless `CLAUDE_CODE_ENABLE_TODO_TOOLS=1`.",
+     "source_url": "https://code.claude.com/docs/en/changelog",
+     "date": "2026-09-01"
+    }
+   ],
+   "business_shifts": "Auto mode default (Aug 14) and free classifier compute on Pro/Max/Team; weekly limits ran +50% May 13-Aug 31 and 5-hour limits doubled May 6 (per press); Sonnet 5 introductory $2/$10 made permanent; Opus 5 at half of Fable 5; Fable 5.1 $10/$50 with 1M context. The planned Jun 15 split of Agent SDK / `claude -p` usage into a separate $20/$100/$200 credit was announced May 13 and then cancelled on Jun 15. Apr 4: third-party tools blocked from using Claude subscription OAuth tokens (server-enforced). Self-hosted runners (Team/Enterprise public beta) and Remote Control GA extend the 'your compute, our control plane' model; Ultraplan was removed (Aug 3-7). Agent SDK bundles the Claude CLI (0.2.150-152 track CLI 2.1.257-259). Claude Code remains closed source.",
+   "user_sentiment": "Praise: auto mode ends confirmation fatigue (HN commenters report months of unattended sysadmin use with no incidents; Simon Willison calls it a real improvement over reflexive human approval but wants independent verification of the prompt-injection claims); weekly what's-new cadence; /doctor, fork mode and cross-session messaging seen as 'agent controls are the feature'. Complaints: recurring 'silent degradation' threads (GitHub issue #19468; Anthropic status incidents on Sonnet 4 output quality Aug 5-Sep 4 and Aug 26-Sep 5), Opus limits exhausted quickly under weekly caps (The Register, Jan), no native Windows sandbox (issue #46740 closed 'not planned'; docs say run WSL2), no model-version pinning, vendor lock-in after the OAuth-token block, agent teams still experimental with no resume and no Windows Terminal split panes, Dynamic Workflows token cost warnings."
+  },
+  {
+   "name": "OpenAI Codex (Codex CLI rust-v0.140→0.153.3, Codex in ChatGPT desktop app, Codex cloud, IDE extension, iOS)",
+   "snapshot": "Open-source (Apache 2.0) Rust CLI with 20+ releases in the window (v0.140.0 Jun 15 → v0.153.3 Sep 4). Today: two-layer security model (OS sandbox: Seatbelt / bwrap+seccomp / native Windows restricted-token sandbox in elevated & unelevated modes; approval policies untrusted/on-request/never/granular) plus named shareable permission profiles and `trust_level` governed-repo mode; Guardian auto-review (a reviewer Codex agent grades boundary-crossing requests low/medium/high/critical, policy.md replaceable per tenant via requirements.toml, circuit breaker, `/approve` override); hooks with trust-by-hash, managed hooks (MDM/cloud/requirements.toml), MCP-tool hooks, Interrupt/SessionEnd/PermissionRequest events; extensions that inspect/replace MCP tool results; Agent Plugins 1.0 (`plugin.json` manifests, marketplaces incl. for Bedrock and Claude Code, remote marketplace CLI); multi-agent v2 stable (path-addressed subagents, configurable models/effort/concurrency); `codex agents` dashboard + `codex queue` inter-session messaging; named/pinned/forked sessions, Markdown export, remote compaction; Codex Security CLI/SDK open-sourced (client only). Codex merged into the ChatGPT desktop app on macOS+Windows Jul 9. Models: GPT-5.6 Sol/Terra/Luna (Sol default in cloud since late July; 272K ctx), GPT-6 Astra (Sep 3, needs CLI ≥0.153.0).",
+   "notable_features": [
+    {
+     "feature": "`codex agents` dashboard + `codex queue` inter-session messaging + `/cd` `/pwd` `/cwd`",
+     "description": "v0.149.0 (Aug 20): full-screen dashboard to search/start/open/rename/stop root sessions grouped by project/status with subagent status and configurable shortcuts; `codex queue --session <name|uuid> \"msg\"` (also from file or to remote WebSocket sessions) wakes an idle session or queues until the turn ends — fire-and-forget, no ack channel; resumed/forked threads restore their permission profile; Guardian V2 stricter on dynamic shell; Windows sandbox hardened against reparse points; `codex doctor` checks endpoint protection/proxy/desktop.",
+     "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.149.0",
+     "date": "2026-08-20"
+    },
+    {
+     "feature": "Extensions can inspect or replace MCP tool results before the model",
+     "description": "v0.151.0 (Aug 29): extension layer intercepts MCP tool results pre-model (DLP scrubbing, enrichment, replacement); configurable grace period for optional MCP servers' tool discovery; plugin catalogs merge per-repo config while reporting invalid marketplaces separately; nested-subagent token accounting fixed.",
+     "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.151.0",
+     "date": "2026-08-29"
+    },
+    {
+     "feature": "Guardian auto-review (reviewer agent for approvals)",
+     "description": "Only fires with `approval_policy = on-request`/granular; eligible: sandbox escalations, blocked network, edits outside roots, MCP/app tools marked for approval, computer-use domains; reviewer sees compact transcript + exact request and returns risk + rationale; critical always denied, high needs explicit user authorization; policy in open-source `policy.md`, replaced (not merged) via `[auto_review] policy` or managed `guardian_policy_config`; circuit breaker after 3 consecutive / 10 rolling denials per turn; `/approve` one-shot override; review history survives compaction/restarts/forks (v0.152.x).",
+     "source_url": "https://learn.chatgpt.com/docs/sandboxing/auto-review",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Hooks: trust-by-hash, managed hooks, MCP-tool handlers, Interrupt/SessionEnd events",
+     "description": "Events SessionStart/End, UserPromptSubmit, PreToolUse (block/rewrite input/add context), PermissionRequest (allow/deny), PostToolUse, PreCompact/PostCompact, SubagentStart/Stop, Stop, Interrupt (v0.150.0, Aug 26). Non-managed hooks must be reviewed and trusted against their hash via `/hooks`; managed hooks from system/MDM/cloud/`requirements.toml` cannot be disabled; `allow_managed_hooks_only`; async hooks (8 concurrent) with spill-to-disk; hooks can call tools on already-connected MCP servers with `${field}` templating.",
+     "source_url": "https://learn.chatgpt.com/docs/hooks",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "Agent Plugins 1.0 + marketplaces (incl. Amazon Bedrock and Claude Code) + named/pinned/forked sessions",
+     "description": "v0.146.0 (Jul 29): `plugin.json` manifests with portable skills/MCP config, workspace plugin publishing, additional marketplaces; named sessions (`/new`, `/clear`), pinned threads, ephemeral forks; remote Code Mode over WebSocket; executor-provided skills. v0.147.0 (Aug 7) multi-source plugin install; v0.153.0 (Sep 3) plugin CLI list/install/remove from remote marketplaces.",
+     "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.146.0",
+     "date": "2026-07-29"
+    },
+    {
+     "feature": "Multi-agent v2 stable + audio input + `/import` from Cursor and Claude Code",
+     "description": "v0.145.0 (Jul 21): configurable sub-agent models, reasoning levels, concurrency, roles, agent navigation; audio inputs/tool outputs; native exec-server sandboxing and network-proxy enforcement on Windows; SessionEnd hooks; `/import` migrates MCP servers, plugins, sessions, commands and project memories from Cursor/Claude Code; Bedrock managed login with GPT-5.6 Sol default.",
+     "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.145.0",
+     "date": "2026-07-21"
+    },
+    {
+     "feature": "Native Windows sandbox (elevated / unelevated)",
+     "description": "Elevated mode provisions `CodexSandboxOffline` (WFP firewall-blocked) and `CodexSandboxOnline` local users; commands run under WRITE_RESTRICTED tokens with synthetic SIDs so only ACL-granted roots (workspace, `writable_roots`) are writable; unelevated mode derives a restricted token from the current user with no firewall segmentation and an `Everyone`-SID gap; AppContainer was rejected because default-deny reads broke toolchains; PowerShell AST classifier forces approval for uninspectable/encoded regions; self-update fails inside the sandbox.",
+     "source_url": "https://codex.danielvaughan.com/2026/07/18/codex-cli-windows-sandbox-architecture-powershell-ast-safety-elevated-unelevated-appcontainer-restricted-tokens/",
+     "date": "2026-07-18"
+    },
+    {
+     "feature": "Permission profiles, trust_level governed-repo mode, requirements.toml, network proxy allowlist",
+     "description": "Named shareable profiles bundle sandbox mode, writable roots and network rules (`allowed_permission_profiles` in managed config); `trust_level = \"untrusted\"` ignores a repo's `.codex/config.toml`, hooks and rules; approval policies untrusted/on-request/never/granular; network off by default, proxy domain allowlist with DNS-rebinding and private-IP blocking; OpenTelemetry export for audit.",
+     "source_url": "https://learn.chatgpt.com/docs/agent-approvals-security",
+     "date": "2026-09-04"
+    },
+    {
+     "feature": "Codex Security CLI/SDK open-sourced (Apache 2.0, client only)",
+     "description": "`@openai/codex-security`: repo threat model, attack-path exploration, sandbox-validated findings, dedup and false-positive tracking, `--max-cost`, `--fail-on-severity` CI gating, SARIF/JSON/CSV for GitHub Code Scanning/Azure DevOps; backend gated to Enterprise/Business/Edu. HN front page 392 points/122 comments: harness engineering praised, cost/rate-limit failures ($13 for a one-minute scan; half a weekly budget) criticized.",
+     "source_url": "https://www.developersdigest.tech/blog/codex-security-open-source-cli-sdk-hn-analysis",
+     "date": "2026-07-29"
+    },
+    {
+     "feature": "Codex inside the unified ChatGPT desktop app (macOS + Windows)",
+     "description": "Jul 9: standalone Codex app merged into ChatGPT desktop (Chat / Work / Codex modes), Atlas browser discontinued; GitHub PR review with reviewer feedback beside the diff in the sidebar, inline annotations, Markdown/code editing; existing projects/settings migrate; Codex Micro hardware control surface (Jul 15).",
+     "source_url": "https://www.neowin.net/news/openai-launches-chatgpt-work-and-unveils-unified-desktop-app-with-codex-built-in/",
+     "date": "2026-07-09"
+    },
+    {
+     "feature": "Session export to Markdown, forks, task @mentions, auto titles, `/copy` picker, per-tool MCP output limits",
+     "description": "v0.148.0 (Aug 18) export conversations to Markdown + fork sessions; v0.150.0 (Aug 26) `@`-mention other Codex tasks, auto-generated task titles, permission-mode cycling keybinds, Vim `.` repeat; v0.152.0 (Sep 1) per-MCP-tool output token limits, MCP names with `:@/.`, shell timeouts >1h for app-server clients; v0.153.0 `tui.auto_recap`, Vim undo/redo.",
+     "source_url": "https://learn.chatgpt.com/docs/changelog",
+     "date": "2026-09-03"
+    },
+    {
+     "feature": "Usage transparency: `/usage` daily/weekly/cumulative, reset credits, earlier rate-limit warnings",
+     "description": "v0.140.0 (Jun 15) `/usage` views; v0.142.0 (Jun 22) show and redeem earned usage-limit reset credits; v0.144.0 (Jul 9) clearer credit details; v0.152.0 (Sep 1) rate-limit banners with plan actions; v0.153.0 earlier 5-hour-window warnings for Plus/Team; remote compaction counts retained images (v0.150.1).",
+     "source_url": "https://www.havoptic.com/tools/openai-codex",
+     "date": "2026-06-15"
+    },
+    {
+     "feature": "Remote executors over authenticated E2E-encrypted Noise relay; Windows system proxy PAC/WPAD",
+     "description": "v0.141.0 (Jun 18) Noise-relay channels for remote executors; v0.142.1 (Jun 25) Windows PAC/WPAD proxy support; v0.143.0 (Jul 8) automatic system proxy routing; v0.142.2 MCP tools use search-by-default when supported (deferred tool discovery).",
+     "source_url": "https://www.havoptic.com/tools/openai-codex",
+     "date": "2026-06-18"
+    },
+    {
+     "feature": "GPT-5.6 Sol/Terra/Luna tiers; Aug 21 Sol price cut; GPT-6 Astra (Sep 3)",
+     "description": "Sol $4/$20 (cut from $5/$30, promised through at least Nov 21), Terra $2/$12, Luna $0.20/$1.20 per Mtok; GPT-5.6 context 272K in CLI (v0.144.6); GPT-6 Astra $10/$50, 'Critical' cyber threshold, 1.9x faster computer use via updated Codex harness, requires CLI ≥0.153.0, Bedrock support in 0.153.3.",
+     "source_url": "https://9to5mac.com/2026/09/04/openai-releasing-major-upgrade-to-chatgpt-and-codex-with-gpt-6-astra-details-here/",
+     "date": "2026-09-03"
+    }
+   ],
+   "business_shifts": "Codex CLI stays Apache-2.0 open source and free; the plan behind it costs: Free $0 (no credit purchase), Go $8, Plus $20, Pro $100/$200, Business/Enterprise; limits reset every 5 hours with weekly caps, Fast mode at 2-2.5x credit burn; Codex cloud included from Plus up and auto-selects GPT-5.6 Sol since late July. Codex Security open-sourced but scans require an Enterprise/Business/Edu backend. Codex desktop folded into the ChatGPT app (Atlas killed) — distribution via ChatGPT, not a dev-only product. GPT-6 Astra adds a $10/$50 tier above the Aug 21 Sol price cut. Plugin marketplaces target Bedrock and Claude Code, signalling cross-vendor plugin portability as strategy.",
+   "user_sentiment": "Praise: r/codex calls GPT-5.6 Sol 'glacial at max reasoning but frequently brilliant' (one-shot builds that failed on 5.5); HN praised Codex Security's harness (dedup, FP tracking, budget caps) more than the scanner; `codex queue` welcomed as an orchestration primitive; Windows sandbox engineering write-ups well received. Complaints: Plus users burning the 5-hour window far faster after GPT-5.6 (OpenAI community, Aug 2); 'access scavenger hunt' across Codex app / Windows Store ChatGPT / Codex Beta builds; Codex Security cost blow-ups and refusals to explain findings; Guardian auto-approving destructive cleanup during 'finalization' (issue #18840) and 'guardian review completed without an assessment payload' failures (#15341); plugin-local hooks documented but not executed (#16430); `queue` has no acknowledgement/response channel."
+  },
+  {
+   "name": "Google Gemini CLI → Antigravity CLI (`agy`)",
+   "snapshot": "Google ended Gemini CLI service for free, AI Pro, AI Ultra and Code Assist-for-individuals accounts on Jun 18, 2026 (announced May 19), pointing them at Antigravity CLI: a closed-source Go binary (`agy`) with multi-agent orchestration, OS sandbox (nsjail / sandbox-exec, AppContainer claimed for Windows), plugin bundles (plugin.json + skills/agents/rules/hooks/MCP), `/agents` approval panel, four approval levels (always-proceed / request-review / strict / proceed-in-sandbox), `/goal`, `/boost`, `/teamwork-preview`, `/schedule`, structured JSON output, enterprise WIF auth, remote control, voice dictation and real-time cost tracking (v1.0.4 Jun 1 → v1.1.26 Sep 4). The Apache-2.0 gemini-cli repo is still maintained 'for enterprise customers' and paid API keys (v0.58.0 stable Sep 1; nightlies through Sep 4, mostly security hardening). Pricing follows Google AI tiers: Free, Pro $19.99, Ultra $99.99, Ultra Max $199.99 (5-hour quotas, $0.01 credits).",
+   "notable_features": [
+    {
+     "feature": "Gemini CLI service cutoff and Antigravity CLI transition",
+     "description": "May 19 announcement; Jun 18 end of service for Free/Pro/Ultra/Code Assist-individual accounts and GitHub org installs; Code Assist Standard/Enterprise licences and paid Agent Platform API keys unaffected; Antigravity CLI 'built in Go' with agents 'communicating with each other to split up the work' and async workflows; migration guide + `agy plugin import gemini`.",
+     "source_url": "https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
+     "date": "2026-05-19"
+    },
+    {
+     "feature": "Open-source repo kept alive for enterprise only; Antigravity CLI closed source",
+     "description": "Google: repo 'remains available to the community as an Apache 2.0 licensed repository with no changes', maintained with model releases, bug and security fixes 'for our enterprise customers'; Antigravity CLI GitHub holds only a changelog, README and GIF. Developers report weekly quota exhausted 'with just a couple of requests' and accuse Google of using 6,000+ community PRs to seed a closed product.",
+     "source_url": "https://www.theregister.com/ai-ml/2026/05/20/bye-bye-gemini-cli-google-nudges-devs-toward-antigravity/5243605",
+     "date": "2026-05-20"
+    },
+    {
+     "feature": "gemini-cli v0.58.0 stable + v0.59.0-preview + nightlies (security hardening)",
+     "description": "Sep 1: v0.58.0 (symlink evaluation consistency, Docker socket isolation in macOS Seatbelt, cancellation errors); v0.59.0-preview.0 prevents SSRF in MCP OAuth metadata discovery and enforces workspace trust in restricted mode; Sep 4 nightly continues MCP OAuth compliance and path-resolution validation — the project is still actively releasing.",
+     "source_url": "https://github.com/google-gemini/gemini-cli/releases",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Antigravity terminal sandbox with permission-derived network allowlist",
+     "description": "Native OS isolation without VMs/Docker: Linux kernel namespaces (nsjail), macOS Seatbelt SBPL; workspace/temp/build caches writable, `~/.ssh` and `.env` blocked; no network by default, outbound allowlist derived from `read_url` permission domains; `enableTerminalSandbox` + `toolPermission: \"proceed-in-sandbox\"` runs sandboxed commands without prompts while bypass requests still prompt; `unsandboxed()` rules for exemptions. Windows AppContainer is claimed on the features page but not documented on the sandbox page.",
+     "source_url": "https://antigravity.google/docs/cli/sandbox/",
+     "date": "2026-09-04"
+    },
+    {
+     "feature": "Subagents, `/agents` approval panel, `/boost`, `/teamwork-preview`, plugins",
+     "description": "Subagents are 'independent, concurrent agent sessions' for background parallel work (v1.1.25); `/agents` panel with `Ctrl+J` jump-to-pending-approval and `Ctrl+K` fast-path approve; `/boost` multi-agent reasoning pipeline; `/teamwork-preview` collaborative teams; plugins are namespaced bundles of skills, agents, rules, MCP servers and hooks distributed via git.",
+     "source_url": "https://antigravity.google/docs/cli/features/",
+     "date": "2026-09-03"
+    },
+    {
+     "feature": "Antigravity CLI release cadence Jun-Sep 2026",
+     "description": "v1.0.14 (Jun 30) unlimited `/goal`; v1.0.15 (Jul 1) parallel workflow status + Windows compatibility; v1.1.5 (Jul 21) `/effort`; v1.1.6 (Jul 24) custom agents as Markdown; v1.1.8 (Jul 28) JSON / streaming-JSON output; v1.1.10 (Aug 3) Google Cloud + Workforce Identity Federation auth; v1.1.11 (Aug 7) Vim mode; v1.1.13 (Aug 14) direct Gemini API key via env var; v1.1.19 (Aug 22) remote-control auto port; v1.1.21 (Aug 26) voice dictation + real-time token cost tracking; v1.1.25 (Sep 3) Gemini 3.8 Flash; v1.1.26 (Sep 4).",
+     "source_url": "https://www.havoptic.com/tools/antigravity-cli",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "Approval modes and no `--yolo`",
+     "description": "Execution modes default / accept-edits / plan (`--mode`, Shift+Tab); shell commands need `/permissions` rules; the only approve-everything switch is `--dangerously-skip-permissions`; Pro/Ultra users get 3-5 parallel subagents which 'burn quota in parallel' — one user hit the limit after two prompts.",
+     "source_url": "https://www.aibuilderclub.com/blog/antigravity-cli-guide",
+     "date": "2026-08-22"
+    },
+    {
+     "feature": "Antigravity pricing ladder",
+     "description": "Free (Individual, no card, 5-hour Flash quota), AI Pro $19.99, AI Ultra $99.99 (~5x), AI Ultra Max $199.99 (~20x, down from $249.99); overage credits $0.01 each ($199 for 20,000); Google has repriced the ladder at least once.",
+     "source_url": "https://www.codeagentswarm.com/en/guides/antigravity-plans-and-pricing",
+     "date": "2026-08-31"
+    }
+   ],
+   "business_shifts": "Open-source → closed-source pivot: Google harvested a 100k-star, 6,000-external-PR project and moved consumers to a proprietary binary while keeping the OSS repo on life support for enterprise licensees and paid API keys. Quotas moved from daily to weekly windows with per-model caps; subagent parallelism multiplies quota burn. Gemini 3 Flash/3.8 Flash auto-routing positions Antigravity on cost; enterprise WIF auth and structured JSON output (Jul-Aug) show a push toward automation and regulated buyers. ACP support, present in Gemini CLI, is absent from Antigravity CLI (cited as a regression).",
+   "user_sentiment": "HN thread 'Gemini CLI will stop working from June 18' reached 406 points / 209 comments: 'bait-and-switch', killedbygoogle references, one-month notice called abrupt, 'developers will never adopt our products if we keep killing them'. Migration went mostly to Claude Code, then Codex, with OpenRouter for Gemini access without Google limits. Antigravity complaints: severely reduced quotas, weekly limits, 'high traffic' errors and ~80% uptime, missing ACP, plugin supply-chain needing manual plugin.json audits, sandbox network policy blocking legitimate curl debugging, stale approval requests blocking workflows. Praise: single Go binary with no runtime deps, native Windows install, multi-agent orchestration described as its 'core strength'."
+  }
+ ],
+ "candidates": [
+  {
+   "title": "Two-stage approval: Expert Mode deterministic rules first, local-model classifier second (\"auto mode\" without the cloud tax)",
+   "description": "Make classifier-graded approval the default permission mode for bog: (1) ExpertRulesMiddleware + SafeTools/exec_risk/git_ops run first as hard/soft deny; (2) for everything that would still prompt, a pluggable reviewer model (Ollama/Bedrock/Anthropic, injected `invoke`) returns {risk: low|medium|high|critical, rationale} against a prose policy file with `allow`/`soft_deny`/`hard_deny`/`environment` sections and a `$defaults` splice; critical always denied, high → HITL, low auto-approved. Add `bog auto-mode defaults|config|critique|reset`, a 'Recently denied' tab with retry, a circuit breaker (N denials per turn → escalate to human), and a Containment-Escape default rule (metadata endpoints, egress evasion). Denials explained via `/why` using the rule engine's proof trace.",
+   "competitor": "Claude Code (auto mode default Aug 14; prose rules + `claude auto-mode critique`; Containment Escape Sep 1) and Codex (Guardian auto-review with policy.md, circuit breaker, `/approve`)",
+   "source_url": "https://code.claude.com/docs/en/auto-mode-config",
+   "source_date": "2026-08-26",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Users stop rubber-stamping 97% of prompts (Anthropic's own number) yet keep a deterministic, auditable floor the competitors lack: an enterprise can prove which rule fired, a solo user on a laptop runs the reviewer on a local 8B model for free and offline, and both get the classifier's long-tail coverage. ROADMAP #23 proposed risk-graded reviewer approvals; the bar moved because both leaders now ship it as the DEFAULT with a prose-rule DSL, a critique/lint CLI and a denial-retry UI — bog must match that surface, not just the concept.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Native Windows sandbox via restricted tokens + WFP firewall (Codex's design), wired into LocalShellBackend",
+   "description": "Implement `local_sandbox.py`'s missing Windows launcher the way Codex does: elevated mode provisions two low-privilege local users (offline = firewall-blocked, online = egress via bog's allowlist proxy) and runs commands under a WRITE_RESTRICTED token with a synthetic SID so only ACL-granted roots (workspace, temp, caches, declared `writable_roots`) are writable; unelevated fallback derives a restricted token from the current user (documented `Everyone`-SID gap). Add a PowerShell AST inspection step (from `exec_risk.py`) that forces HITL on encoded/dynamic script blocks. Keep fail-closed `require_sandbox` semantics and document what is kernel-enforced vs cooperative.",
+   "competitor": "OpenAI Codex (native Windows sandbox May 14; reparse-point hardening v0.149.0 Aug 20); Claude Code still 'Native Windows is not supported' (issue #46740 closed not-planned); Antigravity claims AppContainer",
+   "source_url": "https://codex.danielvaughan.com/2026/07/18/codex-cli-windows-sandbox-architecture-powershell-ast-safety-elevated-unelevated-appcontainer-restricted-tokens/",
+   "source_date": "2026-07-18",
+   "target_users": [
+    "solo power users / OSS",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Windows-first users get real OS isolation today (Claude Code tells them to use WSL2; bog's own sandbox fails closed on Windows), and regulated shops get an auditable boundary for auto-approved shell. ROADMAP #22 already flagged Windows as the open flank; the bar moved because Codex proved a working restricted-token + firewall design and rejected AppContainer — bog can copy a validated architecture instead of inventing one, and it remains the only LangGraph-based framework with it.",
+   "effort_guess": "XL"
+  },
+  {
+   "title": "Credential masking at the egress proxy (sentinel secrets substituted only toward allow-listed hosts)",
+   "description": "Extend `egress_proxy.py` + `SandboxConfig`: `credentials.envVars`/`files` entries with `mode: \"mask\"` give the sandboxed process a per-session sentinel; the CONNECT/TLS-terminating proxy swaps in the real value only on requests to `injectHosts` (or all allowed domains), with `extract` (substring), JWT-aware `decode`, and AWS SigV4 re-signing; masks honored only from user/managed config, never repo-level; startup check that every masked var has a reachable inject host. Surface in `/sandbox` and `/vars`.",
+   "competitor": "Claude Code (mask mode for env vars v2.1.199; files + extract/decode/SigV4 v2.1.224, Aug 3-7)",
+   "source_url": "https://code.claude.com/docs/en/sandboxing",
+   "source_date": "2026-08-07",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "Tools like `gh`, `npm`, `aws` keep working inside the sandbox while the agent, its logs, and any exfiltration attempt never hold a real token — the one thing a plain deny list cannot give. Bog already has the proxy and the sandbox.toml; this turns them from a network fence into a secrets boundary that air-gapped/regulated teams can sign off on, and it composes with the DLP middleware.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`bog queue` + machine-level session registry + `@session` mentions (cross-session messaging primitive)",
+   "description": "Promote `teams.Mailbox` to a per-machine registry (`~/.bog-agents/sessions/<id>.json` with name, cwd, model, state) so any bog process — TUI, daemon job, CI step, another agent — can `bog queue --session <name|id> \"text\"` (or `--file`); messages queue during a turn and wake an idle session; `ListAgents`/`SendMessage` tools with `notify_when_idle`; `@name` autocomplete in the prompt; auto-unique names; received messages tagged as untrusted and never treated as approvals. Add an ack/response channel Codex lacks (`--wait` returns the next assistant reply).",
+   "competitor": "Codex `codex queue` + `codex agents` (v0.149.0 Aug 20); Claude Code cross-session messaging (v2.1.224 Aug 3-7, Windows Aug 17-21, `@` mentions v2.1.232)",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.149.0",
+   "source_date": "2026-08-20",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A CI failure, a daemon cron tick, or a teammate's session can drip context into the exact session that already has the branch checked out and the debugging context loaded, instead of a human re-explaining it; teams get loose coupling between sessions with different models/trust profiles, which `/team run` (tight coupling) does not cover. ROADMAP #21/#11 assumed in-process teams and a watch-only dashboard; the bar moved to first-class peer messaging with a CLI entry point, and bog's daemon makes it strictly more useful than either competitor's.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Tool-result interception + PermissionRequest / Interrupt / PreModelSwitch hook events, trust-by-hash",
+   "description": "Extend `hook_decisions.py`/`hook_middleware.py`: PostToolUse hooks may return a replacement `tool_result` (DLP scrub, secret redaction, injecting context) before the model sees it; new decision-capable events PermissionRequest (allow/deny before HITL), Interrupt (user Esc/Ctrl-C), PreModelSwitch/PostModelSwitch (block or annotate `/model`), SubagentStart/Stop, PreCompact/PostCompact; MCP-tool handlers (a hook calls a tool on an already-connected MCP server with `${field}` templating); async hooks with spill-to-disk; hooks must be trusted by content hash and managed hooks (org config) cannot be disabled — reuse the existing fingerprint gate. Keep the fail-open hooks / fail-closed enforcement split.",
+   "competitor": "Codex v0.151.0 (Aug 29) extensions inspect/replace MCP results; v0.150.0 Interrupt hooks; hooks trust-by-hash + managed hooks; Claude Code PreModelSwitch/PostModelSwitch (v2.1.251 Aug 28)",
+   "source_url": "https://learn.chatgpt.com/docs/hooks",
+   "source_date": "2026-08-29",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Teams can enforce policy where it actually bites — redact PII from tool output before it reaches a cloud model, veto a downgrade to an unapproved model, react to an interrupt — with a shell script instead of writing middleware, and their existing Claude Code/Cursor hook files keep loading unchanged. Bog's hook bus is already decision-capable on PreToolUse/Stop; matching the now-standard event set closes the gap users compare against on day one.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Portable plugin manifest (`plugin.json` + skills/ + .mcp.json + hooks.json) import/export and hardened marketplaces",
+   "description": "Adopt the converged manifest as bog's plugin format and ship `bog plugin import codex|claude|antigravity|cursor` (MCP servers, skills, hooks, agents, rules, project memories, sessions) plus `export`; marketplaces support git, zip-archive-with-SHA-256, `command:` sources (a local command prints the plugin dir, re-resolved per session) and `headersHelper` for private catalogs; plugin-bundled hooks go through the trust-by-hash gate; `bog plugin validate --json`. Publish bog's own plugins into Codex- and Claude-compatible marketplaces.",
+   "competitor": "Codex Agent Plugins 1.0 + marketplaces for Bedrock/Claude Code (v0.146.0 Jul 29), `/import` (v0.145.0); Claude Code zip+SHA-256 (Aug 3-7), command sources (Aug 10-14), headersHelper (v2.1.238 Aug 20); Antigravity `agy plugin import gemini`",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.146.0",
+   "source_date": "2026-07-29",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A team's skills, MCP config and hooks move between Codex, Claude Code and bog without rewriting, so evaluating bog costs one command instead of a migration, and org plugin catalogs behind auth become installable. ROADMAP #34/#35 proposed an importer and registry; the bar moved because the manifest is now shared by all three competitors and hardened distribution (hash pins, minted headers, trust-gated hooks) is expected.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Spend attribution v2: per-loop/daemon-job/teammate ledger, spend-limit bar, prompt-cache miss root-causing, contracted rates",
+   "description": "Extend `CostLedger`/`/cost`/`/usage`: attribute tokens to daemon jobs, `/loop` timers, subagents, teammates and skills (runs, tokens/run, last run); a spend-limit bar against `RunawayCaps` and provider spend headers; per-session prompt-cache line (hit ratio, re-cached tokens, warm/cold) with 'likely causes' computed from bog's own middleware stack (sweeper, summarization, system-prompt churn, tool-schema change) — `prompt_cache.py` already knows when the prefix breaks; `modelPricing` override so org-contracted rates replace the catalog; `--max-budget-usd` that also halts subagents/teammates.",
+   "competitor": "Claude Code Loops breakdown + modelPricing (v2.1.243 Aug 25), spend-limit bar + cache stats (v2.1.251 Aug 28), cache-miss causes (v2.1.260 Sep 3), budget cap on subagents (Jul 20-24); Codex `/usage` views (Jun 15); Antigravity real-time cost tracking (Aug 26)",
+   "source_url": "https://code.claude.com/docs/en/changelog",
+   "source_date": "2026-09-03",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A user can see 'this loop ran 44 times and burned X' or 'cache misses because the sweeper rewrote message 3' and fix it, instead of discovering a blown weekly quota; finance gets contracted-rate numbers they can reconcile. ROADMAP #25 shipped the ledger; the bar moved to explaining WHY tokens were spent (cache diagnostics) and to daemon/loop attribution, where bog's daemon gives it more surfaces than Claude's `/loop`.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`--restricted` hardened profile + `--permission-prompts none` + `trust_level=untrusted` repo mode for unattended runs",
+   "description": "One flag/profile for daemon, CI and headless MCP-server runs: strips shell/code-exec tools, confines file tools to the working directory, refuses bypass/auto modes, ignores user/project/local config and repo-supplied hooks/expert rules/MCP servers (`trust_level: untrusted`), denies anything that would prompt (`--permission-prompts none`), gates reads outside working dirs (`blockReadsOutsideWorkingDirectories`), and reports which managed settings were skipped and why in `/doctor`/`/status`. Bind it to the named trust profiles from #23 and the self-modification guard from #24.",
+   "competitor": "Claude Code `--restricted` (v2.1.248 Aug 27), `--permission-prompts none` (v2.1.259 Sep 2), reads gate (v2.1.257 Sep 1); Codex `trust_level = \"untrusted\"` + `allow_managed_hooks_only`",
+   "source_url": "https://code.claude.com/docs/en/permission-modes",
+   "source_date": "2026-09-02",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Operators get a one-word answer to 'what can the daemon do on this box' that a hostile repository cannot widen, and CI runs never hang on a prompt or silently escalate. ROADMAP #23/#24 cover trust profiles and self-modification; the bar moved to a single documented hardened switch that reviewers now ask for by name.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Fork subagent that inherits the full conversation and prompt cache, and `/fork` into its own worktree",
+   "description": "Add a `fork` subagent type in `graph.py`: the child starts from the parent's exact message prefix (so its first call is a prompt-cache hit) instead of a fresh system prompt, runs in the background by default, and returns its result into the parent thread; `/subtask <prompt>` in the TUI; `/fork` copies the session into a background session that works in its own git worktree, commits/pushes and opens a draft PR only when asked; ensure the sweeper/summarization view transformation keeps the shared prefix byte-identical so caching survives.",
+   "competitor": "Claude Code fork mode default (v2.1.232 Aug 10-14), `/fork` (Jul 13-17) in own worktree (Aug 3-7); Codex fork sessions (v0.148.0 Aug 18) and ephemeral forks (v0.146.0)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w33",
+   "source_date": "2026-08-14",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Side tasks stop costing a re-explanation and a cold cache: the user says 'draft tests for what we just did' and pays cache-read prices for the context instead of re-sending it. Bog's street sweeper + prompt-caching middleware were built to keep a stable prefix — a fork that exploits that is cheaper than Claude's, and it works with local models where context re-fill is wall-clock, not dollars.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Outbound-only self-hosted runners for daemon/fleet (`bog fleet runner`)",
+   "description": "A runner process on customer hosts polls a queue (bog daemon's FastAPI or a hosted control plane) over outbound HTTPS only, claims a session, clones the repo, spawns the agent and streams events back; owner-locking (one user/agent per runner), `--capacity`, `--drain-grace-sec`, `--retire-at` for spot/sandbox lifetimes, `--defer-shutdown-max-min`, `--proxy-authorization-command` for egress proxies, optional autoscaling orchestrator, a CI smoke test for runner images, and a session-identity token internal services can verify. Unlike Claude, allow inference via Bedrock/Vertex/local models.",
+   "competitor": "Claude Code self-hosted environments (v2.1.224 Aug 3-7; runner flags Aug 20/27); Codex remote executors over Noise relay (v0.141.0 Jun 18), Remote Code Mode WebSocket (v0.146.0)",
+   "source_url": "https://code.claude.com/docs/en/self-hosted-environments",
+   "source_date": "2026-08-07",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Regulated teams run agents inside their network with no inbound ports and their own model endpoint — Claude's version forbids Bedrock/Vertex/gateways and ZDR, which is exactly the buyer bog targets. ROADMAP #42 proposed `bog fleet`; the bar moved because the reference architecture (owner-locked outbound pollers, retire-at, drain semantics) is now public and expected.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Agents dashboard control half: start/stop/rename/open, classifier-written headlines, auto titles, `@task` mentions, Markdown export",
+   "description": "Upgrade `/dashboard` from watch to control: search/start/open/rename/stop sessions and daemon runs grouped by project/status, show each subagent's model+effort, a one-line model-written headline per session (\"waiting on you\" / \"pushed PR #42\"), auto-generated session titles, `@task` mentions that pull another task's summary into the prompt, and `bog session export --markdown` (also `/copy` picker for response/code/quote). Reuse session FTS and sidechain transcripts.",
+   "competitor": "Codex `codex agents` dashboard (v0.149.0 Aug 20), auto titles + `@` task mentions (v0.150.0 Aug 26), Markdown export (v0.148.0 Aug 18); Claude Code `claude agents` rows with classifier headlines (Jul 6-10), model/effort per subagent in `/tasks` (v2.1.243)",
+   "source_url": "https://github.com/openai/codex/releases/tag/rust-v0.149.0",
+   "source_date": "2026-08-20",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Someone running five sessions plus daemon jobs sees at a glance which one is blocked on them and acts without hunting through terminals, and can hand a Markdown transcript to a teammate or PR. ROADMAP #11 scored the dashboard as 'partial (watch half)'; both competitors have now shipped the control half, so it is table stakes rather than polish.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Security-scan recipe with sandbox-validated findings, FP ledger, `--max-cost`, SARIF and CI gating",
+   "description": "Package a multi-agent scan (architecture map → threat model → hunt with specialised subagents → independent reviewer via `/jury`) as a recipe + headless command: findings validated by actually reproducing them in the sandbox, deduped against a persistent findings/false-positive ledger, `--max-cost` enforced by CostLedger, `--fail-on-severity` for CI, SARIF/JSON output for GitHub Code Scanning, chosen findings turned into reviewed patches; runs on local models for air-gapped repos.",
+   "competitor": "OpenAI Codex Security open-sourced (Apache 2.0, Jul 28-29; HN 392 pts); Anthropic Claude Security plugin (Jul 20-24)",
+   "source_url": "https://www.developersdigest.tech/blog/codex-security-open-source-cli-sdk-hn-analysis",
+   "source_date": "2026-07-29",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Teams get the part HN said mattered (dedup, FP tracking, budget caps, CI gating) without the parts they hated: Codex's brain is Enterprise-gated and blew $13 in a minute, Claude's needs a claude.ai plan; bog's version costs what the ledger allows and runs offline. Bog already has `/audit`, `/compliance`, evidence bundles and the jury — this is assembly plus the ledger and SARIF, not new research.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`/doctor` that fixes: context-cost audit of skills/MCP/plugins, CLAUDE.md dedupe, slow-hook detection, endpoint/proxy checks",
+   "description": "Turn `/doctor`/`/health` into a repair tool: measure each skill, MCP server and plugin's context cost vs usage across sessions (deferred-tools already knows schema tokens), propose disabling unused ones, dedupe local `.bog-agents`/AGENTS.md memory against checked-in files and trim derivable content, flag hooks slower than N ms, check corporate proxy/TLS inspection and endpoint-protection interference, then apply confirmed fixes. Add `/skill-doctor` (unused skills + cost) and `bog doctor --json` for support tickets.",
+   "competitor": "Claude Code `/doctor` fixes (v2.1.205 Jul 6-10), `/skill-doctor` (v2.1.261 Sep 4); Codex `codex doctor` endpoint-protection/proxy/desktop checks (v0.149.0 Aug 20)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w28",
+   "source_date": "2026-07-10",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "Solo users on local models reclaim context (and tokens/sec) that a dozen forgotten MCP servers were eating, and Windows users behind corporate TLS proxies get a diagnosis instead of a hang; 'first-run works' is the thing OSS reviewers grade.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Rate-limit-aware auto-continue and resumable blocked goals",
+   "description": "When a provider returns a usage-limit/429 with a reset time, park the turn (durable run record) and resume automatically at reset — CLI toggle, daemon retry policy and `/goal` integration so background check-ins back off (30m → 1h → 2h) instead of polling; show 'auto-resuming at HH:MM' in the status bar and Slack/email dispatch; for Bedrock/Vertex quotas map the equivalent headers; never applies to local models.",
+   "competitor": "Claude Code auto-continue on Desktop (Aug 10-14) and CLI (Aug 17-21), `/goal` back-off check-ins (v2.1.239 Aug 21); Codex iOS 'resume blocked or usage-limited goals' (Jul 20)",
+   "source_url": "https://code.claude.com/docs/en/whats-new/2026-w34",
+   "source_date": "2026-08-21",
+   "target_users": [
+    "solo power users / OSS",
+    "small dev teams"
+   ],
+   "why_killer": "A long refactor started at night finishes by morning instead of dying at the 5-hour window, and users stop babysitting quota resets — the most common subscription complaint in both ecosystems. Bog's durable runs (#39) and stop gate make this a scheduler change, not a new subsystem.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Structured human-input forms rendered in TUI, Remote/Slack and daemon email (interactive decisions, not free text)",
+   "description": "An `ask_user` tool that emits a typed form (single/multi choice, text, confirm, file pick) rendered natively in the Textual TUI, in `/remote`/`/telephone` and in daemon dispatch targets (Slack blocks, email links with signed callback), with Mermaid rendering of plans in the same surfaces; answers are recorded in the evidence bundle and audit trail as explicit human decisions distinct from agent messages.",
+   "competitor": "OpenAI Codex iOS interactive forms + Mermaid in transcripts (Jul 20); Claude Code Remote Control device cards + effort control from phone (Aug 17-21)",
+   "source_url": "https://www.developersdigest.tech/blog/codex-claude-code-july-agent-controls",
+   "source_date": "2026-07-20",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A daemon job can ask 'which of these three migrations do you want?' and get an unambiguous, auditable answer from Slack at 2am instead of stalling or guessing; enterprises get a provable record that a human made the call. ROADMAP #32 (two-way Slack) covers transport; the bar moved to structured decisions, which bog's evidence/audit stack can exploit and the competitors' mobile apps cannot.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Model-written orchestration scripts (\"dynamic workflows\") over TaskLedger with typed outcomes",
+   "description": "A `Workflow` tool where the model writes a Python orchestration script against a small sandboxed API (`spawn(agent, prompt, model, effort)`, `gather`, `validate(rubric)`, `retry`), executed deterministically by `run_team`/`TaskLedger` with CostLedger caps and OTel workflow attributes; outcomes are typed JSON shown in `/workflows`; scripts saved as replayable recipes. Extends `/butcher` (sequential slices) and CodeAct (#36) to parallel fan-out with the plan living in code, not in the conversation.",
+   "competitor": "Claude Code dynamic workflows (research preview, May 25-29 / InfoQ Jun 1; `/workflows` outcomes Sep 2; workflow size setting + OTel attributes Jul 6-10)",
+   "source_url": "https://www.infoq.com/news/2026/06/dynamic-workflows-claude-code/",
+   "source_date": "2026-06-01",
+   "target_users": [
+    "small dev teams",
+    "solo power users / OSS"
+   ],
+   "why_killer": "A team gets deterministic, replayable fan-out where the control flow is inspectable code and the conversation only sees the result — and unlike Claude's, spend is capped per workflow by the ledger and it runs on any model. ROADMAP #36 (CodeAct) and #19 (butcher fan-out) point here; the bar moved because Claude made the pattern a named product with an outcomes view.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Model-switch governance: expert rules on `/model`, per-model saved effort, curated picker, subagent model force, session-only effort",
+   "description": "Assert a `model_switch` fact through ExpertRulesMiddleware so policies can deny/confirm switches (e.g. no Opus-class models for teammates, no non-EU endpoints); `/effort` remembers a default per model with an `s` session-only variant; `modelPicker` config curates an ordered, labelled list with friendly names for Bedrock/Vertex IDs; `BOG_AGENTS_SUBAGENT_MODEL_FORCE`; `Agent(model:*)`-style tool-parameter permission rules.",
+   "competitor": "Claude Code PreModelSwitch/PostModelSwitch hooks + per-model effort (v2.1.251 Aug 28), session-only effort + SUBAGENT_MODEL_FORCE (v2.1.257 Sep 1), modelPicker (v2.1.243), Tool(param:value) rules (v2.1.178)",
+   "source_url": "https://code.claude.com/docs/en/changelog",
+   "source_date": "2026-09-01",
+   "target_users": [
+    "enterprise / regulated",
+    "solo power users / OSS"
+   ],
+   "why_killer": "Enterprises enforce 'which model may touch which repo' as a provable rule instead of a hook script, and cost-sensitive users stop accidentally running teammates on the expensive model — bog's rule engine already does the reasoning; it just needs the fact and the knobs. Complements ROADMAP #46 (effort ladder) with the governance half.",
+   "effort_guess": "S"
+  }
+ ],
+ "market_trends": [
+  "Classifier-graded approval replaced human approval as the default: Claude Code made auto mode default on Aug 14 (and stopped charging for classifier calls on Pro/Max/Team), Codex ships Guardian auto-review with a tenant-replaceable policy, and Antigravity offers proceed-in-sandbox — manual HITL is now the opt-in fallback, and the differentiator is the prose-rule DSL, denial-retry UI and lint/critique tooling around the classifier.",
+  "Open source retreated at the top and consolidated at the bottom: Google ended consumer Gemini CLI on Jun 18 and replaced it with a closed Go binary while keeping the Apache repo alive for enterprise, OpenAI open-sourced Codex Security's client but not its backend, Claude Code stays closed; OpenCode (MIT, ~160-190k stars per aggregators) and Ollama (52M monthly downloads Q1 2026) are where model-agnostic, local-first users went.",
+  "Pricing bifurcated: mid-tier frontier prices fell (Sonnet 5 $2/$10 made permanent, Opus 5 at $5/$25, GPT-5.6 Sol cut to $4/$20 on Aug 21, Luna $0.20/$1.20) while new flagship tiers reset the ceiling ($10/$50 for Fable 5.1 and GPT-6 Astra); subscriptions everywhere are 5-hour windows plus weekly caps with credit top-ups, and Anthropic reversed its Jun 15 plan to split Agent SDK usage into a separate credit.",
+  "Usage attribution became table stakes: `/usage` by skill/subagent/plugin/MCP/loop, spend-limit bars, prompt-cache hit ratios with miss explanations, contracted-rate overrides and budget caps that halt subagents all shipped in the window — users judge harnesses on whether they can explain a blown quota.",
+  "Windows is finally first-class for Codex (native restricted-token sandbox, PAC/WPAD proxies, PowerShell AST checks) and partly for Claude Code (PowerShell tool, no Git Bash requirement, cross-session messaging on Windows) but Claude Code's OS sandbox is still WSL2-only and Antigravity's AppContainer claim is undocumented — native Windows isolation remains the one open flank in the category.",
+  "Plugin packaging converged on `plugin.json` + skills/ + .mcp.json + hooks.json with cross-vendor marketplaces (Codex publishes marketplaces for Bedrock and Claude Code; Antigravity imports Gemini plugins; Codex `/import`s Cursor and Claude Code), plus supply-chain hardening (zip + SHA-256 pins, minted headers, hooks trusted by content hash, managed hooks via MDM/requirements.toml).",
+  "Orchestration moved from 'one agent with subagents' to fleets of peers: cross-session messaging, queues, agent dashboards, forkable cache-sharing subagents, 20+ concurrent and 5-deep nesting, experimental shared-tasklist teams, and model-written workflow scripts — with every vendor warning that token cost scales linearly.",
+  "Execution is moving to customer compute under a vendor control plane (Claude self-hosted runners, Codex remote executors over an encrypted relay, Remote Control GA on phones), but Anthropic's version forbids Bedrock/Vertex/gateway inference and ZDR — a gap for regulated buyers that a self-hostable framework can fill.",
+  "Security hardening ships weekly as product, not research: containment-escape and metadata-credential rules, credential masking at the proxy, transcript-tamper blocking, worktree isolation extended to Bash, reads-outside-workdir gates, `--restricted`, MCP OAuth SSRF fixes in gemini-cli, and Guardian misfires filed as GitHub issues — the CVE-2026-25725 class (agent edits its own authority) is now assumed by reviewers.",
+  "Model churn is monthly (Opus 4.8 → Sonnet 5 → Opus 5 → Fable 5.1; GPT-5.5 → 5.6 Sol/Terra/Luna → GPT-6 Astra; Gemini 3.x Flash) and 'silent degradation' threads recur on every platform with users asking for version pinning and independent evals; MCP is commodity (search-by-default tool discovery, managed MCP servers), while ACP support was cited as a regression when Antigravity dropped it."
+ ],
+ "unverified": [
+  "Codex CLI release dates for v0.145.0 (Jul 21) and v0.146.0 (Jul 29): the GitHub release pages fetched returned a mangled year in the summary; dates were taken from the havoptic/gradually aggregators and the Big Hat weekly, not read directly from GitHub.",
+  "OpenAI's own Windows-sandbox blog (openai.com/index/building-codex-windows-sandbox, May 14 2026) returned 403; the elevated/unelevated design is sourced from a third-party deep dive and the learn.chatgpt.com approvals page.",
+  "Antigravity CLI Windows AppContainer sandbox: the official features page claims AppContainer on Windows, but the official sandbox page documents only Linux namespaces and macOS Seatbelt; GA status on Windows unknown.",
+  "Antigravity `/schedule` (cron-style scheduled tasks) and 'remote control' appear in third-party guides and the v1.1.19 aggregator summary but are not on the official features page fetched.",
+  "Claude Code auto-mode study figures (97% approval rate, 13.6% vs 89%, 1,053 testers, Trajectory Labs 0/720 injections) come from press coverage (Help Net Security, Simon Willison, triedandtyped); Anthropic's primary announcement post was not fetched, and the HN thread (item 49214994) returned 429.",
+  "Claude Code 'weekly limits +50% May 13-Aug 31', '5-hour limits doubled May 6', Opus 5 '$5/$25' and 'Sonnet 5 $2/$10 made permanent' are from third-party pricing trackers and the Big Hat weekly, not from an Anthropic pricing page fetched in this session.",
+  "Anthropic status incidents on Sonnet 4 output quality (Aug 5-Sep 4, Aug 26-Sep 5) were seen only in a search snippet of status.anthropic.com; the incident pages were not fetched.",
+  "Codex plugin 'marketplaces for Amazon Bedrock and Claude Code' is quoted from the v0.146.0 release summary; the exact semantics (publishing Codex plugins into Claude Code's marketplace format vs. consuming them) were not confirmed from docs.",
+  "Codex 'Chrome extension' and 'remote-control capabilities' and the '91K stars' figure appear only on a morphllm comparison page and not in the official changelog fetched.",
+  "OpenCode star counts (160K in June per Developers Digest vs 193K in August per morphllm) and 'Claude Code ~140K stars' are aggregator claims, not verified on GitHub.",
+  "The claim that Gemini CLI's OSS repo is maintained 'for enterprise customers' only is from The Register quoting Google; the repository README/policy text was not fetched (GitHub blob fetches returned 403/429).",
+  "Codex Guardian '3 consecutive / 10 rolling denials' circuit breaker and `/approve` override are from the learn.chatgpt.com auto-review page fetched Sep 4; the page gives no version or date for when they shipped.",
+  "Antigravity pricing ladder ($19.99 / $99.99 / $199.99, $0.01 credits) is from third-party pricing guides that themselves say to verify against Google's page; Google's pricing page was not fetched.",
+  "The 'Anthropic blocked third-party tools from using Claude subscription OAuth tokens on Apr 4' claim comes from a comparison blog, not an Anthropic notice.",
+  "Claude Agent SDK Python changelog entries 0.2.150-0.2.152 (bundling CLI 2.1.257-2.1.259) carry no dates in the CHANGELOG fetched; assumed Sep 1-3 by CLI version."
+ ]
+}

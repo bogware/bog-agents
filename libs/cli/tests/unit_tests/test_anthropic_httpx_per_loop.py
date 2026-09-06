@@ -67,6 +67,12 @@ class TestAnthropicHttpxPerLoopFix:
 
         import bog_agents_cli.server_graph  # import has side-effects we're verifying
 
+        # Re-run the (idempotent) hook: another test may have re-imported
+        # ``langchain_anthropic._client_utils`` after the module-import hook
+        # fired, restoring the upstream lru_cache behind our back (order flake
+        # seen under xdist on py3.11).
+        bog_agents_cli.server_graph._install_anthropic_httpx_per_loop_fix()
+
         async_factory = cu._get_default_async_httpx_client
         # The original was an lru_cache wrapper. After the install,
         # ``cache_info`` should NOT be present.
@@ -88,6 +94,8 @@ class TestAnthropicHttpxPerLoopFix:
         import langchain_anthropic._client_utils as cu
 
         import bog_agents_cli.server_graph
+
+        bog_agents_cli.server_graph._install_anthropic_httpx_per_loop_fix()
 
         sync_factory = cu._get_default_httpx_client
         assert not hasattr(sync_factory, "cache_info")

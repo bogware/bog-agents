@@ -166,3 +166,28 @@ class TestMiddleware:
         assert path.exists()
         assert path.read_text(encoding="utf-8") == "# hi\n"
         assert path.parent == tmp_path / ".bog-agents" / "evidence"
+
+
+def test_feature_config_wires_evidence_bundle(monkeypatch) -> None:
+    """v6 SDK-11: `FeatureConfig(enable_evidence_bundle=True)` attaches the middleware."""
+    from bog_agents import create_agent, graph as graph_module
+    from bog_agents.feature_config import FeatureConfig
+
+    captured: list[str] = []
+    original = graph_module._validate_middleware_ordering
+
+    def _spy(middleware_list: list) -> None:
+        captured.extend(type(m).__name__ for m in middleware_list)
+        return original(middleware_list)
+
+    monkeypatch.setattr(graph_module, "_validate_middleware_ordering", _spy)
+
+    create_agent(
+        model="claude-sonnet-4-20250514",
+        config=FeatureConfig(enable_evidence_bundle=True, evidence_check_commands=[["pytest", "-q"]]),
+    )
+    assert "EvidenceBundleMiddleware" in captured
+
+    captured.clear()
+    create_agent(model="claude-sonnet-4-20250514")
+    assert "EvidenceBundleMiddleware" not in captured

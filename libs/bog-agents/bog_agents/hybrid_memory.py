@@ -27,7 +27,7 @@ import re
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -270,10 +270,17 @@ class HybridMemoryIndex:
         self._conn.commit()
 
     def add(self, chunk: MemoryChunk) -> str:
-        """Index a single chunk (insert or replace by id). Returns the chunk id."""
+        """Index a single chunk (insert or replace by id). Returns the chunk id.
+
+        A chunk added without an `embedding` keeps any vector already stored
+        under the same id (v6 SDK-5), so rebuilding the index from the source
+        files on startup never discards embeddings persisted by an earlier run.
+        """
         emb = json.dumps(list(chunk.embedding)) if chunk.embedding is not None else None
         self._conn.execute(
-            "INSERT OR REPLACE INTO chunks (chunk_id, text, source, timestamp, embedding) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO chunks (chunk_id, text, source, timestamp, embedding) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(chunk_id) DO UPDATE SET text = excluded.text, source = excluded.source, "
+            "timestamp = excluded.timestamp, embedding = COALESCE(excluded.embedding, chunks.embedding)",
             (chunk.chunk_id, chunk.text, chunk.source, chunk.timestamp, emb),
         )
         if self._fts:
@@ -281,6 +288,40 @@ class HybridMemoryIndex:
             self._conn.execute("INSERT INTO chunks_fts (chunk_id, text) VALUES (?, ?)", (chunk.chunk_id, chunk.text))
         self._conn.commit()
         return chunk.chunk_id
+
+    def chunks_missing_embeddings(self) -> list[tuple[str, str]]:
+        """Return `(chunk_id, text)` for every chunk that has no stored vector yet.
+
+        The lazy/batch embedding path (v6 SDK-5) embeds exactly these, so a
+        persisted index only pays for content it has not seen before.
+        """
+        rows = self._conn.execute("SELECT chunk_id, text FROM chunks WHERE embedding IS NULL ORDER BY rowid").fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+
+    def set_embeddings(self, vectors: Mapping[str, Sequence[float]]) -> int:
+        """Store vectors for existing chunks by id. Returns the number written."""
+        rows = [(json.dumps(list(vec)), cid) for cid, vec in vectors.items()]
+        if rows:
+            self._conn.executemany("UPDATE chunks SET embedding = ? WHERE chunk_id = ?", rows)
+            self._conn.commit()
+        return len(rows)
+
+    def prune_except(self, keep: Iterable[str]) -> int:
+        """Delete every chunk whose id is not in `keep`. Returns the number removed.
+
+        Lets a persisted index act as a rebuildable cache over the source
+        files: chunks whose text disappeared from the sources are dropped
+        instead of lingering in search results.
+        """
+        keep_set = set(keep)
+        stale = [str(r[0]) for r in self._conn.execute("SELECT chunk_id FROM chunks").fetchall() if str(r[0]) not in keep_set]
+        for cid in stale:
+            self._conn.execute("DELETE FROM chunks WHERE chunk_id = ?", (cid,))
+            if self._fts:
+                self._conn.execute("DELETE FROM chunks_fts WHERE chunk_id = ?", (cid,))
+        if stale:
+            self._conn.commit()
+        return len(stale)
 
     def add_markdown(self, markdown: str, *, source: str = SOURCE_WORKSPACE, timestamp: float = 0.0) -> list[str]:
         """Chunk Markdown on blank lines and index each non-empty block."""

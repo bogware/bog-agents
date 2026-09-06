@@ -332,7 +332,57 @@ def _cmd_help(args: str) -> HeadlessResult:
     return _err(f"Unknown command: /{target}", {"name": target, "found": False})
 
 
+def _cmd_memory(args: str) -> HeadlessResult:
+    """`memory rebuild | status | show | apply | discard` (ROADMAP #75); headless rebuilds are model-free (dedup)."""
+    import asyncio
+
+    from bog_agents_cli.memory_controller import run_memory_command
+
+    tokens = args.split()
+    if tokens and tokens[0] == "rebuild" and "--dedup" not in tokens:
+        tokens.append("--dedup")
+    text = asyncio.run(run_memory_command("/memory " + " ".join(tokens), Path.cwd()))
+    ok = not text.startswith(("Unknown", "No candidate", "Could not", "--threads"))
+    return HeadlessResult(ok=ok, text=text)
+
+
+def _cmd_findings(args: str) -> HeadlessResult:
+    """The project's findings ledger (ROADMAP #59); `findings gate --max high` exits 1 when the gate fails."""
+    from bog_agents_cli.findings_controller import run_findings_headless
+
+    ok, text, data = run_findings_headless(args, Path.cwd())
+    return HeadlessResult(ok=ok, text=text, data=data)
+
+
 # Registry of headless-capable commands: name -> (description, handler).
+def _cmd_tokens(args: str) -> HeadlessResult:
+    """Measure the CLI agent's fixed per-turn cost (headless twin of ``/tokens middleware``).
+
+    Builds the same middleware stack the TUI uses around a recording model (no
+    provider call) and reports tokens per turn attributed to each middleware
+    and tool. ``--mini`` measures the ``lean`` profile instead.
+    """
+    from bog_agents_cli.tokens_audit_controller import (
+        LEAN_PROFILE,
+        audit_cli_agent,
+        render_cli_audit,
+    )
+
+    words = args.split()
+    verb = words[0] if words and not words[0].startswith("-") else "middleware"
+    if verb != "middleware":
+        return HeadlessResult(
+            ok=False, text="usage: tokens middleware [--mini]", data={}
+        )
+    harness_profile = LEAN_PROFILE if "--mini" in words else None
+    audit = audit_cli_agent(harness_profile=harness_profile, cwd=Path.cwd())
+    return HeadlessResult(
+        ok=True,
+        text=render_cli_audit(audit, harness_profile=harness_profile),
+        data=audit.to_dict(),
+    )
+
+
 HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "commands": ("List all slash commands and which run headlessly", _cmd_commands),
     "help": ("Show help for all or a specific slash command", _cmd_help),
@@ -345,7 +395,52 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     ),
     "changelog": ("Show the CLI changelog", _cmd_changelog),
     "goal": ("Show the current project goal, status, and rubric", _cmd_goal),
+    "tokens": (
+        "Harness overhead per turn, attributed per middleware and tool (tokens middleware [--mini])",
+        _cmd_tokens,
+    ),
+    "memory": (
+        "Memory rebuild: rebuild (dedup) | status | show | apply | discard",
+        _cmd_memory,
+    ),
+    "findings": (
+        "Findings ledger: list | show | triage | gate | sarif | record (gate exits 1 on failure)",
+        _cmd_findings,
+    ),
 }
+
+
+_MSYS_GIT_PREFIXES: tuple[str, ...] = (
+    "c:/program files/git",
+    "c:\\program files\\git",
+    "c:/program files (x86)/git",
+    "c:\\program files (x86)\\git",
+    "/c/program files/git",
+)
+
+
+def recover_msys_command(raw: str) -> str:
+    """Undo Git Bash's rewrite of a leading-slash command argument.
+
+    v6 CLI-8: on Windows, MSYS path conversion turns `bog-agents command
+    "/help"` into `C:/Program Files/Git/help` before Python sees it, so the
+    documented form failed with a baffling `/c:/program is not available`.
+    When the argument starts with a Git-for-Windows install prefix, the
+    remainder is the command the user actually typed.
+
+    Args:
+        raw: The stripped command line as received.
+
+    Returns:
+        The recovered command line, or `raw` unchanged.
+    """
+    lowered = raw.replace("\\", "/").lower()
+    for prefix in _MSYS_GIT_PREFIXES:
+        norm_prefix = prefix.replace("\\", "/")
+        if lowered.startswith(norm_prefix):
+            tail = raw.replace("\\", "/")[len(norm_prefix) :]
+            return tail.lstrip("/").strip()
+    return raw
 
 
 def run_headless_command(command_line: str, *, output_format: str = "text") -> int:
@@ -361,7 +456,7 @@ def run_headless_command(command_line: str, *, output_format: str = "text") -> i
         Exit code: `0` on success, `1` when the command ran but reported a
         failure, `2` when the command is unknown or not available headless.
     """
-    raw = command_line.strip()
+    raw = recover_msys_command(command_line.strip())
     if not raw:
         return _emit(
             _err('No command provided. Try `bog-agents command "/help"`.'),
@@ -376,7 +471,8 @@ def run_headless_command(command_line: str, *, output_format: str = "text") -> i
         available = ", ".join(f"/{key}" for key in sorted(HEADLESS_COMMANDS))
         message = (
             f"/{name} is not available in non-interactive mode. "
-            f"Headless commands: {available}. "
+            f"Headless commands: {available} (the leading slash is optional — "
+            "on Git Bash for Windows prefer `bog-agents command help`). "
             "Run other commands inside the interactive TUI, or use a dedicated "
             "subcommand where one exists (e.g. `bog-agents threads list`)."
         )

@@ -471,3 +471,76 @@ class TestWorkingMemoryCapWiring:
         assert 0 < derived <= 6
         # And tool_call is still never resident between calls.
         assert mw.engine.memory.stats().get("tool_call", 0) == 0
+
+
+class TestFirstLoadFailsClosed:
+    """v6 SDK-8: a rulebook that never parsed must not silently enforce nothing."""
+
+    def _broken_rules(self, tmp_path: Path) -> Path:
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        rules_dir.mkdir(parents=True)
+        broken = rules_dir / "deny-prod.yaml"
+        broken.write_text("this is :: not yaml [\n", encoding="utf-8")
+        return broken
+
+    def test_broken_yaml_at_first_load_denies_tool_calls(self, tmp_path: Path) -> None:
+        self._broken_rules(tmp_path)
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
+        calls: list[str] = []
+
+        def handler(_r: object) -> str:
+            calls.append("ran")
+            return "ran"
+
+        result = mw.wrap_tool_call(_make_request("shell", {}), handler)
+
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert "failed to load" in result.content
+        assert calls == []
+        count, err = mw.reload()
+        assert count == 0 and err
+
+    async def test_async_path_denies_too(self, tmp_path: Path) -> None:
+        self._broken_rules(tmp_path)
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
+
+        async def handler(_r: object) -> str:
+            return "ran"
+
+        result = await mw.awrap_tool_call(_make_request("shell", {}), handler)
+        assert isinstance(result, ToolMessage) and result.status == "error"
+
+    def test_fail_open_keeps_the_old_behaviour(self, tmp_path: Path) -> None:
+        self._broken_rules(tmp_path)
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0, fail_open=True)
+        assert mw.wrap_tool_call(_make_request("shell", {}), lambda _r: "ran") == "ran"
+
+    def test_fixing_the_yaml_unblocks(self, tmp_path: Path) -> None:
+        broken = self._broken_rules(tmp_path)
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
+        assert isinstance(mw.wrap_tool_call(_make_request("shell", {}), lambda _r: "ran"), ToolMessage)
+        broken.write_text("[]\n", encoding="utf-8")
+        mw.reload()
+        assert mw.wrap_tool_call(_make_request("shell", {}), lambda _r: "ran") == "ran"
+
+    def test_later_load_error_keeps_good_rules_and_does_not_block(self, tmp_path: Path) -> None:
+        rules_dir = tmp_path / ".bog-agents" / "expert_rules"
+        good = _write_rule_file(
+            rules_dir,
+            "block.yaml",
+            """
+            - name: block_a
+              when:
+                - tool_call:
+                    name: a
+              then:
+                - deny: "no a"
+            """,
+        )
+        mw = ExpertRulesMiddleware(working_dir=tmp_path, reload_interval=0)
+        good.write_text("this is :: not yaml [\n", encoding="utf-8")
+        mw.reload()
+        # The old rule is still enforced and unrelated tools still pass.
+        assert isinstance(mw.wrap_tool_call(_make_request("a", {}), lambda _r: "ran"), ToolMessage)
+        assert mw.wrap_tool_call(_make_request("b", {}), lambda _r: "ran") == "ran"

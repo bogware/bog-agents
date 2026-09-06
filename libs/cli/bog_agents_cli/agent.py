@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from bog_agents import create_agent
+from bog_agents import FeatureConfig, create_agent
 from bog_agents.backends import CompositeBackend, LocalShellBackend
 from bog_agents.backends.filesystem import FilesystemBackend
 from bog_agents.middleware import MemoryMiddleware, SkillsMiddleware
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from bog_agents.backends.sandbox import SandboxBackendProtocol
+    from bog_agents.cost_ledger import CostLedger
     from bog_agents.middleware.subagents import CompiledSubAgent, SubAgent
     from langchain.agents.middleware import InterruptOnConfig
     from langchain.agents.middleware.types import AgentState
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
 
     from bog_agents_cli.mcp_tools import MCPServerInfo
     from bog_agents_cli.output import OutputFormat
+    from bog_agents_cli.trust_profiles import TrustProfile
+    from bog_agents_cli.web_policy import WebPolicy
 
 from bog_agents_cli.config import (
     COLORS,
@@ -56,6 +59,125 @@ from bog_agents_cli.unicode_security import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _powershell_tool_enabled() -> bool:
+    """Whether the opt-in `powershell` tool is on (`tools.powershell` / BOG_AGENTS_POWERSHELL_TOOL, ROADMAP #61)."""
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        return bool(resolve_option("tools.powershell"))
+    except Exception:  # a config problem never blocks agent creation
+        return False
+
+
+def _tool_name(tool: object) -> str:
+    """Best-effort name of a tool object, callable or dict spec."""
+    if isinstance(tool, dict):
+        return str(tool.get("name", ""))
+    return str(getattr(tool, "name", None) or getattr(tool, "__name__", "") or "")
+
+
+def _install_web_policy(trust_profile: TrustProfile) -> WebPolicy:
+    """Install and return the process-wide fetch policy: config lists plus the trust profile's (ROADMAP #48)."""
+    from bog_agents_cli.web_policy import WebPolicy, policy_from_strings, set_web_policy
+
+    allowed = blocked = None
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        allowed = resolve_option("web.allowed_domains")
+        blocked = resolve_option("web.blocked_domains")
+    except Exception:  # a config problem never blocks agent creation
+        logger.debug(
+            "Could not read web.allowed_domains / web.blocked_domains", exc_info=True
+        )
+    policy = policy_from_strings(allowed, blocked).merged(
+        WebPolicy(
+            allowed_domains=trust_profile.allowed_domains,
+            blocked_domains=trust_profile.blocked_domains,
+        )
+    )
+    set_web_policy(policy)
+    return policy
+
+
+def _strip_excluded_tools(
+    agent_middleware: list[Any], trust_profile: TrustProfile
+) -> None:
+    """Drop the trust profile's excluded tools from every middleware that carries tools (ROADMAP #48)."""
+    for mw in agent_middleware:
+        mw_tools = getattr(mw, "tools", None)
+        if not mw_tools:
+            continue
+        kept = [t for t in mw_tools if not trust_profile.tool_excluded(_tool_name(t))]
+        if len(kept) == len(mw_tools):
+            continue
+        try:
+            mw.tools = kept
+        except (
+            AttributeError
+        ):  # read-only property: leave it, the test suite flags the gap
+            logger.warning("Could not strip excluded tools from %s", type(mw).__name__)
+
+
+def _build_fallback_model(spec: str) -> Any:  # noqa: ANN401 - BaseChatModel or None
+    """Build one `[models].fallbacks` entry for the failover middleware (ROADMAP #53)."""
+    try:
+        from bog_agents_cli.config import create_model
+
+        return create_model(spec).model
+    except Exception:
+        logger.info("failover: could not build %s", spec, exc_info=True)
+        return None
+
+
+def _configured_fallbacks() -> list[str]:
+    """`[models].fallbacks` from config.toml, or `[]` when unset / unreadable."""
+    try:
+        from bog_agents_cli.model_config import ModelConfig
+
+        return [s for s in ModelConfig.load().fallbacks if s]
+    except Exception:
+        logger.debug("Could not read [models].fallbacks", exc_info=True)
+        return []
+
+
+def _model_label(model: object) -> str:
+    """How a resolved chat model is named in failover notes."""
+    for attr in ("model_name", "model", "model_id"):
+        value = getattr(model, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return type(model).__name__
+
+
+def _compliance_features(
+    assistant_id: str, *, restricted: bool = False
+) -> dict[str, Any]:
+    """`FeatureConfig` kwargs for the action log / OTLP export from `compliance.*` (ROADMAP #74)."""
+    features: dict[str, Any] = {}
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        if resolve_option("compliance.action_log"):
+            import time as _time
+
+            features["enable_action_log"] = True
+            features["action_log_dir"] = str(
+                Path(settings.user_agents_dir) / "action-log"
+            )
+            features["action_log_run_id"] = (
+                f"{assistant_id}-{_time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            )
+        endpoint = resolve_option("compliance.otel_endpoint")
+        if endpoint:
+            features["otel_endpoint"] = str(endpoint)
+        if resolve_option("tools.code_mode") and not restricted:
+            features["enable_code_mode"] = True  # ROADMAP #72
+    except Exception:  # a config problem never blocks agent creation
+        logger.debug("Could not read compliance.* options", exc_info=True)
+    return features
 
 
 def _resolve_auto_background_after(raw: str | float | None) -> float | None:
@@ -1270,6 +1392,111 @@ def _add_interrupt_on() -> dict[str, InterruptOnConfig]:
     return interrupt_map
 
 
+def _cache_diagnostics_dir() -> Path:
+    """Directory the SDK's cache-bust detector writes per-thread JSONL to (ROADMAP #52)."""
+    from bog_agents_cli.config import bog_agents_home
+
+    return bog_agents_home() / "cache_diagnostics"
+
+
+def _memory_index_path(project_root: Path | str) -> Path:
+    """Return the per-project persistent `memory_search` index path (v6 SDK-5).
+
+    Args:
+        project_root: The working directory the memory cascade was built for.
+
+    Returns:
+        `~/.bog-agents/memory_index/<sha256(project)[:12]>.db`.
+    """
+    import hashlib
+
+    from bog_agents_cli.config import bog_agents_home
+
+    key = hashlib.sha256(str(Path(project_root).resolve()).encode("utf-8")).hexdigest()[
+        :12
+    ]
+    return bog_agents_home() / "memory_index" / f"{key}.db"
+
+
+MINI_KEEP_TOOLS: tuple[str, ...] = (
+    "read_file",
+    "read_many_files",
+    "write_file",
+    "edit_file",
+    "multi_edit_file",
+    "delete",
+    "ls",
+    "glob",
+    "grep",
+    "execute",
+    "task",
+    "ask_user",
+)
+"""Tools whose schemas stay visible under `--mini`; everything else sits behind `tool_search` / `select` (ROADMAP #54)."""
+
+
+def _advisor_tools(model_spec: str, cost_ledger: Any, *, restricted: bool) -> list[Any]:  # noqa: ANN401 - CostLedger
+    """ROADMAP #75: `ask_advisor` to the operator's `hard` tier when `tools.advisor` is on (never under --restricted)."""
+    if restricted:
+        return []
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        if not resolve_option("tools.advisor"):
+            return []
+        from bog_agents_cli.advisor_tools import (
+            advisor_tools_bundle,
+            hard_tier_ask,
+            hard_tier_model,
+        )
+
+        tier = hard_tier_model(active_model=model_spec)
+        if tier is None:
+            return []
+        from bog_agents_cli.config import create_model
+
+        ask, spec = hard_tier_ask(
+            resolve_model=lambda s: create_model(s).model, tier_model=tier
+        )
+        tracker = (
+            cost_ledger.tracker_for("advisor", model_name=spec)
+            if cost_ledger is not None
+            else None
+        )
+
+        def _usage(ins: int, outs: int) -> None:
+            if tracker is not None:
+                tracker.input_tokens += ins
+                tracker.output_tokens += outs
+
+        tools, _meter = advisor_tools_bundle(
+            ask=ask,
+            model_label=spec,
+            max_questions=int(resolve_option("tools.advisor_max_questions") or 5),
+            on_usage=_usage,
+        )
+        return list(tools)
+    except Exception:
+        logger.debug("Could not wire the advisor tool", exc_info=True)
+    return []
+
+
+def _workflow_tools(cwd: Path, *, restricted: bool) -> list[Any]:
+    """ROADMAP #73: `author_workflow` / `list_workflows`, only when the project uses workflows (or `tools.workflows` is on)."""
+    if restricted:
+        return []
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+        from bog_agents_cli.workflow import workflows_dir
+        from bog_agents_cli.workflow_tools import workflow_tools_bundle
+
+        if workflows_dir(cwd).is_dir() or bool(resolve_option("tools.workflows")):
+            return list(workflow_tools_bundle(cwd))
+    except Exception:
+        logger.debug("Could not wire workflow tools", exc_info=True)
+    return []
+
+
 def create_cli_agent(
     model: str | BaseChatModel,
     assistant_id: str,
@@ -1297,6 +1524,11 @@ def create_cli_agent(
     mcp_server_info: list[MCPServerInfo] | None = None,
     cwd: str | Path | None = None,
     project_context: ProjectContext | None = None,
+    cost_ledger: CostLedger | None = None,
+    extra_tools: list[Any] | None = None,
+    harness_profile: str | None = None,
+    restricted: bool = False,
+    plan_only: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -1344,11 +1576,22 @@ def create_cli_agent(
         auto_lint: Auto-run linter after file edits.
         auto_test: Auto-run tests after file edits.
         profile: Configuration profile name to apply.
+        harness_profile: Registry key of an SDK `HarnessProfile` (`lean` behind
+            `--mini`) layered over the model's own profile.
+        plan_only: ROADMAP #69: never register the plan-mode mutating tools
+            (write / edit / execute / git mutations) — the headless `--plan` pass.
+        restricted: `--restricted` (ROADMAP #48): drop the shell, git, raw HTTP,
+            search and daemon tools, refuse auto-approval and gate fetches on
+            the trust profile's domain allow-list.
         cwd: Override the working directory for the agent's filesystem backend
             and system prompt.
         project_context: Explicit project path context for project-sensitive
             behavior such as project `AGENTS.md` files, skills, subagents, and
             MCP trust.
+        extra_tools: Caller-supplied tools appended to the built-ins (ROADMAP #76:
+            a teammate's `send_file` / `receive_files`).
+        cost_ledger: Session ledger whose runaway caps gate subagent spawns
+            and spend (v6 SDK-7); forwarded to `create_agent`.
 
     Returns:
         2-tuple of `(agent_graph, backend)`
@@ -1366,6 +1609,56 @@ def create_cli_agent(
         model = _create_model(model).model
 
     tools = list(tools or [])
+    # ROADMAP #48: the trust profile (`--restricted`, or the CLI profile's
+    # `custom_settings.trust`) decides which tool families exist at all and
+    # which domains the web tools may reach. It is consulted again after the
+    # profile block below so a profile cannot re-enable what the flag removed.
+    from bog_agents_cli.trust_profiles import resolve_trust_profile
+
+    trust_profile = resolve_trust_profile(
+        restricted=restricted,
+        profile_name=profile or "",
+        config_dir=settings.user_agents_dir,
+    )
+    web_policy = _install_web_policy(trust_profile)
+    if trust_profile.restricted and web_policy.allowed_domains:
+        # A config allow-list counts too: `fetch_url` stays, gated by it.
+        from dataclasses import replace as dc_replace
+
+        trust_profile = dc_replace(
+            trust_profile, allowed_domains=web_policy.allowed_domains
+        )
+    if trust_profile.strips_shell:
+        enable_shell = False
+        enable_git_tools = False
+    if plan_only:  # ROADMAP #69: a planning pass registers no mutating tool at all
+        from dataclasses import replace as _replace
+
+        from bog_agents.middleware.plan_mode import MUTATING_TOOLS
+
+        trust_profile = _replace(
+            trust_profile,
+            excluded_tools=(*trust_profile.excluded_tools, *sorted(MUTATING_TOOLS)),
+            notes=(
+                *trust_profile.notes,
+                "plan-only: mutating tools are not registered",
+            ),
+        )
+        enable_shell = False
+        enable_git_tools = False
+    # ROADMAP #50: the managed policy's skill allow-list and zero-retention flag.
+    try:
+        from bog_agents_cli.managed_policy import active_policy, install_skill_filter
+
+        managed = active_policy()
+        install_skill_filter(managed)
+        if managed is not None and managed.zero_retention:
+            enable_memory = False
+    except Exception:
+        logger.debug("managed policy not applied to the agent build", exc_info=True)
+    if trust_profile.restricted:
+        auto_approve = False
+    tools = [t for t in tools if not trust_profile.tool_excluded(_tool_name(t))]
     effective_cwd = (
         Path(cwd)
         if cwd is not None
@@ -1379,7 +1672,11 @@ def create_cli_agent(
     try:
         from bog_agents_cli.proxy_tools import build_proxy_tools
 
-        proxy_tools = build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        proxy_tools = (
+            []
+            if trust_profile.restricted
+            else build_proxy_tools(cwd=effective_cwd or Path.cwd())
+        )
         if proxy_tools:
             tools.extend(proxy_tools)
             logger.info(
@@ -1388,6 +1685,31 @@ def create_cli_agent(
             )
     except Exception:
         logger.warning("Failed to build proxy tools; skipping", exc_info=True)
+
+    # ROADMAP #55: `schedule` / `subscribe` hand work to the ambient daemon
+    # carrying this thread's id, so the run resumes the same thread. Only
+    # registered while the daemon is running (four schemas otherwise wasted).
+    try:
+        from bog_agents_cli.daemon_client import is_daemon_running
+
+        if is_daemon_running() and not trust_profile.restricted:
+            from bog_agents.tools.daemon_tools import daemon_tools_bundle
+
+            daemon_cwd = Path(effective_cwd or Path.cwd())
+            tools.extend(
+                daemon_tools_bundle(
+                    working_dir=str(daemon_cwd),
+                    goal_ref=str(daemon_cwd / ".bog-agents" / "goal.json"),
+                )
+            )
+    except Exception:
+        logger.debug("Could not wire daemon tools", exc_info=True)
+    tools.extend(extra_tools or [])
+    tools.extend(
+        _workflow_tools(
+            Path(effective_cwd or Path.cwd()), restricted=trust_profile.restricted
+        )
+    )
 
     # Agent-written auto-memories (#13): a `remember` tool so the agent can
     # proactively persist durable facts (conventions/gotchas/fix-patterns) to
@@ -1493,6 +1815,15 @@ def create_cli_agent(
 
     # Build middleware stack based on enabled features
     agent_middleware = []
+    if plan_only:  # ROADMAP #69: the built-in write / edit / execute tools never reach a model request
+        from bog_agents.middleware._tool_exclusion import (  # noqa: PLC2701 - the harness-profile exclusion middleware
+            _ToolExclusionMiddleware,
+        )
+        from bog_agents.middleware.plan_mode import MUTATING_TOOLS
+
+        agent_middleware.append(
+            _ToolExclusionMiddleware(excluded=frozenset(MUTATING_TOOLS))
+        )
     agent_middleware.append(ConfigurableModelMiddleware())
 
     # Auto-enable tool-call parser for Ollama models. Many local models emit
@@ -1543,6 +1874,8 @@ def create_cli_agent(
             from bog_agents.tools import memory_search_tool_bundle
 
             memory_embedder = None
+            memory_embed_batch = None
+            memory_db_path = None
             if os.environ.get("BOG_AGENTS_MEMORY_VECTOR", "").strip().lower() in (
                 "1",
                 "true",
@@ -1558,6 +1891,11 @@ def create_cli_agent(
                     model = _get_embedding_model()
                     if model is not None:
                         memory_embedder = embedder_from_langchain(model)
+                        # v6 SDK-5: embed lazily, in one batch, and persist the
+                        # vectors per project so a restart re-embeds only
+                        # changed text instead of every memory block.
+                        memory_embed_batch = getattr(model, "embed_documents", None)
+                        memory_db_path = _memory_index_path(effective_cwd or Path.cwd())
                 except Exception:
                     logger.debug(
                         "Could not resolve a memory embedder; keyword-only",
@@ -1565,7 +1903,12 @@ def create_cli_agent(
                     )
 
             tools.extend(
-                memory_search_tool_bundle(memory_sources, embedder=memory_embedder)
+                memory_search_tool_bundle(
+                    memory_sources,
+                    embedder=memory_embedder,
+                    embed_batch=memory_embed_batch,
+                    db_path=memory_db_path,
+                )
             )
         except Exception:
             logger.debug("Could not build memory_search tool", exc_info=True)
@@ -1712,6 +2055,15 @@ def create_cli_agent(
                     tools.extend(pty_tools_bundle(PtyController()))
             except Exception:
                 logger.debug("Could not wire PTY tools", exc_info=True)
+
+            # Opt-in PowerShell tool (ROADMAP #61): the script goes to
+            # pwsh / powershell.exe as one argv element, never through
+            # cmd.exe; it shares execute's dangerous-command gate and the
+            # CLI's shell classification (SHELL_TOOL_NAMES / auto mode).
+            if _powershell_tool_enabled():
+                from bog_agents.tools import powershell_tool_bundle
+
+                tools.extend(powershell_tool_bundle(backend))
         else:
             # No shell access - use plain FilesystemBackend with the
             # same virtual_mode policy as the shell branch.
@@ -1755,7 +2107,6 @@ def create_cli_agent(
     # deny a tool call. Loads ingested Claude/Cursor hook files + bog hooks.json
     # PreToolUse entries; only added when such hooks exist.
     try:
-        from bog_agents_cli.hook_decisions import load_pretooluse_hooks
         from bog_agents_cli.hook_middleware import PreToolUseHookMiddleware
         from bog_agents_cli.hooks import _load_hooks
 
@@ -1763,11 +2114,45 @@ def create_cli_agent(
             project_context.project_root if project_context is not None else None
         )
         if hook_project_root is not None:
-            decision_hooks = load_pretooluse_hooks(
-                hook_project_root, config_hooks=_load_hooks()
+            from bog_agents_cli.hook_decisions import (
+                load_decision_hooks,
+                load_plugin_hooks,
             )
-            if decision_hooks:
-                agent_middleware.append(PreToolUseHookMiddleware(decision_hooks))
+            from bog_agents_cli.prompt_hooks import build_prompt_invoke, is_prompt_hook
+
+            config_hooks = _load_hooks()
+            plugin_hooks = load_plugin_hooks(
+                settings.user_agents_dir, project_root=hook_project_root
+            )
+            pre_all = load_decision_hooks(
+                hook_project_root,
+                config_hooks=config_hooks,
+                event="PreToolUse",
+                plugin_hooks=plugin_hooks,
+            )
+            decision_hooks = [h for h in pre_all if not is_prompt_hook(h)]
+            prompt_hooks = [h for h in pre_all if is_prompt_hook(h)]
+            post_hooks = [
+                h
+                for h in load_decision_hooks(
+                    hook_project_root,
+                    config_hooks=config_hooks,
+                    event="PostToolUse",
+                    plugin_hooks=plugin_hooks,
+                )
+                if not is_prompt_hook(h)
+            ]
+            if decision_hooks or prompt_hooks or post_hooks:
+                agent_middleware.append(
+                    PreToolUseHookMiddleware(
+                        decision_hooks,
+                        post_hooks=post_hooks,
+                        prompt_hooks=prompt_hooks,
+                        prompt_invoke=build_prompt_invoke(model)
+                        if prompt_hooks
+                        else None,
+                    )
+                )
     except Exception:
         logger.debug("Could not wire PreToolUse hook enforcement", exc_info=True)
 
@@ -1826,13 +2211,29 @@ def create_cli_agent(
             root_dir=tempfile.mkdtemp(prefix="bog_agents_conversation_history_"),
             virtual_mode=True,
         )
-        composite_backend = CompositeBackend(
-            default=backend,
-            routes={
-                "/large_tool_results/": large_results_backend,
-                "/conversation_history/": conversation_history_backend,
-            },
+        # v6 SDK-4: the street sweeper's offloaded originals live under
+        # ~/.bog-agents/swept/<thread>/<marker>.md, never in the project tree.
+        from bog_agents_cli.config import bog_agents_home
+
+        swept_backend = FilesystemBackend(
+            root_dir=str(bog_agents_home() / "swept"),
+            virtual_mode=True,
         )
+        routes: dict[str, Any] = {
+            "/large_tool_results/": large_results_backend,
+            "/conversation_history/": conversation_history_backend,
+            "/swept_context/": swept_backend,
+        }
+        try:  # ROADMAP #76: /add-dir mounts as /mnt/<name>/
+            from bog_agents_cli.mounts import mount_routes
+
+            for route, directory in mount_routes(effective_cwd or Path.cwd()).items():
+                routes[route] = FilesystemBackend(
+                    root_dir=str(directory), virtual_mode=True
+                )
+        except Exception:
+            logger.debug("Could not wire /add-dir mounts", exc_info=True)
+        composite_backend = CompositeBackend(default=backend, routes=routes)
     else:
         # Sandbox mode: No special routing needed
         composite_backend = CompositeBackend(
@@ -1865,6 +2266,10 @@ def create_cli_agent(
                 auto_lint = p.auto_lint
             if p.auto_test is not None:
                 auto_test = p.auto_test
+    if trust_profile.strips_shell:
+        enable_git_tools = False
+    if trust_profile.restricted:
+        auto_approve = False
 
     # Git tools middleware (#15, #43)
     if enable_git_tools and sandbox is None:
@@ -1887,6 +2292,22 @@ def create_cli_agent(
         working_dir = effective_cwd or Path.cwd()
         agent_middleware.append(CheckpointingMiddleware(working_dir=working_dir))
 
+    # ROADMAP #51: session caps + budget from the `cost.*` manifest keys
+    # (config.toml / BOG_AGENTS_* env). Every CLI agent gets a CostLedger so
+    # subagent spawns and web searches are counted and capped.
+    from bog_agents_cli.cost_controller import build_cost_ledger, load_cost_caps
+    from bog_agents_cli.tools import set_web_search_ledger
+
+    cost_caps = load_cost_caps()
+    if cost_ledger is None:
+        cost_ledger = build_cost_ledger(cost_caps)
+    if budget_usd <= 0 and cost_caps.budget_usd:
+        budget_usd = cost_caps.budget_usd
+    set_web_search_ledger(cost_ledger)
+    tools.extend(
+        _advisor_tools(model_spec_str, cost_ledger, restricted=trust_profile.restricted)
+    )
+
     # Cost tracking middleware (#8, #34, #36, #47)
     if enable_cost_tracking:
         from bog_agents.middleware.cost_tracker import CostTrackerMiddleware
@@ -1896,6 +2317,9 @@ def create_cli_agent(
                 model_name=model_spec_str,
                 effort_level=effort_level,
                 budget_usd=budget_usd if budget_usd > 0 else None,
+                # #51: a hit budget pauses with a budget_reached prompt
+                # instead of killing the turn with RuntimeError.
+                on_budget="interrupt",
             )
         )
 
@@ -2077,11 +2501,29 @@ def create_cli_agent(
         agent_middleware.append(
             BedrockRefreshMiddleware(interactive=bedrock_interactive)
         )
+    else:
+        # ROADMAP #53: provider-agnostic failover — a rate limit / quota
+        # failure rotates through `[models].fallbacks` (Ollama included) and
+        # parks the primary until the provider's reset header says otherwise.
+        fallback_specs = _configured_fallbacks()
+        if fallback_specs:
+            from bog_agents.middleware.provider_failover import (
+                ProviderFailoverMiddleware,
+            )
+
+            agent_middleware.append(
+                ProviderFailoverMiddleware(
+                    fallback_specs,
+                    build_model=_build_fallback_model,
+                    primary_label=_model_label(model),
+                )
+            )
 
     # Street sweeper (opt-in) — attach the per-cwd singleton instance, disabled
     # by default. `/sweep on` flips it live without a rebuild. Pointing it at the
     # live composite backend enables offload + the recall_swept tool. Wrapped so
     # an attach failure can never block agent creation.
+    sweeper_attached = False
     try:
         from bog_agents_cli.sweep_controller import get_sweep_controller
 
@@ -2089,6 +2531,7 @@ def create_cli_agent(
         sweeper.set_backend(composite_backend)
         sweeper.set_pricing(model_spec_str)
         agent_middleware.append(sweeper)
+        sweeper_attached = True
     except Exception:
         logger.debug("street sweeper attach failed; skipping", exc_info=True)
 
@@ -2099,6 +2542,14 @@ def create_cli_agent(
     # create_agent even under --auto-approve, so the guard can't be bypassed.
     from bog_agents_cli.self_protection import authority_file_permissions
 
+    # v6 SDK-3: declaring the sweeper feature makes `create_agent` reserve its
+    # canonical slot (inside CostTracker, outside Summarization); the CLI's
+    # singleton above then *replaces* that built-in by name instead of being
+    # spliced in after the core stack, where it ran inside summarization and
+    # never saw the litter summarization had already paid for.
+    if trust_profile.restricted or trust_profile.excluded_tools:
+        tools = [t for t in tools if not trust_profile.tool_excluded(_tool_name(t))]
+        _strip_excluded_tools(agent_middleware, trust_profile)
     agent = create_agent(
         model=model,
         system_prompt=system_prompt,
@@ -2106,8 +2557,25 @@ def create_cli_agent(
         backend=composite_backend,
         middleware=agent_middleware,
         interrupt_on=interrupt_on,
-        permissions=authority_file_permissions(),
+        permissions=authority_file_permissions(restricted=trust_profile.restricted),
         checkpointer=checkpointer,
         subagents=custom_subagents or None,
+        cost_ledger=cost_ledger,
+        config=FeatureConfig(
+            enable_street_sweeper=sweeper_attached,
+            # ROADMAP #52: innermost cache-bust detector; `/cost cache` reads
+            # the per-thread JSONL it writes under ~/.bog-agents.
+            enable_cache_diagnostics=True,
+            cache_diagnostics_dir=str(_cache_diagnostics_dir()),
+            # ROADMAP #54: `--mini` selects the SDK's lean profile.
+            harness_profile=harness_profile or None,
+            # `--mini` also hides every non-core tool schema behind the
+            # `tool_search` / `select` metatools (allowlist mode).
+            enable_deferred_tools=harness_profile == "lean",
+            deferred_keep_tools=list(MINI_KEEP_TOOLS)
+            if harness_profile == "lean"
+            else None,
+            **_compliance_features(assistant_id, restricted=trust_profile.restricted),
+        ),
     ).with_config(config)
     return agent, composite_backend

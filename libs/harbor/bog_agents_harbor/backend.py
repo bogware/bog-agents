@@ -10,6 +10,7 @@ For scripting or testing outside an async context, use the module-level
 `run_sync()` helper::
 
     from bog_agents_harbor.backend import run_sync, HarborSandbox
+
     result = run_sync(sandbox.aexecute("ls"))
 
 Do NOT call `run_sync()` from inside async code — use ``await`` directly.
@@ -19,6 +20,7 @@ import asyncio
 import base64
 import json
 import shlex
+from collections.abc import Coroutine
 from typing import Any
 
 from bog_agents.backends.protocol import (
@@ -37,12 +39,16 @@ _SYNC_NOT_SUPPORTED = (
 )
 
 
-def run_sync(coro: object) -> object:
+def run_sync[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run an async coroutine synchronously.
 
     Convenience helper for testing and scripting contexts where an event loop
     is not already running. Do NOT use this inside async code — use ``await``
     directly.
+
+    v6 SAT-5: runs on a fresh event loop via `asyncio.run`. The previous
+    `asyncio.get_event_loop().run_until_complete` is deprecated on 3.12+ when
+    no loop is set for the thread and reused whatever loop was lying around.
 
     Args:
         coro: An awaitable (coroutine) returned by any ``HarborSandbox.a*`` method.
@@ -58,7 +64,8 @@ def run_sync(coro: object) -> object:
         result = run_sync(sandbox.aexecute("echo hello"))
         ```
     """
-    return asyncio.get_event_loop().run_until_complete(coro)  # type: ignore[arg-type]
+    return asyncio.run(coro)
+
 
 # Shell exit codes used by the aedit command script
 _EXIT_NOT_FOUND = 1

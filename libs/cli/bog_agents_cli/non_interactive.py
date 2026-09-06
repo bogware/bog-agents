@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from bog_agents.git_env import hardened_git_env
 from langchain.agents.middleware.human_in_the_loop import ActionRequest, HITLRequest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command, Interrupt
@@ -527,7 +528,7 @@ def _git_dirty_paths_sync(cwd: Path) -> set[str]:
     """Return the set of paths that `git status --porcelain` reports as dirty.
 
     Synchronous (subprocess.run) by design: the previous async variant used
-    `asyncio.create_subprocess_exec("git", ...)` which on Windows fails to
+    `asyncio.create_subprocess_exec("git", ..., env=hardened_git_env())` which on Windows fails to
     locate `git.exe` reliably without an absolute path, returning an empty
     set silently and breaking the `--auto-commit` scope (Fix #25). Routing
     through `shutil.which()` + `subprocess.run()` is what the rest of the
@@ -556,6 +557,7 @@ def _git_dirty_paths_sync(cwd: Path) -> set[str]:
             encoding="utf-8",
             errors="replace",
             check=False,
+            env=hardened_git_env(),
         )
     except (subprocess.SubprocessError, OSError):
         return set()
@@ -1121,6 +1123,8 @@ async def run_non_interactive(
     always_ask: bool = False,
     auto_mode: bool = False,
     plan_mode: bool = False,
+    plan_only: bool = False,
+    sink: list[str] | None = None,
 ) -> int:
     """Run a single task non-interactively and exit.
 
@@ -1196,6 +1200,11 @@ async def run_non_interactive(
         plan_mode: When `True` (from `--permission-mode plan`), refuse the
             run with exit code 2 — plan-mode tool stripping is interactive
             only and would not be enforced headless.
+
+        plan_only: ROADMAP #69: build the agent with the plan-mode mutating tools
+            never registered (the headless `--plan` planning pass).
+        sink: When given, the agent's final text is appended to it (the planning
+            pass hands its plan to the execution pass this way).
 
     Returns:
         Exit code: 0 for success, 1 for error, 130 for keyboard interrupt.
@@ -1345,7 +1354,9 @@ async def run_non_interactive(
         # Without this, --auto-approve was silently dropped in -n mode and
         # the agent kept emitting "Please run X in your terminal" because
         # it had no execute tool to call (recurring #18 symptom).
-        enable_shell = auto_approve or bool(settings.shell_allow_list)
+        enable_shell = (
+            auto_approve or bool(settings.shell_allow_list)
+        ) and not plan_only
         shell_is_unrestricted = auto_approve or isinstance(
             settings.shell_allow_list, type(SHELL_ALLOW_ALL)
         )
@@ -1376,6 +1387,7 @@ async def run_non_interactive(
                 no_mcp=no_mcp,
                 trust_project_mcp=trust_project_mcp,
                 interactive=False,
+                plan_only=plan_only,
             )
             try:
                 async with asyncio.timeout(45):
@@ -1432,6 +1444,10 @@ async def run_non_interactive(
                 thread_url_lookup=thread_url_lookup,
                 output_format=output_format,
             )
+            if (
+                sink is not None
+            ):  # ROADMAP #69: the planning pass hands its text to the executor
+                sink.append("".join(final_state.full_response))
 
             if auto_commit:
                 from bog_agents_cli.auto_commit import run_auto_commit
@@ -1597,3 +1613,67 @@ async def run_non_interactive(
             mcp_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await mcp_task
+
+
+PLANNING_PREFIX = (
+    "Plan only - do not make changes. Produce a numbered, step-by-step plan for this task: for each step "
+    "name the files it touches and how it will be verified. Reply with the plan and nothing else.\n\n"
+)
+_PHASE_KWARGS = {
+    "auto_approve",
+    "auto_mode",
+    "always_ask",
+    "plan_mode",
+    "plan_only",
+    "sink",
+    "stream",
+}
+
+
+async def run_plan_then_execute(
+    message: str,
+    *,
+    execute: bool,
+    quiet: bool = False,
+    auto_approve: bool = False,
+    **kwargs: Any,
+) -> int:
+    """`--plan`: a read-only planning pass, then (with `--auto` / `--auto-approve`) an execution pass on the brief (ROADMAP #69).
+
+    The planning agent is built `plan_only` (no write / edit / execute / git
+    mutation tools exist for it), so it cannot act; its plan is printed, then
+    turned into an execution brief by `plan_review.PlanReview` and run as a
+    normal `--auto` (acceptEdits) or `--auto-approve` task.
+    """
+    from bog_agents_cli.plan_review import PlanReview
+
+    passthrough = {k: v for k, v in kwargs.items() if k not in _PHASE_KWARGS}
+    captured: list[str] = []
+    code = await run_non_interactive(
+        PLANNING_PREFIX + message,
+        quiet=quiet,
+        stream=False,
+        plan_only=True,
+        auto_approve=True,
+        sink=captured,
+        **passthrough,
+    )
+    plan = captured[0].strip() if captured else ""
+    if code != 0 or not plan:
+        return code or 1
+    if not execute:
+        if not quiet:
+            sys.stderr.write(
+                "\nPlan ready. Re-run with --auto (or --auto-approve) to execute it.\n"
+            )
+        return 0
+    brief = PlanReview.from_text(plan, title="Plan").execution_brief()
+    if not quiet:
+        sys.stderr.write("\nExecuting the plan...\n")
+    return await run_non_interactive(
+        brief,
+        quiet=quiet,
+        auto_mode=not auto_approve,
+        auto_approve=auto_approve,
+        **passthrough,
+    )

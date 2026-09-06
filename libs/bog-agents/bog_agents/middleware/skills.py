@@ -661,6 +661,18 @@ def _format_skills_source_error(source_path: str, error: str) -> str:
 # registered the default "refuse all symlinks" behavior is unchanged, so the SDK
 # stays fail-closed and free of any dependency on the host's trust store.
 _symlink_trust_checker: Callable[[str], bool] | None = None
+_skill_dir_filter: Callable[[str], bool] | None = None
+
+
+def set_skill_dir_filter(predicate: Callable[[str], bool] | None) -> None:
+    """Register (or clear) a predicate that decides whether a skill directory may load at all (ROADMAP #50).
+
+    Runs after the symlink containment check on every candidate directory (sync
+    and async paths alike); a predicate that raises is treated as a refusal.
+    The CLI installs the managed policy's `skill_allowlist` here.
+    """
+    global _skill_dir_filter  # noqa: PLW0603
+    _skill_dir_filter = predicate
 
 
 def set_symlink_trust_checker(checker: Callable[[str], bool] | None) -> None:
@@ -727,6 +739,18 @@ def _filter_skill_dirs(items: Sequence[FileInfo]) -> list[str]:
                 continue
             logger.info("Loading symlinked skill directory %s (explicitly trusted)", item_path)
         skill_dirs.append(item_path)
+    if _skill_dir_filter is not None:
+        kept: list[str] = []
+        for skill_dir in skill_dirs:
+            try:
+                allowed = bool(_skill_dir_filter(skill_dir))
+            except Exception:  # a broken policy predicate refuses, never crashes
+                allowed = False
+            if allowed:
+                kept.append(skill_dir)
+            else:
+                logger.info("Skill directory %s refused by the skill filter (managed policy)", skill_dir)
+        skill_dirs = kept
     return skill_dirs
 
 

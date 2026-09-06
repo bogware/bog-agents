@@ -191,7 +191,7 @@ class TestHookTypes:
         assert hook_type_for_event("UserPromptSubmit") is HookType.MODIFY
         assert hook_type_for_event("Stop") is HookType.GATE
         assert hook_type_for_event("SubagentStop") is HookType.GATE
-        assert hook_type_for_event("PostToolUse") is HookType.OBSERVE
+        assert hook_type_for_event("PostToolUse") is HookType.MODIFY  # ROADMAP #64
         assert hook_type_for_event("Notification") is HookType.OBSERVE
 
     def test_dotted_events_typed(self) -> None:

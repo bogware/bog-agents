@@ -25,6 +25,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerConfig,
     TriggerType,
+    github_trigger_matches,
 )
 from bog_agents_daemon.store import (
     delete_job,
@@ -69,6 +70,8 @@ class TriggerConfigModel(BaseModel):
     webhook_path: str = ""
     webhook_secret: str = ""
     git_branch_pattern: str = "*"
+    github_number: int = Field(0, ge=0)
+    github_kinds: list[str] = Field(default_factory=list, max_length=16)
 
 
 class OutputConfigModel(BaseModel):
@@ -99,7 +102,7 @@ class OutputConfigModel(BaseModel):
     slack_webhook_url: str = ""
     slack_channel: str = ""
     github_repo: str = ""
-    github_issue_or_pr: int = 0
+    github_issue_or_pr: int | str = 0
     github_token: str = ""
     webhook_url: str = ""
     webhook_headers: dict[str, str] = {}
@@ -135,9 +138,44 @@ class CreateJobRequest(BaseModel):
     working_dir: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
     max_retries: int = Field(0, ge=0, le=_MAX_RETRIES)
     retry_backoff_seconds: float = Field(2.0, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
+    budget_usd: float | None = Field(default=None, gt=0)
+    daily_ceiling_usd: float | None = Field(default=None, gt=0)
+    max_runs: int = Field(0, ge=0, le=10_000)
+    thread_id: str = Field("", max_length=200)
+    checkpoint_db: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    goal_ref: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    scan_profile: str = Field("", max_length=40)
+    findings_db: str = Field("", max_length=_MAX_WORKING_DIR_LEN)
+    scan_gate: str = Field("", max_length=20)
     triggers: list[TriggerConfigModel] = Field(default_factory=list, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] = Field(default_factory=list, max_length=_MAX_OUTPUTS)
     enabled: bool = True
+
+
+class FindingsTriageRequest(BaseModel):
+    """Body of `POST /findings/{fingerprint}/triage` (ROADMAP #59)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str | None = Field(default=None, max_length=64)
+    state: str = Field(..., max_length=20)
+    note: str = Field("", max_length=2000)
+
+
+class UsageExportRequest(BaseModel):
+    """Body of `POST /usage/export` (ROADMAP #74)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    days: int = Field(default=30, ge=1, le=3650)
+    csv_path: str | None = None
+    otlp_endpoint: str | None = None
+
+
+class ResumeRunRequest(BaseModel):
+    """Body for `POST /runs/{run_id}/resume` (ROADMAP #51): the raised budget."""
+
+    budget_usd: float = Field(..., gt=0)
 
 
 class TriggerRunRequest(BaseModel):
@@ -166,6 +204,12 @@ class UpdateJobRequest(BaseModel):
     working_dir: str | None = Field(default=None, max_length=_MAX_WORKING_DIR_LEN)
     max_retries: int | None = Field(default=None, ge=0, le=_MAX_RETRIES)
     retry_backoff_seconds: float | None = Field(default=None, ge=0.0, le=_MAX_RETRY_BACKOFF_SECONDS)
+    budget_usd: float | None = Field(default=None, gt=0)
+    daily_ceiling_usd: float | None = Field(default=None, gt=0)
+    max_runs: int | None = Field(default=None, ge=0, le=10_000)
+    thread_id: str | None = Field(default=None, max_length=200)
+    scan_profile: str | None = Field(default=None, max_length=40)
+    scan_gate: str | None = Field(default=None, max_length=20)
     triggers: list[TriggerConfigModel] | None = Field(default=None, max_length=_MAX_TRIGGERS)
     outputs: list[OutputConfigModel] | None = Field(default=None, max_length=_MAX_OUTPUTS)
     enabled: bool | None = None
@@ -226,6 +270,8 @@ def _trigger_config_from_model(m: TriggerConfigModel) -> TriggerConfig:
         webhook_path=m.webhook_path,
         webhook_secret=m.webhook_secret,
         git_branch_pattern=m.git_branch_pattern,
+        github_number=m.github_number,
+        github_kinds=list(m.github_kinds),
     )
 
 
@@ -453,7 +499,13 @@ def create_app(
         """
         _check_auth(request, token_holder["value"])
         jobs = load_jobs()
-        return {"status": "ok", "version": __version__, "job_count": len(jobs)}
+        return {
+            "status": "ok",
+            "version": __version__,
+            "job_count": len(jobs),
+            "running": scheduler.running_count,
+            "draining": scheduler.draining,
+        }
 
     # ------------------------------------------------------------------
     # Shutdown
@@ -477,6 +529,20 @@ def create_app(
             raise HTTPException(status_code=503, detail="Shutdown callback not configured")
         request_shutdown()
         return {"status": "shutting down"}
+
+    @app.post("/drain", status_code=202)
+    async def drain_endpoint(request: Request) -> dict[str, Any]:
+        """Stop starting new runs; in-flight ones finish (ROADMAP #56).
+
+        `bog-agents daemon drain` polls `/health` until `running` is 0, then
+        optionally stops the daemon. Draining is one-way for this process:
+        restart the daemon to take work again.
+
+        Returns:
+            `{"status": "draining", "running": <in-flight count>}`.
+        """
+        _check_auth(request, token_holder["value"])
+        return {"status": "draining", "running": scheduler.begin_drain()}
 
     @app.get("/ready")
     async def ready() -> dict[str, str]:
@@ -568,6 +634,15 @@ def create_app(
             working_dir=body.working_dir,
             max_retries=body.max_retries,
             retry_backoff_seconds=body.retry_backoff_seconds,
+            budget_usd=body.budget_usd,
+            daily_ceiling_usd=body.daily_ceiling_usd,
+            max_runs=body.max_runs,
+            thread_id=body.thread_id,
+            checkpoint_db=body.checkpoint_db,
+            goal_ref=body.goal_ref,
+            scan_profile=body.scan_profile,
+            findings_db=body.findings_db,
+            scan_gate=body.scan_gate,
             triggers=triggers,
             outputs=outputs,
             enabled=body.enabled,
@@ -643,6 +718,10 @@ def create_app(
             updates["max_retries"] = body.max_retries
         if body.retry_backoff_seconds is not None:
             updates["retry_backoff_seconds"] = body.retry_backoff_seconds
+        if body.budget_usd is not None:
+            updates["budget_usd"] = body.budget_usd
+        if body.daily_ceiling_usd is not None:
+            updates["daily_ceiling_usd"] = body.daily_ceiling_usd
         if body.triggers is not None:
             triggers = [_trigger_config_from_model(t) for t in body.triggers]
             # DMN-8: '***' means "keep the stored secret", never a literal value.
@@ -654,6 +733,14 @@ def create_app(
             updates["outputs"] = outputs
         if body.enabled is not None:
             updates["enabled"] = body.enabled
+        if body.max_runs is not None:
+            updates["max_runs"] = body.max_runs
+        if body.thread_id is not None:
+            updates["thread_id"] = body.thread_id
+        if body.scan_profile is not None:
+            updates["scan_profile"] = body.scan_profile
+        if body.scan_gate is not None:
+            updates["scan_gate"] = body.scan_gate
 
         if not updates:
             return _job_to_response(existing)
@@ -751,6 +838,38 @@ def create_app(
         runs = list_runs(job_id=job_id)
         return [_run_to_response(r) for r in runs]
 
+    @app.post("/runs/{run_id}/resume", status_code=202)
+    async def resume_run_endpoint(request: Request, run_id: str, body: ResumeRunRequest) -> dict[str, Any]:
+        """Resume a budget-paused run with a raised cap (ROADMAP #51).
+
+        The run continues in the background on the same graph and thread it
+        paused on; poll `/runs` for the outcome. A pause lives in the daemon
+        process's memory, so a run paused before a restart cannot be resumed.
+
+        Args:
+            run_id: The paused run's id.
+            body: The new `budget_usd`.
+
+        Returns:
+            The run dict with `status=running`.
+
+        Raises:
+            HTTPException: 404 if the run is not paused in this process.
+        """
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon import runner
+
+        if not runner.is_paused(run_id):
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' is not paused (or the daemon restarted since it paused)")
+        paused = runner._PAUSED_RUNS[run_id]
+        task = asyncio.create_task(runner.resume_paused_run(run_id, budget_usd=body.budget_usd))
+        runner._RESUME_TASKS.add(task)
+        task.add_done_callback(runner._RESUME_TASKS.discard)
+        response = _run_to_response(paused.run)
+        response["status"] = "running"
+        response["error"] = ""
+        return response
+
     @app.get("/runs")
     async def list_all_runs_endpoint(request: Request) -> list[dict[str, Any]]:
         """List recent runs across all jobs.
@@ -761,6 +880,124 @@ def create_app(
         _check_auth(request, token_holder["value"])
         runs = list_runs(limit=20)
         return [_run_to_response(r) for r in runs]
+
+    # ------------------------------------------------------------------
+    # Usage export (ROADMAP #74)
+    # ------------------------------------------------------------------
+
+    @app.get("/usage")
+    async def usage_endpoint(request: Request, days: int = 30) -> list[dict[str, Any]]:
+        """Daily spend aggregates per job / model from the daemon's spend ledger."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon.store import spend_db_path
+        from bog_agents_daemon.usage_export import aggregate_usage
+
+        rows = aggregate_usage(spend_db_path(), since_days=float(days))
+        return [
+            {
+                "day": r.day,
+                "scope": r.scope,
+                "kind": r.kind,
+                "owner": r.owner,
+                "model": r.model,
+                "records": r.records,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+                "usd": r.usd,
+            }
+            for r in rows
+        ]
+
+    @app.post("/usage/export", status_code=202)
+    async def usage_export_endpoint(request: Request, body: UsageExportRequest) -> dict[str, Any]:
+        """Write the aggregates as CSV and / or post them as OTLP metrics."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents_daemon.store import spend_db_path
+        from bog_agents_daemon.usage_export import export_usage
+
+        rows, notes = await asyncio.to_thread(
+            export_usage, spend_db_path(), since_days=float(body.days), csv_path=body.csv_path, otlp_endpoint=body.otlp_endpoint
+        )
+        return {"rows": len(rows), "notes": notes}
+
+    # ------------------------------------------------------------------
+    # Findings ledger (ROADMAP #59)
+    # ------------------------------------------------------------------
+
+    def _findings_store_for(job_id: str | None) -> Any:
+        from bog_agents.findings_store import FindingsStore
+
+        if job_id:
+            from bog_agents_daemon.scan import findings_db_path
+
+            job = get_job(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+            return FindingsStore(findings_db_path(job))
+        from bog_agents_daemon.store import daemon_findings_db_path
+
+        return FindingsStore(daemon_findings_db_path())
+
+    @app.get("/findings")
+    async def findings_endpoint(
+        request: Request, job_id: str | None = None, state: str = "open,triaged", min_severity: str = "info"
+    ) -> list[dict[str, Any]]:
+        """Ledger rows for a scan job's repo (or the daemon-level ledger), worst first."""
+        _check_auth(request, token_holder["value"])
+        store = _findings_store_for(job_id)
+        try:
+            states = tuple(s.strip() for s in state.split(",") if s.strip()) or None
+            return [f.to_dict() for f in store.list(states=states, min_severity=min_severity)]
+        finally:
+            store.close()
+
+    @app.get("/findings/gate")
+    async def findings_gate_endpoint(request: Request, job_id: str | None = None, max_severity: str = "high") -> dict[str, Any]:
+        """The CI gate: `passed` is false when open findings sit at or above `max_severity`."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents.findings_store import SEVERITIES
+
+        if max_severity not in SEVERITIES:
+            raise HTTPException(status_code=400, detail=f"max_severity must be one of {', '.join(SEVERITIES)}")
+        store = _findings_store_for(job_id)
+        try:
+            result = store.gate(max_severity=max_severity)
+        finally:
+            store.close()
+        return {
+            "passed": result.passed,
+            "threshold": result.threshold,
+            "blocking": len(result.blocking),
+            "message": result.describe(),
+            "findings": [f.to_dict() for f in result.blocking],
+        }
+
+    @app.get("/findings/sarif")
+    async def findings_sarif_endpoint(request: Request, job_id: str | None = None) -> dict[str, Any]:
+        """SARIF 2.1.0 of the open findings for a code-scanning upload."""
+        _check_auth(request, token_holder["value"])
+        store = _findings_store_for(job_id)
+        try:
+            return store.to_sarif(tool_name="bog-agents-daemon", tool_version=__version__)
+        finally:
+            store.close()
+
+    @app.post("/findings/{fingerprint}/triage")
+    async def findings_triage_endpoint(request: Request, fingerprint: str, body: FindingsTriageRequest) -> dict[str, Any]:
+        """Set a triage state (open / triaged / fixed / wontfix / false_positive) on one finding."""
+        _check_auth(request, token_holder["value"])
+        from bog_agents.findings_store import STATES
+
+        if body.state not in STATES:
+            raise HTTPException(status_code=400, detail=f"state must be one of {', '.join(STATES)}")
+        store = _findings_store_for(body.job_id)
+        try:
+            updated = store.triage(fingerprint, body.state, note=body.note)
+        finally:
+            store.close()
+        if updated is None:
+            raise HTTPException(status_code=404, detail=f"Finding '{fingerprint}' not found")
+        return updated.to_dict()
 
     # ------------------------------------------------------------------
     # Enable / Disable
@@ -941,7 +1178,8 @@ def create_app(
         for job in jobs:
             if not job.enabled:
                 continue
-            if any(t.type == TriggerType.GITHUB for t in job.triggers):
+            # ROADMAP #55: PR / issue-scoped subscriptions only fire for their number and kinds.
+            if any(github_trigger_matches(t, kind=event.kind, number=event.number) for t in job.triggers):
                 dispatched = scheduler.dispatch(job, trigger_type=TriggerType.GITHUB, trigger_context=ctx)
                 if dispatched.status != JobStatus.SKIPPED:
                     triggered.append(job.job_id)

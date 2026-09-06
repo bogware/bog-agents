@@ -8,6 +8,8 @@ import subprocess  # noqa: S404 - required for local git discovery
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from bog_agents.git_env import hardened_git_env
+
 _SSH_CONNECT_TIMEOUT_SECONDS = 15
 """Connect-phase ceiling handed to ssh via `-o ConnectTimeout`."""
 
@@ -108,6 +110,7 @@ def run_local_git(working_dir: Path, *args: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            env=hardened_git_env(),
         )
     except OSError:
         return None

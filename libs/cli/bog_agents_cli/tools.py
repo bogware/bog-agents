@@ -11,6 +11,27 @@ if TYPE_CHECKING:
 _UNSET = object()
 _tavily_client: TavilyClient | object | None = _UNSET
 
+if TYPE_CHECKING:
+    from bog_agents.cost_ledger import CostLedger
+
+_web_search_ledger: CostLedger | None = None
+
+
+def set_web_search_ledger(ledger: CostLedger | None) -> None:
+    """Point `web_search` at the session's `CostLedger` (ROADMAP #51).
+
+    Every search is counted through `register_web_search`, so
+    `cost.max_web_searches` actually fires. The tool is a module-level
+    function shared by every agent in the process, so the most recently
+    created agent's ledger is the one that counts.
+
+    Args:
+        ledger: The ledger, or `None` to stop counting.
+    """
+    global _web_search_ledger  # noqa: PLW0603 - module-level tool state
+    _web_search_ledger = ledger
+
+
 # Hard ceiling on redirect hops the requests-based fetchers will follow.
 # Each hop's target host is re-validated through the SSRF guard.
 _MAX_REDIRECTS = 5
@@ -220,6 +241,14 @@ def web_search(  # noqa: ANN201  # Return type depends on dynamic tool configura
     4. Cite sources by mentioning the page titles or URLs
     5. NEVER show the raw JSON to the user - always provide a formatted response
     """
+    ledger = _web_search_ledger
+    if ledger is not None:
+        decision = ledger.register_web_search()
+        if not decision.allowed:
+            return {
+                "error": f"Web search refused: {decision.reason}. Raise cost.max_web_searches to continue.",
+                "query": query,
+            }
     try:
         import requests
         from tavily import (

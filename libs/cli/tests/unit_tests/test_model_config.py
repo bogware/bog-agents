@@ -2403,7 +2403,7 @@ recent = "openai:gpt-5.2"
         # flagship pick. If we bump the recommendation again,
         # update this assertion alongside the change in
         # ``_get_recommended_model_spec``.
-        assert result == "anthropic:claude-opus-4-7"
+        assert result == "anthropic:claude-sonnet-4-6"  # v6 CLI-6: Sonnet-class default
 
     def test_openai_env_uses_recommended_default(self, tmp_path: Path) -> None:
         """OpenAI auto-detection uses the curated recommended default."""

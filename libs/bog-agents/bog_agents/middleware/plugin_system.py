@@ -29,6 +29,8 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -310,6 +312,7 @@ class PluginSystemMiddleware(AgentMiddleware[PluginSystemState, ContextT, Respon
                         text=True,
                         timeout=60,
                         check=False,
+                        env=hardened_git_env(),
                     )
                     if result.returncode != 0:
                         return f"Failed to clone: {result.stderr}"

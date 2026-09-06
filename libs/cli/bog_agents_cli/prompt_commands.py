@@ -141,6 +141,20 @@ def discover_prompt_commands(
         commands.update(_scan_dir(Path.home() / ".bog-agents" / "prompts", "user"))
     project_root = Path(cwd) if cwd else Path.cwd()
     commands.update(_scan_dir(project_root / ".bog-agents" / "prompts", "project"))
+    try:  # ROADMAP #73: workflow files load as /name beside the prompt commands
+        from bog_agents_cli.workflow import discover_workflows
+
+        for workflow in discover_workflows(project_root).values():
+            commands[f"/{workflow.name}"] = PromptCommand(
+                name=f"/{workflow.name}",
+                description=workflow.description or "workflow",
+                template="",
+                argument_hint=" ".join(f"<{a}>" for a in workflow.args),
+                source=workflow.source,
+                scope="workflow",
+            )
+    except Exception:
+        logger.debug("workflow discovery failed", exc_info=True)
     return commands
 
 

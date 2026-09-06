@@ -38,10 +38,15 @@ from __future__ import annotations
 import logging
 import threading
 import warnings
+from collections.abc import Callable
 from importlib.metadata import EntryPoint, entry_points
+from typing import TYPE_CHECKING
 
 from bog_agents.profiles.harness.harness_profiles import _HARNESS_PROFILES
 from bog_agents.profiles.provider.provider_profiles import _PROVIDER_PROFILES
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +145,7 @@ def _register_builtin_profiles() -> None:
         _anthropic_haiku_4_5,
         _anthropic_opus_4_7,
         _anthropic_sonnet_4_6,
+        _lean,
         _nvidia_nemotron_3_ultra,
         _openai_codex,
     )
@@ -152,6 +158,7 @@ def _register_builtin_profiles() -> None:
     _anthropic_haiku_4_5.register()
     _openai_codex.register()
     _nvidia_nemotron_3_ultra.register()
+    _lean.register()
     _openai.register()
     _nvidia.register()
     _openrouter.register()
@@ -350,3 +357,16 @@ def _invoke_profile_plugins(native_group: str, legacy_group: str) -> None:
             native_group,
         )
         _invoke_entry_point(ep, legacy_group)
+
+
+def builtin_harness_registrar(key: str) -> Callable[[], None] | None:
+    """Registrar for a built-in *harness* profile key, or `None`.
+
+    Lets `named_harness_profile` self-heal when a test fixture snapshotted the
+    registry before bootstrap and restored it empty with `_loaded` left true.
+    Only harness profiles are listed: their registration merges idempotently,
+    whereas provider registrars chain `pre_init` hooks and must not re-run.
+    """
+    from bog_agents.profiles.harness import _lean
+
+    return {_lean.LEAN_PROFILE_KEY: _lean.register}.get(key)

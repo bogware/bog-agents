@@ -134,14 +134,23 @@ See [backends.md](backends.md) for the full backend story.
 
 When you want shell execution to run *outside* the host:
 
-```python
-from bog_agents.backends import DaytonaBackend, ModalBackend
+The sandbox providers ship with the CLI package as optional extras
+(`bog-agents-cli[modal-sandbox]`, `[daytona-sandbox]`, `[runloop-sandbox]`,
+plus a local Docker provider) and plug into the SDK's `BaseSandbox` protocol:
 
+```python
+from bog_agents_cli.integrations.sandbox_factory import create_sandbox
+
+backend = create_sandbox("modal")            # or "docker", "daytona", "runloop"
 agent = create_agent(
     model="anthropic:claude-opus-4-7",
-    backend=DaytonaBackend(api_key=...),   # remote Daytona workspace
+    backend=backend,
 )
 ```
+
+The Daytona backend also lives in the repository as `libs/partners/daytona`
+(source checkout; its `DaytonaSandbox` wraps a `daytona.Daytona().create()`
+workspace). See [backends.md](backends.md) for the provider protocol.
 
 Same agent, same tools, the shell now runs in an isolated workspace.
 Useful when the model might generate destructive commands and you

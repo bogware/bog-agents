@@ -102,7 +102,19 @@ def show_help() -> None:
     console.print("  list                                List available agents")
     console.print("  reset --agent NAME [--target SRC]   Reset an agent's prompt")
     console.print("  skills <list|create|info|delete>     Manage agent skills")
-    console.print("  threads <list|delete>                Manage conversation threads")
+    console.print("  threads <list|delete|import|export>  Manage conversation threads")
+    console.print(
+        "  sessions [--all] [--prune]          List live sessions on this machine"
+    )
+    console.print(
+        "  queue --session NAME [--wait] MSG   Queue a prompt for a running session"
+    )
+    console.print(
+        "  attach NAME                         Reconnect to a session left with /detach"
+    )
+    console.print(
+        "  plugin <list|install|import|trust>   Agent Plugins 1.0 + import from claude/codex/cursor"
+    )
     console.print("  verify                              Run typecheck + lint + tests")
     console.print(
         "  call MESSAGE                        Talk to a running --serve instance"
@@ -135,7 +147,7 @@ def show_help() -> None:
         "  --always-ask               Paranoid mode: every tool call requires approval (overrides --auto-approve)"
     )
     console.print(
-        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (Haiku eval)"
+        "  --auto                     Smart auto-mode: auto-run safe ops, ask only for risky ones (model review)"
     )
     console.print(
         "  --auto-commit              Auto-commit git changes after each agent turn"
@@ -144,6 +156,9 @@ def show_help() -> None:
     console.print(
         "  --doctor-deep              Doctor + probe network/git/MCP/providers"
     )
+    console.print(
+        "  --doctor-features          Audit the advertised slash-command surface"
+    )
     console.print("  -v, --version              Show CLI and SDK versions")
     console.print("  -h, --help                 This help screen")
     console.print()
@@ -151,6 +166,9 @@ def show_help() -> None:
     # --- Non-Interactive / Automation ---
     console.print("[bold]Non-Interactive (Automation):[/bold]", style=COLORS["primary"])
     console.print("  -n, --non-interactive MSG  Run single task, exit with code 0/1")
+    console.print(
+        "  --plan TEXT                Headless plan-then-execute: print a read-only plan; add --auto to run it"
+    )
     console.print(
         "  -p, --print TEXT           Same as -n + -q (clean stdout for pipes)"
     )
@@ -175,6 +193,15 @@ def show_help() -> None:
     )
     console.print("  --pr-base BRANCH           PR base branch (default: main)")
     console.print("  --pr-draft                 Create PR as draft")
+    console.print(
+        "  --pr-review                Post the jury's findings on the new PR as a review (#67)"
+    )
+    console.print(
+        "  --pr-effort LEVEL          Review effort for --pr-review: default | high | custom:rule"
+    )
+    console.print(
+        "  --pr-evidence              Append a proof-of-work evidence bundle to the PR body"
+    )
     console.print()
 
     # --- Model Configuration ---
@@ -183,6 +210,15 @@ def show_help() -> None:
         "  --model-params JSON        Extra kwargs (e.g., '{\"temperature\": 0.7}')"
     )
     console.print("  --profile-override JSON    Override model profile fields")
+    console.print(
+        "  --mini                     Lean harness profile (about a third of the fixed tokens per turn)"
+    )
+    console.print(
+        "  --restricted               Restricted trust profile: no shell/git/HTTP/search/daemon tools, bypass refused"
+    )
+    console.print(
+        "  --name NAME                Name this session for `sessions`, `queue --session` and `attach`"
+    )
     console.print("  --default-model [MODEL]    Set or show the default model")
     console.print("  --clear-default-model      Clear default model")
     console.print()

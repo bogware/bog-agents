@@ -1759,3 +1759,90 @@ class TestPtyToolGating:
         desc = _format_pty_start_description(call, None, None)  # type: ignore[arg-type]
         assert "bash" in desc
         assert "PTY" in desc
+
+
+class TestStreetSweeperCanonicalSlot:
+    """v6 SDK-3/SDK-4: the CLI sweeper singleton takes the canonical slot and offloads out of tree."""
+
+    def _build(self, tmp_path: Path) -> tuple[Mock, Mock]:
+        (tmp_path / "agent").mkdir(exist_ok=True)
+        (tmp_path / "skills").mkdir(exist_ok=True)
+        mock_settings = Mock()
+        mock_settings.ensure_agent_dir.return_value = tmp_path / "agent"
+        mock_settings.ensure_user_skills_dir.return_value = tmp_path / "skills"
+        mock_settings.get_project_skills_dir.return_value = None
+        mock_settings.get_built_in_skills_dir.return_value = (
+            Settings.get_built_in_skills_dir()
+        )
+        mock_settings.get_user_agent_md_path.return_value = (
+            tmp_path / "agent" / "AGENTS.md"
+        )
+        mock_settings.get_project_agent_md_path.return_value = []
+        mock_settings.get_user_agents_dir.return_value = tmp_path / "agents"
+        mock_settings.get_project_agents_dir.return_value = None
+        mock_settings.model_name = None
+        mock_settings.model_provider = None
+        mock_settings.model_context_limit = None
+        mock_agent = Mock()
+        mock_agent.with_config.return_value = mock_agent
+        fake_model = _make_fake_chat_model()
+        with (
+            patch.dict(
+                "os.environ", {"BOG_AGENTS_HOME": str(tmp_path / "home")}, clear=False
+            ),
+            patch("bog_agents_cli.agent.settings", mock_settings),
+            patch("bog_agents_cli.agent.SkillsMiddleware"),
+            patch("bog_agents_cli.agent.MemoryMiddleware"),
+            patch("bog_agents_cli.agent.LocalShellBackend"),
+            patch("bog_agents_cli.agent.FilesystemBackend") as mock_fs,
+            patch(
+                "bog_agents_cli.agent.create_agent", return_value=mock_agent
+            ) as mock_create,
+            patch(
+                "bog_agents_cli.config.create_model",
+                return_value=Mock(model=fake_model),
+            ),
+            patch("bog_agents_cli.agent.get_system_prompt", return_value=""),
+        ):
+            create_cli_agent(
+                model="fake-model",
+                assistant_id="test",
+                enable_memory=False,
+                enable_skills=False,
+                enable_shell=False,
+                interactive=False,
+                cwd=str(tmp_path),
+            )
+        return mock_create, mock_fs
+
+    def test_singleton_is_passed_with_the_feature_flag(self, tmp_path: Path) -> None:
+        from bog_agents_cli.sweep_controller import (
+            get_sweep_controller,
+            reset_sweep_controllers,
+        )
+
+        reset_sweep_controllers()
+        mock_create, _ = self._build(tmp_path)
+        _, kwargs = mock_create.call_args
+        assert kwargs["config"].enable_street_sweeper is True
+        singleton = get_sweep_controller(tmp_path).middleware
+        assert any(m is singleton for m in kwargs["middleware"])
+        assert singleton.enabled is False  # still opt-in via /sweep on
+
+    def test_swept_context_is_routed_out_of_the_project_tree(
+        self, tmp_path: Path
+    ) -> None:
+        _, mock_fs = self._build(tmp_path)
+        roots = [
+            str(c.kwargs.get("root_dir", "")).replace("\\", "/")
+            for c in mock_fs.call_args_list
+        ]
+        assert any(r.endswith("/home/swept") for r in roots), roots
+        swept_call = next(
+            c
+            for c in mock_fs.call_args_list
+            if str(c.kwargs.get("root_dir", ""))
+            .replace("\\", "/")
+            .endswith("/home/swept")
+        )
+        assert swept_call.kwargs.get("virtual_mode") is True

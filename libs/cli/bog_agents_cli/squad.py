@@ -418,12 +418,8 @@ async def handle_squad_subcommand(app: object, raw_arg: str) -> None:
         )
         return
 
-    if getattr(app, "_agent_running", False):
-        await app._mount_message(  # type: ignore[attr-defined]
-            ErrorMessage("Cannot run /squad while the agent is busy.")
-        )
-        return
-
+    # Busy-guarding moved to the app (v6 CLI-3): the review runs inside a
+    # TurnManager-tracked session, during which `_agent_running` is True.
     review_arg = arg
     if head == "review":
         review_arg = rest

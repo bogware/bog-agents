@@ -200,6 +200,36 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/memory",
+            "Rebuild the agent-recorded memories (dedup, contradictions, provenance) into a reviewed candidate",
+            "memory rebuild consolidate dedup apply discard dreams",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_memory_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/add-dir",
+            "Mount another directory into the agent's filesystem at /mnt/<name>/",
+            "multi-repo mount directory workspace add dir",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_add_dir_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/review-plan",
+            "Review a plan line by line (comments, slice checkboxes) before approving or revising it",
+            "plan review approve revise butcher jtbd slices comments",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_review_plan_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/replay",
             "Replay agent actions for debugging",
             "debug trace",

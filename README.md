@@ -41,7 +41,7 @@ Three packages, one stack:
   (multi-reviewer vote on a diff), **`/operator`** (auto difficulty routing), and
   **`/effort`** (real per-provider reasoning knobs). Plus `/peat` personal
   scheduler, `/qa` acceptance-criteria harness, `/record` + `/replay`, an
-  in-memory secrets vault, `bog-agents drive` for scripted runs, and a full
+  in-memory secrets vault, `bog-agents --drive <script.yaml>` for scripted runs, and a full
   **headless surface** so an AI agent or CI job can drive it without a human
   at the keyboard. Matte-swamp TUI.
 - **[`bog-agents-daemon`](libs/daemon)** — the patient watcher. Runs your
@@ -69,6 +69,12 @@ Built on [LangGraph](https://github.com/langchain-ai/langgraph). MIT-licensed.
   function call embeds one in your code.
 - **Composable to the core.** ~90 middlewares snap on or off, sub-agents nest,
   backends swap. The framework gets out of the way as your needs sharpen.
+- **Overhead you can see.** The SDK's default harness costs **7,619 tokens per
+  turn** before your own words (system prompt + tool schemas, `o200k_base`);
+  the built-in `lean` profile costs **2,789**. The CLI with all 104 tools costs
+  21,088 and `bog-agents --mini` 8,565. `/tokens middleware` attributes every
+  token to the middleware or tool that added it, and a CI baseline fails the
+  build when the number creeps up.
 
 ---
 
@@ -86,6 +92,22 @@ uv tool install bog-agents-cli
 # or plain pip
 pip install bog-agents-cli
 ```
+
+No Python, no package manager, or on Windows? One line picks the right path
+(uv → pipx → pip, installs uv and a Python when the machine has none, warns
+about the Microsoft Store `python`/`pwsh` aliases, fixes PATH, runs the doctor):
+
+```powershell
+irm https://raw.githubusercontent.com/bogware/bog-agents/main/install.ps1 | iex   # Windows
+```
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/bogware/bog-agents/main/install.sh | sh  # macOS / Linux
+```
+
+Every CLI release also attaches a standalone `bog-agents-<version>-windows-x64.zip`
+(no Python required; unzip and run `bog-agents\bog-agents.exe`) — see
+[`packaging/`](packaging/README.md) for the winget manifest and Homebrew formula.
 
 Provider extras:
 
@@ -197,7 +219,7 @@ hardened a different stretch of trail.
 - **0.9.1 — Bedrock, seamless.** Automatic inference-profile resolution,
   `/bedrock fix` + `/bedrock config`, and auto SSO-credential refresh. Point
   at a model id; the SDK sorts out the rest.
-- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents drive`
+- **0.9.0 — scriptable TUI, compliance, security sweep.** `bog-agents --drive`
   graduated to a full Pilot-backed runner; `/compliance` auditor with
   HMAC-sealed reports; a repo-wide security pass.
 
@@ -262,7 +284,7 @@ discord, kubernetes, datadog, sentry, and more.
 | Path | What |
 |---|---|
 | `libs/bog-agents/` | The Python SDK. Compiled LangGraph agents, 90+ middlewares, pluggable backends, tool bundles, deepagents compatibility. |
-| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents drive` scripted runner. |
+| `libs/cli/` | The terminal CLI. Textual TUI, 120+ slash commands, MCP marketplace, headless command surface, `bog-agents --drive` scripted runner. |
 | `libs/daemon/` | The ambient daemon. Cron / file-watch / webhook / git-push triggers, REST API. |
 | `libs/acp/` | Agent Client Protocol bridge for the Zed editor. |
 | `libs/harbor/` | Evaluation / benchmark harness (Terminal Bench 2.0). |

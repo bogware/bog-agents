@@ -37,6 +37,9 @@ _MUTATING_TOOLS = frozenset(
     }
 )
 
+MUTATING_TOOLS = _MUTATING_TOOLS
+"""Public alias: the tools plan mode withholds (the CLI's plan-only agents never register them; ROADMAP #69)."""
+
 # Tools that are always allowed in plan mode
 _READ_ONLY_TOOLS = frozenset(
     {

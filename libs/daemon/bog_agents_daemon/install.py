@@ -1,10 +1,12 @@
-"""Service installation helpers for systemd and launchd."""
+"""Service installation helpers for systemd, launchd and Windows Task Scheduler."""
 
 from __future__ import annotations
 
 import getpass
 import stat
+import subprocess
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -254,4 +256,82 @@ def install_launchd(
           launchctl unload {plist_file}
 
         The daemon will start automatically at login.
+    """)
+
+
+WINDOWS_TASK_NAME = "BogAgentsDaemon"
+"""Task Scheduler name used by `install_windows_task`."""
+
+
+def generate_windows_task_command(daemon_path: str, task_name: str = WINDOWS_TASK_NAME) -> list[str]:
+    """Build the `schtasks` argv that registers the daemon to start at logon.
+
+    Args:
+        daemon_path: Absolute path to the bog-agents-daemon executable.
+        task_name: Task Scheduler task name.
+
+    Returns:
+        The argv list (no shell involved).
+    """
+    return [
+        "schtasks",
+        "/Create",
+        "/SC",
+        "ONLOGON",
+        "/TN",
+        task_name,
+        "/TR",
+        f'"{daemon_path}" start',
+        "/RL",
+        "LIMITED",
+        "/F",
+    ]
+
+
+def install_windows_task(
+    daemon_path: str,
+    task_name: str = WINDOWS_TASK_NAME,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    """Register the daemon as a Windows Task Scheduler task that runs at logon.
+
+    v6 DMN-3: `bog-agents daemon install` used to write a systemd unit under
+    `%USERPROFILE%\\.config\\systemd` on Windows and print `systemctl`
+    instructions. This is the Windows equivalent of the launchd/systemd
+    installers: one command, survives logoff/logon, removable with
+    `schtasks /Delete`.
+
+    Args:
+        daemon_path: Absolute path to the bog-agents-daemon executable.
+        task_name: Task Scheduler task name.
+        runner: Injected process runner (tests pass a fake).
+
+    Returns:
+        A multi-line string with what was registered and how to manage it.
+    """
+    argv = generate_windows_task_command(daemon_path, task_name)
+    try:
+        completed = runner(argv, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return textwrap.dedent(f"""\
+            Could not run schtasks ({exc}). Register the task manually:
+              {" ".join(argv)}
+        """)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return textwrap.dedent(f"""\
+            schtasks failed (exit {completed.returncode}): {detail}
+            Register the task manually from an elevated prompt if needed:
+              {" ".join(argv)}
+        """)
+    return textwrap.dedent(f"""\
+        Task Scheduler task registered: {task_name}
+        The daemon starts automatically at logon.
+        Start it now with:
+          schtasks /Run /TN {task_name}
+        Check status with:
+          schtasks /Query /TN {task_name}
+        Remove with:
+          schtasks /Delete /TN {task_name} /F
     """)

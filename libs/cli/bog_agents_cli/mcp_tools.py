@@ -924,6 +924,23 @@ async def resolve_and_load_mcp_tools(
         return [], None, []
 
     merged = merge_mcp_configs(configs)
+    # ROADMAP #50: the managed policy's MCP allow-list applies to every source.
+    try:
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+        if policy is not None and isinstance(merged.get("mcpServers"), dict):
+            kept, removed = policy.filter_mcp_servers(merged["mcpServers"])
+            if removed:
+                logger.warning(
+                    "Managed policy (%s) refused %d MCP server(s): %s",
+                    policy.org or policy.source,
+                    len(removed),
+                    ", ".join(removed),
+                )
+            merged["mcpServers"] = kept
+    except Exception:
+        logger.debug("managed policy MCP filter skipped", exc_info=True)
     if not merged.get("mcpServers"):
         return [], None, []
 

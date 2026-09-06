@@ -77,10 +77,15 @@ broken — the sandbox, not the test, is usually what tripped.
 
 The entry point is `create_agent()` which returns a compiled LangGraph graph. The agent ships with base tools (filesystem, shell, planning, sub-agents) and a composable **middleware stack**.
 
-**`FeatureConfig` (`feature_config.py`) is the toggle surface** — a ~150-field
-dataclass that replaces what would otherwise be a 100+ parameter `create_agent`
-call. New optional features get a field here plus a branch in `graph.py`, not a
-new keyword argument. Pass it as `create_agent(config=FeatureConfig(...))`;
+**`FeatureConfig` (`feature_config.py`) is the toggle surface** — an 80-field
+dataclass (count it with `dataclasses.fields`, do not trust this number) that
+replaces what would otherwise be a 100+ parameter `create_agent` call. New
+optional features get a field here plus a branch in `graph.py`, not a new
+keyword argument. Known exceptions that are `middleware=`-only today (no
+FeatureConfig field): `ExpertRulesMiddleware`, `StopGateMiddleware`,
+`RubricMiddleware`, `GoalToolsMiddleware`, `EvidenceBundleMiddleware`,
+`GuardrailMiddleware`, `LangSmithMiddleware` — an SDK consumer must import and
+order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `create_agent(config=FeatureConfig(...))`;
 `features=` is a deprecated alias kept for backwards compatibility and is
 *silently ignored* when `config=` is also given (`_resolve_feature_config`).
 
@@ -90,7 +95,77 @@ new keyword argument. Pass it as `create_agent(config=FeatureConfig(...))`;
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
-**Governed-autonomy primitives (0.10):** three pure-logic SDK modules underpin the CLI's autonomous surfaces — keep them dependency-light and injectable. `bog_agents/teams.py` (`TaskLedger` atomic dependency-aware claim, `Mailbox`, `run_team` coordinator; CLI `/team run` via `libs/cli/bog_agents_cli/team_executor.py`). `bog_agents/cost_ledger.py` (`CostLedger` + `RunawayCaps` spawn/search/spend caps — every team/subagent spawn must be counted). `bog_agents/evidence.py` (`EvidenceBundle`, `collect_git_evidence`, `render_evidence_markdown`; `merge_ready` gates on checks + rubric). The `/best-of-n` (`best_of_n.py`) and `/jury` CLI features build on these with the rubric grader. When touching any, preserve the "tested core + injected `invoke`/`runner`" split so they unit-test without live models.
+**Plan review (ROADMAP #69).** `plan_review.py` is the one review model (line comments,
+slice checkboxes, revision prompt, execution brief) behind `PlanReviewScreen`, `/review-plan`
+and headless `--plan`. Keep the screen free of model calls — it returns a `PlanReviewResult`
+and `plan_review_controller.decide` chooses the prompt. A headless planning pass is
+`create_cli_agent(plan_only=True)` (`ServerConfig.plan_only`): shell/git are not registered
+and the plan-mode mutating set is withheld from every model request unconditionally — that
+is the guarantee `--plan` rests on; do not make it a toggle.
+
+**Team v2 (ROADMAP #76).** `teams.Attachment` rides on `Message` in both `Mailbox` and
+`MailboxStore` (same `send(..., attachments=)` signature — keep them interchangeable);
+`bog_agents/tools/team_files.py` stages content-addressed, DLP-redacted copies under
+`.bog-agents/team/exchange/` and is bound per teammate through
+`create_cli_agent(extra_tools=...)`. `envcache.py` keys shared `node_modules` / `.venv` on the
+lockfile hash — never link across differing lockfiles. `/add-dir` mounts come from
+`.bog-agents/mounts.json` and are built into the `CompositeBackend` at agent start.
+
+**Memory rebuild + advisor (ROADMAP #75).** `memory_rebuild.py` rewrites only the
+`## Agent-Recorded Memories` section (the one `auto_memory.append_memory` manages) and only
+into a candidate under `.bog-agents/memory.rebuild/`; `/memory apply` swaps it in with a
+backup. Keep `consolidate(invoke=None)` deterministic — the headless twin and any scheduled
+job rely on it being model-free. `advisor_tools.ask_advisor` is registered by
+`agent._advisor_tools` only with `tools.advisor` on, never under `--restricted`, and never
+when the active model is the operator's `hard` tier.
+
+**Workflows (ROADMAP #73).** `workflow.py` (pure: schema, `run_workflow` with an injected
+task runner, persisted `WorkflowRun`) + `workflow_controller.py` (the App binding and the real
+per-task agent runner) + `workflow_tools.py` (`author_workflow` / `list_workflows`). Files in
+`.bog-agents/workflows/*.yaml` load as `/<name>` through `prompt_commands` discovery with
+`scope="workflow"` — keep that scope check in `_maybe_run_prompt_command`, and keep phases
+running through `bog_agents.teams.run_team` so caps and claims stay shared with `/team run`.
+
+**Findings ledger (ROADMAP #59 / #70).** `bog_agents/findings_store.py` is the one
+store behind daemon scan jobs (`scan_profile` on `AmbientJob`, `bog_agents_daemon/scan.py`),
+the `security-scan` recipe and the CLI's `/findings` + `/remediate` (`findings_controller.py`,
+headless `findings gate` exits 1). Rows are keyed by `fingerprint(rule, path, message)` —
+never the line number — so keep messages stable across re-scans and ask any new producer
+for the `FINDINGS_FORMAT_INSTRUCTIONS` line format rather than inventing another one. The
+ledger lives at `<repo>/.bog-agents/findings.db`, beside the code it describes.
+
+**Managed policy (ROADMAP #50).** `managed_policy.py` is the org layer above every
+setting: a signed JSON document verified with the TraceFile key format, cached, loaded
+once per process (`active_policy()`), enforced by pure `ManagedPolicy` methods at MCP
+discovery, skill loading (SDK `set_skill_dir_filter`), plugin install, provider kwargs
+and `/model`. Add a new enforcement point as one lazy `active_policy()` call inside a
+`try`; never let a policy failure break a session — log it and surface it in
+`/permissions` / `/doctor`.
+
+**Governed Code Mode (ROADMAP #72).** `middleware/code_mode.py` runs the model's script
+in a child `python -I`; every `tools.*` call comes back over stdio and is executed through
+the agent's own `wrap_tool_call` chain — never call a tool directly from that module.
+HITL-gated tools are refused inside scripts (interrupts cannot cross the process), spawns
+are counted before they run, and only `call` messages wait for a reply (one-way `print` /
+`error` / `done`, or the child deadlocks). `bind()` needs the merged `interrupt_on` names
+because langchain builds HITL inside `_langchain_create_agent`.
+
+**Compliance artefact (ROADMAP #74).** `bog_agents/action_log.py` is the hash-chained
+per-run log (`ActionLog`, `ActionLogMiddleware`, `verify_chain` / `verify_export`,
+injected signer) and `bog_agents/otel_export.py` the GenAI-semconv span emitter with a
+dependency-free OTLP/HTTP sink — keep both free of provider SDKs. The CLI's
+`action_log_controller.py` owns the approvals / verdicts chain and `/actionlog`; never
+let two processes append to one chain file. The daemon's `usage_export.py` aggregates
+`SpendLedger.records()`; its tests pin CSV totals to `totals_by_scope`.
+
+**Fork subagents (ROADMAP #71).** `SubAgent.mode = "fork"` seeds a child with the
+parent's conversation through `middleware/subagents.py:seed_fork_messages` — keep that
+function the only place the seeding rule lives (system messages out, pending `task`
+call out, task appended). The built-in `fork` subagent is assembled in `graph.py` with
+`_fork_system_prompt`, which must mirror the parent's prompt parts. CLI `/subtask` and
+`/fork` live in `fork_controller.py` and only ever hand work to `BackgroundAgentManager`.
+
+**Governed-autonomy primitives (0.10):** three pure-logic SDK modules underpin the CLI's autonomous surfaces — keep them dependency-light and injectable. `bog_agents/teams.py` (`TaskLedger` atomic dependency-aware claim, `Mailbox`, `run_team` coordinator; CLI `/team run` via `libs/cli/bog_agents_cli/team_executor.py`). `bog_agents/cost_ledger.py` (`CostLedger` + `RunawayCaps` spawn/search/spend caps — every team/subagent spawn must be counted; `estimate_run_cost` brackets a burst for the CLI's pre-flight confirm). ROADMAP #51 adds `bog_agents/spend_ledger.py` (`SpendLedger`, the durable daily $ ledger the CLI keeps at `~/.bog-agents/spend.db` and the daemon beside `jobs.json`; scopes `user` / `project:<key>` / `daemon:<job>`) and makes `CostTrackerMiddleware` pause with a `budget_reached` interrupt at the cap (`on_budget="interrupt"`; only a raise-cap resume continues, see `parse_budget_resume`) — the CLI's `cost_controller.py` and the daemon's `resume_paused_run` are the two consumers; keep the `cost.*` manifest keys as the single source of the caps. `bog_agents/evidence.py` (`EvidenceBundle`, `collect_git_evidence`, `render_evidence_markdown`; `merge_ready` gates on checks + rubric). The `/best-of-n` (`best_of_n.py`) and `/jury` CLI features build on these with the rubric grader. When touching any, preserve the "tested core + injected `invoke`/`runner`" split so they unit-test without live models.
 
 **OS sandbox (#22):** `bog_agents/sandbox/local_sandbox.py` wraps shell commands in bubblewrap/seatbelt; `bog_agents/sandbox/egress_proxy.py` is a threaded localhost CONNECT **allowlist proxy** (`host_allowed` suffix-match on label boundaries). Wired into `LocalShellBackend(sandbox=..., require_sandbox=...)` — opt-in, fail-closed where no launcher exists (Windows today). Driven from `.bog-agents/sandbox.toml` (`local_sandbox` level + `network_allowlist`) via `SandboxConfig.build_local_sandbox`. Invariant: the allowlist is proxy-enforced (cooperating tools), NOT a kernel boundary — a hard cut needs `--unshare-net` (no allowlist). `bwrap` re-shares the net namespace (`--share-net`) only when egress is wanted.
 
@@ -141,6 +216,18 @@ the edge. Preserve that split when touching them, and preserve each one's
 
 **Middleware ordering** (Wave W): the order of middleware in `graph.py` is load-bearing for correctness (CostTracker must wrap before Summarization, Summarization must run before PromptCaching, etc.). The canonical order is locked by `tests/unit_tests/test_middleware_canonical_order.py` — when an intentional reorder is needed, audit the affected interactions and update the test assertions in the same commit. Hard ordering constraints (e.g. ResultSynthesis requires ParallelWorktree earlier in the list) are also declared via `requires: ClassVar` and enforced at build time by `_validate_middleware_ordering`.
 
+**Harness overhead is measured, not guessed (ROADMAP #54).** `bog_agents/token_audit.py`
+builds an agent around `RecordingChatModel`, runs one probe turn and attributes the
+fixed per-turn cost to each middleware (instrumented `wrap_model_call` deltas) and
+each tool schema; `create_agent` must keep calling `notify_assembly(...)` immediately
+before `_langchain_create_agent` for that to work. The built-in `lean` profile
+(`profiles/harness/_lean.py`, selected by `FeatureConfig(harness_profile="lean")`)
+and the CLI's `--mini` (lean + `DeferredToolsMiddleware(keep_names=MINI_KEEP_TOOLS)`)
+are the published low-overhead points; `tests/unit_tests/smoke_tests/test_harness_overhead.py`
+pins the numbers with the offline counter and fails CI on a >5% regression — refresh
+with `make update-snapshots` only for an intentional prompt or tool change, and run
+`bog-agents command "tokens middleware"` before adding a middleware that injects prompt text.
+
 **Street Sweeper (`street_sweeper.py`)** — continuous, lossless-first context pruning that runs on *every* model call (vs. `SummarizationMiddleware`'s one-shot compaction at ~85% full). It is a **view transformation**: canonical history stays untouched in LangGraph state; the sweeper reshapes only the per-call request via `request.override(messages=...)`, offloading dropped content to the backend (recoverable via the `recall_swept` tool). Invariant to preserve when touching it: the sweep **never changes message count or order** — only message text — which is what keeps it composable with `SummarizationMiddleware` (cutoff indices stay aligned) and `AnthropicPromptCachingMiddleware` (stable prefix).
 
 **Lazy loading**: Both `bog_agents/__init__.py` AND `bog_agents/middleware/__init__.py` use `_LAZY_IMPORTS` dicts and `__getattr__` so `import bog_agents.middleware` does NOT eagerly pull every submodule. Follow this pattern when adding new middleware: append to `_LAZY_IMPORTS`, do NOT add a top-level `from … import …` line.
@@ -164,6 +251,7 @@ Built with Textual. Key patterns:
 - **Config surface**: `config_manifest.py` is the single source of truth for user-tunable scalar options (type, typed default, env var name, `config.toml` location; precedence: env var > `config.toml` > default). Every `BOG_AGENTS_*` env var must be defined as a constant in `_env_vars.py` — a drift-detection test greps the package for unregistered string literals. Provider credentials are derived automatically from `PROVIDER_API_KEY_ENV`, so adding a provider needs no manifest change.
 - **Theme system** (`theme.py`): the matte-swamp palette is a registered Textual theme named `bog` (default), with user-defined themes via `/theme`. Do NOT re-introduce hard-coded `$primary:`-style variable overrides at the top of `app.tcss` — they shadow the active theme and break `/theme`.
 - **Skill trust store** (`skill_trust.py` + `skill_trust_controller.py`): the SDK refuses symlinked skill directories by default (`_filter_skill_dirs`, enforced on both the sync and async listing paths); `/skills trust <path>` records an explicit per-directory exception in a persistent trust store, wired into `SkillsMiddleware` through its pluggable symlink-trust checker hook.
+- **Agent Plugins 1.0** (`plugin_spec.py`, `plugin_install.py`, `plugin_import.py`, `session_import.py`; ROADMAP #62): the `plugin.json` layout is mapped onto `ExtensionManifest` so skills/commands/hooks/MCP reuse the extension surfaces; workspace `.agents/plugins` entries stay disabled until trusted (`plugin_trust.json`); installs are SHA-256 pinned with a lock file; `plugin import <tool>` only copies what the memory/rules cascade does not already read natively (say so in the report, never duplicate); session import writes threads through `sessions.get_checkpointer()` with a `MessagesState` graph — the same path the TUI uses — so `/resume` works on them.
 - **MCP OAuth** (`mcp_oauth.py`): remote MCP servers authenticate through the `mcp` SDK's `OAuthClientProvider` (RFC 9728 discovery, dynamic client registration, PKCE, auto-refresh — all inside the SDK). This module supplies only token storage (`~/.bog-agents/mcp-oauth/`), the browser redirect, and the loopback callback handler — don't reimplement OAuth steps by hand.
 - **`/effort`** (`reasoning_effort.py`): maps `low/medium/high/max` onto each provider's real reasoning knob (Anthropic `output_config.effort`, OpenAI `reasoning.effort`, Gemini `thinking_level`, …). Never map effort back onto `max_tokens`/`temperature` — the legacy hack truncated reasoning models.
 
@@ -173,12 +261,17 @@ emit `{"decision": "deny", "reason": …}` on stdout (or exit 2 with a stderr
 reason) to block the call. Claude Code (`.claude/settings.json`) and Cursor
 (`.cursor/hooks.json`) hook files load unchanged, with their tool names (`Bash`,
 `Edit`, `Read`) aliased onto bog's (`execute`, `edit_file`, `read_file`) — treat
-that compat table as a feature, not a shim. Two directions to preserve: the
-hooks themselves are **fail-open** (a crashing/timing-out hook never blocks), and
+that compat table as a feature, not a shim. Two directions to preserve: command
+hooks are **fail-open by default** (a crashing/timing-out hook never blocks unless
+its `on_failure` is `deny`, or `ask` — which forces the approval prompt), and
 enforcement in the tool path is **fail-closed** (a denial means the tool body
-never runs and an error `ToolMessage` is returned). `create_cli_agent` adds
-`HookMiddleware` only when decision-capable hooks exist, so hookless agents pay
-nothing.
+never runs and an error `ToolMessage` is returned). Hook bus v2 (ROADMAP #64):
+`PostToolUse` is MODIFY (`{"tool_result": …}` replaces the result), `PermissionRequest`
+/ `PreModelSwitch` deny, `Interrupt` / `PostModelSwitch` observe, hook scripts are
+hash-pinned (`pin_hook_hashes`, plugin hooks pinned at `/plugin trust`), and
+`prompt_hooks.py` judges `type: prompt` entries with a model — **fail-closed**, like
+Expert Mode. `create_cli_agent` adds `PreToolUseHookMiddleware` only when
+decision-capable hooks exist, so hookless agents pay nothing.
 
 **`git_ops.py` is the single git classifier.** `classify_git_command` answers
 read-only / mutating / destructive for every approval layer. Its regexes were
@@ -189,6 +282,72 @@ patterns here and call it. `bash_hygiene.py` is its sibling for hang-prone
 commands (missing `timeout`, blocking reads) and lives at the CLI/auto-mode
 policy layer *deliberately*, not in the SDK backend, where it would break the
 backend's timeout tests.
+
+**Every internal git call goes through `bog_agents.git_env.hardened_git_env()`**
+(ROADMAP #49): pass `env=hardened_git_env()` (or `hardened_git_env(existing_env)`)
+to every `subprocess` call whose argv starts with `git`, and add `*NO_EXTERNAL_DIFF`
+to any `git diff`/`show` that prints a patch — a cloned `.git/config` can name
+programs in `core.fsmonitor`, `core.hooksPath`, `credential.helper`, `diff.external`
+and friends. Pinned values come from the trusted system/global scopes (so the user's
+credential manager still works); never set `GIT_CONFIG_NOSYSTEM` (it drops
+`core.autocrlf` on Windows and every CRLF checkout looks dirty), and never try to
+"unset" `diff.external` through a config override (git spawns an empty command).
+`scan_repo_config()` is the report side; the CLI's `repo_trust.py` gates `/diff`,
+`/review`, `/pr` on acknowledgement.
+
+**Windows first run (ROADMAP #61).** `install.ps1` / `install.sh` at the repo root
+are the supported one-liners; `packaging/` holds the PyInstaller spec + `build.py` the
+`windows-standalone` release job runs, the winget manifest generator and the Homebrew
+formula. The spec collects the whole dependency closure *with metadata* on purpose —
+a plain `pyinstaller entry.py` build starts but breaks `--doctor` and every lazy
+provider import. The opt-in `powershell` tool (`bog_agents/tools/powershell.py`,
+`tools.powershell`) must keep its argument named `command` and stay in
+`SHELL_TOOL_NAMES`, or auto-mode, never-allow and the approval menu stop treating it
+as a shell; never launch PowerShell via `shell=True`, and never trust `shutil.which("pwsh")`
+without `is_windows_apps_alias` (the Store's zero-byte alias fails with WinError 5).
+
+**`/tasks` is the one task registry the TUI shows (ROADMAP #68).** `tasks_controller.py`
+builds the tree from duck-typed app state (`_pending_approval_widget` for "waiting on
+you", `_pending_messages` for the queue, `_bg_manager`, `_remote_tasks`, `_team_runs`,
+`daemon_client`) and never imports widgets at module level, so it unit-tests with a
+`SimpleNamespace`. A new long-running surface must register itself there (see
+`register_team_run` / `finish_team_run` for the pattern) rather than growing another
+`/foo list` verb; steering goes through the existing channels (team `Mailbox`, task
+metadata inbox, the prompt queue) — do not invent a new one.
+
+**Self-review memo (ROADMAP #67).** `self_review_memo.py` owns the memo under
+`.bog-agents/self-review/`, the diff fingerprint (`review_diff_text` — keep it byte-identical
+to what the `/self-review` prompt tells the agent to run), the `<!-- bog-review:<sha12> -->`
+marker and the `/finding` dispositions → `lessons_block`. `github_review.py` posts jury
+verdicts as PR reviews through an injected `gh` runner; never post from a test. The
+`/resolve` name is taken by merge-conflict resolution — dispositions are `/finding`.
+
+**Trust profiles (ROADMAP #48).** `trust_profiles.py` is the policy half of a CLI
+profile (`custom_settings.trust` in `profiles.json`) and the `--restricted` preset;
+`create_cli_agent(restricted=…)` applies it and `trust_controller.mode_refusal` gates
+every permission-mode change in the App. `RESTRICTED_TOOL_NAMES` must list every tool
+that spawns a process or opens a raw socket — `test_no_surviving_restricted_tool_spawns_processes`
+rebuilds the restricted agent and fails otherwise, so list a new process-spawning tool
+there before it ships. `web_policy.py` gates `fetch_url` / `http_request` inside
+`assert_fetch_allowed` (before DNS); `workspace_trust.py` fingerprints the
+repo-controlled instruction files behind `/permissions trust-workspace`.
+
+**Operator objective + failover (ROADMAP #53).** `operator_decisions.py` owns the
+decisions log (`~/.bog-agents/operator-decisions.jsonl`), `apply_objective`, `bias()`
+and the `/cost` counterfactual; `operator_mode.py` only calls into it (`_persist_decision`
+at routing time, `operator_turn_finished` at turn end — `OperatorDecision` is frozen, so
+the id is set with `dataclasses.replace`). Rate-limit failover is the SDK's
+`middleware/provider_failover.py`; the CLI attaches it from `[models].fallbacks` for
+non-Bedrock models — keep Bedrock on `bedrock_resilience.py`, never both.
+
+**Sessions, queue, detach / attach (ROADMAP #56).** The SDK owns the data:
+`bog_agents/session_registry.py` (per-machine JSON records + heartbeat; never probe a
+pid with `os.kill(pid, 0)` on Windows — it terminates the process — use `pid_alive`)
+and `bog_agents/mailbox_store.py` (SQLite `Mailbox`, exactly-once `drain` across
+processes). `session_controller.py` is the CLI glue: `start_session_queue` /
+`poll_session_queue` / `turn_finished` take the App duck-typed so they test against a
+fake; `ServerProcess.detach()` / `adopt()` are the only server-lifecycle changes.
+Every daemon run registers itself while it runs; tests set `BOG_AGENTS_SESSIONS_DIR`.
 
 **Session & thread surfaces**: `session_search.py` maintains a **rebuildable**
 FTS5 index (`~/.bog-agents/sessions_fts.db`) beside the LangGraph checkpointer
@@ -207,9 +366,20 @@ mutate the buffer inside the engine.
 
 **Prompt-routing family** — three composable modes that intercept a plain user prompt in `_handle_user_message` (after @-mention resolution, before the agent worker launches): (1) **Operator** (`operator_mode.py`, `/operator`) — a judge model classifies each prompt `easy/medium/hard/max` and stages a one-turn model+effort override via `app._operator_turn_model` / `_operator_turn_effort` (consumed by `_build_cli_context`, cleared in `_run_agent_task`'s finally); presets (anthropic default, bedrock, local, hybrid) + user presets live in `~/.bog-agents/operator.toml`; the judge may also escalate a prompt to butcher or jtbd. Judge failures must never block a turn — every path falls through to the user's active model. (2) **Butcher** (`butcher.py`, `/butcher`) — a strong model slices a job into self-contained instruction files under `.bog-agents/butcher/<job-id>/` (manifest.json + slice-NN.md + report.md), then weak workers (sidecar-style async model→tool loop with scoped write tools) execute slices sequentially in-place, each verified by the butcher with a retry→escalation ladder. (3) **JTBD** (`jtbd.py`, `/jtbd`) — interview → Job Spec artifact (`.bog-agents/jtbd/<id>/job-spec.md`) → outcome-driven execution brief → outcome verification (`/jtbd verify`). All three are pure-logic modules with injected `invoke` callables; chat widgets import from `bog_agents_cli.widgets.messages` (NOT `widgets.chat_messages`, which never existed).
 
+**Cost, usage and changes surfaces (ROADMAP #51/#52/#66)** — three controllers keep `app.py` under its size ratchet: `cost_controller.py` (caps from the `cost.*` manifest keys, the durable `SpendLedger`, the daily gate, the pre-flight confirm, `/cost` verbs), `usage_controller.py` (per-response `UsageRecord` from streamed `usage_metadata`, the strip under each reply, status-bar spend, `/cost tree|cache|explain`), and `changes_controller.py` (the turn-end tray built from `FileOpTracker` records, `/changes show|revert [hunk]|keep`, `/diff --ordered`). Ranking lives in the SDK (`bog_agents/diff_ordering.py`) so the tray, `/diff --ordered` and `render_evidence_markdown` agree; the SDK's `CacheBustDetectorMiddleware` must stay the innermost model-call observer. Adapter-side hooks are two callbacks (`set_usage_sink`, `SessionStats.file_records`), not app references.
+
 **Dreamscape (`libs/cli/bog_agents_cli/dreamscape/`)** — agent lifecycle (Awake/Idle/Dormant/Dreaming/Imagining), dormancy-triggered dream generation, imagination injection, and two-tier laws (`.bog-agents/laws.md` hard-reject vs `.bog-agents/constitution.md` soft/log-only). Two invariants: (1) opt-in by design — without `~/.bog-agents/dreamscape.toml` setting `enabled = true`, every dreamscape middleware must be a no-op; (2) dreamscape errors must never reach the user's prompt path — fall through to underlying agent behavior (see the `_safe` pattern in each middleware). `dreamscape/config.py:load_dreamscape_config()` is the single source of truth for toggles. Long-term effectiveness snapshots live in `docs/dreamscape-runs/` — consult them before changing dream/imagination behavior.
 
 ### Daemon (`libs/daemon/`)
+
+**Thread-linked jobs (ROADMAP #55):** a job with `thread_id` continues an interactive
+thread — `runner.open_thread_checkpointer` reopens the CLI's `sessions.db` (or
+`checkpoint_db`) with `AsyncSqliteSaver`, and `continuation_prompt` frames the event and
+quotes the goal. `max_runs` is the attempt cap (skipped in `dispatch`/tick, auto-disabled by
+`record_run_result`); `TriggerConfig.github_number` / `github_kinds` scope GitHub triggers
+(`github_trigger_matches`). The SDK's `bog_agents.tools.daemon_tools` bundle creates these
+jobs from inside an agent (`schedule`, `subscribe`); keep its HTTP client injectable and its
+failures as `Error:` strings.
 
 A long-running FastAPI service that fires agents on cron, interval, file-change, webhook, or git-push triggers and dispatches results to log, stdout, file, Slack, webhook, email, or GitHub-comment targets. Currently the healthiest satellite — keep its tests (flat `tests/` directory, no unit/integration split) passing when touching the SDK's `create_agent` signature.
 
@@ -220,6 +390,7 @@ A long-running FastAPI service that fires agents on cron, interval, file-change,
 - **Startup reconciles orphaned runs** (`store.py:reconcile_orphaned_runs`, wired in `main.py:_run_daemon`): a run left `RUNNING` by a crash is stamped `FAILED` so `/runs` is honest.
 - **Corrupt `jobs.json` is quarantined, never overwritten** (`store.py:_quarantine_corrupt_jobs`): unparseable content is renamed to `jobs.json.corrupt-<ts>` before the next save, so a bad file can't silently destroy every job. A transient `OSError` on read is NOT quarantined.
 - **Network dispatch failures are recorded**: the webhook/slack/email/github dispatchers now raise on failure so `run_job` captures them in `run.dispatch_errors` (they used to swallow `URLError` and vanish into the log).
+- **Drain before stop (ROADMAP #56)**: `DaemonScheduler.begin_drain()` refuses new dispatches; `POST /drain`, SIGTERM and `/shutdown` all call it, `/health` reports `running` / `draining`, and `bog-agents daemon drain|upgrade` poll it. A run cancelled by the shutdown wait is persisted `CANCELLED` (never left `RUNNING`).
 
 ## Code Conventions
 
@@ -278,3 +449,8 @@ Only add `detect_provider()` entry if the provider has a distinctive model name 
   Build plus the 1.0 shortlist it produced. The Tier-1/Tier-2/Tier-3 numbers
   cited in module docstrings (`Tier-1 #1`, `Tier-2 #8`, …) index into it, so read
   it before changing or re-proposing any of those features.
+- `docs/competitive/killer-features-v3-candidates/` — raw per-bucket competitor
+  research + code-grounded novelty checks (JSON) behind ROADMAP § "Killer
+  features v3" (2026-09-04). Read the novelty file for a bucket before
+  re-proposing a feature from that bucket; each entry records bog's verified
+  status and the exact delta.

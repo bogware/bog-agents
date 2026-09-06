@@ -19,7 +19,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from bog_agents.middleware.cost_tracker import CostTracker
+from bog_agents.middleware.cost_tracker import CostTracker, price_for_model
 
 
 @dataclass
@@ -35,6 +35,65 @@ class RunawayCaps:
     max_subagents: int | None = None
     max_web_searches: int | None = None
     max_cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class CostEstimate:
+    """A pre-flight projection for a burst of `agents` full agent runs (ROADMAP #51).
+
+    Attributes:
+        agents: Number of agent runs projected.
+        model: The model spec the projection was priced against.
+        low_usd: Optimistic total (light context, short answers).
+        high_usd: Pessimistic total (heavy context, long answers).
+        priced: `False` when the model has no price on file — the dollar
+            figures are then zero and the caller should say so.
+    """
+
+    agents: int
+    model: str
+    low_usd: float
+    high_usd: float
+    priced: bool
+
+    def format(self) -> str:
+        """Render a one-line summary for a confirmation prompt."""
+        label = self.model or "the active model"
+        if not self.priced:
+            return f"{self.agents} agent run(s) on {label}: no price on file for this model"
+        return f"{self.agents} agent run(s) on {label}: projected ${self.low_usd:.2f}-${self.high_usd:.2f}"
+
+
+def estimate_run_cost(
+    agents: int,
+    model_name: str,
+    *,
+    input_tokens_per_agent: tuple[int, int] = (60_000, 250_000),
+    output_tokens_per_agent: tuple[int, int] = (4_000, 20_000),
+) -> CostEstimate:
+    """Project the cost of `agents` full agent runs on `model_name`.
+
+    The per-agent token bands are deliberately wide — a coding agent run
+    spans a few reads to a long tool loop — so the result is a bracket to
+    confirm against, not an invoice.
+
+    Args:
+        agents: Number of agent runs (a team's workers, `/best-of-n`'s N, …).
+        model_name: Model spec; priced through `price_for_model`.
+        input_tokens_per_agent: `(low, high)` input tokens per run.
+        output_tokens_per_agent: `(low, high)` output tokens per run.
+
+    Returns:
+        The `CostEstimate`.
+    """
+    agents = max(0, int(agents))
+    price = price_for_model(model_name or "")
+    if price is None or agents == 0:
+        return CostEstimate(agents=agents, model=model_name, low_usd=0.0, high_usd=0.0, priced=price is not None)
+    per_in, per_out = price
+    low = agents * (input_tokens_per_agent[0] * per_in + output_tokens_per_agent[0] * per_out) / 1_000_000
+    high = agents * (input_tokens_per_agent[1] * per_in + output_tokens_per_agent[1] * per_out) / 1_000_000
+    return CostEstimate(agents=agents, model=model_name, low_usd=round(low, 4), high_usd=round(high, 4), priced=True)
 
 
 @dataclass(frozen=True)

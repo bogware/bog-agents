@@ -17,6 +17,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from bog_agents.evidence import CommandRun, EvidenceBundle, render_evidence_markdown
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 _MAX_TITLE_LEN = 70
@@ -36,6 +39,8 @@ class PRConfig:
     max_agent_turns: int = 100
     reviewers: list[str] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
+    # v6 SDK-11: append a proof-of-work evidence bundle to the PR body.
+    evidence: bool = False
 
 
 @dataclass
@@ -51,6 +56,7 @@ class PRResult:
     files_changed: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     test_results: str | None = None
+    tests_passed: bool | None = None
     error: str | None = None
     duration_seconds: float = 0.0
 
@@ -73,6 +79,7 @@ def _run_git(args: list[str], *, cwd: str | None = None) -> tuple[bool, str]:
             timeout=30,
             check=False,
             cwd=cwd,
+            env=hardened_git_env(),
         )
         return result.returncode == 0, result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -215,6 +222,57 @@ def generate_pr_body(
     )
 
     return "\n".join(lines)
+
+
+def build_pr_evidence_markdown(
+    task_description: str,
+    *,
+    files_changed: list[str],
+    tests_passed: bool | None,
+    test_output: str = "",
+) -> str:
+    """Render the proof-of-work section appended to a `--pr --pr-evidence` body.
+
+    v6 SDK-11 / ROADMAP #29: the SDK's `EvidenceBundle` and its markdown
+    renderer existed but no surface attached them to a PR. This is pure
+    (no git, no model) so it is unit-testable; `run_pr_mode` feeds it the
+    changed-file list and the test run it already performed.
+
+    Args:
+        task_description: What the agent was asked to do.
+        files_changed: Files the run touched (from `get_changed_files`).
+        tests_passed: Test outcome, or `None` when tests were not run.
+        test_output: Captured test output (truncated by the renderer).
+
+    Returns:
+        Markdown for the evidence section.
+    """
+    commands: list[CommandRun] = []
+    if tests_passed is not None:
+        commands.append(
+            CommandRun(
+                command="tests", exit_code=0 if tests_passed else 1, output=test_output
+            )
+        )
+    bundle = EvidenceBundle(
+        title="Evidence bundle",
+        summary=f"Automated change for: {task_description[:200]}",
+        diff_stat="\n".join(files_changed),
+        commands=commands,
+        metadata={"files_changed": len(files_changed), **_managed_policy_metadata()},
+    )
+    return render_evidence_markdown(bundle)
+
+
+def _managed_policy_metadata() -> dict[str, Any]:
+    """`{"managed_policy": {...}}` for the evidence pack when a managed policy is active (ROADMAP #50)."""
+    try:
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+    except Exception:
+        return {}
+    return {"managed_policy": policy.to_metadata()} if policy is not None else {}
 
 
 def generate_pr_title(task_description: str) -> str:
@@ -404,6 +462,7 @@ async def run_pr_mode(
         if cfg.run_tests_before_pr:
             test_success, test_output = run_tests(cwd=cwd)
             result.test_results = test_output
+            result.tests_passed = test_success
             if not test_success:
                 logger.warning("Tests failed, continuing with PR creation")
 
@@ -430,6 +489,13 @@ async def run_pr_mode(
             result.commits,
             test_results=result.test_results,
         )
+        if cfg.evidence:
+            result.body += "\n\n" + build_pr_evidence_markdown(
+                task_description,
+                files_changed=result.files_changed,
+                tests_passed=result.tests_passed,
+                test_output=result.test_results or "",
+            )
 
         pr_success, pr_output = create_pull_request(
             result.title,

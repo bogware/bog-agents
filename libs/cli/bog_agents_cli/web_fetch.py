@@ -59,6 +59,14 @@ class WebFetchError(RuntimeError):
     """Raised when a fetch fails before we have any usable body."""
 
 
+class DomainPolicyError(WebFetchError):
+    """Raised when a URL's host is refused by the domain policy (ROADMAP #48).
+
+    `web.allowed_domains` / `web.blocked_domains` (or the trust profile's
+    lists) are checked before DNS, so a refused host is never even resolved.
+    """
+
+
 class SsrfError(WebFetchError):
     """Raised when a URL is rejected by the SSRF guard.
 
@@ -182,6 +190,14 @@ def assert_fetch_allowed(url: str) -> None:
     if not host:
         msg = "URL has no host."
         raise SsrfError(msg)
+
+    # ROADMAP #48: the domain policy gates every hop before DNS.
+    from bog_agents_cli.web_policy import get_web_policy
+
+    reason = get_web_policy().violation(host)
+    if reason is not None:
+        msg = f"Refusing to fetch {url!r}: {reason} (domain policy)."
+        raise DomainPolicyError(msg)
 
     for ip in _resolve_host_addresses(host):
         if _ip_is_blocked(ip):

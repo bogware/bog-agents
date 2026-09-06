@@ -6,9 +6,13 @@ import asyncio
 import json
 import logging
 import os
+import re
 import smtplib
 import time
 import urllib.request
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any
@@ -21,7 +25,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerType,
 )
-from bog_agents_daemon.store import record_run_result, save_run
+from bog_agents_daemon.store import record_run_result, save_run, spend_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,217 @@ fanout during a Slack outage) used to inflate the JobRun JSON to
 megabytes. Beyond this cap, additional failures are collapsed to a
 single ``(overflow)`` entry recording the truncated count.
 """
+
+
+class BudgetPausedError(Exception):
+    """The agent hit the job's `budget_usd` mid-run (ROADMAP #51).
+
+    Carries what `resume_paused_run` needs to continue the very same graph
+    run: the compiled agent (with its in-memory checkpointer) and the run
+    config that names the thread.
+    """
+
+    def __init__(self, payload: dict[str, Any], *, agent: Any, config: dict[str, Any]) -> None:
+        """Store the interrupt payload and the paused graph."""
+        super().__init__(str(payload.get("message") or "budget reached"))
+        self.payload = payload
+        self.agent = agent
+        self.config = config
+
+
+@dataclass
+class PausedRun:
+    """A run parked on a `budget_reached` interrupt, awaiting a raise-cap resume."""
+
+    job: AmbientJob
+    run: JobRun
+    agent: Any
+    config: dict[str, Any]
+    trigger_type: TriggerType
+
+
+_PAUSED_RUNS: dict[str, PausedRun] = {}
+_RESUME_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def is_paused(run_id: str) -> bool:
+    """Whether `run_id` is parked on a budget pause in this daemon process."""
+    return run_id in _PAUSED_RUNS
+
+
+def paused_run_ids() -> list[str]:
+    """Run ids currently parked on a budget pause."""
+    return sorted(_PAUSED_RUNS)
+
+
+def _budget_interrupt_payload(chunk: Any) -> dict[str, Any] | None:
+    """Return the `budget_reached` payload carried by a stream chunk, if any."""
+    if not isinstance(chunk, dict) or "__interrupt__" not in chunk:
+        return None
+    interrupts = chunk.get("__interrupt__") or ()
+    for item in interrupts:
+        value = getattr(item, "value", item)
+        if isinstance(value, dict) and value.get("type") == "budget_reached":
+            return value
+    return None
+
+
+def _spend_ledger() -> Any:
+    from bog_agents.spend_ledger import SpendLedger
+
+    return SpendLedger(spend_db_path())
+
+
+def job_spent_today_usd(job: AmbientJob) -> float:
+    """Today's recorded spend for `job` (best-effort; `0.0` when the ledger is unreadable)."""
+    from bog_agents.spend_ledger import daemon_scope
+
+    try:
+        ledger = _spend_ledger()
+        try:
+            return ledger.total_usd(daemon_scope(job.job_id))
+        finally:
+            ledger.close()
+    except Exception:
+        logger.debug("spend ledger unreadable; treating today's spend as 0", exc_info=True)
+        return 0.0
+
+
+def _record_job_spend(job: AmbientJob, *, input_tokens: int, output_tokens: int) -> float:
+    """Price a run's tokens for the job's model and record them under the job's scope."""
+    from bog_agents.middleware.cost_tracker import price_for_model
+    from bog_agents.spend_ledger import daemon_scope
+
+    if not (input_tokens or output_tokens):
+        return 0.0
+    price = price_for_model(job.model or "")
+    if price is None:
+        return 0.0
+    usd = (input_tokens * price[0] + output_tokens * price[1]) / 1_000_000
+    try:
+        ledger = _spend_ledger()
+        try:
+            ledger.record(daemon_scope(job.job_id), usd, model=job.model, input_tokens=input_tokens, output_tokens=output_tokens)
+        finally:
+            ledger.close()
+    except Exception:
+        logger.debug("could not record job spend", exc_info=True)
+    return usd
+
+
+async def _collect_stream(job: AmbientJob, agent: Any, stream_input: Any, config: dict[str, Any] | None) -> str:
+    """Drain one `astream` pass, returning the last AI text; raise `BudgetPausedError` on a budget interrupt."""
+    result_output = ""
+    tokens_in = 0
+    tokens_out = 0
+    stream = agent.astream(stream_input, config=config) if config is not None else agent.astream(stream_input)
+    async for chunk in stream:
+        payload = _budget_interrupt_payload(chunk)
+        if payload is not None:
+            _record_job_spend(job, input_tokens=tokens_in, output_tokens=tokens_out)
+            raise BudgetPausedError(payload, agent=agent, config=config or {})
+        if not isinstance(chunk, dict):
+            continue
+        for node_output in chunk.values():
+            # Some middleware writes state via langgraph reducer
+            # primitives (Overwrite, Send, Command) that aren't
+            # iterable. Only consume `messages` when it's an actual
+            # list — the add_messages reducer normalises real
+            # message updates into a list before they show up here.
+            if not isinstance(node_output, dict):
+                continue
+            messages = node_output.get("messages")
+            if not isinstance(messages, list):
+                continue
+            for msg in messages:
+                content = getattr(msg, "content", None)
+                if content and hasattr(msg, "type") and msg.type == "ai":
+                    result_output = content if isinstance(content, str) else str(content)
+                usage = getattr(msg, "usage_metadata", None)
+                if isinstance(usage, dict):
+                    tokens_in += int(usage.get("input_tokens") or 0)
+                    tokens_out += int(usage.get("output_tokens") or 0)
+    _record_job_spend(job, input_tokens=tokens_in, output_tokens=tokens_out)
+    return result_output
+
+
+async def resume_paused_run(run_id: str, *, budget_usd: float) -> JobRun:
+    """Continue a budget-paused run with a raised cap (ROADMAP #51).
+
+    Args:
+        run_id: A run parked by `run_job` (see `is_paused`).
+        budget_usd: The new cap; must exceed what the run has spent or the
+            graph pauses again immediately.
+
+    Returns:
+        The finished (or re-paused) `JobRun`.
+
+    Raises:
+        KeyError: If `run_id` is not paused in this process.
+    """
+    from langgraph.types import Command
+
+    paused = _PAUSED_RUNS.pop(run_id)
+    job, run = paused.job, paused.run
+    run.status = JobStatus.RUNNING
+    run.error = ""
+    save_run(run)
+    try:
+        output = await asyncio.wait_for(
+            _collect_stream(job, paused.agent, Command(resume={"budget_usd": budget_usd}), paused.config),
+            timeout=_AGENT_TIMEOUT_SECONDS,
+        )
+    except BudgetPausedError as exc:
+        _park_run(job, run, exc, trigger_type=paused.trigger_type)
+    except Exception as exc:
+        logger.exception("Resumed run %s (%s) failed", run.run_id, job.name)
+        run.error = str(exc)
+        run.status = JobStatus.FAILED
+        run.finished_at = time.time()
+    else:
+        run.output = output
+        run.status = JobStatus.COMPLETED
+        run.finished_at = time.time()
+    return await _finish_run(job, run)
+
+
+def _park_run(job: AmbientJob, run: JobRun, exc: BudgetPausedError, *, trigger_type: TriggerType) -> None:
+    """Mark `run` paused and keep the graph so it can be resumed."""
+    run.status = JobStatus.PAUSED
+    run.error = f"budget_reached: {exc.payload.get('message', 'budget reached')}"
+    run.finished_at = 0.0
+    _PAUSED_RUNS[run.run_id] = PausedRun(job=job, run=run, agent=exc.agent, config=exc.config, trigger_type=trigger_type)
+    logger.warning("Job %s (%s) run %s paused on budget: %s", job.job_id, job.name, run.run_id, run.error)
+
+
+def _register_run_session(job: AmbientJob, run: JobRun) -> None:
+    """ROADMAP #56: list this run in the per-machine session registry (best effort)."""
+    try:
+        from bog_agents.session_registry import SessionRecord, register
+
+        register(
+            SessionRecord(
+                session_id=f"run-{run.run_id}",
+                name=job.name,
+                kind="daemon",
+                cwd=str(job.working_dir or ""),
+                model=str(job.model or ""),
+                state="busy",
+                thread_id=str(job.thread_id or ""),
+                detail=run.run_id,
+            )
+        )
+    except Exception:
+        logger.debug("Could not register the run session", exc_info=True)
+
+
+def _unregister_run_session(run: JobRun) -> None:
+    try:
+        from bog_agents.session_registry import unregister
+
+        unregister(f"run-{run.run_id}")
+    except Exception:
+        logger.debug("Could not remove the run session", exc_info=True)
 
 
 async def run_job(
@@ -69,9 +284,10 @@ async def run_job(
             trigger_context=trigger_context or {},
         )
         save_run(run)
+    _register_run_session(job, run)
 
     try:
-        prompt = _build_prompt(job)
+        prompt = _build_prompt(job, trigger_type=trigger_type, trigger_context=trigger_context)
     except Exception as exc:
         # Prompt/skill/pipeline resolution is deterministic — retrying it would
         # just fail identically, so mark FAILED without consuming retries.
@@ -80,15 +296,60 @@ async def run_job(
         run.status = JobStatus.FAILED
         run.finished_at = time.time()
     else:
-        output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type)
-        if agent_exc is None:
-            run.output = output
-            run.status = JobStatus.COMPLETED
+        spent_today = job_spent_today_usd(job) if job.daily_ceiling_usd else 0.0
+        if job.daily_ceiling_usd and spent_today >= job.daily_ceiling_usd:
+            # ROADMAP #51: the job's daily ceiling is already reached — record
+            # the trigger, spend nothing.
+            run.error = f"daily ceiling reached: ${spent_today:.2f} of ${job.daily_ceiling_usd:.2f} spent today"
+            run.status = JobStatus.SKIPPED
+            run.finished_at = time.time()
         else:
-            run.error = str(agent_exc)
-            run.status = JobStatus.FAILED
-        run.finished_at = time.time()
+            try:
+                output, run.attempts, agent_exc = await _invoke_agent_with_retry(job, prompt, trigger_type=trigger_type, run_id=run.run_id)
+            except asyncio.CancelledError:
+                # ROADMAP #56: a drain / shutdown cancelled the run mid-flight.
+                # Record it honestly; a thread-linked job picks its checkpoint
+                # up on the next run.
+                run.status = JobStatus.CANCELLED
+                run.error = "cancelled by daemon drain" + ("; the thread checkpoint resumes on the next run" if job.thread_id else "")
+                run.finished_at = time.time()
+                save_run(run)
+                _unregister_run_session(run)
+                raise
+            except BudgetPausedError as exc:
+                _park_run(job, run, exc, trigger_type=trigger_type)
+            else:
+                if agent_exc is None:
+                    run.output = output
+                    run.status = JobStatus.COMPLETED
+                    if job.scan_profile:
+                        _record_scan(job, run)
+                else:
+                    run.error = str(agent_exc)
+                    run.status = JobStatus.FAILED
+                run.finished_at = time.time()
 
+    return await _finish_run(job, run)
+
+
+def _record_scan(job: AmbientJob, run: JobRun) -> None:
+    """ROADMAP #59: fold a scan run's `## Findings` into the job's ledger; a failed gate lands in `run.error`."""
+    from bog_agents_daemon.scan import record_scan_output
+
+    try:
+        summary = record_scan_output(job, run)
+    except Exception as exc:
+        logger.exception("Job %s (%s) findings ledger update failed", job.job_id, job.name)
+        run.error = f"findings ledger update failed: {exc}"
+        return
+    run.output = f"{run.output.rstrip()}\n\n{summary.describe()}"
+    if summary.gate is not None and not summary.gate.passed:
+        run.error = summary.gate.describe()
+
+
+async def _finish_run(job: AmbientJob, run: JobRun) -> JobRun:
+    """Persist the run outcome on the job, dispatch outputs (unless paused), return the run."""
+    _unregister_run_session(run)
     # Update job state. Merge ONLY run-state fields into the current on-disk
     # record (read-modify-write) so a concurrent config edit (PATCH /jobs)
     # isn't clobbered by this pre-run snapshot. (REVIEW.md v2 P1-56.) Mirror
@@ -105,6 +366,9 @@ async def run_job(
         last_output=job.last_output,
     )
     save_run(run)
+    if run.status == JobStatus.PAUSED:
+        # Nothing to deliver yet; `resume_paused_run` finishes and dispatches.
+        return run
 
     # Dispatch outputs best-effort. Capture per-target failures on the
     # run so an operator can tell from the run record that delivery
@@ -157,34 +421,154 @@ async def run_job(
     return run
 
 
-def _build_prompt(job: AmbientJob) -> str:
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def render_template(template: str, values: Mapping[str, Any]) -> str:
+    """Substitute `{name}` placeholders in `template` from `values`.
+
+    Only bare identifiers in braces are placeholders (`{pr_number}`); anything
+    else — JSON literals, format specs, unknown names — is left verbatim so a
+    prompt that quotes code or a payload never blows up on an unknown key.
+
+    Args:
+        template: The text to render.
+        values: Placeholder name → replacement value (stringified).
+
+    Returns:
+        The rendered text.
+    """
+    if "{" not in template:
+        return template
+
+    def _sub(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return str(values[key]) if key in values else match.group(0)
+
+    return _PLACEHOLDER_RE.sub(_sub, template)
+
+
+def template_values(
+    *,
+    job_name: str,
+    job_id: str,
+    working_dir: str = "",
+    trigger_type: TriggerType | str = TriggerType.MANUAL,
+    trigger_context: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Build the placeholder map for a job prompt or output field.
+
+    v6 DMN-1: the daemon used to send `job.prompt` to the model verbatim, so
+    the issue number, body and branch parsed by the GitHub front door, a CI
+    webhook payload, or the path a file trigger fired on never reached the
+    agent — and the documented `{trigger_context_json}` / `{pr_number}` /
+    `{date}` / `{trigger_path}` placeholders were inert text.
+
+    Available keys: `date`, `time`, `datetime`, `job_name`, `job_id`,
+    `working_dir`, `trigger_type`, `trigger_context_json`, every top-level
+    string-keyed entry of the trigger context (non-string values as JSON),
+    plus the aliases `number` / `pr_number` / `issue_number` and
+    `trigger_path`.
+
+    Args:
+        job_name: The job's display name.
+        job_id: The job's identifier.
+        working_dir: The job's working directory ("" when unset).
+        trigger_type: How the run was initiated.
+        trigger_context: Trigger metadata (webhook payload, GitHub event, …).
+
+    Returns:
+        A name → string mapping for `render_template`.
+    """
+    ctx: dict[str, Any] = dict(trigger_context or {})
+    now = datetime.now().astimezone()
+    values: dict[str, str] = {
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "datetime": now.isoformat(timespec="seconds"),
+        "job_name": job_name,
+        "job_id": job_id,
+        "working_dir": working_dir,
+        "trigger_type": str(getattr(trigger_type, "value", trigger_type)),
+        "trigger_context_json": json.dumps(ctx, sort_keys=True, default=str),
+    }
+    for key, value in ctx.items():
+        if isinstance(key, str) and key.isidentifier():
+            values.setdefault(key, value if isinstance(value, str) else json.dumps(value, default=str))
+    number = ctx.get("number") or ctx.get("pr_number") or ctx.get("issue_number")
+    if number not in (None, "", 0):
+        for alias in ("number", "pr_number", "issue_number"):
+            values.setdefault(alias, str(number))
+    path = ctx.get("trigger_path") or ctx.get("path") or ctx.get("changed_path")
+    if path:
+        values.setdefault("trigger_path", str(path))
+    return values
+
+
+def _render_output_field(value: str, run: JobRun) -> str:
+    """Render placeholders in an output field (file path, issue number) for `run`."""
+    if not value or "{" not in value:
+        return value
+    return render_template(
+        value,
+        template_values(
+            job_name=run.job_name,
+            job_id=run.job_id,
+            trigger_type=run.trigger_type,
+            trigger_context=run.trigger_context,
+        ),
+    )
+
+
+def _build_prompt(
+    job: AmbientJob,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+    trigger_context: Mapping[str, Any] | None = None,
+) -> str:
     """Build the prompt string for a job invocation.
 
-    For raw `prompt` jobs, the prompt is returned verbatim. For
-    `skill_name` jobs, the skill's SKILL.md content is read from
-    `~/.bog-agents/{agent}/skills/{skill}/SKILL.md` and inlined as the
-    prompt body so the model has the full skill instructions, not just
-    the skill name. For `pipeline_name` jobs, the YAML definition is
-    loaded and converted to a structured request.
+    Resolves the prompt source — the raw `prompt`, the named skill's SKILL.md
+    (read from `~/.bog-agents/{agent}/skills/{skill}/SKILL.md` and inlined so
+    the model has the full instructions), or the named pipeline's YAML turned
+    into a structured request — then renders `{placeholder}` references from
+    the trigger (see `template_values`). Unknown placeholders stay verbatim.
 
     Args:
         job: The job whose prompt to resolve.
+        trigger_type: How this run was initiated.
+        trigger_context: Trigger metadata to expose as placeholders.
 
     Returns:
-        The resolved prompt string.
+        The resolved, rendered prompt string.
 
     Raises:
         ValueError: If no prompt source is configured or the named
             skill/pipeline can't be located.
     """
-    if job.prompt:
-        return job.prompt
-    if job.skill_name:
-        return _resolve_skill_prompt(job.skill_name)
-    if job.pipeline_name:
-        return _resolve_pipeline_prompt(job.pipeline_name)
-    msg = f"Job '{job.name}' ({job.job_id}) has no prompt, skill, or pipeline configured"
-    raise ValueError(msg)
+    if job.scan_profile:
+        from bog_agents_daemon.scan import scan_prompt
+
+        base = scan_prompt(job)  # ROADMAP #59
+    elif job.prompt:
+        base = job.prompt
+    elif job.skill_name:
+        base = _resolve_skill_prompt(job.skill_name)
+    elif job.pipeline_name:
+        base = _resolve_pipeline_prompt(job.pipeline_name)
+    else:
+        msg = f"Job '{job.name}' ({job.job_id}) has no prompt, skill, or pipeline configured"
+        raise ValueError(msg)
+    return render_template(
+        base,
+        template_values(
+            job_name=job.name,
+            job_id=job.job_id,
+            working_dir=job.working_dir,
+            trigger_type=trigger_type,
+            trigger_context=trigger_context,
+        ),
+    )
 
 
 _SKILL_SEARCH_PATHS = (
@@ -455,7 +839,13 @@ def _select_backend(root_dir: Path, job: AmbientJob, trigger_type: TriggerType) 
     return LocalShellBackend(root_dir=root_dir, inherit_env=True, env=env, virtual_mode=False)
 
 
-async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerType = TriggerType.MANUAL) -> str:
+async def _invoke_agent(
+    job: AmbientJob,
+    prompt: str,
+    *,
+    trigger_type: TriggerType = TriggerType.MANUAL,
+    run_id: str = "",
+) -> str:
     """Invoke create_agent() with the job configuration and capture output.
 
     Uses a lazy import to avoid circular imports at module load time.  Enforces
@@ -478,12 +868,16 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
         prompt: The resolved prompt to run.
         trigger_type: How this run was initiated; controls the shell sandbox
             posture (MANUAL stays unrestricted, others harden by default).
+        run_id: The run's id, used as the checkpoint thread when the job has a
+            `budget_usd` (so a budget pause can be resumed).
 
     Returns:
         The last AI message content from the agent.
 
     Raises:
         TimeoutError: If the agent does not complete within the allowed time.
+        BudgetPausedError: If the job's `budget_usd` was hit (ROADMAP #51); the
+            paused graph rides on the exception for `resume_paused_run`.
     """
     from bog_agents import create_agent
     from bog_agents.feature_config import FeatureConfig
@@ -499,41 +893,88 @@ async def _invoke_agent(job: AmbientJob, prompt: str, *, trigger_type: TriggerTy
     # V3-13: use the FeatureConfig path instead of the deprecated bare
     # `enable_git_tools=` kwarg (which flows through **legacy_feature_flags and
     # emits a DeprecationWarning on every job; removed at bog-agents 1.0).
+    # ROADMAP #51: a job budget turns on cost tracking; the SDK pauses the
+    # graph with a `budget_reached` interrupt at the cap, which needs a
+    # checkpointer + thread to park on. Uncapped jobs keep the old shape.
     kwargs: dict[str, Any] = {
-        "config": FeatureConfig(enable_git_tools=True),
+        "config": FeatureConfig(enable_git_tools=True, enable_cost_tracking=job.budget_usd is not None, budget_usd=job.budget_usd),
         "backend": backend,
         "working_dir": str(root_dir),
     }
     if job.model:
         kwargs["model"] = job.model
+    run_config: dict[str, Any] | None = None
+    if job.thread_id:
+        # ROADMAP #55: continue the interactive thread that created the job —
+        # reopen the CLI's checkpointer and make the event the next message.
+        saver_cm = open_thread_checkpointer(job)
+        if saver_cm is not None:
+            prompt = continuation_prompt(job, prompt, trigger_type=trigger_type)
+            async with saver_cm as saver:
+                kwargs["checkpointer"] = saver
+                run_config = {"configurable": {"thread_id": job.thread_id}}
+                agent = create_agent(**kwargs)
+                return await _run_with_timeout(job, agent, prompt, run_config)
+    if job.budget_usd is not None:
+        from langgraph.checkpoint.memory import MemorySaver
 
+        kwargs["checkpointer"] = MemorySaver()
+        run_config = {"configurable": {"thread_id": run_id or f"run-{int(time.time() * 1000)}"}}
     agent = create_agent(**kwargs)
+    return await _run_with_timeout(job, agent, prompt, run_config)
 
-    async def _stream() -> str:
-        result_output = ""
-        async for chunk in agent.astream({"messages": [("human", prompt)]}):
-            for node_output in chunk.values():
-                # Some middleware writes state via langgraph reducer
-                # primitives (Overwrite, Send, Command) that aren't
-                # iterable. Only consume `messages` when it's an actual
-                # list — the add_messages reducer normalises real
-                # message updates into a list before they show up here.
-                if not isinstance(node_output, dict):
-                    continue
-                messages = node_output.get("messages")
-                if not isinstance(messages, list):
-                    continue
-                for msg in messages:
-                    content = getattr(msg, "content", None)
-                    if content and hasattr(msg, "type") and msg.type == "ai":
-                        result_output = content if isinstance(content, str) else str(content)
-        return result_output
 
+async def _run_with_timeout(job: AmbientJob, agent: Any, prompt: str, run_config: dict[str, Any] | None) -> str:
     try:
-        return await asyncio.wait_for(_stream(), timeout=_AGENT_TIMEOUT_SECONDS)
+        return await asyncio.wait_for(
+            _collect_stream(job, agent, {"messages": [("human", prompt)]}, run_config),
+            timeout=_AGENT_TIMEOUT_SECONDS,
+        )
     except TimeoutError:
         msg = f"Agent timed out after {_AGENT_TIMEOUT_SECONDS}s for job {job.job_id} ({job.name})"
         raise TimeoutError(msg) from None
+
+
+def thread_checkpoint_db(job: AmbientJob) -> Path:
+    """The SQLite checkpoint database a thread-linked job resumes from (the CLI's `sessions.db` by default)."""
+    if job.checkpoint_db:
+        return Path(job.checkpoint_db).expanduser()
+    raw = os.environ.get("BOG_AGENTS_HOME", "").strip()
+    home = Path(raw).expanduser() if raw else Path.home() / ".bog-agents"
+    return home / "sessions.db"
+
+
+def open_thread_checkpointer(job: AmbientJob) -> Any:
+    """An `AsyncSqliteSaver` context manager for the job's thread, or `None` when it cannot be opened.
+
+    `None` (with a logged warning) means the run falls back to a fresh agent:
+    the sqlite checkpointer is not installed, or the database does not exist.
+    """
+    try:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    except ImportError:
+        logger.warning("Job %s wants thread %s but langgraph-checkpoint-sqlite is not installed; running fresh", job.job_id, job.thread_id)
+        return None
+    path = thread_checkpoint_db(job)
+    if not path.exists():
+        logger.warning("Job %s wants thread %s but %s does not exist; running fresh", job.job_id, job.thread_id, path)
+        return None
+    return AsyncSqliteSaver.from_conn_string(str(path))
+
+
+def continuation_prompt(job: AmbientJob, prompt: str, *, trigger_type: TriggerType) -> str:
+    """Frame a thread-linked run as a continuation: what fired, and the goal the thread was pursuing."""
+    lines = [f"[ambient: {trigger_type.value} trigger for job {job.name or job.job_id}; this continues your earlier thread]"]
+    if job.goal_ref:
+        try:
+            data = json.loads(Path(job.goal_ref).read_text(encoding="utf-8"))
+            objective = str(data.get("objective") or "").strip() if isinstance(data, dict) else ""
+        except (OSError, ValueError):
+            objective = ""
+        if objective:
+            lines.append(f"Goal: {objective}")
+    lines.append(prompt)
+    return "\n".join(lines)
 
 
 async def _invoke_agent_with_retry(
@@ -541,6 +982,7 @@ async def _invoke_agent_with_retry(
     prompt: str,
     *,
     trigger_type: TriggerType = TriggerType.MANUAL,
+    run_id: str = "",
 ) -> tuple[str, int, Exception | None]:
     """Invoke the agent, retrying transient failures per the job's retry policy.
 
@@ -565,7 +1007,11 @@ async def _invoke_agent_with_retry(
     last_exc: Exception | None = None
     for attempt in range(1, total + 1):
         try:
-            output = await _invoke_agent(job, prompt, trigger_type=trigger_type)
+            output = await _invoke_agent(job, prompt, trigger_type=trigger_type, run_id=run_id)
+        except BudgetPausedError:
+            # Deterministic, not transient: retrying would spend the same
+            # budget again. The caller parks the run instead.
+            raise
         except Exception as exc:
             last_exc = exc
             if attempt < total:
@@ -683,7 +1129,7 @@ async def _dispatch_file(run: JobRun, output: OutputConfig, *, working_dir: Path
 
     import aiofiles
 
-    file_path = output.file_path
+    file_path = _render_output_field(output.file_path, run)
     if not file_path:
         logger.warning("File output for job %s has no file_path configured", run.job_id)
         return
@@ -866,7 +1312,16 @@ async def _dispatch_github_comment(run: JobRun, output: OutputConfig) -> None:
         output: The GitHub comment output configuration.
     """
     repo = output.github_repo
-    issue_number = output.github_issue_or_pr
+    raw_issue = _render_output_field(str(output.github_issue_or_pr or ""), run)
+    try:
+        issue_number = int(raw_issue) if raw_issue else 0
+    except ValueError:
+        logger.warning(
+            "GitHub comment output for job %s could not resolve issue/PR number %r (unrendered placeholder?)",
+            run.job_id,
+            raw_issue,
+        )
+        return
     token = output.github_token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GITHUB_API_KEY") or ""
 
     if not repo:

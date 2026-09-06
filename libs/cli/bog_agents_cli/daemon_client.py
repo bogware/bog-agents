@@ -197,6 +197,12 @@ async def get_daemon_job_runs(job_id: str, *, limit: int = 20) -> list[dict[str,
     return items[:limit]
 
 
+async def list_daemon_runs(*, limit: int = 20) -> list[dict[str, Any]]:
+    """Recent runs across every job (`GET /runs`, newest first; ROADMAP #68 `/tasks`)."""
+    runs = await daemon_request("GET", "/runs")
+    return list(runs)[:limit] if isinstance(runs, list) else []
+
+
 async def add_daemon_job(job_def: dict[str, Any]) -> dict[str, Any] | None:
     """Create a new ambient job on the daemon.
 

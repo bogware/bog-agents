@@ -1,0 +1,580 @@
+{
+ "bucket": "Devin, Factory, Copilot agent, Jules, Kiro (+ Anthropic Managed Agents)",
+ "competitors": [
+  {
+   "name": "Cognition Devin (Devin Cloud, Devin CLI, Devin Desktop/Local, Outposts)",
+   "snapshot": "Devin is now a three-surface product: Devin Cloud (managed VMs, ACU-metered), Devin CLI (Rust TUI local agent, launched 2026-04-27, now versioned 3000.x with near-daily releases) and Devin Desktop (Windsurf rebranded 2026-06-02, with Devin Local as a Rust rewrite of Cascade, ACP support for third-party agents, and a Kanban 'Agent Command Center'). The headline 90-day moves are: SWE-1.7 (2026-07-08, Kimi K2.7 base + RL, 1000 TPS via Cerebras, 81.5% Terminal-Bench 2.1); Devin Outposts (session queue with atomic claim so execution runs on your own Mac mini / K8s / GPU box while planning stays in Devin cloud); Plugins with enterprise governance (required/optional/forbidden manifests, soft-fail); recurring code scans (security, cleanup, multi-repo, chained attack paths) as an automation agent type; nested Sub-Devin views; and steady CLI hardening on Windows (PowerShell default shell, CRLF patches, outposts on Windows x64). Pricing: Free / Pro $20 / Max $200 / Teams $80 + $40 per dev / Enterprise.",
+   "notable_features": [
+    {
+     "feature": "Devin Outposts: run sessions on your own infrastructure via a named queue with atomic worker claims",
+     "description": "Devin's agent loop stays in Devin Cloud; command execution, file edits and repo access run on machines you operate (Mac mini, GPU servers, private-network VMs, Kubernetes). Workers are started with `devin worker start` from the CLI; the queue is exposed via API so an orchestrator can spin machines up on demand. Windows x64 worker binary added in the Aug 2026 CLI releases.",
+     "source_url": "https://docs.devin.ai/cloud/outposts/overview",
+     "date": "2026-07 (docs; launch blog fetch rate-limited, secondary sources say 2026-07-21)"
+    },
+    {
+     "feature": "Plugins with enterprise governance manifest (requiredPlugins / optionalPlugins / forbiddenPlugins)",
+     "description": "Skills are distributed as plugins from GitHub repos; admins configure required (auto-installed recursively), optional (endorsed allow-list) and forbidden (deny-list with globs) plugins at Enterprise and Org levels. Both cloud sessions and the CLI enforce the manifest; a forbidden plugin soft-fails at session start with a warning naming the forbidder rather than aborting.",
+     "source_url": "https://docs.devin.ai/product-guides/plugin-ecosystem",
+     "date": "2026-07-17 (release notes: 'Skills distribution via Plugins with enterprise governance')"
+    },
+    {
+     "feature": "Scheduled code scans as an automation agent type + /scan composer command + cleanup scan",
+     "description": "Automations gained a 'code scan' agent type so recurring scans or re-scans on new commits run unattended; new 'cleanup' scan finds dead code; findings tab redesigned for triage with history, validation controls and severity configuration; batch remediation APIs added 2026-08-26.",
+     "source_url": "https://docs.devin.ai/release-notes",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "SWE-1.7 proprietary coding model on an open-weight base",
+     "description": "Trained from Kimi K2.7-Code with additional RL; 77.8% SWE-bench Multilingual, 81.5% Terminal-Bench 2.1, 42.3% FrontierCode 1.1; served at ~1000 TPS on Cerebras across Devin Web, Desktop and CLI. Positioned as frontier-level intelligence at much lower cost and optimized for long-horizon async tasks.",
+     "source_url": "https://cognition.com/blog/swe-1-7",
+     "date": "2026-07-08"
+    },
+    {
+     "feature": "Devin CLI 3000.x: /handoff to cloud, /recap, /rename, /revert step picker, hooks, Windows PowerShell default, outposts",
+     "description": "Local session can be handed off to cloud with git diff + untracked files attached and full TUI rendering of the cloud session; /recap summarizes progress; multi-line paste, CRLF patch handling and PowerShell default shell for Windows; MCP OAuth discovery fixes, memory-leak and PTY-exhaustion fixes.",
+     "source_url": "https://docs.devin.ai/cli/changelog/stable",
+     "date": "2026-08-21 (v3000.5.20) through 2026-09-02 (v3000.6.12)"
+    },
+    {
+     "feature": "Devin Desktop (Windsurf rebrand) with Devin Local Rust agent, ACP and Agent Command Center",
+     "description": "Windsurf renamed via OTA update; Cascade replaced by Devin Local (Rust rewrite, ~30% more token-efficient, native subagents, Cascade retired 2026-07-01); ACP lets Codex / Claude Agent / OpenCode run inside the Desktop; Kanban Command Center with In Flight / Blocked / Ready for Review / Done; Desktop v3.8.20 (2026-08-21) added side-by-side agent windows.",
+     "source_url": "https://devin.ai/blog/windsurf-is-now-devin-desktop",
+     "date": "2026-06-02"
+    },
+    {
+     "feature": "Session UX: side chats, queued message delivery during waits, 'Waiting' status, nested Sub-Devin views, PR-status grouping, model degradation notifications",
+     "description": "A run of TUI/web polish: side chats for focused discussion (08-12), Coach suggestions in the input box (08-14), model degradation notifications and CI-failure shortcuts (08-19), nested Sub-Devin session views (08-21), queued messages delivered while Devin sleeps in a wait plus dedicated 'Waiting' status (08-26), sidebar grouping by PR status or repo (09-02).",
+     "source_url": "https://releasebot.io/updates/devin",
+     "date": "2026-08-12 to 2026-09-02"
+    },
+    {
+     "feature": "Devin Local enabled by default for enterprise; network access requests with approval flow",
+     "description": "Network access requests from sessions now go through an approval flow (07-01); Devin Local became the enterprise default (08-14); granular org/account permissions and clearer MCP install approvals (08-28).",
+     "source_url": "https://docs.devin.ai/release-notes",
+     "date": "2026-07-01 / 2026-08-14 / 2026-08-28"
+    }
+   ],
+   "business_shifts": "Pricing collapsed from $500 to a $20 Pro tier in 2025 and, as of June-August 2026, is Free / Pro $20 / Max $200 / Teams $80 base + $40 per full seat / Enterprise custom; Windsurf's March 2026 switch from credits to daily/weekly quotas (Pro $15 to $20) drew sustained backlash, and the June 2 rebrand folded the editor into the Devin brand (windsurf.com redirects to devin.ai). Cloud features (agents, DeepWiki, Ask Devin, API) are paid-only; the free tier is Desktop tab-completion. Devin CLI repo is public on GitHub but the license was not confirmed. Strategy is vertical integration: own model (SWE-1.7 on an open-weight base), own Rust CLI/TUI, own IDE, ACP for others' agents, and Outposts to reach on-prem/enterprise networks. MCP marketplace expanded (48+ connectors 2026-06-19; Perplexity, Mobbin, You.com later).",
+   "user_sentiment": "Praise: Devin Review 'found things Claude review missed' and is 'the best of the three' for some HN users; Rust CLI/TUI speed; 67% PR merge rate claimed by Cognition. Complaints: ACU pricing opacity ('$2.50/ea' with no clear budget guidance), the March 2026 quota overhaul and bot-only billing support, 'like a fast intern - change your mind halfway and it falls apart', lingering brand baggage from the 2024 hype. HN thread on Devin Review: https://news.ycombinator.com/item?id=46711589 (early 2026)."
+  },
+  {
+   "name": "Factory Droid (CLI + Desktop app + SDK + Missions)",
+   "snapshot": "Factory ships a CLI (v0.209.0 on 2026-09-01), a Desktop app, a TypeScript SDK, and Missions (multi-day orchestrator-plus-workers with git as the handoff medium, headless via `droid exec --mission`). The last 90 days were dominated by enterprise controls (org-wide hooks governance, MCP/plugin marketplace governance, verified-domain invitations, audit-log scope filters, admin model policies, managed BYOK defaults, air-gapped signed binaries), security hardening (macOS whole-process sandbox, `commandBlocklist`, process sandbox hardening, HTTPS proxy support, system cert trust), a private-preview cross-provider Router with failover, native Windows ARM64 build, and a stream of TUI polish (fork sessions, edit queued messages, /rewind-conversation, /btw mid-stream fork, mark-unread, archive). Default model switched to GPT-5.6 Sol on 2026-09-01 and GPT/Grok pricing was cut 60% on 2026-08-29. Pricing: Pro $20 / Plus $100 / Max $200 with Standard Usage, a free open-weight 'Droid Core' pool, prepaid Extra Usage, and BYOK allowance.",
+   "notable_features": [
+    {
+     "feature": "Missions: multi-day orchestrator + fresh-context worker sessions with git-based handoffs, headless via `droid exec --mission`",
+     "description": "Orchestrator decomposes into milestones and features; each feature gets a fresh worker session with clean context; parallel workers when coordination is cheap; validation at every milestone with follow-up work spawned for regressions; role-specialized models (Opus for orchestration, GPT-5.x-Codex for validation, Kimi for research). Longest observed mission 16 days; median mission uses ~12x a normal session's tokens; requires Extra Usage enabled. Mission model settings became configurable 2026-08-18.",
+     "source_url": "https://factory.ai/news/missions",
+     "date": "2026-02-26 (feature); 2026-08-18 (mission model settings, CLI v0.199.0)"
+    },
+    {
+     "feature": "Factory Router: automatic model selection with cross-provider failover (private research preview)",
+     "description": "Routes each Droid session across models, providers and capacity sources; when a provider degrades, rate-limits or runs out of capacity the session continues on another path (claimed 99.9%+ request reliability). Claude Opus 5 was added to Auto selection 2026-08-07; an 'Auto model retry mechanism' shipped 2026-07-20.",
+     "source_url": "https://factory.ai/news/factory-router",
+     "date": "2026-06 (announced); 2026-08-07 (Opus 5 in Auto)"
+    },
+    {
+     "feature": "Droid Core: free open-weight model pool with separate rate limits, consumed before paid Extra Usage",
+     "description": "All individual plans include a pool of leading open-weight models with their own rate limits that kick in after Standard Usage; tasks that an open-weight model can handle get effectively free throughput. BYOK covers Anthropic/OpenAI keys, OpenRouter, Fireworks, Groq, Ollama and any OpenAI-compatible endpoint, with a free BYOK allowance per plan.",
+     "source_url": "https://docs.factory.ai/pricing",
+     "date": "2026-09 (pricing page, current)"
+    },
+    {
+     "feature": "Enterprise governance wave: org-wide hooks governance, MCP server + plugin marketplace governance, admin model policies, managed BYOK defaults, verified-domain invitations, audit-log scope filtering",
+     "description": "June 18 (v0.152.0): org MCP server and plugin marketplace governance, private npm registry plugin auth, `--auto` autonomy flag. June 22 (v0.156.2): organization-wide hooks governance. July 28 (v0.182.0): audit log scope filtering, admin user removal. Aug 18 (v0.199.0): managed BYOK custom models as Enterprise defaults, service-account model policies. Aug 29 (v0.208.0): verified-domain invitations. Plus org-wide CLI auto-update disable (06-14) and air-gapped signed CLI distribution (06-15).",
+     "source_url": "https://docs.factory.ai/changelog/release-notes",
+     "date": "2026-06-14 to 2026-08-29"
+    },
+    {
+     "feature": "Security hardening: `commandBlocklist`, macOS whole-process command sandbox, process sandbox hardening, MCP per-server command-risk config, on-demand MCP tool search",
+     "description": "`commandBlocklist` hard-prevents listed commands (06-12, v0.147.0); per-server MCP command risk configuration and interactive MCP add/remove (06-01); MCP tool on-demand search/loading so large tool sets are not always in context (06-03); macOS whole-process sandbox (07-09) and process sandbox hardening + injection protection (07-23); HTTPS proxy + system cert trust for corporate networks (07-22, 08-07).",
+     "source_url": "https://docs.factory.ai/changelog/release-notes",
+     "date": "2026-06-01 to 2026-08-07"
+    },
+    {
+     "feature": "Session UX parity set: /rewind-conversation, fork sessions (incl. fork-while-staying), /btw mid-stream fork, edit queued messages, Escape confirms before interrupt, mark-unread, archive, external prompt editor",
+     "description": "`/rewind-conversation` restores chat and files to an earlier state (06-22); session forking synced to cloud (07-28) and fork-in-place (08-14); `/btw` mid-stream fork handling (07-17); edit queued messages before send (08-25); Escape prompts before interrupting active runs (08-13); mark sessions unread (08-26); archive from chat with /archive or Ctrl+X (09-01); external editor for long prompts (06-23).",
+     "source_url": "https://docs.factory.ai/changelog/release-notes",
+     "date": "2026-06-22 to 2026-09-01"
+    },
+    {
+     "feature": "Windows: native ARM64 desktop build, WSL path handling, installer architecture detection, Windows plugin-hook and MCP reliability fixes",
+     "description": "Windows ARM64 native build (07-20, v0.176.0); WSL path handling and Windows/Linux compatibility fixes (07-07); installer arch detection (07-13); 'multiple Windows plugin hook and MCP reliability improvements' (08-29).",
+     "source_url": "https://docs.factory.ai/changelog/release-notes",
+     "date": "2026-07-07 to 2026-08-29"
+    },
+    {
+     "feature": "TypeScript SDK: custom system prompts, session message access, spec-mode helpers; Droid diagnostics tool; background processes with real PIDs",
+     "description": "SDK gained session message access + specification-mode helpers (08-12) and custom system prompts per session (08-18); `droid` diagnostics command for connectivity/setup (08-25); background processes report real PIDs (08-20); explorer subagent gets all read-only tools including web search and command execution (08-18).",
+     "source_url": "https://docs.factory.ai/changelog/release-notes",
+     "date": "2026-08-12 to 2026-08-25"
+    }
+   ],
+   "business_shifts": "Individual tiers are Pro $20 / Plus $100 (~5x usage, managed Droid Computers) / Max $200 (~10x); Teams/Business/Enterprise on request. Usage model is three-layered: Standard Usage under rolling 5h/7d/30d rate limits, then free 'Droid Core' open-weight pool, then prepaid Extra Usage ($10 minimum, never expires). GPT and Grok model prices were cut 60% on 2026-08-29 and the default model moved to GPT-5.6 Sol on 2026-09-01. EU data residency for sessions and inference, a bundled /security-review skill, and per-user Droid Computer controls landed in May; air-gapped signed binaries and BYOK defaults in June. No open-source or self-hosted option. Voucher redemption and account-credit checkout suggest a push toward self-serve teams.",
+   "user_sentiment": "Reviewers describe Droid as 'a programmable colleague you can leave running overnight' and praise headless CI use, mid-session model switching and Missions; the trade-off is cost (median mission ~12x tokens, Missions require Extra Usage). No independent HN or Reddit threads specifically about Factory Droid were found in the window - sentiment here comes from vendor-adjacent reviews (developersdigest.tech, sidbharath.com) and should be weighted accordingly."
+  },
+  {
+   "name": "GitHub Copilot cloud (coding) agent + Copilot CLI + Copilot app + Agent HQ / mission control + Copilot SDK",
+   "snapshot": "GitHub moved every surface to usage-based 'AI Credits' on 2026-06-01 (1 credit = $0.01; Pro $10 with $15 usage, Pro+ $39 with $70, new Max $100 with $200) and took a large public backlash. In the same window it shipped the agent-native Copilot app (2026-06-02, worktree-per-session, local vs cloud sandboxes, canvases), Copilot SDK GA in six languages (2026-06-02), Agent Plugins 1.0 as an open cross-vendor standard (2026-08-06 spec, GA in VS Code/CLI/SDK/app 2026-08-12), per-task reasoning levels for the cloud agent (2026-08-03), Copilot CLI upgrades (/tasks, prompt queue, `--plan --mode autopilot` headless, /rewind, native Rust runtime, defaultPermissionMode), team sessions in Slack/Teams (2026-08-24), code review of bot-authored PRs with resolution reasons (2026-08-27), and org-level custom agents. The cloud agent is triggered from github.com, Mobile, IDEs, REST API, gh CLI, Raycast and MCP; mission control assigns across repos, picks custom agents, streams session logs and allows mid-run steering.",
+   "notable_features": [
+    {
+     "feature": "Agent Plugins 1.0 open standard (plugin.json + skills/ + mcp.json + vendor namespaces), GA across VS Code, Copilot CLI, SDK and app",
+     "description": "Co-maintained by AWS, Anysphere, Microsoft, OpenAI, Vercel and Google. v1 standardizes exactly two components - Skills (SKILL.md dirs) and MCP servers (stdio / streamable-http / legacy sse) - with reverse-domain vendor namespaces (`com.github.copilot/` holds custom agents, commands, rules, hooks). Enterprises govern via managed-settings.json `enabledPlugins`, `extraKnownMarketplaces`, `strictKnownMarketplaces`. Kiro (2026-08-07) and Cursor also support it.",
+     "source_url": "https://github.blog/changelog/2026-08-12-agent-plugins-1-0-in-vs-code-copilot-cli-and-the-copilot-app/",
+     "date": "2026-08-12 (spec published 2026-08-06: https://github.com/agentplugins/agent-plugins-spec/blob/main/spec/1.0.0.md)"
+    },
+    {
+     "feature": "Usage-based billing with AI Credits and flex allotments; new Max plan",
+     "description": "All plans moved from premium requests to token-based AI Credits on 2026-06-01. Pro $10 ($10 base + $5 flex), Pro+ $39 ($39 + $31 flex), Max $100 ($100 + $100 flex); flex allotments vary with model pricing. Completions stay unlimited. Code review additionally consumes Actions minutes on private repos. Per-user AI-credit consumption was added to the usage metrics API on 2026-06-19.",
+     "source_url": "https://github.blog/changelog/2026-06-01-updates-to-github-copilot-billing-and-plans/",
+     "date": "2026-06-01 (plans announced 2026-05-12)"
+    },
+    {
+     "feature": "Copilot app: agent-native desktop with git worktree per session, local sandboxes with centrally enforced policy, cloud sandboxes with cross-device continuity, canvases",
+     "description": "'My Work' view for parallel agents across repos; each session in its own worktree; local sandboxes restrict filesystem/network under central policy; cloud sessions are ephemeral Linux sandboxes that persist across devices; bidirectional canvases for plans/PRs/deployments; Customize tab (MCP + plugins) GA, Azure DevOps and WSL support added 2026-08-24.",
+     "source_url": "https://github.blog/news-insights/product-news/github-copilot-app-the-agent-native-desktop-experience/",
+     "date": "2026-06-02"
+    },
+    {
+     "feature": "Copilot CLI: /tasks subagent center, prompt queue during runs, `--plan` + `--mode autopilot` headless, /rewind, /app handoff, defaultMode/defaultPermissionMode, native Rust runtime, session restore",
+     "description": "Aug 10 weekly: /tasks centralizes subagent and task management; queue prompts and slash commands while the agent runs; `--plan --mode autopilot` in headless mode generates and executes a plan; `/rewind` restores Copilot changes without losing user edits; `/app` opens the desktop app with session context. Aug 24 weekly: `defaultMode` / `defaultPermissionMode` config, plugin/MCP management, session restoration, native Rust runtime.",
+     "source_url": "https://github.blog/changelog/2026-08-13-github-copilot-weekly-releases-august-10/",
+     "date": "2026-08-10 and 2026-08-24 (https://github.blog/changelog/2026-08-28-github-copilot-weekly-releases-august-24)"
+    },
+    {
+     "feature": "Team sessions in Slack and Microsoft Teams (@GitHub mention creates a shared agent session the team can follow and steer)",
+     "description": "Mention @GitHub in a Slack or Teams conversation to investigate problems, plan work and make changes; the resulting session is shared and steerable by the whole team rather than owned by one requester.",
+     "source_url": "https://github.blog/changelog/2026-08-28-github-copilot-weekly-releases-august-24",
+     "date": "2026-08-24"
+    },
+    {
+     "feature": "Copilot code review: reviews bot-authored PRs (including Copilot cloud agent PRs), removes 300-file / 20k-LOC limits, adds resolution reasons (Addressed / Won't fix / Incorrect)",
+     "description": "Review now covers PRs authored by bots and the Copilot cloud agent (billed to the org under the 'members without a Copilot license' policy), handles very large PRs, and captures why a human resolved each comment as product feedback. Default review effort moves from Lite to Balanced on 2026-09-28.",
+     "source_url": "https://github.blog/changelog/2026-08-27-copilot-code-review-resolution-reasons-and-expanded-capabilities",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "Per-task reasoning level for the Copilot cloud agent; org-level custom agents; model pinning and 'Manage models' with context window and cost info",
+     "description": "Cloud agent tasks accept a reasoning level next to the model (higher level = more tokens = more credits), on all paid plans (08-03). Visual Studio August update: org/enterprise owners publish custom agents usable across repos; Low/Medium/High thinking effort; Manage models shows capabilities, context sizes and cost; Git agent reviews uncommitted changes before a PR (08-28).",
+     "source_url": "https://github.blog/changelog/2026-08-03-customize-the-reasoning-level-for-copilot-cloud-agent/",
+     "date": "2026-08-03 / 2026-08-28"
+    },
+    {
+     "feature": "VS Code August 2026: side-by-side chat groups, /btw side conversations, cross-app session continuity (Copilot or Claude sessions), Agent Host multi-window, /rubber-duck complementary model, per-model token usage hover, HTML element annotation in integrated browser",
+     "description": "Sessions from other apps (Copilot or Claude) appear in VS Code's Sessions list; `/btw` opens a parallel discussion sharing context; hover a response footer to see input/cached/output tokens per model; experimental /rubber-duck invokes a complementary model for gap analysis; multilingual on-device dictation with custom cleanup instructions.",
+     "source_url": "https://github.blog/changelog/2026-08-31-github-copilot-in-vs-code-august-2026-releases",
+     "date": "2026-08-31"
+    },
+    {
+     "feature": "Copilot SDK GA: embed the Copilot agent runtime (planning, tool calls, file edits, streaming, MCP) in Node/TS, Python, Go, .NET, Rust, Java; BYOK without GitHub auth",
+     "description": "Same runtime as the app/CLI exposed as an SDK; auth via GitHub OAuth, env vars, or BYOK for OpenAI, Azure AI Foundry and Anthropic. Microsoft Agent Framework can use it as a backend.",
+     "source_url": "https://github.blog/news-insights/product-news/github-copilot-app-the-agent-native-desktop-experience/",
+     "date": "2026-06-02"
+    },
+    {
+     "feature": "Upcoming (2026-09-28+): Copilot Chat, Mobile and cloud agent merge into one experience under a single policy; chat retention grows from 28 days to account lifetime; Business/Enterprise seats become prepaid",
+     "description": "Separate policies collapse into one; opting out removes web/mobile Copilot; new Business/Enterprise seat assignments require upfront payment from 2026-09-01 and existing customers from 2026-10-01.",
+     "source_url": "https://github.blog/changelog/2026-08-28-upcoming-changes-to-github-copilot-policies-and-billing/",
+     "date": "2026-08-28"
+    }
+   ],
+   "business_shifts": "The biggest shift in the bucket: 4.7M paid subscribers moved to token-metered AI Credits on 2026-06-01 (Pro/Pro+/Max at $10/$39/$100 with flex allotments; code review also burns Actions minutes), followed by seat prepayment for Business/Enterprise (Sept/Oct 2026) and an experience/policy unification on 2026-09-28 that lengthens chat retention to account lifetime. GitHub simultaneously opened the platform outward: Agent Plugins 1.0 as a multi-vendor standard, Copilot SDK GA with BYOK and no GitHub auth required, Agent HQ hosting Claude/Codex side-by-side, and Ollama as a BYOK provider (JetBrains, 2026-08-10). Kimi K3 and MAI-Code-1.1-Flash were added to the model roster (2026-08-10); several models were deprecated in August.",
+   "user_sentiment": "Strongly negative on billing: community discussion #198015 ('AI Credits Are Unfair, Expensive, and Killing Real Development Workflows', 2026-06-04) reached 391 upvotes vs 2 downvotes with 95+ comments describing credits gone in hours of agent use, no way to estimate a task's cost beforehand, code review costing more than Claude's whole plan, and mass migration to Claude Code/Cursor; GitHub staff closed it with a pointer to an FAQ (52 downvotes). TechTimes reported 10x-50x bill increases for agentic power users. Positive notes cluster around Agent Plugins portability, /rewind, worktree-per-session isolation, and side-by-side sessions."
+  },
+  {
+   "name": "Google Jules (plus the Gemini CLI to Antigravity CLI transition)",
+   "snapshot": "Jules remains a GitHub-integrated async cloud agent (clone into a VM, plan, edit, open a PR) with scheduled tasks, suggested tasks, a REST API with repoless ephemeral environments, MCP servers, auto-fixing CI failures on its own PRs, commit-as-you, and Gemini 3.1 Pro for paid users. The official changelog's most recent entry is 2026-03-09; no dated entries exist for June-September 2026, so Jules' 90-day changes could not be verified. The relevant Google move in the window is that Gemini CLI stopped serving consumers on 2026-06-18 and was replaced by the closed-source, Go-based Antigravity CLI (announced 2026-05-19), which breaks the `/jules` Gemini CLI extension path for free/Pro/Ultra users; secondary sources say Jules is invokable from Antigravity and still in public beta as of July 2026.",
+   "notable_features": [
+    {
+     "feature": "Auto-fixing CI failures on Jules PRs and 'commit as you'",
+     "description": "Jules receives GitHub Actions errors on PRs it opened, works through a fix and resubmits without manual intervention; can be configured to author commits under the user's identity.",
+     "source_url": "https://jules.google/docs/changelog/2026-02-19/",
+     "date": "2026-02-19"
+    },
+    {
+     "feature": "MCP server support (Linear, Stitch, Neon, Tinybird, Context7, Supabase)",
+     "description": "Jules tasks can call external MCP servers configured per project.",
+     "source_url": "https://jules.google/docs/changelog/2026-02-02/",
+     "date": "2026-02-02"
+    },
+    {
+     "feature": "Gemini 3.1 Pro as default for Google Pro plan users; Gemini 3 Flash as base model for everyone",
+     "description": "Model upgrades: Gemini 3 Flash replaced 2.5 Pro as the free base (2026-01-30); Gemini 3.1 Pro replaced 3 Pro for paid users (2026-03-09).",
+     "source_url": "https://jules.google/docs/changelog/2026-03-09/",
+     "date": "2026-03-09"
+    },
+    {
+     "feature": "Scheduled tasks (edit/pause/resume), suggested tasks, performance-optimization detection, Planning Critic for auto-approved plans, repoless REST API",
+     "description": "Recurring maintenance on a schedule; proactive issue finding (TODOs and perf optimizations); a critic pass on auto-approved plans; REST API can create ephemeral cloud dev environments with Node/Python/Rust/Bun preloaded plus file outputs and activity filters.",
+     "source_url": "https://jules.google/docs/changelog/",
+     "date": "2026-01-26"
+    },
+    {
+     "feature": "Gemini CLI shut down for consumers; replaced by closed-source Antigravity CLI (Go, async background orchestration, unified with Antigravity 2.0)",
+     "description": "Gemini CLI stopped serving Google AI Pro/Ultra/free users on 2026-06-18; access remains only via paid Gemini API keys and Code Assist licenses. Antigravity CLI is positioned as agent-first with async workflows. Reported CI/CD pipeline breakage on the cutover date.",
+     "source_url": "https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
+     "date": "2026-05-19 (effective 2026-06-18)"
+    }
+   ],
+   "business_shifts": "Google's CLI story reset in the window: the 100k-star open-source Gemini CLI was sunset for consumers and replaced by a closed-source Antigravity CLI, moving the free/Pro/Ultra developer surface into the Antigravity product line (IDE 2.0, CLI, SDK, 'manager' workflows). Jules itself shows no official changelog activity after 2026-03-09; secondary sources claim a free tier of 8 tasks/month, $20 paid plans and GitLab beta as of July 2026, but these are unverified. Net: Jules is a low-churn, low-signal product in this window and Google-dependent workflows carry platform-churn risk.",
+   "user_sentiment": "HN feedback (2025 threads, still the most-cited): Jules goes silent for long periods with no progress updates, finishes tasks prematurely and rambles on follow-ups, environments fail to persist; one user merged 1 of ~12 Jules PRs and reassigned the rest to another agent. Praise centers on fire-and-forget convenience and the free tier. The Gemini CLI shutdown drew complaints about broken CI pipelines and the shift from open source to a closed CLI (TechTimes 2026-06-18)."
+  },
+  {
+   "name": "AWS Kiro (IDE 1.0.x, CLI 2.x, Kiro Web, cloud sessions, Kiro Crew)",
+   "snapshot": "Kiro is now four surfaces on one account: the IDE (Code-OSS fork, weekly 1.0.x releases), the CLI (2.12 to 2.21 in the window), Kiro Web (GA 2026-09-01) and cloud sessions (preview from 2026-08-11, us-east-1 only, included in plan) that let a session start in the browser and be resumed from the CLI, IDE or phone. Spec-driven development (EARS specs, V3 specs with a review screen and full-screen task execution), Powers (bundled MCP config + POWER.md steering + hooks), global hooks, nested AGENTS.md steering, capability-based permissions, Agent Plugins 1.0 support (2026-08-07), on-device Whisper voice dictation (2026-08-12), tangent side-conversations (2026-07-31), and cloud configuration sync (steering, agents, skills, powers, hooks) are the headline capabilities. Kiro Crew (2026-08-04, Apache-2.0, github.com/kirodotdev/KiroCrew) is a separate open-source persistent local-first agent workspace with a gateway, cron/webhook jobs, model-free script jobs, subagents, chat-channel frontends and durable 'lessons' memory. Enterprise: ISO/IEC 27001:2022 scope, OTLP usage-metrics export, Okta/Entra identity, GovCloud. Two 2026 CVEs (config-file rewrite via poisoned web page; workspace-driven data exfiltration) shaped the permission work.",
+   "notable_features": [
+    {
+     "feature": "Kiro Crew: open-source (Apache-2.0) persistent, local-first agent workspace with gateway, cron/webhook jobs, script-only jobs, subagents, chat-channel frontends and durable-lesson memory",
+     "description": "Gateway separates runtime from UIs (desktop, localhost web dashboard, CLI, Slack/Discord/Telegram/Teams/Webex/WhatsApp); `kirocrew cron` and reactive webhooks; deterministic script execution without a model call; isolated subagents synthesize back into the parent; in-process embeddings for memory search; interactive approvals, OS sandboxing (Linux/macOS), sensitive-path guards, credential redaction, 137 bundled deny patterns, audit logging; Windows supported with documented limits. Reported 39k internal Amazon users (secondary).",
+     "source_url": "https://kiro.dev/blog/introducing-kiro-crew/",
+     "date": "2026-08-04"
+    },
+    {
+     "feature": "Cloud sessions (preview) and Kiro Web GA: start in browser, close laptop, resume from CLI/IDE/phone; cloud config sync into local sessions",
+     "description": "Sessions belong to the account, not the app; run in an AWS-managed sandbox (us-east-1 only), included with Pro/Pro+/Pro Max/Power at no extra compute charge; enterprises opt in via IAM Identity Center. 2026-09-01: cloud Steering, custom agents, Skills, Powers and Hooks load into new local IDE/CLI sessions; branch selection at session creation (08-31); sessions name themselves (08-27).",
+     "source_url": "https://kiro.dev/blog/cloud-sessions/",
+     "date": "2026-08-18 (blog); CLI 2.17.0 2026-08-11; Web GA 2026-09-01 (https://kiro.dev/changelog/)"
+    },
+    {
+     "feature": "V3 spec workflow: guided description step, review screen with staged line comments and mouse support, full-screen task execution with real-time progress and task-scope selection; Plan mode auto-executes approved plans",
+     "description": "CLI 2.15.0 (07-27) added guided spec description and plan auto-execution; 2.18.0 (08-12) added a spec review screen for reading phase documents and staging line comments; 2.19.0 (08-19) mouse support in review; 2.20.0 (08-26) full-screen execution view with scope selection and preserve-scrollback.",
+     "source_url": "https://kiro.dev/changelog/cli/",
+     "date": "2026-07-27 to 2026-08-26"
+    },
+    {
+     "feature": "Agent Plugins 1.0 support in the IDE; nested AGENTS.md steering from anywhere in the workspace tree; global hooks in ~/.kiro/hooks/; hooks on agent writes",
+     "description": "IDE 1.0.288 (08-07) 'Agent Plugin Support and Session Pinning'; 1.0.309 (08-13) nested AGENTS.md; global hooks (IDE 1.0.182 07-20, CLI 2.13.0 07-17); hooks fire on agent file writes (IDE 1.0.116 07-09).",
+     "source_url": "https://kiro.dev/changelog/ide/",
+     "date": "2026-07-09 to 2026-08-13"
+    },
+    {
+     "feature": "Capability-based permissions and protected paths (mcp.json, .vscode/tasks.json, .git) requiring explicit approval in all modes; Windows configured-shell execution",
+     "description": "After CVE-2026-10591 (hidden text on a web page made Kiro rewrite ~/.kiro/settings/mcp.json and launch an attacker MCP server; reported 2026-02-11, fixed by v0.11.130 in April) Kiro enforces protected-path checks platform-side. IDE 1.0.337 (08-18) improved filesystem/command permission rules and runs agent commands in the user's configured Windows terminal profile; 1.0.138 (07-13) added PowerShell trust.",
+     "source_url": "https://thehackernews.com/2026/07/aws-kiro-flaw-let-poisoned-web-page.html",
+     "date": "2026-07 (disclosure); 2026-08-18 (IDE 1.0.337 https://kiro.dev/changelog/ide/)"
+    },
+    {
+     "feature": "On-device voice dictation (/voice, Whisper) and tangent side-conversations in the CLI; Introspect subagent; /upgrade-agent migration",
+     "description": "CLI 2.18.0 (08-12) /voice with on-device Whisper; 2.16.0 (07-31) tangents branch into exploratory threads preserving main context; 2.13.0 (07-17) Introspect subagent for inline feature guidance; 2.14.0 (07-22) converts V2 custom agents to the universal format.",
+     "source_url": "https://kiro.dev/changelog/cli/",
+     "date": "2026-07-17 to 2026-08-12"
+    },
+    {
+     "feature": "Enterprise: per-user usage metrics export to OpenTelemetry (OTLP gRPC/HTTP to CloudWatch, Datadog, Dynatrace, Elastic, Honeycomb, OpenSearch) plus daily CSV; ISO/IEC 27001:2022 scope",
+     "description": "Account admins configure one account-level export (Secrets Manager secret + OTLP endpoint); Kiro delivers per-user adoption/engagement/credit metrics server-side daily at 02:00 UTC. Kiro was added to AWS's ISO 27001:2022 certification scope the same day.",
+     "source_url": "https://kiro.dev/changelog/",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Pricing: Free 50 credits / Pro $20 (1,000) / Pro+ $40 (2,000) / Pro Max $100 (5,000) / Power $200 (10,000); $0.04 per extra credit billed in 0.01 increments, no rollover",
+     "description": "Pro Max was added to close the $40-to-$200 gap after developer feedback; 500 bonus credits for new users and a $20 first-upgrade credit.",
+     "source_url": "https://kiro.dev/blog/kiro-pro-max/",
+     "date": "2026-07 (pricing page https://kiro.dev/pricing/)"
+    },
+    {
+     "feature": "Workspace-driven data exfiltration vulnerability (Mindgard) and Powers prompt-injection disclosure",
+     "description": "Opening a crafted workspace and sending any message let repository-controlled instructions exfiltrate local data; fixed in 0.8.140. Researchers criticized AWS's disclosure process for treating AI-interaction vulnerabilities like conventional defects.",
+     "source_url": "https://thehackernews.com/2026/08/amazon-kiro-prompt-injection-can.html",
+     "date": "2026-08-27"
+    }
+   ],
+   "business_shifts": "Kiro is converging on 'one account, any surface' (IDE, CLI, Web, cloud sessions, mobile) with cloud compute bundled into the $20-$200 credit tiers rather than metered separately; Pro Max ($100) was inserted in July after gap complaints. AWS open-sourced two governance pieces adjacent to Kiro: Kiro Crew (Apache-2.0 persistent agent workspace, 2026-08-04) and Dogwood (Apache-2.0 temporal policy language extending Cedar, 2026-08-06, integrated into Bedrock AgentCore Policy), and joined Agent Plugins 1.0 as a core maintainer. Enterprise posture strengthened with ISO 27001 scope, OTLP usage export, GovCloud availability (Feb 2026) and Okta/Entra identity. Two public CVEs in 2026 pushed platform-enforced protected paths.",
+   "user_sentiment": "Praise: spec-driven development (EARS requirements, design docs, task lists) is the recurring HN highlight; cloud sessions' 'close the laptop, keep the agent' resonates; transparent $0.04 overage is cited as fairer than Cursor's throttling. Complaints: the 2025 HN 'wallet-wrecking tragedy' pricing thread still frames perception; two 2026 CVEs (config rewrite, workspace exfiltration) and Mindgard's criticism of AWS's disclosure process; ecosystem still much smaller than Cursor's; cloud sessions limited to us-east-1."
+  },
+  {
+   "name": "Anthropic Claude Managed Agents (hosted harness, scheduled deployments, self-hosted sandboxes, memory, dreams)",
+   "snapshot": "Launched 2026-04-08 as a public beta (header `managed-agents-2026-04-01`, on by default for all API accounts), Managed Agents is a hosted agent harness: define an Agent (model, prompt, tools, MCP, skills), an Environment (Anthropic cloud sandbox or a self-hosted sandbox on your infra), start Sessions, stream Events, steer or interrupt. Pricing is token list rates plus $0.08 per session-hour and $10 per 1,000 web searches. In the window it added scheduled deployments (cron + IANA timezone, per-run budgets, deployment-run records, webhooks) and Vaults (2026-06-09), hard dollar session budgets that pause rather than kill, memory stores on self-hosted sandboxes, allowed/blocked domains on web_search/web_fetch, and a Console session viewer with a minimap and per-thread cost inspector (2026-08-19/20). 'Dreams' (research preview) rebuild a memory store from up to 100 past sessions into a new, reviewable store. Cloud sessions are not ZDR/HIPAA eligible; self-hosted sandboxes require a Linux host (Windows unsupported for memory stores) and are the compliance path.",
+   "notable_features": [
+    {
+     "feature": "Scheduled deployments: cron expression + IANA timezone, per-run budget, deployment-run records with error types, pause/unpause/archive, manual run, webhooks; plus Vaults for credentials",
+     "description": "Minute-level cron with literal wall-clock DST semantics and up to 15% jitter; failed runs recorded with `environment_archived_error` / `session_rate_limited_error` etc.; missed triggers are not backfilled; auto-pause on unrecoverable errors; up to 1,000 deployments per org. Vaults store env vars/credentials for CLIs and external services.",
+     "source_url": "https://platform.claude.com/docs/en/managed-agents/scheduled-deployments",
+     "date": "2026-06-09 (announcement https://claude.com/blog/whats-new-in-claude-managed-agents)"
+    },
+    {
+     "feature": "Session budgets: hard USD cap on list cost, enforced between model requests; session pauses with `budget_reached` (not terminated) and resumes when the cap is raised or removed",
+     "description": "List cost = model tokens at list price + $10/1k web searches + $0.08/hour runtime. At cap, only settle events (tool results, confirmations, interrupt) are accepted; `session.usage` event precedes the idle event; multiagent sessions share one budget across threads and advisors; deployments copy the budget onto each run. Models without a public list price are rejected for budgeted sessions.",
+     "source_url": "https://platform.claude.com/docs/en/managed-agents/budgets",
+     "date": "2026-08 (current docs; budgets referenced by the June deployments launch)"
+    },
+    {
+     "feature": "Self-hosted sandboxes: orchestration in Anthropic's control plane, tool execution on your infrastructure via an EnvironmentWorker (always-on poll, webhook-triggered, or sandbox-per-session)",
+     "description": "Worker authenticates with an environment key (or IAM SigV4 on AWS), pulls work items, runs bash/file ops/custom tools/wrapped MCP tools locally; code, files and network never leave your environment (tool I/O does). Integration guides for AWS Lambda MicroVMs, Blaxel, Cloudflare, Daytona, E2B, Fly.io, GKE Agent Sandbox, Modal, Namespace, Superserve, Vercel. HIPAA BAA available; Linux host required.",
+     "source_url": "https://platform.claude.com/docs/en/managed-agents/self-hosted-sandboxes",
+     "date": "2026-08-19 (memory stores on self-hosted added)"
+    },
+    {
+     "feature": "Memory stores on self-hosted sandboxes; allowed_domains / blocked_domains on web_search and web_fetch; Console viewer with timeline minimap and per-thread cost inspector",
+     "description": "Memory syncs to /mnt/memory/<store> every 15s (SDK workers only, max 8 stores per session, one session per store at a time). Domain lists are one-or-the-other per tool, no IPs/bare TLDs/internal suffixes, and govern only the built-in web tools. Console change is observability-only, no billing change.",
+     "source_url": "https://explainx.ai/blog/claude-managed-agents-memory-domain-controls-console-update-august-2026",
+     "date": "2026-08-19 to 2026-08-20"
+    },
+    {
+     "feature": "Dreams (research preview): asynchronous job that reads a memory store plus 1-100 session transcripts and produces a new, reorganized memory store (input never modified), steerable with instructions",
+     "description": "Gated by `dreaming-2026-04-21`; runs minutes to hours; output store can be attached to future sessions or discarded; the underlying pipeline session is streamable; billed at standard token rates; supported models include Opus 5, Fable 5, Opus 4.8/4.7, Sonnet 5/4.6.",
+     "source_url": "https://platform.claude.com/docs/en/managed-agents/dreams",
+     "date": "2026-04-21 (beta header) / current docs 2026-09"
+    },
+    {
+     "feature": "Claude Managed Agents available on Claude Platform on AWS (self-hosted sandboxes supported, memory stores not)",
+     "description": "Same API surface inside AWS with IAM auth; feature-availability and session-behavior differences documented.",
+     "source_url": "https://platform.claude.com/docs/en/managed-agents/overview",
+     "date": "2026-09 (current docs)"
+    }
+   ],
+   "business_shifts": "Anthropic is selling the harness, not just tokens: $0.08/session-hour plus list-rate tokens, with hard per-session and per-run USD budgets as a first-class primitive. The June scheduled-deployments + vaults release turned it into an ambient-agent platform competing directly with daemon-style runners (Kiro Crew, Devin automations, Jules scheduled tasks). Self-hosted sandboxes (many partner sandboxes, AWS IAM auth, HIPAA path) are the enterprise on-ramp; cloud sessions explicitly are not ZDR/HIPAA eligible. Still beta (April header), Claude-only, single vendor.",
+   "user_sentiment": "Praise: 'no sandbox, state management or error recovery to build', early adopters Rakuten/Notion/Sentry cited; budgets and scheduled deployments seen as fixing real gaps. Complaints (Medium/blog commentary): MVP feel at launch (no scheduling or messaging until June), Claude-only lock-in, beta header churn, cloud sessions ineligible for ZDR/HIPAA, self-hosted memory needs SDK workers (not the `ant` CLI) and a Linux host - no Windows."
+  }
+ ],
+ "candidates": [
+  {
+   "title": "Native Agent Plugins 1.0 support (read, write, govern) with a com.bogware namespace",
+   "description": "Treat `plugin.json` + `skills/` + `mcp.json` as a first-class plugin format: install from any Agent Plugins 1.0 repo or marketplace, export bog recipes/expert-rule packs/hooks as plugins carrying a `com.bogware.bog-agents/` vendor directory, and honor managed-settings-style `enabledPlugins` / `strictKnownMarketplaces` governance. Extends the existing skills trust store and MCP OAuth stack.",
+   "competitor": "GitHub Copilot (spec co-maintained by AWS, Anysphere, Microsoft, OpenAI, Vercel, Google; also Kiro 2026-08-07, Devin plugins)",
+   "source_url": "https://github.blog/changelog/2026-08-12-agent-plugins-1-0-in-vs-code-copilot-cli-and-the-copilot-app/",
+   "source_date": "2026-08-12",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated",
+    "solo power users"
+   ],
+   "why_killer": "A team that already maintains Copilot/Cursor/Kiro plugins can drop the same directory into bog and get skills + MCP servers working on first run, and can publish one plugin that its whole toolchain consumes - so adopting bog no longer means re-authoring customizations. ROADMAP #34 proposed a cross-ecosystem importer; the bar moved on 2026-08-06 when six vendors published a formal spec, so the win is now 'implements the standard' (with governance) rather than 'imports N ad-hoc formats'.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Temporal, sequence-aware policies in Expert Mode (Dogwood-class `formerly within` / `count_within` / `sum_within`) with a Dogwood importer",
+   "description": "Add temporal aggregate predicates over the session's fact history and cost ledger to `expert_rules.py` / `expert_engine`: 'deny `rm -rf` unless a backup tool_call succeeded within 1h', 'require approval after 5 `git push` in 10m', 'pause when sum(spend) within 1h > $5'. Ship an importer for Apache-2.0 Dogwood policies (Cedar superset) so AgentCore-governed enterprises reuse their policies locally.",
+   "competitor": "AWS (Dogwood, open-sourced 2026-08-06, integrated in Bedrock AgentCore Policy)",
+   "source_url": "https://aws.amazon.com/blogs/opensource/introducing-dogwood-runtime-verification-for-ai-agents/",
+   "source_date": "2026-08-06",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Regulated teams get the 'valid but wrong in sequence' guardrail AWS just made the reference model for agent governance - but provider-agnostic, offline and evaluated locally before every tool call, with `/why` and `/prove` explaining the temporal chain. Nobody in this bucket enforces temporal policy inside a local CLI; Kiro's own CVEs show why platform-enforced sequence rules beat model judgment.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Pre-flight cost estimate + hard USD budget with pause-and-resume (session, team, daemon run)",
+   "description": "Before a run, show an estimated cost range from the operator judge's difficulty class and historical ledger; enforce a hard list-cost cap that pauses the session in a `budget_reached` state (accepting only settle events), resumable by raising the cap from the TUI, Slack, or daemon; copy per-run budgets onto every scheduled daemon job. Builds on `cost_ledger.py` + `RunawayCaps`.",
+   "competitor": "Anthropic Managed Agents (session/deployment budgets); GitHub Copilot AI-credit backlash",
+   "source_url": "https://platform.claude.com/docs/en/managed-agents/budgets",
+   "source_date": "2026-08-20",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "The single loudest complaint across Copilot (#198015, 391 upvotes), Kiro and Devin in this window is 'I cannot know what a task will cost before running it, and it burned my month in hours'. A user who sees '$0.40-$1.20 estimated, hard cap $2' and can resume a paused run instead of losing it gets the cost certainty no hosted vendor offers. ROADMAP #25 covered caps; the bar moved to pause-not-kill semantics plus pre-run estimates.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`bog outpost`: daemon-hosted named work queues with atomic worker claims and `/handoff` from a live CLI session",
+   "description": "Reuse `TaskLedger` atomic claim and the daemon to expose named queues; a TUI session runs `/handoff` (attaching git diff + untracked files) and any bog worker on a Windows box, Mac mini, or K8s pod claims it exactly once and streams the session back; queue API lets an orchestrator spin workers up on demand. Sessions stay resumable from another machine.",
+   "competitor": "Cognition Devin (Outposts + CLI /handoff); AWS Kiro (cloud sessions); GitHub Copilot app (local/cloud continuity)",
+   "source_url": "https://docs.devin.ai/cloud/outposts/overview",
+   "source_date": "2026-07-21",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated",
+    "solo power users"
+   ],
+   "why_killer": "A team keeps execution inside its own network next to secrets and registries (or a solo dev uses the spare desktop as a runner) while still starting work from a laptop and closing the lid - and unlike Devin/Kiro there is no vendor control plane, so it works air-gapped and with local models. ROADMAP #33 (teleport) and #42 (fleet) proposed pieces; the bar moved to the specific 'named queue + atomic claim + on-demand workers' pattern that three vendors converged on this summer.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Scan jobs: a daemon job type that produces a deduplicated findings ledger with triage states and 'remediate -> PR'",
+   "description": "Add `scan` as a first-class daemon job (security, cleanup/dead-code, perf, custom rubric) with findings persisted in SQLite, deduped across runs, triage states (open / addressed / won't fix / incorrect), severity thresholds, scheduled re-scan on new commits, and a `/remediate <finding-id>` path that opens an evidence-bundled PR. Surface in `/jobs` and headless `bog command`.",
+   "competitor": "Cognition Devin (scheduled code scans, /scan, cleanup scan, batch remediation API)",
+   "source_url": "https://docs.devin.ai/release-notes",
+   "source_date": "2026-09-02",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A team gets a standing, self-updating backlog of real issues that survives across runs instead of a fresh wall of findings every night, and can turn any item into a PR with evidence attached - the workflow Devin now sells as an automation type, but runnable on-prem with local models and governed by Expert Mode.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Self-review loop on autonomous PRs with resolution-reason feedback into the rubric",
+   "description": "When bog opens a PR (daemon, /team, /pr), run a distinct reviewer profile (jury) over it, post findings, and record human resolution reasons (Addressed / Won't fix / Incorrect) into the evidence bundle; 'Incorrect' resolutions feed the rubric grader so the reviewer stops repeating a class of false positives. Handles bot-authored and very large PRs.",
+   "competitor": "GitHub Copilot code review (bot-authored PR review, no size limit, resolution reasons)",
+   "source_url": "https://github.blog/changelog/2026-08-27-copilot-code-review-resolution-reasons-and-expanded-capabilities",
+   "source_date": "2026-08-27",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Reviewers stop paying twice - once for the agent's PR and again for a review that ignores what they already told it. ROADMAP #29/#30 proposed evidence bundles and CI auto-repair; the bar moved to closed-loop review where human dispositions become training signal, which no vendor exposes locally.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Provider health monitor + automatic cross-provider failover policy in Operator mode, with local-model degrade path",
+   "description": "Track per-provider latency/error/429 rates in the cost ledger; on degradation, Operator re-routes the turn to a configured fallback (another provider, Bedrock, or local Ollama) and shows a status-line notice ('Opus degraded -> Sonnet'); generalize `BedrockResilienceMiddleware` auto-fallback into a policy table in `operator.toml`.",
+   "competitor": "Factory Router (cross-provider failover, private preview); Devin model degradation notifications (2026-08-19)",
+   "source_url": "https://factory.ai/news/factory-router",
+   "source_date": "2026-06-30",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A solo user's overnight run finishes even when one provider melts down, and a cost-sensitive user gets automatic 'downgrade to local' rather than a stalled session - the reliability story Factory charges for, delivered with keys the user already owns.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Session-UX table stakes: editable message queue, /recap, 'Waiting' status, PR-status grouping in /threads, mark-unread and archive",
+   "description": "Queue prompts/slash commands while the agent runs and let the user edit or reorder them before delivery; `/recap` summarizes progress since last check-in; a visible 'Waiting' state when the agent is deliberately sleeping; group `/threads` by PR status or repo; unread/archive markers. Builds on `/btw` sidechain and session FTS.",
+   "competitor": "Cognition Devin (queued messages, Waiting status, /recap, PR grouping); Factory (edit queued messages); GitHub Copilot CLI (prompt queue)",
+   "source_url": "https://releasebot.io/updates/devin",
+   "source_date": "2026-08-26",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Every competitor CLI shipped these in July-August; a power user who juggles several long runs now expects to queue thoughts without interrupting, catch up in one paragraph, and see at a glance which sessions are blocked on them. Missing them reads as unpolished regardless of bog's deeper features.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Spec review screen with staged line comments + full-screen task execution with scope selection; headless `bog --plan --auto`",
+   "description": "For `/plan`, `/butcher` and `/jtbd` artifacts: an in-TUI review screen where the user reads the phase document and stages line comments that are fed back as one revision request; a full-screen execution view with per-task progress and the ability to select which tasks to run; headless mode that generates a plan and executes it under the current permission mode.",
+   "competitor": "AWS Kiro (V3 spec review + full-screen execution); GitHub Copilot CLI (`--plan --mode autopilot`)",
+   "source_url": "https://kiro.dev/changelog/cli/",
+   "source_date": "2026-08-26",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A developer reviews an agent's plan the way they review a PR - inline, once, with comments - instead of retyping objections into chat, then runs only the tasks they trust. Bog already has three plan-shaped surfaces; giving them one review/execution UI is the difference between 'has planning' and 'planning people use'.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`bog dream` as an explicit, reviewable, non-destructive memory rebuild over N past sessions (daemon-schedulable, local-model friendly)",
+   "description": "Extend Dreamscape and `hybrid_memory` with a batch job that reads the current memory store plus selected session transcripts (from the sessions checkpointer / FTS index), emits a new store (dedup, contradiction resolution, new insights), shows a diff, and only swaps on approval; steerable with instructions; runnable on a schedule via the daemon and with local models.",
+   "competitor": "Anthropic Managed Agents (Dreams research preview); Kiro Crew (durable lessons)",
+   "source_url": "https://platform.claude.com/docs/en/managed-agents/dreams",
+   "source_date": "2026-08-20",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Users get memory that improves over months instead of silting up with stale, contradictory notes, and can inspect exactly what changed before trusting it - Anthropic gates this behind a research-preview header on its hosted platform; bog can ship it locally today because the transcripts and store are already on disk.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Platform-enforced protected paths + workspace-trust gate + web-fetch domain allow/deny lists",
+   "description": "Fail-closed deny list in the filesystem/shell backends for agent-authored writes to self-configuration (`.bog-agents/*`, `.mcp.json`, hooks, `.claude/settings.json`, `.cursor/hooks.json`, `.vscode/tasks.json`, `.git/hooks`), enforced in every permission mode; a trust prompt on first open of an untrusted repo before any repo-controlled instructions load; `allowed_domains` / `blocked_domains` on web fetch/search tools.",
+   "competitor": "AWS Kiro (CVE-2026-10591 config rewrite; workspace exfiltration fixed 0.8.140); Anthropic Managed Agents (domain controls 2026-08-20)",
+   "source_url": "https://thehackernews.com/2026/07/aws-kiro-flaw-let-poisoned-web-page.html",
+   "source_date": "2026-07-15",
+   "target_users": [
+    "enterprise / regulated",
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Two public CVEs proved an agent will rewrite its own MCP config from a poisoned doc page and exfiltrate a workspace on the first message; a user who opens an unknown repo with bog gets a guarantee the agent cannot widen its own permissions or phone home, enforced below the model. ROADMAP #24 proposed a self-modification guard; the bar moved from 'nice to have' to 'the thing security teams now ask about first'.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Org usage exporter: per-user/per-agent daily metrics from the cost ledger to OTLP (CloudWatch, Datadog, Honeycomb...) and CSV",
+   "description": "A daemon-side exporter that aggregates the cost ledger and session index into per-user, per-model, per-job adoption/spend metrics and pushes them daily over OTLP gRPC/HTTP (plus CSV drop), configured once at the org level; align attribute names with OTel GenAI semconv.",
+   "competitor": "AWS Kiro (OTel usage metrics export, 2026-09-01); GitHub (per-user AI credits in usage metrics API, 2026-06-19)",
+   "source_url": "https://kiro.dev/changelog/",
+   "source_date": "2026-09-01",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Platform teams can put agent adoption and spend on the same Datadog board as everything else without asking developers to install anything - the exact question procurement asks before approving a rollout. ROADMAP #38 covered semconv tracing; the bar moved to admin-side daily usage export as a checkbox feature.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Multi-human team sessions from Slack/Teams with in-thread mode toggles",
+   "description": "A daemon-hosted session that any channel member can follow and steer (not just the requester), started by mentioning the bot in a thread; inline toggles like `!fast` / `!ultra` / `!ask` change effort or permission mode per message; session state, cost and evidence bundle posted back into the thread.",
+   "competitor": "GitHub Copilot (@GitHub team sessions in Slack/Teams, 2026-08-24); Cognition Devin (Slack thread sync, !ultra/!fast)",
+   "source_url": "https://github.blog/changelog/2026-08-28-github-copilot-weekly-releases-august-24",
+   "source_date": "2026-08-24",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A small team debugs an incident together with one agent in the channel where the incident already lives, instead of one person relaying between chat and a terminal - and the transcript plus evidence bundle is the postmortem. ROADMAP #32 proposed two-way Slack; the bar moved to multi-human steering with per-message mode switches.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "'Core pool' routing: send cheap sub-tasks (classification, research, summarization, subagent exploration) to local/open-weight models automatically and show the savings",
+   "description": "An Operator/Butcher policy that routes low-difficulty or side-effect-free work to a configured open-weight/local pool (Ollama, OpenRouter, Groq, Fireworks) with its own rate limits, keeps frontier models for orchestration and edits, and reports 'saved $X by routing N calls to local' in `/cost`.",
+   "competitor": "Factory Droid Core (free open-weight pool); GitHub Copilot (Ollama BYOK, 2026-08-10); Cognition SWE-1.7 (open-weight base)",
+   "source_url": "https://docs.factory.ai/pricing",
+   "source_date": "2026-09-01",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A cost-sensitive solo user keeps frontier quality where it matters and pays nothing for the 60% of calls that a local model handles fine - and sees the number. Factory sells this as a plan feature; bog can make it a policy over keys and hardware the user already has, which is exactly its Windows-first/local-models positioning.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`/tasks` command center: one tree view of teams, subagents, worktrees, background shells and daemon jobs with per-node status, cost, and kill/steer",
+   "description": "Unify `/team`, `/squad`, `/worktrees`, `/jobs`, `/background` into a single navigable tree (parent -> nested subagents) showing state (running / waiting / blocked / ready for review / done), spend from the cost ledger, and actions (steer, pause, kill, open diff); optional Kanban grouping like Devin's Command Center.",
+   "competitor": "GitHub Copilot CLI (/tasks, 2026-08-10); Cognition Devin (nested Sub-Devin views, Agent Command Center, 2026-08-21)",
+   "source_url": "https://github.blog/changelog/2026-08-13-github-copilot-weekly-releases-august-10/",
+   "source_date": "2026-08-10",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Someone running a fan-out sees in one screen which of eleven agents is stuck and what each has cost, instead of hopping between five slash commands - the governance bog already computes becomes something a person can act on in seconds.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "On-device voice dictation (`/voice`) with project-terminology cleanup",
+   "description": "Optional faster-whisper / whisper.cpp dependency for push-to-talk dictation into the chat input, multilingual auto-detect, and a cleanup pass that uses the repo's glossary/steering so identifiers come out right; never leaves the machine.",
+   "competitor": "AWS Kiro (/voice on-device Whisper, 2026-08-12); GitHub Copilot (multilingual dictation, 2026-08-31); Factory (voice dictation)",
+   "source_url": "https://kiro.dev/changelog/cli/",
+   "source_date": "2026-08-12",
+   "target_users": [
+    "solo power users"
+   ],
+   "why_killer": "Three vendors shipped it in six weeks, so it is becoming expected; a solo user gets hands-free prompting that stays private, which matters more for a local-first tool than for cloud IDEs.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Plugin/skill governance manifest: required / optional / forbidden with layered scopes and soft-fail",
+   "description": "Extend the skill trust store into an org manifest (`.bog-agents/governance.toml` or a remote URL): required plugins auto-installed (recursively), optional as an endorsed allow-list, forbidden as a deny-list with globs; Enterprise > Org > User precedence; a forbidden plugin is skipped at session start with a warning naming the forbidder, never aborting the session; enforced identically in TUI, headless and daemon.",
+   "competitor": "Cognition Devin (plugin governance, 2026-07-17); GitHub (managed-settings enabledPlugins/strictKnownMarketplaces); Factory (org MCP/plugin marketplace governance, 2026-06-18)",
+   "source_url": "https://docs.devin.ai/product-guides/plugin-ecosystem",
+   "source_date": "2026-07-17",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "A platform team can guarantee every developer's agent carries the security-review skill and never loads an unvetted MCP server, without touching each machine - and developers are not blocked when policy and their setup disagree. This is the governance layer that makes the Agent Plugins candidate acceptable to a CISO.",
+   "effort_guess": "M"
+  }
+ ],
+ "market_trends": [
+  "Metered token billing became the norm and cost unpredictability became the number-one user complaint: GitHub moved 4.7M seats to AI Credits on 2026-06-01 (10x-50x bills for agentic power users, discussion #198015 closed by staff), Kiro bills $0.04 per extra credit in 0.01 increments, Devin's ACUs are called opaque, and Factory layers Standard Usage / open-weight Core pool / prepaid Extra Usage - pre-run estimates and hard pause-not-kill budgets (Managed Agents) are the emerging answer.",
+  "Price ladders converged on $20 / $100 / $200 across the bucket (Devin Pro/Max, Kiro Pro/Pro Max/Power, Factory Pro/Plus/Max, Copilot Pro+/Max), with Kiro inserting a $100 tier in July specifically because users complained about the $40-to-$200 gap.",
+  "Plugin packaging became an open commodity: Agent Plugins 1.0 (spec 2026-08-06, co-maintained by AWS, Anysphere, Microsoft, OpenAI, Vercel, Google) standardizes skills + MCP servers with vendor namespaces, and Kiro, Copilot (VS Code/CLI/SDK/app) and Cursor already consume it; ACP is doing the same for editor-agent integration (Devin Desktop hosts Codex/Claude/OpenCode).",
+  "'Orchestrate anywhere, execute on your own machines' became a product line: Devin Outposts (atomic-claim queues to Mac minis/K8s), Kiro cloud sessions with cross-device resume, the Copilot app's local-vs-cloud sandboxes, and Managed Agents self-hosted sandbox workers on Modal/Daytona/E2B/Lambda - the control plane stays with the vendor, execution and secrets stay with the customer.",
+  "Open-weight models are now the cost tier, not the fringe: Cognition trained SWE-1.7 from Kimi K2.7 and claims near-frontier scores at a fraction of the cost, Factory gives every plan a free open-weight 'Droid Core' pool, Copilot added Ollama BYOK, and Kimi K3 joined Copilot's roster - routing cheap work to open models is expected behaviour.",
+  "Agent security moved from model judgment to platform enforcement after two public Kiro CVEs (config-file rewrite from a poisoned web page; workspace-driven exfiltration): protected paths, command blocklists, whole-process sandboxes (Factory), web-tool domain allow/deny lists (Managed Agents) and AWS's open-source Dogwood temporal policy language (2026-08-06) define the new baseline, and researchers are publicly criticizing vendors' AI-vulnerability disclosure processes.",
+  "Enterprise checklists hardened around observability and governance: per-user usage export to OTLP (Kiro), per-user AI-credit metrics API (GitHub), audit-log scoping and org-wide hook/MCP/plugin governance (Factory), required/forbidden plugin manifests (Devin), ISO 27001 scope, EU data residency and GovCloud - features that decide procurement more than model quality does.",
+  "Scheduled and ambient agents are commodity: Managed Agents scheduled deployments with cron + budgets + webhooks (June), Kiro Crew's cron/webhook/script jobs (August, Apache-2.0), Devin's scheduled scans (September) and Jules' scheduled tasks all exist; differentiation has shifted to governance, cost caps, findings persistence and remediation loops.",
+  "Vendor consolidation raised platform-churn risk for developers: Google shut down the open-source Gemini CLI for consumers on 2026-06-18 in favour of a closed Antigravity CLI (breaking CI pipelines and the Jules extension path), Windsurf was folded into Devin Desktop, and GitHub is merging Chat/Mobile/cloud agent under one policy with lifetime retention - which strengthens the case for an open, local-first, provider-agnostic runtime.",
+  "Session UX converged on a shared vocabulary within weeks: side chats / tangents / `/btw`, queued and editable messages, `/recap`, `/rewind`, fork-in-place, nested subagent trees, worktree-per-session, voice dictation and 'Waiting' states shipped across Devin, Factory, Copilot and Kiro between July and September 2026 and are now judged as table stakes rather than differentiators."
+ ],
+ "unverified": [
+  "Google Jules: the official changelog (https://jules.google/docs/changelog/) has no entries after 2026-03-09; secondary claims that the free tier is 8 tasks/month, paid plans start at $20, and GitLab integration entered beta in mid-2026 (agent-finder.co) could not be confirmed from Google sources. Whether Jules is being folded into Antigravity is also unconfirmed.",
+  "Devin Outposts exact launch date: the launch blog (https://devin.ai/blog/introducing-devin-outposts) returned HTTP 429; the 2026-07-21 date comes from a secondary source (ai-watch-blog.vercel.app) and Cognition's 2026-07-17 release-notes entry mentions plugins, not outposts.",
+  "Devin Desktop rebrand details (Devin Local 30% token-efficiency claim, six missing Devin Local capabilities, Cascade sunset 2026-07-01) were taken from news.creeta.com because https://devin.ai/blog/windsurf-is-now-devin-desktop returned HTTP 429.",
+  "Devin CLI license: the GitHub repo (CognitionAI/devin-cli) is public but the license file was not retrieved; 'open source' status is unconfirmed.",
+  "Factory Router claims (99.9%+ reliability, '25% cost cut' per AlphaSignal) are vendor/secondary statements about a private research preview; no independent verification. Factory user sentiment relies on vendor-adjacent reviews because no HN/Reddit threads about Factory Droid in the window were found.",
+  "Kiro Crew adoption figures ('39,000 Amazon builders', 'nearly 500 contributors') come from a DEV Community post, not from the README fetch (which showed 3.6k GitHub stars).",
+  "Kiro workspace-exfiltration fix timeline is inconsistent in the source (fixed in 0.8.140 'January 15 release' vs disclosure dated 2026-08-27); treat the fix version as verified and the fix date as unverified.",
+  "GitHub Agent HQ: GA status of third-party agents (Claude, Codex) inside github.com in June-September 2026 was not confirmed from a dated GitHub changelog entry; the June/July 2026 sections of the Copilot changelog label page rendered empty during fetch, so June-July coding-agent entries may be under-reported here.",
+  "Anthropic Managed Agents session budgets: the docs page has no publish date; budgets are assumed to have shipped with or after the 2026-06-09 scheduled-deployments launch (the deployments page references them), but the exact release date is unverified.",
+  "Kiro 'Auto' agent details and the AWS Weekly Roundup claim that Kiro Crew works 'online or off' were not verified against product docs.",
+  "Copilot team sessions in Slack/Teams: scope limits (which plans, concurrency) were not stated in the changelog entry."
+ ]
+}

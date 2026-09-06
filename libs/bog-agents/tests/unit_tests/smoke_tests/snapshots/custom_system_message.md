@@ -123,3 +123,4 @@ When NOT to use the task tool:
 
 Available subagent types:
 - general-purpose: General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent.
+- fork: A fork of this agent: the same instructions, tools and the conversation so far. Use it for a side task that needs everything you already know (a second opinion, a parallel investigation, a follow-up that must not lose context) rather than a fresh start.

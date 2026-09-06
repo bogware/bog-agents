@@ -33,6 +33,15 @@ from pathlib import Path
 # Keep alphabetically sorted by constant name.
 # ---------------------------------------------------------------------------
 
+ACTION_LOG = "BOG_AGENTS_ACTION_LOG"
+# ROADMAP #75: the ask_advisor tool (hard-tier second opinion) and its per-session cap
+ADVISOR = "BOG_AGENTS_ADVISOR"
+ADVISOR_MAX_QUESTIONS = "BOG_AGENTS_ADVISOR_MAX_QUESTIONS"
+"""Write the hash-chained action log (`~/.bog-agents/action-log`, ROADMAP #74) when truthy."""
+
+APPROVAL_TIMEOUT = "BOG_AGENTS_APPROVAL_TIMEOUT"
+"""Seconds an approval prompt waits before auto-rejecting (fail-closed); unset = wait forever (#49)."""
+
 BEDROCK_AUTH_MODE = "BOG_AGENTS_BEDROCK_AUTH_MODE"
 """Select the AWS Bedrock authentication mode (e.g. `profile` vs. default chain)."""
 
@@ -41,6 +50,18 @@ BEDROCK_NO_PROBE = "BOG_AGENTS_BEDROCK_NO_PROBE"
 
 BEDROCK_PROFILE = "BOG_AGENTS_BEDROCK_PROFILE"
 """Named AWS profile to use for Bedrock credentials."""
+
+BUDGET_USD = "BOG_AGENTS_BUDGET_USD"
+"""Session cost cap in USD; the agent pauses with a `budget_reached` prompt when it is hit (ROADMAP #51)."""
+
+BUDGET_WARN_AT_PERCENT = "BOG_AGENTS_BUDGET_WARN_AT_PERCENT"
+"""Percent of a budget or daily ceiling at which `/cost` and the turn gate start warning (#51)."""
+
+CODE_MODE = "BOG_AGENTS_CODE_MODE"
+"""Register the governed `run_code` tool (ROADMAP #72) when truthy; never under --restricted."""
+
+DAILY_CEILING_USD = "BOG_AGENTS_DAILY_CEILING_USD"
+"""Per-day spend ceiling in USD for this user across sessions; new turns are refused once reached (#51)."""
 
 DEBUG = "BOG_AGENTS_DEBUG"
 """Enable verbose debug logging.
@@ -103,6 +124,18 @@ LANGSMITH_PROJECT = "BOG_AGENTS_LANGSMITH_PROJECT"
 LOG_LEVEL = "BOG_AGENTS_LOG_LEVEL"
 """Override the root logging level (e.g. `DEBUG`, `INFO`)."""
 
+MANAGED_POLICY = "BOG_AGENTS_MANAGED_POLICY"
+"""URL or path of the org's signed managed policy document (ROADMAP #50)."""
+
+MANAGED_POLICY_KEY = "BOG_AGENTS_MANAGED_POLICY_KEY"
+"""Base64 Ed25519 public key the managed policy must be signed with; required for URL sources."""
+
+MAX_SUBAGENTS = "BOG_AGENTS_MAX_SUBAGENTS"
+"""Subagent/teammate spawns allowed per session — the CostLedger runaway cap (#51)."""
+
+MAX_WEB_SEARCHES = "BOG_AGENTS_MAX_WEB_SEARCHES"
+"""Web searches allowed per session — the CostLedger runaway cap (#51)."""
+
 MCP_STARTUP_TIMEOUT = "BOG_AGENTS_MCP_STARTUP_TIMEOUT"
 """Seconds to wait for an MCP server to start before giving up."""
 
@@ -133,6 +166,15 @@ OPERATOR = "BOG_AGENTS_OPERATOR"
 
 OPERATOR_DISABLE = "BOG_AGENTS_OPERATOR_DISABLE"
 """Emergency kill switch for Operator mode; beats every other toggle."""
+
+OTEL_ENDPOINT = "BOG_AGENTS_OTEL_ENDPOINT"
+"""OTLP/HTTP collector base URL for GenAI-semconv spans (ROADMAP #74); unset = no export."""
+
+POWERSHELL_TOOL = "BOG_AGENTS_POWERSHELL_TOOL"
+"""Register the opt-in `powershell` tool (pwsh / Windows PowerShell via argv, never cmd.exe) when truthy (#61)."""
+
+PREFLIGHT_THRESHOLD_USD = "BOG_AGENTS_PREFLIGHT_THRESHOLD_USD"
+"""Projected spend above which /team run, /butcher and /best-of-n confirm before starting (#51)."""
 
 PROJECT_ROOT = "BOG_AGENTS_PROJECT_ROOT"
 """Override the detected project root directory (used by project hooks)."""
@@ -188,6 +230,14 @@ VIM_MODE = "BOG_AGENTS_VIM_MODE"
 Parsed as a boolean: `1`/`true`/`yes`/`on` (case-insensitive) count as enabled.
 An explicit value wins over the `[ui].vim_mode` config-file entry.
 """
+
+WEB_ALLOWED_DOMAINS = "BOG_AGENTS_WEB_ALLOWED_DOMAINS"
+"""Comma-separated domains `fetch_url` / `http_request` may reach (suffix-matched); empty = any public host."""
+
+WEB_BLOCKED_DOMAINS = "BOG_AGENTS_WEB_BLOCKED_DOMAINS"
+# ROADMAP #73: register author_workflow / list_workflows even before the first workflow exists
+WORKFLOW_TOOLS = "BOG_AGENTS_WORKFLOW_TOOLS"
+"""Comma-separated domains the web tools must never reach (wins over the allow-list)."""
 
 # ---------------------------------------------------------------------------
 # Home-directory resolution.

@@ -44,6 +44,55 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/tasks",
+            "Command center: every thread, queued prompt, background/team/daemon task in one tree, with kill/steer/pause/diff",
+            "tasks tree kill steer pause resume queue waiting status center recap",
+            "agent",
+            available=True,
+            subcommands=(
+                ("list", "Show the task tree (default)"),
+                ("kill", "Stop a task (usage: /tasks kill <id>)"),
+                (
+                    "steer",
+                    "Send instructions to a task (usage: /tasks steer <id> <text>)",
+                ),
+                (
+                    "pause",
+                    "Pause a team run: no new tasks are claimed (usage: /tasks pause <id>)",
+                ),
+                ("resume", "Resume a paused team run (usage: /tasks resume <id>)"),
+                ("diff", "Show a task's worktree diff (usage: /tasks diff <id>)"),
+                (
+                    "queue",
+                    "List, edit or drop queued prompts (usage: /tasks queue [edit <n> <text>|drop <n>])",
+                ),
+                ("recap", "Same as /recap"),
+            ),
+        ),
+        handler_method="_handle_tasks_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/subtask",
+            "Run a prompt in the background with this conversation as context (a fork of this agent)",
+            "subtask fork background side task context",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_fork_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
+            "/fork",
+            "Record a fork of this session and continue the work in a background agent (--worktree for a fresh worktree)",
+            "fork branch worktree background continue",
+            "agent",
+            available=True,
+        ),
+        handler_method="_handle_fork_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/async",
             "Fire-and-forget agent task — submit, get a job id, "
             "get a toast on completion",

@@ -8,7 +8,8 @@ raises :class:`~bog_agents.guardrails.core.GuardrailTripwireError` (fail-fast).
 
 from __future__ import annotations
 
-import contextlib
+import asyncio
+import concurrent.futures
 import inspect
 import logging
 from typing import TYPE_CHECKING, Any
@@ -57,6 +58,32 @@ def _response_text(response: ModelResponse[ResponseT]) -> str:
     return "\n".join(p for p in parts if p)
 
 
+def _await_sync(awaitable: Any) -> Any:
+    """Drive an awaitable to completion from synchronous code.
+
+    Uses `asyncio.run` when no event loop is running in this thread; when one
+    is (a sync `invoke()` issued from inside async code), runs the awaitable
+    on a worker thread with its own loop so the caller's loop is never
+    re-entered.
+
+    Args:
+        awaitable: The guardrail check to finish.
+
+    Returns:
+        Whatever the awaitable resolves to.
+    """
+
+    async def _run() -> Any:
+        return await awaitable
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_run())
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, _run()).result()
+
+
 class GuardrailMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
     """Run input/output guardrails around each model call, failing fast on a trip."""
 
@@ -81,13 +108,11 @@ class GuardrailMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         for g in guardrails:
             result = g.check(text)
             if inspect.isawaitable(result):
-                with contextlib.suppress(Exception):
-                    result.close()  # type: ignore[union-attr]
-                logger.debug(
-                    "guardrail %s is async-only; skipped on the sync path",
-                    getattr(g, "name", "?"),
-                )
-                continue
+                # v6 SDK-10: an async-only guardrail (every LLMGuardrail) used to be
+                # closed and *skipped* here with a DEBUG log, so `agent.invoke()`
+                # enforced nothing the operator had configured. Drive it to
+                # completion instead; a tripwire is a tripwire on both paths.
+                result = _await_sync(result)
             if result.tripped:
                 raise GuardrailTripwireError(result, stage=stage)
 

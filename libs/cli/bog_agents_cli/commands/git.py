@@ -28,6 +28,24 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/changes",
+            "Turn-end changes tray: files in explanatory order, per-file diff, per-hunk revert",
+            "tray diff review revert hunk changeset",
+            "git",
+            available=True,
+            subcommands=(
+                ("show", "Show one file's diff (usage: /changes show <n>)"),
+                (
+                    "revert",
+                    "Revert a file or one hunk (usage: /changes revert <n> [hunk])",
+                ),
+                ("keep", "Keep everything and clear the tray"),
+            ),
+        ),
+        handler_method="_handle_changes_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/pr",
             "Pull request management (create/list/review)",
             "github merge",

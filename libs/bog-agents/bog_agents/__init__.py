@@ -1,16 +1,32 @@
 """Bog Agents package.
 
-Middleware classes are loaded lazily — they are only imported when first accessed.
-This keeps ``import bog_agents`` fast.
+Every public symbol except `__version__` is loaded lazily — imported on first
+attribute access through the module `__getattr__` below. This keeps
+`import bog_agents` free of LangGraph / LangChain (v6 SDK-6): the CLI's
+entry points, the daemon, and `bog-agents --version` no longer pay the full
+graph-module import just to read the version or reach one helper.
 """
 
+from typing import TYPE_CHECKING
+
 from bog_agents._version import __version__
-from bog_agents.builder import AgentBuilder, AgentConfig
-from bog_agents.feature_config import FeatureConfig
-from bog_agents.graph import DeepAgentState, create_agent
+
+if TYPE_CHECKING:
+    # Static-analysis view of the lazily-resolved core exports. Runtime access
+    # goes through `__getattr__`; keep this block in sync with the first five
+    # `_LAZY_IMPORTS` entries.
+    from bog_agents.builder import AgentBuilder as AgentBuilder, AgentConfig as AgentConfig
+    from bog_agents.feature_config import FeatureConfig as FeatureConfig
+    from bog_agents.graph import DeepAgentState as DeepAgentState, create_agent as create_agent
 
 # Lazy-loaded symbols: maps exported name → (module_path, attribute_name)
 _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
+    # Core exports (v6 SDK-6: previously eager, pulling in langgraph on import).
+    "AgentBuilder": ("bog_agents.builder", "AgentBuilder"),
+    "AgentConfig": ("bog_agents.builder", "AgentConfig"),
+    "FeatureConfig": ("bog_agents.feature_config", "FeatureConfig"),
+    "DeepAgentState": ("bog_agents.graph", "DeepAgentState"),
+    "create_agent": ("bog_agents.graph", "create_agent"),
     # deepagents compatibility surface (see bog_agents.deepagents)
     "create_deep_agent": ("bog_agents.deepagents", "create_deep_agent"),
     "create_sub_agent": ("bog_agents.middleware.subagents", "create_sub_agent"),
@@ -27,10 +43,32 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     # Per-agent cost ledger + runaway caps (#25); CTX-3-fixed pricing lookup.
     "CostLedger": ("bog_agents.cost_ledger", "CostLedger"),
     "RunawayCaps": ("bog_agents.cost_ledger", "RunawayCaps"),
+    # Cost certainty (ROADMAP #51): pre-flight estimates + the durable daily spend ledger.
+    "CostEstimate": ("bog_agents.cost_ledger", "CostEstimate"),
+    "estimate_run_cost": ("bog_agents.cost_ledger", "estimate_run_cost"),
+    "SpendLedger": ("bog_agents.spend_ledger", "SpendLedger"),
+    "check_ceiling": ("bog_agents.spend_ledger", "check_ceiling"),
+    "parse_budget_resume": ("bog_agents.middleware.cost_tracker", "parse_budget_resume"),
+    # Proof-ordered diffs (ROADMAP #66).
+    "rank_changes": ("bog_agents.diff_ordering", "rank_changes"),
+    # Harness overhead audit + named profiles (ROADMAP #54).
+    "audit_agent": ("bog_agents.token_audit", "audit_agent"),
+    "audit_create_agent": ("bog_agents.token_audit", "audit_create_agent"),
+    "TokenAudit": ("bog_agents.token_audit", "TokenAudit"),
+    "count_tokens": ("bog_agents.token_audit", "count_tokens"),
+    "named_harness_profile": ("bog_agents.profiles.harness.harness_profiles", "named_harness_profile"),
+    # Hostile-repo hardening (ROADMAP #49).
+    "hardened_git_env": ("bog_agents.git_env", "hardened_git_env"),
+    "scan_repo_config": ("bog_agents.git_env", "scan_repo_config"),
+    "reorder_unified_diff": ("bog_agents.diff_ordering", "reorder_unified_diff"),
+    "split_unified_diff": ("bog_agents.diff_ordering", "split_unified_diff"),
     "price_for_model": ("bog_agents.middleware.cost_tracker", "price_for_model"),
     # Governed agent teams (#21) — claimable task ledger + mailboxes + coordinator.
     "TaskLedger": ("bog_agents.teams", "TaskLedger"),
     "Mailbox": ("bog_agents.teams", "Mailbox"),
+    # Detach / attach + cross-process queue (ROADMAP #56).
+    "MailboxStore": ("bog_agents.mailbox_store", "MailboxStore"),
+    "SessionRecord": ("bog_agents.session_registry", "SessionRecord"),
     "run_team": ("bog_agents.teams", "run_team"),
     "TeamReport": ("bog_agents.teams", "TeamReport"),
     "HarnessProfile": ("bog_agents.profiles.harness.harness_profiles", "HarnessProfile"),
@@ -51,6 +89,7 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
     "AutomationsMiddleware": ("bog_agents.middleware.automations", "AutomationsMiddleware"),
     "BrowserAgentFAMiddleware": ("bog_agents.middleware.browser_agent_fa", "BrowserAgentFAMiddleware"),
     "BrowserAgentMiddleware": ("bog_agents.middleware.browser_agent", "BrowserAgentMiddleware"),
+    "CacheBustDetectorMiddleware": ("bog_agents.middleware.cache_diagnostics", "CacheBustDetectorMiddleware"),
     "CheckpointingMiddleware": ("bog_agents.middleware.checkpointing", "CheckpointingMiddleware"),
     "CitationsMiddleware": ("bog_agents.middleware.citations", "CitationsMiddleware"),
     "CloudSandboxMiddleware": ("bog_agents.middleware.cloud_sandbox", "CloudSandboxMiddleware"),
@@ -139,11 +178,6 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [  # noqa: PLE0604
-    "AgentBuilder",
-    "AgentConfig",
-    "DeepAgentState",
-    "FeatureConfig",
     "__version__",
-    "create_agent",
     *_LAZY_IMPORTS,
 ]

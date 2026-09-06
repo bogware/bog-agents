@@ -135,3 +135,47 @@ def test_unknown_attribute_raises_attribute_error() -> None:
 
     with pytest.raises(AttributeError, match="DefinitelyNotARealMiddleware"):
         _ = m.DefinitelyNotARealMiddleware
+
+
+# ---------------------------------------------------------------------------
+# v6 SDK-6: the five core exports (AgentBuilder, AgentConfig, FeatureConfig,
+# DeepAgentState, create_agent) used to be eager, so `import bog_agents` pulled
+# in graph.py and, through it, langgraph + the whole middleware core. They now
+# resolve through `__getattr__` like every other export.
+# ---------------------------------------------------------------------------
+
+
+def test_top_level_import_does_not_load_langgraph() -> None:
+    """A fresh `import bog_agents` must not import langgraph or graph.py."""
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import sys
+        import bog_agents
+        assert bog_agents.__version__
+        loaded = [m for m in sys.modules if m == "langgraph" or m.startswith("langgraph.")]
+        assert not loaded, f"langgraph loaded eagerly: {loaded[:5]}"
+        assert "bog_agents.graph" not in sys.modules, "bog_agents.graph imported eagerly"
+        assert "bog_agents.builder" not in sys.modules, "bog_agents.builder imported eagerly"
+        # ... and the exports still resolve on first touch.
+        assert callable(bog_agents.create_agent)
+        assert bog_agents.FeatureConfig().enable_street_sweeper is False
+        assert "bog_agents.graph" in sys.modules
+        print("ok")
+        """
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "ok"
+
+
+def test_core_exports_are_in_all_and_lazy_map() -> None:
+    import bog_agents
+
+    for name in ("AgentBuilder", "AgentConfig", "FeatureConfig", "DeepAgentState", "create_agent"):
+        assert name in bog_agents.__all__
+        assert name in _LAZY_IMPORTS
+        assert getattr(bog_agents, name) is not None

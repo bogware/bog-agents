@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from bog_agents.git_env import hardened_git_env
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
@@ -326,6 +328,9 @@ class SessionStats:
     output_tokens: int = 0
     wall_time_seconds: float = 0.0
     per_model: dict[str, ModelStats] = field(default_factory=dict)
+    # ROADMAP #66: the turn's file operation records (live reference to the
+    # tracker's completed list), consumed by the changes tray at turn end.
+    file_records: list[Any] = field(default_factory=list)
 
     def record_request(
         self,
@@ -494,6 +499,7 @@ def _get_git_branch() -> str | None:
             text=True,
             timeout=2,
             check=False,
+            env=hardened_git_env(),
         )
         if result.returncode == 0:
             branch = result.stdout.strip() or None
@@ -690,11 +696,17 @@ class TextualUIAdapter:
         # State tracking
         self._current_tool_messages: dict[str, ToolCallMessage] = {}
         self._token_tracker: Any = None
+        # ROADMAP #52: per-response usage sink (the app's UsageLedger).
+        self._usage_sink: Any = None
         # Persist todo widgets across turns so they are updated in-place rather
         # than mounting duplicate widgets.  Keyed by namespace tuple.
         self._active_todo_messages: dict[tuple, Any] = {}
         # Silent mode is opt-in; verbose ToolCallMessage widgets are the default.
         self.silent_tool_output = False
+
+    def set_usage_sink(self, sink: Any) -> None:  # noqa: ANN401  # Callable[[UsageRecord], None]
+        """Register the per-response usage sink (ROADMAP #52)."""
+        self._usage_sink = sink
 
     def set_token_tracker(self, tracker: Any) -> None:  # noqa: ANN401  # Dynamic tracker type from Textual
         """Set the token tracker for usage tracking."""
@@ -756,47 +768,134 @@ def _build_interrupted_ai_message(
 
 async def _evaluate_auto_mode_batch(
     action_requests: list[dict],
+    *,
+    goal: str = "",
+    notify: Callable[[Any], Awaitable[None]] | None = None,
+    working_dir: Path | str | None = None,
 ) -> bool:
-    """Evaluate a batch of tool-call requests under auto mode.
+    """Decide whether a turn's tool calls may run without a dialog (v6 #47).
 
-    Runs the rule engine over every request in the batch. Falls back to Haiku
-    for any request whose verdict has ``rule_source == "default"``. Returns
-    ``True`` when all requests are safe to auto-approve, ``False`` if any
-    should surface an approval dialog.
+    Governed Auto Mode, in order: (1) the deterministic rule engine
+    (ask-list → git classifier → exec-risk → hygiene → allow-list) decides
+    what it can; (2) everything it left `default` is graded by ONE batched
+    review-model call against the user's stated goal; (3) every decision is
+    written to the approval ledger and asserted as an `approval_decision`
+    fact so `/auto why` and `/why` can explain it; (4) `breaker_threshold`
+    consecutive risky verdicts pause auto mode for the session.
 
     Args:
-        action_requests: List of tool-call request dicts (each has ``name``
-            and ``args`` keys).
+        action_requests: Tool-call request dicts (`name`, `args`).
+        goal: The user's latest prompt.
+        notify: Async mount callable for the one-time "paused" notice.
+        working_dir: Project root for fact assertion (defaults to cwd).
 
     Returns:
-        True when the entire batch can be auto-approved, False otherwise.
+        True when every request may be auto-approved, False when any must
+        surface an approval dialog.
     """
     from bog_agents_cli.auto_mode import (
+        ApprovalDecision,
         AutoDecision,
         AutoModeRuleEngine,
-        haiku_risk_eval,
+        _format_tool_repr,
+        batch_risk_eval,
+        get_auto_mode_breaker,
         load_auto_mode_settings,
+        record_approval_decisions,
+        resolve_risk_judge,
     )
 
     am_settings = load_auto_mode_settings()
     engine = AutoModeRuleEngine(am_settings)
+    breaker = get_auto_mode_breaker(am_settings.breaker_threshold)
+    decisions: list[ApprovalDecision] = []
+    pending: list[tuple[int, str, dict[str, Any]]] = []
+    approve_all = True
 
-    for req in action_requests:
+    for index, req in enumerate(action_requests):
         t_name = req.get("name", "")
         t_args = req.get("args", {}) or {}
         if not isinstance(t_args, dict):
             t_args = {}
+        call = _format_tool_repr(t_name, t_args)
         verdict = engine.evaluate(t_name, t_args)
         if verdict.decision == AutoDecision.ASK:
-            return False
-        if verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
-            is_risky, _reason = await haiku_risk_eval(
-                t_name, t_args, model=am_settings.haiku_eval.model
+            approve_all = False
+            decisions.append(
+                ApprovalDecision(
+                    t_name, call, "ask", verdict.rule_source, verdict.reason
+                )
             )
-            if is_risky:
-                return False
+        elif verdict.rule_source == "default" and am_settings.haiku_eval.enabled:
+            pending.append((index, t_name, t_args))
+        else:
+            decisions.append(
+                ApprovalDecision(
+                    t_name, call, "auto-approved", verdict.rule_source, verdict.reason
+                )
+            )
 
-    return True
+    if pending and breaker.tripped:
+        approve_all = False
+        for _index, t_name, t_args in pending:
+            decisions.append(
+                ApprovalDecision(
+                    t_name,
+                    _format_tool_repr(t_name, t_args),
+                    "paused",
+                    "breaker",
+                    breaker.status(),
+                )
+            )
+    elif pending:
+        judge, judge_desc = resolve_risk_judge(am_settings)
+        if judge is None:
+            approve_all = False
+            for _index, t_name, t_args in pending:
+                decisions.append(
+                    ApprovalDecision(
+                        t_name,
+                        _format_tool_repr(t_name, t_args),
+                        "ask",
+                        "review_model",
+                        f"no review model ({judge_desc})",
+                    )
+                )
+        else:
+            assessments = await batch_risk_eval(pending, goal=goal, invoke=judge)
+            tripped_now = False
+            for (_index, t_name, t_args), assessment in zip(
+                pending, assessments, strict=True
+            ):
+                risky = assessment.risky
+                if risky:
+                    approve_all = False
+                tripped_now = breaker.record(risky) or tripped_now
+                decisions.append(
+                    ApprovalDecision(
+                        t_name,
+                        _format_tool_repr(t_name, t_args),
+                        "ask" if risky else "auto-approved",
+                        "review_model",
+                        assessment.reason,
+                        risk=assessment.risk,
+                        judge=judge_desc,
+                    )
+                )
+            if tripped_now and notify is not None and not breaker.notified:
+                breaker.notified = True
+                from bog_agents_cli.widgets.messages import AppMessage
+
+                await notify(
+                    AppMessage(
+                        f"Auto mode paused: {breaker.threshold} consecutive tool calls were graded risky, "
+                        "so every call will ask until you re-arm with /auto on. "
+                        "See /auto why for the decisions."
+                    )
+                )
+
+    record_approval_decisions(decisions, working_dir or Path.cwd())
+    return approve_all
 
 
 async def execute_task_textual(
@@ -902,6 +1001,10 @@ async def execute_task_textual(
         adapter._token_tracker.hide()
 
     file_op_tracker = FileOpTracker(assistant_id=assistant_id, backend=backend)
+    turn_stats.file_records = file_op_tracker.completed
+    # ROADMAP #52: per-namespace request timing for TTFT / tok/s on the usage strip.
+    request_started_at: dict[tuple, float] = {(): start_time}
+    first_text_at: dict[tuple, float] = {}
     displayed_tool_ids: set[str] = set()
     tool_call_buffers: dict[str | int, dict] = {}
 
@@ -945,6 +1048,7 @@ async def execute_task_textual(
             suppress_resumed_output = False
             pending_interrupts: dict[str, HITLRequest] = {}
             pending_ask_user: dict[str, AskUserRequest] = {}
+            pending_budget: dict[str, dict[str, Any]] = {}
 
             async for chunk in agent.astream(
                 stream_input,
@@ -1001,6 +1105,15 @@ async def execute_task_textual(
                                             "Invalid ask_user interrupt payload"
                                         )
                                         raise
+                                elif (
+                                    isinstance(iv, dict)
+                                    and iv.get("type") == "budget_reached"
+                                ):
+                                    # ROADMAP #51: the cost tracker paused the
+                                    # graph; ask for a raise-cap resume below.
+                                    pending_budget[interrupt_obj.id] = iv
+                                    interrupt_occurred = True
+                                    await dispatch_hook("input.required", {})
                                 else:
                                     try:
                                         validated_request = (
@@ -1179,6 +1292,30 @@ async def execute_task_textual(
                                 captured_input_tokens = max(
                                     captured_input_tokens, total_toks
                                 )
+                            if input_toks or output_toks or total_toks:
+                                # ROADMAP #52: price + time this response, feed
+                                # the session ledger, and hang the strip under
+                                # the message it belongs to.
+                                from bog_agents_cli.usage_controller import (
+                                    record_stream_usage,
+                                )
+
+                                now = time.monotonic()
+                                started = request_started_at.get(ns_key, start_time)
+                                first = first_text_at.get(ns_key)
+                                await record_stream_usage(
+                                    adapter._usage_sink,
+                                    usage,
+                                    model=active_model,
+                                    category="subagent" if ns_key else "main",
+                                    ttft_s=(first - started) if first else None,
+                                    duration_s=now - started,
+                                    message_widget=assistant_message_by_namespace.get(
+                                        ns_key
+                                    ),
+                                )
+                                request_started_at[ns_key] = now
+                                first_text_at.pop(ns_key, None)
 
                     # Check if this is an AIMessageChunk with content
                     if not hasattr(message, "content_blocks"):
@@ -1205,6 +1342,7 @@ async def execute_task_textual(
                                 pending_text = pending_text_by_namespace.get(ns_key, "")
                                 pending_text += text
                                 pending_text_by_namespace[ns_key] = pending_text
+                                first_text_at.setdefault(ns_key, time.monotonic())
 
                                 # Get or create assistant message for this namespace
                                 current_msg = assistant_message_by_namespace.get(ns_key)
@@ -1406,6 +1544,23 @@ async def execute_task_textual(
                 any_rejected = False
                 resume_payload: dict[str, Any] = {}
 
+                for interrupt_id, budget_payload in list(pending_budget.items()):
+                    from bog_agents_cli.cost_controller import (
+                        ask_budget_raise,
+                        budget_stop_message,
+                    )
+
+                    new_cap = await ask_budget_raise(
+                        adapter._request_ask_user, budget_payload
+                    )
+                    if new_cap is None:
+                        await adapter._mount_message(
+                            AppMessage(budget_stop_message(budget_payload))
+                        )
+                        turn_stats.wall_time_seconds = time.monotonic() - start_time
+                        return turn_stats
+                    resume_payload[interrupt_id] = {"budget_usd": new_cap}
+
                 for interrupt_id, ask_req in list(pending_ask_user.items()):
                     questions = ask_req["questions"]
 
@@ -1529,21 +1684,50 @@ async def execute_task_textual(
                             new_args = decision_dict.get("args")
                             if isinstance(new_args, dict):
                                 req["args"] = new_args
+                    # ROADMAP #64: decision hooks in the approval path —
+                    # `PermissionRequest` hooks may deny outright; a `PreToolUse`
+                    # hook that failed with `on_failure: ask` forces the prompt
+                    # for this batch even in auto-approve modes.
+                    from bog_agents_cli.hook_decisions import approval_hook_verdicts
+
+                    hook_denied, hook_force_prompt = await asyncio.to_thread(
+                        approval_hook_verdicts, list(action_requests), Path.cwd()
+                    )
+                    for denied_index in hook_denied:
+                        if denied_index not in blocked_indexes:
+                            blocked_indexes.append(denied_index)
 
                     # P1-75: a hook blocking ONE call in a parallel batch must
                     # not auto-approve its siblings. If every call is blocked we
                     # can short-circuit; otherwise fall through to the normal
                     # approval flow and force the blocked indexes to reject after
                     # the user/auto decision is made (via _force_blocked below).
+                    # ROADMAP #49: persistent per-project never-allow entries reject
+                    # without asking, in every approval mode, with the entry named
+                    # so the agent (and the user) know why.
+                    from bog_agents_cli.auto_mode import denied_indexes
+
+                    never_allowed = denied_indexes(action_requests, Path.cwd())
+                    for denied_index in never_allowed:
+                        if denied_index not in blocked_indexes:
+                            blocked_indexes.append(denied_index)
+
                     def _force_blocked(
                         decisions: list[HITLDecision],
                         _blocked: list[int] = blocked_indexes,
+                        _never: dict[int, str] = never_allowed,
+                        _hooked: dict[int, str] = hook_denied,
                     ) -> list[HITLDecision]:
                         for i in _blocked:
                             if 0 <= i < len(decisions):
+                                if i in _never:
+                                    reason = f"never allowed in this project (.bog-agents/settings.json auto_mode.never_allow): {_never[i]}"
+                                elif i in _hooked:
+                                    reason = f"denied by a PermissionRequest hook: {_hooked[i]}"
+                                else:
+                                    reason = "blocked by .bog-agents/hooks/pre-tool"
                                 decisions[i] = RejectDecision(
-                                    type="reject",
-                                    message="blocked by .bog-agents/hooks/pre-tool",
+                                    type="reject", message=reason
                                 )
                         return decisions
 
@@ -1568,12 +1752,16 @@ async def execute_task_textual(
                     # Determine whether to skip the approval dialog entirely.
                     # Priority: always_ask > auto_mode > auto_approve > ask.
                     should_auto_approve = False
-                    if session_state.auto_approve and not always_ask:
+                    if hook_force_prompt:
+                        should_auto_approve = False  # a hook asked for a human
+                    elif session_state.auto_approve and not always_ask:
                         should_auto_approve = True
                     elif auto_mode and not always_ask:
                         # Smart auto-mode: rule engine + optional Haiku eval.
                         should_auto_approve = await _evaluate_auto_mode_batch(
-                            action_requests
+                            action_requests,
+                            goal=user_input,
+                            notify=adapter._mount_message,
                         )
 
                     if should_auto_approve:
@@ -1662,6 +1850,61 @@ async def execute_task_textual(
                                     tool_msg.set_rejected()
                                 adapter._current_tool_messages.clear()
                                 any_rejected = True
+                            elif decision_type in {
+                                "redirect",
+                                "never_allow",
+                                "timeout",
+                            }:
+                                # ROADMAP #49: steerable rejections. `redirect`
+                                # carries the user's instruction into the
+                                # ToolMessage and lets the agent continue;
+                                # `never_allow` persists a per-project entry
+                                # and continues; `timeout` fails closed and
+                                # ends the turn.
+                                from bog_agents_cli.auto_mode import (
+                                    never_allow_entry_for,
+                                    record_never_allow,
+                                )
+
+                                message = str(decision.get("message") or "").strip()
+                                if decision_type == "never_allow":
+                                    entries = []
+                                    for action_request in action_requests:
+                                        entry = never_allow_entry_for(
+                                            str(action_request.get("name", "")),
+                                            action_request.get("args", {}) or {},
+                                        )
+                                        try:
+                                            record_never_allow(Path.cwd(), entry)
+                                        except OSError:
+                                            logger.warning(
+                                                "could not persist never-allow entry",
+                                                exc_info=True,
+                                            )
+                                        entries.append(entry)
+                                    message = (
+                                        "never allowed in this project from now on: "
+                                        + "; ".join(entries)
+                                        + ". Do not try this again; choose a different approach."
+                                    )
+                                elif decision_type == "redirect":
+                                    message = f"The user rejected this call and says: {message}"
+                                decisions = [
+                                    RejectDecision(type="reject", message=message)
+                                    for _ in action_requests
+                                ]
+                                for tool_msg in list(
+                                    adapter._current_tool_messages.values()
+                                ):
+                                    tool_msg.set_rejected()
+                                adapter._current_tool_messages.clear()
+                                if decision_type == "timeout":
+                                    any_rejected = True
+                                    await adapter._mount_message(
+                                        AppMessage(
+                                            f"[dim]{message}. The turn was stopped (fail-closed).[/dim]"
+                                        )
+                                    )
                             else:
                                 logger.warning(
                                     "Unexpected HITL decision type: %s",

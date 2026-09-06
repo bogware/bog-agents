@@ -22,6 +22,7 @@ from bog_agents_daemon.models import (
     OutputTarget,
     TriggerConfig,
     TriggerType,
+    run_cap_reached,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,16 @@ def _secure_owner_only(path: Path) -> None:
                     timeout=5,
                     check=False,
                 )
+
+
+def spend_db_path() -> Path:
+    """Path of the daemon's durable spend ledger (ROADMAP #51), beside `jobs.json`."""
+    return _DAEMON_DIR / "spend.db"
+
+
+def daemon_findings_db_path() -> Path:
+    """Path of the daemon-level findings ledger (ROADMAP #59) used when a request names no job."""
+    return _DAEMON_DIR / "findings.db"
 
 
 def _ensure_dirs() -> None:
@@ -110,6 +121,8 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
             webhook_path=t.get("webhook_path", ""),
             webhook_secret=t.get("webhook_secret", ""),
             git_branch_pattern=t.get("git_branch_pattern", "*"),
+            github_number=int(t.get("github_number", 0) or 0),
+            github_kinds=list(t.get("github_kinds", []) or []),
         )
         for t in d.get("triggers", [])
     ]
@@ -146,6 +159,15 @@ def _job_from_dict(d: dict[str, Any]) -> AmbientJob:
         working_dir=d.get("working_dir", ""),
         max_retries=d.get("max_retries", 0),
         retry_backoff_seconds=d.get("retry_backoff_seconds", 2.0),
+        budget_usd=d.get("budget_usd"),
+        daily_ceiling_usd=d.get("daily_ceiling_usd"),
+        max_runs=int(d.get("max_runs", 0) or 0),
+        thread_id=str(d.get("thread_id", "") or ""),
+        checkpoint_db=str(d.get("checkpoint_db", "") or ""),
+        goal_ref=str(d.get("goal_ref", "") or ""),
+        scan_profile=str(d.get("scan_profile", "") or ""),
+        findings_db=str(d.get("findings_db", "") or ""),
+        scan_gate=str(d.get("scan_gate", "") or ""),
         triggers=triggers,
         outputs=outputs,
         enabled=d.get("enabled", True),
@@ -384,6 +406,8 @@ def record_run_result(
                 existing.last_status = last_status
                 existing.last_output = last_output
                 existing.run_count += 1
+                if run_cap_reached(existing):
+                    existing.enabled = False  # ROADMAP #55: attempt cap used up
                 _save_jobs_unlocked(jobs)
                 return
         # Not previously registered — insert the snapshot (run-state already set).

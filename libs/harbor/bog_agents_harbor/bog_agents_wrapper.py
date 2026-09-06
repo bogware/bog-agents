@@ -45,6 +45,22 @@ load_dotenv()
 
 _MAX_FILE_LISTING = 10  # maximum files shown in the system prompt directory context
 
+
+def _entry_name(entry: dict[str, Any]) -> str:
+    """Return the display name for one `LsResult` entry (directories keep a trailing `/`).
+
+    Args:
+        entry: A `FileInfo` dict from `BackendProtocol.als`.
+
+    Returns:
+        The last path component, with `/` re-appended for directories.
+    """
+    raw = str(entry.get("path", ""))
+    is_dir = bool(entry.get("is_dir")) or raw.endswith("/")
+    name = raw.rstrip("/").rsplit("/", 1)[-1] or raw
+    return f"{name}/" if is_dir and name else name
+
+
 SYSTEM_MESSAGE = """
 You are an autonomous agent executing tasks in a sandboxed environment. Follow these instructions carefully.
 
@@ -154,12 +170,16 @@ class BogAgentsWrapper(BaseAgent):
         Returns:
             Formatted system prompt with directory context
         """
-        # Get directory information from backend
-        ls_info = await backend.als_info(".")
+        # Get directory information from backend. v6 SAT-5: `als` is the
+        # structured listing (`als_info` is deprecated and removed in 1.0); a
+        # listing error degrades to "empty" rather than failing the whole run.
+        ls_result = await backend.als(".")
+        entries = ls_result.entries or [] if ls_result.error is None else []
+        names = [_entry_name(entry) for entry in entries]
         current_dir = (await backend.aexecute("pwd")).output
 
-        total_files = len(ls_info) if ls_info else 0
-        first_files = ls_info[:_MAX_FILE_LISTING] if ls_info else []
+        total_files = len(names)
+        first_files = names[:_MAX_FILE_LISTING]
 
         # Build file listing header based on actual count
         if total_files == 0:
@@ -196,9 +216,7 @@ class BogAgentsWrapper(BaseAgent):
             environment: Harbor environment (Docker, Modal, etc.)
             context: Context to populate with metrics
         """
-        configuration = json.loads(
-            environment.trial_paths.config_path.read_text(encoding="utf-8")
-        )
+        configuration = json.loads(environment.trial_paths.config_path.read_text(encoding="utf-8"))
         if not isinstance(configuration, dict):
             msg = f"Unexpected configuration format. Expected a dict got {type(configuration)}."
             raise TypeError(msg)

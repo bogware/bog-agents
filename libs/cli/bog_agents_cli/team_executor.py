@@ -14,6 +14,8 @@ without real models; the CLI wires the real `create_cli_agent`.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -30,6 +32,8 @@ from bog_agents.teams import (
     TeamReport,
     run_team,
 )
+
+logger = logging.getLogger(__name__)
 
 # A task spec is either a bare title or a (title, [dependency-title, ...]) pair.
 TaskSpec = str | tuple[str, Sequence[str]]
@@ -124,6 +128,23 @@ def build_ledger(task_specs: Sequence[TaskSpec]) -> TaskLedger:
     return ledger
 
 
+def _team_file_tools(mailbox: Any, member: str, repo_dir: Path) -> list[Any]:  # noqa: ANN401 - Mailbox or MailboxStore
+    """ROADMAP #76: `send_file` / `send_patch` / `receive_files` bound to this teammate, audit-logged when the action log is on."""
+    try:
+        from bog_agents.tools.team_files import team_file_tools
+
+        from bog_agents_cli.action_log_controller import approvals_log
+
+        log = approvals_log()
+        audit = (
+            (lambda kind, data: log.append(kind, **data)) if log is not None else None
+        )
+        return list(team_file_tools(mailbox, member, root=repo_dir, audit=audit))
+    except Exception:
+        logger.debug("team file tools unavailable", exc_info=True)
+        return []
+
+
 def build_worktree_teammate_runner(
     *,
     repo_dir: Path,
@@ -163,6 +184,7 @@ def build_worktree_teammate_runner(
             enable_checkpointing=False,
             enable_memory=False,
             enable_plan_mode=False,
+            extra_tools=_team_file_tools(mailbox, member, repo_dir),
         )
         # Fold in any peer messages addressed to this member so it has context.
         inbox = mailbox.drain(member)
@@ -190,6 +212,10 @@ async def run_team_session(
     caps: RunawayCaps | None = None,
     teammate_runner: Any = None,  # noqa: ANN401 - injected in tests
     agent_factory: Any = None,  # noqa: ANN401
+    ledger: TaskLedger | None = None,
+    mailbox: Mailbox | None = None,
+    cost_ledger: CostLedger | None = None,
+    pause_gate: asyncio.Event | None = None,
 ) -> TeamReport:
     """Run a governed team over `task_specs` and return the report.
 
@@ -206,22 +232,40 @@ async def run_team_session(
         caps: Runaway caps (spawns / searches / spend); uncapped when None.
         teammate_runner: Injected runner (tests); real one built when None.
         agent_factory: Injected `create_cli_agent` (tests).
+        ledger: Pre-built ledger (ROADMAP #68: the `/tasks` tree watches it); built from
+            `task_specs` when `None`.
+        mailbox: Shared mailbox to use (so `/tasks steer` can reach teammates).
+        cost_ledger: Cost ledger to charge (so `/tasks` can show spend); a fresh one when `None`.
+        pause_gate: When given, every task claim waits on this event first —
+            `/tasks pause` clears it, `/tasks resume` sets it.
 
     Returns:
         The `TeamReport` with the final board and stop reason.
     """
-    ledger = build_ledger(task_specs)
+    ledger = ledger if ledger is not None else build_ledger(task_specs)
     runner = teammate_runner or build_worktree_teammate_runner(
         repo_dir=repo_dir,
         resolve_model=resolve_model,
         model_spec=model_spec,
         agent_factory=agent_factory,
     )
-    cost_ledger = CostLedger(caps=caps or RunawayCaps())
+    cost_ledger = (
+        cost_ledger
+        if cost_ledger is not None
+        else CostLedger(caps=caps or RunawayCaps())
+    )
+    if pause_gate is not None:
+        inner_runner = runner
+
+        async def _gated(member: str, task: LedgerTask, box: Mailbox) -> TaskResult:
+            await pause_gate.wait()
+            return await inner_runner(member, task, box)
+
+        runner = _gated
     return await run_team(
         ledger,
         members,
         teammate_runner=runner,
         cost_ledger=cost_ledger,
-        mailbox=Mailbox(),
+        mailbox=mailbox if mailbox is not None else Mailbox(),
     )

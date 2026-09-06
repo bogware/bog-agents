@@ -1309,10 +1309,10 @@ class SessionState:
         return self.auto_approve
 
 
-SHELL_TOOL_NAMES: frozenset[str] = frozenset({"bash", "shell", "execute"})
+SHELL_TOOL_NAMES: frozenset[str] = frozenset({"bash", "shell", "execute", "powershell"})
 """Tool names recognized as shell/command-execution tools.
 
-Only `'execute'` is registered by the SDK and CLI backends in practice.
+`'execute'` is always registered; `'powershell'` only with `tools.powershell` (#61).
 `'bash'` and `'shell'` are legacy names carried over and kept as
 backwards-compatible aliases.
 """
@@ -1697,6 +1697,31 @@ def detect_provider(model_name: str) -> str | None:
     return None
 
 
+def price_hint_for_spec(model_spec: str) -> str:
+    """One-line $/1M-token hint for a `provider:model` spec, or "" when unpriced.
+
+    v6 CLI-6: the wizard and `/model --default` used to confirm a model with no
+    idea of what it costs; cost-sensitive solo users paid Opus rates from turn
+    one without being told.
+
+    Args:
+        model_spec: A `provider:model` spec.
+
+    Returns:
+        A short hint such as `≈ $3.00 in / $15.00 out per 1M tokens`, or "".
+    """
+    try:
+        from bog_agents.middleware.cost_tracker import price_for_model
+    except Exception:
+        return ""
+    model_name = model_spec.split(":", 1)[1] if ":" in model_spec else model_spec
+    priced = price_for_model(model_name)
+    if not priced:
+        return ""
+    price_in, price_out = priced
+    return f"≈ ${price_in:.2f} in / ${price_out:.2f} out per 1M tokens — /cost shows session spend, /model switches"
+
+
 def _pick_default_bedrock_spec() -> str | None:
     """Pick a Bedrock model the account can actually invoke (first run).
 
@@ -1872,6 +1897,46 @@ def _check_aws_credentials() -> bool:
         return False
 
 
+def _ask_approval_mode(con: Any) -> bool:  # noqa: ANN401 — rich Console
+    """Ask the first-run user which approval mode to default to (v6 #47).
+
+    Writes `auto_mode.enabled` to the user-level settings.json; the CLI reads
+    it when no permission flag is given. Auto is recommended: the rule engine
+    approves obviously safe calls, a review model grades the rest against the
+    stated goal, expert rules still gate every call, and `/auto why` explains
+    each decision.
+
+    Args:
+        con: Rich console for prompts.
+
+    Returns:
+        True when auto mode was chosen.
+    """
+    from rich.prompt import Prompt
+
+    from bog_agents_cli._settings_cascade import save_user_section
+
+    con.print()
+    con.print("[bold]Approval mode:[/bold]")
+    con.print(
+        "  [cyan]1[/cyan]) auto (recommended) — safe tool calls run without prompts; uncertain ones are graded by a review model; /auto why explains decisions"
+    )
+    con.print("  [cyan]2[/cyan]) ask — approve every tool call by hand")
+    choice = Prompt.ask("Enter number", choices=["1", "2"], default="1")
+    enabled = choice == "1"
+    try:
+        save_user_section("auto_mode", {"enabled": enabled})
+    except OSError as exc:
+        con.print(
+            f"[yellow]Could not save the approval mode ({exc}); use /auto in the session.[/yellow]"
+        )
+    else:
+        con.print(
+            f"[green]Approval mode: {'auto' if enabled else 'ask'}[/green] (change later with /auto or --permission-mode)"
+        )
+    return enabled
+
+
 def _run_setup_wizard() -> str:
     """Interactive wizard to help the user configure a provider.
 
@@ -1929,7 +1994,7 @@ def _run_setup_wizard() -> str:
     )
     openai_spec = _get_recommended_model_spec("openai") or "openai:gpt-5.4"
     bedrock_spec = _get_recommended_model_spec("bedrock_converse") or (
-        "bedrock_converse:anthropic.claude-sonnet-4-20250514-v1:0"
+        "bedrock_converse:us.anthropic.claude-sonnet-4-6"
     )
     google_spec = _get_recommended_model_spec("google_genai") or (
         "google_genai:gemini-2.5-pro"
@@ -1939,7 +2004,7 @@ def _run_setup_wizard() -> str:
     providers = [
         (
             "1",
-            "Anthropic",
+            "Anthropic (Sonnet by default — balanced; Opus is one /model away)",
             "ANTHROPIC_API_KEY",
             anthropic_spec,
             "sk-ant-...",
@@ -1960,6 +2025,16 @@ def _run_setup_wizard() -> str:
             "AI...",
         ),
         ("5", "Ollama (local, free)", "__OLLAMA__", ollama_spec, None),
+        # v6 CLI-13: the cheap / aggregator lanes were only reachable through
+        # `-M provider:model`; first-run users never saw them.
+        (
+            "6",
+            "OpenRouter (many models, one key)",
+            "OPENROUTER_API_KEY",
+            "openrouter:openai/gpt-oss-120b",
+            "sk-or-...",
+        ),
+        ("7", "xAI (Grok)", "XAI_API_KEY", "xai:grok-4", "xai-..."),
     ]
 
     con.print()
@@ -1975,6 +2050,7 @@ def _run_setup_wizard() -> str:
     )
 
     _, name, env_var, model_spec, hint = next(p for p in providers if p[0] == choice)
+    _ask_approval_mode(con)
 
     # --- AWS Bedrock path ---
     if env_var == "__AWS__":
@@ -2040,6 +2116,10 @@ def _run_setup_wizard() -> str:
     con.print()
 
     api_key = Prompt.ask(f"Paste your {name} API key").strip()
+    if env_var in {"OPENROUTER_API_KEY", "XAI_API_KEY"}:
+        provider_prefix, _, default_model = model_spec.partition(":")
+        chosen = Prompt.ask("Model id", default=default_model).strip() or default_model
+        model_spec = f"{provider_prefix}:{chosen}"
     if not api_key:
         msg = "No API key provided. Run bog-agents again to retry."
         raise ModelConfigError(msg)
@@ -2061,7 +2141,11 @@ def _run_setup_wizard() -> str:
     con.print(
         "\n[green]Saved![/green] Key stored in the secret vault (OS keyring, or an owner-only file)."
     )
-    con.print(f"Default model set to [bold]{model_spec}[/bold]\n")
+    con.print(f"Default model set to [bold]{model_spec}[/bold]")
+    hint = price_hint_for_spec(model_spec)
+    if hint:
+        con.print(f"  [dim]{hint}[/dim]")
+    con.print()
 
     return model_spec
 
@@ -2134,6 +2218,15 @@ def _get_provider_kwargs(
     base_url = config.get_base_url(provider)
     if base_url:
         result["base_url"] = base_url
+    try:  # ROADMAP #50: a managed provider lock pins the gateway, whatever config.toml says
+        from bog_agents_cli.managed_policy import active_policy
+
+        policy = active_policy()
+        locked = policy.locked_base_url(provider) if policy is not None else None
+        if locked:
+            result["base_url"] = locked
+    except Exception:
+        logger.debug("managed provider lock skipped", exc_info=True)
     api_key_env = config.get_api_key_env(provider)
     if api_key_env:
         api_key = os.environ.get(api_key_env)

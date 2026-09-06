@@ -19,6 +19,7 @@ from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
 from rich.text import Text
 from textual.app import App
 from textual.binding import Binding, BindingType
@@ -28,6 +29,12 @@ from textual.message import Message
 from textual.screen import ModalScreen
 
 from bog_agents_cli._debug import configure_debug_logging
+from bog_agents_cli.auto_mode import approval_timeout_seconds
+from bog_agents_cli.changes_controller import (
+    maybe_reorder_diff,
+    mount_changes_tray,
+    run_changes_command,
+)
 from bog_agents_cli.clipboard import (
     copy_selection_to_clipboard_async,
     read_clipboard_text,
@@ -43,7 +50,8 @@ from bog_agents_cli.config import (
     settings,
 )
 from bog_agents_cli.configurable_model import CLIContext
-from bog_agents_cli.hooks import dispatch_hook
+from bog_agents_cli.cost_controller import gate_turn, preflight_start, run_cost_command
+from bog_agents_cli.hooks import dispatch_hook, dispatch_hook_fire_and_forget
 from bog_agents_cli.model_config import ModelSpec, save_recent_model
 from bog_agents_cli.prompt_cache import cache_break_note, thread_reset_message
 from bog_agents_cli.textual_adapter import (
@@ -55,6 +63,7 @@ from bog_agents_cli.textual_adapter import (
     format_token_count,
 )
 from bog_agents_cli.turn_manager import TurnManager
+from bog_agents_cli.usage_controller import install_usage_tracking
 from bog_agents_cli.widgets.approval import ApprovalMenu
 from bog_agents_cli.widgets.ask_user import AskUserMenu
 from bog_agents_cli.widgets.chat_input import ChatInput
@@ -581,6 +590,7 @@ async def _get_current_git_branch() -> str | None:
             "HEAD",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env=hardened_git_env(),
         )
         stdout, _ = await proc.communicate()
         if proc.returncode == 0:
@@ -936,6 +946,18 @@ class BogAgentsApp(App):
         self._server_proc = server_proc
         self._build_pending: dict[str, Any] | None = None
         self._server_kwargs = server_kwargs
+        # ROADMAP #54: the harness profile the server process builds with (`--mini` → "lean").
+        self._harness_profile: str | None = (server_kwargs or {}).get(
+            "harness_profile"
+        ) or None
+        # ROADMAP #48: `--restricted` locks the permission mode and refuses bypass.
+        self._restricted: bool = bool((server_kwargs or {}).get("restricted"))
+        if self._restricted:
+            self._auto_approve = False
+            self._auto_mode = False
+        # ROADMAP #56: registry record + cross-process queue, bound on mount.
+        self._session_queue: Any = None
+        self._detached = False
         self._mcp_preload_kwargs = mcp_preload_kwargs
         self._connecting = server_kwargs is not None
         self._model_override: str | None = None
@@ -963,6 +985,11 @@ class BogAgentsApp(App):
         self._plan_mode_enabled = plan_mode
         self._pre_plan_model_spec: str | None = None
         self._effort_level = "high"
+        # v6 CLI-1: /think is per-session state carried in the runtime
+        # context; None means "use the ThinkingMiddleware's configured default".
+        self._thinking_enabled: bool | None = None
+        self._thinking_budget_tokens: int | None = None
+        self._budget_override: float | None = None
         self._base_auto_approve = auto_approve
         self._base_model_spec = (
             f"{settings.model_provider}:{settings.model_name}"
@@ -1001,6 +1028,8 @@ class BogAgentsApp(App):
         self._preview_servers: dict[str, PreviewServerRecord] = {}
         self._recording_state: RecordingSessionState | None = None
         self._remote_tasks: dict[str, Any] = {}
+        # ROADMAP #68: live `/team run` handles (ledger, mailbox, spend, pause gate) for `/tasks`.
+        self._team_runs: dict[str, Any] = {}
         self._file_watchers: list = []
         # Lazily imported here to avoid pulling image dependencies into
         # argument parsing paths.
@@ -1109,6 +1138,10 @@ class BogAgentsApp(App):
         self._status_bar = self.query_one("#status-bar", StatusBar)
         self._chat_input = self.query_one("#input-area", ChatInput)
         self._install_termination_signal_handlers()
+        from bog_agents_cli.session_controller import POLL_SECONDS, start_session_queue
+
+        self._session_queue = start_session_queue(self)
+        self.set_interval(POLL_SECONDS, self._poll_session_queue)
 
         # Reflect the initial permission mode (bypass / accept-edits / plan /
         # paranoid seeded from --permission-mode / --auto-approve / --auto /
@@ -1175,8 +1208,6 @@ class BogAgentsApp(App):
         self._chat_input.focus_input()
 
         # Fire session.start hook (non-blocking fire-and-forget)
-        from bog_agents_cli.hooks import dispatch_hook_fire_and_forget
-
         dispatch_hook_fire_and_forget(
             "session.start",
             {
@@ -1375,6 +1406,7 @@ class BogAgentsApp(App):
         )
         if self._token_tracker:
             self._ui_adapter.set_token_tracker(self._token_tracker)
+        install_usage_tracking(self)
 
         self.run_worker(
             self._prewarm_threads_cache,
@@ -1904,7 +1936,12 @@ class BogAgentsApp(App):
 
         # Create menu with unique ID to avoid conflicts
         unique_id = f"approval-menu-{uuid.uuid4().hex[:8]}"
-        menu = ApprovalMenu(action_requests, assistant_id, id=unique_id)
+        menu = ApprovalMenu(
+            action_requests,
+            assistant_id,
+            id=unique_id,
+            timeout_seconds=approval_timeout_seconds(),
+        )
         menu.set_future(result_future)
 
         # Store reference
@@ -2477,6 +2514,12 @@ class BogAgentsApp(App):
         cmd = self._prompt_commands.get(name)
         if cmd is None:
             return False
+        if cmd.scope == "workflow":  # ROADMAP #73
+            from bog_agents_cli.workflow_controller import run_workflow_slash
+
+            raw = command.strip()
+            rest = raw[len(name) :].strip() if raw.startswith(name) else ""
+            return await run_workflow_slash(self, cmd, rest)
         from bog_agents_cli.prompt_commands import render_prompt_command
 
         raw = command.strip()
@@ -2504,7 +2547,11 @@ class BogAgentsApp(App):
         for cmd in self._prompt_commands.values():
             hint = f" {cmd.argument_hint}" if cmd.argument_hint else ""
             commands.append(
-                (cmd.name, f"{cmd.description}{hint}", "custom prompt command")
+                (
+                    cmd.name,
+                    f"{cmd.description}{hint}",
+                    "workflow" if cmd.scope == "workflow" else "custom prompt command",
+                )
             )
         autocomplete.SLASH_COMMANDS[:] = commands
 
@@ -2573,6 +2620,9 @@ class BogAgentsApp(App):
             effort_level=self._operator_turn_effort or self._effort_level,
             plan_mode=self._plan_mode_enabled,
             system_prompt_append="\n\n".join(parts) if parts else None,
+            thinking_enabled=self._thinking_enabled,
+            thinking_budget_tokens=self._thinking_budget_tokens,
+            budget_usd=self._budget_override,
         )
 
     def _get_team_shared_context(self) -> str:
@@ -3221,26 +3271,91 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await self._handle_compact()
 
+    async def _handle_tasks_command(self, command: str) -> None:
+        """`/tasks` command center: one tree over threads, queue, background, team and daemon work (#68)."""
+        from bog_agents_cli.tasks_controller import run_tasks_command
+
+        await self._mount_message(UserMessage(command))
+        await run_tasks_command(self, command)
+
+    async def _poll_session_queue(self) -> None:
+        """ROADMAP #56: heartbeat, then pull `bog-agents queue` prompts when idle."""
+        from bog_agents_cli.session_controller import poll_session_queue
+
+        await poll_session_queue(self)
+
+    async def _handle_detach_command(self, command: str) -> None:
+        """Handle `/detach` — leave the agent server running and quit (ROADMAP #56)."""
+        from bog_agents_cli.session_controller import detach
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage(detach(self)))
+        if self._detached:
+            self.exit()
+
+    async def _handle_fork_command(self, command: str) -> None:
+        """`/fork` and `/subtask` — background forks of this conversation (ROADMAP #71)."""
+        from bog_agents_cli.fork_controller import run_fork_command
+
+        await self._mount_message(UserMessage(command))
+        await run_fork_command(self, command)
+
+    async def _handle_actionlog_command(self, command: str) -> None:
+        """`/actionlog` — verify, export or prune the hash-chained action log (ROADMAP #74)."""
+        from bog_agents_cli.action_log_controller import run_actionlog_command
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(await asyncio.to_thread(run_actionlog_command, command))
+        )
+
+    async def _handle_findings_command(self, command: str) -> None:
+        """`/findings` — the project's findings ledger (ROADMAP #59 / #70)."""
+        from bog_agents_cli.findings_controller import (
+            project_root,
+            run_findings_command,
+        )
+
+        await self._mount_message(UserMessage(command))
+        text = await asyncio.to_thread(
+            run_findings_command, command, project_root(self)
+        )
+        await self._mount_message(AppMessage(text))
+
+    async def _handle_remediate_command(self, command: str) -> None:
+        """`/remediate <fingerprint>` — fix one ledger finding with its evidence in hand (ROADMAP #59)."""
+        from bog_agents_cli.findings_controller import project_root, remediation_prompt
+
+        await self._mount_message(UserMessage(command))
+        prompt, note = await asyncio.to_thread(
+            remediation_prompt, command, project_root(self)
+        )
+        await self._mount_message(AppMessage(note))
+        if prompt:
+            await self._send_prompt_to_agent(prompt)
+
+    async def _handle_workflow_command(self, command: str) -> None:
+        """`/workflow` — list, show, author, run, resume, status (ROADMAP #73)."""
+        from bog_agents_cli.workflow_controller import run_workflow_command
+
+        await self._mount_message(UserMessage(command))
+        await run_workflow_command(self, command)
+
+    async def _handle_recap_command(self, command: str) -> None:
+        """`/recap` — where this session stands (#68)."""
+        from bog_agents_cli.tasks_controller import run_recap_command
+
+        await self._mount_message(UserMessage(command))
+        await run_recap_command(self, command)
+
     async def _handle_threads_command(self, command: str) -> None:
         """Open the interactive thread selector, or `/threads search <text>` (Tier-1 #4)."""
         rest = command.strip()[len("/threads") :].strip()
-        if rest.lower().startswith("search"):
-            query = rest[len("search") :].strip()
-            await self._mount_message(UserMessage(command))
-            if not query:
-                await self._mount_message(
-                    AppMessage(
-                        "Usage: [bold]/threads search <text>[/bold] — full-text search past threads."
-                    )
-                )
-                return
-            from bog_agents_cli.session_search import (
-                format_search_results,
-                search_sessions,
-            )
+        from bog_agents_cli.thread_flags import maybe_run_threads_verb
 
-            hits = await search_sessions(query, limit=20)
-            await self._mount_message(AppMessage(format_search_results(query, hits)))
+        if await maybe_run_threads_verb(
+            self, command, rest
+        ):  # search / group / archive / unread (#68)
             return
         await self._show_thread_selector()
 
@@ -3268,56 +3383,47 @@ class BogAgentsApp(App):
         await self._handle_logs_command()
 
     async def _dispatch_onboard_command(self, _command: str) -> None:
-        """Forward to the onboarding helper."""
+        """Forward to the onboarding helper; `/onboard import <tool> [N]` imports sessions (#62)."""
+        if _command.lower().split()[1:2] == ["import"]:
+            from bog_agents_cli.plugin_controller import run_onboard_import
+
+            await self._mount_message(AppMessage(await run_onboard_import(_command)))
+            return
         await self._handle_onboard_command()
 
     async def _handle_tokens_command(self, command: str) -> None:
-        """Show token usage and context breakdown."""
+        """`/cost` — usage report, `budget|caps|today|tree|cache` verbs and `explain <question>` (#51/#52)."""
         await self._mount_message(UserMessage(command))
-        if self._token_tracker and self._token_tracker.current_context > 0:
-            count = self._token_tracker.current_context
-            formatted = format_token_count(count)
+        await run_cost_command(self, command)
 
-            model_name = settings.model_name
-            context_limit = settings.model_context_limit
+    async def _handle_changes_command(self, command: str) -> None:
+        """`/changes [show <n> | revert <n> [hunk] | keep]` — the turn-end changes tray (ROADMAP #66)."""
+        await self._mount_message(UserMessage(command))
+        await run_changes_command(self, command)
 
-            if context_limit is not None:
-                limit_str = format_token_count(context_limit)
-                pct = count / context_limit * 100
-                usage = f"{formatted} / {limit_str} tokens ({pct:.0f}%)"
-            else:
-                usage = f"{formatted} tokens used"
+    async def _handle_memory_command(self, command: str) -> None:
+        """`/memory rebuild|show|apply|discard|status` — consolidate the agent-recorded memories (ROADMAP #75)."""
+        from bog_agents_cli.memory_controller import run_memory_from_app
 
-            msg = f"{usage} | {model_name}" if model_name else usage
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage(await run_memory_from_app(self, command)))
 
-            conv_tokens = await self._get_conversation_token_count()
-            if conv_tokens is not None:
-                overhead = max(0, count - conv_tokens)
-                overhead_str = format_token_count(overhead)
-                conv_str = format_token_count(conv_tokens)
+    async def _handle_add_dir_command(self, command: str) -> None:
+        """`/add-dir <path> | list | remove <name>` — mount extra directories at /mnt/<name>/ (ROADMAP #76)."""
+        from bog_agents_cli.findings_controller import project_root
+        from bog_agents_cli.mounts import run_add_dir_command
 
-                overhead_unit = " tokens" if overhead < 1000 else ""
-                conv_unit = " tokens" if conv_tokens < 1000 else ""
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(
+            AppMessage(run_add_dir_command(command, project_root(self)))
+        )
 
-                msg += (
-                    f"\n|- System prompt + tools: ~{overhead_str}{overhead_unit} (fixed)"
-                    f"\n`- Conversation: ~{conv_str}{conv_unit}"
-                )
+    async def _handle_review_plan_command(self, command: str) -> None:
+        """`/review-plan [last | butcher <id> | jtbd <id> | file <path>]` — line-addressed plan review (ROADMAP #69)."""
+        from bog_agents_cli.plan_review_controller import run_review_plan_command
 
-            await self._mount_message(AppMessage(msg))
-            return
-
-        model_name = settings.model_name
-        context_limit = settings.model_context_limit
-
-        parts: list[str] = ["No token usage yet"]
-        if context_limit is not None:
-            limit_str = format_token_count(context_limit)
-            parts.append(f"{limit_str} token context window")
-        if model_name:
-            parts.append(model_name)
-
-        await self._mount_message(AppMessage(" | ".join(parts)))
+        await self._mount_message(UserMessage(command))
+        await run_review_plan_command(self, command)
 
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
@@ -4150,6 +4256,8 @@ class BogAgentsApp(App):
         )
 
         await self._mount_message(UserMessage(command))
+        if await self._repo_config_blocked():
+            return
         raw_arg = command.strip()[len("/review") :].strip()
         target = parse_review_args(raw_arg)
         prompt = generate_review_prompt(target)
@@ -4163,22 +4271,18 @@ class BogAgentsApp(App):
         security, maintainability, test-coverage, and over-claims lenses and
         emits a SHIP / FIX-FIRST verdict. Pass `--fix` to also fix blockers.
         """
-        from bog_agents_cli.self_review_controller import (
-            generate_self_review_prompt,
-            parse_self_review_args,
-        )
+        from bog_agents_cli.self_review_controller import run_self_review
 
         await self._mount_message(UserMessage(command))
         raw_arg = command.strip()[len("/self-review") :].strip()
-        target = parse_self_review_args(raw_arg)
-        prompt = generate_self_review_prompt(target)
-        announce = (
-            "Running self-review gate (5 lenses) and fixing blockers..."
-            if target.fix
-            else "Running self-review gate (5 lenses)..."
-        )
-        await self._mount_message(AppMessage(announce))
-        await self._send_prompt_to_agent(prompt)
+        await run_self_review(self, raw_arg)
+
+    async def _handle_finding_command(self, command: str) -> None:
+        """`/finding <id> addressed|wontfix|incorrect [note]` — rule on a review finding (#67)."""
+        from bog_agents_cli.self_review_controller import run_resolve
+
+        await self._mount_message(UserMessage(command))
+        await run_resolve(self, command.strip()[len("/finding") :].strip())
 
     async def _handle_ci_fix_command(self, command: str) -> None:
         """`/ci-fix` — read this branch's CI result and diagnose/fix failures (#1).
@@ -5710,14 +5814,15 @@ class BogAgentsApp(App):
             )
 
     async def _handle_auto_command(self, command: str) -> None:
-        """/auto — toggle smart auto-mode (rule-engine + haiku risk eval).
+        """/auto — toggle smart auto-mode (rule-engine + model risk review).
 
         In auto mode the agent auto-approves tool calls that pass the built-in
-        rule engine. Uncertain shell commands are evaluated by Haiku; only
+        rule engine. Uncertain shell commands are reviewed by a cheap model
+        from the active provider (v6 CLI-9); only
         commands flagged as risky surface an approval dialog. ``/always-ask``
         overrides auto mode.
 
-        Usage: /auto [on|off|status]
+        Usage: /auto [on|off|status|why [n]]
         """
         await self._mount_message(UserMessage(command))
         if self._session_state is None:
@@ -5727,9 +5832,26 @@ class BogAgentsApp(App):
         arg = command.strip().split(maxsplit=1)
         verb = arg[1].strip().lower() if len(arg) > 1 else ""
 
+        from bog_agents_cli.auto_mode import (
+            get_approval_ledger,
+            get_auto_mode_breaker,
+            render_auto_mode_status,
+        )
+
+        if verb == "why" or verb.startswith("why "):
+            # v6 #47: explain the auto-mode decisions of this session.
+            try:
+                count = int(verb[3:].strip()) if verb[3:].strip() else 5
+            except ValueError:
+                count = 5
+            await self._mount_message(AppMessage(get_approval_ledger().render(count)))
+            return
         if verb == "status":
-            current = "ON" if self._session_state.auto_mode else "OFF"
-            await self._mount_message(AppMessage(f"auto mode is currently {current}"))
+            await self._mount_message(
+                AppMessage(
+                    render_auto_mode_status(self._session_state.auto_mode, self._cwd)
+                )
+            )
             return
 
         if verb == "on":
@@ -5739,19 +5861,24 @@ class BogAgentsApp(App):
         elif verb in ("", "toggle"):
             new_state = not self._session_state.auto_mode
         else:
-            await self._mount_message(AppMessage("Usage: /auto [on|off|status]"))
+            await self._mount_message(
+                AppMessage("Usage: /auto [on|off|status|why [n]]")
+            )
             return
 
         self._session_state.auto_mode = new_state
         self._auto_mode = new_state
+        if new_state:
+            get_auto_mode_breaker().reset()  # /auto on re-arms the circuit breaker (v6 #47)
         self._refresh_permission_mode_indicator()
         if new_state:
             await self._mount_message(
                 AppMessage(
                     "Auto mode ON. Tool calls are evaluated against built-in rules; "
-                    "risky shell commands are checked by Haiku before running. "
-                    "Use /auto off to return to interactive approval, or "
-                    "/always-ask to require approval for everything."
+                    "risky shell commands are reviewed by a model from your active provider before running. "
+                    "Expert rules still gate every call at the tool boundary and can deny what the reviewer allows. "
+                    "/auto why explains each decision; /auto off returns to interactive approval; "
+                    "/always-ask requires approval for everything."
                 )
             )
         else:
@@ -5941,26 +6068,29 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._set_spinner(f"Racing {len(racers)} models")
-        try:
-            report = await run_race(prompt, racers)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
-            return
-        finally:
-            await self._set_spinner("")
+        async def _body() -> None:
+            await self._set_spinner(f"Racing {len(racers)} models")
+            try:
+                report = await run_race(prompt, racers)
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/race failed: {exc}"))
+                return
+            finally:
+                await self._set_spinner("")
 
-        await self._mount_message(AppMessage(report.format_summary()))
+            await self._mount_message(AppMessage(report.format_summary()))
 
-        winner = pick_winner(report)
-        if winner is not None:
-            await self._mount_message(
-                AppMessage(
-                    f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
-                    f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+            winner = pick_winner(report)
+            if winner is not None:
+                await self._mount_message(
+                    AppMessage(
+                        f"[bold green]Suggested winner:[/bold green] [cyan]{winner.label}[/cyan] "
+                        f"({winner.duration_seconds:.1f}s, {len(winner.output)} chars)."
+                    )
                 )
-            )
+
+        await self._start_model_command(_body(), name="/race")
 
     async def _handle_best_of_n_command(self, command: str) -> None:
         """``/best-of-n [count] <prompt>`` — run N full agent attempts, keep the rubric-judged winner.
@@ -5998,8 +6128,11 @@ class BogAgentsApp(App):
             return
         # N full agent attempts run for minutes+; run as a tracked worker so
         # the TUI stays responsive and Esc/Ctrl+C can stop it (v5 CLIC-2).
-        self._start_tracked_session(
-            self._run_best_of_n_task(prompt, n), name="/best-of-n"
+        preflight_start(
+            self,
+            agents=n,
+            name="/best-of-n",
+            start=lambda: self._run_best_of_n_task(prompt, n),
         )
 
     async def _handle_jury_command(self, command: str) -> None:
@@ -6043,64 +6176,17 @@ class BogAgentsApp(App):
         self._start_tracked_session(self._run_jury_on_diff(diff_text), name="/jury")
 
     async def _gather_jury_diff(self, arg: str) -> str | None:
-        """Gather a diff for /jury based on the user's argument.
-
-        Returns the diff string, or ``None`` if the command was rejected
-        and the caller has already mounted an error.
-        """
-        import subprocess  # noqa: S404  # bounded git invocation
-
+        """Gather a diff for /jury; `None` when rejected (the message is already mounted)."""
         from bog_agents_cli.config import settings
+        from bog_agents_cli.jury import gather_diff
 
-        cwd = settings.project_root or Path(self._cwd)
-        if arg in ("--paste", "paste"):
-            await self._mount_message(
-                AppMessage(
-                    "Paste support is not yet wired up — pipe a diff to /jury via "
-                    "[bold]git diff | bog-agents -m '/jury <ref>'[/bold] or commit and use "
-                    "[bold]/jury <ref>[/bold]."
-                )
-            )
-            return None
-
-        cmd: list[str]
-        if arg in ("", "head", "working"):
-            cmd = ["git", "diff", "HEAD"]
-        elif arg == "staged":
-            cmd = ["git", "diff", "--cached"]
-        else:
-            # Treat as a ref. Reject anything that smells like a flag or
-            # contains shell metachars to keep argv hygiene tight.
-            if arg.startswith("-") or any(c in arg for c in " ;|&`$"):
-                await self._mount_message(
-                    ErrorMessage(f"Refusing suspicious /jury argument: {arg!r}")
-                )
-                return None
-            cmd = ["git", "diff", f"{arg}..HEAD"]
-
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,  # argv-form, no shell
-                cmd,
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=15,
-                check=False,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            await self._mount_message(ErrorMessage(f"git diff failed: {exc}"))
-            return None
-        if result.returncode != 0:
-            await self._mount_message(
-                ErrorMessage(
-                    f"git diff returned {result.returncode}: {result.stderr.strip()}"
-                )
-            )
-            return None
-        # ``capture_output=True, text=True`` always returns str; tighten the type
-        # so ty doesn't flag the bytes branch from subprocess.run's overload.
-        return str(result.stdout)
+        gathered = await asyncio.to_thread(
+            gather_diff, arg, settings.project_root or Path(self._cwd)
+        )
+        if gathered.message:
+            kind = ErrorMessage if gathered.error else AppMessage
+            await self._mount_message(kind(gathered.message))
+        return gathered.diff
 
     async def _run_jury_on_diff(self, diff_text: str) -> None:
         """Build the juror list and run the jury, then mount the report."""
@@ -6247,81 +6333,86 @@ class BogAgentsApp(App):
             )
             return
 
-        await self._set_spinner("Reviewing transcript")
-        try:
-            state_values = await self._get_thread_state_values(self._lc_thread_id)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
-            return
-
-        messages = state_values.get("messages", []) if state_values else []
-        if not messages:
-            await self._set_spinner("")
-            await self._mount_message(AppMessage("Conversation is empty."))
-            return
-
-        transcript_lines = []
-        for msg in messages[-40:]:  # cap to last 40 messages
-            kind = getattr(msg, "type", "msg")
-            content = getattr(msg, "content", "")
-            if isinstance(content, str):
-                transcript_lines.append(f"[{kind}] {content}")
-        transcript = "\n".join(transcript_lines)
-
-        model_spec = self._model_override or settings.model_name
-        try:
-            resolved = create_model(
-                model_spec, profile_overrides=self._profile_override
-            )
-            proposals = await propose_skills_from_transcript(transcript, resolved.model)
-        except Exception as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
-            return
-        finally:
-            await self._set_spinner("")
-
-        if not proposals:
-            await self._mount_message(
-                AppMessage(
-                    "No durable skills surfaced from this session. Try /teach again "
-                    "after a longer or more varied conversation."
-                )
-            )
-            return
-
-        written: list[str] = []
-        for proposal in proposals:
+        async def _body() -> None:
+            await self._set_spinner("Reviewing transcript")
             try:
-                write_proposal(proposal, overwrite=True)
-                written.append(proposal.id)
-            except (ValueError, OSError) as exc:
-                logger.debug("could not write proposal %s: %s", proposal.id, exc)
+                state_values = await self._get_thread_state_values(self._lc_thread_id)
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"Failed to read state: {exc}"))
+                return
 
-        if not written:
+            messages = state_values.get("messages", []) if state_values else []
+            if not messages:
+                await self._set_spinner("")
+                await self._mount_message(AppMessage("Conversation is empty."))
+                return
+
+            transcript_lines = []
+            for msg in messages[-40:]:  # cap to last 40 messages
+                kind = getattr(msg, "type", "msg")
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    transcript_lines.append(f"[{kind}] {content}")
+            transcript = "\n".join(transcript_lines)
+
+            model_spec = self._model_override or settings.model_name
+            try:
+                resolved = create_model(
+                    model_spec, profile_overrides=self._profile_override
+                )
+                proposals = await propose_skills_from_transcript(
+                    transcript, resolved.model
+                )
+            except Exception as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/teach failed: {exc}"))
+                return
+            finally:
+                await self._set_spinner("")
+
+            if not proposals:
+                await self._mount_message(
+                    AppMessage(
+                        "No durable skills surfaced from this session. Try /teach again "
+                        "after a longer or more varied conversation."
+                    )
+                )
+                return
+
+            written: list[str] = []
+            for proposal in proposals:
+                try:
+                    write_proposal(proposal, overwrite=True)
+                    written.append(proposal.id)
+                except (ValueError, OSError) as exc:
+                    logger.debug("could not write proposal %s: %s", proposal.id, exc)
+
+            if not written:
+                await self._mount_message(
+                    AppMessage(
+                        "Could not write any proposals — check ~/.bog-agents/skills/."
+                    )
+                )
+                return
+
+            bullets = "\n".join(
+                f"  [cyan]{p.id}[/cyan] — {p.description}"
+                for p in proposals
+                if p.id in written
+            )
             await self._mount_message(
                 AppMessage(
-                    "Could not write any proposals — check ~/.bog-agents/skills/."
+                    f"[bold]{len(written)}[/bold] proposal(s) written to "
+                    "~/.bog-agents/skills/proposed/:\n\n"
+                    f"{bullets}\n\n"
+                    "[dim]Review with [bold]/teach show <id>[/bold] · "
+                    "accept with [bold]/teach accept <id>[/bold] · "
+                    "reject with [bold]/teach reject <id>[/bold][/dim]"
                 )
             )
-            return
 
-        bullets = "\n".join(
-            f"  [cyan]{p.id}[/cyan] — {p.description}"
-            for p in proposals
-            if p.id in written
-        )
-        await self._mount_message(
-            AppMessage(
-                f"[bold]{len(written)}[/bold] proposal(s) written to "
-                "~/.bog-agents/skills/proposed/:\n\n"
-                f"{bullets}\n\n"
-                "[dim]Review with [bold]/teach show <id>[/bold] · "
-                "accept with [bold]/teach accept <id>[/bold] · "
-                "reject with [bold]/teach reject <id>[/bold][/dim]"
-            )
-        )
+        await self._start_model_command(_body(), name="/teach")
 
     async def _handle_recipe_command(self, command: str) -> None:
         """``/recipe`` — curated YAML recipe pipelines.
@@ -7842,7 +7933,7 @@ class BogAgentsApp(App):
         self._active_profile_name = profile.name
         self._active_profile_prompt = profile.system_prompt_append
         if profile.auto_approve is not None:
-            self._auto_approve = profile.auto_approve
+            self._auto_approve = profile.auto_approve and not self._restricted
         if profile.plan_mode is not None:
             self._plan_mode_enabled = profile.plan_mode
         if profile.effort_level:
@@ -8058,30 +8149,47 @@ class BogAgentsApp(App):
             handle_result,
         )
 
+    async def _repo_config_blocked(self) -> bool:
+        """ROADMAP #49: block review surfaces until a hostile `.git/config` is acknowledged."""
+        from bog_agents_cli.repo_trust import repo_config_gate
+
+        message = await asyncio.to_thread(repo_config_gate, self._cwd)
+        if message:
+            await self._mount_message(AppMessage(message))
+        return message is not None
+
     async def _handle_diff_command(self, command: str) -> None:
         """Handle `/diff` for local git change inspection."""
         await self._mount_message(UserMessage(command))
+        if await self._repo_config_blocked():
+            return
 
         raw_arg = command.strip()[len("/diff") :].strip()
         if raw_arg in {"help", "--help", "-h"}:
             await self._mount_message(
                 AppMessage(
-                    "Usage: /diff | /diff --cached | /diff --stat | "
+                    "Usage: /diff | /diff --cached | /diff --stat | /diff --ordered | "
                     "/diff --name-only | /diff <git-diff-args>"
                 )
             )
             return
 
         if raw_arg.lower() in {"cached", "staged"}:
-            args = ["diff", "--cached", "--minimal"]
+            args = ["diff", *NO_EXTERNAL_DIFF, "--cached", "--minimal"]
         elif raw_arg.lower() in {"stat", "--stat"}:
             args = ["diff", "--stat"]
         elif raw_arg.lower() in {"names", "name-only", "--name-only"}:
             args = ["diff", "--name-only"]
+        elif raw_arg.lower() in {"ordered", "--ordered"}:
+            args = [
+                "diff",
+                *NO_EXTERNAL_DIFF,
+                "--minimal",
+            ]  # ROADMAP #66: blocks reordered below
         elif raw_arg:
-            args = ["diff", *shlex.split(raw_arg)]
+            args = ["diff", *NO_EXTERNAL_DIFF, *shlex.split(raw_arg)]
         else:
-            args = ["diff", "--minimal"]
+            args = ["diff", *NO_EXTERNAL_DIFF, "--minimal"]
 
         success, output = await self._run_git(args)
         if not success:
@@ -8095,7 +8203,20 @@ class BogAgentsApp(App):
         if not output.strip():
             await self._mount_message(AppMessage("No pending git changes."))
             return
-        await self._mount_message(AppMessage(output))
+        if args[1:2] in (["--stat"], ["--name-only"]):
+            # Summaries are plain text, not unified diffs.
+            from rich.markup import escape as _escape_markup
+
+            await self._mount_message(AppMessage(_escape_markup(output)))
+            return
+        from bog_agents_cli.widgets.messages import DiffMessage
+
+        # v6 CLI-5: render through the same coloured DiffMessage the edit
+        # widgets use — the old plain AppMessage was monochrome and treated
+        # `[...]` in diff lines as Rich markup.
+        await self._mount_message(
+            DiffMessage(maybe_reorder_diff(raw_arg, output), max_lines=600)
+        )
 
     async def _handle_branch_command(self, command: str) -> None:
         """Handle `/branch` as a lightweight local git-branch helper."""
@@ -8388,11 +8509,16 @@ class BogAgentsApp(App):
             if thread_id is None:
                 await self._mount_message(AppMessage(f"No checkpoint named {name!r}."))
                 return
-            prompt = (
-                f"Resume conversation from checkpoint '{name}' (thread {thread_id}). "
-                "Restore context and continue from where we left off."
+            # v6 CLI-2: a checkpoint is a saved thread id, so loading it is a
+            # thread switch — `_resume_thread` re-hydrates the transcript and
+            # session state from the checkpointer. The previous implementation
+            # only sent the model a prose "resume from checkpoint" prompt in
+            # the *current* thread, so nothing was restored and the model
+            # confabulated a resume (open since v4 P1-27).
+            await self._mount_message(
+                AppMessage(f"Restoring checkpoint {name!r} (thread {thread_id})…")
             )
-            await self._send_prompt_to_agent(prompt)
+            await self._resume_thread(thread_id)
             return
 
         if action in {"delete", "rm"}:
@@ -8490,9 +8616,10 @@ class BogAgentsApp(App):
         prompt = build_explain_prompt(raw_arg, context)
         await self._send_prompt_to_agent(prompt)
 
-    async def _handle_index_command(self, command: str) -> None:
+    async def _handle_index_command(self, command: str, *, echo: bool = True) -> None:
         """Handle `/index` — build and search the codebase knowledge base."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
 
         from bog_agents_cli.cmd_index import (
             build_index,
@@ -9148,9 +9275,10 @@ class BogAgentsApp(App):
 
         await self._mount_message(AppMessage(format_build_help()))
 
-    async def _handle_agent_command(self, command: str) -> None:
+    async def _handle_agent_command(self, command: str, *, echo: bool = True) -> None:
         """Handle `/agent` as a first-class supervisor over managed workers."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
         await self._ensure_background_manager()
 
         from bog_agents.middleware.worktree import create_worktree
@@ -9573,56 +9701,33 @@ class BogAgentsApp(App):
         return tasks
 
     async def _handle_permissions_command(self, command: str) -> None:
-        """Handle `/permissions` by showing approval posture and shell policy.
+        """Handle `/permissions`: approval posture, trust and shell policy.
 
         Args:
-            command: Full slash command text.
+            command: Full slash command text; `trust-git-config`,
+                `trust-workspace` and `revoke-workspace` are verbs (#48/#49).
         """
+        from bog_agents_cli.trust_controller import (
+            permissions_report,
+            run_permissions_verb,
+        )
+
         await self._mount_message(UserMessage(command))
+        verb = command.strip().lower().split()[1:2]
+        if verb:
+            reply = await asyncio.to_thread(run_permissions_verb, verb[0], self._cwd)
+            if reply is not None:
+                await self._mount_message(AppMessage(reply))
+                return
 
-        from bog_agents_cli.config import RECOMMENDED_SAFE_SHELL_COMMANDS
-
-        allow_list = settings.shell_allow_list
-        if allow_list is None:
-            shell_summary = "disabled"
-            shell_detail = (
-                "Start the CLI with `--shell-allow-list recommended` or "
-                "`--shell-allow-list all` to enable shell access."
-            )
-        elif list(allow_list) == ["__ALL__"]:
-            shell_summary = "all commands auto-approved"
-            shell_detail = "Any shell command can run without an approval prompt."
-        elif list(allow_list) == list(RECOMMENDED_SAFE_SHELL_COMMANDS):
-            shell_summary = "recommended safe list"
-            shell_detail = ", ".join(list(allow_list)[:10])
-        else:
-            shell_summary = f"{len(allow_list)} auto-approved commands"
-            preview = ", ".join(list(allow_list)[:10])
-            remainder = len(allow_list) - 10
-            suffix = f", +{remainder} more" if remainder > 0 else ""
-            shell_detail = preview + suffix
-
-        mode_descriptions = {
-            "default": "default (prompt for every tool call)",
-            "accept-edits": "accept-edits (auto-approve edits + safe tools; "
-            "ask for risky shell)",
-            "plan": "plan (read-only; mutating tools stripped)",
-            "bypass": "bypass (approve everything — no prompts)",
-            "paranoid": "paranoid (force approval for every call)",
-        }
-        mode = self._current_permission_mode()
-        lines = [
-            "Permissions",
-            f"Permission mode: {mode_descriptions.get(mode, mode)}",
-            f"Shell allow-list: {shell_summary}",
-            f"Shell detail: {shell_detail}",
-            "Shift+Tab cycles default -> accept-edits -> plan; Ctrl+T toggles bypass.",
-            (
-                "Tool approvals still appear when a command or tool is not "
-                "covered by the current policy."
-            ),
-        ]
-        await self._mount_message(AppMessage("\n".join(lines)))
+        report = await asyncio.to_thread(
+            permissions_report,
+            self._current_permission_mode(),
+            self._cwd,
+            self._restricted,
+            self._active_profile_name,
+        )
+        await self._mount_message(AppMessage(report))
 
     async def _handle_keybindings_command(self, command: str) -> None:
         """Handle `/keybindings` by showing current keybinding configuration.
@@ -9853,112 +9958,13 @@ class BogAgentsApp(App):
                 await self._mount_message(AppMessage(f"'{name}' was not found."))
             return
 
-        if lowered in {"claude", "claude-status"}:
-            from bog_agents_cli.claude_code_compat import (
-                format_compat_status,
-                get_claude_compat_status,
-            )
+        from bog_agents_cli.plugin_controller import run_compat_or_plugin_verb
 
-            status = await asyncio.to_thread(
-                get_claude_compat_status, Path(self._cwd), config_dir
-            )
-            await self._mount_message(AppMessage(format_compat_status(status)))
-            return
-
-        if lowered == "claude-import":
-            from bog_agents_cli.claude_code_compat import (
-                detect_claude_skills,
-                import_claude_skill,
-            )
-
-            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
-            if not skills:
-                await self._mount_message(
-                    AppMessage(
-                        "No Claude Code skills found in .claude/ directories.\n\n"
-                        "Skills are SKILL.md files in .claude/skills/ or ~/.claude/skills/."
-                    )
-                )
-                return
-            skills_dir = config_dir / "skills"
-            imported: list[str] = []
-            for skill in skills:
-                dest = await asyncio.to_thread(import_claude_skill, skill, skills_dir)
-                imported.append(f"  {skill.name} → {dest}")
-            await self._mount_message(
-                AppMessage(
-                    f"Imported {len(imported)} Claude skill(s) into bog-agents:\n"
-                    + "\n".join(imported)
-                )
-            )
-            return
-
-        if lowered == "claude-list":
-            from bog_agents_cli.claude_code_compat import detect_claude_skills
-
-            skills = await asyncio.to_thread(detect_claude_skills, Path(self._cwd))
-            if not skills:
-                await self._mount_message(AppMessage("No Claude Code skills found."))
-                return
-            lines = [f"Claude Code skills ({len(skills)} found):", ""]
-            for skill in skills:
-                lines.append(f"  {skill.name} v{skill.version} — {skill.description}")
-                lines.append(f"    {skill.source_path}")
-            await self._mount_message(AppMessage("\n".join(lines)))
-            return
-
-        if lowered == "sync-mcp" or lowered.startswith("sync-mcp "):
-            from bog_agents_cli.claude_code_compat import (
-                format_compat_status,
-                sync_mcp_configs,
-            )
-
-            parts2 = raw_arg.split()
-            direction = parts2[1] if len(parts2) > 1 else "both"
-            if direction not in {"both", "to-desktop", "from-desktop"}:
-                await self._mount_message(
-                    AppMessage("Usage: /plugin sync-mcp [both|to-desktop|from-desktop]")
-                )
-                return
-            result = await asyncio.to_thread(
-                sync_mcp_configs, Path(self._cwd), direction=direction
-            )
-            lines = ["MCP sync complete.", ""]
-            if result.added_to_mcp_json:
-                lines.append(
-                    f"Added to .mcp.json: {', '.join(result.added_to_mcp_json)}"
-                )
-            if result.added_from_desktop:
-                lines.append(
-                    f"Added from Claude Desktop: {', '.join(result.added_from_desktop)}"
-                )
-            if not result.added_to_mcp_json and not result.added_from_desktop:
-                lines.append("Nothing to sync — configs are already in sync.")
-            if result.errors:
-                lines.append(f"Errors: {'; '.join(result.errors)}")
-            await self._mount_message(AppMessage("\n".join(lines)))
-            return
-
-        if lowered == "export-mcp":
-            from bog_agents_cli.claude_code_compat import export_mcp_from_extensions
-
-            result = await asyncio.to_thread(
-                export_mcp_from_extensions, config_dir, Path(self._cwd)
-            )
-            if result.added_to_mcp_json:
-                await self._mount_message(
-                    AppMessage(
-                        f"Exported {len(result.added_to_mcp_json)} MCP server(s) to "
-                        f"{result.output_path}:\n  "
-                        + "\n  ".join(result.added_to_mcp_json)
-                    )
-                )
-            elif result.errors:
-                await self._mount_message(
-                    AppMessage(f"Export errors: {'; '.join(result.errors)}")
-                )
-            else:
-                await self._mount_message(AppMessage("No new MCP servers to export."))
+        # Claude Code compatibility verbs + Agent Plugins 1.0 import/trust (#62)
+        # live in the controller so this handler stays a thin dispatcher.
+        text = await run_compat_or_plugin_verb(self, raw_arg, config_dir)
+        if text is not None:
+            await self._mount_message(AppMessage(text))
             return
 
         await self._mount_message(
@@ -9970,7 +9976,10 @@ class BogAgentsApp(App):
                 "  /plugin claude-list       — list detected Claude skills\n"
                 "  /plugin claude-import     — import Claude skills into bog-agents\n"
                 "  /plugin sync-mcp          — sync MCP configs with Claude Desktop\n"
-                "  /plugin export-mcp        — export extension MCP servers to .mcp.json"
+                "  /plugin export-mcp        — export extension MCP servers to .mcp.json\n"
+                "Agent Plugins 1.0 (#62):\n"
+                "  /plugin import <claude|codex|cursor> [--dry-run] — skills, agents, hooks, memories, MCP\n"
+                "  /plugin trust <name>      — enable a workspace .agents/plugins entry"
             )
         )
 
@@ -10378,15 +10387,14 @@ class BogAgentsApp(App):
             )
         )
 
-    async def _handle_worktree_command(self, command: str) -> None:
+    async def _handle_worktree_command(
+        self, command: str, *, echo: bool = True
+    ) -> None:
         """Handle `/worktree` git worktree management."""
-        await self._mount_message(UserMessage(command))
+        if echo:
+            await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.worktree import (
-            create_worktree,
-            list_worktrees,
-            remove_worktree,
-        )
+        from bog_agents.middleware.worktree import list_worktrees, remove_worktree
 
         repo_root = await self._get_repo_root()
         if repo_root is None:
@@ -10423,26 +10431,10 @@ class BogAgentsApp(App):
             return
 
         if lowered.startswith("create "):
-            branch = raw_arg[7:].strip()
-            if not branch:
-                await self._mount_message(
-                    AppMessage("Usage: /worktree create <branch>")
-                )
-                return
-            # create_worktree validates the ref and raises ValueError on an
-            # invalid name (e.g. one with a space); surface it instead of
-            # crashing the TUI with an uncaught traceback. (REVIEW.md v2 P1-29.)
-            try:
-                worktree = await asyncio.to_thread(create_worktree, repo_root, branch)
-            except (ValueError, OSError) as exc:
-                await self._mount_message(ErrorMessage(f"Invalid branch name: {exc}"))
-                return
-            await self._mount_message(
-                AppMessage(
-                    f"Created worktree on branch {worktree.branch}\n"
-                    f"Path: {worktree.path}"
-                )
-            )
+            from bog_agents_cli.worktrees_controller import create_worktree_report
+
+            text, ok = await create_worktree_report(repo_root, raw_arg[7:].strip())
+            await self._mount_message((AppMessage if ok else ErrorMessage)(text))
             return
 
         if lowered.startswith("status "):
@@ -10553,31 +10545,27 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.thinking import ThinkingMiddleware
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, ThinkingMiddleware)
-            ),
-            None,
-        )
-        if mw is None:
-            await self._mount_message(
-                AppMessage(
-                    "ThinkingMiddleware is not active in this session.\n"
-                    "Add `ThinkingMiddleware()` to your middleware stack to enable."
-                )
-            )
-            return
+        # v6 CLI-1: the TUI's agent runs in the LangGraph server process, so
+        # there is no in-process ThinkingMiddleware to poke (the old handler
+        # scanned `self._middleware`, which was never assigned, and printed
+        # "not active" for three cycles). The toggle is per-session state that
+        # reaches the middleware through the runtime context on every turn.
+        from bog_agents_cli.provider_catalog import supports_native_thinking
 
         raw_arg = command.strip()[len("/think") :].strip().lower()
+        default_enabled, default_budget = self._thinking_defaults()
+        enabled = (
+            self._thinking_enabled
+            if self._thinking_enabled is not None
+            else default_enabled
+        )
+        budget = self._thinking_budget_tokens or default_budget
 
         if not raw_arg or raw_arg == "status":
-            from bog_agents_cli.provider_catalog import supports_native_thinking
-
-            state = "enabled" if mw.is_enabled else "disabled"
+            state = "enabled" if enabled else "disabled"
+            origin = (
+                "session" if self._thinking_enabled is not None else "config default"
+            )
             active_model = getattr(settings, "model_name", "") or ""
             native = supports_native_thinking(active_model) if active_model else False
             support_line = f"Model {active_model!r}: " + (
@@ -10588,8 +10576,8 @@ class BogAgentsApp(App):
             )
             await self._mount_message(
                 AppMessage(
-                    f"Extended thinking: {state}\n"
-                    f"Budget tokens: {mw.budget_tokens:,}\n"
+                    f"Extended thinking: {state} ({origin})\n"
+                    f"Budget tokens: {budget:,}\n"
                     f"{support_line}\n\n"
                     "Usage: /think on | /think off | /think toggle | "
                     "/think budget <N>\n"
@@ -10600,44 +10588,43 @@ class BogAgentsApp(App):
             return
 
         if raw_arg == "on":
-            mw.set_thinking(True)
+            self._thinking_enabled = True
             await self._mount_message(
-                AppMessage(
-                    f"Extended thinking enabled (budget: {mw.budget_tokens:,} tokens)."
-                )
+                AppMessage(f"Extended thinking enabled (budget: {budget:,} tokens).")
             )
             return
 
         if raw_arg == "off":
-            mw.set_thinking(False)
+            self._thinking_enabled = False
             await self._mount_message(AppMessage("Extended thinking disabled."))
             return
 
         if raw_arg == "toggle":
-            enabled = mw.toggle()
-            state = "enabled" if enabled else "disabled"
+            self._thinking_enabled = not enabled
+            state = "enabled" if self._thinking_enabled else "disabled"
             await self._mount_message(AppMessage(f"Extended thinking {state}."))
             return
 
         if raw_arg.startswith("budget "):
             budget_str = raw_arg[7:].strip()
             try:
-                budget = int(budget_str)
-                if budget < 1024:
-                    await self._mount_message(
-                        AppMessage("Budget must be at least 1024 tokens.")
-                    )
-                    return
-                mw.set_thinking(mw.is_enabled, budget_tokens=budget)
-                await self._mount_message(
-                    AppMessage(f"Thinking budget set to {budget:,} tokens.")
-                )
+                new_budget = int(budget_str)
             except ValueError:
                 await self._mount_message(
                     AppMessage(
                         f"Invalid budget value: {budget_str!r}. Usage: /think budget <N>"
                     )
                 )
+                return
+            if new_budget < 1024:
+                await self._mount_message(
+                    AppMessage("Budget must be at least 1024 tokens.")
+                )
+                return
+            self._thinking_budget_tokens = new_budget
+            await self._mount_message(
+                AppMessage(f"Thinking budget set to {new_budget:,} tokens.")
+            )
             return
 
         await self._mount_message(
@@ -10645,6 +10632,20 @@ class BogAgentsApp(App):
                 "Usage: /think | /think on | /think off | /think toggle | /think budget <N>"
             )
         )
+
+    @staticmethod
+    def _thinking_defaults() -> tuple[bool, int]:
+        """Return the configured ThinkingMiddleware defaults (enabled, budget).
+
+        Mirrors what `create_cli_agent` passes to the middleware so `/think`
+        status reports the server-side default when no session override is set.
+        """
+        try:
+            from bog_agents_cli.agent import _resolve_thinking_config
+
+            return _resolve_thinking_config()
+        except Exception:
+            return False, 8_000
 
     # ---- New "killer-features" handlers ----------------------------------
     # The implementations live in dedicated modules in bog_agents_cli/ so
@@ -10666,29 +10667,26 @@ class BogAgentsApp(App):
         prefix = self._command_name(command)
         author = command.strip()[len(prefix) :].strip()
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /handoff while the agent is busy.")
-            )
-            return
-
-        await self._set_spinner("Compiling handoff")
-        try:
-            result = await run_handoff(self, author_voice=author)
-        except Exception as exc:
-            logger.exception("/handoff failed")
+        async def _body() -> None:
+            await self._set_spinner("Compiling handoff")
+            try:
+                result = await run_handoff(self, author_voice=author)
+            except Exception as exc:
+                logger.exception("/handoff failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
+                return
             await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/handoff failed: {exc}"))
-            return
-        await self._set_spinner("")
 
-        await self._mount_message(
-            AppMessage(
-                f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
-                f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
-                f"{result.content}"
+            await self._mount_message(
+                AppMessage(
+                    f"[bold]Handoff saved to[/bold] [cyan]{result.path}[/cyan] "
+                    f"([dim]{result.elapsed_seconds:.1f}s[/dim])\n\n"
+                    f"{result.content}"
+                )
             )
-        )
+
+        await self._start_model_command(_body(), name="/handoff")
 
     async def _handle_release_train_command(self, command: str) -> None:
         """``/release-train [config|enable|disable|test|<tag>|<from..to>]`` — release notes + enrichment.
@@ -10907,26 +10905,23 @@ class BogAgentsApp(App):
         prefix = self._command_name(command)
         raw_arg = command.strip()[len(prefix) :].strip()
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /imagine while the agent is busy.")
-            )
-            return
+        async def _body() -> None:
+            await self._set_spinner("Imagining approaches in parallel")
+            try:
+                result = await run_imagine(self, raw_arg)
+            except ValueError as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
+                return
+            except Exception as exc:
+                logger.exception("/imagine failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(result.render()))
 
-        await self._set_spinner("Imagining approaches in parallel")
-        try:
-            result = await run_imagine(self, raw_arg)
-        except ValueError as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/imagine: {exc}"))
-            return
-        except Exception as exc:
-            logger.exception("/imagine failed")
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/imagine failed: {exc}"))
-            return
-        await self._set_spinner("")
-        await self._mount_message(AppMessage(result.render()))
+        await self._start_model_command(_body(), name="/imagine")
 
     async def _handle_devil_command(self, command: str) -> None:
         """``/devil`` — critique the last assistant message adversarially."""
@@ -10934,26 +10929,23 @@ class BogAgentsApp(App):
 
         await self._mount_message(UserMessage(command))
 
-        if self._agent_running:
-            await self._mount_message(
-                ErrorMessage("Cannot run /devil while the agent is busy.")
-            )
-            return
+        async def _body() -> None:
+            await self._set_spinner("Summoning devil's advocate")
+            try:
+                result = await run_devil(self)
+            except ValueError as exc:
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/devil: {exc}"))
+                return
+            except Exception as exc:
+                logger.exception("/devil failed")
+                await self._set_spinner("")
+                await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
+                return
+            await self._set_spinner("")
+            await self._mount_message(AppMessage(result.render()))
 
-        await self._set_spinner("Summoning devil's advocate")
-        try:
-            result = await run_devil(self)
-        except ValueError as exc:
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/devil: {exc}"))
-            return
-        except Exception as exc:
-            logger.exception("/devil failed")
-            await self._set_spinner("")
-            await self._mount_message(ErrorMessage(f"/devil failed: {exc}"))
-            return
-        await self._set_spinner("")
-        await self._mount_message(AppMessage(result.render()))
+        await self._start_model_command(_body(), name="/devil")
 
     async def _handle_squad_command(self, command: str) -> None:
         """``/squad`` — multi-persona dialogue review."""
@@ -10962,11 +10954,24 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         prefix = self._command_name(command)
         raw_arg = command.strip()[len(prefix) :].strip()
-        try:
-            await handle_squad_subcommand(self, raw_arg)
-        except Exception as exc:
-            logger.exception("/squad failed")
-            await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+        head = raw_arg.split(maxsplit=1)[0].lower() if raw_arg else ""
+        if head in {"list", "init"}:
+            # Listing / config paths call no model — run inline.
+            try:
+                await handle_squad_subcommand(self, raw_arg)
+            except Exception as exc:
+                logger.exception("/squad failed")
+                await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+            return
+
+        async def _body() -> None:
+            try:
+                await handle_squad_subcommand(self, raw_arg)
+            except Exception as exc:
+                logger.exception("/squad failed")
+                await self._mount_message(ErrorMessage(f"/squad failed: {exc}"))
+
+        await self._start_model_command(_body(), name="/squad")
 
     async def _handle_dream_command(self, command: str) -> None:
         """``/dream`` — overnight ideation, daemon-backed."""
@@ -11031,7 +11036,13 @@ class BogAgentsApp(App):
         # worker so the TUI stays responsive AND Esc/Ctrl+C can cancel the
         # job — an untracked worker was invisible to every interrupt gate
         # (v5 CLIC-5).
-        self._start_tracked_session(self._run_butcher_task(raw_arg), name="/butcher")
+        # Planner + workers; the slice count is only known once the butcher has planned.
+        preflight_start(
+            self,
+            agents=3,
+            name="/butcher",
+            start=lambda: self._run_butcher_task(raw_arg),
+        )
 
     async def _run_butcher_task(self, prompt: str) -> None:
         """Run one butcher job (dispatched via `_start_tracked_session`)."""
@@ -11054,6 +11065,10 @@ class BogAgentsApp(App):
             return create_model(spec, profile_overrides=self._profile_override).model
 
         caps = RunawayCaps(max_subagents=len(req.task_specs) + 2)
+        from bog_agents_cli.tasks_controller import finish_team_run, register_team_run
+
+        # ROADMAP #68: expose the ledger / mailbox / spend to `/tasks` (kill, steer, pause).
+        handle = register_team_run(self, req.task_specs, members, caps=caps)
         await self._set_spinner(
             f"Team: {len(members)} workers on {len(req.task_specs)} tasks"
         )
@@ -11065,7 +11080,16 @@ class BogAgentsApp(App):
                 resolve_model=_resolve,
                 model_spec=model_spec,
                 caps=caps,
+                ledger=handle.ledger,
+                mailbox=handle.mailbox,
+                cost_ledger=handle.cost_ledger,
+                pause_gate=handle.pause_gate,
             )
+        except BaseException:
+            finish_team_run(handle, status="failed")
+            raise
+        else:
+            finish_team_run(handle, status="done", report=report)
         finally:
             await self._set_spinner("")
 
@@ -11930,39 +11954,48 @@ class BogAgentsApp(App):
                     ErrorMessage("No active model — run /model first.")
                 )
                 return
-            await self._set_spinner("Drafting acceptance criteria")
-            try:
-                criteria = await draft_criteria(
-                    record.objective,
-                    invoke=invoke,
-                    feedback=feedback,
-                    previous_criteria=previous,
-                )
-            except Exception as exc:
+
+            async def _body() -> None:
+                await self._set_spinner("Drafting acceptance criteria")
+                try:
+                    criteria = await draft_criteria(
+                        record.objective,
+                        invoke=invoke,
+                        feedback=feedback,
+                        previous_criteria=previous,
+                    )
+                except Exception as exc:
+                    await self._set_spinner("")
+                    await self._mount_message(
+                        ErrorMessage(f"/rubric draft failed: {exc}")
+                    )
+                    return
                 await self._set_spinner("")
-                await self._mount_message(ErrorMessage(f"/rubric draft failed: {exc}"))
-                return
-            await self._set_spinner("")
-            if not criteria:
+                if not criteria:
+                    await self._mount_message(
+                        ErrorMessage(
+                            "Could not draft criteria — try /rubric regenerate <feedback> "
+                            "or set them manually with /rubric set."
+                        )
+                    )
+                    return
+                self._goal_rubric_pending = RubricPending(
+                    objective=record.objective, criteria=criteria
+                )
+                rendered = "\n".join(
+                    f"  {i}. {c}" for i, c in enumerate(criteria, start=1)
+                )
                 await self._mount_message(
-                    ErrorMessage(
-                        "Could not draft criteria — try /rubric regenerate <feedback> "
-                        "or set them manually with /rubric set."
+                    AppMessage(
+                        "[bold]Proposed acceptance criteria[/bold]\n"
+                        f"{rendered}\n\n"
+                        "[bold]/rubric accept[/bold] to use these, or "
+                        "[bold]/rubric regenerate <feedback>[/bold] to redraft."
                     )
                 )
                 return
-            self._goal_rubric_pending = RubricPending(
-                objective=record.objective, criteria=criteria
-            )
-            rendered = "\n".join(f"  {i}. {c}" for i, c in enumerate(criteria, start=1))
-            await self._mount_message(
-                AppMessage(
-                    "[bold]Proposed acceptance criteria[/bold]\n"
-                    f"{rendered}\n\n"
-                    "[bold]/rubric accept[/bold] to use these, or "
-                    "[bold]/rubric regenerate <feedback>[/bold] to redraft."
-                )
-            )
+
+            await self._start_model_command(_body(), name="/rubric draft")
             return
         await self._mount_message(
             ErrorMessage(
@@ -12215,8 +12248,12 @@ class BogAgentsApp(App):
             model_factory=model_factory,
             parallel=parallel,
         )
-        result = await asyncio.to_thread(controller.run, goal)
-        await self._mount_message(AppMessage(render_result(result)))
+
+        async def _body() -> None:
+            result = await asyncio.to_thread(controller.run, goal)
+            await self._mount_message(AppMessage(render_result(result)))
+
+        await self._start_model_command(_body(), name="/orchestrate")
 
     async def _handle_sidecar_command(self, command: str) -> None:
         """Handle `/sidecar <question>` — isolated read-only Q&A subagent.
@@ -12244,14 +12281,18 @@ class BogAgentsApp(App):
             working_dir=Path(self._cwd),
             model_factory=model_factory,
         )
+
         # v1: no auto-summary of parent messages. The TUI stores
         # conversation as Textual widgets, not a flat LangChain message
         # list, so a clean extractor needs careful work. Users who want
         # the sidecar to know about parent state can paste relevant
         # context into the question. See REVIEW.md T-1 for the eventual
         # parent-context auto-summary plan.
-        result = await asyncio.to_thread(controller.run, question)
-        await self._mount_message(AppMessage(result.quote_for_parent()))
+        async def _body() -> None:
+            result = await asyncio.to_thread(controller.run, question)
+            await self._mount_message(AppMessage(result.quote_for_parent()))
+
+        await self._start_model_command(_body(), name="/sidecar")
 
     async def _handle_search_command(self, command: str) -> None:
         """Handle `/search` hybrid codebase search.
@@ -12267,7 +12308,6 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
 
         from bog_agents.middleware.hybrid_search import (
-            HybridSearchMiddleware,
             format_search_results,
             hybrid_search,
         )
@@ -12282,31 +12322,13 @@ class BogAgentsApp(App):
         lowered = raw_arg.lower()
 
         if lowered in {"index", "index --force"}:
+            # The semantic index is built by /index (cmd_index.build_index),
+            # not by an in-process HybridSearchMiddleware — the old lookup on
+            # `self._middleware` never matched (v6 CLI-12).
             force = "--force" in lowered
-            mw = next(
-                (
-                    m
-                    for m in getattr(self, "_middleware", [])
-                    if isinstance(m, HybridSearchMiddleware)
-                ),
-                None,
+            await self._handle_index_command(
+                "/index rebuild" if force else "/index build", echo=False
             )
-            if mw is None:
-                await self._mount_message(
-                    AppMessage(
-                        "HybridSearchMiddleware is not active.\n"
-                        "Add it to your middleware stack to use semantic indexing."
-                    )
-                )
-                return
-            await self._mount_message(
-                AppMessage("Building embedding index… this may take a minute.")
-            )
-            try:
-                result = await asyncio.to_thread(mw._rebuild_index, force=force)
-                await self._mount_message(AppMessage(f"Index built: {result}"))
-            except Exception as exc:
-                await self._mount_message(AppMessage(f"Index build failed: {exc}"))
             return
 
         try:
@@ -12346,153 +12368,70 @@ class BogAgentsApp(App):
             command: Full command string.
         """
         await self._mount_message(UserMessage(command))
+        await self._ensure_background_manager()
 
-        from bog_agents.middleware.worktree import (
-            ParallelWorktreeMiddleware,
-            format_worktree_status,
-        )
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, ParallelWorktreeMiddleware)
-            ),
-            None,
-        )
-        if mw is None:
-            await self._mount_message(
-                AppMessage(
-                    "ParallelWorktreeMiddleware is not active in this session.\n"
-                    "Add `ParallelWorktreeMiddleware(agent_factory=...)` to your middleware stack."
-                )
-            )
-            return
+        # v6 CLI-1: this handler used to look for a ParallelWorktreeMiddleware
+        # on `self._middleware`, which is never assigned (the agent lives in
+        # the server process), so every subcommand printed "not active" for
+        # three cycles. It now fronts the managed background tasks behind
+        # `/agent spawn --worktree`; parsing/rendering live in
+        # worktrees_controller so this stays a thin dispatcher.
+        from bog_agents_cli import worktrees_controller as wt
 
         raw_arg = command.strip()[len("/worktrees") :].strip()
         lowered = raw_arg.lower()
 
-        if not raw_arg or lowered == "status":
-            tasks = mw.get_tasks()
-            if not tasks:
-                await self._mount_message(
-                    AppMessage(
-                        "No parallel worktree tasks running.\n\nUse /worktrees spawn to start tasks."
-                    )
-                )
-                return
-            await self._mount_message(AppMessage(format_worktree_status(tasks)))
+        if not raw_arg or lowered in {"status", "list"}:
+            await self._mount_message(
+                AppMessage(wt.render_worktree_tasks(self._bg_manager.get_all_tasks()))
+            )
             return
 
         if lowered.startswith("cancel "):
             task_id = raw_arg[7:].strip()
-            task = mw.get_task(task_id)
+            task = self._bg_manager.get_status(task_id)
             if task is None:
                 await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
-                return
-            if task.status not in ("pending", "running"):
+            elif self._bg_manager.cancel(task_id):
+                await self._mount_message(
+                    AppMessage(f"Task '{task_id}' cancelled (worker stopped).")
+                )
+            else:
                 await self._mount_message(
                     AppMessage(f"Task '{task_id}' is already {task.status}.")
                 )
-                return
-            task.status = "cancelled"
-            await self._mount_message(AppMessage(f"Task '{task_id}' cancelled."))
             return
 
         if lowered.startswith("merge "):
-            import json as _json
-
-            task_id = raw_arg[6:].strip()
-            task = mw.get_task(task_id)
-            if task is None:
-                await self._mount_message(AppMessage(f"Task '{task_id}' not found."))
-                return
-            # ParallelWorktreeMiddleware sets status "completed" on success — it
-            # never sets "done", so the old check made /worktrees merge
-            # impossible to ever satisfy. (REVIEW.md v2 P1-31.)
-            if task.status != "completed":
+            ref = raw_arg[6:].strip()
+            task = self._bg_manager.get_status(ref)
+            if task is not None and task.status not in {"completed", "done"}:
                 await self._mount_message(
                     AppMessage(
-                        f"Task '{task_id}' is {task.status}, not completed. Cannot merge yet."
+                        f"Task '{ref}' is {task.status}, not completed. Cannot merge yet."
                     )
                 )
                 return
-            from bog_agents.middleware.worktree import merge_with_conflict_report
-
-            repo_root = await self._get_repo_root()
-            if repo_root is None:
-                await self._mount_message(AppMessage("Not in a git repository."))
-                return
-            report = await asyncio.to_thread(
-                merge_with_conflict_report,
-                repo_root,
-                task.branch,
-                "main",
-                False,
+            branch = (
+                task.worktree_branch
+                if task is not None and task.worktree_branch
+                else ref
             )
-            conflicts = report.get("conflicts", [])
-            merged = report.get("merged", False)
-            status_str = (
-                "Merged successfully."
-                if merged
-                else f"Conflicts detected in: {', '.join(conflicts)}"
-            )
-            await self._mount_message(
-                AppMessage(f"Merge task '{task_id}' ({task.branch}):\n{status_str}")
-            )
+            await self._handle_worktree_command(f"/worktree merge {branch}", echo=False)
             return
 
         if lowered.startswith("spawn "):
-            import json as _json
-
-            json_str = raw_arg[6:].strip()
-            try:
-                tasks_input = _json.loads(json_str)
-            except _json.JSONDecodeError as exc:
-                await self._mount_message(
-                    AppMessage(
-                        f"Invalid JSON: {exc}\n\n"
-                        'Usage: /worktrees spawn [{"label": "task1", "prompt": "do X"}, ...]'
-                    )
-                )
+            items, error = wt.parse_spawn_payload(raw_arg[6:])
+            if error:
+                await self._mount_message(AppMessage(error))
                 return
-            if not isinstance(tasks_input, list):
-                await self._mount_message(
-                    AppMessage("Input must be a JSON array of task objects.")
+            for item in items:
+                await self._handle_agent_command(
+                    wt.agent_spawn_command(item), echo=False
                 )
-                return
-
-            repo_root = await self._get_repo_root()
-            if repo_root is None:
-                await self._mount_message(AppMessage("Not in a git repository."))
-                return
-
-            task_ids = []
-            for item in tasks_input:
-                label = item.get("label", "task")
-                prompt = item.get("prompt", "")
-                task = await mw._create_task(
-                    label=label, prompt=prompt, repo_root=repo_root
-                )
-                task_ids.append(task.task_id)
-                self._spawn(mw._run_task_in_worktree(task))
-
-            await self._mount_message(
-                AppMessage(
-                    f"Spawned {len(task_ids)} parallel task(s).\n"
-                    f"Task IDs: {', '.join(task_ids)}\n\n"
-                    "Use /worktrees status to monitor progress."
-                )
-            )
             return
 
-        await self._mount_message(
-            AppMessage(
-                "Usage: /worktrees | /worktrees status | "
-                '/worktrees spawn [{"label":"...", "prompt":"..."}] | '
-                "/worktrees merge <id> | /worktrees cancel <id>"
-            )
-        )
+        await self._mount_message(AppMessage(wt.USAGE))
 
     async def _handle_compress_command(self, command: str) -> None:
         """Handle `/compress` intelligent context compression.
@@ -12509,18 +12448,12 @@ class BogAgentsApp(App):
         """
         await self._mount_message(UserMessage(command))
 
-        from bog_agents.middleware.intelligent_compaction import (
-            IntelligentCompactionMiddleware,
-        )
-
-        mw = next(
-            (
-                m
-                for m in getattr(self, "_middleware", [])
-                if isinstance(m, IntelligentCompactionMiddleware)
-            ),
-            None,
-        )
+        # v6 CLI-12: the TUI's agent runs in the LangGraph server process, so
+        # there is no in-process IntelligentCompactionMiddleware to drive; the
+        # old lookup on `self._middleware` never matched. `mw` stays None and
+        # every branch below takes its honest path (/compact, or a pointer to
+        # the config that governs server-side auto-compaction).
+        mw = None
 
         raw_arg = command.strip()[len("/compress") :].strip().lower()
 
@@ -12590,7 +12523,11 @@ class BogAgentsApp(App):
             toggle = raw_arg[5:].strip()
             if mw is None:
                 await self._mount_message(
-                    AppMessage("IntelligentCompactionMiddleware not active.")
+                    AppMessage(
+                        "Auto-compaction runs server-side and is not toggled from the TUI; "
+                        "use /compact to compact now, or adjust the summarization settings "
+                        "in ~/.bog-agents/config.toml."
+                    )
                 )
                 return
             if toggle == "on":
@@ -12606,7 +12543,10 @@ class BogAgentsApp(App):
         if raw_arg.startswith("threshold "):
             if mw is None:
                 await self._mount_message(
-                    AppMessage("IntelligentCompactionMiddleware not active.")
+                    AppMessage(
+                        "The auto-compaction threshold is a server-side setting; adjust the "
+                        "summarization settings in ~/.bog-agents/config.toml and /reload."
+                    )
                 )
                 return
             pct_str = raw_arg[10:].strip().rstrip("%")
@@ -13557,7 +13497,13 @@ class BogAgentsApp(App):
             # A team session runs N auto-approving agents for minutes+; run it
             # as a tracked worker so the TUI stays responsive and Esc/Ctrl+C
             # can stop it (v5 CLIC-2).
-            self._start_tracked_session(self._run_team_run_task(req), name="/team run")
+            workers = len(req.members or ("worker-1", "worker-2"))
+            preflight_start(
+                self,
+                agents=workers,
+                name="/team run",
+                start=lambda: self._run_team_run_task(req),
+            )
             return
 
         if action == "whoami":
@@ -14657,6 +14603,8 @@ class BogAgentsApp(App):
         Args:
             message: The user's message
         """
+        if await gate_turn(self):
+            return
         # Intercept daemon registration confirmation for /build pipeline
         if self._build_pending and self._build_pending.get("awaiting_daemon_confirm"):
             await self._mount_message(UserMessage(message))
@@ -15054,6 +15002,10 @@ class BogAgentsApp(App):
             # cleanup (which drains the queue last).
             if isinstance(turn_stats, SessionStats):
                 self._session_stats.merge(turn_stats)
+                from bog_agents_cli.cost_controller import record_turn_spend
+
+                record_turn_spend(turn_stats, cwd=self._cwd)
+                await mount_changes_tray(self, turn_stats)
 
             if self._auto_commit and turn_stats is not None:
                 from bog_agents_cli.auto_commit import run_auto_commit
@@ -15169,6 +15121,37 @@ class BogAgentsApp(App):
         self._turns.begin_agent(worker)
         return worker
 
+    async def _start_model_command(
+        self, coro: Coroutine[Any, Any, None], *, name: str
+    ) -> bool:
+        """Run a model-calling command body as a tracked session, or refuse.
+
+        v6 CLI-3: slash commands are dispatched inline on the App message
+        pump, so a handler that awaits a long model call freezes every key
+        event (Esc included) and is invisible to TurnManager — a prompt typed
+        meanwhile starts a concurrent turn against the same files. Every
+        command whose body calls a model goes through here: refused while a
+        turn or session is in flight, otherwise handed to
+        `_start_tracked_session` so Esc/Ctrl+C cancel it and submissions queue.
+
+        Args:
+            coro: The command body (model calls plus result rendering).
+            name: User-facing command name for guard/interrupt messages.
+
+        Returns:
+            True when the session was started, False when it was refused.
+        """
+        if self._turns.busy:
+            coro.close()
+            await self._mount_message(
+                ErrorMessage(
+                    f"Cannot start {name} while another turn or session is in flight."
+                )
+            )
+            return False
+        self._start_tracked_session(coro, name=name)
+        return True
+
     async def _cleanup_agent_task(self) -> None:
         """Clean up after agent task completes or is cancelled.
 
@@ -15189,7 +15172,11 @@ class BogAgentsApp(App):
         # Set synchronously up front (no await in between) so the common path
         # restores immediately; the finally re-asserts this defensively.
         self._turns.end_agent()
+        from bog_agents_cli.operator_mode import operator_turn_finished
+        from bog_agents_cli.session_controller import turn_finished
 
+        turn_finished(self)
+        operator_turn_finished(self)
         try:
             # Remove spinner if present
             await self._set_spinner(None)
@@ -15941,6 +15928,7 @@ class BogAgentsApp(App):
 
         # If agent is running, interrupt it and discard queued messages
         if self._agent_running and self._agent_worker:
+            dispatch_hook_fire_and_forget("Interrupt", {"reason": "escape"})
             self._cancel_worker(self._agent_worker)
             return
 
@@ -16044,6 +16032,14 @@ class BogAgentsApp(App):
         Args:
             mode: One of `default`, `accept-edits`, `plan`, `bypass`, `paranoid`.
         """
+        from bog_agents_cli.trust_controller import mode_refusal
+
+        refusal = mode_refusal(
+            mode, restricted=self._restricted, profile_name=self._active_profile_name
+        )
+        if refusal:
+            self.notify(refusal, severity="warning")
+            return
         plan_was = self._plan_mode_enabled
         self._auto_approve = mode == "bypass"
         self._auto_mode = mode == "accept-edits"
@@ -17292,6 +17288,8 @@ class BogAgentsApp(App):
         Args:
             command: Full slash command string.
         """
+        if await self._repo_config_blocked():
+            return
         from bog_agents_cli.pr_cli import (
             PRInfo,
             generate_conflict_resolution_prompt,
@@ -17594,6 +17592,18 @@ class BogAgentsApp(App):
         if self._model_switching:
             await self._mount_message(AppMessage("Model switch already in progress."))
             return
+        from bog_agents_cli.hook_decisions import (
+            announce_model_switch,
+            model_switch_refusal,
+        )
+
+        refusal = await asyncio.to_thread(
+            model_switch_refusal, self._cwd, self._model_override or "", model_spec
+        )
+        if refusal:
+            msg = f"Model switch blocked by a PreModelSwitch hook: {refusal}"
+            await self._mount_message(ErrorMessage(msg))
+            return
 
         from bog_agents_cli.model_config import (
             get_credential_env_var,
@@ -17675,6 +17685,7 @@ class BogAgentsApp(App):
             # middleware swaps the model per-invocation — no graph recreation.
             self._model_override = display
             self._model_params_override = extra_kwargs
+            announce_model_switch(display)
 
             if self._status_bar:
                 self._status_bar.set_model(
@@ -17737,7 +17748,15 @@ class BogAgentsApp(App):
                 model_spec = f"{provider}:{model_spec}"
 
         if await asyncio.to_thread(save_default_model, model_spec):
-            await self._mount_message(AppMessage(f"Default model set to {model_spec}"))
+            from bog_agents_cli.config import price_hint_for_spec
+
+            hint = price_hint_for_spec(model_spec)
+            await self._mount_message(
+                AppMessage(
+                    f"Default model set to {model_spec}"
+                    + (f"\n  {hint}" if hint else "")
+                )
+            )
         else:
             await self._mount_message(
                 ErrorMessage(
@@ -17863,6 +17882,8 @@ async def run_textual_app(
         # Guarantee server cleanup regardless of how the app exits.
         # Covers both the pre-started server_proc path and the deferred
         # server_kwargs path (where the background worker sets _server_proc).
+        if app._session_queue is not None:
+            app._session_queue.close(detached=app._detached)
         if app._server_proc is not None:
             app._server_proc.stop()
 

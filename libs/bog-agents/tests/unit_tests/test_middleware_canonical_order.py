@@ -269,3 +269,36 @@ class TestCanonicalMiddlewareOrder:
         assert "DLPMiddleware" in names, names
         assert "AuditTrailMiddleware" in names, names
         assert names.index("DLPMiddleware") < names.index("AuditTrailMiddleware"), names
+
+
+def test_custom_street_sweeper_replaces_builtin_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v6 SDK-3: a caller-supplied sweeper takes the canonical slot, not the tail.
+
+    The CLI attaches a long-lived `StreetSweeperMiddleware` singleton through
+    `middleware=`. With `enable_street_sweeper=True` the built-in instance is
+    replaced *in place* by name, so the singleton runs inside CostTracker and
+    outside Summarization exactly like the FeatureConfig route. Without the
+    flag it would be spliced after the core stack (inside summarization).
+    """
+    from bog_agents import graph as graph_module
+    from bog_agents.middleware.street_sweeper import StreetSweeperMiddleware
+
+    captured: list[Any] = []
+    original = graph_module._validate_middleware_ordering
+
+    def _spy(middleware_list: list[Any]) -> None:
+        captured.extend(middleware_list)
+        return original(middleware_list)
+
+    monkeypatch.setattr(graph_module, "_validate_middleware_ordering", _spy)
+    mine = StreetSweeperMiddleware(enabled=False)
+    create_agent(
+        model="claude-sonnet-4-20250514",
+        config=FeatureConfig(enable_street_sweeper=True, enable_cost_tracking=True),
+        middleware=[mine],
+    )
+    sweepers = [m for m in captured if isinstance(m, StreetSweeperMiddleware)]
+    assert sweepers == [mine], "the built-in sweeper must be replaced by the caller's instance, not kept alongside it"
+    names = [type(m).__name__ for m in captured]
+    assert names.index("CostTrackerMiddleware") < names.index("StreetSweeperMiddleware")
+    assert names.index("StreetSweeperMiddleware") < names.index("_BogAgentsSummarizationMiddleware")

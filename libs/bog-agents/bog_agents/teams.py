@@ -149,6 +149,54 @@ class TaskLedger:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class Attachment:
+    """A file, directory (zip) or patch staged for a teammate (ROADMAP #76).
+
+    Attributes:
+        kind: `file`, `dir` (a zip) or `patch` (a `git diff`).
+        name: File name in the exchange directory.
+        path: Absolute path of the staged copy.
+        sha256: `sha256:<hex>` of the staged bytes (content address).
+        size: Staged size in bytes.
+        redactions: DLP redactions applied before staging.
+        source: Where it came from (path or `git diff HEAD`).
+    """
+
+    kind: str
+    name: str
+    path: str
+    sha256: str
+    size: int = 0
+    redactions: int = 0
+    source: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """JSON-ready mapping."""
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "path": self.path,
+            "sha256": self.sha256,
+            "size": self.size,
+            "redactions": self.redactions,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> Attachment:
+        """Inverse of `to_dict` (tolerant of missing optional keys)."""
+        return cls(
+            kind=str(data.get("kind", "file")),
+            name=str(data.get("name", "")),
+            path=str(data.get("path", "")),
+            sha256=str(data.get("sha256", "")),
+            size=int(data.get("size", 0) or 0),  # type: ignore[call-overload]
+            redactions=int(data.get("redactions", 0) or 0),  # type: ignore[call-overload]
+            source=str(data.get("source", "")),
+        )
+
+
 @dataclass
 class Message:
     """One addressed message between teammates."""
@@ -157,6 +205,7 @@ class Message:
     recipient: str  # a member name, or "@all" for a broadcast
     body: str
     ts: float = field(default_factory=time.time)
+    attachments: tuple[Attachment, ...] = ()
 
 
 class Mailbox:
@@ -175,9 +224,9 @@ class Mailbox:
         self._consumed: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def send(self, sender: str, recipient: str, body: str) -> Message:
-        """Post a message; returns the stored `Message`."""
-        msg = Message(sender=sender, recipient=recipient, body=body)
+    def send(self, sender: str, recipient: str, body: str, *, attachments: tuple[Attachment, ...] = ()) -> Message:
+        """Post a message (optionally carrying attachments); returns the stored `Message`."""
+        msg = Message(sender=sender, recipient=recipient, body=body, attachments=tuple(attachments))
         with self._lock:
             self._messages.append(msg)
         return msg

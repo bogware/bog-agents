@@ -6,10 +6,11 @@ A VS Code extension that brings the Bog Agents coding agent right into your edit
 
 ## Features
 
-- **Chat Panel** — conversational AI assistant in the sidebar
-- **Context Menu Actions** — right-click to review, explain, or fix selected code
-- **Keyboard Shortcut** — `Ctrl+Shift+A` / `Cmd+Shift+A` to open chat
+- **Sidebar Chat** — the Bog Agents view in the activity bar; every prompt gets its own reply bubble
+- **Chat Panel** — the same chat as an editor tab (`Ctrl+Shift+A` / `Cmd+Shift+A`)
+- **Context Menu Actions** — right-click to review, explain, or fix selected code; the reply lands in whichever chat is open
 - **Configurable Model** — use any provider:model supported by Bog Agents
+- **Auto-approve** — opt in to let the CLI run tool calls without asking (`bog-agents.autoApprove`)
 
 ## Requirements
 
@@ -20,16 +21,22 @@ A VS Code extension that brings the Bog Agents coding agent right into your edit
 
 ### From VS Code Marketplace
 
-Search for "Bog Agents" in the VS Code extensions panel.
+Search for "Bog Agents" in the VS Code extensions panel (publisher `bog-agents`).
 
-### From VSIX
+### From a CI build
+
+Every pull request's `VS Code extension` job attaches `bog-agents-vscode.vsix`
+as a workflow artifact — download it and run
+`code --install-extension bog-agents-vscode.vsix`.
+
+### From source
 
 ```bash
 cd libs/vscode-extension
 npm install
 npm run compile
 npx @vscode/vsce package
-code --install-extension bog-agents-vscode-0.1.0.vsix
+code --install-extension bog-agents-vscode-0.2.0.vsix
 ```
 
 ## Extension Settings
@@ -37,7 +44,7 @@ code --install-extension bog-agents-vscode-0.1.0.vsix
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `bog-agents.model` | `anthropic:claude-sonnet-4-6` | Default model (provider:model format) |
-| `bog-agents.autoApprove` | `false` | Auto-approve tool calls |
+| `bog-agents.autoApprove` | `false` | Pass `--auto-approve` so tool calls run without asking. The chat runs the CLI in `--print` mode, which cannot answer approval prompts, so with this off a tool call that needs approval ends the turn. |
 | `bog-agents.cliPath` | (auto-detect) | Path to bog-agents CLI binary |
 
 ## Commands
@@ -62,7 +69,17 @@ npm run lint       # lint
 
 ## Publishing
 
+Releases go through the manual `VS Code Extension Release` workflow
+(`.github/workflows/vscode-extension.yml`): run it with the version to
+release and `publish = true`. It needs a `VSCE_PAT` repository secret — a
+Marketplace Personal Access Token for the `bog-agents` publisher — and fails
+before publishing if the manifest is not marketplace-ready (a PNG icon, a
+`LICENSE` file and a clean `npm run lint` are all checked on every PR by the
+`VS Code extension` CI job).
+
+To publish by hand instead:
+
 ```bash
-npx @vscode/vsce login <publisher-name>
+npx @vscode/vsce login bog-agents
 npx @vscode/vsce publish
 ```

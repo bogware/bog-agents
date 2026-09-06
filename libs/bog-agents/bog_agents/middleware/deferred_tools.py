@@ -49,6 +49,9 @@ if TYPE_CHECKING:
     from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
 
 
+_METATOOL_NAMES: frozenset[str] = frozenset({"tool_search", "select"})
+
+
 def _tool_name(tool: BaseTool | dict[str, Any]) -> str | None:
     """Extract the tool name from a `BaseTool` or dict tool."""
     if isinstance(tool, dict):
@@ -68,6 +71,8 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
             is resolved lazily from the first model request.
         keywords: Optional name → keyword list used to enrich `tool_search`
             matching beyond the tool's own name and description.
+        keep_names: Allowlist mode (ROADMAP #54 `--mini`): defer *every* tool
+            except these and the metatools. Composes with `deferred_names`.
     """
 
     def __init__(
@@ -75,8 +80,11 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         *,
         deferred_names: frozenset[str] = frozenset(),
         keywords: dict[str, list[str]] | None = None,
+        keep_names: frozenset[str] = frozenset(),
     ) -> None:
         self._deferred_names = frozenset(deferred_names)
+        self._keep_names = frozenset(keep_names)
+        self._enabled = bool(self._deferred_names or self._keep_names)
         self._extra_keywords = {name: tuple(words) for name, words in (keywords or {}).items()}
         self._activated: set[str] = set()
         self._registry: dict[str, BaseTool] = {}
@@ -86,9 +94,15 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
     # Metatools
     # ------------------------------------------------------------------
 
+    def _is_deferred(self, name: str) -> bool:
+        """Whether `name` is hidden until activated (denylist entry, or not on the allowlist)."""
+        if name in self._deferred_names:
+            return True
+        return bool(self._keep_names) and name not in self._keep_names and name not in _METATOOL_NAMES
+
     def _build_metatools(self) -> list[BaseTool]:
         """Build the `tool_search` and `select` metatools (empty when idle)."""
-        if not self._deferred_names:
+        if not self._enabled:
             return []
 
         def tool_search(runtime: ToolRuntime[None, Any], query: str, limit: SemanticNumber = 10) -> str:
@@ -149,7 +163,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
             if name is None:
                 visible.append(tool)
                 continue
-            if name in self._deferred_names and name not in self._activated:
+            if self._is_deferred(name) and name not in self._activated:
                 continue
             if name in seen:
                 continue
@@ -163,7 +177,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any]:
         """Hide deferred tool schemas from the model before it is called."""
-        if not self._deferred_names:
+        if not self._enabled:
             return handler(request)
         self._ensure_registry(request)
         return handler(request.override(tools=self._visible_tools(request)))
@@ -174,7 +188,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any]:
         """Async variant of `wrap_model_call`."""
-        if not self._deferred_names:
+        if not self._enabled:
             return await handler(request)
         self._ensure_registry(request)
         return await handler(request.override(tools=self._visible_tools(request)))
@@ -189,7 +203,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ToolCallRequest], ToolMessage | Any],
     ) -> ToolMessage | Any:
         """Intercept `select:<name>` calls and route them to activation."""
-        if not self._deferred_names:
+        if not self._enabled:
             return handler(request)
         content = self._intercept_select_call(request)
         if content is not None:
@@ -202,7 +216,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Any]],
     ) -> ToolMessage | Any:
         """Async variant of `wrap_tool_call`."""
-        if not self._deferred_names:
+        if not self._enabled:
             return await handler(request)
         content = self._intercept_select_call(request)
         if content is not None:
@@ -261,7 +275,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
             )
         lines = []
         for tool in hits[:limit]:
-            state = "deferred" if tool.name in self._deferred_names else "always-visible"
+            state = "deferred" if self._is_deferred(tool.name) else "always-visible"
             if tool.name in self._activated:
                 state = "active"
             lines.append(f"- {tool.name} [{state}]: {tool.description}")
@@ -288,7 +302,7 @@ class DeferredToolsMiddleware(AgentMiddleware[Any, Any, Any]):
         rendered = json.dumps(schema, indent=2, default=str)
         always = (
             "This tool is always visible; its schema is shown here for reference."
-            if name not in self._deferred_names
+            if not self._is_deferred(name)
             else "It will now be included in your available tools on every turn."
         )
         return f"Tool {name!r} is active. {always}\n\n{name} — {tool.description}\n\nSchema:\n{rendered}"

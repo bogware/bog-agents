@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from bog_agents.git_env import hardened_git_env
+
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
 
@@ -403,11 +405,13 @@ def _git(args: list[str], cwd: str | None) -> str:
             text=True,
             timeout=5,
             check=False,
-            env={
-                **os.environ,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_OPTIONAL_LOCKS": "0",
-            },
+            env=hardened_git_env(
+                {
+                    **os.environ,
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                }
+            ),
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""

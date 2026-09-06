@@ -1096,6 +1096,9 @@ class TestDiscoverMcpConfigs:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
 
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1120,6 +1123,9 @@ class TestDiscoverMcpConfigs:
         """Empty list when no config files exist."""
         project = tmp_path / "project"
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: project,
@@ -1142,6 +1148,10 @@ class TestDiscoverMcpConfigs:
         project.mkdir()
 
         monkeypatch.setattr(Path, "home", lambda: home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: project,
@@ -1161,6 +1171,10 @@ class TestDiscoverMcpConfigs:
         cfg.write_text('{"mcpServers": {}}')
 
         monkeypatch.setattr(Path, "home", lambda: home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: project,
@@ -1181,6 +1195,10 @@ class TestDiscoverMcpConfigs:
         cfg.write_text('{"mcpServers": {}}')
 
         monkeypatch.setattr(Path, "home", lambda: home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: project,
@@ -1208,6 +1226,10 @@ class TestDiscoverMcpConfigs:
         proj_root_cfg.write_text('{"mcpServers": {}}')
 
         monkeypatch.setattr(Path, "home", lambda: home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: project,
@@ -1222,6 +1244,9 @@ class TestDiscoverMcpConfigs:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda _start_path=None: None,
@@ -1409,6 +1434,9 @@ class TestResolveAndLoadMcpTools:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
 
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1445,6 +1473,9 @@ class TestResolveAndLoadMcpTools:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
 
         project_root = tmp_path / "project"
         project_root.mkdir()
@@ -1569,8 +1600,10 @@ class TestClassifyDiscoveredConfigs:
     """Tests for classify_discovered_configs."""
 
     def test_user_config_classified(self) -> None:
-        """Paths under ~/.bog-agents/ are classified as user."""
-        user_path = Path.home() / ".bog-agents" / ".mcp.json"
+        """Paths under the bog home are classified as user."""
+        from bog_agents_cli._env_vars import bog_agents_home
+
+        user_path = bog_agents_home() / ".mcp.json"
         user, project = classify_discovered_configs([user_path])
         assert user == [user_path]
         assert project == []
@@ -1585,7 +1618,9 @@ class TestClassifyDiscoveredConfigs:
 
     def test_mixed_classification(self, tmp_path: Path) -> None:
         """Mixed paths are split correctly."""
-        user_path = Path.home() / ".bog-agents" / ".mcp.json"
+        from bog_agents_cli._env_vars import bog_agents_home
+
+        user_path = bog_agents_home() / ".mcp.json"
         project_path = tmp_path / ".mcp.json"
         project_path.touch()
         user, project = classify_discovered_configs([user_path, project_path])

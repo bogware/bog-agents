@@ -1,0 +1,625 @@
+{
+ "bucket": "Cursor, Amp, Grok Build, Warp",
+ "competitors": [
+  {
+   "name": "Cursor (CLI, cloud agents, Origin, Router, Bugbot, Debug Mode, Blame)",
+   "snapshot": "Now a SpaceX subsidiary (deal closed 2026-08-14, $60B all-stock). The last 90 days moved Cursor from 'IDE with agents' to 'always-on agent platform': Cursor Router (Jul 22) replaces Auto with a 3-objective classifier-based model router; cloud agents gained event subscriptions, /goal, isolated-VM subagents and custom modes (Aug 19); Builds pre-bake environments (Aug 13); Origin is a first-party git forge with PRs + GitHub sync (Aug 17); cloud agents no longer need any SCM (Aug 27); and Self-Hosted Machines (Sep 2) keep tool execution inside the customer network while inference/planning stay in Cursor cloud. The CLI (`agent`) got Debug Mode (/debug), /btw, /rewind-by-default, multi-dir workspaces, steering-without-interrupt, full subagent transcripts, /goal, hardened git, timed approvals, and `agent persist` detach/attach (Aug 26). Bugbot is 3x faster (~90s) on Composer 2.5 with a pre-push /review that dedupes against already-reviewed diffs (Jun 10). Grok 4.6 (500k ctx) shipped in Cursor Aug 12-13.",
+   "notable_features": [
+    {
+     "feature": "Cursor Router (Auto mode: Intelligence / Balance / Cost)",
+     "description": "Classifier trained on 600k+ live requests routes each prompt to a frontier or cheap model per a user/admin-chosen objective; on by default for Teams; Cursor claims above-Fable satisfaction at 68% lower cost (Aug 6 follow-up). Available desktop/web/iOS/CLI/SDK.",
+     "source_url": "https://cursor.com/changelog/router",
+     "date": "2026-07-22"
+    },
+    {
+     "feature": "Cloud Agents + Cursor Harness: subscriptions, /goal, isolated subagents, custom modes, non-interrupting steering",
+     "description": "Agents subscribe to event sources (the PR they opened, a Slack thread, a schedule) and wake on events until the goal is met; subagents run on separate VMs with clean context; any skill can be pinned as a persistent mode (Option/Alt+Enter); mid-turn messages queue until the next safe tool boundary.",
+     "source_url": "https://cursor.com/changelog/08-19-26",
+     "date": "2026-08-19"
+    },
+    {
+     "feature": "Self-Hosted Machines (worker pools, hibernation, computer use on Linux/Mac)",
+     "description": "`agent worker start` registers a machine over an outbound-only HTTPS connection; team pools scale with demand; idle workers snapshot+hibernate and restore by worker ID; sandbox providers include AWS Lambda, Cloudflare, Coder, Daytona, E2B, Modal, Namespace, Vercel. Windows workers not mentioned.",
+     "source_url": "https://cursor.com/blog/self-hosted-machines",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "Cursor Origin code hosting (early beta) + Continuity storage",
+     "description": "First-party git forge: repos, PRs with bidirectional GitHub comment sync, agent-native code browsing, Vercel/Depot/Buildkite integrations; Pro/Teams/Enterprise only. Aug 18 'Continuity' S3-backed WAL claims 120+ pushes/s.",
+     "source_url": "https://cursor.com/docs/origin",
+     "date": "2026-08-17"
+    },
+    {
+     "feature": "Cloud Agents start 3x faster with Builds",
+     "description": "Pre-configured environment images built in the background with snapshots, build history/logs in the dashboard; default for all environments from Aug 17 at no extra cost.",
+     "source_url": "https://releasebot.io/updates/cursor",
+     "date": "2026-08-13"
+    },
+    {
+     "feature": "Start from scratch without a repo",
+     "description": "Cloud Agents no longer require GitHub/SCM; prompt first, save to an Origin repo, preview via port-forwarding in the browser, publish to Vercel.",
+     "source_url": "https://cursor.com/changelog",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "CLI: persistent sessions (`agent persist` / /detach / attach) and self-hosted worker desktop sharing",
+     "description": "Runs survive terminal close or disconnect; `agent persist list|stop|--resume`; hibernated workers wake via `--spawn` hook; `--computer-use --share-desktop` shares the agent's managed desktop.",
+     "source_url": "https://cursor.com/docs/cli/changelog",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "CLI: steering, subagent transcripts, /goal, sticky skills, hardened git, timed approvals",
+     "description": "Enter queues at safe boundaries (second Enter interrupts); single-turn runs drain delegated subagents before exit; /goal tracks durable goals across idle/headless runs; hardened git ignores repository-controlled config during agent ops; sandboxed git-over-SSH via SOCKS; mode-switch approvals auto-reject after 15s; inline terminal image previews.",
+     "source_url": "https://cursor.com/docs/cli/changelog",
+     "date": "2026-08-11"
+    },
+    {
+     "feature": "CLI: Auto routing default, multi-directory workspaces, /rewind default, /add-dir /save-workspace",
+     "description": "Fresh installs default to Auto; `/opus` `/composer` instant switches; `--workspace` scoped sessions; per-conversation prompt history; model-only skills hidden via `user-invocable: false`.",
+     "source_url": "https://cursor.com/docs/cli/changelog",
+     "date": "2026-07-06"
+    },
+    {
+     "feature": "CLI: /usage dashboard, --trust in interactive sessions, subagent checkpoints, MCP scope consolidation, QR login",
+     "description": "Included-usage meters and billing-cycle dates in the CLI; enterprise pooled spend charts; subagents persist checkpoints so resume restores context; team network allowlists accept local origins with ports.",
+     "source_url": "https://cursor.com/docs/cli/changelog",
+     "date": "2026-07-20"
+    },
+    {
+     "feature": "Bugbot 3x faster + /review pre-push with diff dedupe + incremental review + effort levels",
+     "description": "~90s reviews (from ~5 min), 0.62 bugs/run, ~22% cheaper on Composer 2.5; `/review`, `/review-bugbot`, `/review-security`; Bugbot recognizes an already-reviewed diff on PR open and skips; 'only what's new since last review'; Default/High/Custom natural-language effort.",
+     "source_url": "https://cursor.com/changelog/bugbot-updates-june-2026",
+     "date": "2026-06-10"
+    },
+    {
+     "feature": "CLI Debug Mode (/debug) and /btw",
+     "description": "Hypothesis generation + inserted log statements + runtime data before a targeted fix; /btw side questions without derailing the run (shipped earlier in 2026; still the CLI's headline debugging story).",
+     "source_url": "https://cursor.com/changelog/04-14-26",
+     "date": "2026-04-14"
+    },
+    {
+     "feature": "Google Workspace plugins (Gmail, Drive, Calendar) for agents",
+     "description": "Agents read/draft/send mail, manage Drive files and calendar via Marketplace plugins.",
+     "source_url": "https://cursor.com/changelog/page/2",
+     "date": "2026-08-03"
+    },
+    {
+     "feature": "Cursor Start plan (India, INR 649/mo) and iPad app",
+     "description": "Localized low-price plan with Grok 4.5 + Composer + cloud agents; iPad app with pinned multi-agent sidebars and full PR review.",
+     "source_url": "https://cursor.com/changelog/page/2",
+     "date": "2026-07-28"
+    },
+    {
+     "feature": "Cursor in Slack: plan-before-start, multi-repo, cross-channel",
+     "description": "Slack agent shares a plan first and supports multi-repo environments.",
+     "source_url": "https://cursor.com/changelog/page/2",
+     "date": "2026-07-17"
+    }
+   ],
+   "business_shifts": "SpaceX acquisition closed 2026-08-14 ($60B stock; cursor.com/blog/joining-spacex). OpenAI notified SpaceX it will stop supplying models to Cursor on 2026-11-12 and will not ship future models (CNBC 2026-08-29; Cursor says ~5% of traffic); Anthropic publicly committed to keep Claude in Cursor and add compute (Cryptopolitan / the-decoder, late Aug). Pricing: Hobby free, Pro $20, Pro+ $60, Ultra $200, Teams $40/user, Teams Premium (5x agent usage at 3x price, from Jun 1 for new customers / Jul 1 renewals, per lowcode.agency), Enterprise; every plan is included-usage + on-demand billed in arrears (cursor.com/pricing). Cursor Start INR 649/mo India-only (Jul 28). Origin is paid-plans-only. Router is on-by-default for Teams. Self-hosted machines + Origin + 'no repo needed' together push Cursor toward owning the whole loop (forge + runner + router). Not open source.",
+   "user_sentiment": "Praise: Router's cost cut, Bugbot speed, /debug, persistent sessions, and the always-on agent story ('long agent lifecycle' essays like forum.cursor.com/t/is-cursor-becoming-the-ios-for-agents/170531). Complaints: credit/usage-based billing remains the dominant grievance (quota exhausted in <24h, $131/month 700% jumps, Teams $40 seat with only $20 usage — dev.to/aellman usage-tracker post, Trustpilot); post-acquisition distrust about model neutrality and lock-in (Origin namespace can't be changed after claim; OpenAI pull-out), and worry that Anthropic/OpenAI spend will be structurally squeezed toward Grok (fireup.pro, developersdigest). Windows is absent from the self-hosted-machine story."
+  },
+  {
+   "name": "Sourcegraph Amp (ampcode.com)",
+   "snapshot": "Amp rebuilt itself around 'orbs' (remote 16-core/32GB machines, $1.66/h by the minute) and shipped roughly 35 changes in the window: agents run in orbs (Jun 30), agent-to-agent spawning with messages and file transfer (Jul 17), event-driven orbs via durable webhooks (Jul 23), self-scheduling agents (Jul 21), multiplayer orbs (Jul 22), Slack (Jul 20), Puck meta-agent home base + voice (Jul 20 / Aug 18), Portals live-preview URLs (Aug 6/23), MCP in orbs (Aug 19), multi-repo projects (Aug 27), intelligently ordered diffs (Sep 1), and an interactive Linux Desktop tab in every orb (Sep 4). The Dial (Jul 9) replaced smart/deep/rush with low/medium/high/ultra, each a fixed model+reviewer pairing (low = GLM-5.2 open model with a GPT-5.6 reviewer; ultra = Claude Fable 5/5.1 with a GPT-5.6 reviewer). Subscriptions arrived Jul 18 ($20 Megawatt / $200 Gigawatt) with linked-ChatGPT/SuperGrok allowances counting instead of Amp credits. Amp Free is closed. The editor extension was discontinued in Feb; the TUI sidebar was removed Aug 27; Amp is CLI + web + orbs.",
+   "notable_features": [
+    {
+     "feature": "The Dial (low / medium / high / ultra)",
+     "description": "Capability tiers bundle model + reasoning effort + a second-model reviewer per tier; replaces smart/deep/rush; deprecated modes reinstallable as plugins (@amp/smart-classic); low runs an open-weight model (GLM-5.2).",
+     "source_url": "https://ampcode.com/news/the-dial",
+     "date": "2026-07-09"
+    },
+    {
+     "feature": "Agents in orbs / Agents, Anywhere",
+     "description": "Every new thread can get a fresh remote orb with code, plugins and tools; agents can be launched remotely from anywhere `amp` runs; orbs come in selectable sizes; OIDC workload identity for secrets (Jul 14).",
+     "source_url": "https://ampcode.com/news/agents-in-orbs",
+     "date": "2026-06-30"
+    },
+    {
+     "feature": "From Agent to Agent: spawn, message, transfer files across threads/machines",
+     "description": "Agents spawn agents in orbs, local or remote machines, send messages and files to each other, fan out parallel browser tests, pull files from prior projects.",
+     "source_url": "https://ampcode.com/news/from-agent-to-agent",
+     "date": "2026-07-17"
+    },
+    {
+     "feature": "Event-driven orbs (durable per-thread webhooks)",
+     "description": "`amp.createWebhook` registers a stable endpoint per thread that survives reloads; GitHub/Linear/Discord/monitoring/deploy/security-scan events start a fresh orb thread with verified repo/event/actor metadata.",
+     "source_url": "https://ampcode.com/news/event-driven-orbs",
+     "date": "2026-07-23"
+    },
+    {
+     "feature": "Right on Schedule: agents set their own schedules and resume",
+     "description": "Agents can schedule themselves to wake and continue work automatically (chronicle summary; detail page 404 on fetch).",
+     "source_url": "https://ampcode.com/chronicle",
+     "date": "2026-07-21"
+    },
+    {
+     "feature": "Subscriptions (Megawatt $20 / Gigawatt $200) + linked third-party subscriptions",
+     "description": "$20: 750 orb-hours + $20 agent usage, low/medium (high with linked ChatGPT); $200: 1,000 xxlarge orb-hours + $200 usage, all modes incl. ultra; linked ChatGPT / X Premium+ / SuperGrok allowances used with no per-token fee; PAYG still available.",
+     "source_url": "https://ampcode.com/news/subscriptions",
+     "date": "2026-07-18"
+    },
+    {
+     "feature": "Puck meta-agent + Talk to Puck (voice)",
+     "description": "Site-wide home-base agent that spawns agents in orbs/repos, finds prior work, archives threads, runs batch jobs; Aug 18 added real-time voice control.",
+     "source_url": "https://ampcode.com/news/meet-puck",
+     "date": "2026-07-20"
+    },
+    {
+     "feature": "Explain Usage (natural-language token/credit/orb accounting)",
+     "description": "Ask Puck 'which threads used the most tokens today'; per-thread usage via `amp usage --details` and `amp threads usage`.",
+     "source_url": "https://ampcode.com/news/explain-usage",
+     "date": "2026-08-21"
+    },
+    {
+     "feature": "Portals into orbs + friendly shareable hostnames",
+     "description": "Live-reloading preview environments for agent-built apps exposed as shareable URLs with custom hostnames (Aug 23).",
+     "source_url": "https://ampcode.com/news/portals",
+     "date": "2026-08-06"
+    },
+    {
+     "feature": "Multiplayer orbs, Space to Talk, thread tagging",
+     "description": "Teammates co-drive an orb (Jul 22); live team chat inside every thread (Aug 31); tag a teammate into a thread (Aug 19).",
+     "source_url": "https://ampcode.com/news/multiplayer",
+     "date": "2026-07-22"
+    },
+    {
+     "feature": "Global plugins and skills; MCP in orbs; multi-repo projects; setup without a commit",
+     "description": "Plugins/skills shared and remixed across workspaces (Aug 11); MCP servers connect to orbs and Puck (Aug 19); a project grants the agent every repo it needs (Aug 27); orb setup runs pre/post-clone with no Amp files committed (Aug 25).",
+     "source_url": "https://ampcode.com/news/multi-repo-projects",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "Intelligently ordered diffs",
+     "description": "Review view ranks files that best explain the change first and mutes tests/fixtures/generated code; toggle vs alphabetical; blue indicator when a new ordering is available after the diff updates.",
+     "source_url": "https://ampcode.com/news/intelligently-ordered-diffs",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Fable 5.1 powers ultra: proof-of-work outputs",
+     "description": "Runs for hours, gives proof (side-by-side video, metrics, screenshots) and iterates when the proof doesn't hold; 35% cheaper threads / 75% cheaper cache reads.",
+     "source_url": "https://ampcode.com/news/fable-5.1",
+     "date": "2026-09-01"
+    },
+    {
+     "feature": "Desktop in orbs",
+     "description": "High-resolution interactive Linux desktop tab in every orb thread for visual verification, GUI apps (LibreOffice, CAD), Android/Linux dev, computer use.",
+     "source_url": "https://ampcode.com/news/desktop",
+     "date": "2026-09-04"
+    },
+    {
+     "feature": "Attach Anything; So Long TUI Sidebar",
+     "description": "Upload videos, logs, PDFs, datasets into threads (Aug 4); the TUI sidebar was removed in favor of a simpler terminal surface (Aug 27).",
+     "source_url": "https://ampcode.com/chronicle",
+     "date": "2026-08-04"
+    }
+   ],
+   "business_shifts": "Pivot from pure pay-as-you-go to subscriptions (Jul 18) and from a free tier to none: Amp Free was throttled from May 23 and is now closed to new signups (ampcode.com/news/amp-free-is-full-for-now; pricing page lists no free tier). $10/month education discount (Aug 18). Enterprise adds SSO/SCIM/minimal retention with a 50% markup on PAYG. Amp Labs partnered with Westpac (Jul 29). Strategy is explicitly 'who cares about the model' (Jul 29): value moves to orbs, events, coordination and proof; low mode deliberately runs an open-weight model. Proprietary, not open source; editor extension discontinued (Feb 19).",
+   "user_sentiment": "Praise (mostly on X/blogs): 'Amp with Orbs feels significantly above the current state of agents in the cloud' (x.com/sqs/status/2084468424885903473), $20 subs delivering orbs that ran 4+ days (x.com/RavinBarthwal/status/2088444858243625210), BYO-subscription fee waiver called 'a great harness' if Anthropic pulls Fable from subs (x.com/benvargas/status/2078236457689657507). Complaints: Amp Free closure and throttling of older clients (tessl.io ad-supported-model coverage; Amp Free Is Full), cost historically 'good but costly', removal of the editor extension and TUI sidebar, and no free on-ramp for OSS/solo users. No large HN/Reddit thread on orbs/subscriptions was found (unverified)."
+  },
+  {
+   "name": "xAI / SpaceXAI Grok Build (grok CLI)",
+   "snapshot": "Since the 2026-07-31 review Grok Build went through a trust crisis and a 1.0. On Jul 12-14 researchers showed v0.2.93 uploading entire git repos (full history, untracked files, .env secrets, 5.1 GiB vs 192 KB of model traffic) to a GCS bucket 'grok-code-session-traces'; xAI flipped a server-side flag on Jul 13, added a /privacy command, and on Jul 15-16 published the ~845k-line Rust source under Apache-2.0 at github.com/xai-org/grok-build with issues and PRs disabled (community fork 'gork-build' strips Mixpanel + trace uploads + auto-update). Workflows (Jul 23) fan a task across up to 128 agents (1,024 for big jobs) in the background with phase-level pause/resume and save as slash commands. 1.0 shipped Aug 7 (Grok 4.5 model, 8 parallel worktree subagents, dashboard summaries) and 1.0.1-1.0.13 (Aug 10-28) added /rewind confirmation, subagent spawn limits, `grok du`, Workflows catalog + timer scripts, persistent 'Never allow' permissions, configurable default permission mode, headless session-history browsing, web-search domain restrictions, `grok clone` content-store + projected working tree + linked-worktree reuse, Ctrl+S draft stash, better Windows/iTerm2 images, auto-retry. Grok 4.6 (500k ctx) launched Aug 12. Access requires SuperGrok ($30) / X Premium+; API model grok-build-0.1 at $1/$2 per M tokens.",
+   "notable_features": [
+    {
+     "feature": "Repository upload incident and server-side kill switch",
+     "description": "v0.2.93 uploaded whole repos incl. secrets to xAI's GCS bucket; disabled server-side (disable_codebase_upload: true) on Jul 13; /privacy command added; enterprise ZDR unaffected; users told to rotate secrets.",
+     "source_url": "https://thehackernews.com/2026/07/grok-build-uploads-entire-git.html",
+     "date": "2026-07-14"
+    },
+    {
+     "feature": "Open-sourced under Apache-2.0, contributions closed",
+     "description": "Full Rust tree published at github.com/xai-org/grok-build for 'source transparency and local builds'; external PRs rejected, issues off; gork-build fork removes telemetry/trace upload/auto-update.",
+     "source_url": "https://github.com/thedavidweng/gork-build",
+     "date": "2026-07-16"
+    },
+    {
+     "feature": "Workflows: plan → fan out to hundreds of agents → verify → synthesize, saved as slash commands",
+     "description": "Grok authors the workflow from plain language; budget 128 agents (1,024 for big jobs); phases (Context/Review/Verify/Synthesize) with per-agent token counts in /workflows; pause/resume; .grok/workflows/*.rhai shared with team, ~/.grok/workflows personal; each becomes `/name [args]`.",
+     "source_url": "https://x.ai/news/workflows",
+     "date": "2026-07-23"
+    },
+    {
+     "feature": "Grok Build 1.0 (out of beta)",
+     "description": "First stable release ~10 weeks after May 25 beta: dashboard summaries, improved TUI/navigation, error recovery, permission handling, up to 8 subagents in isolated worktrees; Grok 4.5 as default model; SuperGrok / X Premium+ subscribers.",
+     "source_url": "https://cryptobriefing.com/grok-build-v1-release/",
+     "date": "2026-08-07"
+    },
+    {
+     "feature": "1.0.1: /rewind confirmation, subagent spawn limits, `grok du`",
+     "description": "Explicit confirmation before rewinding, hard caps on subagent spawns, disk-usage command for ~/.grok, video-generation improvements.",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-10"
+    },
+    {
+     "feature": "1.0.4: web-search domain restrictions + session-search index controls",
+     "description": "Allowlist/denylist for the agent's web search; user control over which sessions get indexed.",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-13"
+    },
+    {
+     "feature": "1.0.6 / 1.0.10: `grok clone` content store, projected working tree, linked-worktree reuse",
+     "description": "Fetches only the branch tip by default into a content store and mounts a projected working tree; reuses a matching local checkout as a linked worktree for faster session/subagent creation (--full-history for legacy clones).",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-24"
+    },
+    {
+     "feature": "1.0.7: Workflows browsing, timer-based command scripts, persistent 'Never allow'",
+     "description": "Workflows catalog tab in the Ctrl+P palette; scheduled command scripts; permission controls gain a durable deny.",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-19"
+    },
+    {
+     "feature": "1.0.11: configurable default permission mode, headless session history browsing",
+     "description": "Set the startup permission mode in config; browse headless sessions' history; better terminal input handling.",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-26"
+    },
+    {
+     "feature": "1.0.13: faster downloads, session reliability, auto-retry on transient failures, Windows/iTerm2 images",
+     "description": "Reliability release; image rendering on Windows terminals improved.",
+     "source_url": "https://releasebot.io/updates/xai/grok-build",
+     "date": "2026-08-28"
+    },
+    {
+     "feature": "Grok 4.6 model (500k context) for long-running agents",
+     "description": "API id grok-4.6; positioned for multi-step agentic work; shipped in Cursor the same week.",
+     "source_url": "https://evolink.ai/blog/grok-4-6-release-date",
+     "date": "2026-08-12"
+    }
+   ],
+   "business_shifts": "Went from closed beta binary to Apache-2.0 source (read-only governance) under privacy pressure; still bundled into SuperGrok ($30) / SuperGrok Heavy ($300) / X Premium+ rather than sold standalone; API pricing for grok-build-0.1 is the cheapest coding tier ($1/$2 per M). Parent company SpaceX now also owns Cursor, so Grok models are being pushed into Cursor (Grok 4.6 with 2x included usage first week; Cursor Start bundles Grok 4.5). Musk reportedly said a non-technical-user version is in the works (secondary sources only; unverified).",
+   "user_sentiment": "Praise: 'my favorite coding harness of all time. The mouse works for a lot of things', perceived 2-3x speed, transparent context meter, per-file permissions, rigorous /plan design docs, the source drop enabling forks (HN item 48926590; future-stack-reviews). Complaints: the upload scandal ('How do you accidentally upload your user's repos to a storage bucket?'), 'open source but you can't send a patch', non-ASCII/CJK rendering breakage, silent persistence of always-approve across sessions, verification regressions between versions, slow on vague prompts, 'paying for SuperGrok just to get this CLI is a hard sell' (3.8/5, 'third tool, not first')."
+  },
+  {
+   "name": "Warp (Warp Agent CLI, Oz, Factories)",
+   "snapshot": "Warp spent the window turning Oz into a harness-agnostic control plane and then rebranding it: the Warp Agent CLI (`warp`, Aug 4) is a standalone terminal-native agent that muxes PTYs like tmux, drives full-screen apps (vim/sqlite/REPLs), runs over SSH with no remote binary, hands off to cloud agents, orchestrates sub-agents across harnesses, and auto-routes across frontier and open-weight models; the `oz` CLI is deprecated (supported through end of September 2026; Oz name retired Sep 15). Warp Factories (closed beta Aug 18, early access in 2026.08.27) is a 'software factory' pipeline — triage → spec → implement → verify → ship → monitor — with a foreman agent, human gates, any harness (Claude Code, Codex, Cursor, Warp, any MCP-capable agent), self-host in your VPC, ZDR, priced per run, $10k credits for pilots. Weekly desktop releases added custom model routers (rule/complexity based), memory citations, BYOK, computer-use recordings, `oz runner` self-hosted cloud runners, debug-agents-inside-failed-cloud-runs (Sep 2), per-category dollar cost breakdown (Aug 27), /usage in the CLI, and `/connect-grok`. The desktop client is AGPL-3 open source since April; cloud/AI backend proprietary. Pricing: Free (150 → 75 credits), Build $18-20, Max $180-200, Business $50/seat; BYOK on paid plans since May.",
+   "notable_features": [
+    {
+     "feature": "Warp Agent CLI (standalone, multiplexing terminal agent)",
+     "description": "Works in any terminal (Ghostty, iTerm2, VS Code, stock Windows/Mac terminals; Windows via PowerShell per blog); natural-language vs shell autodetection with tab completion; agent drives full-screen apps; SSH without remote install; cloud handoff; multi-harness delegation; auto-routing frontier/open-weight; $18/mo for $20 inference or PAYG from $10.",
+     "source_url": "https://www.warp.dev/blog/introducing-the-warp-agent-cli-coding-agent",
+     "date": "2026-08-04"
+    },
+    {
+     "feature": "Warp Factories (early access)",
+     "description": "Repeatable multi-stage agent pipeline with foreman coordination and human approval gates; harness- and model-agnostic per stage; Warp cloud or self-hosted VPC; zero-retention options; usage priced per agent run.",
+     "source_url": "https://www.warp.dev/factories",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "Oz CLI deprecated in favor of Warp Agent CLI",
+     "description": "`oz` commands supported through end of Sept 2026; docs note not every workflow has a `warp` equivalent yet; no standalone Windows package for `oz` (needs the desktop app).",
+     "source_url": "https://docs.warp.dev/reference/cli/",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "Debug agents inside retained sessions of failed cloud runs; raw transcripts for third-party harness runs",
+     "description": "A failed cloud run keeps its sandbox so a debug agent can start inside it; `oz run` prints raw transcripts of Claude Code/Codex runs; MCP distinguishes rejected credentials from OAuth challenges; `create_file allow_overwrite`.",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-09-02"
+    },
+    {
+     "feature": "Per-category dollar cost breakdown + /usage in the CLI",
+     "description": "Usage view shows dollars per category next to credits (Aug 27); `/usage` in Warp Agent CLI (Aug 19/25); conversation details show which models were used (Jul 9).",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-08-27"
+    },
+    {
+     "feature": "TUI alt-screen rendering with mouse, editable shell permission requests, /fast-forward autoexecute, interactive-question answering",
+     "description": "Jul 23 mega-release: TUI renders vim/htop with input forwarding and mouse; shell-command approvals editable before confirming; per-conversation autoexecute; status line with shell/cwd/agent; ConPTY cleanup fixes on Windows; `oz runner` self-hosted cloud runners for all users.",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-07-23"
+    },
+    {
+     "feature": "Custom model routers (complexity- and rule-based) editable without YAML; agent memory citations; BYOK default-model suggestion",
+     "description": "Route prompts by complexity or rules to different models/providers; responses cite fetched memories; `oz` CLI memory-store management; native Antigravity (agy) CLI agent support.",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-07-03"
+    },
+    {
+     "feature": "Third-party harness continuation and non-PR work products; execution profiles from settings files",
+     "description": "Claude Code/Codex runs can continue locally when interrupted (Jun 24); harnesses report non-PR artifacts (Jul 31); agent execution profiles configurable from files; managed secrets validated to 128KB env limit.",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-07-31"
+    },
+    {
+     "feature": "Oz multi-harness control plane (Claude Code + Codex + Warp side by side, cross-harness memory)",
+     "description": "May update made Oz the first control plane running multiple harnesses with shared persistent memory and automatic multi-agent orchestration; `--parent-run-id`, `oz run message send`, `oz run conversation get`.",
+     "source_url": "https://sdtimes.com/ai/warp-updates-oz-to-help-enterprises-orchestrate-coding-agents-across-any-model-or-harness/",
+     "date": "2026-05-20"
+    },
+    {
+     "feature": "Remote SSH sessions apply project rules (WARP.md, AGENTS.md) and support git ops",
+     "description": "Remote sessions discover rules and run git; bundled/home skills and global rules used over SSH (Jun 10/17/24).",
+     "source_url": "https://docs.warp.dev/changelog/2026/",
+     "date": "2026-06-17"
+    }
+   ],
+   "business_shifts": "Consolidation of brand (Oz → Warp Agent, Sep 15) and of surface (standalone CLI so the agent no longer requires the Warp terminal). Credit-based pricing rebuilt Dec 2025 (Free 150→75 credits after 2 months; Build $18-20; Max $180-200; Business $50/seat) with BYOK on paid plans since May 2026 as the escape hatch; Agent CLI subscription $18 for $20 inference. Factories is usage-priced per run with $10k pilot credits and self-host/ZDR positioning aimed at enterprises. Client is AGPL-3 (warpui crates MIT) since April 2026; AI/cloud backend proprietary; AI features now require a Warp account (Jul 3).",
+   "user_sentiment": "HN thread on the Agent CLI (news.ycombinator.com/item?id=49171766, 109 points/87 comments): praise for the Jupyter-like block model, SSH mux without remote install, and 'suggest a new command when the one I ran failed'; complaints that the terminal 'became more and more buggy' as AI grew, 900MB package, 'I literally couldn't run ls because it kept interpreting it as an AI command', mandatory account/telemetry, lock-in ('give terminal for free and charge on the agent'), 'isn't approved for use at my job', and 'I don't see anything that's truly unique' vs Claude Code/OpenCode. Pricing critique: free plan taper 'enough to enjoy and not enough to adopt', Max jump from Build for the same credits (aivario.com/tools/warp)."
+  }
+ ],
+ "candidates": [
+  {
+   "title": "Agent-owned event subscriptions: subscribe to the PR you opened, a Slack thread, or a self-set schedule until the goal is met",
+   "description": "Give the agent `subscribe(source, until)` and `schedule(when, prompt)` tools that register a durable daemon trigger bound to the originating thread (PR checks/comments, Slack thread, cron/timer), so a wake resumes the same LangGraph thread with the event as context and the goal state intact. Surface as `/goal` + `/subscriptions` in the TUI and as daemon job rows.",
+   "competitor": "Cursor (Aug 19 subscriptions + /goal); Amp (Jul 21 self-scheduling, Jul 23 event-driven orbs); Grok Build 1.0.7 timer scripts",
+   "source_url": "https://cursor.com/changelog/08-19-26",
+   "source_date": "2026-08-19",
+   "target_users": [
+    "Small dev teams (high)",
+    "Solo power users (medium)",
+    "Enterprise (medium)"
+   ],
+   "why_killer": "A PR the agent opened stops being fire-and-forget: it follows CI reds and review comments to merge without anyone re-prompting, and a flaky-test hunt can check back every hour on its own. ROADMAP #30 covers inbound assignment and CI-red repair; the bar moved since July: the *agent* now subscribes to what it created and can schedule its own follow-ups, and every competitor ships it only in their cloud. bog's daemon (cron/interval/file/webhook/git-push triggers) plus checkpointed threads means this is wiring, not new infrastructure — and it runs on the user's own box, including Windows.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Persistent detachable sessions: `bog persist` / `/detach` / `bog attach <id>` on the local machine",
+   "description": "A leader-process (or daemon-hosted) session that keeps the agent loop alive when the terminal closes or SSH drops; list/stop/resume; TUI re-attaches to a running turn and shows queued prompts. Windows: run under the daemon service; POSIX: detached process group + unix socket.",
+   "competitor": "Cursor CLI `agent persist` (Aug 26); Warp Agent CLI PTY mux (Aug 4); Grok Build leader process",
+   "source_url": "https://cursor.com/docs/cli/changelog",
+   "source_date": "2026-08-26",
+   "target_users": [
+    "Solo power users (high)",
+    "Small dev teams (high)",
+    "Enterprise (low)"
+   ],
+   "why_killer": "Closing the laptop lid or losing SSH no longer kills a 40-minute refactor, and a long run can be checked from another terminal. ROADMAP #33 proposed teleport between TUI and daemon; since then Cursor made detach/attach a plain CLI verb and Warp built its whole CLI around a mux, so users will treat it as table stakes for any terminal agent. bog already has checkpointing and a daemon, so the delta is a session broker + attach protocol.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Self-hosted worker pools with Windows workers: tool execution on your machines, orchestration anywhere",
+   "description": "`bog worker start --pool <name>` registers a machine over an outbound-only connection to `bog serve`/daemon; the graph's tool calls (shell, files, PTY, browser) are executed on the worker while planning/inference run wherever serve runs; pools scale with demand, idle workers hibernate with snapshot ids; sandbox.toml applies per worker.",
+   "competitor": "Cursor Self-Hosted Machines (Sep 2); Warp Factories self-host / `oz runner`; Amp orbs",
+   "source_url": "https://cursor.com/blog/self-hosted-machines",
+   "source_date": "2026-09-02",
+   "target_users": [
+    "Enterprise (high)",
+    "Small dev teams (medium)",
+    "Solo power users (low)"
+   ],
+   "why_killer": "Code, build outputs and secrets never leave the team's network while the team still gets a shared queue of agents — and, unlike Cursor (Linux/Mac only) and Warp (no standalone Windows Oz), the workers can be Windows boxes with the native sandbox from #22. This is the concrete, self-hostable half of #42 `bog fleet` that competitors now sell as an enterprise SKU; bog can ship it as a CLI verb.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Cost-objective model router: Intelligence / Balance / Cost with a local-model rung and admin pinning",
+   "description": "Extend `/operator`'s judge with a user-selected objective (intelligence, balance, cost) and a routing table that includes local/open-weight models (Ollama, GLM-class) for the easy rung; learn from the cost ledger + rubric outcomes which rung succeeded; enterprise profiles can pin the objective and the allowed model set.",
+   "competitor": "Cursor Router (Jul 22, 60-68% cost cut); Warp custom model routers (Jul 3); Amp Dial low mode on GLM-5.2 (Jul 9)",
+   "source_url": "https://cursor.com/changelog/router",
+   "source_date": "2026-07-22",
+   "target_users": [
+    "Solo power users (high)",
+    "Enterprise (medium)",
+    "Small dev teams (medium)"
+   ],
+   "why_killer": "A cost-sensitive user picks 'Cost' once and routine edits go to a free local model while hard reasoning still gets the frontier model, cutting the monthly bill the way Cursor claims 60%+ — but with the user's own models and an auditable routing decision per turn. ROADMAP #46 unified the effort ladder; since July the bar moved to an explicit cost objective, admin enforcement, and outcome-learned routing, which bog can ground in its CostLedger and rubric grader instead of a black-box classifier.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Hardened git under agent control: ignore repository-controlled config, hooks, pagers and fsmonitor during agent operations",
+   "description": "Every git invocation the agent or its tools make runs with a sanitized environment and overrides (`GIT_CONFIG_NOSYSTEM`, scrubbed `GIT_CONFIG_GLOBAL`, `-c core.hooksPath=<empty>`, `core.fsmonitor=false`, `core.pager=cat`, no `alias.*`, no `credential.helper` from the repo, no `filter.*` from `.gitattributes` unless allowlisted); sandboxed git-over-SSH routed through the egress proxy. Expose as a `git_ops` policy so `/why` can explain a stripped setting.",
+   "competitor": "Cursor CLI 'hardened git commands ignore repository-controlled configuration' + SOCKS git-over-SSH (Aug 11)",
+   "source_url": "https://cursor.com/docs/cli/changelog",
+   "source_date": "2026-08-11",
+   "target_users": [
+    "Enterprise (high)",
+    "Small dev teams (medium)",
+    "Solo power users (medium)"
+   ],
+   "why_killer": "Cloning an untrusted repo and letting the agent run `git status` can no longer execute attacker code via a planted `.git/config` alias, hook path or fsmonitor — the class of attack bog's `exec_risk` catches on the *command line* but not from *inside the repository*. It closes a hole reviewers now check for, fits the existing single git classifier, and is a one-day change.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Steerable approvals: timed auto-reject in unattended runs, 'skip and tell the agent what to do instead', and persistent Never-allow",
+   "description": "HITL dialogs gain (a) a countdown that auto-rejects risky/mode-switch approvals after N seconds when running headless or detached (fail-closed), (b) a third button that opens the composer so the user redirects instead of a bare deny, and (c) a durable per-project deny list with a dangerous-list floor that always re-prompts.",
+   "competitor": "Cursor CLI (Jul 13 skip-and-steer; Aug 11 15-second auto-reject); Grok Build 1.0.7 persistent 'Never allow'",
+   "source_url": "https://cursor.com/docs/cli/changelog",
+   "source_date": "2026-08-11",
+   "target_users": [
+    "Solo power users (high)",
+    "Enterprise (medium)",
+    "Small dev teams (medium)"
+   ],
+   "why_killer": "An agent left running overnight can never sit on a permission prompt forever nor silently escalate, and the human's most common reaction to a bad command ('no, do X instead') becomes one keystroke rather than deny-then-retype. Users of every competitor now expect all three behaviours; bog's HITL and trust profiles (#23) are the natural home and the countdown is a pure UI+policy change.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Agent-authored workflows: describe a big job, get a saved `/name [args]` fan-out with phase checkpoints, per-agent token meters and hard agent budgets",
+   "description": "Let the agent write a recipe/pipeline from a plain-language request (phases: context → work → review → verify → synthesize), run it as a background job over governed teams with a CostLedger cap on agent count and spend, show phase-by-phase progress with per-agent tokens in `/dashboard`, allow pause/resume without redoing finished phases, and persist it to `.bog-agents/workflows/` where it becomes a slash command shared with the team.",
+   "competitor": "Grok Build Workflows (Jul 23, 128-1,024 agents, saved as slash commands); Warp Factories foreman pipeline (Aug 18/27)",
+   "source_url": "https://x.ai/news/workflows",
+   "source_date": "2026-07-23",
+   "target_users": [
+    "Small dev teams (high)",
+    "Solo power users (medium)",
+    "Enterprise (medium)"
+   ],
+   "why_killer": "A team lead types 'review every open PR for the new error-handling rule' once, gets it done across many workers with a verify phase, and keeps `/pr-review N` forever without writing YAML. ROADMAP #35 (recipes v2) and #21 (teams) cover the run-time; the bar moved to *agent-authored* workflows with explicit agent budgets and resumable phases — bog is the only one of the four that can enforce those budgets and rules deterministically rather than by prompt.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Proof-ordered review: intelligently ordered diffs plus a 'proof' section in the turn-end tray and evidence bundle",
+   "description": "Rank changed files by explanatory power (entry points and interface changes first; tests, fixtures, generated and lockfiles muted at the bottom), toggle vs alphabetical, and prepend the evidence bundle's proof artifacts (test output, screenshots/recordings, metrics deltas) so a reviewer reads the claim before the diff.",
+   "competitor": "Amp Intelligently Ordered Diffs + Fable 5.1 'proof of work' (Sep 1); Cursor merge-ready evidence",
+   "source_url": "https://ampcode.com/news/intelligently-ordered-diffs",
+   "source_date": "2026-09-01",
+   "target_users": [
+    "Small dev teams (high)",
+    "Enterprise (medium)",
+    "Solo power users (medium)"
+   ],
+   "why_killer": "Reviewers get to the file that explains an agent's change in one glance instead of scrolling past 30 snapshot files, and the PR opens with what was verified rather than what was touched. #28 (changes tray) and #29 (evidence bundle) exist as proposals; the ordering heuristic is a small addition that makes both immediately more useful and matches what Amp now ships as the default review view.",
+   "effort_killer_note": "",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Teammate file transfer, cross-thread messaging and multi-repo workspaces for governed teams",
+   "description": "Add typed artifact transfer (files/dirs/patches) to the `Mailbox` so a teammate in another worktree or sandbox can hand results over without going through git; allow a workspace to span multiple repos (`/add-dir`, `/save-workspace`, `/load-workspace`, `--workspace`) so one task can touch service + client + infra repos under one ledger and rule set.",
+   "competitor": "Amp From Agent to Agent (Jul 17) + Projects with Multiple Repositories (Aug 27); Cursor CLI multi-dir workspaces (Jul 6) and isolated-VM subagents (Aug 19)",
+   "source_url": "https://ampcode.com/news/from-agent-to-agent",
+   "source_date": "2026-07-17",
+   "target_users": [
+    "Small dev teams (high)",
+    "Enterprise (medium)",
+    "Solo power users (low)"
+   ],
+   "why_killer": "A parallel test-runner teammate can send back a failing-log tarball, and a migration that spans three repos runs as one governed task instead of three uncoordinated sessions. #21 built the ledger and mailbox for messages; competitors moved the bar to files and multi-repo in the same window, and bog's version keeps every transfer under DLP and the audit trail.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`/privacy` egress ledger: what left this machine, to whom, and why — exportable into the evidence pack",
+   "description": "Record per-session bytes and request counts per destination host (model providers, MCP servers, web fetch, telemetry), allowlist violations blocked by the egress proxy, provider retention/ZDR flags, and any secret-env stripping events; `/privacy` renders it live, `bog privacy export` writes it into the evidence bundle and audit trail.",
+   "competitor": "Grok Build repo-upload incident + /privacy command (Jul 13-14); Warp telemetry/account complaints (HN 49171766); Cursor self-hosted 'secrets never leave'",
+   "source_url": "https://thehackernews.com/2026/07/grok-build-uploads-entire-git.html",
+   "source_date": "2026-07-14",
+   "target_users": [
+    "Enterprise (high)",
+    "Solo power users (high)",
+    "Small dev teams (medium)"
+   ],
+   "why_killer": "After Grok Build shipped 27,800x more bytes than the model needed, users want the tool itself to prove what it sends; no competitor shows an in-product per-host egress report, and regulated teams currently reconstruct it from proxy logs. bog already owns the CONNECT allowlist proxy, DLP and audit trail — turning them into a visible ledger is the cheapest trust feature available and an open flank.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "`/cost explain`: natural-language and per-thread/per-agent/per-category spend from the cost ledger, with plan meters",
+   "description": "Let the user ask 'which teammate burned the most tokens today' or 'what did the web searches cost' and get an answer computed from CostLedger (per session, subagent, worktree, model, category), plus a dollar breakdown next to token counts in `/cost` and `/dashboard`, and an included-usage meter when a provider plan is known.",
+   "competitor": "Amp Explain Usage (Aug 21); Warp per-category dollar breakdown (Aug 27); Cursor CLI /usage (Jul 20)",
+   "source_url": "https://ampcode.com/news/explain-usage",
+   "source_date": "2026-08-21",
+   "target_users": [
+    "Solo power users (high)",
+    "Small dev teams (medium)",
+    "Enterprise (medium)"
+   ],
+   "why_killer": "A cost-sensitive solo user finds the runaway subagent in one question instead of reading a token table, and a team lead sees dollars by category before the invoice does. ROADMAP #25 built the ledger and caps; the bar moved to *explainable* usage in plain language and dollar-per-category views, which are query surfaces over data bog already records.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Pinned skills as custom modes and durable `/goal` state across idle, headless and daemon runs",
+   "description": "One keystroke pins a skill as an always-on mode for the session (and optionally the project), shown in the status line; `/goal` state (active/paused/met, evidence of progress) is persisted with the thread so a daemon re-entry, `/resume`, or detached session continues the same goal; `user-invocable: false` hides model-only skills from the slash menu.",
+   "competitor": "Cursor CLI sticky skills / custom modes + /goal (Aug 11, Aug 19)",
+   "source_url": "https://cursor.com/docs/cli/changelog",
+   "source_date": "2026-08-11",
+   "target_users": [
+    "Solo power users (medium)",
+    "Small dev teams (medium)",
+    "Enterprise (low)"
+   ],
+   "why_killer": "A 'test-first' or 'security-review' skill stays in force for a whole multi-hour session without being re-invoked, and a goal set in the TUI is still the goal when the daemon picks the thread up tomorrow. bog already has `/goal`, `/rubric`, skills and the trust store; this is state persistence plus a keybinding, and it is the piece that makes the subscription/persist candidates coherent.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Mission-control meta-agent: natural-language (and optional voice) control over sessions, jobs and worktrees",
+   "description": "A `/control` (Puck-style) agent that can list/inspect/spawn/steer/stop threads, daemon jobs, teams and worktrees — 'spawn an agent in worktree X to fix the CI failure', 'archive finished threads', 'what is job 7 waiting on' — implemented as tools over the existing dashboard, threads, jobs and team registries; voice input via injected STT as a later step.",
+   "competitor": "Amp Puck (Jul 20) + Talk to Puck (Aug 18); Grok Build dashboard; Warp Agents bar drill-down (Aug 13)",
+   "source_url": "https://ampcode.com/news/meet-puck",
+   "source_date": "2026-07-20",
+   "target_users": [
+    "Small dev teams (high)",
+    "Solo power users (medium)",
+    "Enterprise (low)"
+   ],
+   "why_killer": "Managing ten parallel agents stops being a keyboard-navigation problem: the user says what should happen to which run and it happens. v1 #11 (Mission Control) shipped only the watch half; a control agent is the fastest way to ship the control half, and it reuses the team/ledger/daemon APIs instead of a bespoke UI.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Fast spawn: content-store clone, branch-tip fetch, linked-worktree reuse and prebuilt environment snapshots",
+   "description": "When teams/best-of-N/daemon create worktrees or sandboxes: reuse a matching local checkout as a linked worktree, fetch only the branch tip by default, keep a local content store so repeated clones are near-instant, and let sandbox.toml declare a build step whose result is snapshotted and reused so agents start with dependencies installed.",
+   "competitor": "Grok Build `grok clone` content store / linked-worktree reuse (1.0.6, 1.0.10); Cursor Builds 3x faster start (Aug 13)",
+   "source_url": "https://releasebot.io/updates/xai/grok-build",
+   "source_date": "2026-08-24",
+   "target_users": [
+    "Small dev teams (high)",
+    "Solo power users (medium)",
+    "Enterprise (medium)"
+   ],
+   "why_killer": "Best-of-5 or an eight-teammate fan-out starts in seconds rather than waiting on five `npm install`s, which is what makes parallelism cheap enough to use by default. Competitors moved this bar in August; bog's parallel-worktree and sandbox factory paths are where it plugs in, and the daemon benefits on every trigger.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Governed multi-harness workers: run Claude Code, Codex or Grok Build as sub-agents under bog's rules, ledger and evidence",
+   "description": "A `HarnessSubAgentBackend` that launches an external CLI in headless mode (Anthropic stream-json / Codex exec / Grok headless), maps its tool events onto bog's hook bus so Expert Mode, SafeTools, DLP and CostLedger apply to each tool call, and folds its result into the team ledger and evidence bundle; selectable per pipeline stage.",
+   "competitor": "Warp Oz/Factories multi-harness control plane (May 20; Aug 27); Cursor cloud harness",
+   "source_url": "https://www.warp.dev/factories",
+   "source_date": "2026-08-27",
+   "target_users": [
+    "Enterprise (high)",
+    "Small dev teams (high)",
+    "Solo power users (low)"
+   ],
+   "why_killer": "A team keeps the harness each developer already loves while security gets one policy engine, one audit trail and one cost cap across all of them — the value Warp charges enterprises for, delivered as a self-hosted Python package. Grok Build's headless output is wire-compatible with Anthropic stream-json (per the July review), so two of three harnesses share one adapter.",
+   "effort_guess": "L"
+  },
+  {
+   "title": "Incremental self-review with reviewed-diff memo, effort levels and CI dedupe",
+   "description": "`/self-review` remembers the hash of the last reviewed diff per branch, reviews only what changed since, exposes default/high/custom effort (custom = natural-language rule for when to go deep), and the headless twin leaves a 'already reviewed this diff' marker so a CI run skips the repeat.",
+   "competitor": "Cursor Bugbot June update: /review pre-push, diff dedupe, incremental review, effort levels (Jun 10)",
+   "source_url": "https://cursor.com/changelog/bugbot-updates-june-2026",
+   "source_date": "2026-06-10",
+   "target_users": [
+    "Small dev teams (high)",
+    "Solo power users (medium)",
+    "Enterprise (medium)"
+   ],
+   "why_killer": "A developer who ran the review locally is not charged and not nagged again when the same diff lands in the PR, and follow-up pushes get feedback only on the new hunks. v1 #3 shipped self-review with five lenses; Bugbot moved the bar to incremental + deduped + effort-graded, all of which are cheap on top of bog's existing controller and rubric grader.",
+   "effort_guess": "S"
+  },
+  {
+   "title": "Live preview portals: port-forwarded, shareable preview URLs for agent-built apps (local tunnel or daemon-hosted)",
+   "description": "When a run starts a dev server in a sandbox/worktree/worker, expose it as a preview with a friendly name (localhost tunnel for solo, daemon-hosted reverse proxy with auth for teams), link it from the turn-end tray and evidence bundle, and let the browser/QA tools use it for verification.",
+   "competitor": "Amp Portals (Aug 6) + friendly URLs (Aug 23); Cursor no-repo start with browser preview + Vercel publish (Aug 27)",
+   "source_url": "https://ampcode.com/news/portals",
+   "source_date": "2026-08-06",
+   "target_users": [
+    "Small dev teams (medium)",
+    "Solo power users (medium)",
+    "Enterprise (low)"
+   ],
+   "why_killer": "A teammate or PM clicks one link to see what the agent built instead of checking out the branch, and the evidence bundle can include a live URL rather than a stale screenshot. Both cloud competitors now treat previews as part of 'done'; bog's `/preview` and `/qa` surfaces need a novelty check before scoping.",
+   "effort_guess": "M"
+  },
+  {
+   "title": "Desktop-in-sandbox and computer use on self-hosted workers, including Windows desktops",
+   "description": "Expose an interactive desktop (Linux via Xvfb/noVNC in sandboxes; Windows via the worker's own session) so agents can drive GUI apps, record verification video, and let humans peek in; gate by trust profile and record to the evidence bundle.",
+   "competitor": "Amp Desktop in orbs (Sep 4); Cursor computer use on Linux/Mac self-hosted workers (Sep 2); Warp computer-use recordings",
+   "source_url": "https://ampcode.com/news/desktop",
+   "source_date": "2026-09-04",
+   "target_users": [
+    "Small dev teams (medium)",
+    "Enterprise (medium)",
+    "Solo power users (low)"
+   ],
+   "why_killer": "Teams shipping desktop or Windows-native software get an agent that can actually open the app it just built and prove it works — and nobody offers computer use on a Windows worker today. Depends on the worker-pool candidate; sequence after it.",
+   "effort_guess": "L"
+  }
+ ],
+ "market_trends": [
+  "Always-on is the new default: in one summer Cursor (subscriptions, /goal, persist), Amp (event-driven orbs, self-scheduling), Grok Build (Workflows, timer scripts) and Warp (Factories) all reframed the agent as a long-lived service that wakes on events and holds a goal, so a terminal agent that only runs while a human watches now reads as last-generation.",
+  "Execution is moving to where the code lives while orchestration stays hosted: Cursor Self-Hosted Machines, Warp Factories in-VPC, Amp orbs and `oz runner` all split 'agent loop in the cloud, tools on your machines' — and none of them ships a Windows worker.",
+  "Model routing became a product feature with a cost objective (Cursor Router's Intelligence/Balance/Cost, Warp custom routers, Amp's Dial with an open-weight low tier), and 'who cares about the model' (Amp, Jul 29) is now a stated strategy — the harness, not the model, is where vendors claim differentiation.",
+  "Pricing converged on subscription-plus-included-usage with metered overage (Cursor Pro/Pro+/Ultra and Teams Premium, Amp Megawatt/Gigawatt, Warp Build/Max, Grok inside SuperGrok) while free tiers shrank or closed (Amp Free closed, Warp free credits tapered), and BYOK / linked third-party subscriptions became the standard escape hatch that bog's local-model and BYOK posture already satisfies.",
+  "Trust became a release feature: Grok Build's whole-repo upload scandal forced an Apache-2.0 source drop within 72 hours (with contributions closed), Warp open-sourced its client under AGPL, and Cursor markets 'never initiates a connection into your network' — users now ask what leaves the machine, and a verifiable answer is a differentiator.",
+  "Consolidation and vendor risk are real: SpaceX now owns both xAI and Cursor, OpenAI is cutting Cursor off on 2026-11-12, Anthropic chose to stay — multi-provider neutrality and self-hosting are selling points precisely because the largest IDE-agent vendor lost some of both.",
+  "Proof beats diff: Amp's Fable 5.1 framing, Cursor's merge-ready cloud PRs and Warp's computer-use recordings all attach evidence (video, screenshots, metrics) to agent output, and review surfaces are being redesigned around it (intelligently ordered diffs, incremental Bugbot).",
+  "Fan-out scale is now a headline number (Grok 128-1,024 agents per workflow, Grok 1.0's 8 worktree subagents, Amp agent-to-agent, Cursor isolated-VM subagents) which makes hard budgets, spawn caps and per-agent cost attribution table stakes rather than governance extras.",
+  "Commoditized in this window: plan mode, /rewind, MCP with OAuth, skills/plugins marketplaces, subagents in worktrees, Slack integration, voice input, terminal image rendering, and headless/CI modes — none of these differentiates any longer.",
+  "Interop layers are settling around headless wire formats and multi-harness control planes (Warp running Claude Code/Codex/Cursor, Grok's Anthropic stream-json compatibility, ACP for editors), so being a governed host for other harnesses is a bigger opportunity than being one more harness."
+ ],
+ "unverified": [
+  "Musk's claim that a Grok Build variant for non-technical users is in development — reported only by secondary outlets (pasqualepillitteri.it, basenor.com); no x.ai primary source found.",
+  "Grok Build 1.0 shipping with Grok 4.5 as default and exactly 8 parallel worktree subagents — from cryptobriefing.com and Wikipedia summaries; x.ai/build and x.ai/build/changelog returned 403 to fetch.",
+  "Which SuperGrok tier Workflows' 128/1,024-agent budgets require — x.ai/news/workflows says the demo session was free but names no tier.",
+  "Amp 'Right on Schedule' (Jul 21) implementation details — the news page returned 404; only the chronicle summary was read.",
+  "Cursor Router 'learns from production traffic' and the 68%-cheaper-than-Fable claim — taken from the Aug 6 blog as summarized by releasebot.io; primary blog not fetched.",
+  "Cursor Teams Premium seat terms (5x usage at 3x price from Jun 1 / Jul 1) — from lowcode.agency; cursor.com/pricing fetched only shows $40 base for Teams Premium.",
+  "Cursor CLI support for /review Bugbot — June changelog said 'CLI support coming soon'; no confirmation found that it shipped by Sep 4.",
+  "Windows support for Cursor self-hosted workers and for the Warp Agent CLI — Cursor's blog lists Linux/Mac for computer use and never mentions Windows; Warp's blog summary says Windows via PowerShell but docs.warp.dev/agents/cli does not state platforms.",
+  "OpenAI's Nov 12 2026 shutoff date and Anthropic's commitment to Cursor — CNBC returned 403; relied on the-decoder.com and cryptopolitan.com secondary reporting.",
+  "HN reception numbers for Grok Build open-sourcing (90+ points / 100+ comments) — from digitalapplied.com; the HN page fetch (item 48926590) confirmed the themes but not the counts.",
+  "Warp Factories closed-beta date of Aug 18 — from itsfoss.com/ai-tldr.dev; warp.dev/factories gives no launch date.",
+  "No dedicated HN/Reddit thread on Amp's orbs/subscriptions or on Grok Build 1.0 was found; Amp sentiment relies on X posts and Warp/Grok sentiment on single HN threads.",
+  "Grok Build 1.0.x entries (Aug 10-28) are from releasebot.io's mirror of x.ai/build/changelog; the primary page was not fetchable."
+ ]
+}

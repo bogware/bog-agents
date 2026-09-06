@@ -155,11 +155,11 @@ async def test_acp_agent_prompt_streams_list_content_blocks() -> None:
             checkpointer=MemorySaver(),
         ),
     )
-    agent._agent = Graph()  # type: ignore[assignment]
     client = FakeACPClient()
     agent.on_connect(client)  # type: ignore[arg-type]
 
     session = await agent.new_session(cwd="/tmp", mcp_servers=[])
+    agent._runtime(session.session_id).agent = Graph()  # type: ignore[assignment]
     resp = await agent.prompt(
         [TextContentBlock(type="text", text="Hi")], session_id=session.session_id
     )
@@ -359,7 +359,7 @@ async def test_acp_agent_tool_result_completes_tool_call() -> None:
 
             return S()
 
-    agent._agent = Graph()  # type: ignore[assignment]
+    agent._runtime(session.session_id).agent = Graph()  # type: ignore[assignment]
 
     resp = await agent.prompt(
         [TextContentBlock(type="text", text="hi")], session_id=session.session_id
@@ -842,13 +842,13 @@ async def test_reset_agent_with_compiled_state_graph() -> None:
     session_id = session.session_id
 
     # Initially agent is None
-    assert agent_server._agent is None
+    assert agent_server._runtime(session_id).agent is None
 
     # Call _reset_agent
     agent_server._reset_agent(session_id)
 
     # Agent should now be set to the compiled graph
-    assert agent_server._agent is compiled_graph
+    assert agent_server._runtime(session_id).agent is compiled_graph
 
 
 async def test_reset_agent_preserves_session_cwd() -> None:
@@ -943,3 +943,44 @@ async def test_acp_agent_hitl_requests_permission_only_once() -> None:
         "This indicates the double approval bug has regressed."
     )
     assert permission_requests[0]["tool_call"].title == "Write `/tmp/test.txt`"
+
+
+async def test_sessions_do_not_share_agent_cwd_or_cancel() -> None:
+    """v6 SAT-3: each ACP session owns its agent, cwd and cancel flag."""
+    from bog_agents_acp.server import AgentSessionContext
+
+    built: list[AgentSessionContext] = []
+
+    def factory(context: AgentSessionContext) -> Any:
+        built.append(context)
+        return create_agent(
+            model=GenericFakeChatModel(
+                messages=iter([AIMessage(content="ok"), AIMessage(content="ok again")]),
+                stream_delimiter=None,
+            ),
+            checkpointer=MemorySaver(),
+        )
+
+    agent = AgentServerACP(agent=factory)
+    agent.on_connect(FakeACPClient())  # type: ignore[arg-type]
+    one = await agent.new_session(cwd="/repo/one", mcp_servers=[])
+    two = await agent.new_session(cwd="/repo/two", mcp_servers=[])
+
+    await agent.prompt([TextContentBlock(type="text", text="hi")], session_id=one.session_id)
+    await agent.prompt([TextContentBlock(type="text", text="hi")], session_id=two.session_id)
+
+    assert [c.cwd for c in built] == ["/repo/one", "/repo/two"]
+    rt_one, rt_two = agent._runtime(one.session_id), agent._runtime(two.session_id)
+    assert rt_one.agent is not rt_two.agent
+    assert (rt_one.cwd, rt_two.cwd) == ("/repo/one", "/repo/two")
+
+    # Cancelling one session leaves the other untouched; unknown ids are a no-op.
+    await agent.cancel(session_id=one.session_id)
+    assert rt_one.cancelled is True
+    assert rt_two.cancelled is False
+    await agent.cancel(session_id="does-not-exist")
+    assert set(agent._sessions) == {one.session_id, two.session_id}
+
+    # A second prompt on the second session reuses its own agent (no rebuild).
+    await agent.prompt([TextContentBlock(type="text", text="again")], session_id=two.session_id)
+    assert len(built) == 2

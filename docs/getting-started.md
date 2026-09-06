@@ -11,6 +11,22 @@ pipx install bog-agents-cli       # recommended — isolated, clean PATH
 
 Or `uv tool install bog-agents-cli` if you have uv. Or plain pip.
 
+On Windows (or anywhere without Python), one line does the whole dance —
+installer choice, Store-alias warnings, PATH, doctor:
+
+```powershell
+irm https://raw.githubusercontent.com/bogware/bog-agents/main/install.ps1 | iex
+```
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/bogware/bog-agents/main/install.sh | sh
+```
+
+Windows users who want PowerShell instead of `cmd.exe` for the agent's shell
+can turn on the opt-in `powershell` tool with `tools.powershell = true` in
+`config.toml` (or `BOG_AGENTS_POWERSHELL_TOOL=1`); `bog-agents --doctor` says
+which PowerShell it found and flags the Store execution-alias trap.
+
 You'll also want at least one model provider:
 
 ```bash

@@ -497,6 +497,117 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         env_var=_env_vars.FS_UNSANDBOXED,
     ),
     ConfigOption(
+        key="approvals.timeout_seconds",
+        group="Tools",
+        summary="Seconds an approval prompt waits before auto-rejecting (fail-closed). Unset = wait forever.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off"),
+        env_var=_env_vars.APPROVAL_TIMEOUT,
+        toml_keys=("approvals", "timeout_seconds"),
+    ),
+    ConfigOption(
+        key="tools.powershell",
+        group="Tools",
+        summary="Register the opt-in `powershell` tool (pwsh / Windows PowerShell via argv, never cmd.exe). No-op when PowerShell is absent.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.POWERSHELL_TOOL,
+        toml_keys=("tools", "powershell"),
+    ),
+    ConfigOption(
+        key="tools.code_mode",
+        group="Tools",
+        summary="Register the governed `run_code` tool: the model scripts tool calls in a child interpreter; every call re-enters the tool path (ROADMAP #72). Off under --restricted.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.CODE_MODE,
+        toml_keys=("tools", "code_mode"),
+    ),
+    ConfigOption(
+        key="tools.workflows",
+        group="Tools",
+        summary="Always register the `author_workflow` / `list_workflows` tools (ROADMAP #73). Off, they appear once the project has a .bog-agents/workflows/ directory. Off under --restricted.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.WORKFLOW_TOOLS,
+        toml_keys=("tools", "workflows"),
+    ),
+    ConfigOption(
+        key="tools.advisor",
+        group="Tools",
+        summary="Register `ask_advisor`: one bounded question per call to the operator's `hard` tier model (ROADMAP #75). Off under --restricted, and skipped when the active model already is the hard tier.",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.ADVISOR,
+        toml_keys=("tools", "advisor"),
+    ),
+    ConfigOption(
+        key="tools.advisor_max_questions",
+        group="Tools",
+        summary="How many `ask_advisor` questions one session may spend (ROADMAP #75).",
+        kind=OptionKind.INT,
+        default=5,
+        env_var=_env_vars.ADVISOR_MAX_QUESTIONS,
+        toml_keys=("tools", "advisor_max_questions"),
+    ),
+    ConfigOption(
+        key="web.allowed_domains",
+        group="Tools",
+        summary="Comma-separated domains the web tools may fetch (suffix-matched: example.com covers api.example.com). Empty = any public host.",
+        kind=OptionKind.STR,
+        env_var=_env_vars.WEB_ALLOWED_DOMAINS,
+        toml_keys=("web", "allowed_domains"),
+    ),
+    ConfigOption(
+        key="web.blocked_domains",
+        group="Tools",
+        summary="Comma-separated domains the web tools must never fetch; wins over the allow-list.",
+        kind=OptionKind.STR,
+        env_var=_env_vars.WEB_BLOCKED_DOMAINS,
+        toml_keys=("web", "blocked_domains"),
+    ),
+    ConfigOption(
+        key="compliance.action_log",
+        group="Tools",
+        summary="Write every model call, tool call, approval and Expert verdict into a hash-chained JSONL under ~/.bog-agents/action-log (ROADMAP #74).",
+        kind=OptionKind.BOOL,
+        default=False,
+        env_var=_env_vars.ACTION_LOG,
+        toml_keys=("compliance", "action_log"),
+    ),
+    ConfigOption(
+        key="compliance.retention_days",
+        group="Tools",
+        summary="Days to keep action-log chains before `/actionlog prune` removes them.",
+        kind=OptionKind.INT,
+        default=90,
+        toml_keys=("compliance", "retention_days"),
+    ),
+    ConfigOption(
+        key="compliance.otel_endpoint",
+        group="Tools",
+        summary="OTLP/HTTP collector base URL; GenAI-semconv spans for model, tool and subagent calls are posted there.",
+        kind=OptionKind.STR,
+        env_var=_env_vars.OTEL_ENDPOINT,
+        toml_keys=("compliance", "otel_endpoint"),
+    ),
+    ConfigOption(
+        key="managed.policy_source",
+        group="Tools",
+        summary="URL or path of the org's managed policy (allowed MCP servers, skill allow-list, plugin rules, provider lock, model policy); fetched at start, verified, cached (ROADMAP #50).",
+        kind=OptionKind.STR,
+        env_var=_env_vars.MANAGED_POLICY,
+        toml_keys=("managed", "policy_source"),
+    ),
+    ConfigOption(
+        key="managed.policy_public_key",
+        group="Tools",
+        summary="Base64 Ed25519 public key the managed policy must be signed with (required for URL sources).",
+        kind=OptionKind.STR,
+        env_var=_env_vars.MANAGED_POLICY_KEY,
+        toml_keys=("managed", "policy_public_key"),
+    ),
+    ConfigOption(
         key="tools.timeout",
         group="Tools",
         summary="Default per-tool execution timeout (seconds).",
@@ -723,6 +834,64 @@ _STATIC_OPTIONS: tuple[ConfigOption, ...] = (
         kind=OptionKind.STR,
         env_var=_env_vars.DEBUG_FILE,
     ),
+    # --- Cost certainty (ROADMAP #51) ---
+    ConfigOption(
+        key="cost.budget_usd",
+        group="Cost",
+        summary="Session cost cap in USD; the agent pauses with a budget_reached prompt when it is hit. Unset = unlimited.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off", "unlimited"),
+        env_var=_env_vars.BUDGET_USD,
+        toml_keys=("cost", "budget_usd"),
+    ),
+    ConfigOption(
+        key="cost.warn_at_percent",
+        group="Cost",
+        summary="Percent of a budget or daily ceiling at which /cost and the turn gate start warning.",
+        kind=OptionKind.INT,
+        default=80,
+        env_var=_env_vars.BUDGET_WARN_AT_PERCENT,
+        toml_keys=("cost", "warn_at_percent"),
+    ),
+    ConfigOption(
+        key="cost.daily_ceiling_usd",
+        group="Cost",
+        summary="Per-day ceiling in USD for this user across sessions; new turns are refused once reached. Unset = unlimited.",
+        kind=OptionKind.FLOAT,
+        none_sentinels=("none", "off", "unlimited"),
+        env_var=_env_vars.DAILY_CEILING_USD,
+        toml_keys=("cost", "daily_ceiling_usd"),
+    ),
+    ConfigOption(
+        key="cost.max_subagents",
+        group="Cost",
+        summary="Subagent/teammate spawns allowed per session (CostLedger runaway cap); 'none' lifts it.",
+        kind=OptionKind.INT,
+        default=8,
+        none_sentinels=("none", "unlimited"),
+        env_var=_env_vars.MAX_SUBAGENTS,
+        toml_keys=("cost", "max_subagents"),
+    ),
+    ConfigOption(
+        key="cost.max_web_searches",
+        group="Cost",
+        summary="Web searches allowed per session (CostLedger runaway cap); 'none' lifts it.",
+        kind=OptionKind.INT,
+        default=50,
+        none_sentinels=("none", "unlimited"),
+        env_var=_env_vars.MAX_WEB_SEARCHES,
+        toml_keys=("cost", "max_web_searches"),
+    ),
+    ConfigOption(
+        key="cost.preflight_threshold_usd",
+        group="Cost",
+        summary="Projected spend (high estimate) above which /team run, /butcher and /best-of-n ask for confirmation first; 'off' disables.",
+        kind=OptionKind.FLOAT,
+        default=1.0,
+        none_sentinels=("none", "off"),
+        env_var=_env_vars.PREFLIGHT_THRESHOLD_USD,
+        toml_keys=("cost", "preflight_threshold_usd"),
+    ),
 )
 
 
@@ -746,6 +915,29 @@ def _options_by_key() -> dict[str, ConfigOption]:
 def get_option(key: str) -> ConfigOption | None:
     """Return the manifest entry for `key`, or `None` when unknown."""
     return _options_by_key().get(key)
+
+
+def resolve_option(key: str) -> Any:  # noqa: ANN401 - typed per option kind
+    """Resolve one manifest option to its effective typed value.
+
+    The consumer-side twin of the `config` command's introspection: env var,
+    then `config.toml`, then the typed default, with the same coercion and
+    the same `none_sentinels`.
+
+    Args:
+        key: A manifest key such as `cost.budget_usd`.
+
+    Returns:
+        The effective value (possibly `None`).
+
+    Raises:
+        KeyError: If `key` is not in the manifest.
+    """
+    option = get_option(key)
+    if option is None:
+        raise KeyError(key)
+    value, _source = resolve_scalar(option, toml_data=load_config_toml())
+    return value
 
 
 def option_keys() -> tuple[str, ...]:

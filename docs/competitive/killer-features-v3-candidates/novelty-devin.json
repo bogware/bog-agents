@@ -1,0 +1,280 @@
+{
+ "bucket": "Devin, Factory, Copilot agent, Jules, Kiro",
+ "checked": [
+  {
+   "title": "Native Agent Plugins 1.0 support (read, write, govern) with a com.bogware namespace",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/plugin_marketplace.py:108 (reads `manifest.json`, not `plugin.json`); :151-168 `install_plugin_from_path` is a bare `shutil.copytree` with no `skills/` or `mcp.json` handling; libs/cli/bog_agents_cli/extensions.py:21 own manifest `bog-agents-extension.json` with skills/hooks/mcp_servers/commands/agents fields; libs/cli/bog_agents_cli/claude_code_compat.py:214-262 imports Claude SKILL.md, :356 `sync_mcp_configs` for `.mcp.json`, :472 scans `~/.bog-agents/{extensions,plugins}`; tests libs/cli/tests/unit_tests/test_extensions.py + test_killer_features.py. `com.bogware` appears only as the daemon launchd label (libs/daemon/bog_agents_daemon/install.py:45). None found after grepping `plugin.json|enabledPlugins|strictKnownMarketplaces|Agent Plugins` in the CLI/SDK/daemon.",
+   "delta": "(1) A `plugin.json` loader that accepts the Agent Plugins 1.0 root layout (`skills/`, `mcp.json`, `agents/`, `commands/`, `hooks/`) and maps it onto the existing `ExtensionManifest`, replacing the copytree install; (2) install from a git repo or spec `marketplace.json` index (extend `plugin_marketplace.py` + `/plugin`); (3) an exporter that writes bog recipes, expert-rule packs and hooks under a `com.bogware.bog-agents/` vendor directory so one plugin round-trips; (4) managed-settings `enabledPlugins` / `strictKnownMarketplaces` read from a policy file and enforced identically in TUI, headless and daemon, layered on the existing `skill_trust`/`mcp_trust` fingerprint gates.",
+   "roadmap_ref": "#34",
+   "competitor": "GitHub Copilot (spec co-maintained by AWS, Anysphere, Microsoft, OpenAI, Vercel, Google; also Kiro 2026-08-07, Devin plugins)",
+   "source_url": "https://github.blog/changelog/2026-08-12-agent-plugins-1-0-in-vs-code-copilot-cli-and-the-copilot-app/",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated",
+    "solo power users"
+   ],
+   "why_killer": "A team that already maintains Copilot/Cursor/Kiro plugins can drop the same directory into bog and get skills + MCP servers working on first run, and can publish one plugin that its whole toolchain consumes - so adopting bog no longer means re-authoring customizations. ROADMAP #34 proposed a cross-ecosystem importer; the bar moved on 2026-08-06 when six vendors published a formal spec, so the win is now 'implements the standard' (with governance) rather than 'imports N ad-hoc formats'.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Temporal, sequence-aware policies in Expert Mode (Dogwood-class `formerly within` / `count_within` / `sum_within`) with a Dogwood importer",
+   "status": "absent",
+   "evidence": "libs/bog-agents/bog_agents/middleware/expert_engine/types.py:18-32 `PredicateOp` = eq/ne/in/not_in/gt/gte/lt/lte/matches/contains/exists/missing (no window or aggregate ops); expert_engine/working_memory.py:93-94 stamps a timestamp per fact and :221 `by_type` iterates, but there is no time-window query; libs/bog-agents/bog_agents/middleware/expert_rules.py:177 `_tool_call_history: deque(maxlen=200)` and :333-337 asserts a `tool_call` fact per call ('so cross-call rules work') but only exact-match predicates can read them; expert_engine/wizard.py:98-105 spend-threshold template is a static threshold, not a windowed sum; engine tests exist (libs/bog-agents/tests/unit_tests/test_expert_engine.py, test_expert_rules.py). None found after grepping `dogwood|cedar|count_within|sum_within|within|time_window` in expert_engine/ and expert_rules.py.",
+   "delta": "Add aggregate predicates over working memory keyed by fact timestamp — `count_within(fact_type, filter, window)`, `sum_within(field, window)`, `exists_within` / `not_since` — plus a `spend` fact source fed from `CostLedger`; register them in the YAML loader (`loader.py:74-79`), thread the matched temporal chain through `/why` and `/prove` explanations, lint them in `lint.py`, and add a Dogwood-policy importer (Cedar-superset grammar → bog YAML, with unsupported constructs reported rather than silently dropped). The predicates alone are M; the importer is what makes it L.",
+   "roadmap_ref": "none",
+   "competitor": "AWS (Dogwood, open-sourced 2026-08-06, integrated in Bedrock AgentCore Policy)",
+   "source_url": "https://aws.amazon.com/blogs/opensource/introducing-dogwood-runtime-verification-for-ai-agents/",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Regulated teams get the 'valid but wrong in sequence' guardrail AWS just made the reference model for agent governance - but provider-agnostic, offline and evaluated locally before every tool call, with `/why` and `/prove` explaining the temporal chain. Nobody in this bucket enforces temporal policy inside a local CLI; Kiro's own CVEs show why platform-enforced sequence rules beat model judgment.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Pre-flight cost estimate + hard USD budget with pause-and-resume (session, team, daemon run)",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/middleware/cost_tracker.py:236-240 `budget_exceeded`, :463-475 strict mode raises `RuntimeError` (ends the turn; no pause state), :433-442 `set_budget` tool; feature_config.py:136 `budget_usd`, graph.py:1031-1036 wiring; libs/bog-agents/bog_agents/cost_ledger.py:26-32 `RunawayCaps.max_cost_usd`, :131 `check_cost`, consumed by teams.py:270; libs/cli/bog_agents_cli/agent.py:1292,1898 `budget_usd` parameter; no CLI flag (none found after grepping `--budget|--max-cost` in main.py); config_manifest.py:459 only `models.thinking_budget`; daemon models.py has no budget field; no persisted cost history and no estimator (none found after grepping `estimate_cost|cost_history|budget_reached` — auto_mode.py:602 `haiku_preflight_check` is ambiguity detection, not cost).",
+   "delta": "(1) Replace the strict-budget `RuntimeError` with a `budget_reached` LangGraph interrupt that pauses the run and accepts only a raise-cap resume (TUI `/cost budget <N>`, headless flag, daemon `POST /runs/{id}/resume`); apply the same to `RunawayCaps` in `teams.py`; (2) a per-project cost history store written by CostTracker/daemon runner so a pre-run estimate can be derived from the operator judge's tier plus historical spend per tier; (3) `AmbientJob.budget_usd` copied onto every run and shown in `/jobs`; (4) `--budget` CLI flag + config_manifest entry + a pre-run 'estimated $X–$Y, cap $Z' line.",
+   "roadmap_ref": "#25",
+   "competitor": "Anthropic Managed Agents (session/deployment budgets); GitHub Copilot AI-credit backlash",
+   "source_url": "https://platform.claude.com/docs/en/managed-agents/budgets",
+   "target_users": [
+    "solo power users",
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "The single loudest complaint across Copilot (#198015, 391 upvotes), Kiro and Devin in this window is 'I cannot know what a task will cost before running it, and it burned my month in hours'. A user who sees '$0.40-$1.20 estimated, hard cap $2' and can resume a paused run instead of losing it gets the cost certainty no hosted vendor offers. ROADMAP #25 covered caps; the bar moved to pause-not-kill semantics plus pre-run estimates.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`bog outpost`: daemon-hosted named work queues with atomic worker claims and `/handoff` from a live CLI session",
+   "status": "partial",
+   "evidence": "libs/bog-agents/bog_agents/teams.py:93 `TaskLedger.claim_next` is atomic but in-process only (none found after grepping `sqlite|json|persist|save|load` in teams.py); libs/daemon/bog_agents_daemon/api.py:530-815 exposes `/jobs`, `/jobs/{id}/run`, `/runs` but no named queue or worker-claim endpoint; libs/cli/bog_agents_cli/handoff.py:1-15 `/handoff` writes a human-to-human markdown brief to `~/.bog-agents/handoffs/`, not a session transfer; libs/cli/bog_agents_cli/remote.py:1-4 `/remote` is a local `remote-tasks.json` registry + RemoteGraph client (tests test_remote.py, test_remote_client.py); session checkpointer + `session_search.py` exist for resume. None found after grepping `outpost|teleport|bog attach|claim_next` outside teams.py.",
+   "delta": "A daemon-side durable queue store (SQLite: queue name, job payload, lease/heartbeat, claimed_by) with an atomic-claim endpoint modeled on `TaskLedger.claim_next`; a `bog worker --queue <name>` loop that claims exactly once, runs the job through the existing runner and streams events back over the run API; `/handoff --queue <name>` that packages thread id + `git diff` + untracked files into the payload; and `bog attach <run-id>` hydration of a daemon run into the TUI (ROADMAP #33) so the session is resumable from another machine — all air-gap capable, no vendor control plane.",
+   "roadmap_ref": "#33, #42",
+   "competitor": "Cognition Devin (Outposts + CLI /handoff); AWS Kiro (cloud sessions); GitHub Copilot app (local/cloud continuity)",
+   "source_url": "https://docs.devin.ai/cloud/outposts/overview",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated",
+    "solo power users"
+   ],
+   "why_killer": "A team keeps execution inside its own network next to secrets and registries (or a solo dev uses the spare desktop as a runner) while still starting work from a laptop and closing the lid - and unlike Devin/Kiro there is no vendor control plane, so it works air-gapped and with local models. ROADMAP #33 (teleport) and #42 (fleet) proposed pieces; the bar moved to the specific 'named queue + atomic claim + on-demand workers' pattern that three vendors converged on this summer.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Scan jobs: a daemon job type that produces a deduplicated findings ledger with triage states and 'remediate -> PR'",
+   "status": "absent",
+   "evidence": "libs/daemon/bog_agents_daemon/models.py:12-21 `TriggerType` = cron/file_change/webhook/git_push/github/manual/interval — jobs are prompt+trigger only, no job kind; none found after grepping `scan|finding|triage|remediat|dedup` in the daemon (only scheduler.py:48,482 wording); CLI has one-shot prompt templates only — libs/cli/bog_agents_cli/standing_orders.py:55-74 bug-scanner and recipes.py:106-112 incident-triage emit markdown, and `/audit` (commands/quality.py:11-12) is a dependency-vulnerability audit; no findings store or triage states anywhere.",
+   "delta": "Add a `scan` job kind to `AmbientJob` (scan profile: security/cleanup/perf/custom rubric, severity threshold); a SQLite findings table keyed by a stable fingerprint (path + rule + normalized snippet) so re-runs update rather than duplicate; triage states open/addressed/wontfix/incorrect with a `/findings` TUI view and headless twin; auto re-scan on the existing `git_push`/`github` triggers; and `/remediate <finding-id>` that launches a run with the finding as goal and attaches the (currently unwired) `EvidenceBundleMiddleware` output to the resulting PR.",
+   "roadmap_ref": "none (PR side overlaps #30; event-triggered playbooks v1 #14)",
+   "competitor": "Cognition Devin (scheduled code scans, /scan, cleanup scan, batch remediation API)",
+   "source_url": "https://docs.devin.ai/release-notes",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A team gets a standing, self-updating backlog of real issues that survives across runs instead of a fresh wall of findings every night, and can turn any item into a PR with evidence attached - the workflow Devin now sells as an automation type, but runnable on-prem with local models and governed by Expert Mode.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Self-review loop on autonomous PRs with resolution-reason feedback into the rubric",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/self_review_controller.py:1-12 five-lens SHIP/FIX-FIRST gate behind `/self-review` (tests test_self_review_controller.py); jury.py + test_jury.py; libs/cli/bog_agents_cli/cmd_pr_review.py:52,249 fetches the PR diff and builds a review prompt but never posts review comments (none found after grepping `gh pr review|/reviews|post` in that file); libs/bog-agents/bog_agents/middleware/evidence_bundle.py:1-9 can attach a bundle to a PR via `gh`, but it is not wired into graph.py / feature_config.py / CLI / daemon (grep for `EvidenceBundleMiddleware|evidence_bundle` hits only middleware/__init__.py:104 lazy import and tests/unit_tests/test_evidence.py); libs/daemon/bog_agents_daemon/runner.py:858 `_dispatch_github_comment` posts plain comments; none found after grepping `resolution reason|won't fix|wontfix|false positive` feedback capture in CLI/daemon/SDK.",
+   "delta": "(1) Wire `EvidenceBundleMiddleware` through `FeatureConfig` and the daemon runner; (2) a post-PR-open step (daemon `github` trigger, `/team run`, `/pr`) that runs the jury reviewer profile over the diff and posts findings as GitHub review comments (extend cmd_pr_review.py with `gh api pulls/{n}/reviews`); (3) a resolution ingester — GitHub review-thread resolution events plus `/resolve <id> addressed|wontfix|incorrect` — persisted beside the evidence bundle; (4) feed `incorrect` dispositions into the rubric grader as negative exemplars so the same class of false positive is suppressed on later PRs; handle bot-authored and oversized diffs by chunking.",
+   "roadmap_ref": "#29, #30",
+   "competitor": "GitHub Copilot code review (bot-authored PR review, no size limit, resolution reasons)",
+   "source_url": "https://github.blog/changelog/2026-08-27-copilot-code-review-resolution-reasons-and-expanded-capabilities",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "Reviewers stop paying twice - once for the agent's PR and again for a review that ignores what they already told it. ROADMAP #29/#30 proposed evidence bundles and CI auto-repair; the bar moved to closed-loop review where human dispositions become training signal, which no vendor exposes locally.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Provider health monitor + automatic cross-provider failover policy in Operator mode, with local-model degrade path",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/bedrock_resilience.py:1-35,374 `BedrockResilienceMiddleware` live-turn categorize + fallback ladder, gated to Bedrock only (:275 `is_bedrock_chat_model`, :306 `_looks_like_bedrock_failure`); `[models].fallbacks` (model_config.py:1300) is consumed at construction time in libs/cli/bog_agents_cli/config.py:2638-2645 `create_model_with_fallback` (instantiation failures only, not live 429/5xx); libs/bog-agents/bog_agents/middleware/provider_retry.py:1-20 retries timeouts/5xx and explicitly does not retry 429/4xx or switch providers; libs/cli/bog_agents_cli/operator_mode.py:100-127 presets are static tier tables with no health input. None found after grepping `failover|degrad|provider health|429` in operator_mode.py, model_config.py, cost_ledger.py.",
+   "delta": "A rolling per-provider health sampler (error/429/latency windows) recorded alongside `CostLedger`; a generic `ProviderFailoverMiddleware` that generalizes the Bedrock ladder (categorize → hop → remember) to any provider including an Ollama degrade rung; an `[operator.failover]` policy table in `operator.toml` (provider → ordered fallbacks, thresholds) consulted by `_build_cli_context` when staging the turn model; and a status-line notice ('Opus degraded → Sonnet') plus `/model` visibility of current health.",
+   "roadmap_ref": "none",
+   "competitor": "Factory Router (cross-provider failover, private preview); Devin model degradation notifications (2026-08-19)",
+   "source_url": "https://factory.ai/news/factory-router",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A solo user's overnight run finishes even when one provider melts down, and a cost-sensitive user gets automatic 'downgrade to local' rather than a stalled session - the reliability story Factory charges for, delivered with keys the user already owns.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Session-UX table stakes: editable message queue, /recap, 'Waiting' status, PR-status grouping in /threads, mark-unread and archive",
+   "status": "partial",
+   "evidence": "Prompt queue exists: libs/cli/bog_agents_cli/app.py:362-378 `QueuedMessage`, :14630-14632 enqueues a `QueuedUserMessage` (widgets/messages.py:282, a `Static` with no edit/remove/reorder actions — none found after grepping `action_(edit|remove)|reorder|dequeue`), tested in tests/unit_tests/test_app.py and test_messages.py; `/btw` sidechain exists; `/threads` subcommands are list/delete/resume/search only (commands/session.py:37-48). None found after grepping `/recap|_handle_recap`, `unread|archive|group by|pr status` in session.py/session_search.py, or an explicit `Waiting` state (app.py:15855,15929 only comment on HITL keeping the worker active).",
+   "delta": "Queue editing (inline edit / remove / reorder on `QueuedUserMessage` before drain), `/recap` built on `sidechain.py` + `feature_helpers.invoke_model` summarizing everything since the last user turn, a status-bar `Waiting on you` state driven by pending HITL/ask-user widgets, `/threads --group pr|repo` using `gh pr status` per thread branch, and unread/archive flags stored in the FTS sidecar (`sessions_fts.db`) so the checkpointer stays untouched.",
+   "roadmap_ref": "none (adjacent: v1 #11)",
+   "competitor": "Cognition Devin (queued messages, Waiting status, /recap, PR grouping); Factory (edit queued messages); GitHub Copilot CLI (prompt queue)",
+   "source_url": "https://releasebot.io/updates/devin",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Every competitor CLI shipped these in July-August; a power user who juggles several long runs now expects to queue thoughts without interrupting, catch up in one paragraph, and see at a glance which sessions are blocked on them. Missing them reads as unpolished regardless of bog's deeper features.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Spec review screen with staged line comments + full-screen task execution with scope selection; headless `bog --plan --auto`",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/app.py:7873-7900 `/plan` is a read-only tool-hiding toggle, not a plan artifact; libs/cli/bog_agents_cli/butcher.py:1299-1322 `_confirm_butcher_plan` pushes a yes/no `ButcherPlanApprovalScreen` (no line comments, no slice selection); widgets/goal_review.py:1-8 is a read-only modal; JTBD has no review screen; headless has `--auto`, `--print`, `--prompt`, `--permission-mode` (main.py:441,619,627,689) but no `--plan` that generates then executes. None found after grepping `line comment|staged comment|inline comment|select slices|run only`.",
+   "delta": "A shared `PlanReviewScreen` modal for butcher manifests, JTBD job specs and plan-mode output: line-addressed comment staging → one consolidated revision prompt → re-plan loop; per-slice checkbox selection written back into `ButcherJob` so only chosen slices execute; a full-screen execution view reusing `dashboard.py` panels for per-task progress; and `bog-agents --plan \"<prompt>\" --auto` in non_interactive.py that plans, optionally prints, then executes under the current permission mode.",
+   "roadmap_ref": "none (touches #46)",
+   "competitor": "AWS Kiro (V3 spec review + full-screen execution); GitHub Copilot CLI (`--plan --mode autopilot`)",
+   "source_url": "https://kiro.dev/changelog/cli/",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A developer reviews an agent's plan the way they review a PR - inline, once, with comments - instead of retyping objections into chat, then runs only the tasks they trust. Bog already has three plan-shaped surfaces; giving them one review/execution UI is the difference between 'has planning' and 'planning people use'.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`bog dream` as an explicit, reviewable, non-destructive memory rebuild over N past sessions (daemon-schedulable, local-model friendly)",
+   "status": "absent",
+   "evidence": "Two unrelated 'dream' surfaces exist: libs/cli/bog_agents_cli/dream.py:1-11 `/dream` v1 scans TODO/FIXME comments and sketches implementations (daemon-installable via `/dream install`); libs/cli/bog_agents_cli/dreamscape/dream_engine.py:1-22,106-149 v2 mixes recent dream titles + shared-memory entries into creative dream text on dormancy. Neither reads session transcripts nor rewrites the memory store. None found after grepping `consolidat|def rebuild|contradict|memory rebuild` in libs/bog-agents/bog_agents/hybrid_memory.py, middleware/auto_memory.py, memory middleware, or dream_engine.py.",
+   "delta": "A `memory_rebuild.py` batch (pure logic, injected `invoke`): load the current memory store + N selected transcripts from `sessions.db` / `session_search.py`, run an instruction-steerable consolidation pass (dedup, contradiction resolution, new insights, provenance kept), emit a candidate store under `.bog-agents/memory.rebuild/`, show a diff in the TUI (`/dream memory` or `/remember rebuild`), swap only on approval, then rebuild the `hybrid_memory` index; expose it as a daemon job template and default it to the operator preset's cheap/local tier.",
+   "roadmap_ref": "#45 (partial overlap)",
+   "competitor": "Anthropic Managed Agents (Dreams research preview); Kiro Crew (durable lessons)",
+   "source_url": "https://platform.claude.com/docs/en/managed-agents/dreams",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Users get memory that improves over months instead of silting up with stale, contradictory notes, and can inspect exactly what changed before trusting it - Anthropic gates this behind a research-preview header on its hosted platform; bog can ship it locally today because the transcripts and store are already on disk.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Platform-enforced protected paths + workspace-trust gate + web-fetch domain allow/deny lists",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/self_protection.py:27-33 `_PROJECT_AUTHORITY_PATTERNS` guards `.bog-agents/expert_rules/**`, `laws.md`, `constitution.md`, `.bog-agents/hooks/**`, `.mcp.json` via `FilesystemPermission` interrupt rules (HITL even under auto-approve, :8-10), wired at agent.py:1791,2100, tested in tests/unit_tests/test_self_protection.py; :79 `command_targets_authority_file` best-effort shell screen; project MCP trust gate main.py:1465 `_check_mcp_project_trust` and hooks trust gate project_hooks.py:305; domain allowlists exist only as opt-in `AirGappedMiddleware` (libs/bog-agents/bog_agents/middleware/air_gapped.py:195) and `BrowserAgentMiddleware(allowed_domains=…)` (graph.py:1118) plus the egress proxy. Missing: `.claude/settings.json`, `.cursor/hooks.json`, `.vscode/tasks.json`, `.git/hooks` are not in the pattern list; the guard prompts rather than fail-closed denies; none found after grepping `workspace trust|trusted_workspace|untrusted repo` for a repo-level trust prompt before instruction files load; none found after grepping `blocked_domains|domain_denylist` on web fetch/search tools.",
+   "delta": "Extend `_PROJECT_AUTHORITY_PATTERNS` with the editor/CI self-config files and add a `deny` tier (fail-closed, `/why`-explained) for the config-rewrite class in every permission mode; add a first-open workspace trust record (same fingerprint store pattern as `mcp_trust.py`) that gates loading of repo-controlled instructions (CLAUDE.md/AGENTS.md/.bog-agents rules/prompt commands) until trusted; add `allowed_domains` / `blocked_domains` `FeatureConfig` fields enforced inside the web fetch/search tools independent of air-gapped mode.",
+   "roadmap_ref": "#24",
+   "competitor": "AWS Kiro (CVE-2026-10591 config rewrite; workspace exfiltration fixed 0.8.140); Anthropic Managed Agents (domain controls 2026-08-20)",
+   "source_url": "https://thehackernews.com/2026/07/aws-kiro-flaw-let-poisoned-web-page.html",
+   "target_users": [
+    "enterprise / regulated",
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Two public CVEs proved an agent will rewrite its own MCP config from a poisoned doc page and exfiltrate a workspace on the first message; a user who opens an unknown repo with bog gets a guarantee the agent cannot widen its own permissions or phone home, enforced below the model. ROADMAP #24 proposed a self-modification guard; the bar moved from 'nice to have' to 'the thing security teams now ask about first'.",
+   "effort": "S",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Org usage exporter: per-user/per-agent daily metrics from the cost ledger to OTLP (CloudWatch, Datadog, Honeycomb...) and CSV",
+   "status": "proposed-not-built",
+   "evidence": "OpenTelemetry appears only inside the LangSmith bridge (libs/bog-agents/bog_agents/middleware/langsmith_integration.py:135-144); libs/cli/bog_agents_cli/_observability.py:26 states 'no OpenTelemetry, no Prometheus client'; no persisted cost history (none found after grepping `cost_history|cost_log|spend ledger` in CLI/SDK); `/harbor export csv` (app.py:4552-4579) exports benchmark results only; the daemon has no metrics endpoint or exporter. ROADMAP #38 proposes OTel GenAI semconv with no code beyond the LangSmith bridge.",
+   "delta": "Durable per-run usage records (session/thread id, user, model, job id, tokens, USD) written by CostTracker and the daemon runner into SQLite; a daemon `metrics` exporter that aggregates per-user/per-model/per-job daily and pushes over OTLP HTTP/gRPC (optional `opentelemetry-exporter-otlp` extra, `gen_ai.*` semconv attribute names) plus a CSV drop; org-level configuration through `config_manifest.py` so it is a one-time setting, not per-developer.",
+   "roadmap_ref": "#38",
+   "competitor": "AWS Kiro (OTel usage metrics export, 2026-09-01); GitHub (per-user AI credits in usage metrics API, 2026-06-19)",
+   "source_url": "https://kiro.dev/changelog/",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "Platform teams can put agent adoption and spend on the same Datadog board as everything else without asking developers to install anything - the exact question procurement asks before approving a rollout. ROADMAP #38 covered semconv tracing; the bar moved to admin-side daily usage export as a checkbox feature.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Multi-human team sessions from Slack/Teams with in-thread mode toggles",
+   "status": "proposed-not-built",
+   "evidence": "Slack is outbound-only: libs/daemon/bog_agents_daemon/runner.py:831 `_dispatch_slack` posts via an incoming webhook (models.py:118-119 `slack_webhook_url`/`slack_channel`); inbound is the generic `/webhooks/{webhook_path}` trigger (api.py:950) with no Slack signing verification, no thread binding, no steering. None found after grepping `events api|thread_ts|app_mention|socket mode|!fast|!ultra` in daemon and CLI. ROADMAP #32 proposes two-way Slack with no code.",
+   "delta": "A Slack Events/Socket-Mode consumer in the daemon (signing-secret verification, `app_mention` in a thread → new run bound to `thread_ts`, thread replies from any member → steer via the run API), per-message `!fast` / `!ultra` / `!ask` parsed into effort (`reasoning_effort.py`) and permission-mode overrides for that turn, and posting run state, cost and the evidence bundle back into the thread; a Teams adapter behind the same interface second.",
+   "roadmap_ref": "#32",
+   "competitor": "GitHub Copilot (@GitHub team sessions in Slack/Teams, 2026-08-24); Cognition Devin (Slack thread sync, !ultra/!fast)",
+   "source_url": "https://github.blog/changelog/2026-08-28-github-copilot-weekly-releases-august-24",
+   "target_users": [
+    "small dev teams",
+    "enterprise / regulated"
+   ],
+   "why_killer": "A small team debugs an incident together with one agent in the channel where the incident already lives, instead of one person relaying between chat and a terminal - and the transcript plus evidence bundle is the postmortem. ROADMAP #32 proposed two-way Slack; the bar moved to multi-human steering with per-message mode switches.",
+   "effort": "L",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "'Core pool' routing: send cheap sub-tasks (classification, research, summarization, subagent exploration) to local/open-weight models automatically and show the savings",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/operator_mode.py:115-127 `local` and `hybrid` presets route whole turns by judge tier to Ollama models; butcher weak workers execute slices on a cheaper model; subagents accept a per-spec `model` (libs/bog-agents/bog_agents/middleware/subagents.py:427-440) but nothing routes side tasks (research, summarization, judge) automatically and there are no per-pool rate limits; the `/cost` savings counters are the context sweeper's token savings (libs/cli/bog_agents_cli/sweep_controller.py:15-48, commands/general.py:34), not routing savings. None found after grepping `saved \\$|routed.*local|core pool`.",
+   "delta": "An `[operator.pool]` policy in `operator.toml` mapping task classes (subagent exploration, summarization, `@codebase` research, operator judge, butcher workers) to a pool model with its own concurrency/rate limit, applied at subagent spawn and at the summarization/judge call sites; a counterfactual line in `CostLedger` ('would have cost $X on the primary model') surfaced in `/cost` as 'saved $X by routing N calls to local'.",
+   "roadmap_ref": "#46, #25",
+   "competitor": "Factory Droid Core (free open-weight pool); GitHub Copilot (Ollama BYOK, 2026-08-10); Cognition SWE-1.7 (open-weight base)",
+   "source_url": "https://docs.factory.ai/pricing",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "A cost-sensitive solo user keeps frontier quality where it matters and pays nothing for the 60% of calls that a local model handles fine - and sees the number. Factory sells this as a plan feature; bog can make it a policy over keys and hardware the user already has, which is exactly its Windows-first/local-models positioning.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "`/tasks` command center: one tree view of teams, subagents, worktrees, background shells and daemon jobs with per-node status, cost, and kill/steer",
+   "status": "partial",
+   "evidence": "libs/cli/bog_agents_cli/dashboard.py:4,80,129-155 `/dashboard` is a live per-agent grid with per-agent cost and team summaries, watch-only (`stop()` at :361 stops the refresh timer, not agents), tested via tests/unit_tests/test_team_orchestration.py and test_killer_features.py; `/background`, `/jobs`, `/team`, `/worktrees`, `/squad` are separate commands (commands/agent.py:31,87,97; commands/enterprise.py:11,31; commands/general.py:482); `background_shell.py` registry is not surfaced in the dashboard. None found after grepping `\"/tasks\"` or nested/parent tree rendering. ROADMAP v1 #11 already records the 'control half' as missing.",
+   "delta": "A unified `TaskNode` model aggregating the team ledger, subagent registry, worktree manager, `background_shell` registry and daemon `/runs`; a Textual `Tree` screen (`/tasks`) with per-node state (running/waiting/blocked/ready-for-review/done), spend from `CostLedger.format_tree`, and actions kill / steer (peer mailbox) / pause / open diff; optional Kanban grouping by state.",
+   "roadmap_ref": "v1 #11, #25",
+   "competitor": "GitHub Copilot CLI (/tasks, 2026-08-10); Cognition Devin (nested Sub-Devin views, Agent Command Center, 2026-08-21)",
+   "source_url": "https://github.blog/changelog/2026-08-13-github-copilot-weekly-releases-august-10/",
+   "target_users": [
+    "solo power users",
+    "small dev teams"
+   ],
+   "why_killer": "Someone running a fan-out sees in one screen which of eleven agents is stuck and what each has cost, instead of hopping between five slash commands - the governance bog already computes becomes something a person can act on in seconds.",
+   "effort": "M",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "On-device voice dictation (`/voice`) with project-terminology cleanup",
+   "status": "absent",
+   "evidence": "The existing `/whisper` (libs/cli/bog_agents_cli/commands/general.py:569-571, whisper.py) is passive file-edit + git observation, not speech. None found after grepping `faster-whisper|whisper.cpp|dictat|speech-to-text|push-to-talk|microphone|sounddevice|pyaudio` in libs/cli (code and pyproject.toml).",
+   "delta": "An optional `[voice]` extra (faster-whisper + sounddevice), a push-to-talk keybinding on `ChatTextArea` that records and transcribes in a background worker with language auto-detect, and a cleanup pass through the operator preset's cheap tier using a repo glossary (`repomap` identifiers / `.bog-agents/glossary.md`) so identifiers are spelled correctly; Windows audio capture must be verified on the default path.",
+   "roadmap_ref": "none",
+   "competitor": "AWS Kiro (/voice on-device Whisper, 2026-08-12); GitHub Copilot (multilingual dictation, 2026-08-31); Factory (voice dictation)",
+   "source_url": "https://kiro.dev/changelog/cli/",
+   "target_users": [
+    "solo power users"
+   ],
+   "why_killer": "Three vendors shipped it in six weeks, so it is becoming expected; a solo user gets hands-free prompting that stays private, which matters more for a local-first tool than for cloud IDEs.",
+   "effort": "S",
+   "duplicate_of": "none"
+  },
+  {
+   "title": "Plugin/skill governance manifest: required / optional / forbidden with layered scopes and soft-fail",
+   "status": "absent",
+   "evidence": "Trust stores are per-user allowlists only: libs/cli/bog_agents_cli/skill_trust.py:293-322 `is_skill_dir_trusted` / `trust_skill_dir` (per-directory exceptions to the symlink refusal) and libs/cli/bog_agents_cli/mcp_trust.py:113-234 fingerprint-gated project MCP + hooks trust; libs/cli/bog_agents_cli/rbac.py, enterprise.py and libs/bog-agents/bog_agents/middleware/rbac.py carry no skill/plugin policy (none found after grepping `skill|plugin|mcp|forbid|allowlist` there). None found after grepping `governance.toml|managed settings|enterprise_policy|required_plugins|forbidden_plugins|policy_url` in CLI/SDK/daemon.",
+   "delta": "A `governance.py` loader merging `.bog-agents/governance.toml`, `~/.bog-agents/governance.toml` and a remote policy URL with Enterprise > Org > User precedence; `required` (auto-install recursively through the plugin/extension installers), `optional` (endorsed list) and `forbidden` (globs) sets; enforcement hooks in `SkillsMiddleware`'s pluggable trust checker, `mcp_tools.py` server loading and the extension loader; a forbidden item is skipped with a warning naming the forbidding scope and never aborts the session; identical behavior in TUI, headless and daemon, with a `/skills policy` view.",
+   "roadmap_ref": "#23 (adjacent), #34",
+   "competitor": "Cognition Devin (plugin governance, 2026-07-17); GitHub (managed-settings enabledPlugins/strictKnownMarketplaces); Factory (org MCP/plugin marketplace governance, 2026-06-18)",
+   "source_url": "https://docs.devin.ai/product-guides/plugin-ecosystem",
+   "target_users": [
+    "enterprise / regulated",
+    "small dev teams"
+   ],
+   "why_killer": "A platform team can guarantee every developer's agent carries the security-review skill and never loads an unvetted MCP server, without touching each machine - and developers are not blocked when policy and their setup disagree. This is the governance layer that makes the Agent Plugins candidate acceptable to a CISO.",
+   "effort": "M",
+   "duplicate_of": "none"
+  }
+ ]
+}

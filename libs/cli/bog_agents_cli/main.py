@@ -390,6 +390,11 @@ def parse_args() -> argparse.Namespace:
 
     setup_call_parser(subparsers)
 
+    # ROADMAP #62: Agent Plugins 1.0 + one-command import from other tools.
+    from bog_agents_cli.cmd_plugin import setup_plugin_parser
+
+    setup_plugin_parser(subparsers)
+
     # Bedrock connection probe — credentials, region, model access,
     # tiny inference. Self-contained: doesn't load the agent.
     bedrock_parser = subparsers.add_parser(
@@ -401,7 +406,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Bedrock model id to test inference against, e.g. "
-            "anthropic.claude-sonnet-4-20250514-v1:0. When omitted, "
+            "us.anthropic.claude-sonnet-4-6. When omitted, "
             "steps 1-5 (credentials, region, list models) still run."
         ),
     )
@@ -456,6 +461,46 @@ def parse_args() -> argparse.Namespace:
         help="Workspace root the agent operates in (default: current directory).",
     )
 
+    # ROADMAP #56: sessions on this machine, cross-process queue, attach.
+    sessions_parser = subparsers.add_parser(
+        "sessions",
+        help="List live bog-agents sessions on this machine (TUI, daemon runs, detached servers)",
+    )
+    sessions_parser.add_argument(
+        "--all", action="store_true", help="Include stale records"
+    )
+    sessions_parser.add_argument(
+        "--prune", action="store_true", help="Delete records whose host is gone"
+    )
+
+    queue_parser = subparsers.add_parser(
+        "queue",
+        help="Queue a prompt for a running session; it runs when that session is idle",
+    )
+    queue_parser.add_argument(
+        "--session",
+        required=True,
+        help="Session name or id (see `bog-agents sessions`)",
+    )
+    queue_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="Wait for the session's answer and print it",
+    )
+    queue_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600.0,
+        help="Seconds --wait waits before giving up (default 600)",
+    )
+    queue_parser.add_argument("prompt", help="The prompt to queue")
+
+    attach_parser = subparsers.add_parser(
+        "attach",
+        help="Reconnect the TUI to a session left running with /detach",
+    )
+    attach_parser.add_argument("session", help="Session name or id")
+
     threads_parser = subparsers.add_parser(
         "threads",
         help="Manage conversation threads",
@@ -508,6 +553,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Show timestamps as relative time (default: from config, or absolute)",
     )
+    # ROADMAP #62: session import / export.
+    from bog_agents_cli.cmd_plugin import setup_threads_transfer_parsers
+
+    setup_threads_transfer_parsers(threads_sub)
+
     threads_delete = threads_sub.add_parser(
         "delete",
         help="Delete a thread",
@@ -563,6 +613,35 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--mini",
+        action="store_true",
+        help=(
+            "Lean harness profile: a short base prompt, one-line tool "
+            "descriptions and no todo list, for roughly a third of the fixed "
+            "tokens per turn. Inspect with /tokens middleware."
+        ),
+    )
+
+    parser.add_argument(
+        "--restricted",
+        action="store_true",
+        help=(
+            "Restricted trust profile: no shell, git, raw HTTP, search or "
+            "daemon tools; bypass and accept-edits are refused; web fetches "
+            "only reach the configured allowed domains (ROADMAP #48)."
+        ),
+    )
+
+    parser.add_argument(
+        "--name",
+        default=None,
+        help=(
+            "Name this session so `bog-agents sessions`, `bog-agents queue "
+            "--session NAME` and `bog-agents attach NAME` can address it."
+        ),
+    )
+
+    parser.add_argument(
         "--default-model",
         metavar="MODEL",
         nargs="?",
@@ -596,6 +675,14 @@ def parse_args() -> argparse.Namespace:
         metavar="TEXT",
         help="Run a single task non-interactively and exit "
         "(shell disabled unless --shell-allow-list is set)",
+    )
+
+    parser.add_argument(
+        "--plan",
+        dest="plan_prompt",
+        metavar="TEXT",
+        help="Headless plan-then-execute (ROADMAP #69): a read-only planning pass prints the plan; "
+        "add --auto (or --auto-approve) to execute it in a second pass",
     )
 
     parser.add_argument(
@@ -692,8 +779,8 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help=(
             "Smart auto-approve: auto-run tool calls that pass the rule engine; "
-            "ask only for risky operations. Haiku evaluates uncertain shell "
-            "commands. Overridden by --always-ask. Configure rules in "
+            "ask only for risky operations. A cheap model from your active provider "
+            "reviews uncertain shell commands. Overridden by --always-ask. Configure rules in "
             ".bog-agents/settings.json."
         ),
     )
@@ -867,6 +954,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Create the PR as a draft",
     )
+    parser.add_argument(
+        "--pr-review",
+        action="store_true",
+        help="After the PR is opened, run the configured jury over the diff and post its findings as a GitHub review (deduped on the diff fingerprint; #67)",
+    )
+    parser.add_argument(
+        "--pr-effort",
+        default="default",
+        metavar="LEVEL",
+        help='Review effort for --pr-review: default | high | custom:"<rule>" (#67)',
+    )
+    parser.add_argument(
+        "--pr-evidence",
+        action="store_true",
+        help="Append a proof-of-work evidence bundle (changed files, test results) to the PR body and enable the agent's evidence tools",
+    )
 
     parser.add_argument(
         "--auto-commit",
@@ -882,6 +985,15 @@ def parse_args() -> argparse.Namespace:
         "--doctor",
         action="store_true",
         help="Run diagnostics to check environment, dependencies, and configuration",
+    )
+    parser.add_argument(
+        "--doctor-features",
+        action="store_true",
+        help=(
+            "Audit the advertised slash-command surface: every command has a "
+            "handler, implements its documented subcommands, and depends on no "
+            "dead middleware lookup. Exit code 1 when anything drifted."
+        ),
     )
     parser.add_argument(
         "--doctor-deep",
@@ -942,6 +1054,13 @@ def _normalize_permission_mode(args: argparse.Namespace) -> None:
         mode = "bypass"
 
     if mode is None:
+        # v6 #47: honour the wizard's saved approval mode when neither a
+        # permission mode nor a legacy approval flag was given explicitly.
+        if not any(
+            bool(getattr(args, key, False))
+            for key in ("auto_approve", "auto_mode", "always_ask")
+        ):
+            args.auto_mode = _settings_default_auto_mode()
         return
 
     target = _PERMISSION_MODE_FLAGS[mode]
@@ -959,6 +1078,16 @@ def _normalize_permission_mode(args: argparse.Namespace) -> None:
     args.auto_mode = target.get("auto_mode", False)
     args.always_ask = target.get("always_ask", False)
     args.plan_mode = target.get("plan_mode", False)
+
+
+def _settings_default_auto_mode() -> bool:
+    """Return `auto_mode.enabled` from the settings cascade (False on any error)."""
+    try:
+        from bog_agents_cli.auto_mode import load_auto_mode_settings
+
+        return bool(load_auto_mode_settings(Path.cwd()).enabled)
+    except Exception:
+        return False
 
 
 def _exit_permission_conflict(msg: str) -> None:
@@ -987,6 +1116,9 @@ async def run_textual_cli_async(
     mcp_config_path: str | None = None,
     no_mcp: bool = False,
     trust_project_mcp: bool | None = None,
+    mini: bool = False,
+    restricted: bool = False,
+    session_name: str | None = None,
 ) -> "AppResult":
     """Run the Textual CLI interface (async version).
 
@@ -1013,8 +1145,11 @@ async def run_textual_cli_async(
 
             These override config file values.
         profile_override: Extra profile fields from `--profile-override`.
-
             Merged on top of config file profile overrides.
+        mini: Build the agent on the SDK's `lean` harness profile (`--mini`).
+        restricted: Run under the `--restricted` trust profile (ROADMAP #48).
+        session_name: `--name` — how `bog-agents sessions` / `queue` / `attach`
+            address this session (ROADMAP #56).
         thread_id: Thread ID to use (new or resumed)
         initial_prompt: Optional prompt to auto-submit when session starts
         mcp_config_path: Optional path to MCP servers JSON configuration file.
@@ -1054,6 +1189,11 @@ async def run_textual_cli_async(
 
     from bog_agents_cli.app import AppResult
 
+    if restricted:
+        # ROADMAP #48: a restricted session never starts in bypass / accept-edits.
+        auto_approve = False
+        auto_mode = False
+
     # Build kwargs for deferred server startup (runs inside the TUI)
     server_kwargs: dict[str, Any] = {
         "assistant_id": assistant_id,
@@ -1067,7 +1207,19 @@ async def run_textual_cli_async(
         "no_mcp": no_mcp,
         "trust_project_mcp": trust_project_mcp,
         "interactive": True,
+        "harness_profile": "lean" if mini else None,
+        "restricted": restricted,
     }
+    # ROADMAP #56: an `attach` reuses the detached session's server; otherwise
+    # record the `--name` so the App registers itself under it.
+    from bog_agents_cli.session_controller import configure_launch, launch_config
+
+    attached = launch_config().attach
+    if attached is not None:
+        server_kwargs["attach_url"] = attached.server_url
+        server_kwargs["attach_pid"] = attached.server_pid
+    else:
+        configure_launch(name=session_name)
 
     mcp_preload_kwargs: dict[str, Any] | None = None
     if not no_mcp:
@@ -1705,6 +1857,15 @@ def cli_main() -> None:
         _run_doctor(_DoctorConsole())
         sys.exit(0)
 
+    # --doctor-features fast path: static audit of the slash-command surface
+    # (v6 Wave 0 — the REVIEW v4 §4.1 "advertised means reachable" gate).
+    if len(sys.argv) == 2 and sys.argv[1] == "--doctor-features":
+        from bog_agents_cli.feature_selftest import audit_command_surface, render_audit
+
+        audits = audit_command_surface()
+        print(render_audit(audits))  # noqa: T201 — CLI output
+        sys.exit(0 if all(a.ok for a in audits) else 1)
+
     # --doctor-deep fast path: like --doctor but probes external deps too.
     if len(sys.argv) == 2 and sys.argv[1] == "--doctor-deep":
         from rich.console import Console as _DoctorConsole
@@ -1749,6 +1910,10 @@ def cli_main() -> None:
 
     try:
         args = parse_args()
+        if getattr(
+            args, "plan_prompt", None
+        ):  # ROADMAP #69: --plan rides the non-interactive path
+            args.non_interactive_message = args.plan_prompt
 
         model_params: dict[str, Any] | None = None
         raw_kwargs = getattr(args, "model_params", None)
@@ -1791,8 +1956,8 @@ def cli_main() -> None:
             except ImportError as exc:
                 msg = (
                     f"ACP dependencies not available: {exc}\n"
-                    "Install with: pip install 'bog-agents-cli[acp]'\n"
-                    "  or: uv add 'bog-agents-cli[acp]'\n"
+                    "bog-agents-acp is not published yet. Install it from a source checkout:\n"
+                    "  uv pip install -e libs/acp   (from the bog-agents repository root)\n"
                 )
                 sys.stderr.write(msg)
                 sys.stderr.flush()
@@ -1901,10 +2066,20 @@ def cli_main() -> None:
 
             from bog_agents.graph import create_agent as _create_agent
 
-            agent = _create_agent(model=model_result.model)
+            pr_evidence = bool(getattr(args, "pr_evidence", False))
+            if pr_evidence:
+                from bog_agents.feature_config import FeatureConfig as _FeatureConfig
+
+                agent = _create_agent(
+                    model=model_result.model,
+                    config=_FeatureConfig(enable_evidence_bundle=True),
+                )
+            else:
+                agent = _create_agent(model=model_result.model)
             pr_config = PRConfig(
                 base_branch=getattr(args, "pr_base", "main"),
                 draft=getattr(args, "pr_draft", False),
+                evidence=pr_evidence,
             )
 
             console.print(f"Running PR mode: {task}")
@@ -1917,6 +2092,19 @@ def cli_main() -> None:
                 console.print(f"Branch: {pr_result.branch_name}")
                 console.print(f"Files changed: {len(pr_result.files_changed)}")
                 console.print(f"Duration: {pr_result.duration_seconds:.1f}s")
+                if getattr(args, "pr_review", False):
+                    from bog_agents_cli.pr_review_pass import run_post_pr_review
+
+                    ok, message = asyncio.run(
+                        run_post_pr_review(
+                            pr_result,
+                            base_branch=getattr(args, "pr_base", "main"),
+                            effort=getattr(args, "pr_effort", "default"),
+                        )
+                    )
+                    console.print(
+                        f"[{'green' if ok else 'yellow'}]Jury review: {message}[/]"
+                    )
             else:
                 console.print(f"[bold red]PR failed:[/bold red] {pr_result.error}")
                 sys.exit(1)
@@ -2150,6 +2338,24 @@ def cli_main() -> None:
 
         output_format = getattr(args, "output_format", "text")
 
+        if args.command == "attach":
+            # ROADMAP #56: resolve the detached session, then take the normal
+            # interactive path with its thread and server.
+            from bog_agents_cli.session_controller import (
+                attach_target,
+                configure_launch,
+            )
+
+            try:
+                record = attach_target(args.session)
+            except LookupError as exc:
+                console.print(f"[bold red]Error:[/bold red] {exc}")
+                sys.exit(1)
+            configure_launch(name=record.name, attach=record)
+            args.command = None
+            if record.thread_id:
+                args.resume_thread = record.thread_id
+
         if args.command == "help":
             from bog_agents_cli.ui import show_help
 
@@ -2174,6 +2380,10 @@ def cli_main() -> None:
             from bog_agents_cli.cmd_verify import cmd_verify
 
             sys.exit(cmd_verify(args))
+        elif args.command == "plugin":
+            from bog_agents_cli.cmd_plugin import handle_plugin_command
+
+            sys.exit(handle_plugin_command(args))
         elif args.command == "call":
             from bog_agents_cli.cmd_call import cmd_call
 
@@ -2202,6 +2412,19 @@ def cli_main() -> None:
             print(render_probe_report(steps))  # noqa: T201  # CLI subcommand output
             # Exit non-zero if any step failed so CI / scripts can branch.
             sys.exit(0 if all(s.ok for s in steps) else 1)
+        elif args.command == "sessions":
+            from bog_agents_cli.session_controller import sessions_report
+
+            print(sessions_report(include_stale=args.all, prune=args.prune))  # noqa: T201  # CLI subcommand output
+            sys.exit(0)
+        elif args.command == "queue":
+            from bog_agents_cli.session_controller import enqueue_prompt
+
+            code, text = enqueue_prompt(
+                args.session, args.prompt, wait=args.timeout if args.wait else None
+            )
+            print(text)  # noqa: T201  # CLI subcommand output
+            sys.exit(code)
         elif args.command == "threads":
             from bog_agents_cli.sessions import (
                 delete_thread_command,
@@ -2227,6 +2450,14 @@ def cli_main() -> None:
                 asyncio.run(
                     delete_thread_command(args.thread_id, output_format=output_format)
                 )
+            elif args.threads_command == "import":
+                from bog_agents_cli.cmd_plugin import handle_threads_import
+
+                sys.exit(handle_threads_import(args))
+            elif args.threads_command == "export":
+                from bog_agents_cli.cmd_plugin import handle_threads_export
+
+                sys.exit(handle_threads_export(args))
             else:
                 # No subcommand provided, show threads help screen
                 show_threads_help()
@@ -2352,8 +2583,21 @@ def cli_main() -> None:
             except Exception:  # pre-flight only; agent will surface real errors
                 logger.debug("API key pre-flight check failed", exc_info=True)
 
+            runner: Any = run_non_interactive
+            if getattr(args, "plan_prompt", None):
+                from functools import partial
+
+                from bog_agents_cli.non_interactive import run_plan_then_execute
+
+                runner = partial(
+                    run_plan_then_execute,
+                    execute=bool(
+                        getattr(args, "auto_mode", False)
+                        or getattr(args, "auto_approve", False)
+                    ),
+                )
             exit_code = asyncio.run(
-                run_non_interactive(
+                runner(
                     message=args.non_interactive_message,
                     assistant_id=args.agent,
                     model_name=getattr(args, "model", None),
@@ -2486,6 +2730,9 @@ def cli_main() -> None:
                         mcp_config_path=getattr(args, "mcp_config", None),
                         no_mcp=getattr(args, "no_mcp", False),
                         trust_project_mcp=mcp_trust_decision,
+                        mini=getattr(args, "mini", False),
+                        restricted=getattr(args, "restricted", False),
+                        session_name=getattr(args, "name", None),
                     )
                 )
                 return_code = result.return_code

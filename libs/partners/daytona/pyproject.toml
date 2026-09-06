@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "langchain-daytona"
+name = "bog-agents-daytona"
 description = "Daytona sandbox integration for Bog Agents"
 license = { text = "MIT" }
 readme = "README.md"

@@ -70,6 +70,10 @@ class ApprovalMenu(Container):
         Binding("a", "select_auto", "Auto-approve", show=False),
         Binding("3", "select_reject", "Reject", show=False),
         Binding("n", "select_reject", "Reject", show=False),
+        Binding("4", "select_redirect", "Reject and redirect", show=False),
+        Binding("r", "select_redirect", "Reject and redirect", show=False),
+        Binding("5", "select_never", "Never allow", show=False),
+        Binding("x", "select_never", "Never allow", show=False),
         # Esc rejects the pending request — matches the help text shown
         # below the option list and gives the user a no-commitment escape
         # hatch from the modal approval menu.
@@ -98,6 +102,7 @@ class ApprovalMenu(Container):
         action_requests: list[dict[str, Any]] | dict[str, Any],
         _assistant_id: str | None = None,
         id: str | None = None,  # noqa: A002  # Textual widget constructor uses `id` parameter
+        timeout_seconds: float | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the ApprovalMenu widget.
@@ -109,6 +114,8 @@ class ApprovalMenu(Container):
             _assistant_id: Optional assistant ID (currently unused, reserved for
                 future use).
             id: Optional widget ID. Defaults to 'approval-menu'.
+            timeout_seconds: Seconds before the menu auto-rejects every request
+                (fail-closed). `None` disables the countdown.
             **kwargs: Additional keyword arguments passed to the Container base class.
         """
         super().__init__(id=id or "approval-menu", classes="approval-menu", **kwargs)
@@ -131,6 +138,11 @@ class ApprovalMenu(Container):
         self._command_widget: Static | None = None
         self._has_expandable_command = self._check_expandable_command()
         self._security_warnings = self._collect_security_warnings()
+        # ROADMAP #49: countdown auto-reject (fail-closed) and the redirect input.
+        self._timeout_seconds = timeout_seconds
+        self._remaining: float | None = timeout_seconds
+        self._countdown_widget: Static | None = None
+        self._redirect_input: Any = None
 
     def set_future(self, future: asyncio.Future[dict[str, str]]) -> None:
         """Set the future to resolve when user decides."""
@@ -252,24 +264,31 @@ class ApprovalMenu(Container):
 
         # Options container at bottom
         with Container(classes="approval-options-container"):
-            # Options - create 3 Static widgets
-            for i in range(3):  # noqa: B007  # Loop variable unused - iterating for count only
+            # Options - create one Static widget per option
+            for i in range(self.OPTION_COUNT):  # noqa: B007  # Loop variable unused - iterating for count only
                 widget = Static("", classes="approval-option")
                 self._option_widgets.append(widget)
                 yield widget
+            self._countdown_widget = Static("", classes="approval-countdown")
+            yield self._countdown_widget
 
         # Help text at the very bottom
         glyphs = get_glyphs()
         help_text = (
             f"{glyphs.arrow_up}/{glyphs.arrow_down} navigate {glyphs.bullet} "
-            f"Enter select {glyphs.bullet} y/a/n quick keys {glyphs.bullet} Esc reject"
+            f"Enter select {glyphs.bullet} y/a/n/r/x quick keys {glyphs.bullet} Esc reject"
         )
         if self._has_expandable_command:
             help_text += f" {glyphs.bullet} e expand"
         yield Static(help_text, classes="approval-help")
 
+    OPTION_COUNT: ClassVar[int] = 5
+
     async def on_mount(self) -> None:
         """Focus self on mount and update tool info."""
+        if self._timeout_seconds:
+            self._render_countdown()
+            self.set_interval(1.0, self._tick_countdown)
         if _detect_charset_mode() == CharsetMode.ASCII:
             self.styles.border = ("ascii", "yellow")
 
@@ -323,12 +342,16 @@ class ApprovalMenu(Container):
                 "1. Approve (y)",
                 "2. Auto-approve for this thread (a)",
                 "3. Reject (n)",
+                "4. Reject and tell the agent what to do instead (r)",
+                "5. Never allow this in this project (x)",
             ]
         else:
             options = [
                 f"1. Approve all {count} (y)",
                 "2. Auto-approve for this thread (a)",
                 f"3. Reject all {count} (n)",
+                f"4. Reject all {count} and tell the agent what to do instead (r)",
+                f"5. Never allow these {count} in this project (x)",
             ]
 
         for i, (text, widget) in enumerate(
@@ -344,12 +367,12 @@ class ApprovalMenu(Container):
 
     def action_move_up(self) -> None:
         """Move selection up."""
-        self._selected = (self._selected - 1) % 3
+        self._selected = (self._selected - 1) % self.OPTION_COUNT
         self._update_options()
 
     def action_move_down(self) -> None:
         """Move selection down."""
-        self._selected = (self._selected + 1) % 3
+        self._selected = (self._selected + 1) % self.OPTION_COUNT
         self._update_options()
 
     def action_select(self) -> None:
@@ -367,6 +390,77 @@ class ApprovalMenu(Container):
         self._selected = 1
         self._update_options()
         self._handle_selection(1)
+
+    def action_select_redirect(self) -> None:
+        """Select 'reject and redirect' (opens the instruction input)."""
+        self._selected = 3
+        self._update_options()
+        self._handle_selection(3)
+
+    def action_select_never(self) -> None:
+        """Select 'never allow in this project'."""
+        self._selected = 4
+        self._update_options()
+        self._handle_selection(4)
+
+    # ------------------------------------------------------------------ #49 helpers
+
+    def _render_countdown(self) -> None:
+        if self._countdown_widget is None or self._remaining is None:
+            return
+        self._countdown_widget.update(
+            f"auto-rejecting in {int(max(0, self._remaining))}s (fail-closed; any key resets nothing — decide)"
+        )
+
+    def _tick_countdown(self) -> None:
+        if self._remaining is None:
+            return
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._remaining = None
+            self._resolve(
+                {
+                    "type": "timeout",
+                    "message": f"auto-rejected after {int(self._timeout_seconds or 0)}s without an answer",
+                }
+            )
+            return
+        self._render_countdown()
+
+    def _resolve(self, decision: dict[str, str]) -> None:
+        """Resolve the pending future and announce the decision."""
+        self._remaining = None
+        if self._future and not self._future.done():
+            self._future.set_result(decision)
+        self.post_message(self.Decided(decision))
+
+    async def _open_redirect_input(self) -> None:
+        """Mount the redirect instruction box below the options."""
+        from textual.widgets import Input
+
+        if self._redirect_input is not None:
+            self._redirect_input.focus()
+            return
+        box = Input(
+            placeholder="Tell the agent what to do instead, then Enter (Esc cancels)",
+            id="approval-redirect",
+        )
+        self._redirect_input = box
+        await self.mount(box)
+        box.focus()
+
+    def submit_redirect(self, text: str) -> None:
+        """Resolve with a reject-and-redirect decision carrying `text`."""
+        instruction = text.strip()
+        if not instruction:
+            return
+        self._resolve({"type": "redirect", "message": instruction})
+
+    async def on_input_submitted(self, event: Any) -> None:  # noqa: ANN401 - textual Input.Submitted
+        """The redirect box was submitted."""
+        if getattr(getattr(event, "input", None), "id", "") == "approval-redirect":
+            event.stop()
+            self.submit_redirect(str(event.value))
 
     def action_select_reject(self) -> None:
         """Select reject option."""
@@ -389,15 +483,15 @@ class ApprovalMenu(Container):
             0: "approve",
             1: "auto_approve_all",
             2: "reject",
+            4: "never_allow",
         }
-        decision = {"type": decision_map[option]}
-
-        # Resolve the future
-        if self._future and not self._future.done():
-            self._future.set_result(decision)
-
-        # Post message
-        self.post_message(self.Decided(decision))
+        if option == 3:
+            # Reject-and-redirect needs the instruction first; the input's
+            # submit resolves the future.
+            self._remaining = None
+            self.run_worker(self._open_redirect_input(), exclusive=False)
+            return
+        self._resolve({"type": decision_map[option]})
 
     def _collect_security_warnings(self) -> list[str]:
         """Collect warning strings for suspicious Unicode and URL values.
@@ -432,4 +526,6 @@ class ApprovalMenu(Container):
 
     def on_blur(self, event: events.Blur) -> None:  # noqa: ARG002  # Textual event handler signature
         """Re-focus on blur to keep focus trapped until decision is made."""
+        if self._redirect_input is not None:
+            return  # the redirect box owns focus now
         self.call_after_refresh(self.focus)

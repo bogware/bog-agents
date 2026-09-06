@@ -13,7 +13,6 @@ Feature #68: Code transformation engine (AST-based).
 Feature #69: Smart imports.
 Feature #70: Cross-repo operations.
 Feature #71: Time-travel debugging (git bisect AI).
-Feature #74: Agent-to-Agent protocol (A2A).
 Feature #75: Offline mode.
 """
 
@@ -35,6 +34,8 @@ from langchain.agents.middleware.types import (
 from langchain.tools import ToolRuntime
 from langchain_core.tools import BaseTool, StructuredTool
 from typing_extensions import TypedDict
+
+from bog_agents.git_env import hardened_git_env
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,7 @@ def _run_cmd(working_dir: Path, *args: str, timeout: int = 60) -> str:
             text=True,
             timeout=timeout,
             check=False,
+            env=hardened_git_env() if args and str(next(iter(args))).endswith("git") else None,
         )
         if result.returncode != 0:
             return f"[exit code {result.returncode}]\n{result.stderr}\n{result.stdout}".strip()

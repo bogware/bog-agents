@@ -12,6 +12,8 @@ import subprocess  # noqa: S404
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 _CONFIG_SUBDIR = ".bog-agents"
@@ -34,7 +36,12 @@ def _run_git(
         CompletedProcess with stdout/stderr captured as text.
     """
     return subprocess.run(  # noqa: S603
-        ["git", *args], capture_output=True, text=True, cwd=cwd, check=check
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        check=check,
+        env=hardened_git_env(),
     )
 
 
@@ -165,6 +172,7 @@ def _pull_memory(cwd: Path, *, branch: str) -> str:
         text=True,
         check=False,
         cwd=cwd,
+        env=hardened_git_env(),
     )
     diff_output = diff_result.stdout.strip()
 
@@ -270,6 +278,7 @@ def _push_memory(cwd: Path, *, branch: str) -> str:
             text=True,
             check=False,
             cwd=cwd,
+            env=hardened_git_env(),
         )
         if mktree_result.returncode != 0:
             return f"[red]git mktree failed:[/red] {mktree_result.stderr.strip()}"

@@ -14,6 +14,8 @@ import subprocess  # noqa: S404
 from datetime import UTC, datetime
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 _INDEX_BASE: Path = Path.home() / ".bog-agents" / "index"
 _MAX_FILE_SIZE = 500 * 1024  # 500 KB
 _SYMBOL_PATTERN = re.compile(
@@ -64,6 +66,7 @@ def _list_tracked_files(cwd: Path) -> list[str]:
             text=True,
             timeout=10,
             check=False,
+            env=hardened_git_env(),
         )
         if result.returncode == 0:
             return [f for f in result.stdout.strip().split("\n") if f]

@@ -29,6 +29,8 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from bog_agents.git_env import hardened_git_env
+
 from bog_agents_cli.feature_helpers import feature_state_dir
 
 logger = logging.getLogger(__name__)
@@ -190,11 +192,13 @@ def _git(args: list[str], *, cwd: Path) -> str:
             text=True,
             timeout=30,
             check=False,
-            env={
-                **os.environ,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_OPTIONAL_LOCKS": "0",
-            },
+            env=hardened_git_env(
+                {
+                    **os.environ,
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_OPTIONAL_LOCKS": "0",
+                }
+            ),
         )
     except FileNotFoundError as exc:
         msg = "git executable not found on PATH"

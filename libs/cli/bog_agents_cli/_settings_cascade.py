@@ -127,3 +127,42 @@ def _apply_one(
             exc_info=True,
         )
         return current
+
+
+def save_user_section(
+    section: str, values: dict[str, Any], *, user_home: Path | None = None
+) -> Path:
+    """Merge `values` into the `section` of the user-level settings.json.
+
+    Read-merge-write with an atomic replace, so a concurrent reader never sees
+    a half-written file. Keys not in `values` are preserved; a malformed
+    existing file is replaced rather than crashing the caller (the cascade
+    reader already ignores malformed files, so nothing was in force anyway).
+
+    Args:
+        section: Top-level key (e.g. `"auto_mode"`).
+        values: Keys to set inside that section.
+        user_home: Override for the home directory (tests).
+
+    Returns:
+        The path written.
+    """
+    from bog_agents_cli.io_utils import atomic_write_text
+
+    home = user_home if user_home is not None else Path.home()
+    path = home / ".bog-agents" / "settings.json"
+    data: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            logger.warning("settings: replacing malformed %s (%s)", path, exc)
+    current = data.get(section)
+    merged = dict(current) if isinstance(current, dict) else {}
+    merged.update(values)
+    data[section] = merged
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return path

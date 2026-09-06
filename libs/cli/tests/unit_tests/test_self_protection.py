@@ -14,11 +14,10 @@ from bog_agents_cli.self_protection import (
 
 
 class TestAuthorityFilePermissions:
-    def test_rules_are_interrupt_mode_writes(self) -> None:
+    def test_rules_are_write_gates_deny_tier_first(self) -> None:
         rules = authority_file_permissions()
-        assert rules
+        assert [rule.mode for rule in rules] == ["deny", "interrupt"]
         for rule in rules:
-            assert rule.mode == "interrupt"
             assert rule.operations == ["write"]
 
     def test_authority_paths_resolve_to_interrupt(self) -> None:

@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
+
 # Full-diff bodies are collapsed into a <details> block; beyond this many
 # characters the diff is truncated (the stat summary always stays intact) so a
 # giant refactor doesn't produce a multi-megabyte comment.
@@ -163,6 +165,20 @@ def render_evidence_markdown(bundle: EvidenceBundle) -> str:
     if bundle.diff_stat.strip():
         lines.append("## Changes")
         lines.append("")
+        if bundle.diff.strip():
+            # ROADMAP #66: files in explanatory order (entry points and public
+            # signatures first; tests, snapshots and lockfiles last) so a
+            # reviewer reads the proof in the order it explains itself.
+            from bog_agents.diff_ordering import render_ordered_stat, split_unified_diff
+
+            ordered = render_ordered_stat(split_unified_diff(bundle.diff))
+            if ordered:
+                lines.append("Files in explanatory order:")
+                lines.append("")
+                lines.append("```")
+                lines.append(ordered)
+                lines.append("```")
+                lines.append("")
         lines.append("```")
         lines.append(bundle.diff_stat.rstrip())
         lines.append("```")
@@ -215,7 +231,7 @@ def collect_git_evidence(repo_dir: str | Path, *, ref: str = "HEAD", include_dif
             result = subprocess.run(
                 ["git", *args],
                 cwd=cwd,
-                env=env,
+                env=hardened_git_env(env),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -225,8 +241,8 @@ def collect_git_evidence(repo_dir: str | Path, *, ref: str = "HEAD", include_dif
             return ""
         return result.stdout if result.returncode == 0 else ""
 
-    diff_stat = _git("diff", "--stat", ref)
-    diff = _git("diff", ref) if include_diff else ""
+    diff_stat = _git("diff", *NO_EXTERNAL_DIFF, "--stat", ref)
+    diff = _git("diff", *NO_EXTERNAL_DIFF, ref) if include_diff else ""
     return diff_stat, diff
 
 

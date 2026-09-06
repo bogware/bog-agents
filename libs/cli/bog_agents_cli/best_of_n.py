@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bog_agents.git_env import NO_EXTERNAL_DIFF, hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -310,6 +312,14 @@ async def run_worktree_attempt(
         )
 
     wt_path = Path(info.path)
+    try:  # ROADMAP #76: share node_modules / .venv through the env cache
+        from bog_agents_cli.envcache import configured_reuse, reuse_into_worktree
+
+        await asyncio.to_thread(
+            reuse_into_worktree, repo_dir, wt_path, configured_reuse()
+        )
+    except Exception:
+        logger.debug("worktree env reuse skipped", exc_info=True)
     try:
         output = await run_agent(spec, wt_path, prompt)
     except Exception as exc:
@@ -341,14 +351,16 @@ def _worktree_diff(worktree_path: Path) -> str:
             text=True,
             timeout=30,
             check=False,
+            env=hardened_git_env(),
         )
-        result = subprocess.run(
-            ["git", "diff", "--cached"],
+        result = subprocess.run(  # noqa: S603
+            ["git", "diff", *NO_EXTERNAL_DIFF, "--cached"],
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
+            env=hardened_git_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""

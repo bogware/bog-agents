@@ -6,7 +6,10 @@ import os
 from collections.abc import Callable, Sequence
 from importlib import import_module
 from pathlib import Path
-from typing import Annotated, Any, Required, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Required, TypedDict, cast
+
+if TYPE_CHECKING:
+    from bog_agents.cost_ledger import CostLedger
 
 from langchain.agents import AgentState, create_agent as _langchain_create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, InterruptOnConfig, TodoListMiddleware
@@ -50,6 +53,7 @@ from bog_agents.middleware.permissions import (
 from bog_agents.middleware.skills import SkillsMiddleware
 from bog_agents.middleware.subagents import (
     DEFAULT_SUBAGENT_PROMPT,
+    FORK_SUBAGENT_DESCRIPTION,
     GENERAL_PURPOSE_SUBAGENT,
     CompiledSubAgent,
     SubAgent,
@@ -63,7 +67,10 @@ from bog_agents.profiles.harness.harness_profiles import (
     GeneralPurposeSubagentProfile,
     _apply_profile_prompt,
     _harness_profile_for_model,
+    _merge_profiles,
+    named_harness_profile,
 )
+from bog_agents.token_audit import notify_assembly
 
 
 class DeepAgentState(AgentState):
@@ -115,6 +122,35 @@ class SystemPromptConfig(TypedDict, total=False):
 
 
 _PROMPT_SEPARATOR = "\n\n"
+
+
+def _price_tokens(model: str, input_tokens: int, output_tokens: int) -> float | None:
+    """USD for a call from the cost catalog, or `None` when the model is unpriced (ROADMAP #74)."""
+    from bog_agents.middleware.cost_tracker import price_for_model
+
+    prices = price_for_model(model.split(":", 1)[1] if ":" in model else model)
+    if prices is None:
+        return None
+    return (input_tokens / 1_000_000) * prices[0] + (output_tokens / 1_000_000) * prices[1]
+
+
+def _fork_system_prompt(system_prompt: Any, profile: Any) -> str | SystemMessage:
+    """The parent's assembled prompt (prefix, base, suffix, profile suffix) for the built-in `fork` subagent (ROADMAP #71)."""
+    cfg = _normalize_system_prompt(system_prompt)
+    parts: list[str | SystemMessage] = []
+    prefix = cfg.get("prefix")
+    if prefix is not None:
+        parts.append(prefix)
+    profile_base = profile.base_system_prompt if profile.base_system_prompt is not None else BASE_AGENT_PROMPT
+    base = cfg.get("base", profile_base)
+    if base is not None:
+        parts.append(base)
+    suffix = cfg.get("suffix")
+    if suffix is not None:
+        parts.append(suffix)
+    if profile.system_prompt_suffix is not None:
+        parts.append(profile.system_prompt_suffix)
+    return _assemble_prompt_parts(parts)
 
 
 def _assemble_prompt_parts(parts: list[str | SystemMessage]) -> str | SystemMessage:
@@ -532,6 +568,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     config: FeatureConfig | None = None,
     features: FeatureConfig | None = None,
     max_turns: int = 200,
+    cost_ledger: "CostLedger | None" = None,
     **legacy_feature_flags: Any,
 ) -> CompiledStateGraph:
     """Create a bog-agents agent.
@@ -671,6 +708,9 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         debug: Whether to enable debug mode. Passed through to `create_agent`.
         name: The name of the agent. Passed through to `create_agent`.
         cache: The cache to use for the agent. Passed through to `create_agent`.
+        cost_ledger: Session `CostLedger` whose `RunawayCaps` gate every
+            `task` / async subagent spawn and total spend (v6 SDK-7). `None`
+            leaves the default fan-out path uncounted and uncapped.
         config: Primary path for feature configuration via `FeatureConfig`.
 
             Pass a `FeatureConfig` instance to configure all feature flags in one
@@ -733,6 +773,11 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # registered, so the prompt overlay and extra-middleware application below
     # are no-ops out of the box.
     _profile = _harness_profile_for_model(model, _model_spec)
+    if f.harness_profile:
+        # ROADMAP #54: a named profile (`lean`, or anything registered) layers
+        # over the model's own so provider guidance survives and the named
+        # profile's prompt / tool descriptions / exclusions win.
+        _profile = _merge_profiles(_profile, named_harness_profile(f.harness_profile))
 
     # Apply harness-profile tool-description overrides up front, producing a
     # copied tool list (caller-owned tools are never mutated). No-op when the
@@ -961,6 +1006,17 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         if gp_interrupt_on is not None:
             general_purpose_spec["interrupt_on"] = gp_interrupt_on
         all_subagents = [general_purpose_spec, *processed_subagents]
+        if f.enable_fork_subagent and not any(spec["name"] == "fork" for spec in processed_subagents):
+            # ROADMAP #71: a fork shares the parent's base prompt, tools and
+            # conversation, so its first call rides the parent's prefix.
+            fork_spec: SubAgent = {  # ty: ignore[missing-typed-dict-key]
+                **general_purpose_spec,
+                "name": "fork",
+                "description": FORK_SUBAGENT_DESCRIPTION,
+                "mode": "fork",
+                "system_prompt": _fork_system_prompt(system_prompt, _profile),
+            }
+            all_subagents.append(fork_spec)
     else:
         # GP stack not assembled: seed the coverage sets with this profile's
         # exclusions so an entry that would only have matched the (now-omitted)
@@ -1008,10 +1064,15 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     # tool-injecting middleware below; the registry itself is populated from
     # the fully assembled request, so tools contributed by those middleware
     # (filesystem, subagent, …) are deferrable too.
-    if f.enable_deferred_tools and f.deferred_tools:
+    if f.enable_deferred_tools and (f.deferred_tools or f.deferred_keep_tools):
         from bog_agents.middleware.deferred_tools import DeferredToolsMiddleware
 
-        agents_middleware.append(DeferredToolsMiddleware(deferred_names=frozenset(f.deferred_tools)))
+        agents_middleware.append(
+            DeferredToolsMiddleware(
+                deferred_names=frozenset(f.deferred_tools or ()),
+                keep_names=frozenset(f.deferred_keep_tools or ()),
+            )
+        )
 
     if f.enable_git_tools:
         from bog_agents.middleware.git_tools import GitToolsMiddleware
@@ -1027,6 +1088,18 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.checkpointing import CheckpointingMiddleware
 
         agents_middleware.append(CheckpointingMiddleware(working_dir=_wd))
+
+    if f.enable_evidence_bundle:
+        # v6 SDK-11: the middleware and its tests existed but nothing could
+        # reach it — no toggle, no CLI flag, no daemon dispatch.
+        from bog_agents.middleware.evidence_bundle import EvidenceBundleMiddleware
+
+        agents_middleware.append(
+            EvidenceBundleMiddleware(
+                working_dir=_wd,
+                check_commands=[list(c) for c in (f.evidence_check_commands or [])] or None,
+            )
+        )
 
     if f.enable_cost_tracking or f.budget_usd is not None:
         from bog_agents._models import get_model_identifier
@@ -1172,6 +1245,35 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
         from bog_agents.middleware.audit_trail import AuditTrailMiddleware
 
         agents_middleware.append(AuditTrailMiddleware(session_id=f.audit_session_id, advisor_id=f.audit_advisor_id))
+
+    # ROADMAP #74: compliance artefact — hash-chained action log and OTLP export.
+    if f.enable_action_log:
+        import uuid as _uuid
+
+        from bog_agents.action_log import ActionLog, ActionLogMiddleware
+
+        _log_dir = Path(f.action_log_dir) if f.action_log_dir else Path.home() / ".bog-agents" / "action-log"
+        _run_id = f.action_log_run_id or _uuid.uuid4().hex[:12]
+        agents_middleware.append(ActionLogMiddleware(ActionLog(_log_dir / f"{_run_id}.jsonl", run_id=_run_id), price=_price_tokens))
+    if f.otel_endpoint:
+        from bog_agents.otel_export import OTelExportMiddleware, OTLPHttpSink
+
+        agents_middleware.append(
+            OTelExportMiddleware(OTLPHttpSink(f.otel_endpoint, headers=f.otel_headers), agent_name=name or "agent", price=_price_tokens)
+        )
+
+    # ROADMAP #72: governed code mode — bound to the assembled agent below.
+    if f.enable_code_mode:
+        from bog_agents.middleware.code_mode import CodeModeMiddleware
+
+        agents_middleware.append(
+            CodeModeMiddleware(
+                timeout=f.code_mode_timeout,
+                allowed_tools=f.code_mode_allowed_tools,
+                cost_ledger=cost_ledger,
+                max_calls=f.code_mode_max_calls,
+            )
+        )
 
     # D-5 provenance loop: composes citations + hallucination_detection
     # + fact_check so every claim the agent emits has a registered
@@ -1407,6 +1509,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
                 # `{available_agents}` placeholder; `None` (default) uses the
                 # built-in template.
                 task_description=_profile.tool_description_overrides.get("task"),
+                cost_ledger=cost_ledger,
             )
         )
     if not user_supplied_summarization:
@@ -1421,7 +1524,7 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
 
     agents_middleware.extend(defaults_to_append)
     if async_subagents:
-        agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents))
+        agents_middleware.append(AsyncSubAgentMiddleware(async_subagents=async_subagents, cost_ledger=cost_ledger))
 
     # User-supplied middleware: a `.name` collision with a built-in REPLACES it
     # in place (parity with upstream); novel middleware splices in after the
@@ -1462,6 +1565,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     main_interrupt_on = _merge_fs_interrupt_on(_build_interrupt_on_from_permissions(permissions or []), interrupt_on)
     if main_interrupt_on is not None:
         agents_middleware.append(HumanInTheLoopMiddleware(interrupt_on=main_interrupt_on))
+    # ROADMAP #52: the cache-bust detector must be the innermost model-call
+    # observer so the prefix it fingerprints is exactly what the provider sees
+    # (after summarization, memory, caching tags — every other injector).
+    if f.enable_cache_diagnostics:
+        from bog_agents.middleware.cache_diagnostics import CacheBustDetectorMiddleware
+
+        agents_middleware.append(CacheBustDetectorMiddleware(events_dir=f.cache_diagnostics_dir))
 
     # Filter `HarnessProfile.excluded_middleware` from the fully assembled main
     # stack, then verify every exclusion matched something across all stacks
@@ -1530,6 +1640,13 @@ def create_agent(  # Complex graph assembly logic with many conditional branches
     _create_kwargs: dict[str, Any] = {}
     if state_schema is not None:
         _create_kwargs["state_schema"] = state_schema
+
+    # ROADMAP #54: let a running token audit see (and instrument) the final
+    # stack before LangChain binds the hooks. No-op outside `capture_assembly`.
+    for _code_mode in agents_middleware:
+        if type(_code_mode).__name__ == "CodeModeMiddleware":
+            _code_mode.bind(_tools, agents_middleware)  # ROADMAP #72: learn tools + governance chain
+    notify_assembly(agents_middleware, _tools, final_system_prompt)
 
     return _langchain_create_agent(
         model,

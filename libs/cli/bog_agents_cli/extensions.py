@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from bog_agents.git_env import hardened_git_env
+
 logger = logging.getLogger(__name__)
 
 # Extension manifest filename
@@ -241,6 +243,7 @@ def install_extension(
                 text=True,
                 timeout=60,
                 check=False,
+                env=hardened_git_env(),
             )
             if result.returncode != 0:
                 msg = f"Failed to clone {source}: {result.stderr}"

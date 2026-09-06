@@ -45,6 +45,10 @@ class TestDoctorMCPDiscovery:
         mcp_path.write_text(json.dumps({"mcpServers": {}}))
 
         monkeypatch.setattr(Path, "home", lambda: user_home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         # Patch find_project_root so the test doesn't leak the bog-agents
         # repo's own .mcp.json (test runs from inside the repo's working
         # tree; without this isolation, ``find_project_root`` walks up
@@ -69,6 +73,9 @@ class TestDoctorMCPDiscovery:
         user_home = tmp_path / "home"
         user_home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: user_home)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,
@@ -96,6 +103,10 @@ class TestDoctorMCPDiscovery:
         mcp_path.write_text(json.dumps({"mcpServers": {}}))
 
         monkeypatch.setattr(Path, "home", lambda: user_home)
+
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.chdir(project)
 
         report = run_doctor()
@@ -107,6 +118,9 @@ class TestDoctorMCPDiscovery:
     ) -> None:
         """An exception inside discover_mcp_configs must be reported as WARN."""
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,
@@ -131,6 +145,9 @@ class TestDoctorRipgrep:
 
     def test_managed_ripgrep_reported_ok(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,
@@ -149,6 +166,9 @@ class TestDoctorRipgrep:
 
     def test_system_ripgrep_reported(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,
@@ -207,6 +227,9 @@ class TestShadowedEntrypoint:
 
     def test_shadow_row_appears_in_report(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,
@@ -259,6 +282,9 @@ class TestMcpOauthCount:
 
     def test_oauth_row_appears_in_report(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.delenv(
+            "BOG_AGENTS_HOME", raising=False
+        )  # the fake home must win over the test-wide override
         monkeypatch.setattr(
             "bog_agents_cli.project_utils.find_project_root",
             lambda *_a, **_kw: None,

@@ -54,6 +54,17 @@ class FeatureConfig:
         enable_street_sweeper: Continuously prune dead context each turn.
         street_sweeper_aggressive: Enable Tier 2 head/tail truncation of large old outputs.
         street_sweeper_keep_recent: Trailing messages the sweeper never touches.
+        enable_cache_diagnostics: Fingerprint the request prefix on every model
+            call and record which segment broke prompt caching (ROADMAP #52).
+        cache_diagnostics_dir: Directory for the per-thread cache-bust JSONL
+            (`None` keeps events in memory only).
+        enable_fork_subagent: Register the built-in `fork` subagent, a child that
+            starts from the parent's conversation (ROADMAP #71).
+        enable_code_mode: Register the `run_code` tool (ROADMAP #72): a script
+            in a child interpreter whose `tools.*` calls re-enter the tool path.
+        code_mode_timeout: Wall-clock limit per script (seconds).
+        code_mode_allowed_tools: Tool names a script may call (`None` = all).
+        code_mode_max_calls: Tool calls one script may make.
         enable_conversation_branching: Enable conversation branching.
         enable_image_input: Enable image input processing.
         enable_browser: Enable browser-agent tools.
@@ -74,6 +85,13 @@ class FeatureConfig:
         enable_audit_trail: Enable audit trail logging.
         audit_session_id: Session ID for audit trail.
         audit_advisor_id: Advisor ID for audit trail.
+        enable_action_log: Write every model call and tool call into a
+            hash-chained per-run JSONL (`bog_agents.action_log`, ROADMAP #74).
+        action_log_dir: Directory for the run logs (default `~/.bog-agents/action-log`).
+        action_log_run_id: The run's file stem (default: a fresh uuid).
+        otel_endpoint: OTLP/HTTP collector base URL; when set, GenAI-semconv
+            spans are posted for model / tool / subagent calls (`bog_agents.otel_export`).
+        otel_headers: Extra headers for the OTLP collector (auth).
         enable_citations: Enable citation tracking.
         enable_reasoning_chain: Enable reasoning chain middleware.
         enable_hallucination_detection: Enable hallucination detection.
@@ -109,6 +127,16 @@ class FeatureConfig:
         enable_deferred_tools: Hide selected tool schemas from the model until
             activated via the `tool_search`/`select` metatools.
         deferred_tools: Tool names to defer (requires ``enable_deferred_tools``).
+        deferred_keep_tools: Allowlist form: defer every tool *except* these
+            (requires ``enable_deferred_tools``; the CLI's ``--mini`` uses it).
+        harness_profile: Registry key of a HarnessProfile (e.g. ``"lean"``) merged
+            over the model's own profile.
+        enable_evidence_bundle: Attach `EvidenceBundleMiddleware` so the agent
+            can emit a proof-of-work bundle (diff stat, check results, rubric
+            verdict) that PR and daemon surfaces attach to their output
+            (v6 SDK-11; ROADMAP #29/#67).
+        evidence_check_commands: Argv-form verification commands the bundle
+            runs when emitted (requires ``enable_evidence_bundle``).
 
     Note (Wave V): the vertical-market middleware flags
     (portfolio_analysis, client_reports, scenario_engine,
@@ -155,6 +183,16 @@ class FeatureConfig:
     enable_street_sweeper: bool = False
     street_sweeper_aggressive: bool = True
     street_sweeper_keep_recent: int = 6
+    # Cache-bust diagnostics (ROADMAP #52) — innermost observer, off by default.
+    enable_cache_diagnostics: bool = False
+    cache_diagnostics_dir: str | None = None
+    # Built-in `fork` subagent (ROADMAP #71): the parent's prompt, tools and conversation.
+    enable_fork_subagent: bool = True
+    # Governed Code Mode (ROADMAP #72): `run_code` scripts call tools through the tool path.
+    enable_code_mode: bool = False
+    code_mode_timeout: float = 120.0
+    code_mode_allowed_tools: list[str] | None = None
+    code_mode_max_calls: int = 200
     enable_conversation_branching: bool = False
     enable_image_input: bool = False
     enable_browser: bool = False
@@ -175,6 +213,12 @@ class FeatureConfig:
     enable_audit_trail: bool = False
     audit_session_id: str = ""
     audit_advisor_id: str = ""
+    # Compliance artefact (ROADMAP #74): hash-chained action log + OTLP GenAI spans.
+    enable_action_log: bool = False
+    action_log_dir: str | None = None
+    action_log_run_id: str = ""
+    otel_endpoint: str | None = None
+    otel_headers: dict[str, str] | None = None
     enable_citations: bool = False
     enable_reasoning_chain: bool = False
     enable_hallucination_detection: bool = False
@@ -241,3 +285,11 @@ class FeatureConfig:
     # Deferred tool schemas — keep large tool definitions out of context.
     enable_deferred_tools: bool = False
     deferred_tools: list[str] | None = None
+    deferred_keep_tools: list[str] | None = None
+    # Named harness profile layered over the model's own (ROADMAP #54).
+    # `"lean"` ships in-tree; any `register_harness_profile` key works.
+    harness_profile: str | None = None
+    # Proof-of-work evidence bundle (v6 SDK-11). Off by default; the CLI's
+    # `--pr --pr-evidence` and daemon dispatch turn it on.
+    enable_evidence_bundle: bool = False
+    evidence_check_commands: list[list[str]] | None = None
