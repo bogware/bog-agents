@@ -332,6 +332,20 @@ def _cmd_help(args: str) -> HeadlessResult:
     return _err(f"Unknown command: /{target}", {"name": target, "found": False})
 
 
+def _cmd_memory(args: str) -> HeadlessResult:
+    """`memory rebuild | status | show | apply | discard` (ROADMAP #75); headless rebuilds are model-free (dedup)."""
+    import asyncio
+
+    from bog_agents_cli.memory_controller import run_memory_command
+
+    tokens = args.split()
+    if tokens and tokens[0] == "rebuild" and "--dedup" not in tokens:
+        tokens.append("--dedup")
+    text = asyncio.run(run_memory_command("/memory " + " ".join(tokens), Path.cwd()))
+    ok = not text.startswith(("Unknown", "No candidate", "Could not", "--threads"))
+    return HeadlessResult(ok=ok, text=text)
+
+
 def _cmd_findings(args: str) -> HeadlessResult:
     """The project's findings ledger (ROADMAP #59); `findings gate --max high` exits 1 when the gate fails."""
     from bog_agents_cli.findings_controller import run_findings_headless
@@ -384,6 +398,10 @@ HEADLESS_COMMANDS: dict[str, tuple[str, Callable[[str], HeadlessResult]]] = {
     "tokens": (
         "Harness overhead per turn, attributed per middleware and tool (tokens middleware [--mini])",
         _cmd_tokens,
+    ),
+    "memory": (
+        "Memory rebuild: rebuild (dedup) | status | show | apply | discard",
+        _cmd_memory,
     ),
     "findings": (
         "Findings ledger: list | show | triage | gate | sarif | record (gate exits 1 on failure)",

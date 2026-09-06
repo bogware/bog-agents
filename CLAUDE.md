@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Memory rebuild + advisor (ROADMAP #75).** `memory_rebuild.py` rewrites only the
+`## Agent-Recorded Memories` section (the one `auto_memory.append_memory` manages) and only
+into a candidate under `.bog-agents/memory.rebuild/`; `/memory apply` swaps it in with a
+backup. Keep `consolidate(invoke=None)` deterministic — the headless twin and any scheduled
+job rely on it being model-free. `advisor_tools.ask_advisor` is registered by
+`agent._advisor_tools` only with `tools.advisor` on, never under `--restricted`, and never
+when the active model is the operator's `hard` tier.
+
 **Workflows (ROADMAP #73).** `workflow.py` (pure: schema, `run_workflow` with an injected
 task runner, persisted `WorkflowRun`) + `workflow_controller.py` (the App binding and the real
 per-task agent runner) + `workflow_tools.py` (`author_workflow` / `list_workflows`). Files in

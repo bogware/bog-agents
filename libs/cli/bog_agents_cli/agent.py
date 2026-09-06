@@ -1435,6 +1435,52 @@ MINI_KEEP_TOOLS: tuple[str, ...] = (
 """Tools whose schemas stay visible under `--mini`; everything else sits behind `tool_search` / `select` (ROADMAP #54)."""
 
 
+def _advisor_tools(model_spec: str, cost_ledger: Any, *, restricted: bool) -> list[Any]:  # noqa: ANN401 - CostLedger
+    """ROADMAP #75: `ask_advisor` to the operator's `hard` tier when `tools.advisor` is on (never under --restricted)."""
+    if restricted:
+        return []
+    try:
+        from bog_agents_cli.config_manifest import resolve_option
+
+        if not resolve_option("tools.advisor"):
+            return []
+        from bog_agents_cli.advisor_tools import (
+            advisor_tools_bundle,
+            hard_tier_ask,
+            hard_tier_model,
+        )
+
+        tier = hard_tier_model(active_model=model_spec)
+        if tier is None:
+            return []
+        from bog_agents_cli.config import create_model
+
+        ask, spec = hard_tier_ask(
+            resolve_model=lambda s: create_model(s).model, tier_model=tier
+        )
+        tracker = (
+            cost_ledger.tracker_for("advisor", model_name=spec)
+            if cost_ledger is not None
+            else None
+        )
+
+        def _usage(ins: int, outs: int) -> None:
+            if tracker is not None:
+                tracker.input_tokens += ins
+                tracker.output_tokens += outs
+
+        tools, _meter = advisor_tools_bundle(
+            ask=ask,
+            model_label=spec,
+            max_questions=int(resolve_option("tools.advisor_max_questions") or 5),
+            on_usage=_usage,
+        )
+        return list(tools)
+    except Exception:
+        logger.debug("Could not wire the advisor tool", exc_info=True)
+    return []
+
+
 def _workflow_tools(cwd: Path, *, restricted: bool) -> list[Any]:
     """ROADMAP #73: `author_workflow` / `list_workflows`, only when the project uses workflows (or `tools.workflows` is on)."""
     if restricted:
@@ -2220,6 +2266,9 @@ def create_cli_agent(
     if budget_usd <= 0 and cost_caps.budget_usd:
         budget_usd = cost_caps.budget_usd
     set_web_search_ledger(cost_ledger)
+    tools.extend(
+        _advisor_tools(model_spec_str, cost_ledger, restricted=trust_profile.restricted)
+    )
 
     # Cost tracking middleware (#8, #34, #36, #47)
     if enable_cost_tracking:

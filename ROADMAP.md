@@ -1234,15 +1234,24 @@ ADK, and a contract is itself a feature to the target users.
   code-flavoured `workflow` tool variant; workflow runs are not yet in the
   `/tasks` tree. **T/S, M.**
 - **#75 Memory rebuild + advisor tool** *(Managed Agents "Dreams" research preview;
-  Kiro Crew durable lessons; Pydantic harness Advisor)* — **absent.** A
-  `memory_rebuild.py` batch (pure logic, injected `invoke`): load the store + N
-  transcripts from `sessions.db`, run a steerable consolidation (dedup,
-  contradiction resolution, provenance kept), emit a candidate store under
-  `.bog-agents/memory.rebuild/`, show a diff, swap only on approval,
-  daemon-schedulable, local-model friendly. Plus an `ask_advisor` tool that sends
-  one bounded question to the operator's `hard` tier and returns a ToolMessage,
-  counted and capped — the cheap-loop / expensive-question pattern. Grounds v2
-  #45. **S/T, M.**
+  Kiro Crew durable lessons; Pydantic harness Advisor)* — **shipped
+  2026-09-06** (REVIEW v6 §27). `memory_rebuild.py` (pure, injected `invoke`):
+  parse the `## Agent-Recorded Memories` section, consolidate against the N
+  most recent checkpointer transcripts (dedup, contradiction resolution, a
+  `sources` provenance list per entry; deterministic dedup when no model is
+  given or the reply is unusable), write the candidate + unified diff +
+  report under `.bog-agents/memory.rebuild/`, swap only on `/memory apply`
+  (backup kept). `/memory rebuild [--global] [--threads N] [--dedup]
+  [--steer "…"] | show | apply | discard | status` with a headless twin
+  (`bog-agents command "/memory rebuild"`, model-free, so a cron / daemon job
+  can schedule it). `ask_advisor` (`advisor_tools.py`): one bounded question
+  (4k + 12k chars) to the operator's `hard` tier, answered as a tool result,
+  capped per session (`tools.advisor_max_questions`, default 5), tokens
+  charged to the session `CostLedger` under `advisor`; registered when
+  `tools.advisor` is on and the active model is not already the hard tier.
+  *Was:* absent. Open: the rebuild reads thread checkpoints, not the FTS
+  index; no scheduled daemon preset yet (use a `custom` job or cron on the
+  headless command). **S/T, M.**
 - **#76 Team v2: file transfer, cross-thread mailbox, multi-repo, fast spawn**
   *(Amp agent-to-agent file transfer + multi-repo projects; Cursor multi-dir
   workspaces; Grok `grok clone` content store; Cursor Builds 3× faster start)* —

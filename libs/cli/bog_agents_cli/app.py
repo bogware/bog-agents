@@ -3401,6 +3401,13 @@ class BogAgentsApp(App):
         await self._mount_message(UserMessage(command))
         await run_changes_command(self, command)
 
+    async def _handle_memory_command(self, command: str) -> None:
+        """`/memory rebuild|show|apply|discard|status` — consolidate the agent-recorded memories (ROADMAP #75)."""
+        from bog_agents_cli.memory_controller import run_memory_from_app
+
+        await self._mount_message(UserMessage(command))
+        await self._mount_message(AppMessage(await run_memory_from_app(self, command)))
+
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
         cmd = command.lower().strip()

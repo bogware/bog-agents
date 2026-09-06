@@ -34,6 +34,9 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 ACTION_LOG = "BOG_AGENTS_ACTION_LOG"
+# ROADMAP #75: the ask_advisor tool (hard-tier second opinion) and its per-session cap
+ADVISOR = "BOG_AGENTS_ADVISOR"
+ADVISOR_MAX_QUESTIONS = "BOG_AGENTS_ADVISOR_MAX_QUESTIONS"
 """Write the hash-chained action log (`~/.bog-agents/action-log`, ROADMAP #74) when truthy."""
 
 APPROVAL_TIMEOUT = "BOG_AGENTS_APPROVAL_TIMEOUT"

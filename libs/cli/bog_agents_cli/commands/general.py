@@ -200,6 +200,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/memory",
+            "Rebuild the agent-recorded memories (dedup, contradictions, provenance) into a reviewed candidate",
+            "memory rebuild consolidate dedup apply discard dreams",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_memory_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/replay",
             "Replay agent actions for debugging",
             "debug trace",
