@@ -20,9 +20,12 @@ examples wherever possible.
 
 | | |
 |---|---|
+| [Command reference](cli/commands.md) | Every slash command (140+), grouped by intent |
+| [Governed autonomy](cli/governed-autonomy.md) | Teams, best-of-N, jury, operator, workflows, cost caps, evidence, plan review |
+| [Findings & security scans](cli/findings.md) | The findings ledger, the security-scan recipe, the CI gate, `/remediate` |
+| [Governance & safety](cli/governance.md) | Trust profiles, managed policy, the OS sandbox, the hook bus, the action log, code mode |
 | [Drive runner](cli/drive.md) | Scripted non-interactive TUI runs. The whole point. |
-| [Slash command reference](../libs/cli/README.md#day-to-day-commands) | The 120+ slash command surface, grouped by intent (in the CLI README) |
-| [Headless driving](../libs/cli/README.md#driving-it-headless) | `-n` / `-p`, `--json` / `--jsonl`, `bog-agents command`, when to use which |
+| [Headless driving](../libs/cli/README.md#driving-it-headless) | `-n` / `-p`, `--json` / `--jsonl`, `bog-agents command`, `mcp-server`, when to use which |
 
 ## SDK (`bog-agents`)
 
