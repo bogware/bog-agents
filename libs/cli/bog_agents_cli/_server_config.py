@@ -122,6 +122,7 @@ class ServerConfig:
     enable_skills: bool = True
     harness_profile: str | None = None
     restricted: bool = False
+    plan_only: bool = False
     sandbox_type: str | None = None
     sandbox_id: str | None = None
     sandbox_setup: str | None = None
@@ -166,6 +167,7 @@ class ServerConfig:
             "ENABLE_SKILLS": str(self.enable_skills).lower(),
             "HARNESS_PROFILE": self.harness_profile,
             "RESTRICTED": str(self.restricted).lower(),
+            "PLAN_ONLY": str(self.plan_only).lower(),
             "SANDBOX_TYPE": self.sandbox_type,
             "SANDBOX_ID": self.sandbox_id,
             "SANDBOX_SETUP": self.sandbox_setup,
@@ -203,6 +205,7 @@ class ServerConfig:
             enable_skills=_read_env_bool("ENABLE_SKILLS", default=True),
             harness_profile=_read_env_str("HARNESS_PROFILE") or None,
             restricted=_read_env_bool("RESTRICTED"),
+            plan_only=_read_env_bool("PLAN_ONLY"),
             sandbox_type=_read_env_str("SANDBOX_TYPE"),
             sandbox_id=_read_env_str("SANDBOX_ID"),
             sandbox_setup=_read_env_str("SANDBOX_SETUP"),
@@ -233,6 +236,7 @@ class ServerConfig:
         enable_ask_user: bool,
         harness_profile: str | None = None,
         restricted: bool = False,
+        plan_only: bool = False,
         mcp_config_path: str | None,
         no_mcp: bool,
         trust_project_mcp: bool | None,
@@ -257,6 +261,7 @@ class ServerConfig:
             enable_ask_user: Enable ask_user tool.
             harness_profile: SDK harness profile key (`lean` for `--mini`), or `None`.
             restricted: `--restricted` trust profile (ROADMAP #48).
+            plan_only: Headless planning pass — mutating tools never registered (ROADMAP #69).
             mcp_config_path: Path to MCP config.
             no_mcp: Disable MCP.
             trust_project_mcp: Trust project MCP servers.
@@ -277,6 +282,7 @@ class ServerConfig:
             enable_ask_user=enable_ask_user,
             harness_profile=harness_profile,
             restricted=restricted,
+            plan_only=plan_only,
             sandbox_type=sandbox_type,
             sandbox_id=sandbox_id,
             sandbox_setup=_normalize_path(

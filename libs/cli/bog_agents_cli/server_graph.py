@@ -636,6 +636,7 @@ def make_graph() -> Any:  # noqa: ANN401
         enable_skills=config.enable_skills,
         harness_profile=config.harness_profile,
         restricted=config.restricted,
+        plan_only=config.plan_only,
         enable_shell=config.enable_shell,
         mcp_server_info=mcp_server_info,
         cwd=project_context.user_cwd if project_context is not None else config.cwd,

@@ -95,6 +95,14 @@ order them by hand (v6 SDK-13; wiring them is ROADMAP #48/#67). Pass it as `crea
 
 **Expert Mode (`ExpertRulesMiddleware`)** — a small forward+backward-chaining rule engine that loads YAML policies from `.bog-agents/expert_rules/*.yaml`, asserts a `tool_call` fact before every tool call, and can deny / modify / require-approval the call. CLI surface: `/expert`, `/why`, `/prove`. The engine is opt-in (default `enabled=False`) and composes with `RulesMiddleware` (the prose rule injector — different feature, same family of names).
 
+**Plan review (ROADMAP #69).** `plan_review.py` is the one review model (line comments,
+slice checkboxes, revision prompt, execution brief) behind `PlanReviewScreen`, `/review-plan`
+and headless `--plan`. Keep the screen free of model calls — it returns a `PlanReviewResult`
+and `plan_review_controller.decide` chooses the prompt. A headless planning pass is
+`create_cli_agent(plan_only=True)` (`ServerConfig.plan_only`): shell/git are not registered
+and the plan-mode mutating set is withheld from every model request unconditionally — that
+is the guarantee `--plan` rests on; do not make it a toggle.
+
 **Team v2 (ROADMAP #76).** `teams.Attachment` rides on `Message` in both `Mailbox` and
 `MailboxStore` (same `send(..., attachments=)` signature — keep them interchangeable);
 `bog_agents/tools/team_files.py` stages content-addressed, DLP-redacted copies under

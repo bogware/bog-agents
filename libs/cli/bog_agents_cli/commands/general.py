@@ -220,6 +220,16 @@ COMMANDS: tuple[SlashCommand, ...] = (
     ),
     SlashCommand(
         spec=SlashCommandSpec(
+            "/review-plan",
+            "Review a plan line by line (comments, slice checkboxes) before approving or revising it",
+            "plan review approve revise butcher jtbd slices comments",
+            "general",
+            available=True,
+        ),
+        handler_method="_handle_review_plan_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/replay",
             "Replay agent actions for debugging",
             "debug trace",

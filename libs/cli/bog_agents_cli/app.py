@@ -3418,6 +3418,13 @@ class BogAgentsApp(App):
             AppMessage(run_add_dir_command(command, project_root(self)))
         )
 
+    async def _handle_review_plan_command(self, command: str) -> None:
+        """`/review-plan [last | butcher <id> | jtbd <id> | file <path>]` — line-addressed plan review (ROADMAP #69)."""
+        from bog_agents_cli.plan_review_controller import run_review_plan_command
+
+        await self._mount_message(UserMessage(command))
+        await run_review_plan_command(self, command)
+
     async def _handle_remember_command(self, command: str) -> None:
         """Build and send the memory-capture prompt."""
         cmd = command.lower().strip()

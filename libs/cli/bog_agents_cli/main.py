@@ -678,6 +678,14 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--plan",
+        dest="plan_prompt",
+        metavar="TEXT",
+        help="Headless plan-then-execute (ROADMAP #69): a read-only planning pass prints the plan; "
+        "add --auto (or --auto-approve) to execute it in a second pass",
+    )
+
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -1902,6 +1910,10 @@ def cli_main() -> None:
 
     try:
         args = parse_args()
+        if getattr(
+            args, "plan_prompt", None
+        ):  # ROADMAP #69: --plan rides the non-interactive path
+            args.non_interactive_message = args.plan_prompt
 
         model_params: dict[str, Any] | None = None
         raw_kwargs = getattr(args, "model_params", None)
@@ -2571,8 +2583,21 @@ def cli_main() -> None:
             except Exception:  # pre-flight only; agent will surface real errors
                 logger.debug("API key pre-flight check failed", exc_info=True)
 
+            runner: Any = run_non_interactive
+            if getattr(args, "plan_prompt", None):
+                from functools import partial
+
+                from bog_agents_cli.non_interactive import run_plan_then_execute
+
+                runner = partial(
+                    run_plan_then_execute,
+                    execute=bool(
+                        getattr(args, "auto_mode", False)
+                        or getattr(args, "auto_approve", False)
+                    ),
+                )
             exit_code = asyncio.run(
-                run_non_interactive(
+                runner(
                     message=args.non_interactive_message,
                     assistant_id=args.agent,
                     model_name=getattr(args, "model", None),

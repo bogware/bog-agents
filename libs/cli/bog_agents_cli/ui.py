@@ -167,6 +167,9 @@ def show_help() -> None:
     console.print("[bold]Non-Interactive (Automation):[/bold]", style=COLORS["primary"])
     console.print("  -n, --non-interactive MSG  Run single task, exit with code 0/1")
     console.print(
+        "  --plan TEXT                Headless plan-then-execute: print a read-only plan; add --auto to run it"
+    )
+    console.print(
         "  -p, --print TEXT           Same as -n + -q (clean stdout for pipes)"
     )
     console.print("  -q, --quiet                Suppress chrome, pipe-friendly output")

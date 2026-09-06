@@ -1528,6 +1528,7 @@ def create_cli_agent(
     extra_tools: list[Any] | None = None,
     harness_profile: str | None = None,
     restricted: bool = False,
+    plan_only: bool = False,
 ) -> tuple[Pregel, CompositeBackend]:
     """Create a CLI-configured agent with flexible options.
 
@@ -1577,6 +1578,8 @@ def create_cli_agent(
         profile: Configuration profile name to apply.
         harness_profile: Registry key of an SDK `HarnessProfile` (`lean` behind
             `--mini`) layered over the model's own profile.
+        plan_only: ROADMAP #69: never register the plan-mode mutating tools
+            (write / edit / execute / git mutations) — the headless `--plan` pass.
         restricted: `--restricted` (ROADMAP #48): drop the shell, git, raw HTTP,
             search and daemon tools, refuse auto-approval and gate fetches on
             the trust profile's domain allow-list.
@@ -1626,6 +1629,21 @@ def create_cli_agent(
             trust_profile, allowed_domains=web_policy.allowed_domains
         )
     if trust_profile.strips_shell:
+        enable_shell = False
+        enable_git_tools = False
+    if plan_only:  # ROADMAP #69: a planning pass registers no mutating tool at all
+        from dataclasses import replace as _replace
+
+        from bog_agents.middleware.plan_mode import MUTATING_TOOLS
+
+        trust_profile = _replace(
+            trust_profile,
+            excluded_tools=(*trust_profile.excluded_tools, *sorted(MUTATING_TOOLS)),
+            notes=(
+                *trust_profile.notes,
+                "plan-only: mutating tools are not registered",
+            ),
+        )
         enable_shell = False
         enable_git_tools = False
     # ROADMAP #50: the managed policy's skill allow-list and zero-retention flag.
@@ -1797,6 +1815,15 @@ def create_cli_agent(
 
     # Build middleware stack based on enabled features
     agent_middleware = []
+    if plan_only:  # ROADMAP #69: the built-in write / edit / execute tools never reach a model request
+        from bog_agents.middleware._tool_exclusion import (  # noqa: PLC2701 - the harness-profile exclusion middleware
+            _ToolExclusionMiddleware,
+        )
+        from bog_agents.middleware.plan_mode import MUTATING_TOOLS
+
+        agent_middleware.append(
+            _ToolExclusionMiddleware(excluded=frozenset(MUTATING_TOOLS))
+        )
     agent_middleware.append(ConfigurableModelMiddleware())
 
     # Auto-enable tool-call parser for Ollama models. Many local models emit

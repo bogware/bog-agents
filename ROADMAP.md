@@ -1197,13 +1197,25 @@ ADK, and a contract is itself a feature to the target users.
   Claude Code / Codex users can mount bog as their context engine. Completes v2
   #41 and v1 #20. **T/E, L.**
 - **#69 Plan review screen + headless `--plan --auto`** *(Kiro V3 spec review with
-  staged line comments and scoped execution; Copilot CLI `--plan --mode autopilot`)*
-  — **partial.** `/plan` is a tool-hiding toggle; butcher has a yes/no modal. A
-  shared `PlanReviewScreen` for butcher manifests, JTBD job specs and plan-mode
-  output: line-addressed comment staging → one consolidated revision prompt →
-  re-plan loop; per-slice checkboxes written back into `ButcherJob`; a
-  full-screen execution view reusing `dashboard.py` panels; `bog-agents --plan
-  "<prompt>" --auto` in `non_interactive.py`. **S/T, M.**
+  staged line comments and scoped execution; Copilot CLI `--plan --mode autopilot`)* — **shipped 2026-09-06** (REVIEW v6 §29).
+  `plan_review.py` (pure): `parse_plan` numbers lines and tags headings,
+  steps and butcher slices; `PlanReview` holds line-addressed comments and
+  per-slice checkboxes and renders either a *revision prompt* (comments quoted
+  against their lines) or an *execution brief* (deselected slices marked
+  skipped); `load_review` reads `butcher <job-id>` manifests, `jtbd <id>`
+  specs, `file <path>` or the last assistant message; `apply_slice_selection`
+  writes `skipped` back into a butcher manifest. `PlanReviewScreen`
+  (`widgets/plan_review_screen.py`): `c` comment, `space` toggle, `a` approve,
+  `r` revise, `esc` cancel — `/review-plan [...]` opens it and sends what the
+  reviewer decided. Headless: `bog-agents --plan "<prompt>" [--auto |
+  --auto-approve]` runs a `plan_only` agent (`create_cli_agent(plan_only=True)` through
+  `ServerConfig.plan_only`: shell and git tools are not registered and the
+  plan-mode mutating set is withheld from every model request by the
+  harness-profile exclusion middleware), prints the plan, then executes the brief in a
+  second pass under acceptEdits (or full auto-approve). *Was:* absent. Open:
+  the screen is a modal, not the full-screen `dashboard.py` execution view;
+  butcher execution does not yet resume from a reviewed manifest (the brief
+  goes to the agent). **S/T, M.**
 - **#70 Security-scan recipe** *(Codex Security harness; Claude Security plugin)*
   — **shipped 2026-09-06** (REVIEW v6 §25) as the `security-scan` recipe:
   architecture map → threat model → hunter subagents per attack class (via

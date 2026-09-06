@@ -124,6 +124,7 @@ class TestServerGraph:
             enable_skills=True,
             harness_profile=None,
             restricted=False,
+            plan_only=False,
             enable_shell=True,
             mcp_server_info=mcp_server_info,
             cwd=None,
