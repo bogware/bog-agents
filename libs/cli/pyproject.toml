@@ -40,11 +40,17 @@ dependencies = [
     "httpx>=0.28.1,<1.0.0",
 
     # ─── Model providers — bundled by default ─────────────────────────────
-    # Every provider integration ships with the CLI so a plain
+    # Every DIRECT provider integration ships with the CLI so a plain
     # `pip install bog-agents-cli` (or `uv sync`) works with ANY LLM out of
     # the box — users never have to `pip install` a single provider package.
     # The matching `[provider]` extras below are kept as no-op aliases so
     # existing install commands (e.g. `bog-agents-cli[bedrock]`) keep working.
+    #
+    # EXCLUDED (kept opt-in as real extras, NOT bundled): the `openrouter` and
+    # `litellm` *proxy/aggregator* providers. Their chat models validate the
+    # API key at CONSTRUCTION time, so bundling them lets a credential-less
+    # auto-detect select one and hard-crash before the first turn. Install with
+    # `pip install 'bog-agents-cli[openrouter]'` / `[litellm]` when wanted.
     # GHSA-r7w7-9xr2-qq2r — langchain-openai fix landed in 1.1.14
     "langchain-openai>=1.1.14,<2.0.0",
     "langchain-anthropic>=1.0.0,<2.0.0",
@@ -58,11 +64,9 @@ dependencies = [
     "langchain-groq>=1.0.0,<2.0.0",
     "langchain-huggingface>=1.0.0,<2.0.0",
     "langchain-ibm>=1.0.0,<2.0.0",
-    "langchain-litellm>=0.6.1,<2.0.0",
     "langchain-mistralai>=1.0.0,<2.0.0",
     "langchain-nvidia-ai-endpoints>=1.0.0,<2.0.0",
     "langchain-ollama>=1.0.0,<2.0.0",
-    "langchain-openrouter>=0.1.0,<2.0.0",
     "langchain-perplexity>=1.0.0,<2.0.0",
     "langchain-xai>=1.0.0,<2.0.0",
 
@@ -121,10 +125,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Model providers — now bundled in the base install (see [project]
-# dependencies). Kept as no-op aliases so existing install commands like
-# `pip install bog-agents-cli[bedrock]` (or `[all-providers]`) keep working;
-# each resolves to the base package, which already includes every provider.
+# Model providers. All DIRECT providers are bundled in the base install (see
+# [project] dependencies), so these are no-op aliases kept so existing install
+# commands like `pip install bog-agents-cli[bedrock]` keep working.
+# EXCEPTION: `openrouter` and `litellm` are REAL extras (not bundled — they
+# validate keys at construction; see the base-deps note) and pull their package.
 anthropic = []
 baseten = []
 bedrock = []
@@ -135,16 +140,17 @@ google-genai = []
 groq = []
 huggingface = []
 ibm = []
-litellm = []
+litellm = ["langchain-litellm>=0.6.1,<2.0.0"]
 mistralai = []
 nvidia = []
 ollama = []
 openai = []
-openrouter = []
+openrouter = ["langchain-openrouter>=0.1.0,<2.0.0"]
 perplexity = []
 vertexai = []
 xai = []
-all-providers = []
+# All providers = the bundled base set + the two opt-in proxy providers.
+all-providers = ["bog-agents-cli[litellm,openrouter]"]
 # Sandbox integrations (heavy dependencies, install only if needed)
 sandbox = [
     "langsmith[sandbox]>=0.7.7",

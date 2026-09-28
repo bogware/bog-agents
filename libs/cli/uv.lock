@@ -413,13 +413,11 @@ dependencies = [
     { name = "langchain-groq" },
     { name = "langchain-huggingface" },
     { name = "langchain-ibm" },
-    { name = "langchain-litellm" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-mistralai" },
     { name = "langchain-nvidia-ai-endpoints" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
-    { name = "langchain-openrouter" },
     { name = "langchain-perplexity" },
     { name = "langchain-xai" },
     { name = "langgraph" },
@@ -450,6 +448,8 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "daytona" },
+    { name = "langchain-litellm" },
+    { name = "langchain-openrouter" },
     { name = "langsmith" },
     { name = "modal" },
     { name = "pyte" },
@@ -457,14 +457,24 @@ all = [
     { name = "runloop-api-client" },
     { name = "tavily-python" },
 ]
+all-providers = [
+    { name = "langchain-litellm" },
+    { name = "langchain-openrouter" },
+]
 daytona-sandbox = [
     { name = "daytona" },
 ]
 langsmith-sandbox = [
     { name = "langsmith" },
 ]
+litellm = [
+    { name = "langchain-litellm" },
+]
 modal-sandbox = [
     { name = "modal" },
+]
+openrouter = [
+    { name = "langchain-openrouter" },
 ]
 pty = [
     { name = "pyte" },
@@ -505,6 +515,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0,<1.0.0" },
     { name = "bog-agents", editable = "../bog-agents" },
     { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search", "pty"], marker = "extra == 'all'" },
+    { name = "bog-agents-cli", extras = ["litellm", "openrouter"], marker = "extra == 'all-providers'" },
     { name = "croniter", specifier = ">=3.0.0,<4.0.0" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "daytona", marker = "extra == 'daytona-sandbox'", specifier = ">=0.113.0,<1.0.0" },
@@ -523,13 +534,13 @@ requires-dist = [
     { name = "langchain-groq", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-huggingface", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-ibm", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-litellm", specifier = ">=0.6.1,<2.0.0" },
+    { name = "langchain-litellm", marker = "extra == 'litellm'", specifier = ">=0.6.1,<2.0.0" },
     { name = "langchain-mcp-adapters", specifier = ">=0.2.0,<1.0.0" },
     { name = "langchain-mistralai", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-ollama", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-openai", specifier = ">=1.1.14,<2.0.0" },
-    { name = "langchain-openrouter", specifier = ">=0.1.0,<2.0.0" },
+    { name = "langchain-openrouter", marker = "extra == 'openrouter'", specifier = ">=0.1.0,<2.0.0" },
     { name = "langchain-perplexity", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-xai", specifier = ">=1.0.0,<2.0.0" },
     { name = "langgraph", specifier = ">=1.1.2,<2.0.0" },
