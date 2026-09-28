@@ -230,6 +230,39 @@ overrides it (resolved once at import time — i.e. process startup).
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.toml"
 """Path to the user's model configuration file (`~/.bog-agents/config.toml`)."""
 
+PROVIDER_EXTRA: dict[str, str] = {
+    "anthropic": "anthropic",
+    "baseten": "baseten",
+    "bedrock": "bedrock",
+    "bedrock_converse": "bedrock",
+    "cohere": "cohere",
+    "deepseek": "deepseek",
+    "fireworks": "fireworks",
+    "google_genai": "google-genai",
+    "google_vertexai": "vertexai",
+    "groq": "groq",
+    "huggingface": "huggingface",
+    "ibm": "ibm",
+    "litellm": "litellm",
+    "mistralai": "mistralai",
+    "nvidia": "nvidia",
+    "ollama": "ollama",
+    "openai": "openai",
+    "openrouter": "openrouter",
+    "perplexity": "perplexity",
+    "vertexai": "vertexai",
+    "xai": "xai",
+}
+"""Providers whose LangChain integration ships as a `bog-agents-cli` extra.
+
+The extra name matches the provider id except where the CLI uses a hyphenated
+name (`google_genai` -> `google-genai`) or a short alias (`google_vertexai` ->
+`vertexai`). Used to build actionable "reinstall the extra" hints. Every entry
+here is also a base dependency (providers are bundled by default), so these
+extras are no-op aliases kept for backwards-compatible install syntax.
+"""
+
+
 PROVIDER_API_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "azure_openai": "AZURE_OPENAI_API_KEY",
@@ -345,10 +378,17 @@ def _provider_package_is_installed(provider: str) -> bool:
     registry_entry = _get_builtin_providers().get(provider)
     if registry_entry is None:
         return False
-    package_name = registry_entry[0]
+    # Use the top-level package ROOT, not the (possibly dotted) module path
+    # from langchain's registry. importlib.util.find_spec() imports the PARENT
+    # package to resolve a dotted submodule name, which — now that every
+    # provider ships by default — would eagerly import heavy SDKs (e.g.
+    # langchain_google_vertexai pulls in google-cloud-aiplatform) just to
+    # answer "is it installed?". find_spec() on the bare root only consults the
+    # finders and never executes the package.
+    package_root = registry_entry[0].split(".", maxsplit=1)[0]
     try:
-        return importlib.util.find_spec(package_name) is not None
-    except ModuleNotFoundError:
+        return importlib.util.find_spec(package_root) is not None
+    except (ImportError, ValueError):
         return False
 
 
