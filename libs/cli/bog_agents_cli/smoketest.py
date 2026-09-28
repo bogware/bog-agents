@@ -193,7 +193,13 @@ def _categorize(exc: BaseException) -> tuple[SmoketestKind, str]:
     if name in ("TimeoutError", "ReadTimeout", "ConnectTimeout"):
         return SmoketestKind.TIMEOUT, "request timed out"
 
-    if name == "ImportError" or "no module named" in text:
+    if (
+        name == "ImportError"
+        or "no module named" in text
+        or "missing package for provider" in text
+    ):
+        # The last case is the ModelConfigError that config.create_model raises
+        # when a provider's langchain package is absent (parity with Bedrock).
         return SmoketestKind.PACKAGE_MISSING, str(exc)
 
     for signal in _AUTH_MISSING_SIGNALS:
@@ -268,9 +274,18 @@ def _hint_for(kind: SmoketestKind, provider: str) -> str:
             "The provider may be slow or your network may be flaky."
         )
     if kind == SmoketestKind.PACKAGE_MISSING:
+        from bog_agents_cli.model_config import PROVIDER_EXTRA
+
+        extra = PROVIDER_EXTRA.get(provider or "")
+        if extra:
+            return (
+                "The provider package ships with the CLI by default — this "
+                "looks like a partial install. Reinstall with "
+                "`pip install 'bog-agents-cli[all-providers]'` (or just this "
+                f"one: `pip install 'bog-agents-cli[{extra}]'`)."
+            )
         return (
-            "Install the provider's package, e.g. "
-            "`uv pip install langchain-aws` for Bedrock."
+            "Install the provider's package, e.g. `pip install langchain-<provider>`."
         )
     return ""
 

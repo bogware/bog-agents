@@ -47,6 +47,19 @@ class TestCategorize:
         kind, _ = smoketest_module._categorize(ImportError("No module named 'foo'"))
         assert kind is SmoketestKind.PACKAGE_MISSING
 
+    def test_wrapped_missing_provider_package(self) -> None:
+        # config.create_model wraps langchain's ImportError into a
+        # ModelConfigError whose text starts with "Missing package for
+        # provider" — smoketest must still classify that as PACKAGE_MISSING
+        # (parity with the Bedrock package-missing guard).
+        kind, _ = smoketest_module._categorize(
+            Exception(
+                "Missing package for provider 'ollama'. This normally ships "
+                "with the CLI — reinstall ..."
+            )
+        )
+        assert kind is SmoketestKind.PACKAGE_MISSING
+
 
 class TestHintFor:
     """`_hint_for` returns provider-aware action steps."""
@@ -66,6 +79,11 @@ class TestHintFor:
             SmoketestKind.MODEL_NOT_FOUND, "bedrock_converse"
         )
         assert "inference profile" in hint.lower()
+
+    def test_package_missing_points_at_bundled_extra(self) -> None:
+        hint = smoketest_module._hint_for(SmoketestKind.PACKAGE_MISSING, "ollama")
+        assert "bog-agents-cli[ollama]" in hint
+        assert "all-providers" in hint
 
     def test_quota_hint(self) -> None:
         hint = smoketest_module._hint_for(SmoketestKind.QUOTA, "anthropic")

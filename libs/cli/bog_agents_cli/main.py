@@ -2000,12 +2000,21 @@ def cli_main() -> None:
                 sys.exit(1)
 
             from bog_agents_cli.config import create_model_with_fallback
+            from bog_agents_cli.model_config import ModelConfigError
 
-            model_result = create_model_with_fallback(
-                getattr(args, "model", None),
-                extra_kwargs=model_params,
-                profile_overrides=profile_override,
-            )
+            try:
+                model_result = create_model_with_fallback(
+                    getattr(args, "model", None),
+                    extra_kwargs=model_params,
+                    profile_overrides=profile_override,
+                )
+            except ModelConfigError as exc:
+                # Match every other model-resolving surface (TUI/-n/--acp): a
+                # bad model / missing provider package prints a clean one-line
+                # error instead of a raw traceback out of --serve.
+                sys.stderr.write(f"Error: {exc}\n")
+                sys.stderr.flush()
+                sys.exit(1)
             model_result.apply_to_settings()
 
             from bog_agents.graph import create_agent as _create_agent

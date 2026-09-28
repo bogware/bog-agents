@@ -364,7 +364,24 @@ def run_doctor() -> str:
                 )
             checks.append((f"Provider: {pkg}", status, detail))
         except importlib.metadata.PackageNotFoundError:
-            checks.append((f"Provider: {pkg}", "SKIP", "Not installed (optional)"))
+            if pkg == "langchain-ollama" and _read_default_ollama_model():
+                # The configured default is an Ollama model but the provider
+                # package is missing — a degraded install that would fail the
+                # first turn with a masked "server error". Flag it loudly here
+                # rather than as a benign optional SKIP.
+                checks.append(
+                    (
+                        f"Provider: {pkg}",
+                        "WARN",
+                        "Configured default is an Ollama model, but "
+                        "langchain-ollama is not installed. It normally ships "
+                        "with the CLI — reinstall with: pip install "
+                        "'bog-agents-cli[all-providers]' (or: pip install "
+                        "langchain-ollama).",
+                    )
+                )
+            else:
+                checks.append((f"Provider: {pkg}", "SKIP", "Not installed (optional)"))
 
     # 5. CLI tools
     for tool, purpose in [
