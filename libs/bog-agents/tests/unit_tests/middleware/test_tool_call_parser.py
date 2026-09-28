@@ -10,6 +10,8 @@ from bog_agents.middleware.tool_call_parser import (
     ToolCallParserMiddleware,
     _balanced_json_objects,
     _coerce_call,
+    _coerce_shell_command_args,
+    _normalize_shell_tool_calls,
     parse_tool_calls_from_text,
 )
 
@@ -395,3 +397,60 @@ class TestMiddleware:
 
         result = mw.wrap_model_call(request=None, call_next=call_next)  # type: ignore[arg-type]
         assert result.result[0].tool_calls == []
+
+
+class TestShellArgNormalization:
+    """`cmd`/argv-list shell args are coerced onto `command` (gpt-oss, harmony)."""
+
+    def test_coerce_cmd_argv_list_to_command_string(self) -> None:
+        out = _coerce_shell_command_args("execute", {"cmd": ["bash", "-lc", "date"]})
+        assert out == {"command": "bash -lc date"}
+
+    def test_coerce_cmd_string_to_command(self) -> None:
+        out = _coerce_shell_command_args("execute", {"cmd": "ls -la"})
+        assert out == {"command": "ls -la"}
+
+    def test_coerce_command_argv_list(self) -> None:
+        out = _coerce_shell_command_args("shell", {"command": ["echo", "hi there"]})
+        assert out == {"command": "echo 'hi there'"}
+
+    def test_command_string_is_left_alone(self) -> None:
+        args = {"command": "pwd", "timeout": 5}
+        assert _coerce_shell_command_args("execute", args) is args
+
+    def test_non_shell_tool_is_untouched(self) -> None:
+        args = {"cmd": ["not", "a", "shell", "tool"]}
+        assert _coerce_shell_command_args("write_file", args) is args
+
+    def test_normalize_reports_change_and_preserves_other_calls(self) -> None:
+        calls = [
+            {"id": "1", "name": "execute", "args": {"cmd": ["date"]}, "type": "tool_call"},
+            {"id": "2", "name": "read_file", "args": {"path": "a"}, "type": "tool_call"},
+        ]
+        out, changed = _normalize_shell_tool_calls(calls)
+        assert changed is True
+        assert out[0]["args"] == {"command": "date"}
+        assert out[1] == calls[1]
+
+    def test_middleware_normalizes_native_shell_call(self) -> None:
+        mw = ToolCallParserMiddleware()
+        native = [
+            {
+                "id": "abc",
+                "name": "execute",
+                "args": {"cmd": ["bash", "-lc", "date"]},
+                "type": "tool_call",
+            },
+        ]
+        response = ModelResponse(
+            result=[AIMessage(content="", tool_calls=native)],
+            structured_response=None,
+        )
+
+        def call_next(_request: object) -> ModelResponse:
+            return response
+
+        result = mw.wrap_model_call(request=None, call_next=call_next)  # type: ignore[arg-type]
+        recovered = result.result[0].tool_calls[0]
+        assert recovered["args"] == {"command": "bash -lc date"}
+        assert "cmd" not in recovered["args"]

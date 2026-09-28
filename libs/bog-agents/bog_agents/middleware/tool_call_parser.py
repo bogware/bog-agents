@@ -50,6 +50,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -69,6 +70,74 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shell-argument normalization
+# ---------------------------------------------------------------------------
+
+_SHELL_TOOL_NAMES: frozenset[str] = frozenset({"execute", "shell", "bash", "run_command", "powershell"})
+"""Tools whose single required argument is a ``command`` string.
+
+Local models (notably gpt-oss / OpenAI-harmony-trained, and some others) call
+these as ``cmd=["bash", "-lc", "date"]`` — an argv *list* under ``cmd`` — or
+``command=["bash", "-lc", "date"]`` instead of ``command="bash -lc date"``.
+That leaves the tool's required ``command`` field unset and the call fails with
+a pydantic "field required" error before it ever runs.
+"""
+
+
+def _coerce_shell_command_args(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Map a shell tool's ``cmd``/argv-list argument onto ``command`` (a string).
+
+    Returns ``args`` unchanged for non-shell tools, or when a non-empty
+    ``command`` string is already present. An argv list (under either ``cmd`` or
+    ``command``) is joined with ``shlex.join`` so it round-trips as a single
+    shell command line; the stray ``cmd`` key is dropped.
+
+    Args:
+        name: The tool name being called.
+        args: The tool-call arguments dict.
+
+    Returns:
+        A normalized args dict (a new dict when a change was made, else the
+            original object unchanged).
+    """
+    if name not in _SHELL_TOOL_NAMES or not isinstance(args, dict):
+        return args
+    existing = args.get("command")
+    if isinstance(existing, str) and existing.strip():
+        return args
+    candidate: Any = existing if isinstance(existing, list) else args.get("cmd")
+    if isinstance(candidate, list):
+        candidate = shlex.join(str(part) for part in candidate)
+    if not isinstance(candidate, str) or not candidate.strip():
+        return args
+    normalized = {key: value for key, value in args.items() if key != "cmd"}
+    normalized["command"] = candidate
+    return normalized
+
+
+def _normalize_shell_tool_calls(
+    tool_calls: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Coerce shell-tool args across a list of tool calls.
+
+    Returns the (possibly rewritten) list and whether anything changed.
+    """
+    changed = False
+    out: list[dict[str, Any]] = []
+    for call in tool_calls:
+        name = call.get("name") if isinstance(call, dict) else None
+        args = call.get("args") if isinstance(call, dict) else None
+        if isinstance(name, str) and isinstance(args, dict):
+            new_args = _coerce_shell_command_args(name, args)
+            if new_args is not args:
+                out.append({**call, "args": new_args})
+                changed = True
+                continue
+        out.append(call)
+    return out, changed
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +848,14 @@ class ToolCallParserMiddleware(AgentMiddleware[ToolCallParserState, ContextT, Re
             if not isinstance(msg, AIMessage):
                 continue
             if msg.tool_calls:
-                continue  # Already structured; leave alone.
+                # Already structured — but normalize shell-tool args so models
+                # that emit `cmd=[argv]` / `command=[argv]` (gpt-oss, harmony)
+                # still satisfy the shell tool's required `command: str`.
+                fixed_calls, tc_changed = _normalize_shell_tool_calls(msg.tool_calls)
+                if tc_changed:
+                    new_messages[i] = msg.model_copy(update={"tool_calls": fixed_calls})
+                    changed = True
+                continue
             text = msg.content if isinstance(msg.content, str) else ""
             if not text:
                 continue
@@ -800,6 +876,7 @@ class ToolCallParserMiddleware(AgentMiddleware[ToolCallParserState, ContextT, Re
                 }
                 for call in parsed
             ]
+            tool_calls, _ = _normalize_shell_tool_calls(tool_calls)
             new_messages[i] = msg.model_copy(
                 update={
                     "content": residual,
