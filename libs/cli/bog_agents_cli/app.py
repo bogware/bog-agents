@@ -16265,7 +16265,9 @@ class BogAgentsApp(App):
         except Exception:
             # A copy attempt must never crash the app; fall back to a blocking
             # write if the worker can't be scheduled.
-            logger.debug("copy worker dispatch failed; writing synchronously", exc_info=True)
+            logger.debug(
+                "copy worker dispatch failed; writing synchronously", exc_info=True
+            )
             success, last_error = _write_to_clipboard(payload)
             _notify_copy_result(
                 self,
