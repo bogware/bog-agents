@@ -39,9 +39,21 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.15,<1.0.0",
     "httpx>=0.28.1,<1.0.0",
 
-    # Require at least one integration package
-    # GHSA-r7w7-9xr2-qq2r — fix landed in 1.1.14
+    # ─── Integration packages ─────────────────────────────────────────────
+    # `langchain-openai` is the baseline integration. `langchain-ollama` is
+    # bundled too so local models (`ollama:...`) work out of the box with no
+    # extra install — it constructs without credentials or a network call, so
+    # it is safe to ship by default.
+    #
+    # Every OTHER provider stays an opt-in extra (see [optional-dependencies]).
+    # They are intentionally NOT bundled: several validate credentials or open a
+    # socket at CONSTRUCTION time (bedrock/boto3, openrouter, litellm, …), which
+    # would let a credential-less auto-detect pick one and hard-crash before the
+    # first turn. Install what you use, e.g. `pip install
+    # 'bog-agents-cli[anthropic]'`, or `[all-providers]` for everything.
+    # GHSA-r7w7-9xr2-qq2r — langchain-openai fix landed in 1.1.14
     "langchain-openai>=1.1.14,<2.0.0",
+    "langchain-ollama>=1.0.0,<2.0.0",
 
     # Observability
     # GHSA-rr7j-v2q5-chgv — fix landed in 0.7.31
@@ -98,7 +110,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Model providers
+# Model providers — opt-in integration packages. Install the one(s) you use,
+# e.g. `pip install 'bog-agents-cli[anthropic]'`, or `[all-providers]` for all.
+# `ollama` is bundled in the base install already; its extra is a no-op alias
+# so `bog-agents-cli[ollama]` still resolves.
 anthropic = ["langchain-anthropic>=1.0.0,<2.0.0"]
 baseten = ["langchain-baseten>=0.1.9,<1.0.0"]
 bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
@@ -112,7 +127,7 @@ ibm = ["langchain-ibm>=1.0.0,<2.0.0"]
 litellm = ["langchain-litellm>=0.6.1,<2.0.0"]
 mistralai = ["langchain-mistralai>=1.0.0,<2.0.0"]
 nvidia = ["langchain-nvidia-ai-endpoints>=1.0.0,<2.0.0"]
-ollama = ["langchain-ollama>=1.0.0,<2.0.0"]
+ollama = []
 openai = ["langchain-openai>=1.1.8,<2.0.0"]
 openrouter = ["langchain-openrouter>=0.1.0,<2.0.0"]
 perplexity = ["langchain-perplexity>=1.0.0,<2.0.0"]

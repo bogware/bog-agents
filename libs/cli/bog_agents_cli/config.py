@@ -2415,15 +2415,23 @@ def _create_model_via_init(
             "ollama": "langchain-ollama",
         }
         package = package_map.get(provider, f"langchain-{provider}")
-        if provider in ("bedrock", "bedrock_converse"):
-            # Point CLI users at the packaged extra (which pulls langchain-aws
-            # AND boto3) rather than the bare SDK package. The phrase "Missing
-            # package for provider" is kept so _bedrock.categorize_bedrock_error
-            # still classifies this as PACKAGE_MISSING.
+        # Every provider integration ships with the CLI by default, so a
+        # missing package means a partial/degraded install (e.g. `--no-deps`,
+        # or the SDK installed without the CLI). Point users back at the
+        # bundled install first, then a single-provider fallback. The phrase
+        # "Missing package for provider" is load-bearing: both
+        # smoketest._categorize and _bedrock.categorize_bedrock_error classify
+        # PACKAGE_MISSING off it — keep it verbatim.
+        from bog_agents_cli.model_config import PROVIDER_EXTRA
+
+        extra = PROVIDER_EXTRA.get(provider or "")
+        if extra:
             msg = (
-                f"Missing package for provider '{provider}'. Install the AWS "
-                "extra: pip install 'bog-agents-cli[bedrock]'  "
-                "(or: pip install langchain-aws)"
+                f"Missing package for provider '{provider}'. This normally "
+                "ships with the CLI — reinstall everything with: "
+                "pip install 'bog-agents-cli[all-providers]'  (or just this "
+                f"provider: pip install 'bog-agents-cli[{extra}]'  /  "
+                f"pip install {package})"
             )
         else:
             msg = (

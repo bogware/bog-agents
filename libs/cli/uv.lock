@@ -403,6 +403,7 @@ dependencies = [
     { name = "keyring" },
     { name = "langchain" },
     { name = "langchain-mcp-adapters" },
+    { name = "langchain-ollama" },
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
@@ -446,7 +447,6 @@ all = [
     { name = "langchain-litellm" },
     { name = "langchain-mistralai" },
     { name = "langchain-nvidia-ai-endpoints" },
-    { name = "langchain-ollama" },
     { name = "langchain-openai" },
     { name = "langchain-openrouter" },
     { name = "langchain-perplexity" },
@@ -473,7 +473,6 @@ all-providers = [
     { name = "langchain-litellm" },
     { name = "langchain-mistralai" },
     { name = "langchain-nvidia-ai-endpoints" },
-    { name = "langchain-ollama" },
     { name = "langchain-openai" },
     { name = "langchain-openrouter" },
     { name = "langchain-perplexity" },
@@ -526,9 +525,6 @@ modal-sandbox = [
 ]
 nvidia = [
     { name = "langchain-nvidia-ai-endpoints" },
-]
-ollama = [
-    { name = "langchain-ollama" },
 ]
 openai = [
     { name = "langchain-openai" },
@@ -607,7 +603,7 @@ requires-dist = [
     { name = "langchain-mcp-adapters", specifier = ">=0.2.0,<1.0.0" },
     { name = "langchain-mistralai", marker = "extra == 'mistralai'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'nvidia'", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-ollama", marker = "extra == 'ollama'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-ollama", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-openai", specifier = ">=1.1.14,<2.0.0" },
     { name = "langchain-openai", marker = "extra == 'openai'", specifier = ">=1.1.8,<2.0.0" },
     { name = "langchain-openrouter", marker = "extra == 'openrouter'", specifier = ">=0.1.0,<2.0.0" },

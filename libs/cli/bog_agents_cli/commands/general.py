@@ -8,6 +8,20 @@ from bog_agents_cli.commands._base import SlashCommand
 COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand(
         spec=SlashCommandSpec(
+            "/copy",
+            "Copy the last response — or the whole conversation — to the system clipboard",
+            "copy clipboard yank response transcript conversation paste ctrl-c ctrl-shift-c",
+            "general",
+            available=True,
+            subcommands=(
+                ("last", "Copy the last assistant response (default)"),
+                ("all", "Copy the whole conversation transcript"),
+            ),
+        ),
+        handler_method="_handle_copy_command",
+    ),
+    SlashCommand(
+        spec=SlashCommandSpec(
             "/auto",
             "Toggle smart auto-mode: auto-approve safe tool calls, ask only for risky ops",
             "auto mode approve safe risky rules smart automatic",

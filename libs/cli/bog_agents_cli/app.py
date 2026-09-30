@@ -16214,6 +16214,12 @@ class BogAgentsApp(App):
             event.prevent_default()
             event.stop()
 
+    async def _handle_copy_command(self, command: str) -> None:
+        """Copy the last response / transcript to the clipboard (`/copy [all]`)."""
+        from bog_agents_cli.copy_controller import handle_copy_command
+
+        await handle_copy_command(self, command)
+
     def action_copy_selection(self) -> None:
         """Copy the current selection to the system clipboard."""
         copy_selection_to_clipboard_async(self)
