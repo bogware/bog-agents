@@ -422,7 +422,7 @@ Allowed types: feat, fix, chore, refactor, docs, test. `feat` triggers minor bum
 
 1. `libs/cli/bog_agents_cli/model_config.py` — add to `PROVIDER_API_KEY_ENV` (alphabetical) and `PROVIDER_EXTRA` (provider → `[extra]` name; drives the install/reinstall hints).
 2. `libs/cli/bog_agents_cli/api_keys.py` — add to `_PROVIDER_KEY_METADATA` so the vault auto-injects the key (the helper at module load asserts these two registries stay in sync, see P0-G; missing metadata raises at import time).
-3. `libs/cli/pyproject.toml` — add the `langchain-*` package to the base `[project]` `dependencies` block (**providers are bundled by default** — a user must never `pip install` one by hand), and keep a no-op `<provider> = []` alias under `[project.optional-dependencies]` so `bog-agents-cli[<provider>]` install syntax still resolves.
+3. `libs/cli/pyproject.toml` — add the `langchain-*` package as an optional extra under `[project.optional-dependencies]` and include it in `all-providers`. Only `langchain-openai` and `langchain-ollama` are base dependencies (Ollama is bundled so local models work out of the box); every other provider stays opt-in because several validate credentials or open a socket at construction time, which would make a credential-less auto-detect select one and hard-crash.
 4. `libs/cli/tests/unit_tests/test_model_config.py` — add assertion.
 
 Only add `detect_provider()` entry if the provider has a distinctive model name prefix.

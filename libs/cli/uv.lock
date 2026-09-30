@@ -402,24 +402,9 @@ dependencies = [
     { name = "httpx" },
     { name = "keyring" },
     { name = "langchain" },
-    { name = "langchain-anthropic" },
-    { name = "langchain-aws" },
-    { name = "langchain-baseten" },
-    { name = "langchain-cohere" },
-    { name = "langchain-deepseek" },
-    { name = "langchain-fireworks" },
-    { name = "langchain-google-genai" },
-    { name = "langchain-google-vertexai" },
-    { name = "langchain-groq" },
-    { name = "langchain-huggingface" },
-    { name = "langchain-ibm" },
     { name = "langchain-mcp-adapters" },
-    { name = "langchain-mistralai" },
-    { name = "langchain-nvidia-ai-endpoints" },
     { name = "langchain-ollama" },
     { name = "langchain-openai" },
-    { name = "langchain-perplexity" },
-    { name = "langchain-xai" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint-sqlite" },
     { name = "langgraph-cli", extra = ["inmem"] },
@@ -448,8 +433,24 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "daytona" },
+    { name = "langchain-anthropic" },
+    { name = "langchain-aws" },
+    { name = "langchain-baseten" },
+    { name = "langchain-cohere" },
+    { name = "langchain-deepseek" },
+    { name = "langchain-fireworks" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-google-vertexai" },
+    { name = "langchain-groq" },
+    { name = "langchain-huggingface" },
+    { name = "langchain-ibm" },
     { name = "langchain-litellm" },
+    { name = "langchain-mistralai" },
+    { name = "langchain-nvidia-ai-endpoints" },
+    { name = "langchain-openai" },
     { name = "langchain-openrouter" },
+    { name = "langchain-perplexity" },
+    { name = "langchain-xai" },
     { name = "langsmith" },
     { name = "modal" },
     { name = "pyte" },
@@ -458,11 +459,57 @@ all = [
     { name = "tavily-python" },
 ]
 all-providers = [
+    { name = "langchain-anthropic" },
+    { name = "langchain-aws" },
+    { name = "langchain-baseten" },
+    { name = "langchain-cohere" },
+    { name = "langchain-deepseek" },
+    { name = "langchain-fireworks" },
+    { name = "langchain-google-genai" },
+    { name = "langchain-google-vertexai" },
+    { name = "langchain-groq" },
+    { name = "langchain-huggingface" },
+    { name = "langchain-ibm" },
     { name = "langchain-litellm" },
+    { name = "langchain-mistralai" },
+    { name = "langchain-nvidia-ai-endpoints" },
+    { name = "langchain-openai" },
     { name = "langchain-openrouter" },
+    { name = "langchain-perplexity" },
+    { name = "langchain-xai" },
+]
+anthropic = [
+    { name = "langchain-anthropic" },
+]
+baseten = [
+    { name = "langchain-baseten" },
+]
+bedrock = [
+    { name = "langchain-aws" },
+]
+cohere = [
+    { name = "langchain-cohere" },
 ]
 daytona-sandbox = [
     { name = "daytona" },
+]
+deepseek = [
+    { name = "langchain-deepseek" },
+]
+fireworks = [
+    { name = "langchain-fireworks" },
+]
+google-genai = [
+    { name = "langchain-google-genai" },
+]
+groq = [
+    { name = "langchain-groq" },
+]
+huggingface = [
+    { name = "langchain-huggingface" },
+]
+ibm = [
+    { name = "langchain-ibm" },
 ]
 langsmith-sandbox = [
     { name = "langsmith" },
@@ -470,11 +517,23 @@ langsmith-sandbox = [
 litellm = [
     { name = "langchain-litellm" },
 ]
+mistralai = [
+    { name = "langchain-mistralai" },
+]
 modal-sandbox = [
     { name = "modal" },
 ]
+nvidia = [
+    { name = "langchain-nvidia-ai-endpoints" },
+]
+openai = [
+    { name = "langchain-openai" },
+]
 openrouter = [
     { name = "langchain-openrouter" },
+]
+perplexity = [
+    { name = "langchain-perplexity" },
 ]
 pty = [
     { name = "pyte" },
@@ -489,8 +548,14 @@ sandbox = [
     { name = "modal" },
     { name = "runloop-api-client" },
 ]
+vertexai = [
+    { name = "langchain-google-vertexai" },
+]
 web-search = [
     { name = "tavily-python" },
+]
+xai = [
+    { name = "langchain-xai" },
 ]
 
 [package.dev-dependencies]
@@ -515,7 +580,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0,<1.0.0" },
     { name = "bog-agents", editable = "../bog-agents" },
     { name = "bog-agents-cli", extras = ["all-providers", "sandbox", "web-search", "pty"], marker = "extra == 'all'" },
-    { name = "bog-agents-cli", extras = ["litellm", "openrouter"], marker = "extra == 'all-providers'" },
+    { name = "bog-agents-cli", extras = ["anthropic", "baseten", "bedrock", "cohere", "deepseek", "fireworks", "google-genai", "groq", "huggingface", "ibm", "litellm", "mistralai", "nvidia", "ollama", "openai", "openrouter", "perplexity", "vertexai", "xai"], marker = "extra == 'all-providers'" },
     { name = "croniter", specifier = ">=3.0.0,<4.0.0" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "daytona", marker = "extra == 'daytona-sandbox'", specifier = ">=0.113.0,<1.0.0" },
@@ -523,26 +588,27 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1,<1.0.0" },
     { name = "keyring", specifier = ">=25.0.0,<27.0.0" },
     { name = "langchain", specifier = ">=1.2.10,<2.0.0" },
-    { name = "langchain-anthropic", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-aws", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-baseten", specifier = ">=0.1.9,<1.0.0" },
-    { name = "langchain-cohere", specifier = ">=0.5.0,<1.0.0" },
-    { name = "langchain-deepseek", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-fireworks", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-google-genai", specifier = ">=4.0.0,<5.0.0" },
-    { name = "langchain-google-vertexai", specifier = ">=3.0.0,<4.0.0" },
-    { name = "langchain-groq", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-huggingface", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-ibm", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-anthropic", marker = "extra == 'anthropic'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-aws", marker = "extra == 'bedrock'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-baseten", marker = "extra == 'baseten'", specifier = ">=0.1.9,<1.0.0" },
+    { name = "langchain-cohere", marker = "extra == 'cohere'", specifier = ">=0.5.0,<1.0.0" },
+    { name = "langchain-deepseek", marker = "extra == 'deepseek'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-fireworks", marker = "extra == 'fireworks'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-google-genai", marker = "extra == 'google-genai'", specifier = ">=4.0.0,<5.0.0" },
+    { name = "langchain-google-vertexai", marker = "extra == 'vertexai'", specifier = ">=3.0.0,<4.0.0" },
+    { name = "langchain-groq", marker = "extra == 'groq'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-huggingface", marker = "extra == 'huggingface'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-ibm", marker = "extra == 'ibm'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-litellm", marker = "extra == 'litellm'", specifier = ">=0.6.1,<2.0.0" },
     { name = "langchain-mcp-adapters", specifier = ">=0.2.0,<1.0.0" },
-    { name = "langchain-mistralai", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-mistralai", marker = "extra == 'mistralai'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'nvidia'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-ollama", specifier = ">=1.0.0,<2.0.0" },
     { name = "langchain-openai", specifier = ">=1.1.14,<2.0.0" },
+    { name = "langchain-openai", marker = "extra == 'openai'", specifier = ">=1.1.8,<2.0.0" },
     { name = "langchain-openrouter", marker = "extra == 'openrouter'", specifier = ">=0.1.0,<2.0.0" },
-    { name = "langchain-perplexity", specifier = ">=1.0.0,<2.0.0" },
-    { name = "langchain-xai", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-perplexity", marker = "extra == 'perplexity'", specifier = ">=1.0.0,<2.0.0" },
+    { name = "langchain-xai", marker = "extra == 'xai'", specifier = ">=1.0.0,<2.0.0" },
     { name = "langgraph", specifier = ">=1.1.2,<2.0.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.0.0,<4.0.0" },
     { name = "langgraph-cli", extras = ["inmem"], specifier = ">=0.4.15,<1.0.0" },

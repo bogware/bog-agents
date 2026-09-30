@@ -39,36 +39,21 @@ dependencies = [
     "langgraph-cli[inmem]>=0.4.15,<1.0.0",
     "httpx>=0.28.1,<1.0.0",
 
-    # ─── Model providers — bundled by default ─────────────────────────────
-    # Every DIRECT provider integration ships with the CLI so a plain
-    # `pip install bog-agents-cli` (or `uv sync`) works with ANY LLM out of
-    # the box — users never have to `pip install` a single provider package.
-    # The matching `[provider]` extras below are kept as no-op aliases so
-    # existing install commands (e.g. `bog-agents-cli[bedrock]`) keep working.
+    # ─── Integration packages ─────────────────────────────────────────────
+    # `langchain-openai` is the baseline integration. `langchain-ollama` is
+    # bundled too so local models (`ollama:...`) work out of the box with no
+    # extra install — it constructs without credentials or a network call, so
+    # it is safe to ship by default.
     #
-    # EXCLUDED (kept opt-in as real extras, NOT bundled): the `openrouter` and
-    # `litellm` *proxy/aggregator* providers. Their chat models validate the
-    # API key at CONSTRUCTION time, so bundling them lets a credential-less
-    # auto-detect select one and hard-crash before the first turn. Install with
-    # `pip install 'bog-agents-cli[openrouter]'` / `[litellm]` when wanted.
+    # Every OTHER provider stays an opt-in extra (see [optional-dependencies]).
+    # They are intentionally NOT bundled: several validate credentials or open a
+    # socket at CONSTRUCTION time (bedrock/boto3, openrouter, litellm, …), which
+    # would let a credential-less auto-detect pick one and hard-crash before the
+    # first turn. Install what you use, e.g. `pip install
+    # 'bog-agents-cli[anthropic]'`, or `[all-providers]` for everything.
     # GHSA-r7w7-9xr2-qq2r — langchain-openai fix landed in 1.1.14
     "langchain-openai>=1.1.14,<2.0.0",
-    "langchain-anthropic>=1.0.0,<2.0.0",
-    "langchain-aws>=1.0.0,<2.0.0",
-    "langchain-baseten>=0.1.9,<1.0.0",
-    "langchain-cohere>=0.5.0,<1.0.0",
-    "langchain-deepseek>=1.0.0,<2.0.0",
-    "langchain-fireworks>=1.0.0,<2.0.0",
-    "langchain-google-genai>=4.0.0,<5.0.0",
-    "langchain-google-vertexai>=3.0.0,<4.0.0",
-    "langchain-groq>=1.0.0,<2.0.0",
-    "langchain-huggingface>=1.0.0,<2.0.0",
-    "langchain-ibm>=1.0.0,<2.0.0",
-    "langchain-mistralai>=1.0.0,<2.0.0",
-    "langchain-nvidia-ai-endpoints>=1.0.0,<2.0.0",
     "langchain-ollama>=1.0.0,<2.0.0",
-    "langchain-perplexity>=1.0.0,<2.0.0",
-    "langchain-xai>=1.0.0,<2.0.0",
 
     # Observability
     # GHSA-rr7j-v2q5-chgv — fix landed in 0.7.31
@@ -125,32 +110,32 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Model providers. All DIRECT providers are bundled in the base install (see
-# [project] dependencies), so these are no-op aliases kept so existing install
-# commands like `pip install bog-agents-cli[bedrock]` keep working.
-# EXCEPTION: `openrouter` and `litellm` are REAL extras (not bundled — they
-# validate keys at construction; see the base-deps note) and pull their package.
-anthropic = []
-baseten = []
-bedrock = []
-cohere = []
-deepseek = []
-fireworks = []
-google-genai = []
-groq = []
-huggingface = []
-ibm = []
+# Model providers — opt-in integration packages. Install the one(s) you use,
+# e.g. `pip install 'bog-agents-cli[anthropic]'`, or `[all-providers]` for all.
+# `ollama` is bundled in the base install already; its extra is a no-op alias
+# so `bog-agents-cli[ollama]` still resolves.
+anthropic = ["langchain-anthropic>=1.0.0,<2.0.0"]
+baseten = ["langchain-baseten>=0.1.9,<1.0.0"]
+bedrock = ["langchain-aws>=1.0.0,<2.0.0"]
+cohere = ["langchain-cohere>=0.5.0,<1.0.0"]
+deepseek = ["langchain-deepseek>=1.0.0,<2.0.0"]
+fireworks = ["langchain-fireworks>=1.0.0,<2.0.0"]
+google-genai = ["langchain-google-genai>=4.0.0,<5.0.0"]
+groq = ["langchain-groq>=1.0.0,<2.0.0"]
+huggingface = ["langchain-huggingface>=1.0.0,<2.0.0"]
+ibm = ["langchain-ibm>=1.0.0,<2.0.0"]
 litellm = ["langchain-litellm>=0.6.1,<2.0.0"]
-mistralai = []
-nvidia = []
+mistralai = ["langchain-mistralai>=1.0.0,<2.0.0"]
+nvidia = ["langchain-nvidia-ai-endpoints>=1.0.0,<2.0.0"]
 ollama = []
-openai = []
+openai = ["langchain-openai>=1.1.8,<2.0.0"]
 openrouter = ["langchain-openrouter>=0.1.0,<2.0.0"]
-perplexity = []
-vertexai = []
-xai = []
-# All providers = the bundled base set + the two opt-in proxy providers.
-all-providers = ["bog-agents-cli[litellm,openrouter]"]
+perplexity = ["langchain-perplexity>=1.0.0,<2.0.0"]
+vertexai = ["langchain-google-vertexai>=3.0.0,<4.0.0"]
+xai = ["langchain-xai>=1.0.0,<2.0.0"]
+all-providers = [
+    "bog-agents-cli[anthropic,baseten,bedrock,cohere,deepseek,fireworks,google-genai,groq,huggingface,ibm,litellm,mistralai,nvidia,ollama,openai,openrouter,perplexity,vertexai,xai]",
+]
 # Sandbox integrations (heavy dependencies, install only if needed)
 sandbox = [
     "langsmith[sandbox]>=0.7.7",
