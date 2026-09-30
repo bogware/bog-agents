@@ -352,3 +352,37 @@ def copy_selection_to_clipboard_async(app: App) -> bool:
         )
 
     return True
+
+
+def copy_text_to_clipboard_async(app: App, text: str, notify_message: str) -> None:
+    """Write ``text`` to the clipboard off the UI thread, then toast the result.
+
+    Sibling of `copy_selection_to_clipboard_async` for callers that already hold
+    the exact text (e.g. the `/copy` command) rather than a widget selection.
+    The write and its notification run on a background thread so a slow
+    clipboard helper never freezes the TUI; a copy attempt never crashes the app.
+    """
+
+    def _write_and_notify() -> None:
+        success, last_error = _write_to_clipboard(text)
+        _notify_copy_result(
+            app,
+            success=success,
+            last_error=last_error,
+            notify_message=notify_message,
+        )
+
+    try:
+        app.run_worker(
+            _write_and_notify,
+            thread=True,
+            exclusive=False,
+            exit_on_error=False,
+            group="clipboard",
+            name="copy-text",
+        )
+    except Exception:
+        logger.debug(
+            "copy-text worker dispatch failed; writing synchronously", exc_info=True
+        )
+        _write_and_notify()

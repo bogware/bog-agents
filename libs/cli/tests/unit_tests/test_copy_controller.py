@@ -73,3 +73,53 @@ class TestParseCopyMode:
 
     def test_unknown_arg_defaults_last(self) -> None:
         assert parse_copy_mode("/copy something") == "last"
+
+
+class TestHandleCopyCommand:
+    """The app-glue handler, exercised against a fake duck-typed app."""
+
+    class _FakeApp:
+        def __init__(self, messages: list | None) -> None:
+            self._messages = messages
+            self.notified: list[str] = []
+            self.workers: list = []
+
+        def _current_thread_id(self) -> str | None:
+            return "t1" if self._messages is not None else None
+
+        async def _get_thread_state_values(self, _tid: str) -> dict:
+            return {"messages": self._messages}
+
+        def notify(self, message: str, **_kw) -> None:
+            self.notified.append(message)
+
+        def run_worker(self, fn, **_kw) -> None:
+            self.workers.append(fn)
+            fn()  # run inline so the clipboard write happens synchronously
+
+    async def test_copies_last_response(self, monkeypatch) -> None:
+        written: dict[str, str] = {}
+        monkeypatch.setattr(
+            "bog_agents_cli.clipboard._write_to_clipboard",
+            lambda text: (written.setdefault("text", text), (True, None))[1],
+        )
+        app = TestHandleCopyCommand._FakeApp(
+            [HumanMessage(content="hi"), AIMessage(content="the reply")]
+        )
+        from bog_agents_cli.copy_controller import handle_copy_command
+
+        await handle_copy_command(app, "/copy")
+        assert written["text"] == "the reply"
+
+    async def test_empty_notifies_and_does_not_write(self, monkeypatch) -> None:
+        wrote = {"called": False}
+        monkeypatch.setattr(
+            "bog_agents_cli.clipboard._write_to_clipboard",
+            lambda text: (wrote.update(called=True), (True, None))[1],
+        )
+        app = TestHandleCopyCommand._FakeApp(None)
+        from bog_agents_cli.copy_controller import handle_copy_command
+
+        await handle_copy_command(app, "/copy")
+        assert wrote["called"] is False
+        assert app.notified and "empty" in app.notified[0].lower()

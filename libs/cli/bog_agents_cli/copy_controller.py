@@ -1,15 +1,18 @@
 """Controller for the ``/copy`` slash command.
 
-Pure logic — turns a thread's messages into clipboard-ready text — so it is
-unit-testable without spinning up the TUI. The `BogAgentsApp` handler fetches
-the messages and does the actual clipboard write; everything here is a plain
-function over message objects (LangChain `BaseMessage` instances *or* the dicts
-the LangGraph dev server returns in remote mode).
+`build_copy_payload` / `parse_copy_mode` are pure logic over a thread's messages
+(LangChain `BaseMessage` instances *or* the dicts the LangGraph dev server
+returns in remote mode), unit-testable without the TUI. `handle_copy_command`
+is the thin glue the app delegates to: it takes the app duck-typed (so it too
+tests against a fake) and writes to the clipboard off the UI thread.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
 
 CopyMode = Literal["last", "all"]
 
@@ -106,3 +109,31 @@ def parse_copy_mode(command: str) -> CopyMode:
     }:
         return "all"
     return "last"
+
+
+async def handle_copy_command(app: Any, command: str) -> None:  # noqa: ANN401  # app is duck-typed (BogAgentsApp) so this stays testable with a fake
+    """Copy the last response (or whole transcript) to the clipboard.
+
+    `app` is duck-typed — it needs `_current_thread_id()`,
+    `_get_thread_state_values()`, `notify()` and `run_worker()` — so this tests
+    against a fake app. `/copy` copies the last assistant reply; `/copy all`
+    copies the whole conversation.
+    """
+    from bog_agents_cli.clipboard import copy_text_to_clipboard_async
+
+    messages: list[Any] = []
+    thread_id = app._current_thread_id()
+    if thread_id:
+        try:
+            values = await app._get_thread_state_values(thread_id)
+            raw = values.get("messages")
+            if isinstance(raw, list):
+                messages = raw
+        except Exception:
+            logger.debug("copy: failed to read thread state", exc_info=True)
+
+    text, notify_message = build_copy_payload(messages, parse_copy_mode(command))
+    if text is None:
+        app.notify(notify_message, severity="warning", timeout=3, markup=False)
+        return
+    copy_text_to_clipboard_async(app, text, notify_message)

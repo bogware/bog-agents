@@ -16215,66 +16215,10 @@ class BogAgentsApp(App):
             event.stop()
 
     async def _handle_copy_command(self, command: str) -> None:
-        """Copy the last response (or the whole transcript) to the clipboard.
+        """Copy the last response / transcript to the clipboard (`/copy [all]`)."""
+        from bog_agents_cli.copy_controller import handle_copy_command
 
-        `/copy` copies the last assistant reply; `/copy all` copies the whole
-        conversation. This is the keyboard-free alternative to selecting text
-        and pressing Ctrl+Shift+C (plain Ctrl+C interrupts the agent by design,
-        so it can't also copy).
-        """
-        from bog_agents_cli.clipboard import _notify_copy_result, _write_to_clipboard
-        from bog_agents_cli.copy_controller import build_copy_payload, parse_copy_mode
-
-        mode = parse_copy_mode(command)
-        thread_id = self._current_thread_id()
-        messages: list[Any] = []
-        if thread_id:
-            try:
-                values = await self._get_thread_state_values(thread_id)
-                raw = values.get("messages")
-                if isinstance(raw, list):
-                    messages = raw
-            except Exception:
-                logger.debug("copy: failed to read thread state", exc_info=True)
-
-        text, notify_message = build_copy_payload(messages, mode)
-        if text is None:
-            self.notify(notify_message, severity="warning", timeout=3, markup=False)
-            return
-
-        payload = text
-
-        def _write_and_notify() -> None:
-            success, last_error = _write_to_clipboard(payload)
-            _notify_copy_result(
-                self,
-                success=success,
-                last_error=last_error,
-                notify_message=notify_message,
-            )
-
-        try:
-            self.run_worker(
-                _write_and_notify,
-                thread=True,
-                exclusive=False,
-                exit_on_error=False,
-                group="clipboard",
-                name="copy-command",
-            )
-        except Exception:
-            # A copy attempt must never crash the app; fall back to a blocking
-            # write if the worker can't be scheduled.
-            logger.debug(
-                "copy worker dispatch failed; writing synchronously", exc_info=True
-            )
-            success, last_error = _write_to_clipboard(payload)
-            _notify_copy_result(
-                self,
-                success=success,
-                last_error=last_error,
-                notify_message=notify_message,
-            )
+        await handle_copy_command(self, command)
 
     def action_copy_selection(self) -> None:
         """Copy the current selection to the system clipboard."""
